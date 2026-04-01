@@ -1,0 +1,54 @@
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql import func
+
+from .base import Base, new_id
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    premise: Mapped[str] = mapped_column(Text, nullable=False)
+    genre: Mapped[str] = mapped_column(String, default="玄幻")
+    setting_summary: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+class ArcPlanVersion(Base):
+    __tablename__ = "arc_plan_versions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        String, ForeignKey("projects.id"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    arc_synopsis: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+
+class ChapterPlan(Base):
+    __tablename__ = "chapter_plans"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        String, ForeignKey("projects.id"), nullable=False
+    )
+    arc_plan_id: Mapped[str] = mapped_column(
+        String, ForeignKey("arc_plan_versions.id"), nullable=False
+    )
+    chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String, default="")
+    one_line: Mapped[str] = mapped_column(Text, default="")
+    goals_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String, default="planned")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())

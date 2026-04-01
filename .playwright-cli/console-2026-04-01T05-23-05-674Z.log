@@ -1,0 +1,20 @@
+[      76ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/favicon.ico:0
+[   24157ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021009823:0
+[   27164ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021012832:0
+[   30172ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021015840:0
+[   33180ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021018848:0
+[   36186ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021021856:0
+[   39195ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021024861:0
+[   42201ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021027871:0
+[   51225ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021036891:0
+[   54232ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021039901:0
+[   75296ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021060963:0
+[   78301ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021063972:0
+[   81319ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021066976:0
+[   87154ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021072824:0
+[   92661ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021078328:0
+[   98363ms] [ERROR] Failed to load resource: net::ERR_SOCKET_NOT_CONNECTED @ http://127.0.0.1:8899/api/publishers/qidian/auth/qr?ts=1775021084035:0
+[   98363ms] [ERROR] Failed to load resource: net::ERR_SOCKET_NOT_CONNECTED @ http://127.0.0.1:8899/api/publishers/qidian/status:0
+[   98366ms] TypeError: Failed to fetch
+    at pollStatus (http://127.0.0.1:8899/publishers/qidian/auth:84:25)
+    at refreshAll (http://127.0.0.1:8899/publishers/qidian/auth:80:13)

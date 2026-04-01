@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+data/novel.db
+*.egg-info/
+.env

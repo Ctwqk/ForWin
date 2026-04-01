@@ -1,0 +1,59 @@
+body {
+  margin: 0;
+  font-family: "Noto Serif SC", "Source Han Serif SC", serif;
+  background: linear-gradient(135deg, #f4efe6, #efe2cf);
+  color: #1f2a24;
+}
+
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 40px 20px 80px;
+}
+
+.card {
+  background: #fffaf1;
+  border: 1px solid #e7d7bf;
+  border-radius: 20px;
+  padding: 24px;
+  box-shadow: 0 18px 50px rgba(73, 52, 28, 0.08);
+}
+
+label {
+  display: block;
+  margin-top: 14px;
+}
+
+input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 8px;
+  border: 1px solid #e7d7bf;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+button {
+  border: 0;
+  background: #b64b2a;
+  color: #fff;
+  border-radius: 999px;
+  padding: 10px 16px;
+  cursor: pointer;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.status {
+  margin-top: 12px;
+  white-space: pre-wrap;
+}
+
+.muted {
+  color: #755b3d;
+}

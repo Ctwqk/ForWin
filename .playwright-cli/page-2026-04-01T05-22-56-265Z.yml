@@ -1,0 +1,21 @@
+- generic [ref=e2]:
+  - heading "平台发布管理" [level=1] [ref=e3]
+  - paragraph [ref=e4]: 这里按 VideoProcess 的方式登录：主页面只负责打开认证弹窗，认证弹窗自己轮询状态并在登录成功后通知主页面刷新。这样不会再额外引入奇怪的远程交互层。
+  - generic [ref=e5]:
+    - strong [ref=e6]: 诊断提示
+    - paragraph [ref=e7]: 当前上传流程使用的是服务端浏览器会话，所以只在你本地浏览器里登录平台，并不会自动让服务端状态变成“已连接”。建议优先用“打开登录弹窗”，它会打开服务端认证页并自动轮询状态。
+  - generic [ref=e8]:
+    - heading "上传章节" [level=2] [ref=e9]
+    - text: 平台
+    - combobox [ref=e10]
+    - text: 作品名
+    - textbox "输入平台里的作品名" [ref=e11]
+    - text: 章节标题
+    - textbox "例如：第一百二十三章 风雪夜归人" [ref=e12]
+    - text: 正文
+    - textbox "粘贴章节正文" [ref=e13]
+    - text: 可选上传页 URL
+    - textbox "如果你知道某个平台的具体章节编辑页，可以填这里" [ref=e14]
+    - generic [ref=e15]:
+      - button "直接发布" [ref=e16] [cursor=pointer]
+      - button "保存草稿" [ref=e17] [cursor=pointer]

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ForWin Publisher Bridge 设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="wrap">
+    <section class="card">
+      <h1>ForWin Publisher Bridge</h1>
+      <p>把扩展指向当前 ForWin 后端，并填入共享 API Key。保存后扩展会自动注册页面桥接并开始上报平台心跳。</p>
+
+      <label for="backend_base_url">ForWin Backend URL</label>
+      <input id="backend_base_url" placeholder="例如：http://192.168.31.10:8899">
+
+      <label for="api_key">Extension API Key</label>
+      <input id="api_key" placeholder="填写 FORWIN_PUBLISHER_EXTENSION_API_KEY">
+
+      <label style="display:flex; gap:10px; align-items:flex-start; margin-top:14px;">
+        <input id="sync_session_to_backend" type="checkbox" style="width:auto; margin-top:4px;">
+        <span>同步平台登录会话到后端。开启后，扩展会把当前平台 cookie 发给 ForWin，用于后端继续执行上传。</span>
+      </label>
+
+      <div class="actions">
+        <button id="save_button">保存设置</button>
+      </div>
+      <div id="status" class="status">正在读取设置...</div>
+      <div id="match_pattern" class="status muted"></div>
+    </section>
+  </main>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

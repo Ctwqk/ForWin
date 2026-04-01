@@ -1,0 +1,18 @@
+services:
+  forwin:
+    build: .
+    container_name: forwin
+    env_file:
+      - .env
+    ports:
+      - "8899:8899"
+    volumes:
+      - forwin-data:/app/data
+    environment:
+      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
+      - MINIMAX_BASE_URL=${MINIMAX_BASE_URL:-https://api.minimaxi.com/v1}
+      - MINIMAX_MODEL=${MINIMAX_MODEL:-MiniMax-M2.7}
+    restart: unless-stopped
+
+volumes:
+  forwin-data:

@@ -1,18 +1,20 @@
 import { createBackendClient } from './lib/backend-client.js';
+import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
 import { PublisherExtensionController } from './lib/controller.js';
 import { PLATFORM_ADAPTERS, getPlatformAdapter } from './lib/platforms.js';
 import { DEFAULT_SETTINGS, normalizeSettings } from './lib/settings.js';
+import { READY_CHANNELS, TabReadyRegistry } from './lib/tab-ready-registry.js';
 import {
   extensionApi,
   reportBackgroundError,
   wrapCall,
 } from './lib/extension-runtime.js';
 
-const BRIDGE_CHANNEL = 'forwin-publisher-extension';
 const SETTINGS_KEY = 'forwinPublisherSettings';
 const CLIENT_ID_KEY = 'forwinPublisherClientId';
 const PLATFORM_STATE_KEY = 'forwinPublisherPlatformStates';
 const HEARTBEAT_ALARM = 'forwinPublisherHeartbeat';
+const tabReadyRegistry = new TabReadyRegistry();
 
 function randomId() {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
@@ -172,26 +174,32 @@ async function runUploadCommand(tabId, payload) {
   if (!tabId) {
     return { ok: false, error: '未能打开上传页面。' };
   }
+  let ready = await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 6000);
   let attempt = 0;
   while (attempt < 8) {
     attempt += 1;
     try {
+      if (!ready && attempt === 1) {
+        return { ok: false, error: '平台页面初始化超时，无法执行上传。' };
+      }
       const response = await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
-        channel: 'forwin-publisher-platform-agent',
+        channel: PLATFORM_AGENT_CHANNEL,
         action: 'run-upload',
         payload,
       });
       if (response) {
-        if (!response.ok && String(response.error || '').includes('正在跳转到章节编辑页')) {
-          await new Promise((resolve) => globalThis.setTimeout(resolve, 1200));
+        if (!response.ok && response.errorCode === 'editor-navigation-pending') {
+          ready = await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 8000);
+          if (!ready) {
+            return { ok: false, error: '平台页面跳转超时，未能进入章节编辑页。' };
+          }
           continue;
         }
         return response;
       }
     } catch (_error) {
-      // The platform page content script may not be ready yet.
+      ready = await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 2500);
     }
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 800));
   }
   return { ok: false, error: '平台页面没有准备好，无法执行上传。' };
 }
@@ -200,26 +208,33 @@ async function inspectLoginState(tabId) {
   if (!tabId) {
     return { ok: false, authenticated: false, loginVisible: false, currentUrl: '' };
   }
+  let ready = await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 5000);
   let attempt = 0;
   while (attempt < 8) {
     attempt += 1;
     try {
+      if (!ready && attempt === 1) {
+        return { ok: false, authenticated: false, loginVisible: false, currentUrl: '' };
+      }
       const response = await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
-        channel: 'forwin-publisher-platform-agent',
+        channel: PLATFORM_AGENT_CHANNEL,
         action: 'inspect-login-state',
       });
       if (response) {
         return response;
       }
     } catch (_error) {
-      // Platform page content script may not be ready yet.
+      ready = await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 2000);
     }
-    await new Promise((resolve) => globalThis.setTimeout(resolve, 500));
   }
   return { ok: false, authenticated: false, loginVisible: false, currentUrl: '' };
 }
 
 async function ensureHeartbeatAlarm() {
+  const existing = await wrapCall(extensionApi.alarms, 'get', HEARTBEAT_ALARM);
+  if (existing?.periodInMinutes === 1) {
+    return;
+  }
   await wrapCall(extensionApi.alarms, 'create', HEARTBEAT_ALARM, { periodInMinutes: 1 });
 }
 
@@ -269,6 +284,21 @@ const controller = new PublisherExtensionController({
 });
 
 extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const action = String(message?.action || '').trim();
+  if (action === 'content-bridge-ready') {
+    if (sender?.tab?.id) {
+      tabReadyRegistry.markReady(sender.tab.id, READY_CHANNELS.CONTENT_BRIDGE);
+    }
+    sendResponse({ ok: true, payload: { ready: true } });
+    return false;
+  }
+  if (action === 'platform-agent-ready') {
+    if (sender?.tab?.id) {
+      tabReadyRegistry.markReady(sender.tab.id, READY_CHANNELS.PLATFORM_AGENT);
+    }
+    sendResponse({ ok: true, payload: { ready: true } });
+    return false;
+  }
   controller.handleMessage(message, sender)
     .then((payload) => sendResponse({ ok: true, payload }))
     .catch((error) => {
@@ -281,12 +311,17 @@ extensionApi.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 extensionApi.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo?.status === 'loading' || changeInfo?.url) {
+    tabReadyRegistry.reset(tabId, READY_CHANNELS.CONTENT_BRIDGE);
+    tabReadyRegistry.reset(tabId, READY_CHANNELS.PLATFORM_AGENT);
+  }
   controller.handleTabUpdated(tabId, changeInfo, tab).catch((error) => {
     reportBackgroundError('handleTabUpdated', error);
   });
 });
 
 extensionApi.tabs.onRemoved.addListener((tabId) => {
+  tabReadyRegistry.reset(tabId);
   controller.handleTabRemoved(tabId).catch((error) => {
     reportBackgroundError('handleTabRemoved', error);
   });

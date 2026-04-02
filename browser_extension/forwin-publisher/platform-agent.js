@@ -1,12 +1,85 @@
 (function () {
-  const CHANNEL = 'forwin-publisher-platform-agent';
+  const CHANNEL = globalThis.__FORWIN_CHANNELS__?.PLATFORM_AGENT_CHANNEL || 'forwin-publisher-platform-agent';
   const runtime = (globalThis.browser && globalThis.browser.runtime) || (globalThis.chrome && globalThis.chrome.runtime);
   if (!runtime) {
     return;
   }
 
+  function announceReady() {
+    try {
+      runtime.sendMessage({
+        action: 'platform-agent-ready',
+        payload: { href: window.location.href },
+      });
+    } catch (_error) {
+      // Ignore while the extension worker spins up.
+    }
+  }
+
   function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  function waitForCondition(check, timeoutMs = 8000) {
+    return new Promise((resolve) => {
+      const finish = (value) => {
+        if (observer) {
+          observer.disconnect();
+        }
+        window.clearInterval(intervalId);
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      };
+
+      const evaluate = () => {
+        try {
+          const value = check();
+          if (value) {
+            finish(value);
+          }
+        } catch (_error) {
+          // Ignore transient DOM errors while the page is changing.
+        }
+      };
+
+      let observer = null;
+      if (document.documentElement) {
+        observer = new MutationObserver(() => evaluate());
+        observer.observe(document.documentElement, {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          characterData: true,
+        });
+      }
+      const intervalId = window.setInterval(evaluate, 150);
+      const timeoutId = window.setTimeout(() => finish(null), timeoutMs);
+      evaluate();
+    });
+  }
+
+  async function waitForUrlContains(fragment, timeoutMs = 8000) {
+    return waitForCondition(() => window.location.href.includes(fragment), timeoutMs);
+  }
+
+  async function waitForPageSignal(keywords, timeoutMs = 8000) {
+    return waitForCondition(() => includesAny(pageText(), keywords), timeoutMs);
+  }
+
+  async function waitForEditorReady(timeoutMs = 10000) {
+    return waitForCondition(() => {
+      if (window.location.href.includes('write.qq.com')) {
+        return document.querySelector('#inputTitle')
+          || document.querySelector('iframe#mce_0_ifr')
+          || document.querySelector('textarea#mce_0');
+      }
+      if (window.location.href.includes('fanqienovel.com')) {
+        return document.querySelector('.ProseMirror[contenteditable="true"]')
+          || document.querySelector('input[placeholder*="标题"]')
+          || document.querySelector('textarea[placeholder*="标题"]');
+      }
+      return null;
+    }, timeoutMs);
   }
 
   function pageText() {
@@ -196,7 +269,10 @@
     const closeButton = document.querySelector('.byte-modal-close-icon');
     if (closeButton instanceof HTMLElement) {
       closeButton.click();
-      await sleep(500);
+      await waitForCondition(
+        () => !document.querySelector('.byte-modal-close-icon'),
+        2500,
+      );
     }
   }
 
@@ -206,14 +282,18 @@
     if (!openedCreateMenu) {
       return false;
     }
-    await sleep(1200);
+    await waitForPageSignal(['去写章节', '去写作', '创建书本'], 5000);
     const openedEditor = (await clickExactText('去写章节', 4000))
       || (await clickByKeywords(['去写章节'], 4000));
     if (!openedEditor) {
       return false;
     }
-    await sleep(1800);
-    return window.location.href.includes('/publish/') || includesAny(pageText(), ['存草稿', '下一步']);
+    await Promise.race([
+      waitForUrlContains('/publish/', 6000),
+      waitForPageSignal(['存草稿', '下一步'], 6000),
+      waitForEditorReady(6000),
+    ]);
+    return window.location.href.includes('/publish/') || includesAny(pageText(), ['存草稿', '下一步']) || Boolean(document.querySelector('.ProseMirror[contenteditable="true"]'));
   }
 
   function findFanqieBookEntry(bookName) {
@@ -275,7 +355,11 @@
         const openedEditor = (await clickExactText('创建章节', 4000))
           || (await clickByKeywords(['创建章节'], 4000));
         if (openedEditor) {
-          await sleep(1800);
+          await Promise.race([
+            waitForUrlContains('/publish/', 6000),
+            waitForPageSignal(['存草稿', '下一步'], 6000),
+            waitForEditorReady(6000),
+          ]);
           await dismissFanqieGuideModal();
           if (window.location.href.includes('/publish/') || includesAny(pageText(), ['存草稿', '下一步'])) {
             return true;
@@ -331,7 +415,7 @@
       return true;
     })();
     if (clicked) {
-      await sleep(1500);
+      await waitForEditorReady(5000);
     }
     return clicked;
   }
@@ -348,8 +432,8 @@
       return false;
     }
     frameBody.focus();
-    frameBody.innerHTML = '';
-    frameBody.innerText = value;
+    frameBody.replaceChildren();
+    frameBody.textContent = value;
     frameBody.dispatchEvent(new Event('input', { bubbles: true }));
     frameBody.dispatchEvent(new Event('change', { bubbles: true }));
     if (textarea) {
@@ -365,17 +449,22 @@
     if (!(editor instanceof HTMLElement)) {
       return false;
     }
-    const lines = String(value || '').split(/\n+/);
-    const html = lines
-      .map((line) => line.trim())
-      .filter((line, index, all) => line || index === all.length - 1)
-      .map((line) => `<p>${line ? line.replace(/[&<>]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[char])) : '<br>'}</p>`)
-      .join('');
+    const lines = String(value || '').split(/\n/);
+    const normalizedLines = lines.length ? lines : [''];
+    const fragment = document.createDocumentFragment();
+    normalizedLines.forEach((line) => {
+      const paragraph = document.createElement('p');
+      if (line) {
+        paragraph.textContent = line;
+      } else {
+        paragraph.appendChild(document.createElement('br'));
+      }
+      fragment.appendChild(paragraph);
+    });
     editor.focus();
-    editor.innerHTML = html || '<p><br></p>';
+    editor.replaceChildren(fragment);
     editor.dispatchEvent(new Event('input', { bubbles: true }));
     editor.dispatchEvent(new Event('change', { bubbles: true }));
-    await sleep(300);
     return true;
   }
 
@@ -398,15 +487,16 @@
       };
     }
 
-    await sleep(1200);
     const ready = await preparePublishPage(payload.book_name);
     if (!ready) {
       return {
         ok: false,
         currentUrl: window.location.href,
         error: '平台正在跳转到章节编辑页，请稍后重试。',
+        errorCode: 'editor-navigation-pending',
       };
     }
+    await waitForEditorReady(10000);
     if (window.location.href.includes('write.qq.com')) {
       await prepareQidianNewChapter();
       await fillField(['#inputTitle', ...selectorsForTitle()], payload.chapter_title, '章节标题');
@@ -424,7 +514,11 @@
       }
     }
     await clickAction(Boolean(payload.publish));
-    await sleep(1500);
+    await Promise.race([
+      waitForPageSignal(['保存成功', '已保存', '发布成功', '提交成功', '审核中'], 4000),
+      waitForCondition(() => !window.location.href.includes('login'), 4000),
+      sleep(800),
+    ]);
 
     return {
       ok: true,
@@ -458,4 +552,9 @@
     }
     return true;
   });
+
+  window.addEventListener('pageshow', announceReady);
+  window.addEventListener('popstate', announceReady);
+  window.addEventListener('hashchange', announceReady);
+  announceReady();
 })();

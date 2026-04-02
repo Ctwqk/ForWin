@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --check background.js && node --check options.js && node --check content-bridge.js && node --check platform-agent.js && node --check lib/extension-runtime.js && node --test tests/*.test.js"
+    "test": "node --check background.js && node --check options.js && node --check content-bridge.js && node --check platform-agent.js && node --check channels-runtime.js && node --check lib/channels.js && node --check lib/extension-runtime.js && node --check lib/tab-ready-registry.js && node --test tests/*.test.js"
   }
 }

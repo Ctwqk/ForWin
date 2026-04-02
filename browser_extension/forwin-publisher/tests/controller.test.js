@@ -133,6 +133,48 @@ test('controller auto-dispatches claimed upload job for connected platform', asy
   assert.equal(uploadResults.at(-1).status, 'succeeded');
 });
 
+test('controller dispatch caps claimed upload jobs per pass', async () => {
+  let claimed = 0;
+  const { controller, uploadResults } = makeController({
+    getPlatformState: async (platformId) => (platformId === 'qidian' ? { connected: true } : {}),
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
+      claimNextUploadJob: async () => {
+        claimed += 1;
+        return {
+          found: true,
+          job: {
+            job_id: `job-${claimed}`,
+            platform: 'qidian',
+            display_name: '起点小说',
+            status: 'running',
+            book_name: '测试书',
+            chapter_title: `第${claimed}章`,
+            body: '正文',
+            upload_url: null,
+            publish: false,
+          },
+        };
+      },
+      getUploadJob: async () => {
+        throw new Error('should not fetch job again');
+      },
+      updateUploadJobResult: async (_jobId, payload) => {
+        uploadResults.push(payload);
+        return { ok: true };
+      },
+    },
+  });
+
+  const result = await controller.dispatchPendingUploadJobs();
+
+  assert.equal(result.truncated, true);
+  assert.equal(result.handled, 8);
+  assert.equal(claimed, 8);
+  assert.equal(uploadResults.length, 8);
+});
+
 test('controller syncs and dispatches when strong cookies exist before saved connected state flips', async () => {
   let synced = 0;
   let claimed = 0;
@@ -215,4 +257,65 @@ test('controller heartbeat reports cookie summary without leaking full cookies',
   assert.equal(Array.isArray(qidian.cookies), false);
   assert.equal(qidian.raw_state.cookie_count, 2);
   assert.deepEqual(qidian.raw_state.cookie_names, ['AppAuthToken', 'pubtoken']);
+});
+
+test('controller session sync sends only cookie fields needed by the backend uploader', async () => {
+  const payloads = [];
+  const { controller } = makeController({
+    getCookies: async (platformId) => (
+      platformId === 'qidian'
+        ? [{
+          name: 'AppAuthToken',
+          value: 'secret-token',
+          domain: '.write.qq.com',
+          path: '/',
+          secure: true,
+          httpOnly: true,
+          sameSite: 'Lax',
+          expirationDate: 12345,
+          storeId: 'profile-1',
+          session: false,
+        }, {
+          name: 'pubtoken',
+          value: 'secret-cookie',
+          domain: '.write.qq.com',
+          path: '/',
+          secure: true,
+          httpOnly: true,
+          sameSite: 'Lax',
+          expirationDate: 12345,
+          storeId: 'profile-1',
+          session: false,
+        }]
+        : []
+    ),
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      syncBrowserSession: async (payload) => {
+        payloads.push(payload);
+        return { ok: true, cookie_count: 1 };
+      },
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+    },
+  });
+
+  await controller.syncConnectedSessionsToBackend();
+
+  assert.equal(payloads.length, 1);
+  assert.deepEqual(Object.keys(payloads[0].cookies[0]).sort(), [
+    'domain',
+    'expirationDate',
+    'httpOnly',
+    'name',
+    'path',
+    'sameSite',
+    'secure',
+    'value',
+  ]);
+  assert.equal('storeId' in payloads[0].cookies[0], false);
+  assert.equal('session' in payloads[0].cookies[0], false);
 });

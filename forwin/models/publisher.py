@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -117,6 +117,7 @@ class PublisherRawComment(Base):
             "remote_comment_id",
             name="uq_publisher_raw_comments_platform_remote",
         ),
+        Index("ix_publisher_raw_comments_work_name", "work_name"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)

@@ -1,0 +1,59 @@
+- generic [ref=e2]:
+  - heading "平台发布管理" [level=1] [ref=e3]
+  - paragraph [ref=e4]: ForWin 现在把登录、上传和后续评论采集都交给浏览器扩展执行。后端只负责保存任务、接收扩展心跳和持久化结果，不再在服务器里偷偷跑浏览器。
+  - generic [ref=e5]:
+    - generic [ref=e6]:
+      - heading "扩展状态" [level=2] [ref=e7]
+      - generic [ref=e8]: 正在检测浏览器扩展...
+      - generic [ref=e9]:
+        - button "打开扩展设置" [ref=e10] [cursor=pointer]
+        - link "下载扩展包" [ref=e11] [cursor=pointer]:
+          - /url: /api/publishers/extension-package
+    - generic [ref=e12]:
+      - heading "安装提示" [level=2] [ref=e13]
+      - paragraph [ref=e14]: 如果你是用 macOS 浏览器访问这台 Linux 后端，请先把扩展包下载到你的 Mac，再解压后用开发者模式加载。不要直接把 Linux 服务器路径当成本机路径使用。
+      - paragraph [ref=e15]:
+        - code [ref=e16]: browser_extension/forwin-publisher
+      - paragraph [ref=e17]: 扩展里要填当前 ForWin 后端 URL 和共享 API Key。页面只通过扩展桥接登录，不再回退到旧的服务端扫码逻辑。首次安装时，请先在浏览器扩展管理页手动打开扩展选项；页面里的“打开扩展设置”按钮要等扩展已经完成首次配置后才会生效。
+  - generic [ref=e18]:
+    - generic [ref=e19]:
+      - heading "番茄小说" [level=2] [ref=e20]
+      - paragraph [ref=e21]:
+        - text: 登录入口：
+        - link "https://fanqienovel.com/main/writer/" [ref=e22] [cursor=pointer]:
+          - /url: https://fanqienovel.com/main/writer/
+      - paragraph [ref=e23]: 支持登录：scan
+      - paragraph [ref=e24]: 支持动作：save_draft / publish
+      - generic [ref=e25]:
+        - button "重新连接" [ref=e26] [cursor=pointer]
+        - button "仅打开官网" [ref=e27] [cursor=pointer]
+      - generic [ref=e28]: 已连接 | 扩展在线 最近心跳：2026-04-01T22:04:22.754876Z
+    - generic [ref=e29]:
+      - heading "起点小说" [level=2] [ref=e30]
+      - paragraph [ref=e31]:
+        - text: 登录入口：
+        - link "https://write.qq.com/portal/login" [ref=e32] [cursor=pointer]:
+          - /url: https://write.qq.com/portal/login
+      - paragraph [ref=e33]: 支持登录：scan
+      - paragraph [ref=e34]: 支持动作：save_draft / publish
+      - generic [ref=e35]:
+        - button "重新连接" [ref=e36] [cursor=pointer]
+        - button "仅打开官网" [ref=e37] [cursor=pointer]
+      - generic [ref=e38]: 已连接 | 扩展在线 最近心跳：2026-04-01T22:04:22.754876Z
+  - generic [ref=e39]:
+    - heading "上传任务" [level=2] [ref=e40]
+    - text: 平台
+    - combobox [ref=e41]:
+      - option "番茄小说" [selected]
+      - option "起点小说"
+    - text: 作品名
+    - textbox "输入平台里的作品名" [ref=e42]
+    - text: 章节标题
+    - textbox "例如：第一百二十三章 风雪夜归人" [ref=e43]
+    - text: 正文
+    - textbox "粘贴章节正文" [ref=e44]
+    - text: 可选上传页 URL
+    - textbox "如果你知道某个平台的具体章节编辑页，可以填这里" [ref=e45]
+    - generic [ref=e46]:
+      - button "直接发布" [ref=e47] [cursor=pointer]
+      - button "保存草稿" [ref=e48] [cursor=pointer]

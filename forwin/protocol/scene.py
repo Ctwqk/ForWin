@@ -21,4 +21,5 @@ class SceneOutput(BaseModel):
     scene_location_id: str = ""
     involved_entities: list[str] = Field(default_factory=list)
     text: str
+    text_blob_path: str = ""
     micro_summary: str = ""

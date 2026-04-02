@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -12,6 +12,10 @@ from .base import Base, new_id
 
 class Entity(Base):
     __tablename__ = "entities"
+    __table_args__ = (
+        Index("ix_entities_project_active", "project_id", "is_active"),
+        Index("ix_entities_project_name", "project_id", "name"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(
@@ -42,6 +46,9 @@ class EntityAlias(Base):
 
 class EntityState(Base):
     __tablename__ = "entity_states"
+    __table_args__ = (
+        Index("ix_entity_states_entity_chapter", "entity_id", "as_of_chapter"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     entity_id: Mapped[str] = mapped_column(

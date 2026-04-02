@@ -69,12 +69,13 @@ def cmd_read(args: argparse.Namespace) -> None:
     """Read a chapter from the database."""
     from sqlalchemy import select
 
-    from forwin.models.base import get_engine, get_session_factory
+    from forwin.models.base import get_engine, get_session_factory, init_db
     from forwin.models.draft import ChapterDraft
     from forwin.models.project import ChapterPlan
 
     config = _get_config(args)
     engine = get_engine(config.db_path)
+    init_db(engine)
     Session = get_session_factory(engine)
     session = Session()
 
@@ -114,13 +115,14 @@ def cmd_read(args: argparse.Namespace) -> None:
         print(f"\n{'─'*60}")
     finally:
         session.close()
+        engine.dispose()
 
 
 def cmd_status(args: argparse.Namespace) -> None:
     """Show project status."""
     from sqlalchemy import func, select
 
-    from forwin.models.base import get_engine, get_session_factory
+    from forwin.models.base import get_engine, get_session_factory, init_db
     from forwin.models.draft import ChapterDraft
     from forwin.models.entity import Entity
     from forwin.models.event import CanonEvent
@@ -129,6 +131,7 @@ def cmd_status(args: argparse.Namespace) -> None:
 
     config = _get_config(args)
     engine = get_engine(config.db_path)
+    init_db(engine)
     Session = get_session_factory(engine)
     session = Session()
 
@@ -198,6 +201,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         print(f"{'='*60}\n")
     finally:
         session.close()
+        engine.dispose()
 
 
 # ------------------------------------------------------------------

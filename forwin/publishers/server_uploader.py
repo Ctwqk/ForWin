@@ -204,8 +204,8 @@ class ServerPublisherUploader:
                           if (!node) return false;
                           node.focus();
                           if (node.isContentEditable) {
-                            node.innerHTML = '';
-                            document.execCommand('insertText', false, text);
+                            node.replaceChildren();
+                            node.textContent = text;
                           }
                           node.dispatchEvent(new Event('input', { bubbles: true }));
                           return true;
@@ -383,8 +383,8 @@ class ServerPublisherUploader:
             body.evaluate(
                 """(node, text) => {
                   node.focus();
-                  node.innerHTML = '';
-                  node.innerText = text;
+                  node.replaceChildren();
+                  node.textContent = text;
                   node.dispatchEvent(new Event('input', { bubbles: true }));
                   node.dispatchEvent(new Event('change', { bubbles: true }));
                 }""",
@@ -409,14 +409,20 @@ class ServerPublisherUploader:
                 return False
             editor.evaluate(
                 """(node, text) => {
-                  const lines = String(text || '').split(/\\n+/);
-                  const html = lines
-                    .map((line) => line.trim())
-                    .filter((line, index, all) => line || index === all.length - 1)
-                    .map((line) => `<p>${line ? line.replace(/[&<>]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[char])) : '<br>'}</p>`)
-                    .join('');
+                  const lines = String(text || '').split(/\\n/);
+                  const normalizedLines = lines.length ? lines : [''];
+                  const fragment = document.createDocumentFragment();
+                  normalizedLines.forEach((line) => {
+                    const paragraph = document.createElement('p');
+                    if (line) {
+                      paragraph.textContent = line;
+                    } else {
+                      paragraph.appendChild(document.createElement('br'));
+                    }
+                    fragment.appendChild(paragraph);
+                  });
                   node.focus();
-                  node.innerHTML = html || '<p><br></p>';
+                  node.replaceChildren(fragment);
                   node.dispatchEvent(new Event('input', { bubbles: true }));
                   node.dispatchEvent(new Event('change', { bubbles: true }));
                 }""",

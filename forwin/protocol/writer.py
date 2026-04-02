@@ -6,6 +6,7 @@ from .state_change import StateChangeCandidate, EventCandidate, ThreadBeatCandid
 
 class WriterOutput(BaseModel):
     """Structured output from the Chapter Writer."""
+    project_id: str = ""
     chapter_number: int
     title: str
     body: str                                         # The actual Chinese chapter text

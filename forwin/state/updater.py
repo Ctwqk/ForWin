@@ -278,8 +278,13 @@ class StateUpdater:
           4. Parse state_json, update the specified field.
           5. Create a new EntityState with as_of_chapter=chapter_number.
         """
+        entity_lookup = self._repo.get_entities_by_names(
+            project_id,
+            [change.entity_name for change in changes],
+        )
+
         for change in changes:
-            entity = self._repo.get_entity_by_name(project_id, change.entity_name)
+            entity = entity_lookup.get(change.entity_name)
 
             if entity is None:
                 logger.info(
@@ -294,6 +299,7 @@ class StateUpdater:
                     description="",
                     chapter=chapter_number,
                 )
+                entity_lookup[change.entity_name] = entity
 
             # Retrieve the most recent EntityState.
             stmt = (
@@ -340,6 +346,14 @@ class StateUpdater:
           2. Abort the event if any entity cannot be resolved.
           3. Create a CanonEvent and all corresponding EventEntityLink rows.
         """
+        entity_lookup = self._repo.get_entities_by_names(
+            project_id,
+            [
+                entity_name
+                for event_candidate in events
+                for entity_name in event_candidate.involved_entity_names
+            ],
+        )
         for event_candidate in events:
             resolved_links: list[tuple[str, str]] = []
             names = event_candidate.involved_entity_names
@@ -347,7 +361,7 @@ class StateUpdater:
 
             for idx, entity_name in enumerate(names):
                 role = roles[idx] if idx < len(roles) else "mentioned"
-                entity = self._repo.get_entity_by_name(project_id, entity_name)
+                entity = entity_lookup.get(entity_name)
                 if entity is None:
                     raise ValueError(
                         "Event references unknown entity "

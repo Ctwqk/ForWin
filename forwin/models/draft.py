@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -11,6 +11,9 @@ from .base import Base, new_id
 
 class ChapterDraft(Base):
     __tablename__ = "chapter_drafts"
+    __table_args__ = (
+        Index("ix_chapter_drafts_plan_version", "chapter_plan_id", "version"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     chapter_plan_id: Mapped[str] = mapped_column(

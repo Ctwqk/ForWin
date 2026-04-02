@@ -4,6 +4,17 @@ from .base import Base, get_engine, get_session_factory, init_db, new_id
 from .draft import ChapterDraft, ChapterReview
 from .entity import Entity, EntityAlias, EntityState, RelationEdge
 from .event import CanonEvent, EventEntityLink
+from .phase import (
+    ArcEnvelope,
+    ArcEnvelopeAnalysis,
+    ArcStructureDraft,
+    ProjectReplanEvent,
+    ProjectStageAnalysis,
+    ProvisionalChapterLedger,
+    ProvisionalBandExecution,
+    ProvisionalPromotionRecord,
+)
+from .phase4 import NPCIntentSnapshot, WorldSimulationTurn
 from .publisher import (
     PublisherBrowserSession,
     PublisherCommentSyncJob,
@@ -34,6 +45,16 @@ __all__ = [
     # event
     "CanonEvent",
     "EventEntityLink",
+    "ProjectStageAnalysis",
+    "ProjectReplanEvent",
+    "ArcEnvelope",
+    "ArcStructureDraft",
+    "ArcEnvelopeAnalysis",
+    "ProvisionalChapterLedger",
+    "ProvisionalBandExecution",
+    "ProvisionalPromotionRecord",
+    "NPCIntentSnapshot",
+    "WorldSimulationTurn",
     # thread
     "PlotThread",
     "PlotThreadBeat",

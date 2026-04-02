@@ -39,5 +39,5 @@ export function getOriginMatchPattern(input) {
     return '';
   }
   const parsed = new URL(origin);
-  return `${parsed.protocol}//${parsed.hostname}/*`;
+  return `${parsed.protocol}//${parsed.host}/*`;
 }

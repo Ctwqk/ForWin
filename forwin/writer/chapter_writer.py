@@ -44,6 +44,11 @@ class ChapterWriter:
         writer_mode: str = "scene",
         default_scene_count: int = 3,
         max_scene_count: int = 4,
+        min_chapter_chars: int = 1500,
+        max_chapter_chars: int = 2200,
+        target_chapter_chars: int = 2000,
+        single_call_timeout_seconds: float = 90.0,
+        scene_call_timeout_seconds: float = 45.0,
     ) -> None:
         self.llm_client = llm_client
         self.temperature = temperature
@@ -51,6 +56,14 @@ class ChapterWriter:
         self.writer_mode = writer_mode
         self.default_scene_count = default_scene_count
         self.max_scene_count = max_scene_count
+        self.min_chapter_chars = min_chapter_chars
+        self.max_chapter_chars = max_chapter_chars
+        self.target_chapter_chars = max(
+            self.min_chapter_chars,
+            min(int(target_chapter_chars), self.max_chapter_chars),
+        )
+        self.single_call_timeout_seconds = max(10.0, float(single_call_timeout_seconds))
+        self.scene_call_timeout_seconds = max(10.0, float(scene_call_timeout_seconds))
 
     # ------------------------------------------------------------------
     # Public API
@@ -66,19 +79,39 @@ class ChapterWriter:
             return self._write_single_chapter(context)
         return self._write_scene_chapter(context)
 
-    def _write_single_chapter(self, context: ChapterContextPack) -> WriterOutput:
+    def _write_single_chapter(
+        self,
+        context: ChapterContextPack,
+        *,
+        timeout_seconds: float | None = None,
+        max_attempts: int = 2,
+        retry_on_timeout: bool = True,
+    ) -> WriterOutput:
         logger.info(
             "write_chapter(single): chapter=%d title_plan=%r",
             context.chapter_number,
             context.chapter_plan_title,
         )
+        target_chars = max(
+            self.min_chapter_chars,
+            min(self.target_chapter_chars, self.max_chapter_chars),
+        )
+        max_output_tokens = min(
+            self.max_tokens,
+            max(2600, int(target_chars * 1.8)),
+        )
         draft_data = self._chat_json(
             build_single_chapter_draft_prompt(
                 context,
-                target_chars=1800,
+                target_chars=target_chars,
+                min_chars=self.min_chapter_chars,
+                max_chars=self.max_chapter_chars,
             ),
             temperature=self.temperature,
-            max_tokens=min(self.max_tokens, 2600),
+            max_tokens=max_output_tokens,
+            timeout_seconds=timeout_seconds or self.single_call_timeout_seconds,
+            max_attempts=max_attempts,
+            retry_on_timeout=retry_on_timeout,
         )
         extracted = self._extract_structured(
             context,
@@ -99,28 +132,47 @@ class ChapterWriter:
             context.chapter_number,
             context.chapter_plan_title,
         )
-        scene_plans = self._plan_scenes(context)
-        scene_outputs = [
-            self._generate_scene(context, scene_plan) for scene_plan in scene_plans
-        ]
-        stitched = self._stitch_scenes(context, scene_outputs)
-        extracted = self._extract_structured(
-            context,
-            stitched.get("title", context.chapter_plan_title or f"第{context.chapter_number}章"),
-            stitched.get("body", ""),
-        )
+        try:
+            scene_plans = self._plan_scenes(context)
+            scene_outputs = [
+                self._generate_scene(context, scene_plan) for scene_plan in scene_plans
+            ]
+            stitched = self._stitch_scenes(context, scene_outputs)
+            extracted = self._extract_structured(
+                context,
+                stitched.get("title", context.chapter_plan_title or f"第{context.chapter_number}章"),
+                stitched.get("body", ""),
+            )
 
-        merged = dict(stitched)
-        merged.update(extracted)
-        output = self._writer_output_from_dict(context, merged, scene_outputs=scene_outputs)
-        output.generation_meta.update(
-            {
-                "mode": "scene",
-                "scene_count": len(scene_outputs),
-                "call_count": len(scene_outputs) + 3,
-            }
-        )
-        return output
+            merged = dict(stitched)
+            merged.update(extracted)
+            output = self._writer_output_from_dict(context, merged, scene_outputs=scene_outputs)
+            output.generation_meta.update(
+                {
+                    "mode": "scene",
+                    "scene_count": len(scene_outputs),
+                    "call_count": len(scene_outputs) + 3,
+                }
+            )
+            return output
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "scene chapter generation failed, falling back to single draft mode: %s",
+                exc,
+            )
+            output = self._write_single_chapter(
+                context,
+                timeout_seconds=self.scene_call_timeout_seconds,
+                max_attempts=1,
+                retry_on_timeout=False,
+            )
+            output.generation_meta.update(
+                {
+                    "fallback_from_scene": True,
+                    "scene_fallback_error": str(exc),
+                }
+            )
+            return output
 
     def _writer_output_from_dict(
         self,
@@ -144,6 +196,7 @@ class ChapterWriter:
 
         body: str = data.get("body", "")
         output = WriterOutput(
+            project_id=getattr(context, "project_id", ""),
             chapter_number=context.chapter_number,
             title=data.get("title", f"第{context.chapter_number}章"),
             body=body,
@@ -168,36 +221,59 @@ class ChapterWriter:
         return output
 
     def _plan_scenes(self, context: ChapterContextPack) -> list[ScenePlan]:
-        data = self._chat_json(
-            build_scene_breakdown_prompt(
-                context,
-                default_scene_count=self.default_scene_count,
-                max_scene_count=self.max_scene_count,
-            ),
-            temperature=0.6,
-            max_tokens=min(self.max_tokens, 900),
-        )
-        scenes = self._build_list(data, "scenes", ScenePlan)
-        if scenes:
-            return scenes[: self.max_scene_count]
+        try:
+            data = self._chat_json(
+                build_scene_breakdown_prompt(
+                    context,
+                    default_scene_count=self.default_scene_count,
+                    max_scene_count=self.max_scene_count,
+                ),
+                temperature=0.6,
+                max_tokens=min(
+                    self.max_tokens,
+                    max(1200, self.default_scene_count * 420),
+                ),
+                timeout_seconds=self.scene_call_timeout_seconds,
+                max_attempts=1,
+                retry_on_timeout=False,
+            )
+            scenes = self._build_list(data, "scenes", ScenePlan)
+            if scenes:
+                return scenes[: self.max_scene_count]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "scene breakdown failed, falling back to heuristic scenes: %s",
+                exc,
+            )
 
         fallback_count = min(max(self.default_scene_count, 2), self.max_scene_count)
         goals = context.chapter_goals or [context.chapter_plan_one_line or "推进本章主线"]
+        base_target = max(
+            700,
+            min(self.target_chapter_chars, self.max_chapter_chars) // fallback_count,
+        )
         return [
             ScenePlan(
                 scene_no=index + 1,
                 objective=goals[min(index, len(goals) - 1)],
                 must_progress_points=[goals[min(index, len(goals) - 1)]],
-                target_chars=max(600, context.chapter_number * 0 + 800),
+                target_chars=base_target,
             )
             for index in range(fallback_count)
         ]
 
     def _generate_scene(self, context: ChapterContextPack, scene_plan: ScenePlan) -> SceneOutput:
+        max_output_tokens = min(
+            self.max_tokens,
+            max(1400, int(max(scene_plan.target_chars, 600) * 1.8)),
+        )
         data = self._chat_json(
             build_scene_generation_prompt(context, scene_plan),
             temperature=self.temperature,
-            max_tokens=min(self.max_tokens, 1600),
+            max_tokens=max_output_tokens,
+            timeout_seconds=self.scene_call_timeout_seconds,
+            max_attempts=2,
+            retry_on_timeout=False,
         )
         return SceneOutput(
             scene_no=scene_plan.scene_no,
@@ -218,6 +294,9 @@ class ChapterWriter:
             build_scene_stitch_prompt(context, scene_outputs),
             temperature=0.5,
             max_tokens=min(self.max_tokens, 2400),
+            timeout_seconds=self.scene_call_timeout_seconds,
+            max_attempts=2,
+            retry_on_timeout=False,
         )
 
     def _extract_structured(
@@ -232,6 +311,9 @@ class ChapterWriter:
                 prompt,
                 temperature=0.3,
                 max_tokens=min(self.max_tokens, 1400),
+                timeout_seconds=self.scene_call_timeout_seconds,
+                max_attempts=2,
+                retry_on_timeout=False,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -248,6 +330,9 @@ class ChapterWriter:
                     ),
                     temperature=0.2,
                     max_tokens=min(self.max_tokens, 900),
+                    timeout_seconds=self.scene_call_timeout_seconds,
+                    max_attempts=1,
+                    retry_on_timeout=False,
                 )
             except Exception as repair_exc:  # noqa: BLE001
                 logger.warning(
@@ -303,6 +388,9 @@ class ChapterWriter:
         *,
         temperature: float,
         max_tokens: int,
+        timeout_seconds: float | None = None,
+        max_attempts: int = 3,
+        retry_on_timeout: bool = True,
     ) -> dict:
         attempts = [
             {"temperature": temperature, "max_tokens": max_tokens},
@@ -311,25 +399,17 @@ class ChapterWriter:
                 "max_tokens": max(420, min(max_tokens, 1400)),
             },
             {"temperature": 0.2, "max_tokens": max(360, min(max_tokens, 900))},
-        ]
+        ][: max(1, int(max_attempts))]
         last_error: Exception | None = None
         for index, attempt in enumerate(attempts, start=1):
             try:
-                try:
-                    raw = self.llm_client.chat(
-                        messages,
-                        temperature=attempt["temperature"],
-                        max_tokens=attempt["max_tokens"],
-                        response_format={"type": "json_object"},
-                    )
-                except TypeError as exc:
-                    if "response_format" not in str(exc):
-                        raise
-                    raw = self.llm_client.chat(
-                        messages,
-                        temperature=attempt["temperature"],
-                        max_tokens=attempt["max_tokens"],
-                    )
+                raw = self._chat_with_compat(
+                    messages,
+                    temperature=attempt["temperature"],
+                    max_tokens=attempt["max_tokens"],
+                    timeout_seconds=timeout_seconds,
+                    retry_on_timeout=retry_on_timeout,
+                )
                 return parse_llm_json(raw, error_prefix="ChapterWriter JSON parser")
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
@@ -340,3 +420,47 @@ class ChapterWriter:
                     exc,
                 )
         raise ValueError(f"ChapterWriter JSON generation failed after retries: {last_error}")
+
+    def _chat_with_compat(
+        self,
+        messages: list[dict],
+        *,
+        temperature: float,
+        max_tokens: int,
+        timeout_seconds: float | None,
+        retry_on_timeout: bool,
+    ) -> str:
+        variants = [
+            {
+                "response_format": {"type": "json_object"},
+                "timeout_seconds": timeout_seconds,
+                "retry_on_timeout": retry_on_timeout,
+            },
+            {
+                "response_format": {"type": "json_object"},
+            },
+            {
+                "timeout_seconds": timeout_seconds,
+                "retry_on_timeout": retry_on_timeout,
+            },
+            {},
+        ]
+        last_type_error: TypeError | None = None
+        for extra in variants:
+            try:
+                return self.llm_client.chat(
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    **extra,
+                )
+            except TypeError as exc:
+                message = str(exc)
+                if not any(
+                    name in message
+                    for name in ("response_format", "timeout_seconds", "retry_on_timeout")
+                ):
+                    raise
+                last_type_error = exc
+                continue
+        raise last_type_error or RuntimeError("chat compatibility fallback failed")

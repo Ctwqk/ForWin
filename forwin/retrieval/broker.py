@@ -10,6 +10,7 @@ from forwin.protocol.context import (
     PlotThreadSnapshot,
     RelationSnapshot,
 )
+from .memory_index import ChapterMemoryIndex, create_memory_index
 
 
 class RetrievalBroker:
@@ -21,11 +22,15 @@ class RetrievalBroker:
         max_entities: int = 8,
         max_threads: int = 4,
         max_summaries: int = 3,
+        max_memories: int = 3,
+        memory_index: ChapterMemoryIndex | None = None,
     ) -> None:
         self.context_budget_chars = context_budget_chars
         self.max_entities = max_entities
         self.max_threads = max_threads
         self.max_summaries = max_summaries
+        self.max_memories = max_memories
+        self.memory_index = memory_index or create_memory_index()
 
     def build_chapter_context(self, repo, project_id: str, chapter_plan) -> ChapterContextPack:
         base_pack = assemble_context(repo, project_id, chapter_plan)
@@ -34,6 +39,7 @@ class RetrievalBroker:
         entities = self._pick_entities(base_pack.active_entities)
         threads = self._pick_threads(base_pack.active_threads)
         relations = self._pick_relations(base_pack.active_relations, entities)
+        memories = self._pick_memories(base_pack)
 
         pack = base_pack.model_copy(
             update={
@@ -41,20 +47,30 @@ class RetrievalBroker:
                 "active_entities": entities,
                 "active_threads": threads,
                 "active_relations": relations,
+                "retrieved_memories": memories,
             }
         )
+        estimate = self._estimate_pack_with_components(pack)
 
-        while self._estimate_chars(pack) > self.context_budget_chars:
+        while estimate > self.context_budget_chars:
             if pack.active_relations:
+                removed = pack.active_relations[-1]
+                estimate -= self._estimate_component_chars(removed)
                 pack = pack.model_copy(update={"active_relations": pack.active_relations[:-1]})
                 continue
             if len(pack.active_entities) > 3:
+                removed = pack.active_entities[-1]
+                estimate -= self._estimate_component_chars(removed)
                 pack = pack.model_copy(update={"active_entities": pack.active_entities[:-1]})
                 continue
             if len(pack.active_threads) > 1:
+                removed = pack.active_threads[-1]
+                estimate -= self._estimate_component_chars(removed)
                 pack = pack.model_copy(update={"active_threads": pack.active_threads[:-1]})
                 continue
             if len(pack.previous_chapter_summaries) > 1:
+                removed = pack.previous_chapter_summaries[0]
+                estimate -= self._estimate_component_chars(removed)
                 pack = pack.model_copy(
                     update={"previous_chapter_summaries": pack.previous_chapter_summaries[1:]}
                 )
@@ -90,3 +106,52 @@ class RetrievalBroker:
     def _estimate_chars(pack: ChapterContextPack) -> int:
         payload = pack.model_dump(mode="json")
         return len(json.dumps(payload, ensure_ascii=False))
+
+    @classmethod
+    def _estimate_pack_with_components(cls, pack: ChapterContextPack) -> int:
+        empty_pack = pack.model_copy(
+            update={
+                "previous_chapter_summaries": [],
+                "active_entities": [],
+                "active_threads": [],
+                "active_relations": [],
+                "retrieved_memories": [],
+            }
+        )
+        total = cls._estimate_chars(empty_pack)
+        total += sum(cls._estimate_component_chars(item) for item in pack.previous_chapter_summaries)
+        total += sum(cls._estimate_component_chars(item) for item in pack.active_entities)
+        total += sum(cls._estimate_component_chars(item) for item in pack.active_threads)
+        total += sum(cls._estimate_component_chars(item) for item in pack.active_relations)
+        total += sum(cls._estimate_component_chars(item) for item in pack.retrieved_memories)
+        return total
+
+    @staticmethod
+    def _estimate_component_chars(item: object) -> int:
+        if hasattr(item, "model_dump"):
+            payload = item.model_dump(mode="json")
+        else:
+            payload = item
+        return len(json.dumps(payload, ensure_ascii=False)) + 1
+
+    def _pick_memories(self, base_pack: ChapterContextPack):
+        query_parts = [
+            base_pack.chapter_plan_title,
+            base_pack.chapter_plan_one_line,
+            *base_pack.chapter_goals,
+            *(thread.name for thread in base_pack.active_threads[: self.max_threads]),
+            *(entity.name for entity in base_pack.active_entities[: self.max_entities]),
+        ]
+        query = "\n".join(part for part in query_parts if part)
+        if not query.strip():
+            return []
+        memories = self.memory_index.search(
+            project_id=base_pack.project_id,
+            query=query,
+            limit=self.max_memories,
+        )
+        return [
+            memory
+            for memory in memories
+            if memory.chapter_number < base_pack.chapter_number
+        ]

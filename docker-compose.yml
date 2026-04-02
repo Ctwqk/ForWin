@@ -2,6 +2,9 @@ services:
   forwin:
     build: .
     container_name: forwin
+    depends_on:
+      - qdrant
+      - minio
     env_file:
       - .env
     ports:
@@ -12,7 +15,38 @@ services:
       - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
       - MINIMAX_BASE_URL=${MINIMAX_BASE_URL:-https://api.minimaxi.com/v1}
       - MINIMAX_MODEL=${MINIMAX_MODEL:-MiniMax-M2.7}
+      - WRITER_MODE=${WRITER_MODE:-scene}
+      - FORWIN_RETRIEVAL_BACKEND=${FORWIN_RETRIEVAL_BACKEND:-qdrant}
+      - FORWIN_QDRANT_URL=${FORWIN_QDRANT_URL:-http://qdrant:6333}
+      - FORWIN_QDRANT_COLLECTION=${FORWIN_QDRANT_COLLECTION:-chapter_memories}
+      - FORWIN_ARTIFACT_BACKEND=${FORWIN_ARTIFACT_BACKEND:-minio}
+      - FORWIN_MINIO_ENDPOINT=${FORWIN_MINIO_ENDPOINT:-minio:9000}
+      - FORWIN_MINIO_ACCESS_KEY=${FORWIN_MINIO_ACCESS_KEY:-forwinminio}
+      - FORWIN_MINIO_SECRET_KEY=${FORWIN_MINIO_SECRET_KEY:-forwinminio123}
+      - FORWIN_MINIO_BUCKET=${FORWIN_MINIO_BUCKET:-forwin-artifacts}
+      - FORWIN_MINIO_PREFIX=${FORWIN_MINIO_PREFIX:-artifacts}
+      - FORWIN_MINIO_SECURE=${FORWIN_MINIO_SECURE:-false}
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: forwin-qdrant
+    volumes:
+      - forwin-qdrant:/qdrant/storage
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: forwin-minio
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${FORWIN_MINIO_ACCESS_KEY:-forwinminio}
+      - MINIO_ROOT_PASSWORD=${FORWIN_MINIO_SECRET_KEY:-forwinminio123}
+    volumes:
+      - forwin-minio:/data
     restart: unless-stopped
 
 volumes:
   forwin-data:
+  forwin-qdrant:
+  forwin-minio:

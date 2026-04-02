@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ForWin Publisher Bridge",
-  "version": "0.1.5",
+  "version": "0.1.12",
   "description": "Handle publisher login and upload for ForWin through browser-side automation.",
   "permissions": [
     "alarms",
@@ -33,6 +33,7 @@
         "https://*/*"
       ],
       "js": [
+        "channels-runtime.js",
         "content-bridge.js"
       ],
       "run_at": "document_idle"
@@ -45,6 +46,7 @@
         "https://*.fanqienovel.com/*"
       ],
       "js": [
+        "channels-runtime.js",
         "platform-agent.js"
       ],
       "run_at": "document_idle"

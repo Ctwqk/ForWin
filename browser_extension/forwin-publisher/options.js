@@ -3,6 +3,14 @@ import { DEFAULT_SETTINGS, getBackendOrigin, getOriginMatchPattern, normalizeSet
 
 const SETTINGS_KEY = 'forwinPublisherSettings';
 
+function expectElement(id) {
+  const element = document.getElementById(id);
+  if (!element) {
+    throw new Error(`扩展设置页面缺少必要节点: ${id}`);
+  }
+  return element;
+}
+
 async function readSettings() {
   const result = await wrapCall(extensionApi.storage.local, 'get', SETTINGS_KEY);
   return normalizeSettings(result?.[SETTINGS_KEY] || DEFAULT_SETTINGS);
@@ -15,7 +23,7 @@ async function writeSettings(settings) {
 }
 
 function renderPattern(settings) {
-  const el = document.getElementById('match_pattern');
+  const el = expectElement('match_pattern');
   const pattern = getOriginMatchPattern(settings);
   el.textContent = pattern
     ? `页面桥接匹配规则：${pattern}`
@@ -24,26 +32,26 @@ function renderPattern(settings) {
 
 async function boot() {
   const settings = await readSettings();
-  document.getElementById('backend_base_url').value = settings.backendBaseUrl;
-  document.getElementById('api_key').value = settings.apiKey;
-  document.getElementById('sync_session_to_backend').checked = settings.syncSessionToBackend;
-  document.getElementById('status').textContent = '已读取当前扩展设置。';
+  expectElement('backend_base_url').value = settings.backendBaseUrl;
+  expectElement('api_key').value = settings.apiKey;
+  expectElement('sync_session_to_backend').checked = settings.syncSessionToBackend;
+  expectElement('status').textContent = '已读取当前扩展设置。';
   renderPattern(settings);
 }
 
-document.getElementById('save_button').addEventListener('click', async () => {
+expectElement('save_button').addEventListener('click', async () => {
   const nextSettings = normalizeSettings({
-    backendBaseUrl: document.getElementById('backend_base_url').value,
-    apiKey: document.getElementById('api_key').value,
-    syncSessionToBackend: document.getElementById('sync_session_to_backend').checked,
+    backendBaseUrl: expectElement('backend_base_url').value,
+    apiKey: expectElement('api_key').value,
+    syncSessionToBackend: expectElement('sync_session_to_backend').checked,
   });
   if (!getBackendOrigin(nextSettings)) {
-    document.getElementById('status').textContent = 'ForWin Backend URL 无效，请填写 http(s)://主机:端口。';
+    expectElement('status').textContent = 'ForWin Backend URL 无效，请填写 http(s)://主机:端口。';
     return;
   }
   await writeSettings(nextSettings);
   renderPattern(nextSettings);
-  document.getElementById('status').textContent = '设置已保存，扩展会自动刷新页面桥接并开始向后端发送心跳。';
+  expectElement('status').textContent = '设置已保存，扩展会自动刷新页面桥接并开始向后端发送心跳。';
   try {
     await wrapCall(extensionApi.runtime, 'sendMessage', {
       action: 'settings-updated',
@@ -55,5 +63,8 @@ document.getElementById('save_button').addEventListener('click', async () => {
 });
 
 boot().catch((error) => {
-  document.getElementById('status').textContent = error instanceof Error ? error.message : String(error);
+  const status = document.getElementById('status');
+  if (status) {
+    status.textContent = error instanceof Error ? error.message : String(error);
+  }
 });

@@ -263,7 +263,7 @@ export class PublisherExtensionController {
       await this.deps.backend.syncBrowserSession({
         client_id: clientId,
         platform: platformId,
-        cookies,
+        cookies: cookies.map((cookie) => this.#cookieForSessionSync(cookie)),
       });
       synced += 1;
     }
@@ -302,7 +302,8 @@ export class PublisherExtensionController {
       return { skipped: true };
     }
     let handled = 0;
-    while (true) {
+    const MAX_JOBS_PER_DISPATCH = 8;
+    while (handled < MAX_JOBS_PER_DISPATCH) {
       const claimed = await this.deps.backend.claimNextUploadJob({
         client_id: clientId,
         connected_platforms: connectedPlatforms,
@@ -313,6 +314,7 @@ export class PublisherExtensionController {
       handled += 1;
       await this.executeUploadJobPayload(claimed.job, 0);
     }
+    return { found: true, handled, truncated: true };
   }
 
   async closeExistingPlatformSession(platformId) {
@@ -323,6 +325,19 @@ export class PublisherExtensionController {
       await this.deps.closePopup(session.popupWindowId);
       this.loginSessions.delete(session.popupTabId);
     }
+  }
+
+  #cookieForSessionSync(cookie) {
+    return {
+      name: String(cookie?.name || ''),
+      value: String(cookie?.value || ''),
+      domain: String(cookie?.domain || ''),
+      path: String(cookie?.path || '/') || '/',
+      secure: Boolean(cookie?.secure),
+      httpOnly: Boolean(cookie?.httpOnly),
+      sameSite: String(cookie?.sameSite || 'Lax'),
+      expirationDate: cookie?.expirationDate ?? null,
+    };
   }
 
   async evaluateLoginSession(session, url) {

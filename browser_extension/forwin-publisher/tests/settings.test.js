@@ -16,8 +16,8 @@ test('normalizeSettings trims trailing slash and api key whitespace', () => {
 test('getOriginMatchPattern converts backend URL into bridge match pattern', () => {
   assert.equal(
     getOriginMatchPattern({ backendBaseUrl: 'http://192.168.31.10:8899' }),
-    'http://192.168.31.10/*',
+    'http://192.168.31.10:8899/*',
   );
   assert.equal(getBackendOrigin({ backendBaseUrl: 'https://forwin.local:8899/app' }), 'https://forwin.local:8899');
-  assert.equal(getBackendOrigin({ backendBaseUrl: 'http:/10.0.0.150:8899/' }), 'http://10.0.0.150:8899');
+  assert.equal(getBackendOrigin({ backendBaseUrl: 'javascript:alert(1)' }), '');
 });

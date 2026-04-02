@@ -5,7 +5,7 @@ import logging
 from typing import Any
 
 from forwin.writer.llm_client import LLMClient
-from forwin.utils import parse_llm_json
+from forwin.utils import LLMJSONParseError, parse_llm_json
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ class ArcDirector:
                     "name": plot_name,
                     "description": plot_description,
                     "status": "active",
-                    "priority": 10,
+                    "priority": 1,
                 }
             ],
         }
@@ -171,48 +171,117 @@ class ArcDirector:
         )
         return self._as_list(payload.get("chapters"))
 
-    def _plan_world(
+    def draft_arc_structure(
         self,
+        *,
         premise: str,
         genre: str,
-        core: dict,
-        chapters: list[dict],
+        total_chapters: int,
+        policy_tier: str,
+        base_target_size: int,
+        chapter_seed: list[dict[str, Any]],
     ) -> dict:
         fallback = {
-            "characters": [],
-            "locations": [],
-            "factions": [],
-            "relations": [],
-            "plot_threads": [],
+            "phase_layout": ["setup", "pressure", "turn", "payoff"],
+            "key_beats": [
+                item.get("one_line") or item.get("title") or f"第{index + 1}章推进"
+                for index, item in enumerate(chapter_seed[:4])
+            ],
+            "thread_priorities": [
+                {
+                    "name": f"{genre}主线",
+                    "priority": 1,
+                    "reason": "当前 active arc 的核心冲突线",
+                }
+            ],
+            "hotspot_candidates": [
+                item.get("title") or item.get("one_line") or f"第{index + 1}章热点"
+                for index, item in enumerate(chapter_seed[:3])
+            ],
+            "compression_candidates": [
+                item.get("title") or item.get("one_line") or f"第{index + 1}章压缩候选"
+                for index, item in enumerate(chapter_seed[2:4])
+            ],
         }
-        chapter_brief = "\n".join(
-            f"- 第{item.get('chapter_number', idx + 1)}章：{item.get('title', '')}｜{item.get('one_line', '')}"
-            for idx, item in enumerate(chapters[:6])
-        )
         prompt = [
             {
                 "role": "system",
-                "content": "你是故事世界设定编辑，只输出 JSON 对象。",
+                "content": "你是网文 arc 结构导演，只输出 JSON 对象。",
             },
             {
                 "role": "user",
                 "content": (
-                    "请为这个故事补齐初始角色、地点、势力、关系和剧情线，只返回 JSON。\n"
-                    "顶层必须包含：characters、locations、factions、relations、plot_threads。\n"
-                    "每个数组最多 4 项，避免过度展开。角色 initial_state 使用固定字段 "
-                    "location/status/goal/power_level/mood；地点 initial_state 使用 "
-                    "status/controlled_by；势力 initial_state 使用 status/location/goal/power_level。\n\n"
+                    "请为当前 active arc 生成中层结构草案，只返回 JSON。\n"
+                    "字段必须包含：phase_layout、key_beats、thread_priorities、"
+                    "hotspot_candidates、compression_candidates。\n"
+                    "thread_priorities 中每项必须有 name/priority/reason。\n\n"
                     f"类型：{genre}\n"
-                    f"前提：{premise}\n"
-                    f"整体弧线：{core.get('arc_synopsis', '')}\n"
-                    f"章节表：\n{chapter_brief}"
+                    f"全书目标章节数：{total_chapters}\n"
+                    f"当前 policy tier：{policy_tier}\n"
+                    f"当前 arc 的基础 target：{base_target_size}\n"
+                    f"故事前提：{premise}\n"
+                    f"近端章节种子：{json.dumps(chapter_seed, ensure_ascii=False)}"
                 ),
             },
         ]
         return self._call_json(
             prompt,
             temperature=0.4,
-            max_tokens=min(self.max_tokens, 1400),
+            max_tokens=min(self.max_tokens, 1000),
+            fallback=fallback,
+        )
+
+    def analyze_arc_envelope(
+        self,
+        *,
+        total_chapters: int,
+        policy_tier: str,
+        base_target_size: int,
+        base_soft_min: int,
+        base_soft_max: int,
+        structure_draft: dict[str, Any],
+        provisional_band: list[dict[str, Any]],
+    ) -> dict:
+        fallback = {
+            "recommendation": "keep",
+            "evidence": [
+                f"policy_tier={policy_tier}",
+                f"base_target={base_target_size}",
+                f"provisional_band={len(provisional_band)}",
+            ],
+            "expansion_signals": [],
+            "compression_signals": [],
+            "suggested_target": base_target_size,
+            "suggested_soft_min": base_soft_min,
+            "suggested_soft_max": base_soft_max,
+            "confidence": 0.65,
+        }
+        prompt = [
+            {
+                "role": "system",
+                "content": "你是网文 arc envelope 分析器，只输出 JSON 对象。",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "请根据 current active arc 的结构草案和 provisional band，"
+                    "输出 keep / expand / compress 建议。\n"
+                    "字段必须包含：recommendation、evidence、expansion_signals、"
+                    "compression_signals、suggested_target、suggested_soft_min、"
+                    "suggested_soft_max、confidence。\n\n"
+                    f"全书目标章节数：{total_chapters}\n"
+                    f"policy tier：{policy_tier}\n"
+                    f"base target：{base_target_size}\n"
+                    f"base soft range：{base_soft_min} ~ {base_soft_max}\n"
+                    f"ArcStructureDraft：{json.dumps(structure_draft, ensure_ascii=False)}\n"
+                    f"Provisional band：{json.dumps(provisional_band, ensure_ascii=False)}"
+                ),
+            },
+        ]
+        return self._call_json(
+            prompt,
+            temperature=0.35,
+            max_tokens=min(self.max_tokens, 1100),
             fallback=fallback,
         )
 
@@ -224,6 +293,8 @@ class ArcDirector:
         max_tokens: int,
         fallback: dict,
     ) -> dict:
+        if hasattr(self.llm_client, "api_key") and not getattr(self.llm_client, "api_key", "").strip():
+            return fallback
         attempts = [
             {"temperature": temperature, "max_tokens": max_tokens},
             {"temperature": max(0.2, temperature - 0.15), "max_tokens": max(480, min(max_tokens, 900))},
@@ -256,7 +327,7 @@ class ArcDirector:
                     len(attempts),
                     exc,
                 )
-                if "First 300 chars: ''" in str(exc):
+                if isinstance(exc, LLMJSONParseError) and exc.empty_response:
                     break
         logger.warning("ArcDirector falling back to deterministic scaffold: %s", last_error)
         return fallback

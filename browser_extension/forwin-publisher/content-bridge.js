@@ -1,8 +1,16 @@
 (function () {
-  const CHANNEL = 'forwin-publisher-extension';
+  const CHANNEL = globalThis.__FORWIN_CHANNELS__?.BRIDGE_CHANNEL || 'forwin-publisher-extension';
   const runtime = (globalThis.browser && globalThis.browser.runtime) || (globalThis.chrome && globalThis.chrome.runtime);
   if (!runtime) {
     return;
+  }
+
+  function announceReady() {
+    try {
+      runtime.sendMessage({ action: 'content-bridge-ready' });
+    } catch (_error) {
+      // Ignore when the background worker is still waking up.
+    }
   }
 
   window.addEventListener('message', (event) => {
@@ -55,4 +63,7 @@
       window.location.origin,
     );
   });
+
+  window.addEventListener('pageshow', announceReady);
+  announceReady();
 })();

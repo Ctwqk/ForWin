@@ -235,6 +235,7 @@ class PublisherManager:
             if isinstance(item, dict) and str(item.get("name", "")).strip()
         ]
         with self.session_factory() as session:
+            self._ensure_extension_client(session, client_id)
             stored = session.get(PublisherBrowserSession, platform)
             if stored is None:
                 stored = PublisherBrowserSession(platform_id=platform)
@@ -400,10 +401,7 @@ class PublisherManager:
     ) -> dict[str, Any]:
         now = _utc_now()
         with self.session_factory() as session:
-            client = session.get(PublisherExtensionClient, client_id)
-            if client is None:
-                client = PublisherExtensionClient(client_id=client_id)
-                session.add(client)
+            client = self._ensure_extension_client(session, client_id)
 
             client.extension_version = extension_version
             client.browser_name = browser_name
@@ -451,6 +449,7 @@ class PublisherManager:
             if job is None:
                 raise ValueError("上传任务不存在。")
 
+            self._ensure_extension_client(session, client_id)
             if client_id:
                 job.extension_client_id = client_id
             if status == "running":
@@ -536,6 +535,7 @@ class PublisherManager:
         updated = 0
 
         with self.session_factory() as session:
+            self._ensure_extension_client(session, client_id)
             if job_id:
                 job = session.get(PublisherCommentSyncJob, job_id)
                 if job is not None:
@@ -543,22 +543,38 @@ class PublisherManager:
                     job.status = "running"
                     job.started_at = job.started_at or now
 
+            remote_ids = [
+                str(item.get("remote_comment_id", "")).strip()
+                for item in comments
+                if str(item.get("remote_comment_id", "")).strip()
+            ]
+            existing_rows = (
+                session.execute(
+                    select(PublisherRawComment).where(
+                        PublisherRawComment.platform_id == platform,
+                        PublisherRawComment.remote_comment_id.in_(remote_ids),
+                    )
+                ).scalars().all()
+                if remote_ids
+                else []
+            )
+            row_map = {
+                row.remote_comment_id: row
+                for row in existing_rows
+            }
+
             for item in comments:
                 remote_comment_id = str(item.get("remote_comment_id", "")).strip()
                 if not remote_comment_id:
                     continue
-                row = session.execute(
-                    select(PublisherRawComment).where(
-                        PublisherRawComment.platform_id == platform,
-                        PublisherRawComment.remote_comment_id == remote_comment_id,
-                    )
-                ).scalar_one_or_none()
+                row = row_map.get(remote_comment_id)
                 if row is None:
                     row = PublisherRawComment(
                         platform_id=platform,
                         remote_comment_id=remote_comment_id,
                     )
                     session.add(row)
+                    row_map[remote_comment_id] = row
                     inserted += 1
                 else:
                     updated += 1
@@ -666,6 +682,20 @@ class PublisherManager:
         if parsed is None:
             return False
         return parsed >= (_utc_now() - timedelta(seconds=self.heartbeat_stale_seconds))
+
+    @staticmethod
+    def _ensure_extension_client(
+        session,
+        client_id: str,
+    ) -> PublisherExtensionClient | None:
+        normalized = str(client_id or "").strip()
+        if not normalized:
+            return None
+        client = session.get(PublisherExtensionClient, normalized)
+        if client is None:
+            client = PublisherExtensionClient(client_id=normalized)
+            session.add(client)
+        return client
 
     def _is_browser_session_connected(
         self,

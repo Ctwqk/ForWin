@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -25,6 +25,9 @@ class Project(Base):
 
 class ArcPlanVersion(Base):
     __tablename__ = "arc_plan_versions"
+    __table_args__ = (
+        Index("ix_arc_plan_versions_project_status", "project_id", "status"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(
@@ -38,6 +41,10 @@ class ArcPlanVersion(Base):
 
 class ChapterPlan(Base):
     __tablename__ = "chapter_plans"
+    __table_args__ = (
+        Index("ix_chapter_plans_project_chapter", "project_id", "chapter_number"),
+        Index("ix_chapter_plans_project_status", "project_id", "status"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(

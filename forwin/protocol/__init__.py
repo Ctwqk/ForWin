@@ -7,9 +7,14 @@ from .state_change import (
 )
 from .context import (
     EntitySnapshot,
+    MemorySnippet,
+    NPCIntentView,
+    ReaderCommentView,
+    ReaderFeedbackView,
     RelationSnapshot,
     PlotThreadSnapshot,
     TimelineSnapshot,
+    WorldPressureView,
     ChapterContextPack,
 )
 from .scene import ScenePlan, SceneOutput
@@ -25,9 +30,14 @@ __all__ = [
     "TimeAdvance",
     # context
     "EntitySnapshot",
+    "MemorySnippet",
+    "NPCIntentView",
+    "ReaderCommentView",
+    "ReaderFeedbackView",
     "RelationSnapshot",
     "PlotThreadSnapshot",
     "TimelineSnapshot",
+    "WorldPressureView",
     "ChapterContextPack",
     # scene
     "ScenePlan",

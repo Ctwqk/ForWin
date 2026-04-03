@@ -68,7 +68,6 @@ export class PublisherExtensionController {
       loginMethod: 'scan',
       lastError: '',
     });
-    await this.sendHeartbeat();
     const popup = await this.deps.openLoginPopup(adapter.loginUrl);
     const session = {
       platformId,
@@ -79,12 +78,24 @@ export class PublisherExtensionController {
       lastUrl: adapter.loginUrl,
     };
     this.loginSessions.set(popup.tabId, session);
+    let syncWarning = '';
+    try {
+      await this.sendHeartbeat();
+    } catch (error) {
+      syncWarning = error instanceof Error ? error.message : String(error);
+    }
     await this.deps.notifyPage(originTabId, 'login-status', {
       platform: platformId,
       connected: false,
-      message: `${adapter.displayName} 登录弹窗已打开，请在弹窗里完成扫码。`,
+      message: syncWarning
+        ? `${adapter.displayName} 登录弹窗已打开，请在弹窗里完成扫码。状态同步稍后重试：${syncWarning}`
+        : `${adapter.displayName} 登录弹窗已打开，请在弹窗里完成扫码。`,
     });
-    return { message: `${adapter.displayName} 登录弹窗已打开。` };
+    return {
+      message: syncWarning
+        ? `${adapter.displayName} 登录弹窗已打开，但状态同步失败：${syncWarning}`
+        : `${adapter.displayName} 登录弹窗已打开。`,
+    };
   }
 
   async executeUploadJob(jobId, originTabId) {
@@ -93,6 +104,39 @@ export class PublisherExtensionController {
     }
     const job = await this.deps.backend.getUploadJob(jobId);
     return this.executeUploadJobPayload(job, originTabId);
+  }
+
+  async waitForOpenedUploadTab(tabId, platformId, timeoutMs = 6000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const tab = await this.deps.getTab(tabId);
+      const url = String(tab?.url || '');
+      const isExpectedUrl = platformId === 'qidian'
+        ? url.includes('write.qq.com')
+        : url.includes('fanqienovel.com');
+      if (isExpectedUrl && (!tab?.status || tab.status === 'complete')) {
+        return true;
+      }
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 400));
+    }
+    return false;
+  }
+
+  async runUploadWithPageReadyRetries(tabId, platformId, uploadPayload) {
+    let result = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      result = await this.deps.runUploadCommand(tabId, uploadPayload);
+      if (result.ok || !String(result.error || '').includes('平台页面没有准备好')) {
+        return result;
+      }
+      await this.waitForOpenedUploadTab(tabId, platformId, 8000 + (attempt * 4000));
+      await new Promise((resolve) => globalThis.setTimeout(resolve, 1500 + (attempt * 1000)));
+    }
+    return result || {
+      ok: false,
+      error: '平台页面没有准备好，无法执行上传。',
+      currentUrl: '',
+    };
   }
 
   async executeUploadJobPayload(job, originTabId = 0) {
@@ -119,22 +163,30 @@ export class PublisherExtensionController {
     try {
       const targetUrl = job.upload_url || adapter.publishUrl;
       const tab = await this.deps.openUploadTab(targetUrl);
-      const result = await this.deps.runUploadCommand(tab.tabId, {
+      await this.waitForOpenedUploadTab(tab.tabId, job.platform, 6000);
+      const uploadPayload = {
         platform: job.platform,
         display_name: job.display_name,
         book_name: job.book_name,
         chapter_title: job.chapter_title,
         body: job.body,
         publish: job.publish,
-      });
+        create_if_missing: Boolean(job.result_payload?.create_if_missing),
+        book_meta: job.result_payload?.book_meta || null,
+      };
+      const result = await this.runUploadWithPageReadyRetries(tab.tabId, job.platform, uploadPayload);
       const finalStatus = result.ok ? 'succeeded' : 'failed';
+      const resultPayload = {
+        ...(result.resultPayload || {}),
+        ...(result.errorCode ? { error_code: result.errorCode } : {}),
+      };
       await this.deps.backend.updateUploadJobResult(job.job_id, {
         client_id: clientId,
         status: finalStatus,
         message: result.message || (result.ok ? '上传已完成。' : '上传失败。'),
         current_url: result.currentUrl || '',
         error: result.error || '',
-        result_payload: result.resultPayload || {},
+        result_payload: resultPayload,
       });
 
       await this.deps.setPlatformState(job.platform, {

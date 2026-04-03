@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import os
 
+DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
+DEFAULT_MINIMAX_MODEL = "MiniMax-M2.7"
+
 try:
     from pydantic_settings import BaseSettings as _ConfigBaseModel
 
@@ -30,7 +33,7 @@ def _env_values() -> dict[str, object]:
         "embedding_backend": os.environ.get("FORWIN_EMBEDDING_BACKEND", "hash"),
         "embedding_base_url": os.environ.get(
             "FORWIN_EMBEDDING_BASE_URL",
-            os.environ.get("MINIMAX_BASE_URL", "https://api.minimaxi.com/v1"),
+            os.environ.get("MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL),
         ),
         "embedding_api_key": os.environ.get(
             "FORWIN_EMBEDDING_API_KEY",
@@ -47,9 +50,9 @@ def _env_values() -> dict[str, object]:
         ),
         "minimax_api_key": os.environ.get("MINIMAX_API_KEY", ""),
         "minimax_base_url": os.environ.get(
-            "MINIMAX_BASE_URL", "https://api.minimaxi.com/v1"
+            "MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL
         ),
-        "minimax_model": os.environ.get("MINIMAX_MODEL", "MiniMax-M2.7"),
+        "minimax_model": os.environ.get("MINIMAX_MODEL", DEFAULT_MINIMAX_MODEL),
         "llm_timeout_seconds": float(os.environ.get("LLM_TIMEOUT_SECONDS", "90")),
         "scene_call_timeout_seconds": float(
             os.environ.get("SCENE_CALL_TIMEOUT_SECONDS", "45")
@@ -108,15 +111,15 @@ class _ConfigFields:
     qdrant_url: str = ""
     qdrant_collection: str = "chapter_memories"
     embedding_backend: str = "hash"
-    embedding_base_url: str = "https://api.minimaxi.com/v1"
+    embedding_base_url: str = DEFAULT_MINIMAX_BASE_URL
     embedding_api_key: str = ""
     embedding_model: str = ""
     embedding_dims: int = 64
     runtime_settings_path: str = "data/runtime_settings.json"
     publisher_extension_api_key: str = ""
     minimax_api_key: str = ""
-    minimax_base_url: str = "https://api.minimaxi.com/v1"
-    minimax_model: str = "MiniMax-M2.7"
+    minimax_base_url: str = DEFAULT_MINIMAX_BASE_URL
+    minimax_model: str = DEFAULT_MINIMAX_MODEL
     llm_timeout_seconds: float = 90.0
     scene_call_timeout_seconds: float = 45.0
     max_chapter_chars: int = 2200

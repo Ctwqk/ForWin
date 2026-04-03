@@ -2,13 +2,20 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from forwin.models.draft import ChapterDraft
 from forwin.models.entity import EntityState
-from forwin.models.phase import ArcEnvelope, ProjectReplanEvent, ProjectStageAnalysis
+from forwin.models.phase import (
+    ArcEnvelope,
+    ArcEnvelopeAnalysis,
+    ProjectReplanEvent,
+    ProjectStageAnalysis,
+    ProvisionalBandExecution,
+)
 from forwin.models.phase4 import WorldSimulationTurn
 from forwin.models.project import ArcPlanVersion
 from forwin.models.thread import PlotThreadBeat
@@ -16,6 +23,76 @@ from forwin.models.thread import PlotThreadBeat
 
 def _as_list(values: Iterable[str]) -> list[str]:
     return [value for value in values if value]
+
+
+def _latest_ranked_rows(
+    model,
+    partition_column,
+    order_by: tuple[Any, ...],
+    id_filter_values: list[str],
+    *,
+    filter_column=None,
+):
+    column = filter_column or partition_column
+    return (
+        select(
+            model.id.label("row_id"),
+            partition_column.label("partition_key"),
+            func.row_number()
+            .over(partition_by=partition_column, order_by=order_by)
+            .label("rn"),
+        )
+        .where(column.in_(id_filter_values))
+        .subquery()
+    )
+
+
+def _load_latest_partitioned_rows(
+    session: Session,
+    model,
+    partition_column,
+    id_filter_values: Iterable[str],
+    *,
+    order_by: tuple[Any, ...],
+    filter_column=None,
+) -> dict[str, Any]:
+    ids = _as_list(id_filter_values)
+    if not ids:
+        return {}
+
+    ranked = _latest_ranked_rows(
+        model,
+        partition_column,
+        order_by,
+        ids,
+        filter_column=filter_column,
+    )
+    rows = session.execute(
+        select(model)
+        .join(ranked, model.id == ranked.c.row_id)
+        .where(ranked.c.rn == 1)
+    ).scalars().all()
+    return {getattr(row, partition_column.key): row for row in rows}
+
+
+def _active_arc_rows_for_projects(project_ids: list[str]):
+    return (
+        select(
+            ArcPlanVersion.id.label("arc_id"),
+            ArcPlanVersion.project_id.label("project_id"),
+            func.row_number()
+            .over(
+                partition_by=ArcPlanVersion.project_id,
+                order_by=(ArcPlanVersion.version.desc(), ArcPlanVersion.id.desc()),
+            )
+            .label("arc_rn"),
+        )
+        .where(
+            ArcPlanVersion.project_id.in_(project_ids),
+            ArcPlanVersion.status == "active",
+        )
+        .subquery()
+    )
 
 
 def load_latest_entity_states(
@@ -106,140 +183,68 @@ def load_latest_drafts_by_plan_id(
     session: Session,
     chapter_plan_ids: Iterable[str],
 ) -> dict[str, ChapterDraft]:
-    ids = _as_list(chapter_plan_ids)
-    if not ids:
-        return {}
-
-    ranked = (
-        select(
-            ChapterDraft.id.label("row_id"),
-            ChapterDraft.chapter_plan_id.label("chapter_plan_id"),
-            func.row_number()
-            .over(
-                partition_by=ChapterDraft.chapter_plan_id,
-                order_by=(
-                    ChapterDraft.version.desc(),
-                    ChapterDraft.created_at.desc(),
-                    ChapterDraft.id.desc(),
-                ),
-            )
-            .label("rn"),
-        )
-        .where(ChapterDraft.chapter_plan_id.in_(ids))
-        .subquery()
+    return _load_latest_partitioned_rows(
+        session,
+        ChapterDraft,
+        ChapterDraft.chapter_plan_id,
+        chapter_plan_ids,
+        order_by=(
+            ChapterDraft.version.desc(),
+            ChapterDraft.created_at.desc(),
+            ChapterDraft.id.desc(),
+        ),
     )
-
-    rows = session.execute(
-        select(ChapterDraft)
-        .join(ranked, ChapterDraft.id == ranked.c.row_id)
-        .where(ranked.c.rn == 1)
-    ).scalars().all()
-    return {row.chapter_plan_id: row for row in rows}
 
 
 def load_latest_stage_analysis_by_project(
     session: Session,
     project_ids: Iterable[str],
 ) -> dict[str, ProjectStageAnalysis]:
-    ids = _as_list(project_ids)
-    if not ids:
-        return {}
-
-    ranked = (
-        select(
-            ProjectStageAnalysis.id.label("row_id"),
-            ProjectStageAnalysis.project_id.label("project_id"),
-            func.row_number()
-            .over(
-                partition_by=ProjectStageAnalysis.project_id,
-                order_by=(
-                    ProjectStageAnalysis.chapter_number.desc(),
-                    ProjectStageAnalysis.created_at.desc(),
-                    ProjectStageAnalysis.id.desc(),
-                ),
-            )
-            .label("rn"),
-        )
-        .where(ProjectStageAnalysis.project_id.in_(ids))
-        .subquery()
+    return _load_latest_partitioned_rows(
+        session,
+        ProjectStageAnalysis,
+        ProjectStageAnalysis.project_id,
+        project_ids,
+        order_by=(
+            ProjectStageAnalysis.chapter_number.desc(),
+            ProjectStageAnalysis.created_at.desc(),
+            ProjectStageAnalysis.id.desc(),
+        ),
     )
-
-    rows = session.execute(
-        select(ProjectStageAnalysis)
-        .join(ranked, ProjectStageAnalysis.id == ranked.c.row_id)
-        .where(ranked.c.rn == 1)
-    ).scalars().all()
-    return {row.project_id: row for row in rows}
 
 
 def load_latest_world_turn_by_project(
     session: Session,
     project_ids: Iterable[str],
 ) -> dict[str, WorldSimulationTurn]:
-    ids = _as_list(project_ids)
-    if not ids:
-        return {}
-
-    ranked = (
-        select(
-            WorldSimulationTurn.id.label("row_id"),
-            WorldSimulationTurn.project_id.label("project_id"),
-            func.row_number()
-            .over(
-                partition_by=WorldSimulationTurn.project_id,
-                order_by=(
-                    WorldSimulationTurn.chapter_number.desc(),
-                    WorldSimulationTurn.created_at.desc(),
-                    WorldSimulationTurn.id.desc(),
-                ),
-            )
-            .label("rn"),
-        )
-        .where(WorldSimulationTurn.project_id.in_(ids))
-        .subquery()
+    return _load_latest_partitioned_rows(
+        session,
+        WorldSimulationTurn,
+        WorldSimulationTurn.project_id,
+        project_ids,
+        order_by=(
+            WorldSimulationTurn.chapter_number.desc(),
+            WorldSimulationTurn.created_at.desc(),
+            WorldSimulationTurn.id.desc(),
+        ),
     )
-
-    rows = session.execute(
-        select(WorldSimulationTurn)
-        .join(ranked, WorldSimulationTurn.id == ranked.c.row_id)
-        .where(ranked.c.rn == 1)
-    ).scalars().all()
-    return {row.project_id: row for row in rows}
 
 
 def load_latest_replan_event_by_project(
     session: Session,
     project_ids: Iterable[str],
 ) -> dict[str, ProjectReplanEvent]:
-    ids = _as_list(project_ids)
-    if not ids:
-        return {}
-
-    ranked = (
-        select(
-            ProjectReplanEvent.id.label("row_id"),
-            ProjectReplanEvent.project_id.label("project_id"),
-            func.row_number()
-            .over(
-                partition_by=ProjectReplanEvent.project_id,
-                order_by=(
-                    ProjectReplanEvent.trigger_chapter.desc(),
-                    ProjectReplanEvent.created_at.desc(),
-                    ProjectReplanEvent.id.desc(),
-                ),
-            )
-            .label("rn"),
-        )
-        .where(ProjectReplanEvent.project_id.in_(ids))
-        .subquery()
+    return _load_latest_partitioned_rows(
+        session,
+        ProjectReplanEvent,
+        ProjectReplanEvent.project_id,
+        project_ids,
+        order_by=(
+            ProjectReplanEvent.trigger_chapter.desc(),
+            ProjectReplanEvent.created_at.desc(),
+            ProjectReplanEvent.id.desc(),
+        ),
     )
-
-    rows = session.execute(
-        select(ProjectReplanEvent)
-        .join(ranked, ProjectReplanEvent.id == ranked.c.row_id)
-        .where(ranked.c.rn == 1)
-    ).scalars().all()
-    return {row.project_id: row for row in rows}
 
 
 def load_latest_active_arc_envelope_by_project(
@@ -250,23 +255,7 @@ def load_latest_active_arc_envelope_by_project(
     if not ids:
         return {}
 
-    active_arcs = (
-        select(
-            ArcPlanVersion.id.label("arc_id"),
-            ArcPlanVersion.project_id.label("project_id"),
-            func.row_number()
-            .over(
-                partition_by=ArcPlanVersion.project_id,
-                order_by=(ArcPlanVersion.version.desc(), ArcPlanVersion.id.desc()),
-            )
-            .label("arc_rn"),
-        )
-        .where(
-            ArcPlanVersion.project_id.in_(ids),
-            ArcPlanVersion.status == "active",
-        )
-        .subquery()
-    )
+    active_arcs = _active_arc_rows_for_projects(ids)
     ranked = (
         select(
             ArcEnvelope.id.label("row_id"),
@@ -288,6 +277,57 @@ def load_latest_active_arc_envelope_by_project(
         .where(ranked.c.rn == 1)
     ).scalars().all()
     return {row.project_id: row for row in rows}
+
+
+def load_latest_arc_envelope_analysis_by_project(
+    session: Session,
+    project_ids: Iterable[str],
+) -> dict[str, ArcEnvelopeAnalysis]:
+    ids = _as_list(project_ids)
+    if not ids:
+        return {}
+
+    active_arcs = _active_arc_rows_for_projects(ids)
+    ranked = (
+        select(
+            ArcEnvelopeAnalysis.id.label("row_id"),
+            ArcEnvelopeAnalysis.project_id.label("project_id"),
+            func.row_number()
+            .over(
+                partition_by=ArcEnvelopeAnalysis.project_id,
+                order_by=(
+                    ArcEnvelopeAnalysis.created_at.desc(),
+                    ArcEnvelopeAnalysis.id.desc(),
+                ),
+            )
+            .label("rn"),
+        )
+        .join(active_arcs, ArcEnvelopeAnalysis.arc_id == active_arcs.c.arc_id)
+        .where(active_arcs.c.arc_rn == 1)
+        .subquery()
+    )
+    rows = session.execute(
+        select(ArcEnvelopeAnalysis)
+        .join(ranked, ArcEnvelopeAnalysis.id == ranked.c.row_id)
+        .where(ranked.c.rn == 1)
+    ).scalars().all()
+    return {row.project_id: row for row in rows}
+
+
+def load_latest_provisional_band_execution_by_project(
+    session: Session,
+    project_ids: Iterable[str],
+) -> dict[str, ProvisionalBandExecution]:
+    return _load_latest_partitioned_rows(
+        session,
+        ProvisionalBandExecution,
+        ProvisionalBandExecution.project_id,
+        project_ids,
+        order_by=(
+            ProvisionalBandExecution.created_at.desc(),
+            ProvisionalBandExecution.id.desc(),
+        ),
+    )
 
 
 def chunked(values: Sequence[str], size: int = 200) -> list[list[str]]:

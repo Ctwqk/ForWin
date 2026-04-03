@@ -4,6 +4,8 @@ import json
 import threading
 from pathlib import Path
 
+from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
+
 
 class RuntimeSettingsStore:
     """Persist mutable runtime settings outside code and environment files."""
@@ -13,8 +15,8 @@ class RuntimeSettingsStore:
         path: str,
         *,
         default_api_key: str = "",
-        default_base_url: str = "https://api.minimaxi.com/v1",
-        default_model: str = "MiniMax-M2.7",
+        default_base_url: str = DEFAULT_MINIMAX_BASE_URL,
+        default_model: str = DEFAULT_MINIMAX_MODEL,
         default_operation_mode: str = "blackbox",
         default_freeze_failed_candidates: bool = True,
     ) -> None:
@@ -28,8 +30,11 @@ class RuntimeSettingsStore:
             "operation_mode": default_operation_mode,
             "freeze_failed_candidates": default_freeze_failed_candidates,
         }
+        self._cache: dict[str, str | bool] | None = None
 
     def _load_unlocked(self) -> dict[str, str | bool]:
+        if self._cache is not None:
+            return dict(self._cache)
         payload = dict(self._defaults)
         if self.path.exists():
             try:
@@ -45,6 +50,7 @@ class RuntimeSettingsStore:
                     "freeze_failed_candidates": bool(raw.get("freeze_failed_candidates", payload["freeze_failed_candidates"])),
                 }
             )
+        self._cache = dict(payload)
         return payload
 
     def get(self) -> dict[str, str | bool]:
@@ -76,4 +82,5 @@ class RuntimeSettingsStore:
                 json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            self._cache = dict(payload)
             return payload

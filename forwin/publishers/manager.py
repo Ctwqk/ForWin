@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
@@ -17,6 +18,8 @@ from forwin.models.publisher import (
 )
 
 from .platforms import SUPPORTED_PLATFORMS, PlatformSpec
+
+_DISPLAY_TZ = ZoneInfo("America/Los_Angeles")
 
 
 def _utc_now() -> datetime:
@@ -35,7 +38,7 @@ def _isoformat(value: datetime | None) -> str:
     parsed = _as_utc(value)
     if parsed is None:
         return ""
-    return parsed.isoformat().replace("+00:00", "Z")
+    return parsed.astimezone(_DISPLAY_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
 class PublisherManager:
@@ -50,19 +53,50 @@ class PublisherManager:
         self.heartbeat_stale_seconds = heartbeat_stale_seconds
 
     def list_platforms(self) -> list[dict[str, Any]]:
+        platform_ids = list(SUPPORTED_PLATFORMS.keys())
         with self.session_factory() as session:
-            states = {
-                item.platform_id: item
-                for item in session.execute(select(PublisherConnectionState)).scalars()
+            state_rows = session.execute(
+                select(
+                    PublisherConnectionState.platform_id,
+                    PublisherConnectionState.extension_client_id,
+                    PublisherConnectionState.connected,
+                    PublisherConnectionState.last_error,
+                    PublisherConnectionState.last_heartbeat_at,
+                ).where(PublisherConnectionState.platform_id.in_(platform_ids))
+            ).all()
+            browser_session_rows = session.execute(
+                select(
+                    PublisherBrowserSession.platform_id,
+                    PublisherBrowserSession.extension_client_id,
+                    PublisherBrowserSession.cookies_json,
+                    PublisherBrowserSession.last_error,
+                ).where(PublisherBrowserSession.platform_id.in_(platform_ids))
+            ).all()
+            client_ids = {
+                client_id
+                for row in state_rows
+                for client_id in [row.extension_client_id]
+                if client_id
+            } | {
+                client_id
+                for row in browser_session_rows
+                for client_id in [row.extension_client_id]
+                if client_id
             }
-            clients = {
-                item.client_id: item
-                for item in session.execute(select(PublisherExtensionClient)).scalars()
-            }
-            browser_sessions = {
-                item.platform_id: item
-                for item in session.execute(select(PublisherBrowserSession)).scalars()
-            }
+            client_rows = (
+                session.execute(
+                    select(
+                        PublisherExtensionClient.client_id,
+                        PublisherExtensionClient.last_heartbeat_at,
+                    ).where(PublisherExtensionClient.client_id.in_(client_ids))
+                ).all()
+                if client_ids
+                else []
+            )
+
+            states = {row.platform_id: row for row in state_rows}
+            clients = {row.client_id: row for row in client_rows}
+            browser_sessions = {row.platform_id: row for row in browser_session_rows}
 
         items: list[dict[str, Any]] = []
         for spec in SUPPORTED_PLATFORMS.values():
@@ -136,8 +170,16 @@ class PublisherManager:
         body: str,
         upload_url: str | None,
         publish: bool,
+        create_if_missing: bool = False,
+        book_meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         spec = self._spec(platform)
+        job_payload: dict[str, Any] = {}
+        if create_if_missing:
+            job_payload["create_if_missing"] = True
+        normalized_book_meta = self._normalize_book_meta(book_meta)
+        if normalized_book_meta:
+            job_payload["book_meta"] = normalized_book_meta
         with self.session_factory() as session:
             job = PublisherUploadJob(
                 platform_id=platform,
@@ -148,70 +190,12 @@ class PublisherManager:
                 upload_url=upload_url or "",
                 publish=publish,
                 result_message=f"{spec.display_name} 上传任务已创建，等待浏览器扩展执行。",
+                result_payload_json=json.dumps(job_payload, ensure_ascii=False),
             )
             session.add(job)
             session.commit()
             session.refresh(job)
             return self._serialize_upload_job(job)
-
-    def claim_upload_job_for_server(
-        self,
-        *,
-        job_id: str,
-        client_id: str,
-    ) -> dict[str, Any] | None:
-        now = _utc_now()
-        with self.session_factory() as session:
-            job = session.get(PublisherUploadJob, job_id)
-            if job is None or job.status != "pending":
-                return None
-
-            job.status = "running"
-            job.extension_client_id = client_id
-            job.claimed_at = job.claimed_at or now
-            job.started_at = job.started_at or now
-            job.result_message = "后端正在使用已同步会话执行上传。"
-            job.error_message = ""
-
-            session.commit()
-            session.refresh(job)
-            return self._serialize_upload_job(job)
-
-    def claim_pending_upload_jobs_for_server(
-        self,
-        *,
-        platform: str,
-        client_id: str,
-        limit: int = 5,
-    ) -> list[dict[str, Any]]:
-        self._spec(platform)
-        now = _utc_now()
-        claimed: list[dict[str, Any]] = []
-        with self.session_factory() as session:
-            jobs = session.execute(
-                select(PublisherUploadJob)
-                .where(
-                    PublisherUploadJob.status == "pending",
-                    PublisherUploadJob.platform_id == platform,
-                )
-                .order_by(PublisherUploadJob.created_at.asc())
-                .limit(limit)
-            ).scalars().all()
-
-            for job in jobs:
-                job.status = "running"
-                job.extension_client_id = client_id
-                job.claimed_at = job.claimed_at or now
-                job.started_at = job.started_at or now
-                job.result_message = "后端正在使用已同步会话执行上传。"
-                job.error_message = ""
-
-            session.commit()
-
-            for job in jobs:
-                session.refresh(job)
-                claimed.append(self._serialize_upload_job(job))
-        return claimed
 
     def get_upload_job(self, job_id: str) -> dict[str, Any]:
         with self.session_factory() as session:
@@ -464,7 +448,16 @@ class PublisherManager:
             job.current_url = current_url
             job.result_message = message
             job.error_message = error
-            job.result_payload_json = json.dumps(result_payload or {}, ensure_ascii=False)
+            merged_payload = {}
+            try:
+                merged_payload = json.loads(job.result_payload_json or "{}")
+            except json.JSONDecodeError:
+                merged_payload = {}
+            if not isinstance(merged_payload, dict):
+                merged_payload = {}
+            if result_payload:
+                merged_payload.update(result_payload)
+            job.result_payload_json = json.dumps(merged_payload, ensure_ascii=False)
 
             if job.platform_id in SUPPORTED_PLATFORMS:
                 state = session.get(PublisherConnectionState, job.platform_id)
@@ -652,6 +645,36 @@ class PublisherManager:
             "sameSite": same_site,
             "expires": expires,
         }
+
+    @staticmethod
+    def _normalize_book_meta(book_meta: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(book_meta, dict):
+            return {}
+
+        def normalized_tags(key: str) -> list[str]:
+            values = book_meta.get(key, [])
+            if not isinstance(values, list):
+                return []
+            return [str(item).strip() for item in values if str(item).strip()]
+
+        normalized: dict[str, Any] = {}
+        audience = str(book_meta.get("audience", "")).strip()
+        if audience:
+            normalized["audience"] = audience
+        primary_category = str(book_meta.get("primary_category", "")).strip()
+        if primary_category:
+            normalized["primary_category"] = primary_category
+        protagonist_names = normalized_tags("protagonist_names")[:2]
+        if protagonist_names:
+            normalized["protagonist_names"] = protagonist_names
+        intro = str(book_meta.get("intro", "")).strip()
+        if intro:
+            normalized["intro"] = intro
+        for key in ("theme_tags", "role_tags", "plot_tags"):
+            tags = normalized_tags(key)[:2]
+            if tags:
+                normalized[key] = tags
+        return normalized
 
     def _serialize_upload_job(self, job: PublisherUploadJob) -> dict[str, Any]:
         spec = self._spec(job.platform_id)

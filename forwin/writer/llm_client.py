@@ -5,6 +5,8 @@ import time
 
 import httpx
 
+from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,8 +16,8 @@ class LLMClient:
     def __init__(
         self,
         api_key: str,
-        base_url: str = "https://api.minimaxi.com/v1",
-        model: str = "MiniMax-M2.7",
+        base_url: str = DEFAULT_MINIMAX_BASE_URL,
+        model: str = DEFAULT_MINIMAX_MODEL,
         timeout_seconds: float = 90.0,
     ) -> None:
         self.api_key = api_key

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from forwin.models import PlotThread, PlotThreadBeat
 from forwin.state.query_helpers import load_latest_thread_beats
@@ -70,9 +70,11 @@ def sample_active_threads(
         thread for thread in candidates
         if _gap(thread) < hot_threshold
     ]
+    stale_ids = {thread.id for thread in stale}
+    hot_ids = {thread.id for thread in hot}
     baseline = [
         thread for thread in candidates
-        if thread not in stale and thread not in hot
+        if thread.id not in stale_ids and thread.id not in hot_ids
     ]
 
     stale.sort(key=_score, reverse=True)
@@ -105,7 +107,18 @@ def sample_active_threads(
         _take(merged, active_limit)
 
     chosen = selected[:active_limit]
+    chosen_beats = {
+        thread.id: latest_beats[thread.id]
+        for thread in chosen
+        if thread.id in latest_beats
+    }
+    for thread in chosen:
+        if object_session(thread) is session:
+            session.expunge(thread)
+    for beat in chosen_beats.values():
+        if object_session(beat) is session:
+            session.expunge(beat)
     return SampledThreadSet(
         threads=chosen,
-        latest_beats={thread.id: latest_beats[thread.id] for thread in chosen if thread.id in latest_beats},
+        latest_beats=chosen_beats,
     )

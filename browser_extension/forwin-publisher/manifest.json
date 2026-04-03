@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "ForWin Publisher Bridge",
-  "version": "0.1.12",
+  "version": "0.1.16",
   "description": "Handle publisher login and upload for ForWin through browser-side automation.",
   "permissions": [
     "alarms",
     "cookies",
+    "debugger",
     "storage",
     "tabs"
   ],

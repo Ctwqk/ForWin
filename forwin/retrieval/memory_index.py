@@ -6,7 +6,6 @@ import math
 import re
 import sqlite3
 from contextlib import closing
-from dataclasses import dataclass
 from hashlib import sha1
 from pathlib import Path
 from uuid import UUID
@@ -18,15 +17,6 @@ from forwin.protocol.context import MemorySnippet
 logger = logging.getLogger(__name__)
 
 _WORD_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]")
-
-
-@dataclass(slots=True)
-class ChapterMemoryRecord:
-    project_id: str
-    chapter_number: int
-    title: str
-    summary: str
-    excerpt: str
 
 
 class TextEmbedder:

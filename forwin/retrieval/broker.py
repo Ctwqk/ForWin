@@ -87,6 +87,8 @@ class RetrievalBroker:
         return ranked[: self.max_entities]
 
     def _pick_threads(self, threads: list[PlotThreadSnapshot]) -> list[PlotThreadSnapshot]:
+        # Lower numeric priority means more important, matching the DB/order semantics
+        # used by thread sampling and phase analyzers.
         ranked = sorted(threads, key=lambda item: (item.priority, item.name))
         return ranked[: self.max_threads]
 

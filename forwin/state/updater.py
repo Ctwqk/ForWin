@@ -35,6 +35,7 @@ from forwin.protocol import (
 )
 
 from .repo import StateRepository
+from .query_helpers import load_latest_entity_states
 from .schema import prepare_state_change, validate_state_payload
 
 logger = logging.getLogger(__name__)
@@ -282,6 +283,11 @@ class StateUpdater:
             project_id,
             [change.entity_name for change in changes],
         )
+        existing_entities = [entity for entity in entity_lookup.values() if entity is not None]
+        latest_state_map = load_latest_entity_states(
+            self.session,
+            [entity.id for entity in existing_entities],
+        )
 
         for change in changes:
             entity = entity_lookup.get(change.entity_name)
@@ -301,14 +307,7 @@ class StateUpdater:
                 )
                 entity_lookup[change.entity_name] = entity
 
-            # Retrieve the most recent EntityState.
-            stmt = (
-                select(EntityState)
-                .where(EntityState.entity_id == entity.id)
-                .order_by(EntityState.as_of_chapter.desc())
-                .limit(1)
-            )
-            latest_state = self.session.execute(stmt).scalar_one_or_none()
+            latest_state = latest_state_map.get(entity.id)
 
             current_state: dict = {}
             if latest_state is not None:
@@ -331,6 +330,11 @@ class StateUpdater:
                 entity_id=entity.id,
                 chapter=chapter_number,
                 state=next_state,
+            )
+            latest_state_map[entity.id] = EntityState(
+                entity_id=entity.id,
+                as_of_chapter=chapter_number,
+                state_json=json.dumps(next_state, ensure_ascii=False),
             )
 
     def apply_events(

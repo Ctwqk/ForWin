@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import inspect
 import logging
+import re
 
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import SceneOutput, ScenePlan
@@ -14,6 +16,7 @@ from forwin.protocol.state_change import (
 from forwin.protocol.writer import WriterOutput
 from .llm_client import LLMClient
 from .prompts import (
+    build_preview_chapter_prompt,
     build_single_chapter_draft_prompt,
     build_scene_breakdown_prompt,
     build_scene_generation_prompt,
@@ -64,6 +67,7 @@ class ChapterWriter:
         )
         self.single_call_timeout_seconds = max(10.0, float(single_call_timeout_seconds))
         self.scene_call_timeout_seconds = max(10.0, float(scene_call_timeout_seconds))
+        self._chat_signature = inspect.signature(self.llm_client.chat)
 
     # ------------------------------------------------------------------
     # Public API
@@ -78,6 +82,80 @@ class ChapterWriter:
         if self.writer_mode == "single":
             return self._write_single_chapter(context)
         return self._write_scene_chapter(context)
+
+    def write_preview_chapter(
+        self,
+        context: ChapterContextPack,
+        *,
+        timeout_seconds: float | None = None,
+        max_attempts: int = 2,
+        retry_on_timeout: bool = True,
+    ) -> WriterOutput:
+        """Write a lightweight provisional preview chapter.
+
+        Preview generation prioritizes producing a readable draft with a
+        single LLM call. It intentionally skips structured extraction so
+        provisional execution can retain real preview text without paying the
+        latency and failure cost of a second LLM pass.
+        """
+        logger.info(
+            "write_chapter(preview): chapter=%d title_plan=%r",
+            context.chapter_number,
+            context.chapter_plan_title,
+        )
+        target_chars = max(
+            self.min_chapter_chars,
+            min(self.target_chapter_chars, self.max_chapter_chars),
+        )
+        max_output_tokens = min(
+            self.max_tokens,
+            max(1800, int(target_chars * 1.8)),
+        )
+        preview_text = self._chat_preview_text(
+            build_preview_chapter_prompt(
+                context,
+                target_chars=target_chars,
+                min_chars=self.min_chapter_chars,
+                max_chars=self.max_chapter_chars,
+            ),
+            temperature=min(self.temperature, 0.7),
+            max_tokens=max_output_tokens,
+            timeout_seconds=timeout_seconds or self.single_call_timeout_seconds,
+            max_attempts=max_attempts,
+            retry_on_timeout=retry_on_timeout,
+        )
+        draft_data = self._parse_preview_text(
+            preview_text,
+            fallback_title=context.chapter_plan_title or f"第{context.chapter_number}章",
+        )
+        title = draft_data.get(
+            "title",
+            context.chapter_plan_title or f"第{context.chapter_number}章",
+        )
+        body = str(draft_data.get("body", "") or "")
+        output = WriterOutput(
+            project_id=getattr(context, "project_id", ""),
+            chapter_number=context.chapter_number,
+            title=title,
+            body=body,
+            char_count=len(body),
+            end_of_chapter_summary=self._preview_summary(
+                draft_data.get("end_of_chapter_summary"),
+                title,
+                body,
+            ),
+            generation_meta={
+                "mode": "provisional_preview",
+                "call_count": 1,
+                "structured_extraction": "skipped",
+            },
+        )
+        logger.info(
+            "write_preview_chapter: done – chapter=%d char_count=%d",
+            output.chapter_number,
+            output.char_count,
+        )
+        return output
 
     def _write_single_chapter(
         self,
@@ -350,6 +428,20 @@ class ChapterWriter:
                     },
                 }
 
+    @staticmethod
+    def _preview_summary(raw_summary: object, title: str, body: str) -> str:
+        summary = str(raw_summary or "").strip()
+        if summary:
+            return summary
+        cleaned = " ".join(
+            line.strip()
+            for line in body.replace("\r", "\n").split("\n")
+            if line.strip()
+        )
+        if cleaned:
+            return cleaned[:120]
+        return title
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -403,10 +495,11 @@ class ChapterWriter:
         last_error: Exception | None = None
         for index, attempt in enumerate(attempts, start=1):
             try:
-                raw = self._chat_with_compat(
+                raw = self._call_chat(
                     messages,
                     temperature=attempt["temperature"],
                     max_tokens=attempt["max_tokens"],
+                    response_format={"type": "json_object"},
                     timeout_seconds=timeout_seconds,
                     retry_on_timeout=retry_on_timeout,
                 )
@@ -421,46 +514,144 @@ class ChapterWriter:
                 )
         raise ValueError(f"ChapterWriter JSON generation failed after retries: {last_error}")
 
-    def _chat_with_compat(
+    def _chat_preview_text(
         self,
         messages: list[dict],
         *,
         temperature: float,
         max_tokens: int,
-        timeout_seconds: float | None,
-        retry_on_timeout: bool,
+        timeout_seconds: float | None = None,
+        max_attempts: int = 2,
+        retry_on_timeout: bool = True,
     ) -> str:
-        variants = [
+        attempts = [
+            {"temperature": temperature, "max_tokens": max_tokens},
             {
-                "response_format": {"type": "json_object"},
-                "timeout_seconds": timeout_seconds,
-                "retry_on_timeout": retry_on_timeout,
+                "temperature": max(0.2, temperature - 0.15),
+                "max_tokens": max(600, min(max_tokens, 1400)),
             },
-            {
-                "response_format": {"type": "json_object"},
-            },
-            {
-                "timeout_seconds": timeout_seconds,
-                "retry_on_timeout": retry_on_timeout,
-            },
-            {},
-        ]
-        last_type_error: TypeError | None = None
-        for extra in variants:
+            {"temperature": 0.2, "max_tokens": max(520, min(max_tokens, 1100))},
+        ][: max(1, int(max_attempts))]
+        last_error: Exception | None = None
+        for index, attempt in enumerate(attempts, start=1):
             try:
-                return self.llm_client.chat(
+                raw = self._call_chat(
                     messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    **extra,
+                    temperature=attempt["temperature"],
+                    max_tokens=attempt["max_tokens"],
+                    timeout_seconds=timeout_seconds,
+                    retry_on_timeout=retry_on_timeout,
                 )
-            except TypeError as exc:
-                message = str(exc)
-                if not any(
-                    name in message
-                    for name in ("response_format", "timeout_seconds", "retry_on_timeout")
-                ):
-                    raise
-                last_type_error = exc
-                continue
-        raise last_type_error or RuntimeError("chat compatibility fallback failed")
+                parsed = self._parse_preview_text(raw, fallback_title="")
+                if parsed.get("body", "").strip():
+                    return raw
+                raise ValueError("preview response body is empty")
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                logger.warning(
+                    "ChapterWriter preview call failed on attempt %d/%d: %s",
+                    index,
+                    len(attempts),
+                    exc,
+                )
+        raise ValueError(f"ChapterWriter preview generation failed after retries: {last_error}")
+
+    def _call_chat(
+        self,
+        messages: list[dict],
+        *,
+        temperature: float,
+        max_tokens: int,
+        response_format: dict | None = None,
+        timeout_seconds: float | None = None,
+        retry_on_timeout: bool = True,
+    ) -> str:
+        parameters = self._chat_signature.parameters
+        kwargs: dict[str, object] = {
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if response_format is not None and "response_format" in parameters:
+            kwargs["response_format"] = response_format
+        if timeout_seconds is not None and "timeout_seconds" in parameters:
+            kwargs["timeout_seconds"] = timeout_seconds
+        if "retry_on_timeout" in parameters:
+            kwargs["retry_on_timeout"] = retry_on_timeout
+        return self.llm_client.chat(messages, **kwargs)
+
+    @staticmethod
+    def _parse_preview_text(raw: str, *, fallback_title: str) -> dict[str, str]:
+        cleaned = str(raw or "").strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```[^\n]*\n?", "", cleaned)
+            cleaned = re.sub(r"\n?```$", "", cleaned).strip()
+
+        marker_groups = [
+            ("<<FORWIN_TITLE>>", "<<FORWIN_BODY>>", "<<FORWIN_SUMMARY>>"),
+            ("【标题】", "【正文】", "【摘要】"),
+        ]
+
+        def extract_with_markers(title_marker: str, body_marker: str, summary_marker: str) -> tuple[str, str, str]:
+            title_pos = cleaned.rfind(title_marker)
+            body_pos = cleaned.rfind(body_marker)
+            summary_pos = cleaned.rfind(summary_marker)
+            if body_pos < 0:
+                return "", "", ""
+            title = ""
+            if title_pos >= 0 and title_pos < body_pos:
+                title = cleaned[title_pos + len(title_marker):body_pos].strip()
+            body_end = summary_pos if summary_pos > body_pos else len(cleaned)
+            body = cleaned[body_pos + len(body_marker):body_end].strip()
+            summary = ""
+            if summary_pos >= 0 and summary_pos > body_pos:
+                summary = cleaned[summary_pos + len(summary_marker):].strip()
+            return title, body, summary
+
+        title = ""
+        body = ""
+        summary = ""
+        for title_marker, body_marker, summary_marker in marker_groups:
+            title, body, summary = extract_with_markers(title_marker, body_marker, summary_marker)
+            if body:
+                break
+
+        if not body:
+            title_match = re.search(r"标题[:：]\s*(.+)", cleaned)
+            if title_match and not title:
+                title = title_match.group(1).strip()
+            body_match = re.search(r"正文[:：]\s*(.+?)(?:摘要[:：]|$)", cleaned, re.S)
+            if body_match:
+                body = body_match.group(1).strip()
+            summary_match = re.search(r"摘要[:：]\s*(.+)$", cleaned, re.S)
+            if summary_match and not summary:
+                summary = summary_match.group(1).strip()
+
+        if not body:
+            lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+            if lines:
+                if not title:
+                    title = lines[0][:40]
+                body = "\n".join(lines[1:] if len(lines) > 1 else lines)
+
+        if body and len(body.strip()) < 100 and len(cleaned) > 300:
+            stripped_lines = []
+            for line in cleaned.splitlines():
+                candidate = line.strip()
+                if not candidate:
+                    continue
+                if candidate.startswith(("<<FORWIN_", "【标题】", "【正文】", "【摘要】")):
+                    continue
+                if re.match(r"^[0-9]+\.\s", candidate):
+                    continue
+                if candidate in {"标题", "正文", "摘要"}:
+                    continue
+                stripped_lines.append(candidate)
+            rebuilt = "\n".join(stripped_lines).strip()
+            if len(rebuilt) > len(body):
+                body = rebuilt
+
+        return {
+            "title": title or fallback_title,
+            "body": body.strip(),
+            "end_of_chapter_summary": summary.strip(),
+        }

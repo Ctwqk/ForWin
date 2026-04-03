@@ -11,7 +11,7 @@ class PlatformSpec:
     dashboard_url: str
     publish_url: str
     supported_login_methods: tuple[str, ...] = ("scan",)
-    supported_actions: tuple[str, ...] = ("save_draft", "publish")
+    supported_actions: tuple[str, ...] = ("create_book", "save_draft", "publish")
 
 
 SUPPORTED_PLATFORMS: dict[str, PlatformSpec] = {

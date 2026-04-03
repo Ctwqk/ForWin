@@ -1,15 +1,27 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
+from typing import Callable
 from uuid import uuid4
 
 from sqlalchemy import Engine, event, text
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import NullPool, StaticPool
 
 
 class Base(DeclarativeBase):
     pass
+
+
+MigrationApplyFn = Callable[[object], None]
+
+
+@dataclass(frozen=True)
+class MigrationSpec:
+    version: str
+    apply_fn: MigrationApplyFn
 
 
 def new_id() -> str:
@@ -19,9 +31,15 @@ def new_id() -> str:
 
 def get_engine(db_path: str) -> Engine:
     """Create a SQLite engine with WAL journal mode enabled."""
+    pool_kwargs: dict[str, object]
+    if db_path == ":memory:":
+        pool_kwargs = {"poolclass": StaticPool}
+    else:
+        pool_kwargs = {"poolclass": NullPool}
     engine = create_engine(
         f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "timeout": 30},
+        **pool_kwargs,
     )
 
     @event.listens_for(engine, "connect")
@@ -29,6 +47,7 @@ def get_engine(db_path: str) -> Engine:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()
 
     return engine
@@ -45,6 +64,41 @@ def init_db(engine: Engine) -> None:
     upgrade_db(engine)
 
 
+def _migration_applied(conn, version: str) -> bool:
+    return (
+        conn.execute(
+            text(
+                """
+                SELECT 1
+                FROM schema_migrations
+                WHERE version = :version
+                """
+            ),
+            {"version": version},
+        ).scalar_one_or_none()
+        is not None
+    )
+
+
+def _mark_migration_applied(conn, version: str) -> None:
+    conn.execute(
+        text(
+            """
+            INSERT OR IGNORE INTO schema_migrations(version)
+            VALUES (:version)
+            """
+        ),
+        {"version": version},
+    )
+
+
+def _run_migration(conn, version: str, apply_fn) -> None:
+    if _migration_applied(conn, version):
+        return
+    apply_fn(conn)
+    _mark_migration_applied(conn, version)
+
+
 def upgrade_db(engine: Engine) -> None:
     """Apply lightweight forward-only schema upgrades."""
     with engine.begin() as conn:
@@ -58,16 +112,9 @@ def upgrade_db(engine: Engine) -> None:
                 """
             )
         )
-        applied = conn.execute(
-            text(
-                """
-                SELECT 1
-                FROM schema_migrations
-                WHERE version = 'entity_alias_index_v1'
-                """
-            )
-        ).scalar_one_or_none()
-        if applied is None:
+        migrations: list[MigrationSpec] = []
+
+        def apply_entity_alias_index_v1(conn) -> None:
             conn.execute(
                 text(
                     """
@@ -131,24 +178,9 @@ def upgrade_db(engine: Engine) -> None:
                             "alias": alias_text,
                         },
                     )
-            conn.execute(
-                text(
-                    """
-                    INSERT OR IGNORE INTO schema_migrations(version)
-                    VALUES ('entity_alias_index_v1')
-                    """
-                )
-            )
-        applied = conn.execute(
-            text(
-                """
-                SELECT 1
-                FROM schema_migrations
-                WHERE version = 'phase3_analysis_v1'
-                """
-            )
-        ).scalar_one_or_none()
-        if applied is None:
+        migrations.append(MigrationSpec("entity_alias_index_v1", apply_entity_alias_index_v1))
+
+        def apply_phase3_analysis_v1(conn) -> None:
             conn.execute(
                 text(
                     """
@@ -206,24 +238,9 @@ def upgrade_db(engine: Engine) -> None:
                     """
                 )
             )
-            conn.execute(
-                text(
-                    """
-                    INSERT OR IGNORE INTO schema_migrations(version)
-                    VALUES ('phase3_analysis_v1')
-                    """
-                )
-            )
-        applied = conn.execute(
-            text(
-                """
-                SELECT 1
-                FROM schema_migrations
-                WHERE version = 'phase24_arc_envelope_v1'
-                """
-            )
-        ).scalar_one_or_none()
-        if applied is None:
+        migrations.append(MigrationSpec("phase3_analysis_v1", apply_phase3_analysis_v1))
+
+        def apply_phase24_arc_envelope_v1(conn) -> None:
             conn.execute(
                 text(
                     """
@@ -342,24 +359,9 @@ def upgrade_db(engine: Engine) -> None:
                     """
                 )
             )
-            conn.execute(
-                text(
-                    """
-                    INSERT OR IGNORE INTO schema_migrations(version)
-                    VALUES ('phase24_arc_envelope_v1')
-                    """
-                )
-            )
-        applied = conn.execute(
-            text(
-                """
-                SELECT 1
-                FROM schema_migrations
-                WHERE version = 'phase24_provisional_band_exec_v1'
-                """
-            )
-        ).scalar_one_or_none()
-        if applied is None:
+        migrations.append(MigrationSpec("phase24_arc_envelope_v1", apply_phase24_arc_envelope_v1))
+
+        def apply_phase24_provisional_band_exec_v1(conn) -> None:
             conn.execute(
                 text(
                     """
@@ -389,24 +391,11 @@ def upgrade_db(engine: Engine) -> None:
                     """
                 )
             )
-            conn.execute(
-                text(
-                    """
-                    INSERT OR IGNORE INTO schema_migrations(version)
-                    VALUES ('phase24_provisional_band_exec_v1')
-                    """
-                )
-            )
-        applied = conn.execute(
-            text(
-                """
-                SELECT 1
-                FROM schema_migrations
-                WHERE version = 'phase24_provisional_chapter_ledger_v1'
-                """
-            )
-        ).scalar_one_or_none()
-        if applied is None:
+        migrations.append(
+            MigrationSpec("phase24_provisional_band_exec_v1", apply_phase24_provisional_band_exec_v1)
+        )
+
+        def apply_phase24_provisional_chapter_ledger_v1(conn) -> None:
             conn.execute(
                 text(
                     """
@@ -445,24 +434,14 @@ def upgrade_db(engine: Engine) -> None:
                     """
                 )
             )
-            conn.execute(
-                text(
-                    """
-                    INSERT OR IGNORE INTO schema_migrations(version)
-                    VALUES ('phase24_provisional_chapter_ledger_v1')
-                    """
-                )
+        migrations.append(
+            MigrationSpec(
+                "phase24_provisional_chapter_ledger_v1",
+                apply_phase24_provisional_chapter_ledger_v1,
             )
-        applied = conn.execute(
-            text(
-                """
-                SELECT 1
-                FROM schema_migrations
-                WHERE version = 'performance_indexes_v1'
-                """
-            )
-        ).scalar_one_or_none()
-        if applied is None:
+        )
+
+        def apply_performance_indexes_v1(conn) -> None:
             for statement in (
                 """
                 CREATE INDEX IF NOT EXISTS ix_entities_project_active
@@ -510,24 +489,9 @@ def upgrade_db(engine: Engine) -> None:
                 """,
             ):
                 conn.execute(text(statement))
-            conn.execute(
-                text(
-                    """
-                    INSERT OR IGNORE INTO schema_migrations(version)
-                    VALUES ('performance_indexes_v1')
-                    """
-                )
-            )
-        applied = conn.execute(
-            text(
-                """
-                SELECT 1
-                FROM schema_migrations
-                WHERE version = 'phase4_simulation_v1'
-                """
-            )
-        ).scalar_one_or_none()
-        if applied is None:
+        migrations.append(MigrationSpec("performance_indexes_v1", apply_performance_indexes_v1))
+
+        def apply_phase4_simulation_v1(conn) -> None:
             conn.execute(
                 text(
                     """
@@ -581,24 +545,9 @@ def upgrade_db(engine: Engine) -> None:
                     """
                 )
             )
-            conn.execute(
-                text(
-                    """
-                    INSERT OR IGNORE INTO schema_migrations(version)
-                    VALUES ('phase4_simulation_v1')
-                    """
-                )
-            )
-        applied = conn.execute(
-            text(
-                """
-                SELECT 1
-                FROM schema_migrations
-                WHERE version = 'phase3_replan_strategy_v1'
-                """
-            )
-        ).scalar_one_or_none()
-        if applied is None:
+        migrations.append(MigrationSpec("phase4_simulation_v1", apply_phase4_simulation_v1))
+
+        def apply_phase3_replan_strategy_v1(conn) -> None:
             columns = {
                 row[1]
                 for row in conn.execute(text("PRAGMA table_info(project_replan_events)"))
@@ -612,11 +561,7 @@ def upgrade_db(engine: Engine) -> None:
                         """
                     )
                 )
-            conn.execute(
-                text(
-                    """
-                    INSERT OR IGNORE INTO schema_migrations(version)
-                    VALUES ('phase3_replan_strategy_v1')
-                    """
-                )
-            )
+        migrations.append(MigrationSpec("phase3_replan_strategy_v1", apply_phase3_replan_strategy_v1))
+
+        for migration in migrations:
+            _run_migration(conn, migration.version, migration.apply_fn)

@@ -123,11 +123,11 @@ def cmd_status(args: argparse.Namespace) -> None:
     from sqlalchemy import func, select
 
     from forwin.models.base import get_engine, get_session_factory, init_db
-    from forwin.models.draft import ChapterDraft
     from forwin.models.entity import Entity
     from forwin.models.event import CanonEvent
     from forwin.models.project import ChapterPlan, Project
     from forwin.models.thread import PlotThread
+    from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 
     config = _get_config(args)
     engine = get_engine(config.db_path)
@@ -180,15 +180,10 @@ def cmd_status(args: argparse.Namespace) -> None:
             .order_by(ChapterPlan.chapter_number)
         ).scalars().all()
         if plans:
+            draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
             print(f"\n章节 ({len(plans)}):")
             for p in plans:
-                # Get draft info
-                draft = session.execute(
-                    select(ChapterDraft)
-                    .where(ChapterDraft.chapter_plan_id == p.id)
-                    .order_by(ChapterDraft.version.desc())
-                    .limit(1)
-                ).scalar_one_or_none()
+                draft = draft_map.get(p.id)
                 char_info = f" ({draft.char_count}字)" if draft else ""
                 print(f"  第{p.chapter_number}章 《{p.title}》 [{p.status}]{char_info}")
 

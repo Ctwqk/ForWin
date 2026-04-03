@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 import json
 import logging
 from pathlib import Path
+from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
@@ -78,8 +79,13 @@ class RunResult:
 class WritingOrchestrator:
     """Orchestrates the full chapter-generation pipeline."""
 
-    def __init__(self, config: Config | None = None) -> None:
+    def __init__(
+        self,
+        config: Config | None = None,
+        progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> None:
         self.config = config or Config.from_env()
+        self.progress_callback = progress_callback
 
         # Ensure the database directory exists.
         db_dir = Path(self.config.db_path).parent
@@ -140,6 +146,36 @@ class WritingOrchestrator:
             target_chapter_chars=self.config.target_chapter_chars,
             single_call_timeout_seconds=self.config.llm_timeout_seconds,
             scene_call_timeout_seconds=self.config.scene_call_timeout_seconds,
+        )
+        provisional_target_chars = max(
+            700,
+            min(self.config.target_chapter_chars, 900),
+        )
+        provisional_min_chars = max(500, min(self.config.min_chapter_chars, provisional_target_chars))
+        provisional_max_chars = max(
+            provisional_target_chars,
+            min(self.config.max_chapter_chars, 1000),
+        )
+        provisional_timeout_seconds = min(
+            max(
+                self.config.llm_timeout_seconds,
+                self.config.scene_call_timeout_seconds,
+                90.0,
+            ),
+            180.0,
+        )
+        self.provisional_writer = ChapterWriter(
+            llm_client=self.llm_client,
+            temperature=min(self.config.temperature, 0.7),
+            max_tokens=min(self.config.max_tokens, 2400),
+            writer_mode="single",
+            default_scene_count=1,
+            max_scene_count=1,
+            min_chapter_chars=provisional_min_chars,
+            max_chapter_chars=provisional_max_chars,
+            target_chapter_chars=provisional_target_chars,
+            single_call_timeout_seconds=provisional_timeout_seconds,
+            scene_call_timeout_seconds=provisional_timeout_seconds,
         )
         self.stage_analyzer = StageAnalyzer()
         self.pacing_strategist = PacingStrategist(
@@ -206,6 +242,13 @@ class WritingOrchestrator:
             project_id = project.id
 
             self._seed_state(updater, project_id, arc_plan, num_chapters)
+            session.commit()
+            self._emit_progress(
+                "project_created",
+                project_id=project_id,
+                title=project.title,
+            )
+
             self.arc_envelope_manager.ensure_active_arc_resolution(
                 session=session,
                 project_id=project_id,
@@ -254,6 +297,14 @@ class WritingOrchestrator:
             raise
         finally:
             session.close()
+
+    def _emit_progress(self, event: str, **payload: Any) -> None:
+        if self.progress_callback is None:
+            return
+        try:
+            self.progress_callback(event, payload)
+        except Exception:  # noqa: BLE001
+            logger.debug("Ignoring progress callback error.", exc_info=True)
 
     def continue_project(self, project_id: str) -> RunResult:
         session: Session = self._SessionFactory()
@@ -532,7 +583,6 @@ class WritingOrchestrator:
                 f"({writer_output.char_count}字) "
                 f"审查: {verdict.verdict}{issue_summary}"
             )
-            repo, updater, checker = self._make_state_helpers(session)
 
         return RunResult(
             project_id=project_id,
@@ -611,7 +661,7 @@ class WritingOrchestrator:
         chapter_number: int,
         writer_output: WriterOutput,
         verdict: ReviewVerdict,
-    ) -> str:
+    ) -> str | None:
         try:
             filtered_state_changes = self._filter_supported_state_changes(
                 writer_output.state_changes
@@ -635,7 +685,7 @@ class WritingOrchestrator:
                 updater.apply_time_advance(
                     project_id, chapter_number, writer_output.time_advance
                 )
-            return ""
+            return None
         except Exception:
             logger.exception(
                 "Canon update failed for chapter %d; keeping saved draft and review.",
@@ -654,7 +704,7 @@ class WritingOrchestrator:
                     },
             )
             session.rollback()
-            return frozen_path
+            return frozen_path or None
 
     @staticmethod
     def _filter_resolvable_events(
@@ -766,7 +816,12 @@ class WritingOrchestrator:
         if not chapter_plans or not self.config.minimax_api_key.strip():
             return None
 
-        repo, _updater, checker = self._make_state_helpers(session)
+        repo, _updater, _checker = self._make_state_helpers(session)
+        preview_checker = ContinuityChecker(
+            repo,
+            min_chars=self.provisional_writer.min_chapter_chars,
+            max_chars=self.provisional_writer.max_chapter_chars,
+        )
         safe_band = "".join(
             ch if ch.isalnum() or ch in {"-", "_"} else "_"
             for ch in band_id
@@ -806,8 +861,13 @@ class WritingOrchestrator:
                     update={"previous_chapter_summaries": previous}
                 )
             try:
-                writer_output = self.writer.write_chapter(context)
-                verdict = checker.check(project_id, writer_output)
+                writer_output = self.provisional_writer.write_preview_chapter(
+                    context,
+                    max_attempts=2,
+                    retry_on_timeout=False,
+                )
+                verdict = preview_checker.check(project_id, writer_output)
+                verdict = self._normalize_provisional_verdict(writer_output, verdict)
                 artifact_paths = self.artifact_store.save_writer_output(
                     project_id=project_id,
                     chapter_number=chapter_plan.chapter_number,
@@ -914,6 +974,44 @@ class WritingOrchestrator:
                 elif verdict.verdict == "warn" and aggregate_verdict == "pass":
                     aggregate_verdict = "warn"
             except Exception as exc:  # noqa: BLE001
+                if self._should_degrade_provisional_preview(exc):
+                    fallback = self._build_provisional_fallback(
+                        chapter_plan=chapter_plan,
+                        current_time_label=current_time_label,
+                        error_text=str(exc),
+                        issue_description="当前章节预演生成失败，已降级为计划级影子草案。",
+                    )
+                    issue_count += len(fallback["issues"])
+                    total_char_count += int(fallback["char_count"])
+                    chapter_numbers.append(chapter_plan.chapter_number)
+                    summaries.append(str(fallback["summary"]))
+                    chapter_payloads.append(fallback)
+                    session.add(
+                        ProvisionalChapterLedger(
+                            id=new_id(),
+                            project_id=project_id,
+                            arc_id=arc_id,
+                            band_id=band_id,
+                            chapter_number=chapter_plan.chapter_number,
+                            title=str(fallback["title"]),
+                            summary=str(fallback["summary"]),
+                            verdict=str(fallback["verdict"]),
+                            char_count=int(fallback["char_count"]),
+                            artifact_meta_path="",
+                            draft_blob_path="",
+                            current_time_label=current_time_label,
+                            projected_time_label=str(fallback["projected_time_label"]),
+                            state_changes_json="[]",
+                            events_json="[]",
+                            thread_beats_json="[]",
+                            time_advance_json="{}",
+                            issues_json=json.dumps(fallback["issues"], ensure_ascii=False),
+                            error_text=str(fallback["error"]),
+                        )
+                    )
+                    if aggregate_verdict == "pass":
+                        aggregate_verdict = "warn"
+                    continue
                 failure_count += 1
                 aggregate_verdict = "fail"
                 chapter_payloads.append(
@@ -979,6 +1077,103 @@ class WritingOrchestrator:
             chapter_numbers=chapter_numbers,
             summary_lines=summaries,
         )
+
+    @staticmethod
+    def _normalize_provisional_verdict(
+        writer_output: WriterOutput,
+        verdict: ReviewVerdict,
+    ) -> ReviewVerdict:
+        usable_body = len((writer_output.body or "").strip()) >= 300
+        filtered_issues = [
+            issue for issue in verdict.issues if issue.rule_name != "char_count_low"
+        ]
+        if verdict.verdict != "fail":
+            if len(filtered_issues) == len(verdict.issues):
+                return verdict
+            if not filtered_issues:
+                return ReviewVerdict(verdict="pass", issues=[])
+            severities = {issue.severity for issue in filtered_issues}
+            next_verdict = "fail" if "error" in severities else "warn"
+            return ReviewVerdict(verdict=next_verdict, issues=filtered_issues)
+        if not usable_body:
+            return ReviewVerdict(verdict=verdict.verdict, issues=filtered_issues)
+        softened_issues = [
+            issue.model_copy(update={"severity": "warning"})
+            for issue in filtered_issues
+        ]
+        softened_issues.append(
+            softened_issues[0].model_copy(
+                update={
+                    "rule_name": "provisional_softened_fail",
+                    "description": "预演正文可用，已将严格失败降级为预演警告。",
+                    "entity_names": [],
+                }
+            )
+            if softened_issues
+            else None
+        )
+        softened_issues = [issue for issue in softened_issues if issue is not None]
+        return ReviewVerdict(
+            verdict="warn" if softened_issues else "pass",
+            issues=softened_issues,
+        )
+
+    @staticmethod
+    def _should_degrade_provisional_preview(exc: Exception) -> bool:
+        text = str(exc).lower()
+        return any(
+            token in text
+            for token in (
+                "timed out",
+                "timeout",
+                "read operation timed out",
+                "json generation failed",
+                "llmjsonparseerror",
+                "connection reset",
+            )
+        )
+
+    @staticmethod
+    def _build_provisional_fallback(
+        *,
+        chapter_plan: ChapterPlan,
+        current_time_label: str,
+        error_text: str,
+        issue_description: str,
+    ) -> dict[str, Any]:
+        try:
+            goals = json.loads(chapter_plan.goals_json or "[]") or []
+        except (json.JSONDecodeError, TypeError):
+            goals = []
+        summary = chapter_plan.one_line.strip() or chapter_plan.title.strip() or f"第{chapter_plan.chapter_number}章"
+        estimated_char_count = max(
+            360,
+            min(1200, 260 + len(summary) * 8 + sum(len(str(goal)) for goal in goals) * 4),
+        )
+        issues = [
+            {
+                "rule_name": "provisional_fallback",
+                "severity": "warning",
+                "description": issue_description,
+            }
+        ]
+        return {
+            "chapter_number": chapter_plan.chapter_number,
+            "title": chapter_plan.title,
+            "summary": summary,
+            "char_count": estimated_char_count,
+            "verdict": "warn",
+            "current_time_label": current_time_label,
+            "projected_time_label": current_time_label,
+            "state_changes": [],
+            "events": [],
+            "thread_beats": [],
+            "time_advance": {},
+            "artifact_meta_path": "",
+            "issues": issues,
+            "error": error_text,
+            "fallback_mode": "plan_shadow",
+        }
 
     def _load_writer_output_from_meta(self, meta_path: str) -> WriterOutput:
         payload = self.artifact_store.read_json(meta_path)

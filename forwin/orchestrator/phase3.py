@@ -17,6 +17,7 @@ from forwin.models import (
     StoryTimePoint,
     new_id,
 )
+from forwin.orchestrator.goals import load_goals_json
 from forwin.orchestrator.thread_sampling import sample_active_threads
 
 
@@ -347,7 +348,7 @@ class ReplanGovernor:
         if next_plan is None:
             return
         focus_note = "、".join(focus_threads) if focus_threads else "当前主线"
-        goals = self._load_goals(next_plan.goals_json)
+        goals = load_goals_json(next_plan.goals_json)
         patch_goal = (
             f"优先修补节奏风险：{pacing.verdict}，围绕{focus_note}提升有效推进。"
         )
@@ -386,7 +387,7 @@ class ReplanGovernor:
             f"把 {focus_note} 重新并回主线阶段目标",
         ]
         for index, plan in enumerate(future_plans):
-            goals = self._load_goals(plan.goals_json)
+            goals = load_goals_json(plan.goals_json)
             goal = templates[min(index, len(templates) - 1)]
             if goal not in goals:
                 goals.insert(0, goal)
@@ -443,7 +444,7 @@ class ReplanGovernor:
         ).scalars().all()
         for plan in future_plans:
             plan.arc_plan_id = new_arc.id
-            goals = self._load_goals(plan.goals_json)
+            goals = load_goals_json(plan.goals_json)
             if focus_threads:
                 extra_goal = f"推进线索：{'、'.join(focus_threads)}"
                 if extra_goal not in goals:
@@ -452,14 +453,6 @@ class ReplanGovernor:
             prefix = f"[{stage.stage_label}] "
             if plan.one_line and not plan.one_line.startswith(prefix):
                 plan.one_line = f"{prefix}{plan.one_line}"
-
-    @staticmethod
-    def _load_goals(raw: str) -> list[str]:
-        try:
-            data = json.loads(raw or "[]") or []
-        except (json.JSONDecodeError, TypeError):
-            data = []
-        return [str(item) for item in data]
 
 
 def save_stage_analysis(

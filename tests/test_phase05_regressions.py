@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gc
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,7 @@ from unittest.mock import patch
 import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
+from sqlalchemy.orm import close_all_sessions
 
 import forwin.api as api_module
 from forwin import cli as cli_module
@@ -40,13 +42,16 @@ from forwin.models.publisher import (
     PublisherUploadJob,
 )
 from forwin.models.project import ArcPlanVersion, ChapterPlan
-from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.orchestrator.loop import RunResult, WritingOrchestrator
 from forwin.orchestrator.phase3 import PacingAssessment, PacingStrategist, ReplanGovernor, StageAssessment
 from forwin.orchestrator.phase24 import ArcEnvelopeManager
+from forwin.orchestrator.phase24 import policy_for_total_chapters
 from forwin.orchestrator.phase4 import NPCIntentGenerator, WorldSimulator
 from forwin.orchestrator.thread_sampling import sample_active_threads
+from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.context import (
     ChapterContextPack,
+    ArcEnvelopeView,
     EntitySnapshot,
     MemorySnippet,
     NPCIntentView,
@@ -61,6 +66,7 @@ from forwin.protocol.scene import SceneOutput, ScenePlan
 from forwin.protocol.state_change import EventCandidate, StateChangeCandidate, ThreadBeatCandidate
 from forwin.protocol.writer import WriterOutput
 from forwin.publishers import PublisherManager
+from forwin.publishers.server_uploader import ServerPublisherUploader
 from forwin.retrieval import RetrievalBroker
 from forwin.retrieval.memory_index import LocalChapterMemoryIndex, RemoteTextEmbedder, create_memory_index
 from forwin.runtime_settings import RuntimeSettingsStore
@@ -76,6 +82,1121 @@ from forwin.writer.prompts import (
 
 
 class Phase05RegressionTests(unittest.TestCase):
+    def test_server_uploader_qidian_publish_requires_official_confirmation(self) -> None:
+        class FakeBodyLocator:
+            def inner_text(self) -> str:
+                return ""
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.url = "https://write.qq.com/portal/booknovels/chaptertmp/CBID/20812774308997404/addType/1.html#ccid=-1"
+
+            def goto(self, url: str, **_kwargs) -> None:
+                self.url = url
+
+            def wait_for_timeout(self, _value: int) -> None:
+                return
+
+            def wait_for_load_state(self, *_args, **_kwargs) -> None:
+                return
+
+            def locator(self, selector: str):
+                if selector == "body":
+                    return FakeBodyLocator()
+                raise AssertionError(selector)
+
+            def evaluate(self, script: str, args=None):
+                if ".g-prodution-item" in script:
+                    return {
+                        "book_text": "恒星之间 无最新章节 作品相关 已发布 去写作",
+                        "latest_text": "无最新章节",
+                    }
+                if ".ne-st-item" in script:
+                    return ["ForWin联调草稿-20260401-111548", "序二 抬头看的权利"]
+                raise AssertionError(script[:120])
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+
+        result = uploader._verify_qidian_submission(
+            page=FakePage(),
+            book_name="恒星之间",
+            chapter_title="第一章 雨夜接单",
+            publish=True,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error, "publish-not-confirmed")
+        self.assertIn("无最新章节", result.message)
+
+    def test_server_uploader_qidian_publish_accepts_verified_chapter_page(self) -> None:
+        class FakeBodyLocator:
+            def inner_text(self) -> str:
+                return "恒星之间\nForWin验证章\n正文"
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.url = "https://write.qq.com/portal/booknovels/chaptertmp/CBID/20812774308997404/addType/1.html#ccid=95325920662963388"
+
+            def goto(self, url: str, **_kwargs) -> None:
+                self.url = url
+
+            def wait_for_timeout(self, _value: int) -> None:
+                return
+
+            def wait_for_load_state(self, *_args, **_kwargs) -> None:
+                return
+
+            def locator(self, selector: str):
+                if selector == "body":
+                    return FakeBodyLocator()
+                raise AssertionError(selector)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+
+        result = uploader._verify_qidian_submission(
+            page=FakePage(),
+            book_name="恒星之间",
+            chapter_title="ForWin验证章",
+            publish=True,
+            action_meta={
+                "response": {
+                    "code": "1000000",
+                    "result": {
+                        "ccid": "95325920662963388",
+                        "chaptertitle": "ForWin验证章",
+                    },
+                }
+            },
+        )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.result_payload["ccid"], "95325920662963388")
+        self.assertIn("进入审核队列", result.message)
+
+    def test_server_uploader_qidian_publish_does_not_accept_draft_list_only(self) -> None:
+        class FakeBodyLocator:
+            def inner_text(self) -> str:
+                return ""
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.url = "https://write.qq.com/portal/booknovels/chaptertmp/CBID/20812774308997404/addType/1.html#ccid=95325920662963388"
+
+            def goto(self, url: str, **_kwargs) -> None:
+                self.url = url
+
+            def wait_for_timeout(self, _value: int) -> None:
+                return
+
+            def wait_for_load_state(self, *_args, **_kwargs) -> None:
+                return
+
+            def locator(self, selector: str):
+                if selector == "body":
+                    return FakeBodyLocator()
+                raise AssertionError(selector)
+
+            def evaluate(self, script: str, args=None):
+                if ".g-prodution-item" in script:
+                    return {
+                        "book_text": "恒星之间 最新章节 旧章节名 作品相关 已发布 去写作",
+                        "latest_text": "最新章节 旧章节名",
+                    }
+                if ".ne-st-item" in script:
+                    return ["ForWin验证章", "旧章节名"]
+                raise AssertionError(script[:120])
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+
+        result = uploader._verify_qidian_submission(
+            page=FakePage(),
+            book_name="恒星之间",
+            chapter_title="ForWin验证章",
+            publish=True,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error, "publish-not-confirmed")
+        self.assertIn("未看到刚提交的章节标题", result.message)
+
+    def test_server_uploader_fanqie_publish_requires_official_confirmation(self) -> None:
+        class FakeBodyLocator:
+            def inner_text(self) -> str:
+                return ""
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.url = "https://fanqienovel.com/main/writer/7623869161952791576/publish/7623869167682191896?enter_from=newchapter_0"
+
+            def goto(self, url: str, **_kwargs) -> None:
+                self.url = url
+
+            def wait_for_timeout(self, _value: int) -> None:
+                return
+
+            def wait_for_load_state(self, *_args, **_kwargs) -> None:
+                return
+
+            def locator(self, selector: str):
+                if selector == "body":
+                    return FakeBodyLocator()
+                raise AssertionError(selector)
+
+            def evaluate(self, script: str, args=None):
+                if ".home-book-item" in script:
+                    return {
+                        "book_text": "拍阑干的新书 最近更新：暂未发布章节 0 章 0 字 待审核",
+                        "publish_href": "/main/writer/7623869161952791576/publish/7623869167682191896",
+                        "chapter_manage_href": "/main/writer/7623869161952791576/chapter-manage/7623869167682191896",
+                    }
+                raise AssertionError(script[:120])
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._dismiss_fanqie_modal = lambda page: None
+
+        result = uploader._verify_fanqie_submission(
+            page=FakePage(),
+            book_name="拍阑干的新书",
+            chapter_title="第一章 雨夜接单",
+            publish=True,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error, "publish-not-confirmed")
+        self.assertIn("暂未发布章节", result.message)
+
+    def test_server_uploader_fanqie_publish_accepts_chapter_manage_pending_review(self) -> None:
+        class FakeBodyLocator:
+            def __init__(self, page) -> None:
+                self._page = page
+
+            def inner_text(self) -> str:
+                if "chapter-manage" in self._page.url:
+                    return "章节管理 第1章 ForWin验证章 审核中 2026-04-03 03:47"
+                return ""
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.url = "https://fanqienovel.com/main/writer/7623869161952791576/publish/7623869167682191896?enter_from=newchapter_0"
+
+            def goto(self, url: str, **_kwargs) -> None:
+                self.url = url
+
+            def wait_for_timeout(self, _value: int) -> None:
+                return
+
+            def wait_for_load_state(self, *_args, **_kwargs) -> None:
+                return
+
+            def locator(self, selector: str):
+                if selector == "body":
+                    return FakeBodyLocator(self)
+                raise AssertionError(selector)
+
+            def evaluate(self, script: str, args=None):
+                if ".home-book-item" in script:
+                    return {
+                        "book_text": "拍阑干的新书 最近更新：暂未发布章节 0 章 0 字 待审核",
+                        "publish_href": "/main/writer/7623869161952791576/publish/7623869167682191896",
+                        "chapter_manage_href": "/main/writer/chapter-manage/7623869161952791576&拍阑干的新书?type=1",
+                        "book_id": "7623869161952791576",
+                    }
+                raise AssertionError(script[:120])
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._dismiss_fanqie_modal = lambda page: None
+
+        result = uploader._verify_fanqie_submission(
+            page=FakePage(),
+            book_name="拍阑干的新书",
+            chapter_title="ForWin验证章",
+            publish=True,
+        )
+
+        self.assertTrue(result.ok)
+        self.assertIn("审核中", result.message)
+
+    def test_server_uploader_fanqie_publish_surfaces_platform_block_reason(self) -> None:
+        class FakeBodyLocator:
+            def inner_text(self) -> str:
+                return ""
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.url = "https://fanqienovel.com/main/writer/7623869161952791576/publish/7623869167682191896?enter_from=newchapter_0"
+
+            def goto(self, url: str, **_kwargs) -> None:
+                self.url = url
+
+            def wait_for_timeout(self, _value: int) -> None:
+                return
+
+            def wait_for_load_state(self, *_args, **_kwargs) -> None:
+                return
+
+            def locator(self, selector: str):
+                if selector == "body":
+                    return FakeBodyLocator()
+                raise AssertionError(selector)
+
+            def evaluate(self, script: str, args=None):
+                if ".home-book-item" in script:
+                    return {
+                        "book_text": "拍阑干的新书 最近更新：暂未发布章节 0 章 0 字 待审核",
+                        "publish_href": "/main/writer/7623869161952791576/publish/7623869167682191896",
+                        "chapter_manage_href": "/main/writer/7623869161952791576/chapter-manage/7623869167682191896",
+                    }
+                raise AssertionError(script[:120])
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._dismiss_fanqie_modal = lambda page: None
+
+        result = uploader._verify_fanqie_submission(
+            page=FakePage(),
+            book_name="拍阑干的新书",
+            chapter_title="第一章 雨夜接单",
+            publish=True,
+            action_meta={
+                "responses": {
+                    "check_trafficed_book": {
+                        "data": {
+                            "is_valid": False,
+                            "invalid_reason": "作品暂不支持下架作品使用",
+                        }
+                    }
+                }
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error, "publish-blocked")
+        self.assertIn("作品暂不支持下架作品使用", result.message)
+
+    def test_server_uploader_fanqie_publish_surfaces_setup_required_state(self) -> None:
+        class FakeBodyLocator:
+            def inner_text(self) -> str:
+                return ""
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.url = "https://fanqienovel.com/main/writer/7623869161952791576/publish/7623869167682191896?enter_from=newchapter_0"
+
+            def goto(self, url: str, **_kwargs) -> None:
+                self.url = url
+
+            def wait_for_timeout(self, _value: int) -> None:
+                return
+
+            def wait_for_load_state(self, *_args, **_kwargs) -> None:
+                return
+
+            def locator(self, selector: str):
+                if selector == "body":
+                    return FakeBodyLocator()
+                raise AssertionError(selector)
+
+            def evaluate(self, script: str, args=None):
+                if ".home-book-item" in script:
+                    return {
+                        "book_text": "拍阑干的新书 最近更新：暂未发布章节 0 章 0 字 待审核",
+                        "publish_href": "/main/writer/7623869161952791576/publish/7623869167682191896",
+                        "chapter_manage_href": "/main/writer/7623869161952791576/chapter-manage/7623869167682191896",
+                    }
+                raise AssertionError(script[:120])
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._dismiss_fanqie_modal = lambda page: None
+
+        result = uploader._verify_fanqie_submission(
+            page=FakePage(),
+            book_name="拍阑干的新书",
+            chapter_title="第一章 雨夜接单",
+            publish=True,
+            action_meta={
+                "responses": {
+                    "modify_book": {"code": 0, "message": "success"},
+                    "upload_pic": {"code": 0, "message": "success"},
+                }
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.error, "publish-setup-required")
+        self.assertIn("首次发布设置流程", result.message)
+
+    def test_server_uploader_qidian_publish_clicks_exact_confirmation(self) -> None:
+        class FakeConfirmLocator:
+            def __init__(self, page) -> None:
+                self._page = page
+
+            @property
+            def first(self):
+                return self
+
+            def count(self) -> int:
+                return 1
+
+            def click(self, *, timeout: int, force: bool) -> None:
+                self._page.locator_clicks.append((timeout, force))
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.waits: list[int] = []
+                self.exact_clicks: list[tuple[str, ...]] = []
+                self.locator_clicks: list[tuple[int, bool]] = []
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.waits.append(value)
+
+            def locator(self, selector: str):
+                if selector == "button.btn-send-sure":
+                    return FakeConfirmLocator(self)
+                raise AssertionError(selector)
+
+            def evaluate(self, _script: str, args=None):
+                if "button.btn-send-sure" in _script:
+                    return True
+                labels = tuple(args[0]) if args else ()
+                if labels == ("确认章节信息", "确认发布", "同意"):
+                    return True
+                if labels == ("同意",):
+                    self.exact_clicks.append(labels)
+                    return True
+                raise AssertionError(labels)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+
+        page = FakePage()
+        uploader._confirm_qidian_publish(page)
+
+        self.assertEqual(page.locator_clicks, [(4000, True)])
+        self.assertEqual(page.exact_clicks, [("同意",)])
+        self.assertIn(1200, page.waits)
+
+    def test_server_uploader_qidian_publish_saves_before_publish(self) -> None:
+        class FakeRoleButton:
+            def __init__(self, page, name: str) -> None:
+                self._page = page
+                self._name = name
+
+            def click(self, *, timeout: int) -> None:
+                self._page.clicks.append((self._name, timeout))
+                if self._name == "保存":
+                    self._page.url = "https://write.qq.com/portal/booknovels/chaptertmp/CBID/1/addType/1.html#ccid=95325739469034917"
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.url = "https://write.qq.com/portal/booknovels/chaptertmp/CBID/1/addType/1.html#ccid=-1"
+                self.clicks: list[tuple[str, int]] = []
+                self.waits: list[int] = []
+
+            def get_by_role(self, role: str, *, name: str):
+                self.role = role
+                return FakeRoleButton(self, name)
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.waits.append(value)
+
+            def wait_for_load_state(self, *_args, **_kwargs) -> None:
+                return
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+
+        page = FakePage()
+        uploader._click_action(page, "qidian", True)
+
+        self.assertEqual(page.clicks[0][0], "保存")
+        self.assertEqual(page.clicks[1][0], "发布")
+        self.assertNotIn("#ccid=-1", page.url)
+
+    def test_server_uploader_fanqie_publish_runs_two_step_confirmation(self) -> None:
+        class FakePage:
+            def __init__(self) -> None:
+                self.waits: list[int] = []
+                self.exact_clicks: list[tuple[str, ...]] = []
+                self.has_confirm = False
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.waits.append(value)
+
+            def evaluate(self, script: str, args=None):
+                if "some((node) => textOf(node) === label)" in script:
+                    return self.has_confirm
+                labels = tuple(args[0]) if args else ()
+                if labels == ("下一步", "确认发布", "开启检测"):
+                    return True
+                if labels == ("确认发布", "取消", "开启检测"):
+                    return True
+                if labels == ("下一步",):
+                    self.exact_clicks.append(labels)
+                    self.has_confirm = True
+                    return True
+                if labels == ("确认发布",):
+                    self.exact_clicks.append(labels)
+                    return True
+                raise AssertionError(labels)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._fanqie_confirm_risk_detection = lambda page: True
+        uploader._fanqie_wait_for_publish_settings = lambda page, timeout_ms=8000: True
+        uploader._fanqie_select_non_ai_publish_option = lambda page: True
+
+        page = FakePage()
+        action_meta = uploader._confirm_fanqie_publish(page)
+
+        self.assertGreaterEqual(page.exact_clicks.count(("下一步",)), 1)
+        self.assertGreaterEqual(page.exact_clicks.count(("确认发布",)), 1)
+        self.assertIn(1200, page.waits)
+        self.assertEqual(action_meta, {"responses": {}})
+
+    def test_server_uploader_fanqie_publish_action_waits_for_confirmation_stage(self) -> None:
+        class FakePage:
+            def __init__(self) -> None:
+                self.clicks: list[tuple[str, int | None]] = []
+
+            def get_by_role(self, role: str, name: str):
+                class _Locator:
+                    def __init__(self, outer, current_role: str, current_name: str) -> None:
+                        self._outer = outer
+                        self._role = current_role
+                        self._name = current_name
+
+                    def click(self, timeout: int | None = None) -> None:
+                        self._outer.clicks.append((f"{self._role}:{self._name}", timeout))
+
+                return _Locator(self, role, name)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+
+        page = FakePage()
+        uploader._click_action(page, "fanqie", True)
+
+        self.assertEqual(page.clicks, [])
+
+    def test_server_uploader_fanqie_publish_returns_first_step_block_without_confirm(self) -> None:
+        class FakePage:
+            def __init__(self) -> None:
+                self.waits: list[int] = []
+                self.exact_clicks: list[tuple[str, ...]] = []
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.waits.append(value)
+
+            def evaluate(self, script: str, args=None):
+                if "some((node) => textOf(node) === label)" in script:
+                    return False
+                labels = tuple(args[0]) if args else ()
+                if labels in {
+                    ("下一步", "确认发布", "开启检测"),
+                    ("确认发布", "取消", "开启检测"),
+                }:
+                    return True
+                if labels == ("下一步",):
+                    self.exact_clicks.append(labels)
+                    return True
+                raise AssertionError(labels)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._read_fanqie_publish_responses = lambda page: {
+            "check_trafficed_book": {
+                "code": 0,
+                "data": {
+                    "is_valid": False,
+                    "invalid_reason": "作品暂不支持下架作品使用",
+                },
+            }
+        }
+        uploader._fanqie_confirm_risk_detection = lambda page: True
+        uploader._fanqie_wait_for_publish_settings = lambda page, timeout_ms=8000: True
+        uploader._fanqie_select_non_ai_publish_option = lambda page: True
+
+        page = FakePage()
+        action_meta = uploader._confirm_fanqie_publish(page)
+
+        self.assertEqual(page.exact_clicks, [("下一步",)])
+        self.assertEqual(
+            action_meta,
+            {
+                "responses": {
+                    "check_trafficed_book": {
+                        "code": 0,
+                        "data": {
+                            "is_valid": False,
+                            "invalid_reason": "作品暂不支持下架作品使用",
+                        },
+                    }
+                }
+            },
+        )
+
+    def test_server_uploader_fanqie_publish_returns_first_step_block_immediately(self) -> None:
+        class FakePage:
+            def __init__(self) -> None:
+                self.waits: list[int] = []
+                self.exact_clicks: list[tuple[str, ...]] = []
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.waits.append(value)
+
+            def evaluate(self, script: str, args=None):
+                if "some((node) => textOf(node) === label)" in script:
+                    return False
+                labels = tuple(args[0]) if args else ()
+                if labels == ("下一步", "确认发布", "开启检测"):
+                    return True
+                if labels == ("下一步",):
+                    self.exact_clicks.append(labels)
+                    return True
+                raise AssertionError(labels)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._read_fanqie_publish_responses = lambda page: {
+            "check_trafficed_book": {
+                "code": 0,
+                "data": {
+                    "is_valid": False,
+                    "invalid_reason": "作品暂不支持下架作品使用",
+                },
+            },
+            "edit_article": {"code": 0, "message": "success"}
+        }
+        uploader._fanqie_confirm_risk_detection = lambda page: True
+        uploader._fanqie_wait_for_publish_settings = lambda page, timeout_ms=8000: True
+        uploader._fanqie_select_non_ai_publish_option = lambda page: True
+
+        page = FakePage()
+        action_meta = uploader._confirm_fanqie_publish(page)
+
+        self.assertEqual(page.exact_clicks, [("下一步",)])
+        self.assertEqual(
+            action_meta,
+            {
+                "responses": {
+                    "check_trafficed_book": {
+                        "code": 0,
+                        "data": {
+                            "is_valid": False,
+                            "invalid_reason": "作品暂不支持下架作品使用",
+                        },
+                    },
+                    "edit_article": {"code": 0, "message": "success"},
+                }
+            },
+        )
+
+    def test_server_uploader_fanqie_publish_handles_intermediate_dialog_before_confirm(self) -> None:
+        class FakePage:
+            def __init__(self) -> None:
+                self.waits: list[int] = []
+                self.exact_clicks: list[tuple[str, ...]] = []
+                self.has_confirm = False
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.waits.append(value)
+
+            def evaluate(self, script: str, args=None):
+                if "some((node) => textOf(node) === label)" in script:
+                    return self.has_confirm
+                labels = tuple(args[0]) if args else ()
+                if labels == ("下一步", "确认发布", "开启检测"):
+                    return True
+                if labels == ("下一步",):
+                    self.exact_clicks.append(labels)
+                    return True
+                if labels == ("提交", "确定", "开启检测", "继续", "继续发布", "确认提交"):
+                    self.exact_clicks.append(labels)
+                    self.has_confirm = True
+                    return True
+                if labels == ("确认发布",):
+                    self.exact_clicks.append(labels)
+                    return True
+                raise AssertionError(labels)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._capture_response_during_click = lambda page, fragment, clicker, timeout_ms: (
+            clicker() and {"code": 0, "data": {"is_valid": True}}
+        )
+        uploader._read_fanqie_publish_responses = lambda page: {}
+        uploader._fanqie_confirm_risk_detection = lambda page: True
+        uploader._fanqie_wait_for_publish_settings = lambda page, timeout_ms=8000: True
+        uploader._fanqie_select_non_ai_publish_option = lambda page: True
+
+        page = FakePage()
+        action_meta = uploader._confirm_fanqie_publish(page)
+
+        self.assertEqual(
+            page.exact_clicks,
+            [("下一步",), ("提交", "确定", "开启检测", "继续", "继续发布", "确认提交"), ("确认发布",)],
+        )
+        self.assertEqual(
+            action_meta,
+            {"responses": {"check_trafficed_book": {"code": 0, "data": {"is_valid": True}}}},
+        )
+
+    def test_server_uploader_dismiss_fanqie_modal_also_removes_reactour_tour(self) -> None:
+        class FakeCloseLocator:
+            @property
+            def first(self):
+                return self
+
+            def count(self) -> int:
+                return 0
+
+            def click(self, *, timeout: int) -> None:
+                raise AssertionError(timeout)
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.waits: list[int] = []
+                self.evaluate_calls: list[str] = []
+
+            def locator(self, selector: str):
+                self.selector = selector
+                return FakeCloseLocator()
+
+            def evaluate(self, script: str):
+                self.evaluate_calls.append(script)
+                if "reactour" in script:
+                    return 3
+                raise AssertionError(script[:120])
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.waits.append(value)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+
+        page = FakePage()
+        uploader._dismiss_fanqie_modal(page)
+
+        self.assertTrue(any("reactour" in script for script in page.evaluate_calls))
+        self.assertIn(200, page.waits)
+
+    def test_server_uploader_dismiss_fanqie_modal_clicks_guide_steps(self) -> None:
+        class FakeCloseLocator:
+            @property
+            def first(self):
+                return self
+
+            def count(self) -> int:
+                return 0
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.waits: list[int] = []
+                self.evaluate_calls: list[str] = []
+                self.guide_clicks = 0
+
+            def locator(self, selector: str):
+                self.selector = selector
+                return FakeCloseLocator()
+
+            def evaluate(self, script: str):
+                self.evaluate_calls.append(script)
+                if "guide-card-footer-btn" in script:
+                    if self.guide_clicks < 2:
+                        self.guide_clicks += 1
+                        return "下一步"
+                    return ""
+                if "reactour" in script:
+                    return 0
+                raise AssertionError(script[:120])
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.waits.append(value)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+
+        page = FakePage()
+        uploader._dismiss_fanqie_modal(page)
+
+        self.assertTrue(any("guide-card-footer-btn" in script for script in page.evaluate_calls))
+        self.assertEqual(page.guide_clicks, 2)
+        self.assertIn(350, page.waits)
+
+    def test_server_uploader_fanqie_click_next_step_ignores_reactour_button(self) -> None:
+        class FakeLocator:
+            @property
+            def first(self):
+                return self
+
+            def count(self) -> int:
+                return 0
+
+            def click(self, *, timeout: int, force: bool) -> None:
+                raise AssertionError((timeout, force))
+
+        class FakeRoleLocator:
+            @property
+            def first(self):
+                return self
+
+            def count(self) -> int:
+                return 0
+
+            def click(self, *, timeout: int, force: bool) -> None:
+                raise AssertionError((timeout, force))
+
+        class FakePage:
+            def locator(self, selector: str):
+                self.selector = selector
+                return FakeLocator()
+
+            def get_by_role(self, role: str, *, name: str):
+                self.role = role
+                self.name = name
+                return FakeRoleLocator()
+
+            def evaluate(self, script: str):
+                if "reactour" in script and "下一步" in script:
+                    return True
+                raise AssertionError(script[:120])
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._click_exact_text = lambda page, labels, timeout_ms=3000: False
+
+        page = FakePage()
+        clicked = uploader._fanqie_click_next_step(page, timeout_ms=4000)
+
+        self.assertTrue(clicked)
+
+    def test_server_uploader_prepare_fanqie_editor_keeps_direct_publish_page(self) -> None:
+        class FakeBodyLocator:
+            def inner_text(self) -> str:
+                return "拍阑干的新书 正文字数 2200 存草稿 下一步"
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.url = "https://fanqienovel.com/main/writer/1/publish/2?enter_from=newchapter_0"
+
+            def locator(self, selector: str):
+                if selector == "body":
+                    return FakeBodyLocator()
+                raise AssertionError(selector)
+
+            def content(self) -> str:
+                return '<input placeholder="请输入标题" />'
+
+            def evaluate(self, script: str):
+                if "publish-button auto-editor-next" in script or "publish-button.auto-editor-next" in script:
+                    return True
+                raise AssertionError(script[:120])
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._dismiss_fanqie_modal = lambda page: None
+        uploader._fanqie_entry_links = lambda page, book_name: (_ for _ in ()).throw(AssertionError("should not scan entries"))
+
+        page = FakePage()
+        uploader._prepare_fanqie_editor(page, "拍阑干的新书")
+
+    def test_server_uploader_prepare_fanqie_editor_waits_for_publish_hydration(self) -> None:
+        class FakePage:
+            def __init__(self) -> None:
+                self.url = "https://fanqienovel.com/main/writer/1/publish/2?enter_from=newchapter_0"
+                self.wait_calls = 0
+
+            def locator(self, selector: str):
+                raise AssertionError(selector)
+
+            def evaluate(self, script: str):
+                if "publish-button auto-editor-next" in script or "publish-button.auto-editor-next" in script:
+                    return self.wait_calls > 0
+                raise AssertionError(script[:120])
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.wait_calls += 1
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._dismiss_fanqie_modal = lambda page: None
+
+        page = FakePage()
+        uploader._prepare_fanqie_editor(page, "拍阑干的新书")
+        self.assertGreaterEqual(page.wait_calls, 1)
+
+    def test_server_uploader_capture_page_after_action_prefers_popup_page(self) -> None:
+        class FakePopupPage:
+            def __init__(self) -> None:
+                self.url = "https://fanqienovel.com/main/writer/1/publish/2?enter_from=newchapter_0"
+                self.wait_states: list[tuple[str, int]] = []
+                self.waits: list[int] = []
+
+            def wait_for_load_state(self, state: str, timeout: int) -> None:
+                self.wait_states.append((state, timeout))
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.waits.append(value)
+
+        class FakePopupContext:
+            def __init__(self, popup_page) -> None:
+                self.value = popup_page
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        class FakeMainPage:
+            def __init__(self, popup_page) -> None:
+                self.context = type("Context", (), {"pages": [self, popup_page]})()
+                self.popup_page = popup_page
+                self.clicked = False
+
+            def expect_popup(self, *, timeout: int):
+                self.timeout = timeout
+                return FakePopupContext(self.popup_page)
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.wait_value = value
+
+        popup_page = FakePopupPage()
+        page = FakeMainPage(popup_page)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+
+        target = uploader._capture_page_after_action(page, lambda: setattr(page, "clicked", True), timeout_ms=4500, settle_ms=1600)
+
+        self.assertIs(target, popup_page)
+        self.assertTrue(page.clicked)
+        self.assertEqual(page.timeout, 4500)
+        self.assertEqual(popup_page.wait_states, [("domcontentloaded", 4500)])
+        self.assertEqual(popup_page.waits, [1600])
+
+    def test_server_uploader_fanqie_publish_preserves_live_block_reason_with_popup_response(self) -> None:
+        class FakePage:
+            def __init__(self) -> None:
+                self.waits: list[int] = []
+                self.exact_clicks: list[tuple[str, ...]] = []
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.waits.append(value)
+
+            def evaluate(self, script: str, args=None):
+                if "some((node) => textOf(node) === label)" in script:
+                    return False
+                labels = tuple(args[0]) if args else ()
+                if labels == ("下一步", "确认发布", "开启检测"):
+                    return True
+                if labels == ("下一步",):
+                    self.exact_clicks.append(labels)
+                    return True
+                raise AssertionError(labels)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._listen_for_fanqie_publish_responses = lambda page: {
+            "data": {
+                "check_trafficed_book": {
+                    "code": 0,
+                    "data": {
+                        "is_valid": False,
+                        "invalid_reason": "作品暂不支持下架作品使用",
+                    },
+                }
+            },
+            "cleanup": None,
+        }
+        uploader._read_fanqie_publish_responses = lambda page: {
+            "get_speak_popup": {
+                "code": 0,
+                "data": {
+                    "popup_info": {
+                        "title": "提示",
+                        "sub_title": "非章节内容请使用“作者有话说”功能。",
+                    }
+                },
+            }
+        }
+        uploader._fanqie_confirm_risk_detection = lambda page: True
+        uploader._fanqie_wait_for_publish_settings = lambda page, timeout_ms=8000: True
+        uploader._fanqie_select_non_ai_publish_option = lambda page: True
+
+        page = FakePage()
+        action_meta = uploader._confirm_fanqie_publish(page)
+
+        self.assertEqual(page.exact_clicks, [("下一步",)])
+        self.assertEqual(
+            action_meta,
+            {
+                "responses": {
+                    "get_speak_popup": {
+                        "code": 0,
+                        "data": {
+                            "popup_info": {
+                                "title": "提示",
+                                "sub_title": "非章节内容请使用“作者有话说”功能。",
+                            }
+                        },
+                    },
+                    "check_trafficed_book": {
+                        "code": 0,
+                        "data": {
+                            "is_valid": False,
+                            "invalid_reason": "作品暂不支持下架作品使用",
+                        },
+                    },
+                }
+            },
+        )
+
+    def test_server_uploader_normalizes_fanqie_chapter_manage_href(self) -> None:
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        normalized = uploader._normalize_fanqie_chapter_manage_href(
+            "https://fanqienovel.com/main/writer/",
+            "/main/writer/chapter-manage/7623869161952791576&书名?type=1",
+            "7623869161952791576",
+        )
+        self.assertEqual(
+            normalized,
+            "https://fanqienovel.com/main/writer/chapter-manage/7623869161952791576?type=1",
+        )
+
+    def test_server_uploader_normalizes_absolute_fanqie_chapter_manage_href(self) -> None:
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        normalized = uploader._normalize_fanqie_chapter_manage_href(
+            "https://fanqienovel.com/main/writer/",
+            "https://fanqienovel.com/main/writer/chapter-manage/7623869161952791576&书名?type=1",
+            "7623869161952791576",
+        )
+        self.assertEqual(
+            normalized,
+            "https://fanqienovel.com/main/writer/chapter-manage/7623869161952791576?type=1",
+        )
+
+    def test_server_uploader_fanqie_body_waits_for_counter_and_enabled_button(self) -> None:
+        class FakeKeyboard:
+            def __init__(self) -> None:
+                self.actions: list[tuple[str, str]] = []
+
+            def press(self, value: str) -> None:
+                self.actions.append(("press", value))
+
+            def insert_text(self, value: str) -> None:
+                self.actions.append(("insert_text", value))
+
+        class FakeLocator:
+            def __init__(self) -> None:
+                self.clicks = 0
+                self.first = self
+
+            def count(self) -> int:
+                return 1
+
+            def click(self, *args, **kwargs) -> None:
+                self.clicks += 1
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.keyboard = FakeKeyboard()
+                self.waits: list[int] = []
+                self.locator_instance = FakeLocator()
+                self.statuses = [
+                    {"body_char_count": 0, "next_disabled": True, "editor_text_length": 1803},
+                    {"body_char_count": 0, "next_disabled": True, "editor_text_length": 1803},
+                    {"body_char_count": 1758, "next_disabled": False, "editor_text_length": 1803},
+                ]
+
+            def locator(self, selector: str):
+                self.selector = selector
+                return self.locator_instance
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.waits.append(value)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._fill_fanqie_sequence = lambda page: None
+        uploader._dismiss_fanqie_modal = lambda page: None
+        uploader._focus_fanqie_body = lambda page: True
+
+        def fake_status(page):
+            return page.statuses.pop(0)
+
+        uploader._read_fanqie_editor_status = fake_status
+
+        page = FakePage()
+        ok = uploader._fill_fanqie_body(page, "正文" * 900)
+
+        self.assertTrue(ok)
+        self.assertEqual(page.selector, '.ProseMirror[contenteditable="true"]')
+        self.assertEqual(page.keyboard.actions[0][0], "insert_text")
+        self.assertGreaterEqual(len(page.waits), 1)
+        self.assertTrue(all(value == 250 for value in page.waits))
+
+    def test_server_uploader_fanqie_sequence_retries_until_value_exists(self) -> None:
+        class FakeKeyboard:
+            def __init__(self) -> None:
+                self.actions: list[tuple[str, str]] = []
+
+            def press(self, value: str) -> None:
+                self.actions.append(("press", value))
+
+            def type(self, value: str, delay: int | None = None) -> None:
+                self.actions.append(("type", value))
+
+        class FakeLocator:
+            def __init__(self) -> None:
+                self.first = self
+                self.clicks = 0
+                self.fills: list[str] = []
+                self.values = ["", "", "1"]
+
+            def count(self) -> int:
+                return 1
+
+            def input_value(self) -> str:
+                return self.values.pop(0) if self.values else "1"
+
+            def click(self, *args, **kwargs) -> None:
+                self.clicks += 1
+
+            def fill(self, value: str) -> None:
+                self.fills.append(value)
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.keyboard = FakeKeyboard()
+                self.waits: list[int] = []
+                self.locator_instance = FakeLocator()
+
+            def locator(self, selector: str):
+                self.selector = selector
+                return self.locator_instance
+
+            def wait_for_timeout(self, value: int) -> None:
+                self.waits.append(value)
+
+        uploader = ServerPublisherUploader.__new__(ServerPublisherUploader)
+        uploader._timeout_error = TimeoutError
+        uploader._dismiss_fanqie_modal = lambda page: None
+
+        page = FakePage()
+        uploader._fill_fanqie_sequence(page)
+
+        self.assertEqual(page.selector, "input.serial-input.byte-input.byte-input-size-default")
+        self.assertEqual(page.locator_instance.fills, ["1"])
+        self.assertEqual(page.keyboard.actions, [("press", "Control+A"), ("type", "1")])
+        self.assertEqual(page.waits, [150, 150])
+
     def test_config_from_env_reads_shared_fields_once(self) -> None:
         with patch.dict(
             "os.environ",
@@ -1098,12 +2219,52 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(hits[0].chapter_number, 1)
         self.assertIn("末班车", hits[0].summary)
 
+    def test_runtime_settings_store_caches_get_results_until_save(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "runtime-settings.json"
+            store = RuntimeSettingsStore(
+                str(path),
+                default_api_key="sk-default",
+                default_base_url="https://example.default/v1",
+                default_model="default-model",
+            )
+
+            first = store.get()
+            path.write_text(
+                json.dumps(
+                    {
+                        "api_key": "sk-external",
+                        "base_url": "https://example.external/v1",
+                        "model": "external-model",
+                        "operation_mode": "checkpoint",
+                        "freeze_failed_candidates": False,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            second = store.get()
+            saved = store.save(model="saved-model")
+            third = store.get()
+
+        self.assertEqual(first["api_key"], "sk-default")
+        self.assertEqual(second["api_key"], "sk-default")
+        self.assertEqual(saved["model"], "saved-model")
+        self.assertEqual(third["model"], "saved-model")
+
     def test_thread_sampling_balances_stale_and_hot_threads(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "thread-sampling.db")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
+            sampled_names: list[str] = []
+            updater = None
+            project = None
+            stale_primary = None
+            hot_followup = None
+            stale_secondary = None
+            sampled = None
             try:
                 updater = StateUpdater(session)
                 project = updater.create_project(title="测试书", premise="前提", genre="玄幻")
@@ -1137,11 +2298,20 @@ class Phase05RegressionTests(unittest.TestCase):
                     stale_window=2,
                     recent_window=2,
                 )
+                sampled_names = [thread.name for thread in sampled.threads]
+                sampled = None
             finally:
+                updater = None
+                project = None
+                stale_primary = None
+                hot_followup = None
+                stale_secondary = None
+                sampled = None
                 session.close()
+                close_all_sessions()
                 engine.dispose()
+                gc.collect()
 
-        sampled_names = [thread.name for thread in sampled.threads]
         self.assertIn("主线悬案", sampled_names)
         self.assertIn("新线索", sampled_names)
         self.assertLessEqual(len(sampled_names), 3)
@@ -1207,6 +2377,343 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(analysis_count, 1)
         self.assertEqual(provisional_count, 1)
 
+    def test_provisional_preview_falls_back_per_chapter_without_disabling_later_previews(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "provisional-degrade.db")
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    artifact_root=str(Path(tmp) / "artifacts"),
+                    minimax_api_key="fake-key",
+                    minimax_model="fake-model",
+                )
+            )
+            calls = {"count": 0}
+            try:
+                engine = get_engine(db_path)
+                init_db(engine)
+                session = get_session_factory(engine)()
+                try:
+                    updater = StateUpdater(session)
+                    project = updater.create_project(title="测试书", premise="前提", genre="玄幻")
+                    arc = updater.create_arc_plan(project.id, "主线弧")
+                    for chapter_number in range(1, 6):
+                        updater.create_chapter_plan(
+                            project_id=project.id,
+                            arc_plan_id=arc.id,
+                            chapter_number=chapter_number,
+                            title=f"第{chapter_number}章",
+                            one_line=f"推进第{chapter_number}章冲突",
+                            goals=["推进", "升级"],
+                        )
+
+                    def preview_writer(context, **_kwargs):
+                        calls["count"] += 1
+                        if calls["count"] == 1:
+                            raise RuntimeError("ChapterWriter JSON generation failed after retries: The read operation timed out")
+                        return WriterOutput(
+                            project_id=project.id,
+                            chapter_number=context.chapter_number,
+                            title=f"预演第{context.chapter_number}章",
+                            body="夜雾压城，顾临川沿着堤岸追查海图上新增的坐标。"*8,
+                            char_count=len("夜雾压城，顾临川沿着堤岸追查海图上新增的坐标。"*8),
+                            end_of_chapter_summary=f"第{context.chapter_number}章预演摘要",
+                        )
+
+                    orchestrator.provisional_writer.write_preview_chapter = preview_writer
+                    orchestrator.arc_envelope_manager.director = None
+
+                    envelope = orchestrator.arc_envelope_manager.ensure_active_arc_resolution(
+                        session=session,
+                        project_id=project.id,
+                        activation_chapter=1,
+                    )
+                    session.commit()
+
+                    preview = session.execute(
+                        select(ProvisionalBandExecution)
+                        .where(ProvisionalBandExecution.project_id == project.id)
+                        .order_by(ProvisionalBandExecution.created_at.desc())
+                        .limit(1)
+                    ).scalar_one()
+                    ledgers = session.execute(
+                        select(ProvisionalChapterLedger)
+                        .where(ProvisionalChapterLedger.project_id == project.id)
+                        .order_by(ProvisionalChapterLedger.chapter_number.asc())
+                    ).scalars().all()
+                finally:
+                    session.close()
+                    engine.dispose()
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+        self.assertIsNotNone(envelope)
+        self.assertEqual(calls["count"], len(ledgers))
+        self.assertEqual(preview.aggregate_verdict, "warn")
+        self.assertEqual(preview.failure_count, 0)
+        self.assertEqual(len(ledgers), 5)
+        self.assertEqual(ledgers[0].verdict, "warn")
+        self.assertIn("timed out", ledgers[0].error_text.lower())
+        self.assertTrue(all(not item.error_text for item in ledgers[1:]))
+        self.assertTrue(all(item.title.startswith("预演第") for item in ledgers[1:]))
+        self.assertTrue(all(item.char_count > 0 for item in ledgers[1:]))
+        self.assertGreater(preview.preview_char_count, 0)
+
+    def test_preview_writer_parses_marker_text_without_json(self) -> None:
+        class FakePreviewClient:
+            def chat(self, messages, **_kwargs):
+                return (
+                    "<<FORWIN_TITLE>>\n"
+                    "雨夜的古符\n"
+                    "<<FORWIN_BODY>>\n"
+                    + "林明在废土雨夜中握紧古符，循着残光走向断壁。" * 40
+                    + "\n<<FORWIN_SUMMARY>>\n"
+                    "林明被古符引向新的废墟入口。"
+                )
+
+        writer = ChapterWriter(
+            FakePreviewClient(),
+            writer_mode="single",
+            min_chapter_chars=600,
+            max_chapter_chars=1200,
+            target_chapter_chars=900,
+        )
+        context = ChapterContextPack(
+            project_id="p1",
+            project_title="测试书",
+            premise="前提",
+            genre="玄幻",
+            setting_summary="废土",
+            chapter_number=1,
+            chapter_plan_title="第一章",
+            chapter_plan_one_line="古符现身",
+            chapter_goals=["推进主线"],
+        )
+
+        output = writer.write_preview_chapter(context, max_attempts=1, retry_on_timeout=False)
+
+        self.assertEqual(output.title, "雨夜的古符")
+        self.assertIn("林明在废土雨夜中握紧古符", output.body)
+        self.assertEqual(output.end_of_chapter_summary, "林明被古符引向新的废墟入口。")
+        self.assertEqual(output.generation_meta["mode"], "provisional_preview")
+
+    def test_preview_writer_uses_last_marker_block_when_model_echoes_instruction(self) -> None:
+        class FakePreviewClient:
+            def chat(self, messages, **_kwargs):
+                return (
+                    "请按以下结构输出：\n"
+                    "【标题】\n"
+                    "这里写标题\n"
+                    "【正文】\n"
+                    "这里写正文\n"
+                    "【摘要】\n"
+                    "这里写摘要\n"
+                    "</think>\n\n"
+                    "【标题】\n"
+                    "午夜戏台\n"
+                    "【正文】\n"
+                    + "顾临川沿着潮湿台阶走向沉没戏台，耳边全是海风和旧戏腔。" * 30
+                    + "\n【摘要】\n"
+                    "顾临川确认戏台将在下一次满潮时现身。"
+                )
+
+        writer = ChapterWriter(
+            FakePreviewClient(),
+            writer_mode="single",
+            min_chapter_chars=600,
+            max_chapter_chars=1200,
+            target_chapter_chars=900,
+        )
+        context = ChapterContextPack(
+            project_id="p1",
+            project_title="测试书",
+            premise="前提",
+            genre="悬疑奇幻",
+            setting_summary="海边旧城",
+            chapter_number=3,
+            chapter_plan_title="第3章",
+            chapter_plan_one_line="戏台出现",
+            chapter_goals=["推进主线"],
+        )
+
+        output = writer.write_preview_chapter(context, max_attempts=1, retry_on_timeout=False)
+
+        self.assertEqual(output.title, "午夜戏台")
+        self.assertIn("顾临川沿着潮湿台阶走向沉没戏台", output.body)
+        self.assertNotIn("这里写正文", output.body)
+        self.assertEqual(output.end_of_chapter_summary, "顾临川确认戏台将在下一次满潮时现身。")
+
+    def test_provisional_verdict_softens_fail_when_preview_body_is_usable(self) -> None:
+        writer_output = WriterOutput(
+            project_id="p1",
+            chapter_number=1,
+            title="第1章",
+            body="正文内容" * 120,
+            char_count=len("正文内容" * 120),
+            end_of_chapter_summary="摘要",
+        )
+        verdict = ReviewVerdict(
+            verdict="fail",
+            issues=[
+                ContinuityIssue(
+                    rule_name="empty_body",
+                    severity="error",
+                    description="过短",
+                    entity_names=[],
+                )
+            ],
+        )
+
+        softened = WritingOrchestrator._normalize_provisional_verdict(writer_output, verdict)
+
+        self.assertEqual(softened.verdict, "warn")
+        self.assertTrue(any(issue.rule_name == "provisional_softened_fail" for issue in softened.issues))
+
+    def test_provisional_verdict_ignores_preview_char_count_warning(self) -> None:
+        writer_output = WriterOutput(
+            project_id="p1",
+            chapter_number=1,
+            title="第1章",
+            body="正文内容" * 80,
+            char_count=len("正文内容" * 80),
+            end_of_chapter_summary="摘要",
+        )
+        verdict = ReviewVerdict(
+            verdict="warn",
+            issues=[
+                ContinuityIssue(
+                    rule_name="char_count_low",
+                    severity="warning",
+                    description="预演较短",
+                    entity_names=[],
+                )
+            ],
+        )
+
+        normalized = WritingOrchestrator._normalize_provisional_verdict(writer_output, verdict)
+
+        self.assertEqual(normalized.verdict, "pass")
+        self.assertEqual(normalized.issues, [])
+
+    def test_provisional_preview_uses_preview_checker_thresholds(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "preview-thresholds.db")
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    artifact_root=str(Path(tmp) / "artifacts"),
+                    minimax_api_key="fake-key",
+                    minimax_model="fake-model",
+                )
+            )
+            try:
+                engine = get_engine(db_path)
+                init_db(engine)
+                session = get_session_factory(engine)()
+                try:
+                    updater = StateUpdater(session)
+                    project = updater.create_project(title="测试书", premise="前提", genre="玄幻")
+                    arc = updater.create_arc_plan(project.id, "主线弧")
+                    chapter_plan = updater.create_chapter_plan(
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=1,
+                        title="第1章",
+                        one_line="预演正文",
+                        goals=["推进"],
+                    )
+
+                    def preview_writer(_context, **_kwargs):
+                        body = "海风沿着旧城墙穿过，顾临川在潮声里翻开残卷。"
+                        body = body * 20  # > provisional min_chars, < formal 1500
+                        return WriterOutput(
+                            project_id=project.id,
+                            chapter_number=1,
+                            title="预演第1章",
+                            body=body,
+                            char_count=len(body),
+                            end_of_chapter_summary="顾临川确认残卷与潮汐异象有关。",
+                        )
+
+                    orchestrator.provisional_writer.write_preview_chapter = preview_writer
+                    preview = orchestrator._run_provisional_band_preview(
+                        session=session,
+                        project_id=project.id,
+                        arc_id=arc.id,
+                        band_id="band:1:1",
+                        chapter_plans=[chapter_plan],
+                    )
+                    session.commit()
+                    ledger = session.execute(
+                        select(ProvisionalChapterLedger)
+                        .where(ProvisionalChapterLedger.project_id == project.id)
+                        .limit(1)
+                    ).scalar_one()
+                finally:
+                    session.close()
+                    engine.dispose()
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+        self.assertIsNotNone(preview)
+        self.assertEqual(preview.aggregate_verdict, "pass")
+        self.assertEqual(preview.issue_count, 0)
+        self.assertEqual(ledger.verdict, "pass")
+        self.assertEqual(json.loads(ledger.issues_json), [])
+
+    def test_orchestrator_emits_project_created_progress(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "progress-callback.db")
+            progress_events: list[tuple[str, dict[str, object]]] = []
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    artifact_root=str(Path(tmp) / "artifacts"),
+                    minimax_api_key="fake-key",
+                    minimax_model="fake-model",
+                ),
+                progress_callback=lambda event, payload: progress_events.append((event, payload)),
+            )
+            try:
+                with patch.object(
+                    orchestrator.arc_director,
+                    "plan_arc",
+                    return_value={
+                        "arc_synopsis": "测试主线",
+                        "setting_summary": "测试世界",
+                        "characters": [],
+                        "locations": [],
+                        "factions": [],
+                        "threads": [],
+                        "chapter_plans": [
+                            {
+                                "chapter_number": 1,
+                                "title": "第一章",
+                                "one_line": "开场",
+                                "goals": ["推进"],
+                            }
+                        ],
+                    },
+                ), patch.object(
+                    orchestrator,
+                    "_run_project_chapters",
+                    return_value=RunResult(
+                        project_id="placeholder",
+                        requested_chapters=1,
+                    ),
+                ):
+                    result = orchestrator.run("前提", "玄幻", 1)
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+        self.assertEqual(result.status, "completed")
+        self.assertTrue(progress_events)
+        self.assertEqual(progress_events[0][0], "project_created")
+        self.assertTrue(progress_events[0][1]["project_id"])
+
     def test_api_projects_expose_active_arc_envelope_fields(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "arc-envelope-api.db")
@@ -1234,6 +2741,34 @@ class Phase05RegressionTests(unittest.TestCase):
                         source_policy_tier="short",
                     )
                 )
+                session.add(
+                    ArcEnvelopeAnalysis(
+                        project_id=project.id,
+                        arc_id=arc.id,
+                        based_on_band_id="band:1:6",
+                        recommendation="expand",
+                        evidence_json='["热点后移", "主冲突仍在升温"]',
+                        expansion_signals_json='["主高潮尚未到来"]',
+                        compression_signals_json='[]',
+                        suggested_target=22,
+                        suggested_soft_min=16,
+                        suggested_soft_max=28,
+                        confidence=0.86,
+                    )
+                )
+                session.add(
+                    ProvisionalBandExecution(
+                        project_id=project.id,
+                        arc_id=arc.id,
+                        band_id="band:1:6",
+                        chapter_numbers_json="[1, 2, 3]",
+                        artifact_path="provisional://band.json",
+                        aggregate_verdict="warn",
+                        preview_char_count=4200,
+                        issue_count=2,
+                        failure_count=0,
+                    )
+                )
                 session.commit()
 
                 old_engine = api_module._engine
@@ -1252,8 +2787,39 @@ class Phase05RegressionTests(unittest.TestCase):
 
         self.assertEqual(payload[0].active_arc_policy_tier, "short")
         self.assertEqual(payload[0].active_arc_target_size, 20)
+        self.assertEqual(payload[0].active_arc_recommendation, "expand")
+        self.assertEqual(payload[0].provisional_band_id, "band:1:6")
         self.assertEqual(detail.active_arc_detailed_band_size, 8)
         self.assertEqual(detail.active_arc_frozen_zone_size, 3)
+        self.assertEqual(detail.active_arc_evidence[0], "热点后移")
+        self.assertEqual(detail.provisional_aggregate_verdict, "warn")
+
+    def test_api_projects_created_at_uses_pacific_display_time(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "projects-timezone.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="测试书", premise="前提", genre="玄幻")
+                project.created_at = datetime(2026, 4, 2, 19, 0, 0, tzinfo=timezone.utc)
+                session.commit()
+
+                old_engine = api_module._engine
+                old_factory = api_module._SessionFactory
+                try:
+                    api_module._engine = engine
+                    api_module._SessionFactory = get_session_factory(engine)
+                    payload = api_module.list_projects()
+                finally:
+                    api_module._engine = old_engine
+                    api_module._SessionFactory = old_factory
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertEqual(payload[0].created_at, "2026-04-02 12:00:00 PDT")
 
     def test_api_exposes_latest_provisional_band_shadow_ledger(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -1319,6 +2885,76 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(payload.chapters[0].projected_time_label, "第二日晨")
         self.assertEqual(payload.chapters[0].events[0]["summary"], "发现异动")
         self.assertEqual(payload.chapters[0].issues[0]["rule_name"], "len")
+
+    def test_api_exposes_latest_provisional_band_pass_verdict(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "provisional-pass-api.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="测试书", premise="前提", genre="玄幻")
+                arc = updater.create_arc_plan(project.id, "主线弧")
+                session.add(
+                    ProvisionalBandExecution(
+                        project_id=project.id,
+                        arc_id=arc.id,
+                        band_id="band:1:1",
+                        chapter_numbers_json="[1]",
+                        artifact_path="provisional://pass-band.json",
+                        aggregate_verdict="pass",
+                        preview_char_count=900,
+                        issue_count=0,
+                        failure_count=0,
+                    )
+                )
+                session.add(
+                    ProvisionalChapterLedger(
+                        project_id=project.id,
+                        arc_id=arc.id,
+                        band_id="band:1:1",
+                        chapter_number=1,
+                        title="第一章",
+                        summary="预演摘要",
+                        verdict="pass",
+                        char_count=900,
+                        artifact_meta_path="meta://1",
+                        draft_blob_path="draft://1",
+                        current_time_label="第一日夜",
+                        projected_time_label="第二日晨",
+                        state_changes_json="[]",
+                        events_json="[]",
+                        thread_beats_json="[]",
+                        time_advance_json="{}",
+                        issues_json="[]",
+                    )
+                )
+                session.commit()
+
+                old_engine = api_module._engine
+                old_factory = api_module._SessionFactory
+                try:
+                    api_module._engine = engine
+                    api_module._SessionFactory = get_session_factory(engine)
+                    payload = api_module.get_latest_provisional_band(project.id)
+                finally:
+                    api_module._engine = old_engine
+                    api_module._SessionFactory = old_factory
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertEqual(payload.aggregate_verdict, "pass")
+        self.assertEqual(payload.issue_count, 0)
+        self.assertEqual(payload.chapters[0].verdict, "pass")
+
+    def test_phase24_uses_ultra_long_tier_for_epic_projects(self) -> None:
+        policy = policy_for_total_chapters(1000)
+
+        self.assertEqual(policy.name, "ultra-long")
+        self.assertEqual(policy.min_size, 24)
+        self.assertEqual(policy.max_size, 48)
 
     def test_api_list_chapters_uses_latest_draft_values(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -1401,6 +3037,45 @@ class Phase05RegressionTests(unittest.TestCase):
                 pressure_summary="悬置线程开始反噬主角。",
                 notable_shifts=["失踪信号开始扩散"],
             ),
+            reader_feedback=ReaderFeedbackView(
+                comment_count=12,
+                dominant_sentiment="期待",
+                feedback_summary="读者期待主角尽快追上失踪信号。",
+                recent_highlights=[
+                    ReaderCommentView(
+                        platform_id="fanqie",
+                        author_name="海边听潮",
+                        body_text="这个伏笔埋得很稳，快让主角去追信号。",
+                        remote_created_at="2026-04-02 12:00:00 PDT",
+                    )
+                ],
+            ),
+            retrieved_memories=[
+                MemorySnippet(
+                    chapter_number=2,
+                    title="旧站台",
+                    summary="主角在旧站台首次发现异常潮声。",
+                    excerpt="主角在旧站台首次发现异常潮声，并意识到信号来自海边。",
+                    score=0.91,
+                )
+            ],
+            current_arc_envelope=ArcEnvelopeView(
+                base_target_size=12,
+                base_soft_min=9,
+                base_soft_max=15,
+                resolved_target_size=12,
+                resolved_soft_min=9,
+                resolved_soft_max=15,
+                detailed_band_size=5,
+                frozen_zone_size=2,
+                current_projected_size=12,
+                current_confidence=0.82,
+                source_policy_tier="short",
+            ),
+            timeline=TimelineSnapshot(
+                current_time_label="第二日夜",
+                ordinal=2,
+            ),
         )
         prompt = build_single_chapter_draft_prompt(
             context,
@@ -1410,6 +3085,10 @@ class Phase05RegressionTests(unittest.TestCase):
         )
         self.assertIn("【NPC 当前意图】", prompt[1]["content"])
         self.assertIn("【世界压力】", prompt[1]["content"])
+        self.assertIn("【读者反馈】", prompt[1]["content"])
+        self.assertIn("【检索到的关键记忆】", prompt[1]["content"])
+        self.assertIn("【当前 Arc Envelope】", prompt[1]["content"])
+        self.assertIn("【当前时间】", prompt[1]["content"])
 
         scene_prompt = build_scene_generation_prompt(
             context,
@@ -1426,6 +3105,10 @@ class Phase05RegressionTests(unittest.TestCase):
         )
         self.assertIn("当前 NPC 意图", scene_prompt[1]["content"])
         self.assertIn("世界压力", scene_prompt[1]["content"])
+        self.assertIn("读者反馈", scene_prompt[1]["content"])
+        self.assertIn("检索到的关键记忆", scene_prompt[1]["content"])
+        self.assertIn("当前 Arc Envelope", scene_prompt[1]["content"])
+        self.assertIn("当前时间", scene_prompt[1]["content"])
 
     def test_state_repository_active_entities_uses_latest_state_and_alias_rows(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -2539,6 +4222,23 @@ class Phase05RegressionTests(unittest.TestCase):
         tmp, engine, manager = self._make_publisher_manager()
         try:
             items = {item["platform_id"]: item for item in manager.list_platforms()}
+            self.assertEqual(
+                set(items["qidian"].keys()),
+                {
+                    "platform_id",
+                    "display_name",
+                    "login_url",
+                    "dashboard_url",
+                    "publish_url",
+                    "supported_login_methods",
+                    "supported_actions",
+                    "connected",
+                    "extension_online",
+                    "last_heartbeat_at",
+                    "last_error",
+                    "extension_client_id",
+                },
+            )
             self.assertFalse(items["qidian"]["connected"])
             self.assertFalse(items["qidian"]["extension_online"])
             self.assertEqual(items["qidian"]["supported_login_methods"], ["scan"])
@@ -2569,6 +4269,7 @@ class Phase05RegressionTests(unittest.TestCase):
             self.assertTrue(items["qidian"]["connected"])
             self.assertTrue(items["qidian"]["extension_online"])
             self.assertEqual(items["fanqie"]["last_error"], "等待扫码")
+            self.assertTrue(items["qidian"]["last_heartbeat_at"].endswith("PDT"))
 
             with manager.session_factory() as session:
                 client = session.get(PublisherExtensionClient, "client-1")
@@ -2742,14 +4443,18 @@ class Phase05RegressionTests(unittest.TestCase):
                 body="正文",
                 upload_url=None,
                 publish=False,
+                create_if_missing=True,
+                book_meta={
+                    "audience": "male",
+                    "primary_category": "都市日常",
+                    "protagonist_names": ["沈砚", "林雾"],
+                    "intro": "一段关于旧城与旧案的故事。",
+                },
             )
-            claimed = manager.claim_upload_job_for_server(
-                job_id=server_job["job_id"],
-                client_id=stored["client_id"],
-            )
-            self.assertIsNotNone(claimed)
-            assert claimed is not None
-            self.assertEqual(claimed["status"], "running")
+            self.assertEqual(server_job["status"], "pending")
+            self.assertEqual(server_job["message"], "起点小说 上传任务已创建，等待浏览器扩展执行。")
+            self.assertTrue(server_job["result_payload"]["create_if_missing"])
+            self.assertEqual(server_job["result_payload"]["book_meta"]["primary_category"], "都市日常")
         finally:
             engine.dispose()
             tmp.cleanup()
@@ -2817,20 +4522,28 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.assertEqual(len(platforms.json()), 2)
                 self.assertEqual(platforms.json()[0]["supported_login_methods"], ["scan"])
 
-                with patch.object(api_module, "_start_backend_upload_thread", lambda _job_id: None):
-                    created = client.post(
-                        "/api/publishers/upload-jobs",
-                        json={
-                            "platform": "fanqie",
-                            "book_name": "测试书",
-                            "chapter_title": "第一章",
-                            "body": "正文",
-                            "publish": False,
+                created = client.post(
+                    "/api/publishers/upload-jobs",
+                    json={
+                        "platform": "fanqie",
+                        "book_name": "测试书",
+                        "chapter_title": "第一章",
+                        "body": "正文",
+                        "publish": False,
+                        "create_if_missing": True,
+                        "book_meta": {
+                            "audience": "male",
+                            "primary_category": "都市日常",
+                            "protagonist_names": ["沈砚", "林雾"],
+                            "intro": "一段关于旧城与旧案的故事。",
                         },
-                    )
+                    },
+                )
                 self.assertEqual(created.status_code, 200)
                 job_id = created.json()["job_id"]
                 self.assertEqual(created.json()["status"], "pending")
+                self.assertTrue(created.json()["result_payload"]["create_if_missing"])
+                self.assertEqual(created.json()["result_payload"]["book_meta"]["primary_category"], "都市日常")
 
                 fetched = client.get(f"/api/publishers/upload-jobs/{job_id}")
                 self.assertEqual(fetched.status_code, 200)
@@ -2915,20 +4628,19 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.assertEqual(session_sync.status_code, 200)
                 self.assertEqual(session_sync.json()["cookie_count"], 2)
 
-                with patch.object(api_module, "_start_backend_upload_thread", lambda _job_id: None):
-                    server_claim = client.post(
-                        "/api/publishers/upload-jobs",
-                        json={
-                            "platform": "qidian",
-                            "book_name": "测试书",
-                            "chapter_title": "后端接管章节",
-                            "body": "正文",
-                            "publish": False,
-                        },
-                    )
+                server_claim = client.post(
+                    "/api/publishers/upload-jobs",
+                    json={
+                        "platform": "qidian",
+                        "book_name": "测试书",
+                        "chapter_title": "后端接管章节",
+                        "body": "正文",
+                        "publish": False,
+                    },
+                )
                 self.assertEqual(server_claim.status_code, 200)
-                self.assertEqual(server_claim.json()["status"], "running")
-                self.assertEqual(server_claim.json()["message"], "后端正在使用已同步会话执行上传。")
+                self.assertEqual(server_claim.json()["status"], "pending")
+                self.assertEqual(server_claim.json()["message"], "起点小说 上传任务已创建，等待浏览器扩展执行。")
 
                 updated = client.post(
                     f"/api/publishers/upload-jobs/{job_id}/result",
@@ -2943,6 +4655,9 @@ class Phase05RegressionTests(unittest.TestCase):
                 )
                 self.assertEqual(updated.status_code, 200)
                 self.assertEqual(updated.json()["status"], "succeeded")
+                self.assertTrue(updated.json()["result_payload"]["create_if_missing"])
+                self.assertEqual(updated.json()["result_payload"]["book_meta"]["primary_category"], "都市日常")
+                self.assertEqual(updated.json()["result_payload"]["mode"], "draft")
 
                 claimed_none = client.post(
                     "/api/publishers/extension/upload-jobs/claim",
@@ -3038,6 +4753,10 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertIn("open-login", page.text)
         self.assertIn("execute-upload-job", page.text)
         self.assertIn("浏览器扩展未响应", page.text)
+        self.assertIn("let selectedPlatformId = '';", page.text)
+        self.assertIn("const nextSelectedPlatformId = selectedPlatformId || select.value || '';", page.text)
+        self.assertIn("selectedPlatformId = select.value || '';", page.text)
+        self.assertIn("document.getElementById('platform').addEventListener('change'", page.text)
 
     def test_review_endpoints_expose_and_continue_paused_chapter(self) -> None:
         class FakeThread:

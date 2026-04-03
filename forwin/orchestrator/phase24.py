@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.director.arc_director import ArcDirector
@@ -20,6 +20,7 @@ from forwin.models import (
     ProvisionalPromotionRecord,
     new_id,
 )
+from forwin.orchestrator.goals import load_goals_json
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ _ARC_POLICY_TIERS = [
     ((1, 150), ArcPolicyTier("short", 0.18, 12, 24, 0.75, 1.25)),
     ((151, 400), ArcPolicyTier("medium", 0.15, 16, 30, 0.65, 1.50)),
     ((401, 800), ArcPolicyTier("long", 0.10, 20, 40, 0.55, 1.70)),
-    ((801, 10**9), ArcPolicyTier("epic", 0.08, 24, 48, 0.50, 2.00)),
+    ((801, 10**9), ArcPolicyTier("ultra-long", 0.08, 24, 48, 0.50, 2.00)),
 ]
 
 
@@ -137,21 +138,23 @@ class ArcEnvelopeManager:
             )
             return existing
 
-        total_chapters = session.execute(
-            select(func.count(ChapterPlan.id)).where(ChapterPlan.project_id == project_id)
-        ).scalar_one()
         chapter_plans = session.execute(
             select(ChapterPlan)
             .where(ChapterPlan.arc_plan_id == active_arc.id)
             .order_by(ChapterPlan.chapter_number.asc())
         ).scalars().all()
+        total_chapter_count = len(
+            session.execute(
+                select(ChapterPlan.id).where(ChapterPlan.project_id == project_id)
+            ).scalars().all()
+        )
         project = session.get(Project, project_id)
         if project is None:
             return None
 
-        policy = policy_for_total_chapters(total_chapters)
+        policy = policy_for_total_chapters(total_chapter_count)
         base_target_size = _clamp_int(
-            total_chapters * policy.ratio,
+            total_chapter_count * policy.ratio,
             policy.min_size,
             policy.max_size,
         )
@@ -163,7 +166,7 @@ class ArcEnvelopeManager:
 
         structure = self._build_structure_draft(
             project=project,
-            total_chapters=total_chapters,
+            total_chapters=total_chapter_count,
             chapter_plans=chapter_plans,
             policy=policy,
             base_target_size=base_target_size,
@@ -190,7 +193,7 @@ class ArcEnvelopeManager:
         )
         resolution = self._resolve_envelope(
             chapter_plans=chapter_plans,
-            total_chapters=total_chapters,
+            total_chapters=total_chapter_count,
             policy=policy,
             base_target_size=base_target_size,
             base_soft_min=base_soft_min,
@@ -375,7 +378,7 @@ class ArcEnvelopeManager:
                 "chapter_number": plan.chapter_number,
                 "title": plan.title,
                 "one_line": plan.one_line,
-                "goals": self._load_goals(plan.goals_json),
+                "goals": load_goals_json(plan.goals_json),
             }
             for plan in chapter_plans[: min(len(chapter_plans), 8)]
         ]
@@ -508,7 +511,7 @@ class ArcEnvelopeManager:
                             "chapter_number": plan.chapter_number,
                             "title": plan.title,
                             "one_line": plan.one_line,
-                            "goals": self._load_goals(plan.goals_json),
+                            "goals": load_goals_json(plan.goals_json),
                         }
                         for plan in provisional_band
                     ],
@@ -559,14 +562,6 @@ class ArcEnvelopeManager:
             based_on_band_id=band_id,
             source_policy_tier=policy.name,
         )
-
-    @staticmethod
-    def _load_goals(raw: str) -> list[str]:
-        try:
-            payload = json.loads(raw or "[]") or []
-        except (json.JSONDecodeError, TypeError):
-            payload = []
-        return [str(item).strip() for item in payload if str(item).strip()]
 
     def _execute_provisional_band(
         self,

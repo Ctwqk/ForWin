@@ -6,6 +6,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
 from forwin.models.publisher import (
@@ -39,6 +40,13 @@ def _isoformat(value: datetime | None) -> str:
     if parsed is None:
         return ""
     return parsed.astimezone(_DISPLAY_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class PublisherManager:
@@ -324,6 +332,20 @@ class PublisherManager:
             job = session.execute(
                 select(PublisherUploadJob)
                 .where(
+                    PublisherUploadJob.status == "running",
+                    PublisherUploadJob.finished_at.is_(None),
+                    PublisherUploadJob.extension_client_id == client_id,
+                    PublisherUploadJob.platform_id.in_(platforms),
+                )
+                .order_by(PublisherUploadJob.started_at.asc(), PublisherUploadJob.created_at.asc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if job is not None:
+                return self._serialize_upload_job(job)
+
+            job = session.execute(
+                select(PublisherUploadJob)
+                .where(
                     PublisherUploadJob.status == "pending",
                     PublisherUploadJob.platform_id.in_(platforms),
                 )
@@ -343,6 +365,64 @@ class PublisherManager:
             session.commit()
             session.refresh(job)
             return self._serialize_upload_job(job)
+
+    def claim_next_comment_sync_job(
+        self,
+        *,
+        client_id: str,
+        connected_platforms: list[str],
+    ) -> dict[str, Any] | None:
+        platforms = [
+            platform
+            for platform in connected_platforms
+            if platform in SUPPORTED_PLATFORMS
+        ]
+        if not platforms:
+            return None
+
+        now = _utc_now()
+        with self.session_factory() as session:
+            job = session.execute(
+                select(PublisherCommentSyncJob)
+                .where(
+                    PublisherCommentSyncJob.status == "running",
+                    PublisherCommentSyncJob.finished_at.is_(None),
+                    PublisherCommentSyncJob.extension_client_id == client_id,
+                    PublisherCommentSyncJob.platform_id.in_(platforms),
+                )
+                .order_by(
+                    PublisherCommentSyncJob.started_at.asc(),
+                    PublisherCommentSyncJob.created_at.asc(),
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+            if job is not None:
+                return self._serialize_comment_sync_job(job)
+
+            job = session.execute(
+                select(PublisherCommentSyncJob)
+                .where(
+                    PublisherCommentSyncJob.status == "pending",
+                    PublisherCommentSyncJob.platform_id.in_(platforms),
+                )
+                .order_by(PublisherCommentSyncJob.created_at.asc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if job is None:
+                return None
+
+            job.status = "running"
+            job.extension_client_id = client_id
+            job.started_at = job.started_at or now
+            job.error_message = ""
+            job.result_summary_json = json.dumps(
+                {"phase": "claimed", "message": "评论同步任务已被浏览器扩展自动领取。"},
+                ensure_ascii=False,
+            )
+
+            session.commit()
+            session.refresh(job)
+            return self._serialize_comment_sync_job(job)
 
     def requeue_interrupted_upload_jobs(self) -> list[str]:
         now = _utc_now()
@@ -514,6 +594,57 @@ class PublisherManager:
                 "created_at": _isoformat(job.created_at),
             }
 
+    def update_comment_sync_job_result(
+        self,
+        *,
+        job_id: str,
+        client_id: str,
+        status: str,
+        message: str,
+        error: str,
+        result_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if status not in {"running", "succeeded", "failed"}:
+            raise ValueError("不支持的评论同步任务状态。")
+
+        now = _utc_now()
+        with self.session_factory() as session:
+            job = session.get(PublisherCommentSyncJob, job_id)
+            if job is None:
+                raise ValueError("评论同步任务不存在。")
+
+            self._ensure_extension_client(session, client_id)
+            if client_id:
+                job.extension_client_id = client_id
+            if status == "running":
+                job.started_at = job.started_at or now
+                job.error_message = ""
+            elif status in {"succeeded", "failed"}:
+                job.started_at = job.started_at or now
+                job.finished_at = now
+
+            merged_payload: dict[str, Any]
+            try:
+                merged_payload = json.loads(job.result_summary_json or "{}")
+            except json.JSONDecodeError:
+                merged_payload = {}
+            if not isinstance(merged_payload, dict):
+                merged_payload = {}
+            merged_payload.update({
+                "message": str(message or "").strip(),
+                "status": status,
+            })
+            if result_payload:
+                merged_payload.update(result_payload)
+
+            job.status = status
+            job.error_message = str(error or "").strip()
+            job.result_summary_json = json.dumps(merged_payload, ensure_ascii=False)
+
+            session.commit()
+            session.refresh(job)
+            return self._serialize_comment_sync_job(job)
+
     def ingest_comments_batch(
         self,
         *,
@@ -581,6 +712,8 @@ class PublisherManager:
                 row.body_text = str(item.get("body", "")).strip()
                 row.parent_remote_comment_id = str(item.get("parent_remote_comment_id", "")).strip()
                 row.remote_created_at = str(item.get("created_at", "")).strip()
+                row.like_count = max(0, _as_int(item.get("like_count", 0)))
+                row.reply_count = max(0, _as_int(item.get("reply_count", 0)))
                 row.raw_payload_json = json.dumps(item.get("raw_payload", item), ensure_ascii=False)
                 row.synced_at = now
 
@@ -700,6 +833,26 @@ class PublisherManager:
             "finished_at": _isoformat(job.finished_at),
         }
 
+    def _serialize_comment_sync_job(self, job: PublisherCommentSyncJob) -> dict[str, Any]:
+        payload = json.loads(job.result_summary_json or "{}")
+        return {
+            "job_id": job.id,
+            "platform": job.platform_id,
+            "status": job.status,
+            "work_id": job.work_id,
+            "work_name": job.work_name,
+            "chapter_id": job.chapter_id,
+            "chapter_title": job.chapter_title,
+            "limit": int(job.limit or 0),
+            "extension_client_id": job.extension_client_id,
+            "message": str(payload.get("message", "")).strip(),
+            "error": job.error_message,
+            "result_payload": payload,
+            "created_at": _isoformat(job.created_at),
+            "started_at": _isoformat(job.started_at),
+            "finished_at": _isoformat(job.finished_at),
+        }
+
     def _is_recent(self, value: datetime | None) -> bool:
         parsed = _as_utc(value)
         if parsed is None:
@@ -718,6 +871,11 @@ class PublisherManager:
         if client is None:
             client = PublisherExtensionClient(client_id=normalized)
             session.add(client)
+            try:
+                session.flush([client])
+            except IntegrityError:
+                session.rollback()
+                client = session.get(PublisherExtensionClient, normalized)
         return client
 
     def _is_browser_session_connected(

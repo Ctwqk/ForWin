@@ -14,10 +14,11 @@ from forwin.models import (
     ChapterPlan,
     Entity,
     EntityAlias,
+    FeedbackActionRecord,
     NPCIntentSnapshot,
     PlotThread,
-    PublisherRawComment,
     Project,
+    ReaderScaleSnapshot,
     RelationEdge,
     StoryTimePoint,
     WorldSimulationTurn,
@@ -29,6 +30,7 @@ from forwin.protocol import (
     ReaderCommentView,
     ReaderFeedbackView,
     RelationSnapshot,
+    SignalSummaryView,
     TimelineSnapshot,
     WorldPressureView,
 )
@@ -39,9 +41,21 @@ from forwin.state.query_helpers import (
 
 logger = logging.getLogger(__name__)
 
-_POSITIVE_COMMENT_KEYWORDS = ("喜欢", "精彩", "好看", "期待", "爽", "牛", "神", "上头")
-_NEGATIVE_COMMENT_KEYWORDS = ("水", "拖", "崩", "难看", "失望", "弃", "烂", "短", "乱")
-_QUESTION_COMMENT_KEYWORDS = ("为什么", "怎么", "是不是", "会不会", "求", "能不能")
+
+class _AudienceHintData:
+    __slots__ = ("pacing_hints", "clarity_hints", "character_heat_changes", "risk_flags")
+
+    def __init__(
+        self,
+        pacing_hints: list[str],
+        clarity_hints: list[str],
+        character_heat_changes: list[str],
+        risk_flags: list[str],
+    ) -> None:
+        self.pacing_hints = pacing_hints
+        self.clarity_hints = clarity_hints
+        self.character_heat_changes = character_heat_changes
+        self.risk_flags = risk_flags
 
 
 class StateRepository:
@@ -356,74 +370,110 @@ class StateRepository:
         work_name = str(project.title or "").strip()
         if not work_name:
             return None
-        rows = self.session.execute(
-            select(PublisherRawComment)
-            .where(PublisherRawComment.work_name == work_name)
-            .order_by(
-                PublisherRawComment.synced_at.desc(),
-                PublisherRawComment.updated_at.desc(),
-            )
-            .limit(limit)
-        ).scalars().all()
-        if not rows:
+        from forwin.orchestrator.comment_analysis import build_reader_feedback_snapshot
+
+        snapshot = build_reader_feedback_snapshot(
+            self.session,
+            work_name,
+            project_id=project_id,
+            before_chapter=before_chapter,
+            limit=limit,
+            analyze_missing=False,
+        )
+        if not snapshot["recent_comments"] and snapshot["comment_count"] <= 0:
             return None
-
-        positive = 0
-        negative = 0
-        curious = 0
-        topic_hits: dict[str, int] = {}
-        highlights: list[ReaderCommentView] = []
-        for row in rows:
-            body = str(row.body_text or "").strip()
-            if not body:
-                continue
-            if any(keyword in body for keyword in _POSITIVE_COMMENT_KEYWORDS):
-                positive += 1
-                topic_hits["高期待"] = topic_hits.get("高期待", 0) + 1
-            if any(keyword in body for keyword in _NEGATIVE_COMMENT_KEYWORDS):
-                negative += 1
-                topic_hits["节奏风险"] = topic_hits.get("节奏风险", 0) + 1
-            if any(keyword in body for keyword in _QUESTION_COMMENT_KEYWORDS):
-                curious += 1
-                topic_hits["悬念追问"] = topic_hits.get("悬念追问", 0) + 1
-            highlights.append(
-                ReaderCommentView(
-                    platform_id=row.platform_id,
-                    author_name=row.author_name,
-                    body_text=body[:180],
-                    chapter_title=row.chapter_title,
-                    remote_created_at=row.remote_created_at,
-                )
+        highlights = [
+            ReaderCommentView(
+                platform_id=row.platform_id,
+                author_name=row.author_name,
+                body_text=str(row.body_text or "")[:180],
+                chapter_title=row.chapter_title,
+                remote_created_at=row.remote_created_at,
             )
+            for row in snapshot["recent_comments"]
+        ]
+        confirmed_signals = [
+            SignalSummaryView(
+                signal_key=str(item.get("signal_key") or ""),
+                signal_type=str(item.get("signal_type") or ""),
+                target_name=str(item.get("target_name") or ""),
+                level=str(item.get("level") or "noise"),
+                hit_count=int(item.get("hit_count") or 0),
+                max_severity=int(item.get("max_severity") or 0),
+            )
+            for item in snapshot["confirmed_signals"]
+        ]
 
-        if negative > max(positive, curious):
-            dominant = "negative"
-        elif positive > max(negative, curious):
-            dominant = "positive"
-        elif curious:
-            dominant = "curious"
-        else:
-            dominant = "neutral"
-        topics = sorted(topic_hits.items(), key=lambda item: (-item[1], item[0]))
-        highlighted_topics = [name for name, _count in topics[:3]]
-        summary_parts = [f"最近 {len(highlights)} 条读者评论"]
-        if dominant == "positive":
-            summary_parts.append("整体情绪偏积极")
-        elif dominant == "negative":
-            summary_parts.append("整体情绪偏担忧")
-        elif dominant == "curious":
-            summary_parts.append("读者对悬念追问较多")
-        else:
-            summary_parts.append("情绪相对中性")
-        if highlighted_topics:
-            summary_parts.append(f"主要关注：{'、'.join(highlighted_topics)}")
+        # ── Load reader tier from latest snapshot ──
+        reader_tier = 0
+        scale_row = self.session.execute(
+            select(ReaderScaleSnapshot)
+            .where(ReaderScaleSnapshot.project_id == project_id)
+            .order_by(ReaderScaleSnapshot.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if scale_row is not None:
+            reader_tier = scale_row.tier
 
         return ReaderFeedbackView(
-            comment_count=len(highlights),
-            dominant_sentiment=dominant,
-            feedback_summary="，".join(summary_parts),
+            comment_count=int(snapshot["comment_count"]),
+            dominant_sentiment=str(snapshot["dominant_sentiment"] or "neutral"),
+            feedback_summary=str(snapshot["feedback_summary"] or ""),
             recent_highlights=highlights[:4],
-            highlighted_topics=highlighted_topics,
+            highlighted_topics=list(snapshot["highlighted_topics"]),
+            confirmed_signals=confirmed_signals,
+            reader_tier=reader_tier,
+        )
+
+    # ------------------------------------------------------------------
+    # Audience hints (Phase C)
+    # ------------------------------------------------------------------
+
+    def get_audience_hints(
+        self,
+        project_id: str,
+        before_chapter: int,
+    ) -> Optional["_AudienceHintData"]:
+        """Build audience hints from recent FeedbackActionRecords.
+
+        Returns a lightweight data object with hint lists, or None if no actions exist.
+        """
+        records = self.session.execute(
+            select(FeedbackActionRecord)
+            .where(
+                FeedbackActionRecord.project_id == project_id,
+                FeedbackActionRecord.triggered_at_chapter < before_chapter,
+                FeedbackActionRecord.cooldown_until_chapter >= before_chapter,
+            )
+            .order_by(FeedbackActionRecord.created_at.desc())
+            .limit(12)
+        ).scalars().all()
+        if not records:
+            return None
+
+        pacing: list[str] = []
+        clarity: list[str] = []
+        heat: list[str] = []
+        risk: list[str] = []
+        for rec in records:
+            note = rec.notes or rec.action_type
+            if rec.signal_type == "pacing":
+                pacing.append(note)
+            elif rec.signal_type == "confusion":
+                clarity.append(note)
+            elif rec.signal_type == "character_heat":
+                heat.append(note)
+            elif rec.signal_type == "risk":
+                risk.append(note)
+
+        if not any((pacing, clarity, heat, risk)):
+            return None
+
+        return _AudienceHintData(
+            pacing_hints=pacing[:3],
+            clarity_hints=clarity[:3],
+            character_heat_changes=heat[:3],
+            risk_flags=risk[:3],
         )
 
     # ------------------------------------------------------------------

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -132,8 +132,102 @@ class PublisherRawComment(Base):
     body_text: Mapped[str] = mapped_column(Text, default="")
     parent_remote_comment_id: Mapped[str] = mapped_column(String, default="")
     remote_created_at: Mapped[str] = mapped_column(String, default="")
+    like_count: Mapped[int] = mapped_column(Integer, default=0)
+    reply_count: Mapped[int] = mapped_column(Integer, default=0)
     raw_payload_json: Mapped[str] = mapped_column(Text, default="{}")
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
     )
+
+
+class CommentSignalCandidate(Base):
+    __tablename__ = "comment_signal_candidates"
+    __table_args__ = (
+        Index("ix_comment_signals_source", "source_comment_id"),
+        Index("ix_comment_signals_project_type", "project_id", "signal_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        String, ForeignKey("projects.id"), nullable=False
+    )
+    source_comment_id: Mapped[str] = mapped_column(
+        String, ForeignKey("publisher_raw_comments.id"), nullable=False
+    )
+    signal_type: Mapped[str] = mapped_column(String, nullable=False)
+    target_type: Mapped[str] = mapped_column(String, default="")
+    target_name: Mapped[str] = mapped_column(String, default="")
+    severity: Mapped[int] = mapped_column(Integer, default=1)
+    confidence: Mapped[float] = mapped_column(Float, default=0.5)
+    evidence_span: Mapped[str] = mapped_column(Text, default="")
+    signal_level: Mapped[str] = mapped_column(String, default="noise")
+    chapter_number: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+
+class SignalWindowAggregate(Base):
+    __tablename__ = "signal_window_aggregates"
+    __table_args__ = (
+        Index(
+            "ix_signal_window_agg_project_key_window",
+            "project_id", "signal_key", "window_type",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        String, ForeignKey("projects.id"), nullable=False
+    )
+    signal_key: Mapped[str] = mapped_column(String, nullable=False)
+    signal_type: Mapped[str] = mapped_column(String, default="")
+    target_type: Mapped[str] = mapped_column(String, default="")
+    target_name: Mapped[str] = mapped_column(String, default="")
+    window_type: Mapped[str] = mapped_column(String, default="short")
+    window_chapter_start: Mapped[int] = mapped_column(Integer, default=0)
+    window_chapter_end: Mapped[int] = mapped_column(Integer, default=0)
+    hit_comment_count: Mapped[int] = mapped_column(Integer, default=0)
+    unique_user_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_comment_count: Mapped[int] = mapped_column(Integer, default=0)
+    reader_estimate: Mapped[int] = mapped_column(Integer, default=0)
+    reader_tier: Mapped[int] = mapped_column(Integer, default=0)
+    max_severity: Mapped[int] = mapped_column(Integer, default=0)
+    avg_confidence: Mapped[float] = mapped_column(Float, default=0.0)
+    signal_level: Mapped[str] = mapped_column(String, default="noise")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+
+class ReaderScaleSnapshot(Base):
+    __tablename__ = "reader_scale_snapshots"
+    __table_args__ = (
+        Index("ix_reader_scale_project_chapter", "project_id", "chapter_number"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        String, ForeignKey("projects.id"), nullable=False
+    )
+    chapter_number: Mapped[int] = mapped_column(Integer, default=0)
+    reader_estimate: Mapped[int] = mapped_column(Integer, default=0)
+    estimation_method: Mapped[str] = mapped_column(String, default="comment_proxy")
+    tier: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+
+class FeedbackActionRecord(Base):
+    __tablename__ = "feedback_action_records"
+    __table_args__ = (
+        Index("ix_feedback_actions_project_key", "project_id", "signal_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        String, ForeignKey("projects.id"), nullable=False
+    )
+    signal_key: Mapped[str] = mapped_column(String, nullable=False)
+    signal_type: Mapped[str] = mapped_column(String, default="")
+    action_type: Mapped[str] = mapped_column(String, default="")
+    triggered_at_chapter: Mapped[int] = mapped_column(Integer, default=0)
+    cooldown_until_chapter: Mapped[int] = mapped_column(Integer, default=0)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())

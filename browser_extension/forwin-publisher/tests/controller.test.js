@@ -40,10 +40,18 @@ function makeController(overrides = {}) {
       message: '章节发布动作已提交。',
       resultPayload: { mode: 'publish' },
     }),
+    runCommentSyncCommand: async () => ({
+      ok: true,
+      currentUrl: 'https://fanqienovel.com/main/writer/',
+      message: '评论同步已完成。',
+      comments: [],
+      resultPayload: { source: 'fanqie-author-api' },
+    }),
     backend: {
       heartbeat: async () => ({ ok: true }),
       syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
       claimNextUploadJob: async () => ({ found: false, job: null }),
+      claimNextCommentSyncJob: async () => ({ found: false, job: null }),
       getUploadJob: async () => ({
         job_id: 'job-1',
         platform: 'qidian',
@@ -54,10 +62,12 @@ function makeController(overrides = {}) {
         upload_url: null,
         publish: true,
       }),
+      syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
       updateUploadJobResult: async (_jobId, payload) => {
         uploadResults.push(payload);
         return { ok: true };
       },
+      updateCommentSyncJobResult: async () => ({ ok: true }),
     },
     ...overrides,
   };
@@ -216,6 +226,122 @@ test('controller auto-dispatches claimed upload job for connected platform', asy
   assert.equal(uploadResults.at(-1).status, 'succeeded');
 });
 
+test('controller auto-dispatches claimed comment sync job for connected platform', async () => {
+  let claimedOnce = false;
+  const commentResults = [];
+  const syncedPayloads = [];
+  const { controller } = makeController({
+    getPlatformState: async (platformId) => (platformId === 'fanqie' ? { connected: true } : {}),
+    runCommentSyncCommand: async (_tabId, payload) => ({
+      ok: true,
+      currentUrl: 'https://fanqienovel.com/main/writer/',
+      message: '评论同步已完成。',
+      comments: [
+        {
+          remote_comment_id: 'book:comment-1',
+          work_id: payload.work_id,
+          work_name: payload.work_name,
+          chapter_id: payload.chapter_id,
+          chapter_title: payload.chapter_title,
+          author_id: 'reader-1',
+          author_name: '读者A',
+          body: '催更',
+          parent_remote_comment_id: '',
+          created_at: '2026-04-04T10:00:00Z',
+          like_count: 2,
+          reply_count: 1,
+          raw_payload: { body: '催更' },
+        },
+      ],
+      resultPayload: { source: 'fanqie-author-api' },
+    }),
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      claimNextCommentSyncJob: async () => {
+        if (claimedOnce) {
+          return { found: false, job: null };
+        }
+        claimedOnce = true;
+        return {
+          found: true,
+          job: {
+            job_id: 'comment-job-1',
+            platform: 'fanqie',
+            status: 'running',
+            work_id: 'book-1',
+            work_name: '测试书',
+            chapter_id: 'chapter-1',
+            chapter_title: '第一章',
+            limit: 20,
+          },
+        };
+      },
+      syncCommentsBatch: async (payload) => {
+        syncedPayloads.push(payload);
+        return { ok: true, inserted: 1, updated: 0 };
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+      updateCommentSyncJobResult: async (_jobId, payload) => {
+        commentResults.push(payload);
+        return { ok: true };
+      },
+    },
+  });
+
+  await controller.dispatchPendingCommentSyncJobs();
+
+  assert.equal(syncedPayloads.length, 1);
+  assert.equal(syncedPayloads[0].job_id, 'comment-job-1');
+  assert.equal(syncedPayloads[0].comments.length, 1);
+  assert.equal(commentResults.at(-1).status, 'succeeded');
+  assert.equal(commentResults.at(-1).result_payload.inserted, 1);
+});
+
+test('controller resumes an already running claimed upload job for the same client', async () => {
+  let claimedOnce = false;
+  const { controller, uploadResults } = makeController({
+    getPlatformState: async (platformId) => (platformId === 'fanqie' ? { connected: true } : {}),
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
+      claimNextUploadJob: async () => {
+        if (claimedOnce) {
+          return { found: false, job: null };
+        }
+        claimedOnce = true;
+        return {
+          found: true,
+          job: {
+            job_id: 'job-running',
+            platform: 'fanqie',
+            display_name: '番茄小说',
+            status: 'running',
+            book_name: '我的一本书dasdgasdf',
+            chapter_title: '江潮入夜',
+            body: '正文',
+            upload_url: null,
+            publish: false,
+          },
+        };
+      },
+      getUploadJob: async () => {
+        throw new Error('should not fetch job again');
+      },
+      updateUploadJobResult: async (_jobId, payload) => {
+        uploadResults.push(payload);
+        return { ok: true };
+      },
+    },
+  });
+
+  await controller.dispatchPendingUploadJobs();
+
+  assert.equal(uploadResults.at(-1).status, 'succeeded');
+  assert.equal(uploadResults.some((item) => item.result_payload?.phase === 'opened-upload-tab'), true);
+});
+
 test('controller records extension error code in upload job payload', async () => {
   const uploadResults = [];
   const { controller } = makeController({
@@ -344,7 +470,7 @@ test('controller dispatch caps claimed upload jobs per pass', async () => {
   assert.equal(result.truncated, true);
   assert.equal(result.handled, 8);
   assert.equal(claimed, 8);
-  assert.equal(uploadResults.length, 8);
+  assert.equal(uploadResults.filter((item) => item.status === 'succeeded').length, 8);
 });
 
 test('controller syncs and dispatches when strong cookies exist before saved connected state flips', async () => {

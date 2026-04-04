@@ -180,7 +180,9 @@ class ArcDirector:
         policy_tier: str,
         base_target_size: int,
         chapter_seed: list[dict[str, Any]],
+        audience_trends: list[str] | None = None,
     ) -> dict:
+        normalized_trends = [str(item).strip() for item in (audience_trends or []) if str(item).strip()]
         fallback = {
             "phase_layout": ["setup", "pressure", "turn", "payoff"],
             "key_beats": [
@@ -220,6 +222,7 @@ class ArcDirector:
                     f"当前 policy tier：{policy_tier}\n"
                     f"当前 arc 的基础 target：{base_target_size}\n"
                     f"故事前提：{premise}\n"
+                    f"读者长窗趋势：{json.dumps(normalized_trends, ensure_ascii=False)}\n"
                     f"近端章节种子：{json.dumps(chapter_seed, ensure_ascii=False)}"
                 ),
             },

@@ -491,6 +491,158 @@ def upgrade_db(engine: Engine) -> None:
                 conn.execute(text(statement))
         migrations.append(MigrationSpec("performance_indexes_v1", apply_performance_indexes_v1))
 
+        def apply_audience_feedback_v1(conn) -> None:
+            raw_comment_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(publisher_raw_comments)"))
+            }
+            if "like_count" not in raw_comment_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE publisher_raw_comments
+                        ADD COLUMN like_count INTEGER NOT NULL DEFAULT 0
+                        """
+                    )
+                )
+            if "reply_count" not in raw_comment_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE publisher_raw_comments
+                        ADD COLUMN reply_count INTEGER NOT NULL DEFAULT 0
+                        """
+                    )
+                )
+
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS comment_signal_candidates (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        source_comment_id TEXT NOT NULL,
+                        signal_type TEXT NOT NULL,
+                        target_type TEXT NOT NULL DEFAULT '',
+                        target_name TEXT NOT NULL DEFAULT '',
+                        severity INTEGER NOT NULL DEFAULT 1,
+                        confidence FLOAT NOT NULL DEFAULT 0.5,
+                        evidence_span TEXT NOT NULL DEFAULT '',
+                        signal_level TEXT NOT NULL DEFAULT 'noise',
+                        chapter_number INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id),
+                        FOREIGN KEY(source_comment_id) REFERENCES publisher_raw_comments(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_comment_signals_source
+                    ON comment_signal_candidates(source_comment_id)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_comment_signals_project_type
+                    ON comment_signal_candidates(project_id, signal_type)
+                    """
+                )
+            )
+
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS signal_window_aggregates (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        signal_key TEXT NOT NULL,
+                        signal_type TEXT NOT NULL DEFAULT '',
+                        target_type TEXT NOT NULL DEFAULT '',
+                        target_name TEXT NOT NULL DEFAULT '',
+                        window_type TEXT NOT NULL DEFAULT 'short',
+                        window_chapter_start INTEGER NOT NULL DEFAULT 0,
+                        window_chapter_end INTEGER NOT NULL DEFAULT 0,
+                        hit_comment_count INTEGER NOT NULL DEFAULT 0,
+                        unique_user_count INTEGER NOT NULL DEFAULT 0,
+                        total_comment_count INTEGER NOT NULL DEFAULT 0,
+                        reader_estimate INTEGER NOT NULL DEFAULT 0,
+                        reader_tier INTEGER NOT NULL DEFAULT 0,
+                        max_severity INTEGER NOT NULL DEFAULT 0,
+                        avg_confidence FLOAT NOT NULL DEFAULT 0,
+                        signal_level TEXT NOT NULL DEFAULT 'noise',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_signal_window_agg_project_key_window
+                    ON signal_window_aggregates(project_id, signal_key, window_type)
+                    """
+                )
+            )
+
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS reader_scale_snapshots (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        chapter_number INTEGER NOT NULL DEFAULT 0,
+                        reader_estimate INTEGER NOT NULL DEFAULT 0,
+                        estimation_method TEXT NOT NULL DEFAULT 'comment_proxy',
+                        tier INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_reader_scale_project_chapter
+                    ON reader_scale_snapshots(project_id, chapter_number)
+                    """
+                )
+            )
+
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS feedback_action_records (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        signal_key TEXT NOT NULL,
+                        signal_type TEXT NOT NULL DEFAULT '',
+                        action_type TEXT NOT NULL DEFAULT '',
+                        triggered_at_chapter INTEGER NOT NULL DEFAULT 0,
+                        cooldown_until_chapter INTEGER NOT NULL DEFAULT 0,
+                        notes TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_feedback_actions_project_key
+                    ON feedback_action_records(project_id, signal_key)
+                    """
+                )
+            )
+        migrations.append(MigrationSpec("audience_feedback_v1", apply_audience_feedback_v1))
+
         def apply_phase4_simulation_v1(conn) -> None:
             conn.execute(
                 text(

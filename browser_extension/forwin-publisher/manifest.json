@@ -43,6 +43,8 @@
       "matches": [
         "https://write.qq.com/*",
         "https://*.write.qq.com/*",
+        "https://pcwrite.yuewen.com/*",
+        "https://*.yuewen.com/*",
         "https://fanqienovel.com/*",
         "https://*.fanqienovel.com/*"
       ],

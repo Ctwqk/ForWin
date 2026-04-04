@@ -91,6 +91,8 @@ def _env_values() -> dict[str, object]:
             os.environ.get("BLACKBOX_WRITER_ATTENTION_RETRIES", "3")
         ),
         "phase4_use_llm": os.environ.get("PHASE4_USE_LLM", "true").strip().lower() not in {"0", "false", "no"},
+        "feedback_cooldown_chapters": int(os.environ.get("FEEDBACK_COOLDOWN_CHAPTERS", "3")),
+        "comment_to_reader_ratio": int(os.environ.get("COMMENT_TO_READER_RATIO", "80")),
         "temperature": float(os.environ.get("TEMPERATURE", "0.85")),
         "max_tokens": int(os.environ.get("MAX_TOKENS", "16384")),
     }
@@ -142,6 +144,8 @@ class _ConfigFields:
     replan_cooldown_chapters: int = 3
     blackbox_writer_attention_retries: int = 3
     phase4_use_llm: bool = True
+    feedback_cooldown_chapters: int = 3
+    comment_to_reader_ratio: int = 80
     temperature: float = 0.85
     max_tokens: int = 16384
 

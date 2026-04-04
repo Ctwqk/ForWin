@@ -142,6 +142,28 @@ def _reader_feedback_section(context: ChapterContextPack, *, detailed: bool) -> 
     return "【读者反馈】\n" f"  · {feedback.feedback_summary}"
 
 
+def _audience_hints_section(context: ChapterContextPack) -> str | None:
+    hints = getattr(context, "audience_hints", None)
+    if not hints:
+        return None
+    lines: list[str] = []
+    if hints.risk_flags:
+        lines.append("  ⚠ 风险提示：")
+        lines.extend(f"    · {h}" for h in hints.risk_flags)
+    if hints.pacing_hints:
+        lines.append("  节奏建议：")
+        lines.extend(f"    · {h}" for h in hints.pacing_hints)
+    if hints.clarity_hints:
+        lines.append("  清晰度建议：")
+        lines.extend(f"    · {h}" for h in hints.clarity_hints)
+    if hints.character_heat_changes:
+        lines.append("  角色热度：")
+        lines.extend(f"    · {h}" for h in hints.character_heat_changes)
+    if not lines:
+        return None
+    return "【读者信号提示（仅供参考，自然融入情节）】\n" + "\n".join(lines)
+
+
 def _retrieved_memories_section(
     context: ChapterContextPack,
     *,
@@ -218,6 +240,7 @@ def _scene_prompt_sections(
             detailed=feedback_detailed,
         ),
         _world_pressure_section(context),
+        _audience_hints_section(context),
         _reader_feedback_section(context, detailed=feedback_detailed),
         _retrieved_memories_section(context, limit=memory_limit, excerpt_chars=80),
         _timeline_section(context),
@@ -248,6 +271,7 @@ def build_single_chapter_draft_prompt(
         _arc_envelope_section(context, compact=False),
         _npc_intents_section(context, limit=4, detailed=True),
         _world_pressure_section(context),
+        _audience_hints_section(context),
         _reader_feedback_section(context, detailed=True),
         _retrieved_memories_section(context, limit=3, excerpt_chars=80),
         _timeline_section(context),
@@ -300,6 +324,7 @@ def build_preview_chapter_prompt(
         _arc_envelope_section(context, compact=True),
         _npc_intents_section(context, limit=3, detailed=False),
         _world_pressure_section(context),
+        _audience_hints_section(context),
         _reader_feedback_section(context, detailed=False),
         _retrieved_memories_section(context, limit=2, excerpt_chars=60),
         _timeline_section(context),

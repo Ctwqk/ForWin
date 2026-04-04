@@ -5,6 +5,19 @@
     return;
   }
 
+  function markPlatformAgentState(name, value = '1') {
+    try {
+      const root = document.documentElement;
+      if (root instanceof HTMLElement) {
+        root.setAttribute(name, String(value));
+      }
+    } catch (_error) {
+      // Best effort only.
+    }
+  }
+
+  markPlatformAgentState('data-forwin-platform-agent-boot', '1');
+
   function announceReady() {
     try {
       runtime.sendMessage({
@@ -18,6 +31,20 @@
 
   function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  function setDebugStep(step, extra = {}) {
+    try {
+      globalThis.__FORWIN_PLATFORM_AGENT_DEBUG__ = {
+        step: String(step || '').trim(),
+        extra: extra && typeof extra === 'object' ? extra : {},
+        url: String(window.location.href || ''),
+        at: Date.now(),
+      };
+      markPlatformAgentState('data-forwin-platform-agent-step', String(step || '').trim());
+    } catch (_error) {
+      // Best effort only.
+    }
   }
 
   function waitForCondition(check, timeoutMs = 8000) {
@@ -101,11 +128,432 @@
     return keywords.some((keyword) => text.includes(keyword));
   }
 
+  function normalizeText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function firstNonEmpty(source, keys) {
+    if (!source || typeof source !== 'object') {
+      return '';
+    }
+    for (const key of keys) {
+      const value = source[key];
+      if (value === null || value === undefined) {
+        continue;
+      }
+      const text = normalizeText(value);
+      if (text) {
+        return text;
+      }
+    }
+    return '';
+  }
+
+  function firstNumber(source, keys, fallback = 0) {
+    if (!source || typeof source !== 'object') {
+      return fallback;
+    }
+    for (const key of keys) {
+      const value = Number(source[key]);
+      if (Number.isFinite(value)) {
+        return value;
+      }
+    }
+    return fallback;
+  }
+
+  function extractListPayload(payload) {
+    const candidates = [
+      payload,
+      payload?.records,
+      payload?.list,
+      payload?.items,
+      payload?.comment_list,
+      payload?.messageList,
+      payload?.data,
+      payload?.data?.records,
+      payload?.data?.list,
+      payload?.data?.items,
+      payload?.data?.comment_list,
+      payload?.data?.messageList,
+      payload?.result,
+      payload?.result?.records,
+      payload?.result?.list,
+      payload?.result?.items,
+    ];
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate)) {
+        return candidate;
+      }
+    }
+    return [];
+  }
+
+  function extractQidianMenus(payload) {
+    const candidates = [
+      payload?.childrenMenuInfoList,
+      payload?.menuList,
+      payload?.data?.childrenMenuInfoList,
+      payload?.data?.menuList,
+      payload?.result?.childrenMenuInfoList,
+      payload?.result?.menuList,
+    ];
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate)) {
+        return candidate;
+      }
+    }
+    return [];
+  }
+
+  async function fetchPlatformJson(path, options = {}) {
+    const url = path.startsWith('http')
+      ? path
+      : new URL(path, window.location.origin).toString();
+    const response = await fetch(url, {
+      method: options.method || 'GET',
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json, text/plain, */*',
+        ...(options.headers || {}),
+      },
+    });
+    const rawText = await response.text();
+    let payload = {};
+    try {
+      payload = rawText ? JSON.parse(rawText) : {};
+    } catch (_error) {
+      payload = { raw_text: rawText };
+    }
+    if (!response.ok) {
+      throw makeUploadError(
+        firstNonEmpty(payload, ['message', 'msg', 'detail']) || `HTTP ${response.status}`,
+        'platform-api-request-failed',
+        { path, status: response.status, payload },
+      );
+    }
+    const code = Number(payload?.code);
+    if (Number.isFinite(code) && code !== 0) {
+      throw makeUploadError(
+        firstNonEmpty(payload, ['message', 'msg']) || `平台接口返回 code=${code}`,
+        'platform-api-request-failed',
+        { path, code, payload },
+      );
+    }
+    return payload;
+  }
+
+  function buildNormalizedComment(record, overrides = {}) {
+    const category = normalizeText(overrides.category || firstNonEmpty(record, ['comment_type', 'message_type'])) || 'comment';
+    const rawCommentId = firstNonEmpty(record, [
+      'comment_id',
+      'id',
+      'message_id',
+      'msgId',
+      'msg_id',
+      'item_id',
+    ]);
+    const baseParentId = normalizeText(overrides.parent_remote_comment_id || firstNonEmpty(record, ['parent_comment_id', 'root_comment_id']));
+    return {
+      remote_comment_id: `${category}:${rawCommentId || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`,
+      work_id: normalizeText(overrides.work_id || firstNonEmpty(record, ['book_id', 'work_id', 'bookId'])),
+      work_name: normalizeText(overrides.work_name || firstNonEmpty(record, ['book_name', 'work_name', 'bookName'])),
+      chapter_id: normalizeText(overrides.chapter_id || firstNonEmpty(record, ['chapter_id', 'chapterId', 'item_id'])),
+      chapter_title: normalizeText(overrides.chapter_title || firstNonEmpty(record, ['chapter_title', 'item_title', 'chapter_name', 'chapterName'])),
+      author_id: normalizeText(firstNonEmpty(record, ['user_id', 'author_id', 'uid', 'reader_user_id', 'sender_id'])),
+      author_name: normalizeText(firstNonEmpty(record, ['user_name', 'author_name', 'nickname', 'nick_name', 'reader_name', 'sender_name'])),
+      body: normalizeText(overrides.body || firstNonEmpty(record, [
+        'content',
+        'comment_content',
+        'reply_content',
+        'messageContent',
+        'message_content',
+        'text',
+        'desc',
+        'description',
+        'title',
+      ])),
+      parent_remote_comment_id: baseParentId
+        ? (baseParentId.includes(':') ? baseParentId : `${category}:${baseParentId}`)
+        : '',
+      created_at: normalizeText(firstNonEmpty(record, ['create_time', 'created_at', 'ctime', 'comment_time', 'messageTime', 'send_time', 'update_time'])),
+      like_count: Math.max(0, firstNumber(record, ['digg_count', 'like_count', 'praise_count'])),
+      reply_count: Math.max(0, firstNumber(record, ['reply_count', 'comment_count', 'sub_comment_count'])),
+      raw_payload: {
+        ...(record && typeof record === 'object' ? record : {}),
+        forwin_category: category,
+      },
+    };
+  }
+
+  function dedupeComments(comments, limit) {
+    const seen = new Set();
+    const rows = [];
+    for (const item of comments) {
+      const remoteId = normalizeText(item?.remote_comment_id);
+      const body = normalizeText(item?.body);
+      if (!remoteId || !body || seen.has(remoteId)) {
+        continue;
+      }
+      seen.add(remoteId);
+      rows.push(item);
+      if (rows.length >= limit) {
+        break;
+      }
+    }
+    return rows;
+  }
+
+  async function fetchFanqieCommentPage(path, params) {
+    const url = new URL(path, window.location.origin);
+    Object.entries(params || {}).forEach(([key, value]) => {
+      if (value === '' || value === null || value === undefined) {
+        return;
+      }
+      url.searchParams.set(key, String(value));
+    });
+    return fetchPlatformJson(url.toString(), {
+      method: 'GET',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    });
+  }
+
+  async function collectFanqieComments(payload) {
+    const limit = Math.min(Math.max(Number(payload?.limit || 100), 1), 100);
+    const pageSize = Math.min(limit, 20);
+    const comments = [];
+    const workId = normalizeText(payload?.work_id);
+    const workName = normalizeText(payload?.work_name);
+    const chapterId = normalizeText(payload?.chapter_id);
+    const chapterTitle = normalizeText(payload?.chapter_title);
+    if (!workId) {
+      throw makeUploadError('番茄评论同步缺少作品 ID。', 'comment-sync-invalid-payload');
+    }
+
+    const fetchers = [
+      {
+        category: 'book',
+        path: '/api/author/comment/book_comment_list/v0/',
+        baseParams: {
+          book_id: workId,
+          days: 30,
+          sort: 0,
+          user_filter: 0,
+          scope_filter: 0,
+        },
+      },
+      chapterId
+        ? {
+          category: 'chapter',
+          path: '/api/author/comment/chapter_comment_list/v0/',
+          baseParams: {
+            book_id: workId,
+            item_id: chapterId,
+            days: 30,
+            sort: 0,
+          },
+        }
+        : null,
+    ].filter(Boolean);
+
+    for (const fetcher of fetchers) {
+      let pageIndex = 1;
+      while (comments.length < limit) {
+        const page = await fetchFanqieCommentPage(fetcher.path, {
+          ...fetcher.baseParams,
+          page_index: pageIndex,
+          page_count: pageSize,
+        });
+        const list = extractListPayload(page);
+        if (!list.length) {
+          break;
+        }
+        for (const entry of list) {
+          const row = buildNormalizedComment(entry, {
+            category: fetcher.category,
+            work_id: workId,
+            work_name: workName,
+            chapter_id: fetcher.category === 'chapter' ? chapterId : normalizeText(firstNonEmpty(entry, ['chapter_id', 'item_id'])),
+            chapter_title: fetcher.category === 'chapter' ? chapterTitle : normalizeText(firstNonEmpty(entry, ['chapter_title', 'item_title', 'chapter_name'])),
+          });
+          comments.push(row);
+          const rawCommentId = firstNonEmpty(entry, ['comment_id', 'id']);
+          const replyCount = Math.min(Math.max(Number(row.reply_count || 0), 0), 10);
+          if (rawCommentId && replyCount > 0 && comments.length < limit) {
+            const replies = await fetchFanqieCommentPage('/api/author/comment/reply_comment_list/v0/', {
+              comment_id: rawCommentId,
+              page_index: 1,
+              page_count: Math.min(replyCount, 10),
+            });
+            for (const reply of extractListPayload(replies)) {
+              comments.push(buildNormalizedComment(reply, {
+                category: 'reply',
+                work_id: workId,
+                work_name: workName,
+                chapter_id: row.chapter_id,
+                chapter_title: row.chapter_title,
+                parent_remote_comment_id: row.remote_comment_id.split(':').slice(1).join(':'),
+              }));
+              if (comments.length >= limit) {
+                break;
+              }
+            }
+          }
+          if (comments.length >= limit) {
+            break;
+          }
+        }
+        if (list.length < pageSize) {
+          break;
+        }
+        pageIndex += 1;
+        if (pageIndex > 5) {
+          break;
+        }
+      }
+    }
+
+    return dedupeComments(comments, limit);
+  }
+
+  function qidianMessageLooksLikeComment(record) {
+    const haystack = normalizeText([
+      firstNonEmpty(record, ['title', 'msgTitle', 'message_title']),
+      firstNonEmpty(record, ['content', 'messageContent', 'message_content', 'desc']),
+      firstNonEmpty(record, ['book_name', 'bookName']),
+      firstNonEmpty(record, ['chapter_title', 'chapterName']),
+      firstNonEmpty(record, ['menuTitle', 'menu_name']),
+    ].join(' '));
+    return /评论|书评|本章说|章评|留言|回复|读者|书友|互动|催更/.test(haystack);
+  }
+
+  function normalizeQidianMessage(record, menu = {}) {
+    const title = normalizeText(firstNonEmpty(record, ['title', 'msgTitle', 'message_title']));
+    const content = normalizeText(firstNonEmpty(record, ['content', 'messageContent', 'message_content', 'desc']));
+    return buildNormalizedComment(record, {
+      category: `message-${normalizeText(firstNonEmpty(menu, ['type', 'menuType', 'id']) || firstNonEmpty(record, ['type'])) || 'unknown'}`,
+      body: normalizeText([title, content].filter(Boolean).join(' | ')),
+      work_id: normalizeText(firstNonEmpty(record, ['book_id', 'bookId'])),
+      work_name: normalizeText(firstNonEmpty(record, ['book_name', 'bookName'])),
+      chapter_id: normalizeText(firstNonEmpty(record, ['chapter_id', 'chapterId', 'item_id'])),
+      chapter_title: normalizeText(firstNonEmpty(record, ['chapter_title', 'chapterName', 'item_title'])),
+    });
+  }
+
+  async function collectQidianComments(payload) {
+    const limit = Math.min(Math.max(Number(payload?.limit || 100), 1), 100);
+    const menuPayload = await fetchPlatformJson('/ccauthorapp/desk/message/getMenuMessInfo', {
+      method: 'GET',
+      headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    });
+    const menus = extractQidianMenus(menuPayload);
+    const candidateMenus = menus.filter((menu) => /评论|书评|本章说|章评|回复|互动/.test(
+      normalizeText(firstNonEmpty(menu, ['title', 'menuTitle', 'name', 'menu_name'])),
+    ));
+    const menusToFetch = candidateMenus.length ? candidateMenus : menus;
+    if (!menusToFetch.length) {
+      throw makeUploadError('起点消息中心未返回可用的消息分类。', 'comment-sync-platform-unsupported', {
+        menu_payload: menuPayload,
+      });
+    }
+
+    const comments = [];
+    for (const menu of menusToFetch) {
+      const menuType = normalizeText(firstNonEmpty(menu, ['type', 'menuType', 'id']));
+      if (!menuType) {
+        continue;
+      }
+      const listPayload = await fetchPlatformJson(
+        `/ccauthorapp/desk/message/getMessageList?type=${encodeURIComponent(menuType)}&IDX=0&pageSize=${Math.min(limit, 20)}`,
+        {
+          method: 'GET',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        },
+      );
+      const list = extractListPayload(listPayload);
+      for (const entry of list) {
+        if (!candidateMenus.length && !qidianMessageLooksLikeComment(entry)) {
+          continue;
+        }
+        comments.push(normalizeQidianMessage(entry, menu));
+        if (comments.length >= limit) {
+          break;
+        }
+      }
+      if (comments.length >= limit) {
+        break;
+      }
+    }
+
+    const rows = dedupeComments(comments, limit);
+    if (!rows.length) {
+      throw makeUploadError('起点消息中心未找到可同步的评论消息。', 'comment-sync-no-comment-found', {
+        menus: menus.map((menu) => ({
+          type: firstNonEmpty(menu, ['type', 'menuType', 'id']),
+          title: firstNonEmpty(menu, ['title', 'menuTitle', 'name', 'menu_name']),
+        })),
+      });
+    }
+    return {
+      comments: rows,
+      menus: menus.map((menu) => ({
+        type: firstNonEmpty(menu, ['type', 'menuType', 'id']),
+        title: firstNonEmpty(menu, ['title', 'menuTitle', 'name', 'menu_name']),
+      })),
+    };
+  }
+
+  async function runCommentSync(payload) {
+    setDebugStep('run-comment-sync-start', {
+      platform: String(payload?.platform || ''),
+      workId: String(payload?.work_id || ''),
+      chapterId: String(payload?.chapter_id || ''),
+      limit: Number(payload?.limit || 0),
+    });
+    if (window.location.href.includes('login')) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: '平台当前仍在登录页，请先完成扫码登录。',
+        errorCode: 'login-required',
+      };
+    }
+    if (window.location.href.includes('fanqienovel.com')) {
+      const comments = await collectFanqieComments(payload);
+      return {
+        ok: true,
+        currentUrl: window.location.href,
+        message: `番茄评论同步完成，共抓取 ${comments.length} 条评论。`,
+        comments,
+        resultPayload: { source: 'fanqie-author-api' },
+      };
+    }
+    if (window.location.href.includes('write.qq.com') || window.location.href.includes('pcwrite.yuewen.com')) {
+      const result = await collectQidianComments(payload);
+      return {
+        ok: true,
+        currentUrl: window.location.href,
+        message: `起点评论同步完成，共抓取 ${result.comments.length} 条评论消息。`,
+        comments: result.comments,
+        resultPayload: {
+          source: 'qidian-message-center',
+          menus: result.menus,
+        },
+      };
+    }
+    return {
+      ok: false,
+      currentUrl: window.location.href,
+      error: '当前页面不支持评论同步。',
+      errorCode: 'comment-sync-unsupported-page',
+    };
+  }
+
   function inspectLoginState() {
     const url = window.location.href;
     const text = pageText();
 
-    if (url.includes('write.qq.com')) {
+    if (url.includes('write.qq.com') || url.includes('pcwrite.yuewen.com')) {
       const loginVisible = includesAny(text, [
         '扫码登录',
         '微信扫码',
@@ -113,14 +561,16 @@
         '账号登录',
         '验证码登录',
       ]);
-      const authenticated = !loginVisible && includesAny(text, [
+      const authenticated = (!loginVisible && includesAny(text, [
         '作品管理',
         '作家专区',
         '章节管理',
         '写新章',
         '新建章节',
         '数据概览',
-      ]);
+        '消息中心',
+        '消息通知',
+      ])) || url.includes('/authorh5/');
       return {
         ok: true,
         currentUrl: url,
@@ -237,6 +687,64 @@
     node.dispatchEvent(new Event('input', { bubbles: true }));
   }
 
+  function setInputValue(node, value) {
+    if (!(node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)) {
+      return false;
+    }
+    const tagName = String(node.tagName || '').toLowerCase();
+    const prototype = tagName === 'textarea'
+      ? HTMLTextAreaElement.prototype
+      : HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+    if (descriptor?.set) {
+      descriptor.set.call(node, value);
+    } else {
+      node.value = value;
+    }
+    node.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true,
+      cancelable: true,
+      data: String(value || ''),
+      inputType: 'insertText',
+    }));
+    node.dispatchEvent(new Event('input', { bubbles: true }));
+    node.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
+  async function fillInputExact(node, value, options = {}) {
+    const normalizedValue = String(value || '');
+    const perCharDelayMs = Number(options.perCharDelayMs || 30);
+    if (!(node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)) {
+      return false;
+    }
+    node.focus();
+    setInputValue(node, normalizedValue);
+    node.dispatchEvent(new Event('blur', { bubbles: true }));
+    await sleep(200);
+    if (String(node.value || '').trim() === normalizedValue.trim()) {
+      return true;
+    }
+    node.focus();
+    try {
+      if (typeof node.select === 'function') {
+        node.select();
+      } else {
+        document.execCommand('selectAll', false, null);
+      }
+    } catch (_error) {
+      // Ignore when the browser blocks selection commands.
+    }
+    setInputValue(node, '');
+    for (const char of normalizedValue) {
+      setInputValue(node, `${String(node.value || '')}${char}`);
+      await sleep(perCharDelayMs);
+    }
+    node.dispatchEvent(new Event('blur', { bubbles: true }));
+    await sleep(300);
+    return String(node.value || '').trim() === normalizedValue.trim();
+  }
+
   async function fillField(selectors, value, fieldName) {
     const node = await waitForSelector(selectors);
     if (!node) {
@@ -284,6 +792,32 @@
     return false;
   }
 
+  async function clickActionExactText(text, timeoutMs = 4000, root = document) {
+    const startedAt = Date.now();
+    while ((Date.now() - startedAt) < timeoutMs) {
+      const directTargets = Array.from(root.querySelectorAll('button, [role="button"], a'))
+        .filter((node) => String(node?.innerText || node?.textContent || '').trim() === text)
+        .sort((left, right) => left.childElementCount - right.childElementCount);
+      const direct = directTargets[0];
+      if (direct instanceof HTMLElement) {
+        direct.click();
+        return true;
+      }
+      const nestedTargets = Array.from(root.querySelectorAll('div, span'))
+        .filter((node) => String(node?.innerText || node?.textContent || '').trim() === text)
+        .map((node) => node.closest?.('button, [role="button"], a') || node)
+        .filter((node) => node instanceof HTMLElement)
+        .sort((left, right) => left.childElementCount - right.childElementCount);
+      const nested = nestedTargets[0];
+      if (nested instanceof HTMLElement) {
+        nested.click();
+        return true;
+      }
+      await sleep(250);
+    }
+    return false;
+  }
+
   function hasFanqieEmptyWorkState() {
     const text = pageText();
     return includesAny(text, [
@@ -296,13 +830,44 @@
 
   function normalizeFanqieBookMeta(rawMeta, bookName) {
     const meta = rawMeta && typeof rawMeta === 'object' ? rawMeta : {};
+    const rawPrimaryCategory = String(meta.primary_category || '').trim();
+    const normalizedPrimaryCategory = (() => {
+      if (!rawPrimaryCategory) {
+        return '悬疑灵异';
+      }
+      const mappings = [
+        ['悬疑', '悬疑灵异'],
+        ['灵异', '悬疑灵异'],
+        ['脑洞', '悬疑脑洞'],
+        ['科幻', '科幻末世'],
+        ['末世', '科幻末世'],
+        ['都市', '都市日常'],
+        ['玄幻', '传统玄幻'],
+        ['仙侠', '东方仙侠'],
+        ['历史', '历史古代'],
+        ['游戏', '游戏体育'],
+        ['衍生', '男频衍生'],
+      ];
+      const matched = mappings.find(([needle]) => rawPrimaryCategory.includes(needle));
+      return matched ? matched[1] : rawPrimaryCategory;
+    })();
     const protagonistNames = Array.isArray(meta.protagonist_names)
       ? meta.protagonist_names.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 2)
       : [];
     const intro = String(meta.intro || '').trim();
+    const fallbackIntro = `${String(bookName || '').trim()}讲的是普通人被旧日悬案卷入后，在现实缝隙里一步步逼近真相的故事。`;
+    const normalizedIntro = (() => {
+      const base = intro || fallbackIntro;
+      if (base.length >= 50) {
+        return base;
+      }
+      const suffix = '故事将围绕旧案、港区谜团与人物命运展开，在层层追索中揭开真相。';
+      const combined = `${base}${suffix}`;
+      return combined.length >= 50 ? combined : `${combined}${fallbackIntro}`;
+    })();
     return {
       audience: String(meta.audience || 'male').trim().toLowerCase(),
-      primaryCategory: String(meta.primary_category || '').trim(),
+      primaryCategory: normalizedPrimaryCategory,
       themeTags: Array.isArray(meta.theme_tags)
         ? meta.theme_tags.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 2)
         : [],
@@ -313,7 +878,7 @@
         ? meta.plot_tags.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 2)
         : [],
       protagonistNames,
-      intro: intro || `${String(bookName || '').trim()}讲的是普通人被旧日悬案卷入后，在现实缝隙里一步步逼近真相的故事。`,
+      intro: normalizedIntro,
     };
   }
 
@@ -357,6 +922,25 @@
       return true;
     }
     await dismissFanqieGuideModal();
+    window.location.href = 'https://fanqienovel.com/main/writer/create';
+    await Promise.race([
+      waitForUrlContains('/main/writer/create', 8000),
+      waitForPageSignal(['创建作品', '立即创建', '书本名称'], 8000),
+    ]);
+    if (window.location.href.includes('/main/writer/create') || includesAny(pageText(), ['创建作品', '立即创建', '书本名称'])) {
+      return true;
+    }
+    const openedTrial = (await clickExactText('立即体验', 2500))
+      || (await clickByKeywords(['立即体验'], 2500));
+    if (openedTrial) {
+      await Promise.race([
+        waitForUrlContains('/main/writer/create', 5000),
+        waitForPageSignal(['去写章节', '创建书本', '立即创建', '书本名称'], 5000),
+      ]);
+      if (window.location.href.includes('/main/writer/create') || includesAny(pageText(), ['立即创建', '书本名称'])) {
+        return true;
+      }
+    }
     const openedCreateMenu = (await clickExactText('创建新书', 4000))
       || (await clickByKeywords(['创建新书'], 4000));
     if (!openedCreateMenu) {
@@ -432,20 +1016,24 @@
     if (!normalized) {
       return true;
     }
+    const modal = document.querySelector('.arco-modal.category-modal') || document.querySelector('.category-choose');
+    const root = modal instanceof HTMLElement ? modal : document;
     const selectors = [
-      '.category-choose-item-title',
       '.category-choose-item-container',
       '.category-choose-item',
+      '.category-choose-item-title',
       'button',
       '[role="button"]',
       'span',
       'div',
     ];
     for (const selector of selectors) {
-      const nodes = Array.from(document.querySelectorAll(selector))
-        .filter((node) => String(node?.innerText || node?.textContent || '').trim() === normalized)
-        .sort((left, right) => left.childElementCount - right.childElementCount);
-      const target = nodes[0];
+      const nodes = Array.from(root.querySelectorAll(selector))
+        .filter((node) => String(node?.innerText || node?.textContent || '').trim() === normalized);
+      const target = nodes
+        .map((node) => node.closest?.('.category-choose-item-container, .category-choose-item') || node)
+        .filter((node) => node instanceof HTMLElement)
+        .sort((left, right) => left.childElementCount - right.childElementCount)[0];
       if (target instanceof HTMLElement) {
         target.click();
         await sleep(250);
@@ -456,16 +1044,59 @@
   }
 
   async function confirmFanqieTagModal() {
-    const confirmed = (await clickExactText('确认', 2500))
-      || (await clickByKeywords(['确认'], 2500));
+    const dialog = document.querySelector('.arco-modal.category-modal') || document.querySelector('.category-choose');
+    let confirmed = false;
+    const waitClosed = () => waitForCondition(
+      () => !document.querySelector('.arco-modal.category-modal')
+        && !document.querySelector('.category-choose'),
+      4000,
+    );
+    if (dialog instanceof HTMLElement) {
+      const button = Array.from(dialog.querySelectorAll('button, [role="button"]'))
+        .filter((node) => String(node?.innerText || node?.textContent || '').trim() === '确认')
+        .sort((left, right) => left.childElementCount - right.childElementCount)[0];
+      if (button instanceof HTMLElement) {
+        button.click();
+        confirmed = true;
+        await sleep(250);
+        if (document.querySelector('.arco-modal.category-modal') || document.querySelector('.category-choose')) {
+          button.focus();
+          button.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter' }));
+          button.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter' }));
+          await sleep(250);
+        }
+      }
+    }
+    if (!confirmed) {
+      confirmed = (await clickExactText('确认', 2500))
+        || (await clickByKeywords(['确认'], 2500));
+    }
     if (!confirmed) {
       return false;
     }
-    await waitForCondition(
-      () => !document.querySelector('.arco-modal.category-modal'),
-      4000,
-    );
-    return true;
+    let closed = await waitClosed();
+    if (closed) {
+      return true;
+    }
+    const closeButton = Array.from((dialog || document).querySelectorAll(
+      '.arco-modal-close-icon, .arco-modal-close-btn, .close, [aria-label="Close"], [aria-label="关闭"], button',
+    )).find((node) => {
+      const text = String(node?.innerText || node?.textContent || '').trim();
+      const className = String(node?.className || '');
+      return className.includes('close') || text === '关闭' || text === '×';
+    });
+    if (closeButton instanceof HTMLElement) {
+      closeButton.click();
+      await sleep(250);
+      closed = await waitClosed();
+      if (closed) {
+        return true;
+      }
+    }
+    document.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape', code: 'Escape' }));
+    document.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Escape', code: 'Escape' }));
+    closed = await waitClosed();
+    return Boolean(closed);
   }
 
   async function selectFanqieContestIfPresent() {
@@ -563,14 +1194,15 @@
       '作品简介',
     );
     await selectFanqieContestIfPresent();
-    const submitted = (await clickExactText('立即创建', 4000))
-      || (await clickByKeywords(['立即创建'], 4000));
+    const submitted = (await clickActionExactText('立即创建', 4000))
+      || (await clickExactText('立即创建', 2000))
+      || (await clickByKeywords(['立即创建'], 2000));
     if (!submitted) {
       throw makeUploadError('番茄创建书本时未找到立即创建按钮。', 'create-book-validation-failed');
     }
     await sleep(2000);
     const currentText = pageText();
-    if (includesAny(currentText, ['已到达当日创建作品上限', '当日创建作品上限', '无法继续发布'])) {
+    if (includesAny(currentText, ['已到达当日创建作品上限', '当日创建作品上限'])) {
       throw makeUploadError(
         '番茄当前账号已达到当日创建作品上限。',
         'create-book-rate-limited',
@@ -589,7 +1221,7 @@
     ]);
     if (!includesAny(pageText(), [bookName]) && !window.location.href.includes('/main/writer/book-info/')) {
       const text = pageText();
-      if (includesAny(text, ['已到达当日创建作品上限', '当日创建作品上限', '无法继续发布'])) {
+      if (includesAny(text, ['已到达当日创建作品上限', '当日创建作品上限'])) {
         throw makeUploadError(
           '番茄当前账号已达到当日创建作品上限。',
           'create-book-rate-limited',
@@ -645,21 +1277,31 @@
     return waitForCondition(() => findQidianSiteDialog(), 4000);
   }
 
-  async function selectQidianPublishSite(audience) {
-    const normalizedAudience = String(audience || 'male').toLowerCase().includes('female') ? '女生' : '男生';
-    await waitForCondition(() => {
-      const siteValue = String(document.querySelector('input[name="site"]')?.value || '').trim();
-      const text = pageText();
-      return Boolean(siteValue) || text.includes('起点');
-    }, 2000);
+  function qidianSiteSelectionSummary() {
     const infoText = String(document.querySelector('.jsSiteInfo')?.innerText || '').trim();
     const siteFieldValue = String(document.querySelector('input[name="site"]')?.value || '').trim();
-    const visibleText = pageText();
-    if (
-      (infoText.includes('起点') && infoText.includes(normalizedAudience))
-      || Boolean(siteFieldValue)
-      || (visibleText.includes('起点') && visibleText.includes(normalizedAudience))
-    ) {
+    return {
+      infoText,
+      siteFieldValue,
+    };
+  }
+
+  function isQidianSiteSelected(audience) {
+    const normalizedAudience = String(audience || 'male').toLowerCase().includes('female') ? '女生' : '男生';
+    const { infoText, siteFieldValue } = qidianSiteSelectionSummary();
+    if (infoText.includes('起点') && infoText.includes(normalizedAudience)) {
+      return true;
+    }
+    return Boolean(siteFieldValue);
+  }
+
+  async function selectQidianPublishSite(audience) {
+    const normalizedAudience = String(audience || 'male').toLowerCase().includes('female') ? '女生' : '男生';
+    await waitForCondition(
+      () => isQidianSiteSelected(audience) || Boolean(findQidianSiteDialog()),
+      2000,
+    );
+    if (isQidianSiteSelected(audience)) {
       return true;
     }
     const dialog = await ensureQidianSiteDialog();
@@ -683,40 +1325,32 @@
     }
     genderButton.click();
     await sleep(250);
-    let confirmed = false;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const confirmButton = dialog.querySelector('.jsSiteSure:not(.disabled), .jsSiteSure, .site-right-button, button');
-      if (!(confirmButton instanceof HTMLElement)) {
-        break;
+      if (confirmButton instanceof HTMLElement) {
+        confirmButton.click();
+        await Promise.race([
+          waitForCondition(() => isQidianSiteSelected(audience) || !findQidianSiteDialog(), 2500),
+          sleep(500),
+        ]);
       }
-      confirmButton.click();
-      await Promise.race([
-        waitForCondition(() => !findQidianSiteDialog(), 2500),
-        sleep(500),
-      ]);
-      if (!findQidianSiteDialog()) {
-        confirmed = true;
+      if (isQidianSiteSelected(audience)) {
         break;
       }
       const dialogConfirm = await clickExactText('确定', 1200)
         || await clickByKeywords(['确定'], 1200);
       if (dialogConfirm) {
         await Promise.race([
-          waitForCondition(() => !findQidianSiteDialog(), 2500),
+          waitForCondition(() => isQidianSiteSelected(audience) || !findQidianSiteDialog(), 2500),
           sleep(500),
         ]);
-        if (!findQidianSiteDialog()) {
-          confirmed = true;
+        if (isQidianSiteSelected(audience)) {
           break;
         }
       }
     }
-    if (!confirmed) {
-      return false;
-    }
-    const updated = String(document.querySelector('.jsSiteInfo')?.innerText || '').trim();
-    return (updated.includes('起点') && updated.includes(normalizedAudience))
-      || (visibleText.includes('起点') && visibleText.includes(normalizedAudience));
+    await waitForCondition(() => isQidianSiteSelected(audience), 4000);
+    return isQidianSiteSelected(audience);
   }
 
   async function waitForQidianCategoryReady(timeoutMs = 8000) {
@@ -929,18 +1563,79 @@
   }
 
   async function dismissFanqieGuideModal() {
-    const closeButton = document.querySelector('.byte-modal-close-icon');
-    if (closeButton instanceof HTMLElement) {
-      closeButton.click();
-      await waitForCondition(
-        () => !document.querySelector('.byte-modal-close-icon'),
-        2500,
-      );
+    const hasGuideArtifacts = () => {
+      if (document.querySelector('button.guide-card-footer-btn') || document.querySelector('#___reactour')) {
+        return true;
+      }
+      const guideNodes = Array.from(document.querySelectorAll(
+        '#___reactour, .reactour__helper, .reactour__mask, [class*="reactour"], .publish-guide-desc, .publish-guide-mask, .publish-guide-card, [role="dialog"], .byte-modal-wrapper, .byte-modal-content, .arco-modal',
+      ));
+      return guideNodes.some((node) => {
+        const text = String(node?.innerText || node?.textContent || '').trim();
+        return text.includes('番茄原创平台全新上线')
+          || text.includes('新增读者纠错功能')
+          || text.includes('立即体验')
+          || text.includes('我知道了')
+          || text.includes('继续');
+      });
+    };
+
+    if (!hasGuideArtifacts()) {
+      return;
+    }
+
+    if (document.querySelector('button.guide-card-footer-btn') || document.querySelector('#___reactour')) {
+      await dismissFanqieGuideSteps();
+      if (!hasGuideArtifacts()) {
+        return;
+      }
+    }
+
+    const clickDismissAction = async () => {
+      const labels = ['我知道了', '知道了', '关闭', '确定', '立即体验', '继续'];
+      for (const label of labels) {
+        const clicked = await clickActionExactText(label, 600, document)
+          || await clickExactText(label, 600)
+          || await clickByKeywords([label], 600);
+        if (clicked) {
+          await sleep(500);
+          return true;
+        }
+      }
+      return false;
+    };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const closeButton = document.querySelector('.byte-modal-close-icon, .arco-modal-close-icon, .byte-modal-close, .arco-modal-close-btn');
+      if (closeButton instanceof HTMLElement) {
+        closeButton.click();
+        await sleep(500);
+      } else {
+        await clickDismissAction();
+      }
+      const stillVisible = Array.from(document.querySelectorAll('[role="dialog"], .byte-modal-wrapper, .byte-modal-content, .arco-modal'))
+        .some((node) => {
+          const text = String(node?.innerText || node?.textContent || '').trim();
+          return text.includes('番茄原创平台全新上线')
+            || text.includes('新增读者纠错功能')
+            || text.includes('立即体验')
+            || text.includes('我知道了');
+        });
+      if (!stillVisible) {
+        break;
+      }
     }
     const tourNodes = Array.from(document.querySelectorAll(
       '#___reactour, .reactour__helper, .reactour__mask, [class*="reactour"], .publish-guide-desc, .publish-guide-mask, .publish-guide-card',
     ));
     tourNodes.forEach((node) => node.remove());
+    Array.from(document.querySelectorAll('.byte-modal-wrapper, .byte-modal-mask, .byte-modal-content, .arco-modal, .arco-modal-mask'))
+      .filter((node) => {
+        const text = String(node?.innerText || node?.textContent || '').trim();
+        return text.includes('番茄原创平台全新上线')
+          || text.includes('新增读者纠错功能');
+      })
+      .forEach((node) => node.remove());
     await dismissFanqieGuideSteps();
   }
 
@@ -964,49 +1659,21 @@
   async function fillFanqieTitle(value) {
     const selector = 'input[placeholder="请输入标题"]';
     const node = await waitForSelector([selector], 8000);
-    const normalizedValue = String(value || '');
     if (!(node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)) {
       return false;
     }
-    node.click();
-    node.value = normalizedValue;
-    node.dispatchEvent(new Event('input', { bubbles: true }));
-    node.dispatchEvent(new Event('change', { bubbles: true }));
-    await sleep(250);
-    if (String(node.value || '').trim() === normalizedValue.trim()) {
-      return true;
-    }
-    node.click();
-    try {
-      document.execCommand('selectAll', false, null);
-    } catch (_error) {
-      // Ignore when the browser blocks execCommand.
-    }
-    node.value = '';
-    node.dispatchEvent(new Event('input', { bubbles: true }));
-    node.dispatchEvent(new Event('change', { bubbles: true }));
-    node.focus();
-    node.value = normalizedValue;
-    node.dispatchEvent(new Event('input', { bubbles: true }));
-    node.dispatchEvent(new Event('change', { bubbles: true }));
-    await sleep(250);
-    return String(node.value || '').trim() === normalizedValue.trim();
+    return fillInputExact(node, value, { perCharDelayMs: 40 });
   }
 
   async function fillFanqieSequence() {
-    const node = document.querySelector('input.serial-input.byte-input.byte-input-size-default');
+    const node = document.querySelector('input.serial-input.byte-input.byte-input-size-default:not(.serial-editor-input-hint-area):not([placeholder])');
     if (!(node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)) {
       return false;
     }
     if (String(node.value || '').trim()) {
       return true;
     }
-    node.click();
-    node.value = '1';
-    node.dispatchEvent(new Event('input', { bubbles: true }));
-    node.dispatchEvent(new Event('change', { bubbles: true }));
-    await sleep(150);
-    return Boolean(String(node.value || '').trim());
+    return fillInputExact(node, '1', { perCharDelayMs: 10 });
   }
 
   function applyFanqieTrustedBody(value) {
@@ -1094,12 +1761,64 @@
     return window.location.href.includes('/publish/') || includesAny(pageText(), ['存草稿', '下一步']) || Boolean(document.querySelector('.ProseMirror[contenteditable="true"]'));
   }
 
+  function findFanqieBookEntryNode(bookName) {
+    const textOf = (node) => String(node?.innerText || node?.textContent || '').trim();
+    const items = Array.from(document.querySelectorAll('div, section, article, li'))
+      .filter((node) => {
+        const text = textOf(node);
+        if (!text) {
+          return false;
+        }
+        if (bookName && !text.includes(bookName)) {
+          return false;
+        }
+        return Boolean(
+          node.querySelector('a[href*="/publish/"]')
+          || node.querySelector('a[href*="/chapter-manage/"]')
+          || Array.from(node.querySelectorAll('button, [role="button"]')).find((button) => {
+            const buttonText = textOf(button);
+            return buttonText.includes('创建章节') || buttonText.includes('章节管理');
+          }),
+        );
+      })
+      .sort((left, right) => textOf(left).length - textOf(right).length);
+    return items[0] || null;
+  }
+
   function findFanqieBookEntry(bookName) {
     const textOf = (node) => String(node?.innerText || node?.textContent || '').trim();
-    const items = Array.from(document.querySelectorAll('.home-book-item, .home-book-item-home'));
-    const matchedItem = bookName
-      ? items.find((item) => textOf(item).includes(bookName))
-      : items[0];
+    const normalize = (value) => {
+      try {
+        return decodeURIComponent(String(value || '').trim());
+      } catch (_error) {
+        return String(value || '').trim();
+      }
+    };
+    const targetBookName = String(bookName || '').trim();
+    const chapterManageAnchors = Array.from(document.querySelectorAll('a[href*="/chapter-manage/"]'));
+    const matchedManageAnchor = targetBookName
+      ? chapterManageAnchors.find((node) => {
+        const href = normalize(node.getAttribute('href') || '');
+        const text = `${textOf(node)} ${(node.parentElement && textOf(node.parentElement)) || ''}`.trim();
+        return href.includes(targetBookName) || text.includes(targetBookName);
+      })
+      : (chapterManageAnchors[0] || null);
+    if (matchedManageAnchor instanceof HTMLAnchorElement) {
+      const chapterManageHref = String(matchedManageAnchor.getAttribute('href') || '');
+      const workIdMatch = chapterManageHref.match(/\/chapter-manage\/(\d+)/);
+      const workId = workIdMatch ? String(workIdMatch[1] || '').trim() : '';
+      const publishAnchor = workId
+        ? Array.from(document.querySelectorAll(`a[href*="/${workId}/publish/"]`)).find((node) => node instanceof HTMLAnchorElement) || null
+        : null;
+      return {
+        bookText: `${textOf(matchedManageAnchor)} ${(matchedManageAnchor.parentElement && textOf(matchedManageAnchor.parentElement)) || ''}`.trim(),
+        workId,
+        publishHref: publishAnchor ? String(publishAnchor.getAttribute('href') || '') : '',
+        publishAnchor,
+        chapterManageHref,
+      };
+    }
+    const matchedItem = findFanqieBookEntryNode(bookName);
     if (!matchedItem) {
       return null;
     }
@@ -1108,39 +1827,114 @@
     const chapterManageAnchor = anchors.find((node) => String(node.getAttribute('href') || '').includes('/chapter-manage/'));
     return {
       bookText: textOf(matchedItem),
+      workId: '',
       publishHref: publishAnchor ? String(publishAnchor.getAttribute('href') || '') : '',
+      publishAnchor: publishAnchor instanceof HTMLAnchorElement ? publishAnchor : null,
       chapterManageHref: chapterManageAnchor ? String(chapterManageAnchor.getAttribute('href') || '') : '',
     };
   }
 
   async function openFanqieBookEntryEditor(bookName) {
-    return (() => {
-      const textOf = (node) => String(node?.innerText || node?.textContent || '').trim();
-      const items = Array.from(document.querySelectorAll('.home-book-item, .home-book-item-home'));
-      const matchedItem = bookName
-        ? items.find((item) => textOf(item).includes(bookName))
-        : (items[0] || null);
-      if (!matchedItem) {
-        return false;
+    await dismissFanqieGuideModal();
+    const textOf = (node) => String(node?.innerText || node?.textContent || '').trim();
+    const initialUrl = String(window.location.href || '');
+    const waitForNavigation = async (timeoutMs = 2200) => {
+      const navigated = await waitForCondition(() => {
+        const href = String(window.location.href || '');
+        if (href !== initialUrl && href.includes('/publish/')) {
+          return href;
+        }
+        if (includesAny(pageText(), ['存草稿', '下一步']) || document.querySelector('.ProseMirror[contenteditable="true"]')) {
+          return href || initialUrl;
+        }
+        return null;
+      }, timeoutMs);
+      return Boolean(navigated);
+    };
+    const matchedEntry = findFanqieBookEntry(bookName);
+    const matchedItem = findFanqieBookEntryNode(bookName);
+    const absolutePublishHref = matchedEntry?.publishHref
+      ? new URL(matchedEntry.publishHref, window.location.href).toString()
+      : '';
+
+    if (absolutePublishHref) {
+      setDebugStep('fanqie-location-assign-direct', {
+        workId: matchedEntry?.workId || '',
+        targetUrl: absolutePublishHref,
+      });
+      window.location.assign(absolutePublishHref);
+      return {
+        opened: true,
+        navigated: false,
+        method: 'location-assign-direct',
+        targetUrl: absolutePublishHref,
+        workId: matchedEntry?.workId || '',
+      };
+    }
+    if (matchedItem instanceof HTMLElement) {
+      const createButton = Array.from(matchedItem.querySelectorAll('button, [role="button"]')).find((node) => {
+        const text = textOf(node);
+        return text === '创建章节' || text.includes('创建章节');
+      });
+      if (createButton instanceof HTMLElement) {
+        setDebugStep('fanqie-click-create-button', {
+          workId: matchedEntry?.workId || '',
+          targetUrl: absolutePublishHref,
+        });
+        createButton.click();
+        if (await waitForNavigation()) {
+          setDebugStep('fanqie-create-button-navigated', {
+            workId: matchedEntry?.workId || '',
+            targetUrl: absolutePublishHref,
+          });
+          return {
+            opened: true,
+            navigated: true,
+            method: 'create-button-click',
+            targetUrl: absolutePublishHref,
+            workId: matchedEntry?.workId || '',
+          };
+        }
+        return {
+          opened: true,
+          navigated: false,
+          method: 'create-button-click',
+          targetUrl: absolutePublishHref,
+          workId: matchedEntry?.workId || '',
+        };
       }
       const publishAnchor = Array.from(matchedItem.querySelectorAll('a[href]')).find((node) => {
         const href = String(node.getAttribute('href') || '');
         return href.includes('/publish/');
       });
       if (publishAnchor instanceof HTMLAnchorElement) {
+        setDebugStep('fanqie-click-matched-item-publish-anchor', {
+          workId: matchedEntry?.workId || '',
+          targetUrl: absolutePublishHref || new URL(String(publishAnchor.getAttribute('href') || ''), window.location.href).toString(),
+        });
         publishAnchor.click();
-        return true;
+        if (await waitForNavigation()) {
+          setDebugStep('fanqie-matched-item-publish-anchor-navigated', {
+            workId: matchedEntry?.workId || '',
+            targetUrl: absolutePublishHref || new URL(String(publishAnchor.getAttribute('href') || ''), window.location.href).toString(),
+          });
+          return {
+            opened: true,
+            navigated: true,
+            method: 'matched-item-publish-anchor-click',
+            targetUrl: absolutePublishHref || new URL(String(publishAnchor.getAttribute('href') || ''), window.location.href).toString(),
+            workId: matchedEntry?.workId || '',
+          };
+        }
       }
-      const createButton = Array.from(matchedItem.querySelectorAll('button, [role="button"]')).find((node) => {
-        const text = textOf(node);
-        return text === '创建章节' || text.includes('创建章节');
-      });
-      if (createButton instanceof HTMLElement) {
-        createButton.click();
-        return true;
-      }
-      return false;
-    })();
+    }
+    return {
+      opened: false,
+      navigated: false,
+      method: 'not-found',
+      targetUrl: '',
+      workId: matchedEntry?.workId || '',
+    };
   }
 
   async function waitForFanqieEditorNavigation(timeoutMs = 8000) {
@@ -1195,21 +1989,85 @@
       }
     }
     if (window.location.href.includes('fanqienovel.com')) {
+      setDebugStep('fanqie-prepare-publish-start', {
+        bookName: String(bookName || ''),
+        createIfMissing: Boolean(payload.create_if_missing),
+      });
+      setDebugStep('fanqie-prepare-before-dismiss-guide', {
+        url: String(window.location.href || ''),
+      });
       await dismissFanqieGuideModal();
+      setDebugStep('fanqie-prepare-after-dismiss-guide', {
+        url: String(window.location.href || ''),
+      });
+      if (
+        window.location.href.includes('/publish/')
+        || includesAny(pageText(), ['存草稿', '下一步'])
+        || Boolean(document.querySelector('.ProseMirror[contenteditable="true"]'))
+      ) {
+        setDebugStep('fanqie-prepare-editor-already-open', {
+          url: String(window.location.href || ''),
+        });
+        return true;
+      }
       const text = pageText();
       const entry = findFanqieBookEntry(bookName);
       const createIfMissing = Boolean(payload.create_if_missing);
       const bookMeta = payload.book_meta || null;
       if (
         window.location.href.includes('/main/writer/')
-        && entry?.publishHref
+        && createIfMissing
+        && bookName
+        && !entry
       ) {
-        const openedEditor = await openFanqieBookEntryEditor(bookName);
-        if (openedEditor) {
-          return false;
-        }
-        window.location.href = new URL(entry.publishHref, window.location.href).toString();
+        setDebugStep('fanqie-create-book-missing-entry', { bookName: String(bookName || '') });
+        await createFanqieBook(bookName, bookMeta);
         return false;
+      }
+      if (
+        window.location.href.includes('/main/writer/')
+        && entry
+      ) {
+        setDebugStep('fanqie-entry-found', {
+          bookName: String(bookName || ''),
+          workId: entry.workId || '',
+          publishHref: entry.publishHref || '',
+        });
+        const openedEditor = await openFanqieBookEntryEditor(bookName);
+        if (openedEditor?.opened) {
+          if (openedEditor.navigated) {
+            return true;
+          }
+          return {
+            pending: true,
+            currentUrl: window.location.href,
+            error: '番茄正在跳转到章节编辑页，请稍后重试。',
+            errorCode: 'editor-navigation-pending',
+            resultPayload: {
+              platform_stage: 'fanqie-entry-opened',
+              fanqie_step: openedEditor.method,
+              target_url: openedEditor.targetUrl || '',
+              work_id: openedEditor.workId || '',
+            },
+          };
+        }
+        if (entry.publishHref) {
+          const targetUrl = new URL(entry.publishHref, window.location.href).toString();
+          window.location.assign(targetUrl);
+          return {
+            pending: true,
+            currentUrl: window.location.href,
+            error: '番茄正在跳转到章节编辑页，请稍后重试。',
+            errorCode: 'editor-navigation-pending',
+            resultPayload: {
+              platform_stage: 'fanqie-entry-fallback-assign',
+              fanqie_step: 'publish-href-fallback',
+              target_url: targetUrl,
+              work_id: entry.workId || '',
+            },
+          };
+        }
+        throw makeUploadError('番茄当前账号下未找到对应作品的创建章节入口。', 'chapter-editor-navigation-failed');
       }
       if (
         window.location.href.includes('/main/writer/')
@@ -1468,7 +2326,7 @@
 
   async function ensureQidianSavedDraftIfNeeded() {
     const href = String(window.location.href || '');
-    if (!href.includes('#ccid=-1')) {
+    if (href.includes('#ccid=') && !href.includes('#ccid=-1')) {
       return true;
     }
     const clicked = await clickExactTexts(['保存', '存草稿'], 3000)
@@ -1483,17 +2341,135 @@
     return Boolean(await waitForQidianRealCcid(15000));
   }
 
-  async function confirmFanqiePublishIfNeeded() {
+  function fanqieModalTexts() {
+    return Array.from(document.querySelectorAll('.arco-modal-wrapper, .byte-modal, .semi-modal, .auxo-modal, [role="dialog"]'))
+      .map((node) => String(node?.innerText || node?.textContent || '').trim())
+      .filter(Boolean);
+  }
+
+  function hasFanqieRiskDetectionModal() {
+    return fanqieModalTexts().some((text) => text.includes('是否进行内容风险检测'));
+  }
+
+  function hasFanqiePublishSettings() {
+    return fanqieModalTexts().some((text) => includesAny(text, ['发布设置', '非AI', 'AI']))
+      || includesAny(pageText(), ['发布设置', '非AI', 'AI']);
+  }
+
+  function findFanqiePublishSettingsModal() {
+    return document.querySelector('.publish-confirm-container-new')
+      || Array.from(document.querySelectorAll('.arco-modal, [role="dialog"]'))
+        .find((node) => String(node?.innerText || node?.textContent || '').includes('发布设置'))
+      || null;
+  }
+
+  async function chooseFanqieNonAiIfPresent() {
+    const modal = await waitForCondition(() => findFanqiePublishSettingsModal(), 4000);
+    if (!(modal instanceof HTMLElement)) {
+      return false;
+    }
+    const noInput = modal.querySelector('input[type="radio"][value="2"]');
+    const yesInput = modal.querySelector('input[type="radio"][value="1"]');
+    const radioLabels = Array.from(modal.querySelectorAll('label.arco-radio'));
+    const noLabel = radioLabels.find((node) => String(node?.innerText || node?.textContent || '').trim() === '否') || null;
+    const clickTarget = noLabel instanceof HTMLElement
+      ? noLabel
+      : (noInput instanceof HTMLElement ? noInput : null);
+    if (!(clickTarget instanceof HTMLElement)) {
+      return false;
+    }
+    clickTarget.click();
+    if (noInput instanceof HTMLInputElement) {
+      noInput.dispatchEvent(new Event('input', { bubbles: true }));
+      noInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    await sleep(400);
+    const selected = await waitForCondition(() => {
+      if (!(noInput instanceof HTMLInputElement)) {
+        return null;
+      }
+      return noInput.checked === true && (!(yesInput instanceof HTMLInputElement) || yesInput.checked === false);
+    }, 2000);
+    return Boolean(selected);
+  }
+
+  async function submitFanqiePublishSettings() {
+    const modal = await waitForCondition(() => findFanqiePublishSettingsModal(), 4000);
+    if (!(modal instanceof HTMLElement)) {
+      return false;
+    }
+    const primary = modal.querySelector('.arco-modal-footer button.arco-btn-primary')
+      || Array.from(modal.querySelectorAll('button, [role="button"]'))
+        .find((node) => String(node?.innerText || node?.textContent || '').trim() === '确认发布')
+      || null;
+    if (!(primary instanceof HTMLElement)) {
+      return false;
+    }
+    primary.click();
+    await sleep(1200);
+    const closed = await waitForCondition(() => !findFanqiePublishSettingsModal(), 4000);
+    return Boolean(closed);
+  }
+
+  async function handleFanqieRiskDetectionModal() {
+    if (!hasFanqieRiskDetectionModal()) {
+      return false;
+    }
+    const cancelled = await clickExactTexts(['取消'], 2000)
+      || await clickByKeywords(['取消'], 2000);
+    if (!cancelled) {
+      return false;
+    }
+    await waitForCondition(() => !hasFanqieRiskDetectionModal(), 4000);
+    await sleep(500);
+    return true;
+  }
+
+  async function waitForFanqiePublishSettings(timeoutMs = 5000) {
+    return waitForCondition(() => {
+      if (hasFanqiePublishSettings()) {
+        return true;
+      }
+      if (includesAny(pageText(), ['确定', '下一步'])) {
+        return 'intermediate-confirm';
+      }
+      return null;
+    }, timeoutMs);
+  }
+
+  async function dismissFanqiePublishSettingsIfPresent() {
+    if (!hasFanqiePublishSettings()) {
+      return false;
+    }
+    const closed = await clickExactTexts(['取消', '关闭', '返回'], 2000)
+      || await clickByKeywords(['取消', '关闭', '返回'], 2000);
+    if (closed) {
+      await sleep(600);
+      return true;
+    }
+    const closeButton = Array.from(document.querySelectorAll(
+      '.arco-modal-close-icon, .arco-modal-close-btn, .byte-modal-close-icon, .byte-modal-close, [aria-label="关闭"], [aria-label="Close"]',
+    ))[0];
+    if (closeButton instanceof HTMLElement) {
+      closeButton.click();
+      await sleep(600);
+      return true;
+    }
+    return false;
+  }
+
+  async function confirmFanqiePublishIfNeeded(publish) {
     if (!window.location.href.includes('fanqienovel.com')) {
       return false;
     }
     await dismissFanqieGuideModal();
-    await Promise.race([
-      waitForPageSignal(['发布设置', 'AI', '非AI', '审核中', '发布成功'], 5000),
-      sleep(600),
-    ]);
+    let signal = await waitForFanqiePublishSettings(4000);
+    if (hasFanqieRiskDetectionModal()) {
+      await handleFanqieRiskDetectionModal();
+      signal = await waitForFanqiePublishSettings(5000);
+    }
     let text = pageText();
-    if (!includesAny(text, ['发布设置', 'AI', '非AI']) && includesAny(text, ['确定', '下一步'])) {
+    if (!hasFanqiePublishSettings() && signal === 'intermediate-confirm') {
       try {
         const focused = document.activeElement;
         if (focused instanceof HTMLElement) {
@@ -1507,23 +2483,24 @@
       } catch (_error) {
         // Ignore fallback keyboard failures.
       }
-      if (!includesAny(text, ['发布设置', 'AI', '非AI'])) {
+      if (!hasFanqiePublishSettings()) {
         await clickExactTexts(['确定', '我知道了', '继续', '下一步'], 2500)
           || await clickByKeywords(['确定', '我知道了', '继续', '下一步'], 2500);
-        await sleep(600);
+        await sleep(800);
+        await waitForFanqiePublishSettings(4000);
         text = pageText();
       }
     }
-    if (!includesAny(text, ['发布设置', 'AI', '非AI'])) {
+    if (!hasFanqiePublishSettings()) {
       return false;
     }
-    await clickExactTexts(['非AI', '非AI生成', '否'], 2500)
-      || await clickByKeywords(['非AI', '非AI生成', '否'], 2500);
-    await sleep(400);
-    const confirmed = await clickExactTexts(['确认发布', '发布', '提交审核', '确定'], 3000)
-      || await clickByKeywords(['确认发布', '发布', '提交审核', '确定'], 3000);
-    if (confirmed) {
-      await sleep(1200);
+    setDebugStep('fanqie-publish-settings-open');
+    const nonAiSelected = await chooseFanqieNonAiIfPresent();
+    setDebugStep('fanqie-publish-settings-non-ai', { selected: nonAiSelected });
+    const confirmed = await submitFanqiePublishSettings();
+    setDebugStep('fanqie-publish-settings-confirmed', { confirmed });
+    if (!confirmed && !publish) {
+      return false;
     }
     return confirmed;
   }
@@ -1540,6 +2517,9 @@
 
   async function verifyPublishOutcome(platform, chapterTitle, publish) {
     if (!publish) {
+      if (platform === 'fanqie') {
+        return buildFanqieDraftVerifyRequest(chapterTitle);
+      }
       return {
         ok: true,
         currentUrl: window.location.href,
@@ -1708,6 +2688,82 @@
     return readFanqieEditorStatus().bodyCharCount;
   }
 
+  async function waitForFanqieSaved(timeoutMs = 15000) {
+    return waitForCondition(() => {
+      const text = pageText();
+      if (text.includes('保存中')) {
+        return null;
+      }
+      if (includesAny(text, ['已保存', '保存成功'])) {
+        return true;
+      }
+      return null;
+    }, timeoutMs);
+  }
+
+  function extractFanqieWorkId() {
+    const href = String(window.location.href || '');
+    const matched = href.match(/\/main\/writer\/(\d+)\/publish(?:\/|[?#]|$)/);
+    return matched ? String(matched[1] || '').trim() : '';
+  }
+
+  async function verifyFanqieDraftSavedOnCurrentPage(chapterTitle) {
+    const text = pageText();
+    const title = String(chapterTitle || '').trim();
+    if (title && text.includes(title)) {
+      return {
+        ok: true,
+        currentUrl: window.location.href,
+        message: '章节草稿已进入番茄章节管理。',
+        resultPayload: {
+          mode: 'draft',
+          official_status: 'drafted',
+          verified_via: 'chapter-manage',
+        },
+      };
+    }
+    return {
+      ok: false,
+      currentUrl: window.location.href,
+      error: '番茄章节管理页未找到新草稿。',
+      errorCode: 'publish-not-confirmed',
+      resultPayload: {
+        mode: 'draft',
+        chapter_title: chapterTitle,
+        verify_phase: 'chapter-manage',
+      },
+    };
+  }
+
+  function buildFanqieDraftVerifyRequest(chapterTitle) {
+    const workId = extractFanqieWorkId();
+    if (!workId) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: '番茄当前页面缺少作品 ID，无法核验草稿是否落盘。',
+        errorCode: 'publish-not-confirmed',
+        resultPayload: {
+          mode: 'draft',
+          chapter_title: chapterTitle,
+          verify_phase: 'missing-work-id',
+        },
+      };
+    }
+    return {
+      ok: false,
+      currentUrl: window.location.href,
+      error: '番茄需要跳转章节管理页核验草稿。',
+      errorCode: 'fanqie-draft-verify-required',
+      resultPayload: {
+        mode: 'draft',
+        chapter_title: chapterTitle,
+        verify_phase: 'pending-chapter-manage',
+        verify_url: `https://fanqienovel.com/main/writer/chapter-manage/${workId}?type=1`,
+      },
+    };
+  }
+
   function locateFanqieTrustedBodyTarget() {
     const paragraph = document.querySelector('.ProseMirror[contenteditable="true"] p');
     const editor = document.querySelector('.ProseMirror[contenteditable="true"]');
@@ -1727,6 +2783,23 @@
   }
 
   async function clickAction(publish) {
+    if (window.location.href.includes('fanqienovel.com')) {
+      const primaryNextButton = document.querySelector('button.publish-button.auto-editor-next');
+      let clicked = false;
+      if (primaryNextButton instanceof HTMLElement) {
+        primaryNextButton.click();
+        clicked = true;
+      }
+      if (!clicked) {
+        clicked = await clickActionExactText('下一步', 5000)
+          || await clickExactText('下一步', 2000)
+          || await clickByKeywords(['下一步'], 2000);
+      }
+      if (!clicked) {
+        throw new Error('未找到番茄下一步按钮。');
+      }
+      return;
+    }
     const keywords = publish
       ? ['发布', '提交', '保存并发布', '发布章节', '提交审核']
       : ['保存', '存草稿', '保存草稿'];
@@ -1737,6 +2810,12 @@
   }
 
   async function runUpload(payload) {
+    setDebugStep('run-upload-start', {
+      platform: String(payload?.platform || ''),
+      bookName: String(payload?.book_name || ''),
+      chapterTitle: String(payload?.chapter_title || ''),
+      publish: Boolean(payload?.publish),
+    });
     if (window.location.href.includes('login')) {
       return {
         ok: false,
@@ -1749,9 +2828,10 @@
     if (ready && typeof ready === 'object' && ready.pending) {
       return {
         ok: false,
-        currentUrl: window.location.href,
+        currentUrl: ready.currentUrl || window.location.href,
         error: ready.error || '平台正在跳转，请稍后重试。',
         errorCode: ready.errorCode || 'editor-navigation-pending',
+        resultPayload: ready.resultPayload || {},
       };
     }
     if (!ready) {
@@ -1762,7 +2842,9 @@
         errorCode: 'editor-navigation-pending',
       };
     }
+    setDebugStep('run-upload-editor-ready-wait');
     await waitForEditorReady(10000);
+    setDebugStep('run-upload-editor-ready');
     if (window.location.href.includes('write.qq.com')) {
       const qidianChapterReady = await prepareQidianNewChapter();
       if (qidianChapterReady?.pending) {
@@ -1795,12 +2877,19 @@
         }
       }
     } else {
+      setDebugStep('run-upload-fill-title-start');
       await fillField(selectorsForTitle(), payload.chapter_title, '章节标题');
+      setDebugStep('run-upload-fill-title-done');
       if (window.location.href.includes('fanqienovel.com')) {
         if (!payload.trustedBodyDone) {
+          setDebugStep('run-upload-fanqie-sequence-start');
           await fillFanqieSequence();
+          setDebugStep('run-upload-fanqie-sequence-done');
+          setDebugStep('run-upload-fanqie-title-exact-start');
           await fillFanqieTitle(payload.chapter_title);
+          setDebugStep('run-upload-fanqie-title-exact-done');
           await dismissFanqieGuideModal();
+          setDebugStep('run-upload-fanqie-trusted-body-required');
           return {
             ok: false,
             currentUrl: window.location.href,
@@ -1811,9 +2900,11 @@
           };
         }
         await dismissFanqieGuideModal();
+        setDebugStep('run-upload-fanqie-editor-status-read');
         const status = readFanqieEditorStatus();
         const wordCount = status.bodyCharCount;
         if (wordCount <= 0) {
+          setDebugStep('run-upload-fanqie-editor-status-empty', status);
           return {
             ok: false,
             currentUrl: window.location.href,
@@ -1823,12 +2914,25 @@
             editorStatus: status,
           };
         }
+        setDebugStep('run-upload-fanqie-sequence-start-2');
+        await fillFanqieSequence();
+        setDebugStep('run-upload-fanqie-sequence-done-2');
+        setDebugStep('run-upload-fanqie-title-exact-start-2');
+        await fillFanqieTitle(payload.chapter_title);
+        setDebugStep('run-upload-fanqie-title-exact-done-2');
+        setDebugStep('run-upload-fanqie-save-wait-start');
+        await waitForFanqieSaved(20000);
+        setDebugStep('run-upload-fanqie-save-wait-done');
       }
     }
     if (!(window.location.href.includes('write.qq.com') && payload.publish && payload.trustedPublishDone)) {
+      setDebugStep('run-upload-click-action-start', { publish: Boolean(payload.publish) });
       await clickAction(Boolean(payload.publish));
-      if (window.location.href.includes('fanqienovel.com') && payload.publish) {
-        await confirmFanqiePublishIfNeeded();
+      setDebugStep('run-upload-click-action-done', { publish: Boolean(payload.publish) });
+      if (window.location.href.includes('fanqienovel.com')) {
+        setDebugStep('run-upload-fanqie-confirm-start', { publish: Boolean(payload.publish) });
+        await confirmFanqiePublishIfNeeded(Boolean(payload.publish));
+        setDebugStep('run-upload-fanqie-confirm-done', { publish: Boolean(payload.publish) });
       }
       if (window.location.href.includes('write.qq.com') && payload.publish) {
         const qidianConfirm = await confirmQidianPublishIfNeeded();
@@ -1847,11 +2951,13 @@
         }
       }
     }
+    setDebugStep('run-upload-post-action-wait-start');
     await Promise.race([
       waitForPageSignal(['保存成功', '已保存', '发布成功', '提交成功', '审核中'], 4000),
       waitForCondition(() => !window.location.href.includes('login'), 4000),
       sleep(800),
     ]);
+    setDebugStep('run-upload-verify-start');
     return verifyPublishOutcome(
       window.location.href.includes('write.qq.com') ? 'qidian' : 'fanqie',
       payload.chapter_title,
@@ -1877,9 +2983,49 @@
       });
       return false;
     }
+    if (message.action === 'inspect-platform-agent-debug') {
+      sendResponse({
+        ok: true,
+        currentUrl: window.location.href,
+        debug: globalThis.__FORWIN_PLATFORM_AGENT_DEBUG__ || null,
+      });
+      return false;
+    }
+    if (message.action === 'verify-fanqie-draft') {
+      verifyFanqieDraftSavedOnCurrentPage(message.payload?.chapterTitle || '')
+        .then(sendResponse)
+        .catch((error) => {
+          sendResponse({
+            ok: false,
+            currentUrl: window.location.href,
+            error: error instanceof Error ? error.message : String(error),
+            errorCode: error instanceof Error ? String(error.code || '') : '',
+            resultPayload: error instanceof Error && error.resultPayload && typeof error.resultPayload === 'object'
+              ? error.resultPayload
+              : {},
+          });
+        });
+      return true;
+    }
     if (message.action === 'apply-fanqie-trusted-body') {
       sendResponse(applyFanqieTrustedBody(message.payload?.body || ''));
       return false;
+    }
+    if (message.action === 'run-comment-sync') {
+      runCommentSync(message.payload || {})
+        .then(sendResponse)
+        .catch((error) => {
+          sendResponse({
+            ok: false,
+            currentUrl: window.location.href,
+            error: error instanceof Error ? error.message : String(error),
+            errorCode: error instanceof Error ? String(error.code || '') : '',
+            resultPayload: error instanceof Error && error.resultPayload && typeof error.resultPayload === 'object'
+              ? error.resultPayload
+              : {},
+          });
+        });
+      return true;
     }
     if (message.action === 'run-upload') {
       runUpload(message.payload || {})
@@ -1903,5 +3049,6 @@
   window.addEventListener('pageshow', announceReady);
   window.addEventListener('popstate', announceReady);
   window.addEventListener('hashchange', announceReady);
+  markPlatformAgentState('data-forwin-platform-agent-ready', '1');
   announceReady();
 })();

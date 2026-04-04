@@ -51,8 +51,35 @@ export function createBackendClient(fetchImpl, rawSettings) {
       return parseJson(response);
     },
 
+    async claimNextCommentSyncJob(payload) {
+      const response = await fetchImpl(`${settings.backendBaseUrl}/api/publishers/extension/comment-sync-jobs/claim`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(payload),
+      });
+      return parseJson(response);
+    },
+
     async syncBrowserSession(payload) {
       const response = await fetchImpl(`${settings.backendBaseUrl}/api/publishers/extension/session-sync`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(payload),
+      });
+      return parseJson(response);
+    },
+
+    async syncCommentsBatch(payload) {
+      const response = await fetchImpl(`${settings.backendBaseUrl}/api/publishers/extension/comments/batch`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(payload),
+      });
+      return parseJson(response);
+    },
+
+    async updateCommentSyncJobResult(jobId, payload) {
+      const response = await fetchImpl(`${settings.backendBaseUrl}/api/publishers/comment-sync-jobs/${jobId}/result`, {
         method: 'POST',
         headers: headers(),
         body: JSON.stringify(payload),

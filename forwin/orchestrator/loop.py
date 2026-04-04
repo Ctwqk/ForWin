@@ -35,6 +35,7 @@ from forwin.orchestrator.phase3 import (
     StageAnalyzer,
     save_stage_analysis,
 )
+from forwin.orchestrator.feedback_aggregator import run_feedback_aggregation_pass
 from forwin.orchestrator.phase4 import (
     NPCIntentGenerator,
     WorldSimulator,
@@ -802,6 +803,14 @@ class WritingOrchestrator:
             project_id=project_id,
             chapter_number=chapter_number,
             turn=world_turn,
+        )
+        # Phase B: windowed signal aggregation + cooldown filter
+        run_feedback_aggregation_pass(
+            session,
+            project_id,
+            chapter_number,
+            cooldown_chapters=self.config.feedback_cooldown_chapters,
+            comment_to_reader_ratio=self.config.comment_to_reader_ratio,
         )
 
     def _run_provisional_band_preview(

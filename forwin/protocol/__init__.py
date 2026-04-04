@@ -6,6 +6,7 @@ from .state_change import (
     TimeAdvance,
 )
 from .context import (
+    AudienceHintView,
     EntitySnapshot,
     MemorySnippet,
     NPCIntentView,
@@ -13,6 +14,7 @@ from .context import (
     ReaderFeedbackView,
     RelationSnapshot,
     PlotThreadSnapshot,
+    SignalSummaryView,
     TimelineSnapshot,
     WorldPressureView,
     ChapterContextPack,
@@ -29,11 +31,13 @@ __all__ = [
     "ThreadBeatCandidate",
     "TimeAdvance",
     # context
+    "AudienceHintView",
     "EntitySnapshot",
     "MemorySnippet",
     "NPCIntentView",
     "ReaderCommentView",
     "ReaderFeedbackView",
+    "SignalSummaryView",
     "RelationSnapshot",
     "PlotThreadSnapshot",
     "TimelineSnapshot",

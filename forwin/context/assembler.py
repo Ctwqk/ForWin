@@ -5,6 +5,7 @@ import logging
 
 from forwin.protocol.context import (
     ArcEnvelopeView,
+    AudienceHintView,
     ChapterContextPack,
     EntitySnapshot,
     NPCIntentView,
@@ -75,6 +76,12 @@ def assemble_context(
         if callable(arc_envelope_getter)
         else None
     )
+    audience_hints_getter = getattr(repo, "get_audience_hints", None)
+    audience_hints_raw = (
+        audience_hints_getter(project_id, before_chapter=chapter_plan.chapter_number)
+        if callable(audience_hints_getter)
+        else None
+    )
 
     # 7. Parse chapter goals from goals_json
     try:
@@ -116,6 +123,16 @@ def assemble_context(
                 current_confidence=arc_envelope_row.current_confidence,
             )
             if arc_envelope_row is not None
+            else None
+        ),
+        audience_hints=(
+            AudienceHintView(
+                pacing_hints=audience_hints_raw.pacing_hints,
+                clarity_hints=audience_hints_raw.clarity_hints,
+                character_heat_changes=audience_hints_raw.character_heat_changes,
+                risk_flags=audience_hints_raw.risk_flags,
+            )
+            if audience_hints_raw is not None
             else None
         ),
     )

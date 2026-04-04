@@ -11,6 +11,7 @@ export class PublisherExtensionController {
     this.deps = deps;
     this.loginSessions = new Map();
     this.dispatchInFlight = null;
+    this.commentDispatchInFlight = null;
   }
 
   async bootstrap() {
@@ -19,6 +20,7 @@ export class PublisherExtensionController {
     await this.sendHeartbeat();
     await this.syncConnectedSessionsToBackend();
     await this.dispatchPendingUploadJobs();
+    await this.dispatchPendingCommentSyncJobs();
   }
 
   async handleMessage(message, sender = {}) {
@@ -36,6 +38,7 @@ export class PublisherExtensionController {
       await this.sendHeartbeat();
       await this.syncConnectedSessionsToBackend();
       await this.dispatchPendingUploadJobs();
+      await this.dispatchPendingCommentSyncJobs();
       return { message: '扩展设置已更新。' };
     }
     if (action === 'open-login') {
@@ -106,13 +109,21 @@ export class PublisherExtensionController {
     return this.executeUploadJobPayload(job, originTabId);
   }
 
+  async executeCommentSyncJob(jobId, originTabId) {
+    if (!jobId) {
+      throw new Error('缺少评论同步任务 ID。');
+    }
+    const job = await this.deps.backend.getCommentSyncJob(jobId);
+    return this.executeCommentSyncJobPayload(job, originTabId);
+  }
+
   async waitForOpenedUploadTab(tabId, platformId, timeoutMs = 6000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       const tab = await this.deps.getTab(tabId);
       const url = String(tab?.url || '');
       const isExpectedUrl = platformId === 'qidian'
-        ? url.includes('write.qq.com')
+        ? (url.includes('write.qq.com') || url.includes('pcwrite.yuewen.com'))
         : url.includes('fanqienovel.com');
       if (isExpectedUrl && (!tab?.status || tab.status === 'complete')) {
         return true;
@@ -164,6 +175,18 @@ export class PublisherExtensionController {
       const targetUrl = job.upload_url || adapter.publishUrl;
       const tab = await this.deps.openUploadTab(targetUrl);
       await this.waitForOpenedUploadTab(tab.tabId, job.platform, 6000);
+      const openedTab = await this.deps.getTab(tab.tabId);
+      await this.deps.backend.updateUploadJobResult(job.job_id, {
+        client_id: clientId,
+        status: 'running',
+        message: `${adapter.displayName} 正在打开平台编辑页。`,
+        current_url: String(openedTab?.url || targetUrl || ''),
+        error: '',
+        result_payload: {
+          ...(job.result_payload || {}),
+          phase: 'opened-upload-tab',
+        },
+      });
       const uploadPayload = {
         platform: job.platform,
         display_name: job.display_name,
@@ -174,7 +197,23 @@ export class PublisherExtensionController {
         create_if_missing: Boolean(job.result_payload?.create_if_missing),
         book_meta: job.result_payload?.book_meta || null,
       };
-      const result = await this.runUploadWithPageReadyRetries(tab.tabId, job.platform, uploadPayload);
+      const timedResult = await Promise.race([
+        this.runUploadWithPageReadyRetries(tab.tabId, job.platform, uploadPayload),
+        new Promise((resolve) => {
+          globalThis.setTimeout(() => resolve({ __forwinTimedOut: true }), 90000);
+        }),
+      ]);
+      const result = timedResult?.__forwinTimedOut
+        ? {
+          ok: false,
+          currentUrl: String((await this.deps.getTab(tab.tabId))?.url || ''),
+          error: '浏览器扩展执行超时，未能完成平台章节流程。',
+          errorCode: 'extension-upload-timeout',
+          resultPayload: {
+            phase: 'execute-upload-timeout',
+          },
+        }
+        : timedResult;
       const finalStatus = result.ok ? 'succeeded' : 'failed';
       const resultPayload = {
         ...(result.resultPayload || {}),
@@ -216,6 +255,102 @@ export class PublisherExtensionController {
         result_payload: { phase: 'controller-error' },
       });
       await this.deps.notifyPage(originTabId, 'upload-status', {
+        jobId: job.job_id,
+        status: 'failed',
+        platform: job.platform,
+        message,
+      });
+      throw error;
+    }
+  }
+
+  async executeCommentSyncJobPayload(job, originTabId = 0) {
+    const clientId = await this.deps.getClientId();
+    const adapter = getPlatformAdapter(job.platform);
+
+    await this.deps.backend.updateCommentSyncJobResult(job.job_id, {
+      client_id: clientId,
+      status: 'running',
+      message: `${adapter.displayName} 评论同步任务已被浏览器扩展接管。`,
+      error: '',
+      result_payload: { phase: 'claimed' },
+    });
+    await this.deps.notifyPage(originTabId, 'comment-sync-status', {
+      jobId: job.job_id,
+      status: 'running',
+      platform: job.platform,
+      message: `${adapter.displayName} 评论同步执行中。`,
+    });
+
+    try {
+      const targetUrl = job.comment_url || adapter.commentUrl || adapter.dashboardUrl || adapter.publishUrl;
+      const tab = await this.deps.openUploadTab(targetUrl);
+      await this.waitForOpenedUploadTab(tab.tabId, job.platform, 8000);
+      const openedTab = await this.deps.getTab(tab.tabId);
+      const syncPayload = {
+        platform: job.platform,
+        work_id: job.work_id,
+        work_name: job.work_name,
+        chapter_id: job.chapter_id,
+        chapter_title: job.chapter_title,
+        limit: Number(job.limit || 0) || 100,
+      };
+      const result = await this.deps.runCommentSyncCommand(tab.tabId, syncPayload);
+      if (!result?.ok) {
+        await this.deps.backend.updateCommentSyncJobResult(job.job_id, {
+          client_id: clientId,
+          status: 'failed',
+          message: result?.message || '评论同步失败。',
+          error: result?.error || '平台未返回评论数据。',
+          result_payload: {
+            ...(result?.resultPayload || {}),
+            current_url: result?.currentUrl || String(openedTab?.url || targetUrl || ''),
+          },
+        });
+        return {
+          message: '评论同步失败，请查看任务状态。',
+        };
+      }
+
+      const comments = Array.isArray(result.comments) ? result.comments : [];
+      const uploadResult = await this.deps.backend.syncCommentsBatch({
+        client_id: clientId,
+        platform: job.platform,
+        job_id: job.job_id,
+        comments,
+      });
+      await this.deps.backend.updateCommentSyncJobResult(job.job_id, {
+        client_id: clientId,
+        status: 'succeeded',
+        message: result.message || '评论同步已完成。',
+        error: '',
+        result_payload: {
+          ...(result.resultPayload || {}),
+          fetched_count: comments.length,
+          inserted: Number(uploadResult?.inserted || 0),
+          updated: Number(uploadResult?.updated || 0),
+          current_url: result.currentUrl || String(openedTab?.url || targetUrl || ''),
+        },
+      });
+      await this.deps.notifyPage(originTabId, 'comment-sync-status', {
+        jobId: job.job_id,
+        status: 'succeeded',
+        platform: job.platform,
+        message: result.message || '评论同步已完成。',
+      });
+      return {
+        message: result.message || '浏览器扩展已完成评论同步。',
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.deps.backend.updateCommentSyncJobResult(job.job_id, {
+        client_id: clientId,
+        status: 'failed',
+        message: '浏览器扩展执行评论同步任务时失败。',
+        error: message,
+        result_payload: { phase: 'controller-error' },
+      });
+      await this.deps.notifyPage(originTabId, 'comment-sync-status', {
         jobId: job.job_id,
         status: 'failed',
         platform: job.platform,
@@ -334,6 +469,18 @@ export class PublisherExtensionController {
     }
   }
 
+  async dispatchPendingCommentSyncJobs() {
+    if (this.commentDispatchInFlight) {
+      return this.commentDispatchInFlight;
+    }
+    this.commentDispatchInFlight = this._dispatchPendingCommentSyncJobs();
+    try {
+      return await this.commentDispatchInFlight;
+    } finally {
+      this.commentDispatchInFlight = null;
+    }
+  }
+
   async _dispatchPendingUploadJobs() {
     const settings = await this.deps.getSettings();
     if (!settings.backendBaseUrl || !settings.apiKey) {
@@ -365,6 +512,46 @@ export class PublisherExtensionController {
       }
       handled += 1;
       await this.executeUploadJobPayload(claimed.job, 0);
+    }
+    return { found: true, handled, truncated: true };
+  }
+
+  async _dispatchPendingCommentSyncJobs() {
+    const settings = await this.deps.getSettings();
+    if (
+      !settings.backendBaseUrl
+      || !settings.apiKey
+      || typeof this.deps.backend?.claimNextCommentSyncJob !== 'function'
+    ) {
+      return { skipped: true };
+    }
+
+    const clientId = await this.deps.getClientId();
+    const connectedPlatforms = [];
+    for (const platformId of Object.keys(PLATFORM_ADAPTERS)) {
+      const savedState = await this.deps.getPlatformState(platformId);
+      const cookies = await this.deps.getCookies(platformId);
+      const heartbeatState = buildHeartbeatState(platformId, cookies, savedState);
+      if (heartbeatState.connected || heartbeatState.raw_state?.cookie_signal) {
+        connectedPlatforms.push(platformId);
+      }
+    }
+    if (!connectedPlatforms.length) {
+      return { skipped: true };
+    }
+
+    let handled = 0;
+    const MAX_JOBS_PER_DISPATCH = 8;
+    while (handled < MAX_JOBS_PER_DISPATCH) {
+      const claimed = await this.deps.backend.claimNextCommentSyncJob({
+        client_id: clientId,
+        connected_platforms: connectedPlatforms,
+      });
+      if (!claimed?.found || !claimed.job) {
+        return handled ? { found: true, handled } : { found: false };
+      }
+      handled += 1;
+      await this.executeCommentSyncJobPayload(claimed.job, 0);
     }
     return { found: true, handled, truncated: true };
   }
@@ -404,6 +591,7 @@ export class PublisherExtensionController {
       });
       await this.sendHeartbeat();
       await this.syncConnectedSessionsToBackend();
+      await this.dispatchPendingCommentSyncJobs();
       await this.deps.notifyPage(session.originTabId, 'login-status', {
         platform: session.platformId,
         connected: true,

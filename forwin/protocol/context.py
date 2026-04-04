@@ -83,12 +83,30 @@ class ReaderCommentView(BaseModel):
     remote_created_at: str = ""
 
 
+class SignalSummaryView(BaseModel):
+    signal_key: str = ""
+    signal_type: str = ""
+    target_name: str = ""
+    level: str = "noise"
+    hit_count: int = 0
+    max_severity: int = 0
+
+
 class ReaderFeedbackView(BaseModel):
     comment_count: int = 0
     dominant_sentiment: str = "neutral"
     feedback_summary: str = ""
     recent_highlights: list[ReaderCommentView] = Field(default_factory=list)
     highlighted_topics: list[str] = Field(default_factory=list)
+    confirmed_signals: list[SignalSummaryView] = Field(default_factory=list)
+    reader_tier: int = 0
+
+
+class AudienceHintView(BaseModel):
+    pacing_hints: list[str] = Field(default_factory=list)
+    clarity_hints: list[str] = Field(default_factory=list)
+    character_heat_changes: list[str] = Field(default_factory=list)
+    risk_flags: list[str] = Field(default_factory=list)
 
 
 class ChapterContextPack(BaseModel):
@@ -118,3 +136,4 @@ class ChapterContextPack(BaseModel):
     world_pressure: WorldPressureView | None = None
     reader_feedback: ReaderFeedbackView | None = None
     current_arc_envelope: ArcEnvelopeView | None = None
+    audience_hints: AudienceHintView | None = None

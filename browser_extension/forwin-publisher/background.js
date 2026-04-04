@@ -2,7 +2,7 @@ import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
 import { PublisherExtensionController } from './lib/controller.js';
 import { getPlatformAdapter } from './lib/platforms.js';
-import { DEFAULT_SETTINGS, normalizeSettings } from './lib/settings.js';
+import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
 import { READY_CHANNELS, TabReadyRegistry } from './lib/tab-ready-registry.js';
 import {
   extensionApi,
@@ -152,6 +152,29 @@ async function openOptionsPage() {
   await wrapCall(extensionApi.runtime, 'openOptionsPage');
 }
 
+async function refreshContentBridge() {
+  const origin = getBackendOrigin(await getSettings());
+  if (!origin) {
+    return;
+  }
+  const tabs = await queryTabs({}) || [];
+  await Promise.all(
+    tabs
+      .filter((tab) => String(tab?.url || '').startsWith(origin))
+      .map(async (tab) => {
+        const tabId = Number(tab?.id || 0);
+        if (!tabId) {
+          return;
+        }
+        try {
+          await wrapCall(extensionApi.tabs, 'reload', tabId);
+        } catch (_error) {
+          // Ignore tabs that can no longer be reloaded.
+        }
+      }),
+  );
+}
+
 function getExtensionVersion() {
   return extensionApi.runtime.getManifest().version;
 }
@@ -198,8 +221,65 @@ async function inspectFanqieEditorState(tabId) {
   }
 }
 
+async function inspectPlatformAgentDebug(tabId) {
+  if (!tabId) {
+    return { ok: false, debug: null, currentUrl: '' };
+  }
+  const ready = await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 5000);
+  if (!ready) {
+    return { ok: false, debug: null, currentUrl: '' };
+  }
+  try {
+    return await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
+      channel: PLATFORM_AGENT_CHANNEL,
+      action: 'inspect-platform-agent-debug',
+    }) || { ok: false, debug: null, currentUrl: '' };
+  } catch (_error) {
+    return { ok: false, debug: null, currentUrl: '' };
+  }
+}
+
+async function probePlatformAgentResponsive(tabId) {
+  if (!tabId) {
+    return false;
+  }
+  try {
+    const response = await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
+      channel: PLATFORM_AGENT_CHANNEL,
+      action: 'inspect-login-state',
+    });
+    return Boolean(response);
+  } catch (_error) {
+    return false;
+  }
+}
+
 async function sleep(ms) {
   await new Promise((resolve) => globalThis.setTimeout(resolve, ms));
+}
+
+async function sendPlatformAgentMessage(tabId, action, payload, timeoutMs = 12000) {
+  return Promise.race([
+    wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
+      channel: PLATFORM_AGENT_CHANNEL,
+      action,
+      payload,
+    }),
+    new Promise((resolve) => {
+      globalThis.setTimeout(() => {
+        resolve({
+          ok: false,
+          error: '平台页面执行超时。',
+          errorCode: 'platform-agent-timeout',
+          currentUrl: '',
+          resultPayload: {
+            phase: 'message-timeout',
+            action,
+          },
+        });
+      }, timeoutMs);
+    }),
+  ]);
 }
 
 async function attachDebugger(tabId) {
@@ -262,6 +342,55 @@ async function trustedInsertText(tabId, text) {
   await sendDebuggerCommand(tabId, 'Input.insertText', { text });
 }
 
+async function trustedKeyPress(tabId, key, code, windowsVirtualKeyCode, modifiers = 0) {
+  await sendDebuggerCommand(tabId, 'Input.dispatchKeyEvent', {
+    type: 'rawKeyDown',
+    key,
+    code,
+    windowsVirtualKeyCode,
+    nativeVirtualKeyCode: windowsVirtualKeyCode,
+    modifiers,
+  });
+  await sendDebuggerCommand(tabId, 'Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key,
+    code,
+    windowsVirtualKeyCode,
+    nativeVirtualKeyCode: windowsVirtualKeyCode,
+    modifiers,
+  });
+}
+
+async function trustedSelectAllAndDelete(tabId) {
+  await trustedKeyPress(tabId, 'a', 'KeyA', 65, 2);
+  await sleep(120);
+  await trustedKeyPress(tabId, 'Backspace', 'Backspace', 8, 0);
+  await sleep(120);
+}
+
+async function trustedFanqieEditorNudge(tabId, target) {
+  if (!target?.x || !target?.y) {
+    throw new Error('未能定位番茄正文编辑器。');
+  }
+  const triggerText = ' 海风从旧港吹来，雨声更急了。';
+  await attachDebugger(tabId);
+  try {
+    await trustedClick(tabId, target.x, target.y);
+    await sleep(150);
+    await trustedKeyPress(tabId, 'End', 'End', 35, 0);
+    await sleep(120);
+    await trustedInsertText(tabId, triggerText);
+    await sleep(500);
+    for (const _char of Array.from(triggerText)) {
+      await trustedKeyPress(tabId, 'Backspace', 'Backspace', 8, 0);
+      await sleep(40);
+    }
+    await sleep(800);
+  } finally {
+    await detachDebugger(tabId);
+  }
+}
+
 async function applyTrustedFanqieBodyInput(tabId, body, target) {
   if (!target?.x || !target?.y) {
     throw new Error('未能定位番茄正文编辑器。');
@@ -275,16 +404,27 @@ async function applyTrustedFanqieBodyInput(tabId, body, target) {
         channel: PLATFORM_AGENT_CHANNEL,
         action: 'apply-fanqie-trusted-body',
         payload: { body: String(body || '') },
-      });
+        });
       if (applied?.ok) {
         await sleep(800);
-        return;
+        const inspected = await inspectFanqieEditorState(tabId);
+        if (Number(inspected?.wordCount || 0) > 0) {
+          return;
+        }
+        await trustedFanqieEditorNudge(tabId, target);
+        const nudged = await inspectFanqieEditorState(tabId);
+        if (Number(nudged?.wordCount || 0) > 0) {
+          return;
+        }
       }
     } catch (_error) {
       // Fall through to the debugger text path below.
     }
+    await trustedClick(tabId, target.x, target.y);
+    await sleep(150);
+    await trustedSelectAllAndDelete(tabId);
     await trustedInsertText(tabId, String(body || ''));
-    await sleep(800);
+    await sleep(1200);
   } finally {
     await detachDebugger(tabId);
   }
@@ -330,14 +470,58 @@ async function runUploadCommand(tabId, payload) {
           await sleep(1200);
         }
       }
-      const response = await wrapCall(extensionApi.tabs, 'sendMessage', activeTabId, {
-        channel: PLATFORM_AGENT_CHANNEL,
-        action: 'run-upload',
-        payload,
-      });
+      const response = await sendPlatformAgentMessage(activeTabId, 'run-upload', payload, 30000);
       if (response) {
+        if (!response.ok && response.errorCode === 'platform-agent-timeout') {
+          lastError = response.error || '平台页面执行超时。';
+          const workflowTabId = await waitForPlatformWorkflowTab(payload.platform, activeTabId, 6000);
+          if (workflowTabId) {
+            activeTabId = workflowTabId;
+          }
+          const redirectedTabId = await waitForUploadEditorTab(payload.platform, activeTabId, 6000);
+          if (redirectedTabId) {
+            activeTabId = redirectedTabId;
+          }
+          readyState = await waitForRunnablePlatformTab(payload.platform, activeTabId, 6000);
+          if (readyState) {
+            const debugState = await inspectPlatformAgentDebug(activeTabId);
+            response.resultPayload = {
+              ...(response.resultPayload || {}),
+              debug_step: debugState?.debug?.step || '',
+              debug_extra: debugState?.debug?.extra || null,
+            };
+            ready = Boolean(readyState.ready);
+            await sleep(1000);
+            continue;
+          }
+          const currentTab = await getTab(activeTabId);
+          const debugState = await inspectPlatformAgentDebug(activeTabId);
+          return {
+            ok: false,
+            error: '平台页面执行超时，且未能确认进入章节编辑流程。',
+            errorCode: 'chapter-editor-navigation-failed',
+            currentUrl: String(currentTab?.url || ''),
+            resultPayload: {
+              ...(response.resultPayload || {}),
+              phase: 'platform-agent-timeout',
+              debug_step: debugState?.debug?.step || '',
+              debug_extra: debugState?.debug?.extra || null,
+            },
+          };
+        }
         if (!response.ok && response.errorCode === 'trusted-body-input-required') {
           await applyTrustedFanqieBodyInput(activeTabId, payload.body, response.trustedBodyTarget);
+          await sleep(1200);
+          await inspectFanqieEditorState(activeTabId);
+          ready = await tabReadyRegistry.waitFor(activeTabId, READY_CHANNELS.PLATFORM_AGENT, 1500);
+          payload = {
+            ...payload,
+            trustedBodyDone: true,
+          };
+          continue;
+        }
+        if (!response.ok && response.errorCode === 'trusted-body-input-missing') {
+          await trustedFanqieEditorNudge(activeTabId, response.trustedBodyTarget);
           await sleep(1200);
           await inspectFanqieEditorState(activeTabId);
           ready = await tabReadyRegistry.waitFor(activeTabId, READY_CHANNELS.PLATFORM_AGENT, 1500);
@@ -385,6 +569,28 @@ async function runUploadCommand(tabId, payload) {
           ready = true;
           continue;
         }
+        if (!response.ok && response.errorCode === 'fanqie-draft-verify-required') {
+          const verifyUrl = String(response.resultPayload?.verify_url || '');
+          if (!verifyUrl) {
+            return response;
+          }
+          await navigateTab(activeTabId, verifyUrl);
+          const workflowTabId = await waitForPlatformWorkflowTab(payload.platform, activeTabId, 15000);
+          if (workflowTabId) {
+            activeTabId = workflowTabId;
+          }
+          const runnable = await waitForRunnableWorkflowTab(payload.platform, activeTabId, 12000);
+          if (!runnable) {
+            return {
+              ok: false,
+              error: '番茄章节管理页跳转超时，未能核验草稿。',
+              errorCode: 'chapter-editor-navigation-failed',
+              currentUrl: verifyUrl,
+            };
+          }
+          await sleep(1800);
+          return verifyFanqieDraftOnPage(activeTabId, payload.chapter_title);
+        }
         return response;
       }
     } catch (_error) {
@@ -419,6 +625,23 @@ async function runUploadCommand(tabId, payload) {
   };
 }
 
+async function runCommentSyncCommand(tabId, payload) {
+  if (!tabId) {
+    return { ok: false, error: '未能打开评论同步页面。' };
+  }
+  const readyState = await waitForRunnablePlatformTab(payload.platform, tabId, 12000);
+  if (!readyState?.ready) {
+    const tab = await getTab(tabId);
+    return {
+      ok: false,
+      error: '平台评论页面没有准备好，无法执行评论同步。',
+      currentUrl: String(tab?.url || ''),
+      errorCode: 'comment-sync-page-not-ready',
+    };
+  }
+  return sendPlatformAgentMessage(tabId, 'run-comment-sync', payload, 45000);
+}
+
 function isUploadEditorUrl(platformId, url = '') {
   if (!url) {
     return false;
@@ -447,11 +670,12 @@ function isPlatformWorkflowUrl(platformId, url = '') {
     );
   }
   if (platformId === 'qidian') {
-    return url.includes('write.qq.com') && (
+    return (url.includes('write.qq.com') || url.includes('pcwrite.yuewen.com')) && (
       url.includes('/portal/dashboard')
       || url.includes('/create-novel')
       || url.includes('/chaptertmp/')
       || url.includes('/portal/booknovels/chaptertmp/')
+      || url.includes('/authorh5/message-notify')
     );
   }
   return false;
@@ -480,7 +704,11 @@ async function waitForUploadEditorTab(platformId, currentTabId, timeoutMs = 8000
       const candidateStatus = String(candidate?.status || '');
       const candidateReady = tabReadyRegistry.isReady(candidateTabId, READY_CHANNELS.PLATFORM_AGENT)
         || await tabReadyRegistry.waitFor(candidateTabId, READY_CHANNELS.PLATFORM_AGENT, 1200);
-      if (candidateReady || candidateStatus === 'complete') {
+      if (candidateReady) {
+        return candidateTabId;
+      }
+      if (candidateStatus === 'complete' && await probePlatformAgentResponsive(candidateTabId)) {
+        tabReadyRegistry.markReady(candidateTabId, READY_CHANNELS.PLATFORM_AGENT);
         return candidateTabId;
       }
     }
@@ -512,7 +740,11 @@ async function waitForPlatformWorkflowTab(platformId, currentTabId, timeoutMs = 
       const candidateStatus = String(candidate?.status || '');
       const candidateReady = tabReadyRegistry.isReady(candidateTabId, READY_CHANNELS.PLATFORM_AGENT)
         || await tabReadyRegistry.waitFor(candidateTabId, READY_CHANNELS.PLATFORM_AGENT, 1200);
-      if (candidateReady || candidateStatus === 'complete') {
+      if (candidateReady) {
+        return candidateTabId;
+      }
+      if (candidateStatus === 'complete' && await probePlatformAgentResponsive(candidateTabId)) {
+        tabReadyRegistry.markReady(candidateTabId, READY_CHANNELS.PLATFORM_AGENT);
         return candidateTabId;
       }
     }
@@ -533,8 +765,12 @@ async function waitForRunnableWorkflowTab(platformId, tabId, timeoutMs = 8000) {
     if (isPlatformWorkflowUrl(platformId, url)) {
       const ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
         || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 800);
-      if (ready || tab?.status === 'complete') {
-        return { tabId, url, ready };
+      if (ready) {
+        return { tabId, url, ready: true };
+      }
+      if (tab?.status === 'complete' && await probePlatformAgentResponsive(tabId)) {
+        tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
+        return { tabId, url, ready: true };
       }
     }
     await sleep(400);
@@ -550,8 +786,12 @@ async function waitForRunnablePlatformTab(platformId, tabId, timeoutMs = 8000) {
     if (isPlatformWorkflowUrl(platformId, url) || isUploadEditorUrl(platformId, url)) {
       const ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
         || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 800);
-      if (ready || tab?.status === 'complete') {
-        return { tabId, url, ready };
+      if (ready) {
+        return { tabId, url, ready: true };
+      }
+      if (tab?.status === 'complete' && await probePlatformAgentResponsive(tabId)) {
+        tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
+        return { tabId, url, ready: true };
       }
     }
     await sleep(400);
@@ -585,6 +825,63 @@ async function inspectLoginState(tabId) {
   return { ok: false, authenticated: false, loginVisible: false, currentUrl: '' };
 }
 
+async function verifyFanqieDraftOnPage(tabId, chapterTitle) {
+  let ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
+    || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 5000);
+  if (!ready) {
+    ready = await probePlatformAgentResponsive(tabId);
+    if (ready) {
+      tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
+    }
+  }
+  let attempt = 0;
+  while (attempt < 10) {
+    attempt += 1;
+    try {
+      const response = await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
+        channel: PLATFORM_AGENT_CHANNEL,
+        action: 'verify-fanqie-draft',
+        payload: { chapterTitle },
+      });
+      if (response) {
+        if (
+          !response.ok
+          && response.errorCode === 'publish-not-confirmed'
+          && String(response.error || '').includes('未找到新草稿')
+          && attempt < 10
+        ) {
+          await sleep(1500);
+          if (attempt % 3 === 0) {
+            try {
+              await wrapCall(extensionApi.tabs, 'reload', tabId);
+            } catch (_error) {
+              // Ignore reload failures and keep polling the page.
+            }
+            await sleep(1500);
+          }
+          continue;
+        }
+        return response;
+      }
+    } catch (_error) {
+      ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
+        || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 2000);
+      if (!ready) {
+        ready = await probePlatformAgentResponsive(tabId);
+        if (ready) {
+          tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
+        }
+      }
+    }
+  }
+  return {
+    ok: false,
+    currentUrl: '',
+    error: '番茄章节管理页未响应草稿核验。',
+    errorCode: 'chapter-editor-navigation-failed',
+  };
+}
+
 async function ensureHeartbeatAlarm() {
   const existing = await wrapCall(extensionApi.alarms, 'get', HEARTBEAT_ALARM);
   if (existing?.periodInMinutes === 1) {
@@ -607,8 +904,23 @@ const controller = new PublisherExtensionController({
     async claimNextUploadJob(payload) {
       return withBackendClient((client) => client.claimNextUploadJob(payload));
     },
+    async claimNextCommentSyncJob(payload) {
+      return withBackendClient((client) => client.claimNextCommentSyncJob(payload));
+    },
     async syncBrowserSession(payload) {
       return withBackendClient((client) => client.syncBrowserSession(payload));
+    },
+    async syncCommentsBatch(payload) {
+      return withBackendClient((client) => client.syncCommentsBatch(payload));
+    },
+    async updateCommentSyncJobResult(jobId, payload) {
+      return withBackendClient((client) => client.updateCommentSyncJobResult(jobId, payload));
+    },
+    async getCommentSyncJob(jobId) {
+      return {
+        job_id: String(jobId || ''),
+        platform: '',
+      };
     },
   },
   ensureClientId,
@@ -625,9 +937,11 @@ const controller = new PublisherExtensionController({
   closePopup,
   notifyPage,
   openOptionsPage,
+  refreshContentBridge,
   getExtensionVersion,
   getBrowserInfo,
   runUploadCommand,
+  runCommentSyncCommand,
   inspectLoginState,
   ensureHeartbeatAlarm,
 });
@@ -686,6 +1000,7 @@ extensionApi.alarms.onAlarm.addListener((alarm) => {
   if (alarm?.name === HEARTBEAT_ALARM) {
     controller.sendHeartbeat()
       .then(() => controller.dispatchPendingUploadJobs())
+      .then(() => controller.dispatchPendingCommentSyncJobs())
       .catch((error) => {
         reportBackgroundError('heartbeat alarm', error);
       });

@@ -325,11 +325,29 @@ class ExtensionClaimUploadJobResponse(BaseModel):
     job: PublisherUploadJobResponse | None = None
 
 
+class ExtensionClaimCommentSyncJobRequest(BaseModel):
+    client_id: str
+    connected_platforms: list[str] = Field(default_factory=list)
+
+
+class ExtensionClaimCommentSyncJobResponse(BaseModel):
+    found: bool
+    job: PublisherCommentSyncJobResponse | None = None
+
+
 class UploadJobResultRequest(BaseModel):
     client_id: str
     status: str
     message: str = ""
     current_url: str = ""
+    error: str = ""
+    result_payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class CommentSyncJobResultRequest(BaseModel):
+    client_id: str
+    status: str
+    message: str = ""
     error: str = ""
     result_payload: dict[str, Any] = Field(default_factory=dict)
 
@@ -366,6 +384,8 @@ class PublisherRawCommentInput(BaseModel):
     body: str = ""
     parent_remote_comment_id: str = ""
     created_at: str = ""
+    like_count: int = 0
+    reply_count: int = 0
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 

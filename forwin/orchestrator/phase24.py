@@ -18,6 +18,7 @@ from forwin.models import (
     Project,
     ProvisionalBandExecution,
     ProvisionalPromotionRecord,
+    SignalWindowAggregate,
     new_id,
 )
 from forwin.orchestrator.goals import load_goals_json
@@ -27,6 +28,32 @@ logger = logging.getLogger(__name__)
 
 def _clamp_int(value: float | int, lower: int, upper: int) -> int:
     return max(lower, min(int(round(value)), upper))
+
+
+def _load_long_window_audience_trends(
+    session: Session,
+    project_id: str,
+    *,
+    limit: int = 3,
+) -> list[str]:
+    rows = session.execute(
+        select(SignalWindowAggregate)
+        .where(
+            SignalWindowAggregate.project_id == project_id,
+            SignalWindowAggregate.window_type == "long",
+            SignalWindowAggregate.signal_level.in_(("confirmed", "watchlist")),
+        )
+        .order_by(
+            SignalWindowAggregate.window_chapter_end.desc(),
+            SignalWindowAggregate.unique_user_count.desc(),
+            SignalWindowAggregate.max_severity.desc(),
+        )
+        .limit(limit)
+    ).scalars().all()
+    return [
+        f"{row.target_name or '整体'}:{row.signal_type}:{row.signal_level}"
+        for row in rows
+    ]
 
 
 @dataclass(slots=True)
@@ -165,6 +192,7 @@ class ArcEnvelopeManager:
         band_id = f"band:1:{provisional_target}"
 
         structure = self._build_structure_draft(
+            session=session,
             project=project,
             total_chapters=total_chapter_count,
             chapter_plans=chapter_plans,
@@ -367,6 +395,7 @@ class ArcEnvelopeManager:
     def _build_structure_draft(
         self,
         *,
+        session: Session,
         project: Project,
         total_chapters: int,
         chapter_plans: list[ChapterPlan],
@@ -382,6 +411,7 @@ class ArcEnvelopeManager:
             }
             for plan in chapter_plans[: min(len(chapter_plans), 8)]
         ]
+        audience_trends = _load_long_window_audience_trends(session, project.id)
         if self.director is not None:
             try:
                 drafted = self.director.draft_arc_structure(
@@ -391,6 +421,7 @@ class ArcEnvelopeManager:
                     policy_tier=policy.name,
                     base_target_size=base_target_size,
                     chapter_seed=chapter_seed,
+                    audience_trends=audience_trends,
                 )
             except Exception:
                 drafted = {}

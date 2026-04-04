@@ -39,7 +39,10 @@ from forwin.api_schemas import (
     ChapterReviewApproveRequest,
     ChapterReviewApproveResponse,
     ChapterReviewDetail,
+    CommentSyncJobResultRequest,
     EntityInfo,
+    ExtensionClaimCommentSyncJobRequest,
+    ExtensionClaimCommentSyncJobResponse,
     ExtensionClaimUploadJobRequest,
     ExtensionClaimUploadJobResponse,
     ExtensionCommentsBatchRequest,
@@ -555,6 +558,24 @@ def claim_publisher_upload_job(
     )
 
 
+@app.post("/api/publishers/extension/comment-sync-jobs/claim", response_model=ExtensionClaimCommentSyncJobResponse)
+def claim_publisher_comment_sync_job(
+    req: ExtensionClaimCommentSyncJobRequest,
+    x_forwin_extension_key: str | None = Header(default=None),
+):
+    _require_extension_auth(x_forwin_extension_key)
+    payload = _publisher_manager.claim_next_comment_sync_job(
+        client_id=req.client_id,
+        connected_platforms=req.connected_platforms,
+    )
+    if payload is None:
+        return ExtensionClaimCommentSyncJobResponse(found=False, job=None)
+    return ExtensionClaimCommentSyncJobResponse(
+        found=True,
+        job=PublisherCommentSyncJobResponse(**payload),
+    )
+
+
 @app.post("/api/publishers/comment-sync-jobs", response_model=PublisherCommentSyncJobResponse)
 def create_publisher_comment_sync_job(req: PublisherCommentSyncJobRequest):
     try:
@@ -565,6 +586,27 @@ def create_publisher_comment_sync_job(req: PublisherCommentSyncJobRequest):
             chapter_id=req.chapter_id,
             chapter_title=req.chapter_title,
             limit=req.limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return PublisherCommentSyncJobResponse(**payload)
+
+
+@app.post("/api/publishers/comment-sync-jobs/{job_id}/result", response_model=PublisherCommentSyncJobResponse)
+def update_publisher_comment_sync_job_result(
+    job_id: str,
+    req: CommentSyncJobResultRequest,
+    x_forwin_extension_key: str | None = Header(default=None),
+):
+    _require_extension_auth(x_forwin_extension_key)
+    try:
+        payload = _publisher_manager.update_comment_sync_job_result(
+            job_id=job_id,
+            client_id=req.client_id,
+            status=req.status,
+            message=req.message,
+            error=req.error,
+            result_payload=req.result_payload,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

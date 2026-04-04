@@ -14,6 +14,7 @@ from forwin.models import (
     PlotThread,
     ProjectReplanEvent,
     ProjectStageAnalysis,
+    SignalWindowAggregate,
     StoryTimePoint,
     new_id,
 )
@@ -171,6 +172,28 @@ class PacingStrategist:
             reasons.append("最近窗口内没有主线 beat")
         if not reasons:
             reasons.append("最近章节推进均衡")
+
+        # ── Audience pacing signal boost ──
+        audience_pacing = session.execute(
+            select(SignalWindowAggregate)
+            .where(
+                SignalWindowAggregate.project_id == project_id,
+                SignalWindowAggregate.signal_type == "pacing",
+                SignalWindowAggregate.window_type == "medium",
+                SignalWindowAggregate.signal_level == "confirmed",
+            )
+            .order_by(SignalWindowAggregate.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if audience_pacing is not None:
+            if risk_level == "low":
+                risk_level = "medium"
+            if verdict == "steady":
+                verdict = "audience_pacing_concern"
+            reasons.append(
+                f"读者节奏反馈（{audience_pacing.signal_level}，"
+                f"{audience_pacing.unique_user_count}人）"
+            )
 
         return PacingAssessment(
             risk_level=risk_level,

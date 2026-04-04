@@ -14,6 +14,7 @@ export const PLATFORM_ADAPTERS = {
     loginUrl: 'https://write.qq.com/portal/login',
     dashboardUrl: 'https://write.qq.com/portal/dashboard',
     publishUrl: 'https://write.qq.com/portal/dashboard',
+    commentUrl: 'https://pcwrite.yuewen.com/authorh5/message-notify',
     cookieUrls: [
       'https://write.qq.com/',
       'https://www.qq.com/',
@@ -31,6 +32,7 @@ export const PLATFORM_ADAPTERS = {
     loginUrl: 'https://fanqienovel.com/main/writer/',
     dashboardUrl: 'https://fanqienovel.com/main/writer/',
     publishUrl: 'https://fanqienovel.com/main/writer/',
+    commentUrl: 'https://fanqienovel.com/main/writer/',
     cookieUrls: [
       'https://fanqienovel.com/',
       'https://www.fanqienovel.com/',

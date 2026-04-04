@@ -16,12 +16,16 @@ from .phase import (
 )
 from .phase4 import NPCIntentSnapshot, WorldSimulationTurn
 from .publisher import (
+    CommentSignalCandidate,
+    FeedbackActionRecord,
     PublisherBrowserSession,
     PublisherCommentSyncJob,
     PublisherConnectionState,
     PublisherExtensionClient,
     PublisherRawComment,
     PublisherUploadJob,
+    ReaderScaleSnapshot,
+    SignalWindowAggregate,
 )
 from .project import ArcPlanVersion, ChapterPlan, Project
 from .thread import PlotThread, PlotThreadBeat
@@ -65,10 +69,14 @@ __all__ = [
     "ChapterDraft",
     "ChapterReview",
     # publisher
+    "CommentSignalCandidate",
+    "FeedbackActionRecord",
     "PublisherExtensionClient",
     "PublisherConnectionState",
     "PublisherBrowserSession",
     "PublisherUploadJob",
     "PublisherCommentSyncJob",
     "PublisherRawComment",
+    "ReaderScaleSnapshot",
+    "SignalWindowAggregate",
 ]

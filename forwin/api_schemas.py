@@ -315,6 +315,15 @@ class ExtensionSessionSyncResponse(BaseModel):
     cookie_count: int = 0
 
 
+class ExtensionBrowserSessionResponse(BaseModel):
+    platform: str
+    client_id: str = ""
+    cookie_count: int = 0
+    cookies: list[ExtensionBrowserCookie] = Field(default_factory=list)
+    synced_at: str = ""
+    last_error: str = ""
+
+
 class ExtensionClaimUploadJobRequest(BaseModel):
     client_id: str
     connected_platforms: list[str] = Field(default_factory=list)

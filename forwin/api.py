@@ -50,6 +50,7 @@ from forwin.api_schemas import (
     ExtensionHeartbeatRequest,
     ExtensionHeartbeatResponse,
     ExtensionPlatformHeartbeat,
+    ExtensionBrowserSessionResponse,
     ExtensionSessionSyncRequest,
     ExtensionSessionSyncResponse,
     GenerateRequest,
@@ -227,6 +228,7 @@ async def lifespan(app: FastAPI):
     _publisher_manager = PublisherManager(
         _SessionFactory,
         extension_api_key=_config.publisher_extension_api_key,
+        preferred_client_id=_config.publisher_preferred_client_id,
     )
     with _SessionFactory() as bootstrap_session:
         created_envelopes = _orchestrator.arc_envelope_manager.backfill_missing_resolutions(
@@ -478,6 +480,20 @@ def get_publisher_upload_job(job_id: str):
     return PublisherUploadJobResponse(**payload)
 
 
+@app.get("/api/publishers/upload-jobs", response_model=list[PublisherUploadJobResponse])
+def list_publisher_upload_jobs(
+    status: str = "",
+    platform: str = "",
+    limit: int = 30,
+):
+    payload = _publisher_manager.list_upload_jobs(
+        status=status,
+        platform=platform,
+        limit=limit,
+    )
+    return [PublisherUploadJobResponse(**item) for item in payload]
+
+
 @app.post("/api/publishers/extension/heartbeat", response_model=ExtensionHeartbeatResponse)
 def publisher_extension_heartbeat(
     req: ExtensionHeartbeatRequest,
@@ -516,6 +532,21 @@ def publisher_extension_session_sync(
         cookies=[item.model_dump() for item in req.cookies],
     )
     return ExtensionSessionSyncResponse(**payload)
+
+
+@app.get(
+    "/api/publishers/extension/browser-sessions/{platform}",
+    response_model=ExtensionBrowserSessionResponse | None,
+)
+def publisher_extension_get_browser_session(
+    platform: str,
+    x_forwin_extension_key: str | None = Header(default=None),
+):
+    _require_extension_auth(x_forwin_extension_key)
+    payload = _publisher_manager.get_browser_session(platform)
+    if payload is None:
+        return None
+    return ExtensionBrowserSessionResponse(**payload)
 
 
 @app.post("/api/publishers/upload-jobs/{job_id}/result", response_model=PublisherUploadJobResponse)

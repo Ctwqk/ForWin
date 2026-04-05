@@ -43,6 +43,32 @@ class PublisherConnectionState(Base):
     last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
+class PublisherExtensionPlatformState(Base):
+    __tablename__ = "publisher_extension_platform_states"
+    __table_args__ = (
+        Index(
+            "ix_publisher_extension_platform_states_platform",
+            "platform_id",
+            "connected",
+        ),
+    )
+
+    client_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("publisher_extension_clients.client_id"),
+        primary_key=True,
+    )
+    platform_id: Mapped[str] = mapped_column(String, primary_key=True)
+    connected: Mapped[bool] = mapped_column(Boolean, default=False)
+    login_method: Mapped[str] = mapped_column(String, default="")
+    status_json: Mapped[str] = mapped_column(Text, default="{}")
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+
 class PublisherBrowserSession(Base):
     __tablename__ = "publisher_browser_sessions"
 

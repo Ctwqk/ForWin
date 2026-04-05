@@ -48,6 +48,9 @@ def _env_values() -> dict[str, object]:
             "FORWIN_PUBLISHER_EXTENSION_API_KEY",
             os.environ.get("PUBLISHER_EXTENSION_API_KEY", ""),
         ),
+        "publisher_preferred_client_id": os.environ.get(
+            "FORWIN_PUBLISHER_PREFERRED_CLIENT_ID", ""
+        ),
         "minimax_api_key": os.environ.get("MINIMAX_API_KEY", ""),
         "minimax_base_url": os.environ.get(
             "MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL
@@ -119,6 +122,7 @@ class _ConfigFields:
     embedding_dims: int = 64
     runtime_settings_path: str = "data/runtime_settings.json"
     publisher_extension_api_key: str = ""
+    publisher_preferred_client_id: str = ""
     minimax_api_key: str = ""
     minimax_base_url: str = DEFAULT_MINIMAX_BASE_URL
     minimax_model: str = DEFAULT_MINIMAX_MODEL

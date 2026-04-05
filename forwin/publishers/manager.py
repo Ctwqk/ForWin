@@ -14,6 +14,7 @@ from forwin.models.publisher import (
     PublisherCommentSyncJob,
     PublisherConnectionState,
     PublisherExtensionClient,
+    PublisherExtensionPlatformState,
     PublisherRawComment,
     PublisherUploadJob,
 )
@@ -55,10 +56,12 @@ class PublisherManager:
         session_factory: sessionmaker,
         extension_api_key: str = "",
         heartbeat_stale_seconds: int = 90,
+        preferred_client_id: str = "",
     ) -> None:
         self.session_factory = session_factory
         self.extension_api_key = extension_api_key
         self.heartbeat_stale_seconds = heartbeat_stale_seconds
+        self.preferred_client_id = str(preferred_client_id or "").strip()
 
     def list_platforms(self) -> list[dict[str, Any]]:
         platform_ids = list(SUPPORTED_PLATFORMS.keys())
@@ -105,14 +108,39 @@ class PublisherManager:
             states = {row.platform_id: row for row in state_rows}
             clients = {row.client_id: row for row in client_rows}
             browser_sessions = {row.platform_id: row for row in browser_session_rows}
+            preferred_states = (
+                {
+                    row.platform_id: row
+                    for row in session.execute(
+                        select(
+                            PublisherExtensionPlatformState.platform_id,
+                            PublisherExtensionPlatformState.client_id,
+                            PublisherExtensionPlatformState.connected,
+                            PublisherExtensionPlatformState.last_error,
+                            PublisherExtensionPlatformState.last_heartbeat_at,
+                        ).where(
+                            PublisherExtensionPlatformState.client_id == self.preferred_client_id,
+                            PublisherExtensionPlatformState.platform_id.in_(platform_ids),
+                        )
+                    ).all()
+                }
+                if self.preferred_client_id
+                else {}
+            )
 
         items: list[dict[str, Any]] = []
         for spec in SUPPORTED_PLATFORMS.values():
             state = states.get(spec.platform_id)
             browser_session = browser_sessions.get(spec.platform_id)
+            preferred_state = preferred_states.get(spec.platform_id)
             client = (
                 clients.get(state.extension_client_id)
                 if state and state.extension_client_id
+                else None
+            )
+            preferred_client = (
+                clients.get(preferred_state.client_id)
+                if preferred_state and preferred_state.client_id
                 else None
             )
             session_client = (
@@ -121,7 +149,11 @@ class PublisherManager:
                 else None
             )
             last_heartbeat_at = None
-            if client and client.last_heartbeat_at:
+            if preferred_client and preferred_client.last_heartbeat_at:
+                last_heartbeat_at = preferred_client.last_heartbeat_at
+            elif preferred_state and preferred_state.last_heartbeat_at:
+                last_heartbeat_at = preferred_state.last_heartbeat_at
+            elif client and client.last_heartbeat_at:
                 last_heartbeat_at = client.last_heartbeat_at
             elif session_client and session_client.last_heartbeat_at:
                 last_heartbeat_at = session_client.last_heartbeat_at
@@ -130,7 +162,9 @@ class PublisherManager:
 
             extension_online = self._is_recent(last_heartbeat_at)
             connected = False
-            if state and state.connected:
+            if preferred_state and preferred_state.connected:
+                connected = True
+            elif state and state.connected:
                 connected = True
             elif browser_session and self._is_browser_session_connected(
                 spec.platform_id,
@@ -139,7 +173,11 @@ class PublisherManager:
             ):
                 connected = True
 
-            last_error = state.last_error if state else ""
+            last_error = (
+                preferred_state.last_error
+                if preferred_state
+                else (state.last_error if state else "")
+            )
             if not last_error and browser_session:
                 last_error = browser_session.last_error
 
@@ -157,17 +195,44 @@ class PublisherManager:
                     "last_heartbeat_at": _isoformat(last_heartbeat_at),
                     "last_error": last_error,
                     "extension_client_id": (
-                        client.client_id
-                        if client
+                        preferred_client.client_id
+                        if preferred_client
                         else (
-                            session_client.client_id
-                            if session_client
-                            else (browser_session.extension_client_id if browser_session else "")
+                            preferred_state.client_id
+                            if preferred_state
+                            else (
+                                client.client_id
+                                if client
+                                else (
+                                    session_client.client_id
+                                    if session_client
+                                    else (browser_session.extension_client_id if browser_session else "")
+                                )
+                            )
                         )
                     ),
                 }
             )
         return items
+
+    def list_upload_jobs(
+        self,
+        *,
+        status: str = "",
+        platform: str = "",
+        limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        normalized_status = str(status or "").strip()
+        normalized_platform = str(platform or "").strip()
+        normalized_limit = max(1, min(int(limit or 30), 100))
+        with self.session_factory() as session:
+            stmt = select(PublisherUploadJob).order_by(PublisherUploadJob.created_at.desc())
+            if normalized_status:
+                stmt = stmt.where(PublisherUploadJob.status == normalized_status)
+            if normalized_platform:
+                stmt = stmt.where(PublisherUploadJob.platform_id == normalized_platform)
+            jobs = session.execute(stmt.limit(normalized_limit)).scalars().all()
+            return [self._serialize_upload_job(job) for job in jobs]
 
     def create_upload_job(
         self,
@@ -237,33 +302,42 @@ class PublisherManager:
             stored.cookies_json = json.dumps(normalized, ensure_ascii=False)
             stored.synced_at = now
             stored.last_error = ""
+            connected = self._is_browser_session_connected(
+                platform,
+                stored.cookies_json,
+                "",
+            )
 
             state = session.get(PublisherConnectionState, platform)
             if state is None:
                 state = PublisherConnectionState(platform_id=platform)
                 session.add(state)
             state.extension_client_id = client_id
-            state.connected = self._is_browser_session_connected(
-                platform,
-                stored.cookies_json,
-                "",
-            )
+            state.connected = connected
             state.login_method = state.login_method or "scan"
             if state.connected:
                 state.last_error = ""
-            state.status_json = json.dumps(
-                {
-                    "platform": platform,
-                    "connected": state.connected,
-                    "login_method": state.login_method,
-                    "last_error": state.last_error,
-                    "cookie_names": self._cookie_names_from_json(stored.cookies_json),
-                    "cookie_signal": state.connected,
-                    "session_synced": True,
-                },
-                ensure_ascii=False,
-            )
+            state_payload = {
+                "platform": platform,
+                "connected": connected,
+                "login_method": state.login_method,
+                "last_error": state.last_error,
+                "cookie_names": self._cookie_names_from_json(stored.cookies_json),
+                "cookie_signal": connected,
+                "session_synced": True,
+            }
+            state.status_json = json.dumps(state_payload, ensure_ascii=False)
             state.last_heartbeat_at = now
+            self._upsert_extension_platform_state(
+                session,
+                client_id=client_id,
+                platform_id=platform,
+                connected=connected,
+                login_method=state.login_method,
+                last_error="",
+                status_payload=state_payload,
+                last_heartbeat_at=now,
+            )
             session.commit()
         return {
             "ok": True,
@@ -343,28 +417,32 @@ class PublisherManager:
             if job is not None:
                 return self._serialize_upload_job(job)
 
-            job = session.execute(
+            pending_jobs = session.execute(
                 select(PublisherUploadJob)
                 .where(
                     PublisherUploadJob.status == "pending",
                     PublisherUploadJob.platform_id.in_(platforms),
                 )
                 .order_by(PublisherUploadJob.created_at.asc())
-                .limit(1)
-            ).scalar_one_or_none()
-            if job is None:
-                return None
+            ).scalars().all()
+            for job in pending_jobs:
+                if not self._client_can_claim_platform(
+                    session,
+                    client_id=client_id,
+                    platform_id=job.platform_id,
+                ):
+                    continue
+                job.status = "running"
+                job.extension_client_id = client_id
+                job.claimed_at = job.claimed_at or now
+                job.started_at = job.started_at or now
+                job.result_message = "上传任务已被浏览器扩展自动领取。"
+                job.error_message = ""
 
-            job.status = "running"
-            job.extension_client_id = client_id
-            job.claimed_at = job.claimed_at or now
-            job.started_at = job.started_at or now
-            job.result_message = "上传任务已被浏览器扩展自动领取。"
-            job.error_message = ""
-
-            session.commit()
-            session.refresh(job)
-            return self._serialize_upload_job(job)
+                session.commit()
+                session.refresh(job)
+                return self._serialize_upload_job(job)
+            return None
 
     def claim_next_comment_sync_job(
         self,
@@ -399,30 +477,34 @@ class PublisherManager:
             if job is not None:
                 return self._serialize_comment_sync_job(job)
 
-            job = session.execute(
+            pending_jobs = session.execute(
                 select(PublisherCommentSyncJob)
                 .where(
                     PublisherCommentSyncJob.status == "pending",
                     PublisherCommentSyncJob.platform_id.in_(platforms),
                 )
                 .order_by(PublisherCommentSyncJob.created_at.asc())
-                .limit(1)
-            ).scalar_one_or_none()
-            if job is None:
-                return None
+            ).scalars().all()
+            for job in pending_jobs:
+                if not self._client_can_claim_platform(
+                    session,
+                    client_id=client_id,
+                    platform_id=job.platform_id,
+                ):
+                    continue
+                job.status = "running"
+                job.extension_client_id = client_id
+                job.started_at = job.started_at or now
+                job.error_message = ""
+                job.result_summary_json = json.dumps(
+                    {"phase": "claimed", "message": "评论同步任务已被浏览器扩展自动领取。"},
+                    ensure_ascii=False,
+                )
 
-            job.status = "running"
-            job.extension_client_id = client_id
-            job.started_at = job.started_at or now
-            job.error_message = ""
-            job.result_summary_json = json.dumps(
-                {"phase": "claimed", "message": "评论同步任务已被浏览器扩展自动领取。"},
-                ensure_ascii=False,
-            )
-
-            session.commit()
-            session.refresh(job)
-            return self._serialize_comment_sync_job(job)
+                session.commit()
+                session.refresh(job)
+                return self._serialize_comment_sync_job(job)
+            return None
 
     def requeue_interrupted_upload_jobs(self) -> list[str]:
         now = _utc_now()
@@ -488,6 +570,16 @@ class PublisherManager:
                 state.last_error = str(item.get("last_error", "")).strip()
                 state.status_json = json.dumps(item, ensure_ascii=False)
                 state.last_heartbeat_at = now
+                self._upsert_extension_platform_state(
+                    session,
+                    client_id=client_id,
+                    platform_id=platform_id,
+                    connected=state.connected,
+                    login_method=state.login_method,
+                    last_error=state.last_error,
+                    status_payload=item,
+                    last_heartbeat_at=now,
+                )
 
             session.commit()
 
@@ -553,6 +645,22 @@ class PublisherManager:
                 elif status == "failed" and current_url and "login" in current_url:
                     state.connected = False
                     state.last_error = error or message
+                self._upsert_extension_platform_state(
+                    session,
+                    client_id=client_id,
+                    platform_id=job.platform_id,
+                    connected=state.connected,
+                    login_method=state.login_method,
+                    last_error=state.last_error,
+                    status_payload={
+                        "platform": job.platform_id,
+                        "connected": state.connected,
+                        "login_method": state.login_method,
+                        "last_error": state.last_error,
+                        "source": "upload-job-result",
+                    },
+                    last_heartbeat_at=now,
+                )
 
             session.commit()
             session.refresh(job)
@@ -734,6 +842,22 @@ class PublisherManager:
                     session.add(state)
                 state.extension_client_id = client_id
                 state.last_heartbeat_at = now
+                self._upsert_extension_platform_state(
+                    session,
+                    client_id=client_id,
+                    platform_id=platform,
+                    connected=bool(state.connected),
+                    login_method=state.login_method,
+                    last_error=state.last_error,
+                    status_payload={
+                        "platform": platform,
+                        "connected": bool(state.connected),
+                        "login_method": state.login_method,
+                        "last_error": state.last_error,
+                        "source": "comment-batch-ingest",
+                    },
+                    last_heartbeat_at=now,
+                )
 
             session.commit()
 
@@ -852,6 +976,68 @@ class PublisherManager:
             "started_at": _isoformat(job.started_at),
             "finished_at": _isoformat(job.finished_at),
         }
+
+    def _client_can_claim_platform(
+        self,
+        session,
+        *,
+        client_id: str,
+        platform_id: str,
+    ) -> bool:
+        preferred_client_id = self.preferred_client_id
+        if not preferred_client_id or client_id == preferred_client_id:
+            return True
+        return not self._preferred_client_can_claim_platform(
+            session,
+            platform_id=platform_id,
+        )
+
+    def _preferred_client_can_claim_platform(self, session, *, platform_id: str) -> bool:
+        preferred_client_id = self.preferred_client_id
+        if not preferred_client_id:
+            return False
+        client = session.get(PublisherExtensionClient, preferred_client_id)
+        if client is None or not self._is_recent(client.last_heartbeat_at):
+            return False
+        platform_state = session.get(
+            PublisherExtensionPlatformState,
+            {
+                "client_id": preferred_client_id,
+                "platform_id": platform_id,
+            },
+        )
+        return bool(platform_state and platform_state.connected)
+
+    @staticmethod
+    def _upsert_extension_platform_state(
+        session,
+        *,
+        client_id: str,
+        platform_id: str,
+        connected: bool,
+        login_method: str,
+        last_error: str,
+        status_payload: dict[str, Any],
+        last_heartbeat_at: datetime,
+    ) -> None:
+        state = session.get(
+            PublisherExtensionPlatformState,
+            {
+                "client_id": client_id,
+                "platform_id": platform_id,
+            },
+        )
+        if state is None:
+            state = PublisherExtensionPlatformState(
+                client_id=client_id,
+                platform_id=platform_id,
+            )
+            session.add(state)
+        state.connected = connected
+        state.login_method = str(login_method or "").strip()
+        state.last_error = str(last_error or "").strip()
+        state.status_json = json.dumps(status_payload or {}, ensure_ascii=False)
+        state.last_heartbeat_at = last_heartbeat_at
 
     def _is_recent(self, value: datetime | None) -> bool:
         parsed = _as_utc(value)

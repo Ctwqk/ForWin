@@ -12,11 +12,14 @@ export class PublisherExtensionController {
     this.loginSessions = new Map();
     this.dispatchInFlight = null;
     this.commentDispatchInFlight = null;
+    this.executionTasks = new Map();
+    this.executionTabToTask = new Map();
   }
 
   async bootstrap() {
     await this.deps.ensureClientId();
     await this.deps.ensureHeartbeatAlarm();
+    await this.restoreDisconnectedSessionsFromBackend();
     await this.sendHeartbeat();
     await this.syncConnectedSessionsToBackend();
     await this.dispatchPendingUploadJobs();
@@ -35,6 +38,7 @@ export class PublisherExtensionController {
     }
     if (action === 'settings-updated') {
       await this.deps.refreshContentBridge();
+      await this.restoreDisconnectedSessionsFromBackend();
       await this.sendHeartbeat();
       await this.syncConnectedSessionsToBackend();
       await this.dispatchPendingUploadJobs();
@@ -61,6 +65,29 @@ export class PublisherExtensionController {
       browserVersion: browserInfo.browserVersion,
       backendBaseUrl: settings.backendBaseUrl,
     };
+  }
+
+  async restoreDisconnectedSessionsFromBackend() {
+    const settings = await this.deps.getSettings();
+    if (!settings.backendBaseUrl || !settings.apiKey) {
+      return { skipped: true };
+    }
+    let restored = 0;
+    for (const platformId of Object.keys(PLATFORM_ADAPTERS)) {
+      const savedState = await this.deps.getPlatformState(platformId);
+      const cookies = await this.deps.getCookies(platformId);
+      const heartbeatState = buildHeartbeatState(platformId, cookies, savedState);
+      if (heartbeatState.connected || heartbeatState.raw_state?.cookie_signal) {
+        continue;
+      }
+      const session = await this.deps.backend.getBrowserSession(platformId);
+      if (!session?.cookies?.length) {
+        continue;
+      }
+      await this.deps.setCookies(platformId, session.cookies);
+      restored += 1;
+    }
+    return { restored };
   }
 
   async openLogin(platformId, originTabId) {
@@ -117,6 +144,85 @@ export class PublisherExtensionController {
     return this.executeCommentSyncJobPayload(job, originTabId);
   }
 
+  registerExecutionTask(taskKey, tabId) {
+    if (!taskKey || !tabId) {
+      return;
+    }
+    this.executionTasks.set(taskKey, { tabs: new Set([tabId]) });
+    this.executionTabToTask.set(tabId, taskKey);
+  }
+
+  linkExecutionTab(tabId, openerTabId) {
+    if (!tabId || !openerTabId) {
+      return;
+    }
+    const taskKey = this.executionTabToTask.get(openerTabId);
+    if (!taskKey) {
+      return;
+    }
+    const task = this.executionTasks.get(taskKey);
+    if (!task) {
+      return;
+    }
+    task.tabs.add(tabId);
+    this.executionTabToTask.set(tabId, taskKey);
+  }
+
+  unlinkExecutionTab(tabId) {
+    if (!tabId) {
+      return;
+    }
+    const taskKey = this.executionTabToTask.get(tabId);
+    if (!taskKey) {
+      return;
+    }
+    this.executionTabToTask.delete(tabId);
+    const task = this.executionTasks.get(taskKey);
+    if (!task) {
+      return;
+    }
+    task.tabs.delete(tabId);
+    if (!task.tabs.size) {
+      this.executionTasks.delete(taskKey);
+    }
+  }
+
+  async cleanupExecutionTabs(taskKey) {
+    const task = this.executionTasks.get(taskKey);
+    if (!task) {
+      return { attempted: false, closed_tab_ids: [], failed_tab_ids: [] };
+    }
+    const tabIds = Array.from(task.tabs).filter(Boolean);
+    const closedTabIds = [];
+    const failedTabIds = [];
+    for (const tabId of tabIds) {
+      try {
+        await this.deps.closeTab(tabId);
+        closedTabIds.push(tabId);
+      } catch (_error) {
+        failedTabIds.push(tabId);
+      }
+      this.unlinkExecutionTab(tabId);
+    }
+    this.executionTasks.delete(taskKey);
+    return {
+      attempted: true,
+      closed_tab_ids: closedTabIds,
+      failed_tab_ids: failedTabIds,
+    };
+  }
+
+  forgetExecutionTask(taskKey) {
+    const task = this.executionTasks.get(taskKey);
+    if (!task) {
+      return;
+    }
+    for (const tabId of task.tabs) {
+      this.executionTabToTask.delete(tabId);
+    }
+    this.executionTasks.delete(taskKey);
+  }
+
   async waitForOpenedUploadTab(tabId, platformId, timeoutMs = 6000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -153,6 +259,7 @@ export class PublisherExtensionController {
   async executeUploadJobPayload(job, originTabId = 0) {
     const clientId = await this.deps.getClientId();
     const adapter = getPlatformAdapter(job.platform);
+    const taskKey = `upload:${job.job_id}`;
 
     if (job.status !== 'running') {
       await this.deps.backend.updateUploadJobResult(job.job_id, {
@@ -174,6 +281,7 @@ export class PublisherExtensionController {
     try {
       const targetUrl = job.upload_url || adapter.publishUrl;
       const tab = await this.deps.openUploadTab(targetUrl);
+      this.registerExecutionTask(taskKey, tab.tabId);
       await this.waitForOpenedUploadTab(tab.tabId, job.platform, 6000);
       const openedTab = await this.deps.getTab(tab.tabId);
       await this.deps.backend.updateUploadJobResult(job.job_id, {
@@ -215,9 +323,14 @@ export class PublisherExtensionController {
         }
         : timedResult;
       const finalStatus = result.ok ? 'succeeded' : 'failed';
+      const cleanupPayload = result.ok ? await this.cleanupExecutionTabs(taskKey) : { attempted: false };
+      if (!result.ok) {
+        this.forgetExecutionTask(taskKey);
+      }
       const resultPayload = {
         ...(result.resultPayload || {}),
         ...(result.errorCode ? { error_code: result.errorCode } : {}),
+        tab_cleanup: cleanupPayload,
       };
       await this.deps.backend.updateUploadJobResult(job.job_id, {
         client_id: clientId,
@@ -245,6 +358,7 @@ export class PublisherExtensionController {
         message: result.ok ? '浏览器扩展已完成上传。' : '上传失败，请查看任务状态。',
       };
     } catch (error) {
+      this.forgetExecutionTask(taskKey);
       const message = error instanceof Error ? error.message : String(error);
       await this.deps.backend.updateUploadJobResult(job.job_id, {
         client_id: clientId,
@@ -267,6 +381,7 @@ export class PublisherExtensionController {
   async executeCommentSyncJobPayload(job, originTabId = 0) {
     const clientId = await this.deps.getClientId();
     const adapter = getPlatformAdapter(job.platform);
+    const taskKey = `comment:${job.job_id}`;
 
     await this.deps.backend.updateCommentSyncJobResult(job.job_id, {
       client_id: clientId,
@@ -285,6 +400,7 @@ export class PublisherExtensionController {
     try {
       const targetUrl = job.comment_url || adapter.commentUrl || adapter.dashboardUrl || adapter.publishUrl;
       const tab = await this.deps.openUploadTab(targetUrl);
+      this.registerExecutionTask(taskKey, tab.tabId);
       await this.waitForOpenedUploadTab(tab.tabId, job.platform, 8000);
       const openedTab = await this.deps.getTab(tab.tabId);
       const syncPayload = {
@@ -297,6 +413,7 @@ export class PublisherExtensionController {
       };
       const result = await this.deps.runCommentSyncCommand(tab.tabId, syncPayload);
       if (!result?.ok) {
+        this.forgetExecutionTask(taskKey);
         await this.deps.backend.updateCommentSyncJobResult(job.job_id, {
           client_id: clientId,
           status: 'failed',
@@ -319,6 +436,7 @@ export class PublisherExtensionController {
         job_id: job.job_id,
         comments,
       });
+      const cleanupPayload = await this.cleanupExecutionTabs(taskKey);
       await this.deps.backend.updateCommentSyncJobResult(job.job_id, {
         client_id: clientId,
         status: 'succeeded',
@@ -330,6 +448,7 @@ export class PublisherExtensionController {
           inserted: Number(uploadResult?.inserted || 0),
           updated: Number(uploadResult?.updated || 0),
           current_url: result.currentUrl || String(openedTab?.url || targetUrl || ''),
+          tab_cleanup: cleanupPayload,
         },
       });
       await this.deps.notifyPage(originTabId, 'comment-sync-status', {
@@ -342,6 +461,7 @@ export class PublisherExtensionController {
         message: result.message || '浏览器扩展已完成评论同步。',
       };
     } catch (error) {
+      this.forgetExecutionTask(taskKey);
       const message = error instanceof Error ? error.message : String(error);
       await this.deps.backend.updateCommentSyncJobResult(job.job_id, {
         client_id: clientId,
@@ -370,7 +490,14 @@ export class PublisherExtensionController {
     await this.evaluateLoginSession(session, url);
   }
 
+  async handleTabCreated(tab) {
+    const tabId = Number(tab?.id || 0);
+    const openerTabId = Number(tab?.openerTabId || 0);
+    this.linkExecutionTab(tabId, openerTabId);
+  }
+
   async handleTabRemoved(tabId) {
+    this.unlinkExecutionTab(tabId);
     const session = this.loginSessions.get(tabId);
     if (!session) {
       return;

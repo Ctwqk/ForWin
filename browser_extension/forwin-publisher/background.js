@@ -77,6 +77,58 @@ async function getCookies(platformId) {
   return cookies;
 }
 
+function normalizeSameSite(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'strict') {
+    return 'strict';
+  }
+  if (raw === 'no_restriction' || raw === 'none') {
+    return 'no_restriction';
+  }
+  if (raw === 'unspecified') {
+    return 'unspecified';
+  }
+  return 'lax';
+}
+
+function cookieSetDetails(cookie) {
+  const domain = String(cookie?.domain || '').trim();
+  const host = domain.replace(/^\./, '');
+  const path = String(cookie?.path || '/').trim() || '/';
+  const secure = Boolean(cookie?.secure);
+  const details = {
+    url: host ? `${secure ? 'https' : 'http'}://${host}${path}` : '',
+    name: String(cookie?.name || '').trim(),
+    value: String(cookie?.value || ''),
+    path,
+    secure,
+    httpOnly: Boolean(cookie?.httpOnly),
+    sameSite: normalizeSameSite(cookie?.sameSite),
+  };
+  if (domain) {
+    details.domain = domain;
+  }
+  const expirationDate = Number(cookie?.expirationDate);
+  if (Number.isFinite(expirationDate) && expirationDate > 0) {
+    details.expirationDate = expirationDate;
+  }
+  return details;
+}
+
+async function setCookies(platformId, cookies = []) {
+  getPlatformAdapter(platformId);
+  let applied = 0;
+  for (const item of cookies) {
+    const details = cookieSetDetails(item);
+    if (!details.name || !details.url) {
+      continue;
+    }
+    await wrapCall(extensionApi.cookies, 'set', details);
+    applied += 1;
+  }
+  return { applied };
+}
+
 async function openLoginPopup(url) {
   const created = await wrapCall(extensionApi.windows, 'create', {
     url,
@@ -97,6 +149,17 @@ async function openUploadTab(url) {
     active: true,
   });
   return { tabId: tab?.id || 0 };
+}
+
+async function closeTab(tabId) {
+  if (!tabId) {
+    return;
+  }
+  try {
+    await wrapCall(extensionApi.tabs, 'remove', tabId);
+  } catch (_error) {
+    // Ignore already-closed tabs.
+  }
 }
 
 async function queryTabs(queryInfo = {}) {
@@ -930,8 +993,10 @@ const controller = new PublisherExtensionController({
   getPlatformState,
   setPlatformState,
   getCookies,
+  setCookies,
   openLoginPopup,
   openUploadTab,
+  closeTab,
   getTab,
   navigateTab,
   closePopup,
@@ -980,6 +1045,12 @@ extensionApi.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
   controller.handleTabUpdated(tabId, changeInfo, tab).catch((error) => {
     reportBackgroundError('handleTabUpdated', error);
+  });
+});
+
+extensionApi.tabs.onCreated.addListener((tab) => {
+  controller.handleTabCreated(tab).catch((error) => {
+    reportBackgroundError('handleTabCreated', error);
   });
 });
 

@@ -69,6 +69,16 @@ export function createBackendClient(fetchImpl, rawSettings) {
       return parseJson(response);
     },
 
+    async getBrowserSession(platformId) {
+      const response = await fetchImpl(
+        `${settings.backendBaseUrl}/api/publishers/extension/browser-sessions/${encodeURIComponent(platformId)}`,
+        {
+          headers: headers(),
+        },
+      );
+      return parseJson(response);
+    },
+
     async syncCommentsBatch(payload) {
       const response = await fetchImpl(`${settings.backendBaseUrl}/api/publishers/extension/comments/batch`, {
         method: 'POST',

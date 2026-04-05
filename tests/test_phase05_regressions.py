@@ -3104,13 +3104,20 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertTrue(output.generation_meta["fallback_from_scene"])
         self.assertEqual(len(output.scene_outputs), 0)
 
-    def _make_publisher_manager(self) -> tuple[TemporaryDirectory, object, PublisherManager]:
+    def _make_publisher_manager(
+        self,
+        preferred_client_id: str = "",
+    ) -> tuple[TemporaryDirectory, object, PublisherManager]:
         tmp = TemporaryDirectory()
         db_path = str(Path(tmp.name) / "publisher.db")
         engine = get_engine(db_path)
         init_db(engine)
         session_factory = get_session_factory(engine)
-        return tmp, engine, PublisherManager(session_factory, extension_api_key="secret")
+        return tmp, engine, PublisherManager(
+            session_factory,
+            extension_api_key="secret",
+            preferred_client_id=preferred_client_id,
+        )
 
     def test_publisher_manager_tracks_extension_heartbeat_and_stale_state(self) -> None:
         tmp, engine, manager = self._make_publisher_manager()
@@ -3458,6 +3465,84 @@ class Phase05RegressionTests(unittest.TestCase):
             engine.dispose()
             tmp.cleanup()
 
+    def test_publisher_manager_prefers_configured_linux_client_and_falls_back(self) -> None:
+        tmp, engine, manager = self._make_publisher_manager(preferred_client_id="linux-client")
+        try:
+            manager.record_extension_heartbeat(
+                client_id="linux-client",
+                extension_version="0.1.0",
+                browser_name="Chrome",
+                browser_version="146.0",
+                backend_base_url="http://10.0.0.150:8899",
+                platforms=[{"platform": "fanqie", "connected": True, "login_method": "scan", "last_error": ""}],
+            )
+            manager.record_extension_heartbeat(
+                client_id="laptop-client",
+                extension_version="0.1.0",
+                browser_name="Chrome",
+                browser_version="146.0",
+                backend_base_url="http://10.0.0.35:8899",
+                platforms=[{"platform": "fanqie", "connected": True, "login_method": "scan", "last_error": ""}],
+            )
+            job = manager.create_upload_job(
+                platform="fanqie",
+                book_name="测试书",
+                chapter_title="优先调度",
+                body="正文",
+                upload_url=None,
+                publish=False,
+            )
+
+            self.assertIsNone(
+                manager.claim_next_upload_job(
+                    client_id="laptop-client",
+                    connected_platforms=["fanqie"],
+                )
+            )
+            claimed = manager.claim_next_upload_job(
+                client_id="linux-client",
+                connected_platforms=["fanqie"],
+            )
+            self.assertIsNotNone(claimed)
+            assert claimed is not None
+            self.assertEqual(claimed["job_id"], job["job_id"])
+            self.assertEqual(claimed["extension_client_id"], "linux-client")
+
+            manager.update_upload_job_result(
+                job_id=job["job_id"],
+                client_id="linux-client",
+                status="succeeded",
+                message="完成",
+                current_url="https://fanqienovel.com/main/writer/",
+                error="",
+                result_payload={},
+            )
+            fallback_job = manager.create_upload_job(
+                platform="fanqie",
+                book_name="测试书",
+                chapter_title="回退调度",
+                body="正文",
+                upload_url=None,
+                publish=False,
+            )
+            with manager.session_factory() as session:
+                client = session.get(PublisherExtensionClient, "linux-client")
+                assert client is not None
+                client.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+                session.commit()
+
+            fallback_claim = manager.claim_next_upload_job(
+                client_id="laptop-client",
+                connected_platforms=["fanqie"],
+            )
+            self.assertIsNotNone(fallback_claim)
+            assert fallback_claim is not None
+            self.assertEqual(fallback_claim["job_id"], fallback_job["job_id"])
+            self.assertEqual(fallback_claim["extension_client_id"], "laptop-client")
+        finally:
+            engine.dispose()
+            tmp.cleanup()
+
     def test_publishers_page_and_extension_api_routes(self) -> None:
         tmp, engine, manager = self._make_publisher_manager()
         old_manager = api_module._publisher_manager
@@ -3470,7 +3555,8 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.assertIn("浏览器扩展", page.text)
                 self.assertIn("如果你是用 macOS 浏览器访问这台 Linux 后端", page.text)
                 self.assertIn("browser_extension/forwin-publisher", page.text)
-                self.assertIn("execute-upload-job", page.text)
+                self.assertIn("最近上传任务", page.text)
+                self.assertIn("等待首选 Linux 扩展优先领取", page.text)
                 self.assertIn("/api/publishers/extension-package", page.text)
 
                 package = client.get("/api/publishers/extension-package")
@@ -3511,6 +3597,11 @@ class Phase05RegressionTests(unittest.TestCase):
                 fetched = client.get(f"/api/publishers/upload-jobs/{job_id}")
                 self.assertEqual(fetched.status_code, 200)
                 self.assertEqual(fetched.json()["job_id"], job_id)
+
+                listed = client.get("/api/publishers/upload-jobs")
+                self.assertEqual(listed.status_code, 200)
+                self.assertEqual(len(listed.json()), 1)
+                self.assertEqual(listed.json()[0]["job_id"], job_id)
 
                 unauthorized = client.post(
                     "/api/publishers/extension/heartbeat",
@@ -3590,6 +3681,15 @@ class Phase05RegressionTests(unittest.TestCase):
                 )
                 self.assertEqual(session_sync.status_code, 200)
                 self.assertEqual(session_sync.json()["cookie_count"], 2)
+
+                restored_session = client.get(
+                    "/api/publishers/extension/browser-sessions/qidian",
+                    headers={"X-Forwin-Extension-Key": "secret"},
+                )
+                self.assertEqual(restored_session.status_code, 200)
+                self.assertEqual(restored_session.json()["platform"], "qidian")
+                self.assertEqual(restored_session.json()["cookie_count"], 2)
+                self.assertEqual(restored_session.json()["cookies"][0]["name"], "AppAuthToken")
 
                 server_claim = client.post(
                     "/api/publishers/upload-jobs",

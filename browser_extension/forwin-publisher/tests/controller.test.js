@@ -6,6 +6,8 @@ import { PublisherExtensionController } from '../lib/controller.js';
 function makeController(overrides = {}) {
   const events = [];
   const uploadResults = [];
+  const closedTabs = [];
+  const restoredCookies = [];
   const deps = {
     ensureClientId: async () => 'client-1',
     getClientId: async () => 'client-1',
@@ -29,11 +31,18 @@ function makeController(overrides = {}) {
     }),
     navigateTab: async () => {},
     closePopup: async () => {},
+    closeTab: async (tabId) => {
+      closedTabs.push(tabId);
+    },
     notifyPage: async (tabId, eventName, payload) => {
       events.push({ tabId, eventName, payload });
     },
     getPlatformState: async () => ({}),
     setPlatformState: async () => {},
+    setCookies: async (platformId, cookies) => {
+      restoredCookies.push({ platformId, cookies });
+      return { applied: cookies.length };
+    },
     runUploadCommand: async () => ({
       ok: true,
       currentUrl: 'https://write.qq.com/portal/dashboard',
@@ -50,6 +59,7 @@ function makeController(overrides = {}) {
     backend: {
       heartbeat: async () => ({ ok: true }),
       syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
+      getBrowserSession: async () => null,
       claimNextUploadJob: async () => ({ found: false, job: null }),
       claimNextCommentSyncJob: async () => ({ found: false, job: null }),
       getUploadJob: async () => ({
@@ -71,7 +81,7 @@ function makeController(overrides = {}) {
     },
     ...overrides,
   };
-  return { controller: new PublisherExtensionController(deps), events, uploadResults };
+  return { controller: new PublisherExtensionController(deps), events, uploadResults, closedTabs, restoredCookies };
 }
 
 test('controller opens login popup and closes it after successful tab update', async () => {
@@ -96,6 +106,7 @@ test('controller still opens login popup when heartbeat sync fails', async () =>
         throw new TypeError('Failed to fetch');
       },
       syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
+      getBrowserSession: async () => null,
       claimNextUploadJob: async () => ({ found: false, job: null }),
       getUploadJob: async () => ({
         job_id: 'job-1',
@@ -122,6 +133,67 @@ test('controller still opens login popup when heartbeat sync fails', async () =>
   assert.match(events[0].payload.message, /状态同步稍后重试/);
 });
 
+test('controller restores backend sessions before heartbeat when local browser is disconnected', async () => {
+  const heartbeatCalls = [];
+  const { controller, restoredCookies } = makeController({
+    getCookies: async (platformId) => (platformId === 'fanqie' ? [{ name: 'serial_uuid' }] : []),
+    backend: {
+      heartbeat: async (payload) => {
+        heartbeatCalls.push(payload);
+        return { ok: true };
+      },
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 2 }),
+      getBrowserSession: async (platformId) => {
+        if (platformId !== 'fanqie') {
+          return null;
+        }
+        return {
+          platform: 'fanqie',
+          client_id: 'laptop-client',
+          cookie_count: 2,
+          cookies: [
+            {
+              name: 'sessionid',
+              value: 'cookie-value',
+              domain: '.fanqienovel.com',
+              path: '/',
+              secure: true,
+              httpOnly: true,
+              sameSite: 'none',
+              expirationDate: 1893456000,
+            },
+            {
+              name: 'sid_tt',
+              value: 'cookie-value-2',
+              domain: '.fanqienovel.com',
+              path: '/',
+              secure: true,
+              httpOnly: true,
+              sameSite: 'none',
+              expirationDate: 1893456000,
+            },
+          ],
+        };
+      },
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      claimNextCommentSyncJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('not used');
+      },
+      syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
+      updateUploadJobResult: async () => ({ ok: true }),
+      updateCommentSyncJobResult: async () => ({ ok: true }),
+    },
+  });
+
+  await controller.bootstrap();
+
+  assert.equal(restoredCookies.length, 1);
+  assert.equal(restoredCookies[0].platformId, 'fanqie');
+  assert.equal(restoredCookies[0].cookies.length, 2);
+  assert.equal(heartbeatCalls.length >= 1, true);
+});
+
 test('controller marks upload job running then succeeded', async () => {
   const { controller, uploadResults } = makeController();
 
@@ -132,6 +204,56 @@ test('controller marks upload job running then succeeded', async () => {
 
   assert.equal(uploadResults[0].status, 'running');
   assert.equal(uploadResults.at(-1).status, 'succeeded');
+});
+
+test('controller closes execution tabs after successful upload', async () => {
+  let controllerRef = null;
+  const { controller, closedTabs, uploadResults } = makeController({
+    runUploadCommand: async (_tabId, payload) => {
+      await controllerRef.handleTabCreated({ id: 88, openerTabId: 77 });
+      return {
+        ok: true,
+        currentUrl: 'https://write.qq.com/portal/dashboard',
+        message: `章节发布动作已提交：${payload.chapter_title}`,
+        resultPayload: { mode: 'publish' },
+      };
+    },
+  });
+  controllerRef = controller;
+
+  await controller.handleMessage(
+    { action: 'execute-upload-job', payload: { jobId: 'job-1' } },
+    { tab: { id: 100 } },
+  );
+
+  assert.deepEqual(closedTabs.sort((a, b) => a - b), [77, 88]);
+  assert.equal(uploadResults.at(-1).result_payload.tab_cleanup.closed_tab_ids.length, 2);
+});
+
+test('controller keeps execution tabs open when upload fails', async () => {
+  let controllerRef = null;
+  const { controller, closedTabs, uploadResults } = makeController({
+    runUploadCommand: async () => {
+      await controllerRef.handleTabCreated({ id: 99, openerTabId: 77 });
+      return {
+        ok: false,
+        currentUrl: 'https://write.qq.com/portal/login',
+        message: '上传失败。',
+        error: '需要重新登录',
+        resultPayload: { mode: 'publish' },
+      };
+    },
+  });
+  controllerRef = controller;
+
+  await controller.handleMessage(
+    { action: 'execute-upload-job', payload: { jobId: 'job-1' } },
+    { tab: { id: 100 } },
+  );
+
+  assert.deepEqual(closedTabs, []);
+  assert.equal(uploadResults.at(-1).status, 'failed');
+  assert.equal(uploadResults.at(-1).result_payload.tab_cleanup.attempted, false);
 });
 
 test('controller forwards create-if-missing book metadata to upload command', async () => {

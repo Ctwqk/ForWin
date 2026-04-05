@@ -643,6 +643,40 @@ def upgrade_db(engine: Engine) -> None:
             )
         migrations.append(MigrationSpec("audience_feedback_v1", apply_audience_feedback_v1))
 
+        def apply_publisher_extension_platform_state_v1(conn) -> None:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS publisher_extension_platform_states (
+                        client_id TEXT NOT NULL,
+                        platform_id TEXT NOT NULL,
+                        connected INTEGER NOT NULL DEFAULT 0,
+                        login_method TEXT NOT NULL DEFAULT '',
+                        status_json TEXT NOT NULL DEFAULT '{}',
+                        last_error TEXT NOT NULL DEFAULT '',
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        last_heartbeat_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (client_id, platform_id),
+                        FOREIGN KEY(client_id) REFERENCES publisher_extension_clients(client_id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_publisher_extension_platform_states_platform
+                    ON publisher_extension_platform_states(platform_id, connected)
+                    """
+                )
+            )
+        migrations.append(
+            MigrationSpec(
+                "publisher_extension_platform_state_v1",
+                apply_publisher_extension_platform_state_v1,
+            )
+        )
+
         def apply_phase4_simulation_v1(conn) -> None:
             conn.execute(
                 text(

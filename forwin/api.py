@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
-from sqlalchemy import select, func
+from sqlalchemy import delete, select, func
 
 from forwin.api_pages import render_home_page, render_publishers_page
 from forwin.api_project_payloads import (
@@ -39,6 +39,7 @@ from forwin.api_schemas import (
     ChapterReviewApproveRequest,
     ChapterReviewApproveResponse,
     ChapterReviewDetail,
+    ChapterReviewIssueInfo,
     CommentSyncJobResultRequest,
     EntityInfo,
     ExtensionClaimCommentSyncJobRequest,
@@ -54,9 +55,15 @@ from forwin.api_schemas import (
     ExtensionSessionSyncRequest,
     ExtensionSessionSyncResponse,
     GenerateRequest,
+    LLMDefaultProfileRequest,
+    LLMPreferencesRequest,
+    LLMProfileUpsertRequest,
     LLMSettingsRequest,
     LLMSettingsResponse,
+    ModelProfile,
     ProjectArcSnapshotFields,
+    ProjectChapterPublishRequest,
+    ProjectDeleteResponse,
     ProjectDetail,
     ProjectSummary,
     ProvisionalBandDetail,
@@ -68,17 +75,21 @@ from forwin.api_schemas import (
     PublisherUploadJobCreateRequest,
     PublisherUploadJobResponse,
     TaskResponse,
+    TaskSummaryResponse,
     ThreadInfo,
     UploadJobResultRequest,
 )
 from forwin.config import Config
-from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.base import Base, get_engine, get_session_factory, init_db
 from forwin.models.project import Project, ChapterPlan
 from forwin.models.entity import Entity
-from forwin.models.event import CanonEvent
+from forwin.models.event import CanonEvent, EventEntityLink
 from forwin.models.publisher import PublisherCommentSyncJob, PublisherConnectionState, PublisherExtensionClient, PublisherRawComment, PublisherUploadJob
 from forwin.models.thread import PlotThread
 from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.models.timeline import ChapterTimeline, StoryTimePoint
+from forwin.models.phase4 import NPCIntentSnapshot
+import forwin.models.phase  # noqa: F401
 from forwin.state.repo import StateRepository
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.publishers import PublisherManager
@@ -170,6 +181,118 @@ def _create_task_record(message: str = "") -> dict[str, Any]:
         "created_at": now,
         "updated_at": now,
     }
+
+
+def _serialize_task(task_id: str, task: dict[str, Any]) -> TaskSummaryResponse:
+    return TaskSummaryResponse(
+        task_id=task_id,
+        status=task["status"],
+        project_id=task.get("project_id"),
+        error=task.get("error"),
+        message=task.get("message", ""),
+        failed_chapters=task.get("failed_chapters", []),
+        paused_chapters=task.get("paused_chapters", []),
+        frozen_artifacts=task.get("frozen_artifacts", []),
+        created_at=_display_datetime(task.get("created_at")),
+        updated_at=_display_datetime(task.get("updated_at")),
+    )
+
+
+def _serialize_model_profiles(payload: dict[str, object]) -> list[ModelProfile]:
+    profiles = []
+    for item in payload.get("profiles", []):
+        if not isinstance(item, dict):
+            continue
+        profiles.append(
+            ModelProfile(
+                id=str(item.get("id", "")).strip(),
+                name=str(item.get("name", "")).strip() or "未命名模型",
+                has_api_key=bool(str(item.get("api_key", "")).strip()),
+                base_url=str(item.get("base_url", "")).strip(),
+                model=str(item.get("model", "")).strip(),
+            )
+        )
+    return profiles
+
+
+def _serialize_llm_settings(payload: dict[str, object], *, message: str) -> LLMSettingsResponse:
+    return LLMSettingsResponse(
+        has_api_key=bool(payload["api_key"]),
+        base_url=str(payload["base_url"]),
+        model=str(payload["model"]),
+        profiles=_serialize_model_profiles(payload),
+        default_profile_id=str(payload.get("default_profile_id", "")).strip(),
+        operation_mode=str(payload["operation_mode"]),
+        freeze_failed_candidates=bool(payload["freeze_failed_candidates"]),
+        message=message,
+    )
+
+
+def _delete_project(session, project_id: str) -> None:
+    chapter_plan_ids = session.execute(
+        select(ChapterPlan.id).where(ChapterPlan.project_id == project_id)
+    ).scalars().all()
+    if chapter_plan_ids:
+        draft_ids = session.execute(
+            select(ChapterDraft.id).where(ChapterDraft.chapter_plan_id.in_(chapter_plan_ids))
+        ).scalars().all()
+        if draft_ids:
+            session.execute(
+                delete(ChapterReview).where(ChapterReview.draft_id.in_(draft_ids))
+            )
+            session.execute(
+                delete(ChapterDraft).where(ChapterDraft.id.in_(draft_ids))
+            )
+
+    thread_ids = session.execute(
+        select(PlotThread.id).where(PlotThread.project_id == project_id)
+    ).scalars().all()
+    if thread_ids:
+        session.execute(
+            delete(Base.metadata.tables["plot_thread_beats"]).where(
+                Base.metadata.tables["plot_thread_beats"].c.thread_id.in_(thread_ids)
+            )
+        )
+
+    entity_ids = session.execute(
+        select(Entity.id).where(Entity.project_id == project_id)
+    ).scalars().all()
+    if entity_ids:
+        session.execute(
+            delete(Base.metadata.tables["entity_states"]).where(
+                Base.metadata.tables["entity_states"].c.entity_id.in_(entity_ids)
+            )
+        )
+
+    event_ids = session.execute(
+        select(CanonEvent.id).where(CanonEvent.project_id == project_id)
+    ).scalars().all()
+    if event_ids:
+        session.execute(
+            delete(EventEntityLink).where(EventEntityLink.event_id.in_(event_ids))
+        )
+
+    time_point_ids = session.execute(
+        select(StoryTimePoint.id).where(StoryTimePoint.project_id == project_id)
+    ).scalars().all()
+    if time_point_ids:
+        session.execute(
+            delete(ChapterTimeline).where(
+                (ChapterTimeline.start_time_id.in_(time_point_ids))
+                | (ChapterTimeline.end_time_id.in_(time_point_ids))
+            )
+        )
+
+    session.execute(
+        delete(NPCIntentSnapshot).where(NPCIntentSnapshot.project_id == project_id)
+    )
+
+    for table in reversed(Base.metadata.sorted_tables):
+        if table.name == "projects" or "project_id" not in table.c:
+            continue
+        session.execute(delete(table).where(table.c.project_id == project_id))
+
+    session.execute(delete(Project).where(Project.id == project_id))
 
 
 def _update_task(task_id: str, **changes: Any) -> None:
@@ -361,14 +484,7 @@ def get_llm_settings():
     if not _runtime_settings:
         raise HTTPException(503, "服务尚未初始化")
     payload = _runtime_settings.get()
-    return LLMSettingsResponse(
-        has_api_key=bool(payload["api_key"]),
-        base_url=str(payload["base_url"]),
-        model=str(payload["model"]),
-        operation_mode=str(payload["operation_mode"]),
-        freeze_failed_candidates=bool(payload["freeze_failed_candidates"]),
-        message="已读取当前默认模型配置",
-    )
+    return _serialize_llm_settings(payload, message="已读取当前默认模型配置")
 
 
 @app.post("/api/settings/llm", response_model=LLMSettingsResponse)
@@ -382,14 +498,58 @@ def save_llm_settings(req: LLMSettingsRequest):
         operation_mode=req.operation_mode,
         freeze_failed_candidates=req.freeze_failed_candidates,
     )
-    return LLMSettingsResponse(
-        has_api_key=bool(payload["api_key"]),
-        base_url=str(payload["base_url"]),
-        model=str(payload["model"]),
-        operation_mode=str(payload["operation_mode"]),
-        freeze_failed_candidates=bool(payload["freeze_failed_candidates"]),
+    return _serialize_llm_settings(
+        payload,
         message="默认模型配置已保存",
     )
+
+
+@app.post("/api/settings/llm/preferences", response_model=LLMSettingsResponse)
+def save_llm_preferences(req: LLMPreferencesRequest):
+    if not _runtime_settings:
+        raise HTTPException(503, "服务尚未初始化")
+    payload = _runtime_settings.save(
+        operation_mode=req.operation_mode,
+        freeze_failed_candidates=req.freeze_failed_candidates,
+    )
+    return _serialize_llm_settings(payload, message="运行偏好已保存")
+
+
+@app.post("/api/settings/llm/profiles", response_model=LLMSettingsResponse)
+def save_llm_profile(req: LLMProfileUpsertRequest):
+    if not _runtime_settings:
+        raise HTTPException(503, "服务尚未初始化")
+    payload = _runtime_settings.save_profile(
+        profile_id=req.profile_id,
+        name=req.name,
+        api_key=req.api_key,
+        base_url=req.base_url,
+        model=req.model,
+        set_as_default=req.set_as_default,
+    )
+    return _serialize_llm_settings(payload, message="模型配置已保存")
+
+
+@app.post("/api/settings/llm/default-profile", response_model=LLMSettingsResponse)
+def set_default_llm_profile(req: LLMDefaultProfileRequest):
+    if not _runtime_settings:
+        raise HTTPException(503, "服务尚未初始化")
+    try:
+        payload = _runtime_settings.set_default_profile(req.profile_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    return _serialize_llm_settings(payload, message="默认模型已切换")
+
+
+@app.delete("/api/settings/llm/profiles/{profile_id}", response_model=LLMSettingsResponse)
+def delete_llm_profile(profile_id: str):
+    if not _runtime_settings:
+        raise HTTPException(503, "服务尚未初始化")
+    try:
+        payload = _runtime_settings.delete_profile(profile_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return _serialize_llm_settings(payload, message="模型配置已删除")
 
 
 @app.get("/api/tasks/{task_id}", response_model=TaskResponse)
@@ -400,16 +560,20 @@ def get_task(task_id: str):
         task = dict(task_row) if task_row is not None else None
     if task is None:
         raise HTTPException(404, "任务不存在")
-    return TaskResponse(
-        task_id=task_id,
-        status=task["status"],
-        project_id=task.get("project_id"),
-        error=task.get("error"),
-        message=task.get("message", ""),
-        failed_chapters=task.get("failed_chapters", []),
-        paused_chapters=task.get("paused_chapters", []),
-        frozen_artifacts=task.get("frozen_artifacts", []),
-    )
+    return _serialize_task(task_id, task)
+
+
+@app.get("/api/tasks", response_model=list[TaskSummaryResponse])
+def list_tasks(limit: int = 30):
+    _prune_tasks()
+    normalized_limit = max(1, min(int(limit or 30), 100))
+    with _tasks_lock:
+        ordered = sorted(
+            _tasks.items(),
+            key=lambda item: item[1].get("updated_at", _utcnow()),
+            reverse=True,
+        )[:normalized_limit]
+    return [_serialize_task(task_id, dict(task)) for task_id, task in ordered]
 
 
 def _build_extension_package() -> bytes:
@@ -678,6 +842,24 @@ def list_projects():
         session.close()
 
 
+@app.delete("/api/projects/{project_id}", response_model=ProjectDeleteResponse)
+def delete_project(project_id: str):
+    session = _get_session()
+    try:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        _delete_project(session, project_id)
+        session.commit()
+        return ProjectDeleteResponse(
+            ok=True,
+            project_id=project_id,
+            message=f"项目《{project.title}》已删除。",
+        )
+    finally:
+        session.close()
+
+
 @app.get("/api/projects/{project_id}", response_model=ProjectDetail)
 def get_project(project_id: str):
     session = _get_session()
@@ -778,6 +960,54 @@ def get_chapter(project_id: str, chapter_number: int):
         )
     finally:
         session.close()
+
+
+@app.post(
+    "/api/projects/{project_id}/publishers/upload-jobs",
+    response_model=PublisherUploadJobResponse,
+)
+def create_project_chapter_upload_job(
+    project_id: str,
+    req: ProjectChapterPublishRequest,
+):
+    session = _get_session()
+    try:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        plan = session.execute(
+            select(ChapterPlan).where(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number == req.chapter_number,
+            )
+        ).scalar_one_or_none()
+        if plan is None:
+            raise HTTPException(404, f"第{req.chapter_number}章不存在")
+        draft = session.execute(
+            select(ChapterDraft)
+            .where(ChapterDraft.chapter_plan_id == plan.id)
+            .order_by(ChapterDraft.version.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if draft is None:
+            raise HTTPException(404, f"第{req.chapter_number}章尚未生成")
+    finally:
+        session.close()
+
+    try:
+        payload = _publisher_manager.create_upload_job(
+            platform=req.platform,
+            book_name=req.book_name,
+            chapter_title=plan.title,
+            body=draft.body_text,
+            upload_url=req.upload_url,
+            publish=req.publish,
+            create_if_missing=req.create_if_missing,
+            book_meta=req.book_meta.model_dump() if req.book_meta else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return PublisherUploadJobResponse(**payload)
 
 
 @app.get("/api/projects/{project_id}/chapters/{chapter_number}/review", response_model=ChapterReviewDetail)

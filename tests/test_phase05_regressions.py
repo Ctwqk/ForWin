@@ -42,7 +42,7 @@ from forwin.models.publisher import (
     PublisherRawComment,
     PublisherUploadJob,
 )
-from forwin.models.project import ArcPlanVersion, ChapterPlan
+from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.orchestrator.loop import RunResult, WritingOrchestrator
 from forwin.orchestrator.phase3 import PacingAssessment, PacingStrategist, ReplanGovernor, StageAssessment
 from forwin.orchestrator.phase24 import ArcEnvelopeManager
@@ -4155,6 +4155,212 @@ class Phase05RegressionTests(unittest.TestCase):
             finally:
                 api_module._config = old_config
                 api_module._runtime_settings = old_store
+
+    def test_llm_profile_endpoints_and_preferences(self) -> None:
+        with TemporaryDirectory() as tmp:
+            old_config = api_module._config
+            old_store = api_module._runtime_settings
+            try:
+                api_module._config = Config(
+                    db_path=":memory:",
+                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
+                    minimax_api_key="",
+                    minimax_base_url="https://api.minimaxi.com/v1",
+                    minimax_model="MiniMax-M2.7",
+                )
+                api_module._runtime_settings = RuntimeSettingsStore(
+                    api_module._config.runtime_settings_path,
+                    default_api_key="default-key",
+                    default_base_url=api_module._config.minimax_base_url,
+                    default_model=api_module._config.minimax_model,
+                )
+                saved_profile = api_module.save_llm_profile(
+                    api_module.LLMProfileUpsertRequest(
+                        name="OpenRouter 备用",
+                        api_key="sk-alt",
+                        base_url="https://openrouter.ai/api/v1",
+                        model="openrouter/test",
+                        set_as_default=True,
+                    )
+                )
+                profile_id = saved_profile.default_profile_id
+
+                prefs = api_module.save_llm_preferences(
+                    api_module.LLMPreferencesRequest(
+                        operation_mode="checkpoint",
+                        freeze_failed_candidates=False,
+                    )
+                )
+                current = api_module.get_llm_settings()
+                deleted = api_module.delete_llm_profile(profile_id)
+
+                self.assertEqual(prefs.operation_mode, "checkpoint")
+                self.assertEqual(current.default_profile_id, profile_id)
+                self.assertEqual(current.operation_mode, "checkpoint")
+                self.assertEqual(current.freeze_failed_candidates, False)
+                self.assertGreaterEqual(len(current.profiles), 2)
+                self.assertNotEqual(deleted.default_profile_id, profile_id)
+            finally:
+                api_module._config = old_config
+                api_module._runtime_settings = old_store
+
+    def test_tasks_list_endpoint_returns_recent_items(self) -> None:
+        old_tasks = api_module._tasks
+        now = datetime.now(timezone.utc)
+        try:
+            api_module._tasks = {
+                "task-old": {
+                    "status": "completed",
+                    "project_id": "proj-old",
+                    "error": None,
+                    "message": "done",
+                    "failed_chapters": [],
+                    "paused_chapters": [],
+                    "frozen_artifacts": [],
+                    "created_at": now - timedelta(minutes=2),
+                    "updated_at": now - timedelta(minutes=1),
+                },
+                "task-new": {
+                    "status": "running",
+                    "project_id": "proj-new",
+                    "error": None,
+                    "message": "running",
+                    "failed_chapters": [],
+                    "paused_chapters": [],
+                    "frozen_artifacts": [],
+                    "created_at": now,
+                    "updated_at": now,
+                },
+            }
+            payload = api_module.list_tasks(limit=10)
+            self.assertEqual([item.task_id for item in payload], ["task-new", "task-old"])
+            self.assertEqual(payload[0].status, "running")
+            self.assertTrue(payload[0].created_at)
+            self.assertTrue(payload[0].updated_at)
+        finally:
+            api_module._tasks = old_tasks
+
+    def test_project_delete_endpoint_cascades_related_rows(self) -> None:
+        tmp = TemporaryDirectory()
+        engine = get_engine(str(Path(tmp.name) / "project-delete.db"))
+        init_db(engine)
+        session_factory = get_session_factory(engine)
+
+        old_session_factory = api_module._SessionFactory
+        try:
+            with session_factory() as session:
+                project = Project(id="proj-delete", title="待删项目", premise="premise", genre="玄幻")
+                session.add(project)
+                session.commit()
+                arc = ArcPlanVersion(id="arc-delete", project_id=project.id, arc_synopsis="arc")
+                plan = ChapterPlan(
+                    id="plan-delete",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=1,
+                    title="第一章",
+                    status="completed",
+                )
+                session.add(arc)
+                session.commit()
+                session.add(plan)
+                session.commit()
+                draft = ChapterDraft(
+                    id="draft-delete",
+                    chapter_plan_id=plan.id,
+                    version=1,
+                    body_text="正文",
+                    summary="摘要",
+                    char_count=2,
+                )
+                review = ChapterReview(
+                    id="review-delete",
+                    draft_id=draft.id,
+                    verdict="pass",
+                )
+                session.add_all([draft, review])
+                session.commit()
+
+            api_module._SessionFactory = session_factory
+            response = api_module.delete_project("proj-delete")
+            self.assertTrue(response.ok)
+            with session_factory() as session:
+                self.assertIsNone(session.get(Project, "proj-delete"))
+                self.assertEqual(
+                    session.execute(select(func.count()).select_from(ChapterPlan)).scalar_one(),
+                    0,
+                )
+                self.assertEqual(
+                    session.execute(select(func.count()).select_from(ChapterDraft)).scalar_one(),
+                    0,
+                )
+                self.assertEqual(
+                    session.execute(select(func.count()).select_from(ChapterReview)).scalar_one(),
+                    0,
+                )
+        finally:
+            api_module._SessionFactory = old_session_factory
+            engine.dispose()
+            tmp.cleanup()
+
+    def test_project_chapter_upload_job_uses_generated_chapter_body(self) -> None:
+        tmp = TemporaryDirectory()
+        engine = get_engine(str(Path(tmp.name) / "project-upload.db"))
+        init_db(engine)
+        session_factory = get_session_factory(engine)
+        manager = PublisherManager(session_factory, extension_api_key="secret")
+
+        old_session_factory = api_module._SessionFactory
+        old_manager = api_module._publisher_manager
+        try:
+            with session_factory() as session:
+                project = Project(id="proj-upload", title="雾港潮生录", premise="premise", genre="悬疑")
+                session.add(project)
+                session.commit()
+                arc = ArcPlanVersion(id="arc-upload", project_id=project.id, arc_synopsis="arc")
+                plan = ChapterPlan(
+                    id="plan-upload",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=3,
+                    title="第三章 雨夜回港",
+                    status="completed",
+                )
+                session.add(arc)
+                session.commit()
+                session.add(plan)
+                session.commit()
+                draft = ChapterDraft(
+                    id="draft-upload",
+                    chapter_plan_id=plan.id,
+                    version=1,
+                    body_text="这里是第三章正文",
+                    summary="摘要",
+                    char_count=8,
+                )
+                session.add(draft)
+                session.commit()
+
+            api_module._SessionFactory = session_factory
+            api_module._publisher_manager = manager
+            payload = api_module.create_project_chapter_upload_job(
+                "proj-upload",
+                api_module.ProjectChapterPublishRequest(
+                    platform="fanqie",
+                    chapter_number=3,
+                    book_name="雾港潮生录",
+                    publish=False,
+                ),
+            )
+
+            self.assertEqual(payload.chapter_title, "第三章 雨夜回港")
+            self.assertEqual(payload.body, "这里是第三章正文")
+            self.assertEqual(payload.status, "pending")
+        finally:
+            api_module._SessionFactory = old_session_factory
+            api_module._publisher_manager = old_manager
+            engine.dispose()
+            tmp.cleanup()
 
     def test_generate_uses_saved_runtime_settings_when_request_omits_key(self) -> None:
         class FakeThread:

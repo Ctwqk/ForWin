@@ -32,6 +32,39 @@ def build_home_page_settings(
     }
 
 
+def _resolve_profile(
+    stored: dict[str, object],
+    *,
+    requested_profile_id: str = "",
+) -> dict[str, str]:
+    profiles = [
+        item for item in stored.get("profiles", [])
+        if isinstance(item, dict)
+    ]
+    target_id = requested_profile_id.strip() or str(stored.get("default_profile_id", "")).strip()
+    selected = next(
+        (
+            item for item in profiles
+            if str(item.get("id", "")).strip() == target_id
+        ),
+        None,
+    )
+    if selected is None and profiles:
+        selected = profiles[0]
+    if selected is None:
+        selected = {
+            "id": "",
+            "api_key": str(stored.get("api_key", "")).strip(),
+            "base_url": str(stored.get("base_url", "")).strip(),
+            "model": str(stored.get("model", "")).strip(),
+        }
+    return {
+        "api_key": str(selected.get("api_key", "")).strip(),
+        "base_url": str(selected.get("base_url", "")).strip(),
+        "model": str(selected.get("model", "")).strip(),
+    }
+
+
 def build_runtime_config(
     req: GenerateRequest,
     *,
@@ -39,9 +72,13 @@ def build_runtime_config(
     runtime_settings: RuntimeSettingsStore | None,
 ) -> Config:
     stored = runtime_settings.get() if runtime_settings else {}
-    api_key = (req.api_key or "").strip() or stored.get("api_key", base_config.minimax_api_key)
-    base_url = (req.base_url or "").strip() or stored.get("base_url", base_config.minimax_base_url)
-    model = (req.model or "").strip() or stored.get("model", base_config.minimax_model)
+    selected = _resolve_profile(
+        stored,
+        requested_profile_id=str(req.model_profile_id or "").strip(),
+    )
+    api_key = (req.api_key or "").strip() or selected.get("api_key") or str(stored.get("api_key", base_config.minimax_api_key))
+    base_url = (req.base_url or "").strip() or selected.get("base_url") or str(stored.get("base_url", base_config.minimax_base_url))
+    model = (req.model or "").strip() or selected.get("model") or str(stored.get("model", base_config.minimax_model))
     operation_mode = (req.operation_mode or "").strip() or str(
         stored.get("operation_mode", base_config.operation_mode)
     )

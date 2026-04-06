@@ -36,6 +36,10 @@ def render_home_page(
     default_genre: str = "玄幻",
     default_chapters: int = 3,
 ) -> str:
+    base_url_json = json.dumps(base_url, ensure_ascii=False)
+    model_json = json.dumps(model, ensure_ascii=False)
+    operation_mode_json = json.dumps(operation_mode, ensure_ascii=False)
+    freeze_failed_json = json.dumps(bool(freeze_failed_candidates))
     return f"""
 <!doctype html>
 <html lang="zh-CN">
@@ -45,118 +49,264 @@ def render_home_page(
   <title>ForWin 创作台</title>
   <style>
     :root {{
-      --paper:#f7f1e7;
-      --panel:#fffaf3;
-      --ink:#1d2522;
-      --muted:#6e6250;
-      --accent:#b24a28;
+      --paper:#efe6d7;
+      --panel:#f9f3e9;
+      --panel-strong:#fffdf8;
+      --ink:#17211d;
+      --muted:#6f6352;
+      --accent:#ad4a2d;
       --accent-2:#284d46;
-      --line:#e7d8c4;
-      --shadow:0 24px 70px rgba(68,46,24,.10);
+      --line:#decfba;
+      --line-strong:#cdb89b;
+      --shadow:0 24px 70px rgba(43,28,11,.12);
+      --warn:#8a5418;
+      --ok:#1d6d45;
+      --danger:#8e2f2f;
+      --ui:"Inter","SF Pro Display","Segoe UI","PingFang SC","Noto Sans SC",sans-serif;
+      --serif:"Iowan Old Style","Palatino Linotype","Noto Serif SC","Source Han Serif SC",serif;
     }}
     * {{ box-sizing:border-box; }}
     body {{
       margin:0;
       color:var(--ink);
-      font-family:"Noto Serif SC","Source Han Serif SC",serif;
+      font-family:var(--serif);
       background:
-        radial-gradient(circle at top left, rgba(255,248,224,.95), transparent 33%),
-        radial-gradient(circle at 85% 15%, rgba(219,118,63,.13), transparent 22%),
-        linear-gradient(140deg, #f2eadb, #eadfcb 58%, #efe7da);
+        radial-gradient(circle at 0% 0%, rgba(255,247,224,.95), transparent 28%),
+        radial-gradient(circle at 88% 8%, rgba(173,74,45,.12), transparent 20%),
+        linear-gradient(135deg, #f3ebdf 0%, #e9dfcf 55%, #f2ebde 100%);
+      min-height:100vh;
+      position:relative;
     }}
-    .wrap {{ max-width:1180px; margin:0 auto; padding:36px 20px 72px; }}
+    body::before {{
+      content:"";
+      position:fixed;
+      inset:0;
+      background:
+        linear-gradient(rgba(255,255,255,.14), rgba(255,255,255,0)),
+        repeating-linear-gradient(
+          90deg,
+          rgba(125,96,55,.04) 0,
+          rgba(125,96,55,.04) 1px,
+          transparent 1px,
+          transparent 96px
+        );
+      pointer-events:none;
+    }}
+    .wrap {{
+      position:relative;
+      max-width:1320px;
+      margin:0 auto;
+      padding:28px 24px 80px;
+    }}
+    .masthead {{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:16px;
+      margin-bottom:24px;
+      padding-bottom:18px;
+      border-bottom:1px solid rgba(111,99,82,.16);
+    }}
+    .brand-lockup {{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }}
+    .brand-name {{
+      font-size:14px;
+      letter-spacing:.22em;
+      text-transform:uppercase;
+      font-family:var(--ui);
+      color:var(--muted);
+    }}
+    .brand-note {{
+      font-size:13px;
+      color:var(--muted);
+      font-family:var(--ui);
+    }}
+    .masthead-links {{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+    }}
     .hero {{
-      display:grid; grid-template-columns:1.2fr .95fr; gap:22px; align-items:stretch;
+      display:grid;
+      grid-template-columns:minmax(0, 1.25fr) minmax(360px, .9fr);
+      gap:24px;
+      align-items:stretch;
     }}
     .panel {{
-      background:rgba(255,250,243,.9);
-      border:1px solid var(--line);
-      border-radius:24px;
+      position:relative;
+      overflow:hidden;
+      background:linear-gradient(180deg, rgba(255,253,249,.94), rgba(247,240,228,.92));
+      border:1px solid rgba(205,184,155,.58);
+      border-radius:28px;
       box-shadow:var(--shadow);
-      backdrop-filter:blur(8px);
+      backdrop-filter:blur(12px);
+      transition:transform .24s ease, box-shadow .24s ease, border-color .24s ease;
+      animation:riseIn .45s ease both;
+    }}
+    .panel:hover {{
+      transform:translateY(-2px);
+      box-shadow:0 28px 76px rgba(43,28,11,.14);
+      border-color:rgba(173,74,45,.26);
     }}
     .lead {{
-      padding:34px 32px;
-      min-height:320px;
+      padding:40px 38px;
+      min-height:360px;
       display:flex;
       flex-direction:column;
       justify-content:space-between;
       background:
-        linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,0)),
-        radial-gradient(circle at bottom right, rgba(178,74,40,.11), transparent 30%);
+        linear-gradient(180deg, rgba(255,255,255,.36), rgba(255,255,255,0)),
+        radial-gradient(circle at bottom right, rgba(173,74,45,.14), transparent 32%),
+        linear-gradient(120deg, rgba(40,77,70,.05), transparent 52%);
+    }}
+    .lead::after {{
+      content:"";
+      position:absolute;
+      right:-36px;
+      bottom:-44px;
+      width:220px;
+      height:220px;
+      border-radius:50%;
+      border:1px solid rgba(173,74,45,.12);
+      box-shadow:0 0 0 26px rgba(173,74,45,.04), 0 0 0 64px rgba(173,74,45,.025);
     }}
     .eyebrow {{
       display:inline-flex;
       align-items:center;
       gap:8px;
-      border:1px solid rgba(178,74,40,.2);
+      border:1px solid rgba(173,74,45,.18);
       border-radius:999px;
-      padding:7px 12px;
+      padding:8px 14px;
       color:var(--accent);
-      font-size:13px;
-      letter-spacing:.06em;
+      font-size:12px;
+      letter-spacing:.14em;
+      text-transform:uppercase;
+      font-family:var(--ui);
+      background:rgba(173,74,45,.06);
     }}
-    h1 {{ margin:16px 0 10px; font-size:44px; line-height:1.06; }}
-    .lead p {{ margin:0; font-size:16px; line-height:1.8; color:var(--muted); }}
-    .hero-actions {{ display:flex; gap:12px; flex-wrap:wrap; margin-top:24px; }}
+    h1 {{
+      margin:18px 0 12px;
+      font-size:56px;
+      line-height:.98;
+      letter-spacing:-.03em;
+      max-width:10ch;
+    }}
+    .lead p {{
+      margin:0;
+      max-width:58ch;
+      font-size:16px;
+      line-height:1.9;
+      color:var(--muted);
+    }}
+    .lead-footnote {{
+      margin-top:18px;
+      padding-top:18px;
+      border-top:1px solid rgba(111,99,82,.14);
+      font-size:13px;
+      color:var(--muted);
+      font-family:var(--ui);
+    }}
+    .hero-actions {{
+      display:flex;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-top:26px;
+    }}
     a.button, button {{
       appearance:none;
-      border:0;
+      border:1px solid transparent;
       border-radius:999px;
       padding:12px 18px;
       cursor:pointer;
-      font:inherit;
+      font:600 14px/1.1 var(--ui);
       text-decoration:none;
-      transition:transform .18s ease, box-shadow .18s ease, opacity .18s ease;
+      letter-spacing:.01em;
+      transition:transform .18s ease, box-shadow .18s ease, opacity .18s ease, border-color .18s ease, background .18s ease;
     }}
     a.button:hover, button:hover {{ transform:translateY(-1px); }}
     .primary {{
       color:#fff;
-      background:linear-gradient(135deg, var(--accent), #cc6a3d);
-      box-shadow:0 16px 30px rgba(178,74,40,.24);
+      background:linear-gradient(135deg, var(--accent), #c8633c);
+      box-shadow:0 16px 30px rgba(173,74,45,.22);
     }}
     .secondary {{
       color:var(--accent-2);
-      background:rgba(40,77,70,.08);
-      border:1px solid rgba(40,77,70,.16);
+      background:rgba(40,77,70,.06);
+      border-color:rgba(40,77,70,.14);
     }}
     .form {{
-      padding:28px 24px;
+      padding:34px 28px;
       display:grid;
-      gap:14px;
+      gap:16px;
       align-content:start;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.36), rgba(255,255,255,0)),
+        radial-gradient(circle at top right, rgba(40,77,70,.08), transparent 28%);
     }}
-    .form h2 {{ margin:0 0 4px; font-size:24px; }}
-    .hint {{ color:var(--muted); font-size:14px; line-height:1.6; }}
+    .form h2, .projects-head h2 {{
+      margin:0 0 4px;
+      font-size:28px;
+      line-height:1.08;
+    }}
+    .hint {{
+      color:var(--muted);
+      font-size:14px;
+      line-height:1.7;
+      font-family:var(--ui);
+    }}
     .grid {{
       display:grid;
       grid-template-columns:repeat(2, minmax(0, 1fr));
-      gap:14px;
+      gap:14px 16px;
     }}
-    label {{ display:block; font-size:14px; margin-bottom:6px; color:var(--muted); }}
+    label {{
+      display:block;
+      font-size:12px;
+      margin-bottom:6px;
+      color:var(--muted);
+      font-family:var(--ui);
+      letter-spacing:.08em;
+      text-transform:uppercase;
+    }}
     input, textarea, select {{
       width:100%;
-      border:1px solid var(--line);
-      border-radius:16px;
-      padding:12px 14px;
-      background:#fffdfa;
+      border:1px solid rgba(205,184,155,.82);
+      border-radius:18px;
+      padding:13px 15px;
+      background:rgba(255,253,248,.98);
       color:var(--ink);
-      font:inherit;
+      font:500 14px/1.4 var(--ui);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.8);
+      transition:border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+    }}
+    input:focus, textarea:focus, select:focus {{
+      outline:none;
+      border-color:rgba(173,74,45,.46);
+      box-shadow:0 0 0 4px rgba(173,74,45,.08);
     }}
     textarea {{ min-height:180px; resize:vertical; }}
     .stats {{
       display:grid;
       grid-template-columns:repeat(3, minmax(0,1fr));
-      gap:14px;
-      margin-top:22px;
+      gap:12px;
+      margin-top:28px;
     }}
     .stat {{
-      padding:16px 18px;
-      border-radius:18px;
-      background:rgba(255,255,255,.45);
+      padding:18px 18px 16px;
+      border-radius:22px;
+      background:rgba(255,255,255,.5);
       border:1px solid rgba(231,216,196,.8);
+      min-height:112px;
     }}
-    .stat b {{ display:block; font-size:26px; margin-bottom:6px; }}
+    .stat b {{
+      display:block;
+      font-size:28px;
+      margin-bottom:8px;
+      line-height:1;
+    }}
     .row {{
       display:flex;
       gap:12px;
@@ -165,137 +315,293 @@ def render_home_page(
     }}
     .status {{
       margin-top:8px;
-      padding:14px 16px;
-      border-radius:16px;
-      background:rgba(255,255,255,.54);
-      border:1px solid var(--line);
+      padding:15px 16px;
+      border-radius:18px;
+      background:rgba(255,255,255,.58);
+      border:1px solid rgba(205,184,155,.72);
       color:var(--muted);
       min-height:56px;
       line-height:1.6;
       white-space:pre-wrap;
+      font-family:var(--ui);
+    }}
+    .status.ok {{ color:var(--ok); }}
+    .status.warn {{ color:var(--warn); }}
+    .status.error {{ color:var(--danger); }}
+    .section-grid {{
+      display:grid;
+      grid-template-columns:repeat(2, minmax(0, 1fr));
+      gap:22px;
+      margin-top:26px;
+    }}
+    .mini-grid {{
+      display:grid;
+      grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));
+      gap:14px;
     }}
     .projects {{
       margin-top:26px;
-      padding:24px;
+      padding:28px;
     }}
     .projects-head {{
       display:flex;
       justify-content:space-between;
-      align-items:center;
+      align-items:flex-start;
       gap:12px;
-      margin-bottom:12px;
+      margin-bottom:18px;
     }}
     .project-list {{
       display:grid;
-      grid-template-columns:repeat(auto-fit, minmax(240px, 1fr));
-      gap:14px;
+      grid-template-columns:repeat(auto-fit, minmax(320px, 1fr));
+      gap:16px;
     }}
     .project-card {{
-      padding:18px;
-      border-radius:18px;
-      border:1px solid var(--line);
-      background:rgba(255,255,255,.58);
+      padding:22px;
+      border-radius:24px;
+      border:1px solid rgba(205,184,155,.74);
+      background:linear-gradient(180deg, rgba(255,255,255,.62), rgba(252,247,240,.56));
+      position:relative;
+      overflow:hidden;
     }}
-    .project-card h3 {{ margin:0 0 8px; font-size:19px; }}
-    .project-card p {{ margin:0 0 8px; color:var(--muted); line-height:1.6; }}
-    .muted {{ color:var(--muted); }}
+    .project-card::before {{
+      content:"";
+      position:absolute;
+      left:22px;
+      top:0;
+      width:72px;
+      height:3px;
+      background:linear-gradient(90deg, var(--accent), rgba(173,74,45,0));
+    }}
+    .project-card h3 {{
+      margin:0 0 8px;
+      font-size:24px;
+      line-height:1.12;
+    }}
+    .project-card p {{
+      margin:0 0 10px;
+      color:var(--muted);
+      line-height:1.7;
+    }}
+    .task-card, .platform-card, .profile-card {{
+      padding:18px;
+      border-radius:20px;
+      border:1px solid rgba(205,184,155,.74);
+      background:linear-gradient(180deg, rgba(255,255,255,.62), rgba(252,247,240,.56));
+    }}
+    .task-list, .platform-list, .profile-list {{
+      display:grid;
+      gap:12px;
+      margin-top:12px;
+    }}
+    .task-shell {{
+      margin-top:18px;
+    }}
+    .task-toolbar {{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-bottom:14px;
+    }}
+    .task-filter-group {{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+    }}
+    .filter-chip {{
+      appearance:none;
+      border:1px solid rgba(40,77,70,.14);
+      background:rgba(40,77,70,.04);
+      color:var(--accent-2);
+      border-radius:999px;
+      padding:10px 14px;
+      font:600 13px/1 var(--ui);
+      cursor:pointer;
+      transition:all .18s ease;
+      box-shadow:none;
+    }}
+    .filter-chip:hover {{
+      transform:translateY(-1px);
+    }}
+    .filter-chip.active {{
+      background:linear-gradient(135deg, var(--accent), #c8633c);
+      color:#fff;
+      border-color:transparent;
+      box-shadow:0 12px 24px rgba(173,74,45,.18);
+    }}
+    .task-columns {{
+      display:grid;
+      grid-template-columns:repeat(2, minmax(0, 1fr));
+      gap:16px;
+    }}
+    .task-pane {{
+      min-height:220px;
+      transition:opacity .2s ease, transform .2s ease;
+    }}
+    .task-pane.hidden {{
+      display:none;
+    }}
+    .task-pane-head {{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:12px;
+      margin-bottom:4px;
+    }}
+    .task-pane-head h3 {{
+      margin:0;
+      font-size:20px;
+      line-height:1.1;
+    }}
+    .empty-state {{
+      min-height:160px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      text-align:center;
+      padding:24px;
+      border-style:dashed;
+      background:linear-gradient(180deg, rgba(255,255,255,.52), rgba(251,246,238,.44));
+    }}
+    .task-card strong,
+    .platform-card strong,
+    .profile-card strong {{
+      display:block;
+      margin-bottom:6px;
+      font-size:18px;
+      line-height:1.2;
+    }}
+    .badge {{
+      display:inline-flex;
+      align-items:center;
+      gap:6px;
+      border-radius:999px;
+      padding:6px 10px;
+      font-size:12px;
+      background:rgba(178,74,40,.10);
+      color:var(--accent);
+      font-family:var(--ui);
+      border:1px solid rgba(173,74,45,.12);
+    }}
+    .danger {{
+      background:rgba(142,47,47,.10);
+      color:var(--danger);
+      border:1px solid rgba(142,47,47,.18);
+    }}
+    .inline-note {{
+      font-size:13px;
+      color:var(--muted);
+      line-height:1.5;
+      font-family:var(--ui);
+    }}
+    .project-tools {{
+      margin-top:16px;
+      padding-top:16px;
+      border-top:1px dashed rgba(111,99,82,.22);
+    }}
+    .task-meta {{
+      font-size:13px;
+      color:var(--muted);
+      line-height:1.5;
+      font-family:var(--ui);
+    }}
+    .muted {{
+      color:var(--muted);
+      font-family:var(--ui);
+    }}
+    a {{
+      color:var(--accent);
+      text-decoration:none;
+    }}
+    a:hover {{
+      text-decoration:underline;
+    }}
+    @keyframes riseIn {{
+      from {{
+        opacity:0;
+        transform:translateY(12px);
+      }}
+      to {{
+        opacity:1;
+        transform:translateY(0);
+      }}
+    }}
     @media (max-width: 900px) {{
+      .masthead {{
+        flex-direction:column;
+        align-items:flex-start;
+      }}
       .hero {{ grid-template-columns:1fr; }}
-      .grid, .stats {{ grid-template-columns:1fr; }}
-      h1 {{ font-size:36px; }}
+      .grid, .stats, .section-grid {{ grid-template-columns:1fr; }}
+      h1 {{
+        font-size:42px;
+        max-width:11ch;
+      }}
+      .projects {{
+        padding:22px;
+      }}
+      .task-columns {{
+        grid-template-columns:1fr;
+      }}
     }}
   </style>
 </head>
 <body>
   <div class="wrap">
+    <header class="masthead">
+      <div class="brand-lockup">
+        <span class="brand-name">ForWin Control Desk</span>
+        <span class="brand-note">长篇网文生成、项目检查与平台发布共用一套控制台。</span>
+      </div>
+      <div class="masthead-links">
+        <a class="button secondary" href="#generator">生成入口</a>
+        <a class="button secondary" href="#task_panels">任务队列</a>
+        <a class="button secondary" href="/publishers">平台安装与排障</a>
+      </div>
+    </header>
     <section class="hero">
       <article class="panel lead">
         <div>
           <span class="eyebrow">FORWIN · Longform Web Novel Studio</span>
           <h1>从设定到章节，把长篇连载真正跑起来</h1>
-          <p>这里可以直接发起生成任务，也可以跳到平台发布页做番茄 / 起点登录与上传。默认已经指向 MiniMax 的 OpenAI 兼容接口，你只需要在网页上填自己的 API Key 就能开始。</p>
+          <p>首页现在同时承接生成与发布。模型配置、生成任务、发布任务、平台状态和项目卡内一键发布都放在这里；平台页只保留给扩展安装和排障。</p>
           <div class="stats">
             <div class="stat">
-              <b>MiniMax</b>
-              <span class="muted">默认 Base URL 已预填</span>
+              <b>多模型</b>
+              <span class="muted">支持保存多个 Base URL / API Key / Model 档案</span>
             </div>
             <div class="stat">
-              <b>Single</b>
-              <span class="muted">阶段 0.5 默认先走单章草稿流程，优先保证生成闭环</span>
+              <b>双任务栏</b>
+              <span class="muted">生成任务和发布任务拆开看，不再混在项目卡里</span>
             </div>
             <div class="stat">
-              <b>Phase 2</b>
-              <span class="muted">支持项目生成、查询与发布联调</span>
+              <b>卡内发布</b>
+              <span class="muted">从项目卡直接选章节入队上传，不再手动复制正文</span>
             </div>
           </div>
         </div>
         <div class="hero-actions">
           <a class="button primary" href="#generator">开始生成</a>
-          <a class="button secondary" href="/publishers">去平台登录与上传</a>
+          <a class="button secondary" href="#task_panels">看任务队列</a>
+          <a class="button secondary" href="/publishers">平台安装与排障页</a>
         </div>
+        <div class="lead-footnote">视觉层重构后，这里更像创作工作台而不是原始调试页，但所有交互仍走现有后端接口。</div>
       </article>
       <section class="panel form" id="generator">
         <div>
           <h2>生成新项目</h2>
-          <div class="hint">你可以先把 API Key 保存成默认配置，也可以只在这一次生成里临时覆盖。Base URL 与模型名已经按 MiniMax M2.7 预填好了。</div>
-        </div>
-        <div class="panel" style="padding:18px 18px 12px; border-radius:18px; box-shadow:none; background:rgba(255,255,255,.45);">
-          <div class="row" style="justify-content:space-between; align-items:flex-start;">
-            <div>
-              <h3 style="margin:0 0 6px; font-size:18px;">默认模型设置</h3>
-              <div class="hint">保存后，后续生成会自动使用这份配置。这样你设置完以后，我也可以直接继续联调测试。</div>
-            </div>
-            <div id="saved_badge" class="hint">已保存 API Key：{"是" if has_api_key else "否"}</div>
-          </div>
-          <div class="grid" style="margin-top:12px;">
-            <div>
-              <label for="saved_api_key">已保存 API Key</label>
-              <input id="saved_api_key" type="password" placeholder="sk-..." autocomplete="off">
-            </div>
-            <div>
-              <label for="saved_model">已保存 Model</label>
-              <input id="saved_model" value="{model}" spellcheck="false">
-            </div>
-          </div>
-          <div class="grid" style="margin-top:6px;">
-            <div>
-              <label for="saved_operation_mode">运行模式</label>
-              <select id="saved_operation_mode">
-                <option value="blackbox" {"selected" if operation_mode == "blackbox" else ""}>黑箱模式</option>
-                <option value="checkpoint" {"selected" if operation_mode == "checkpoint" else ""}>检查点模式</option>
-                <option value="copilot" {"selected" if operation_mode == "copilot" else ""}>共驾模式</option>
-              </select>
-              <div id="saved_mode_hint" class="hint" style="margin-top:6px;"></div>
-            </div>
-            <div style="display:flex;align-items:end;">
-              <label style="display:flex; gap:10px; align-items:flex-start; margin:0;">
-                <input id="saved_freeze_failed_candidates" type="checkbox" style="width:auto; margin-top:4px;" {"checked" if freeze_failed_candidates else ""}>
-                <span>状态写入失败时冻结 candidate artifact</span>
-              </label>
-            </div>
-          </div>
-          <div style="margin-top:6px;">
-            <label for="saved_base_url">已保存 Base URL</label>
-            <input id="saved_base_url" value="{base_url}" spellcheck="false">
-          </div>
-          <div class="row" style="margin-top:10px;">
-            <button class="secondary" onclick="saveSettings()">保存默认配置</button>
-            <button class="secondary" onclick="loadSettings()">重新读取配置</button>
-          </div>
-          <div id="settings_status" class="status" style="margin-top:12px;">默认配置尚未修改。</div>
-        </div>
-        <div>
-          <label for="api_key">MiniMax API Key</label>
-          <input id="api_key" type="password" placeholder="sk-..." autocomplete="off">
+          <div class="hint">先保存模型档案，再用下拉选择本次生成使用哪一套模型。运行模式仍可按次覆盖。</div>
         </div>
         <div class="grid">
           <div>
-            <label for="base_url">Base URL</label>
-            <input id="base_url" value="{base_url}" spellcheck="false">
+            <label for="generate_profile_id">模型配置</label>
+            <select id="generate_profile_id"></select>
+            <div class="inline-note" id="generate_profile_meta">正在加载模型配置...</div>
           </div>
           <div>
-            <label for="model">Model</label>
-            <input id="model" value="{model}" spellcheck="false">
+            <label for="num_chapters">章节数</label>
+            <input id="num_chapters" type="number" min="1" max="20" value="{default_chapters}">
           </div>
         </div>
         <div class="grid">
@@ -310,12 +616,6 @@ def render_home_page(
               <option>历史</option>
             </select>
           </div>
-          <div>
-            <label for="num_chapters">章节数</label>
-            <input id="num_chapters" type="number" min="1" max="20" value="{default_chapters}">
-          </div>
-        </div>
-        <div class="grid">
           <div>
             <label for="operation_mode">本次运行模式</label>
             <select id="operation_mode">
@@ -344,19 +644,128 @@ def render_home_page(
       </section>
     </section>
 
+    <section class="section-grid">
+      <section class="panel projects">
+        <div class="projects-head">
+          <div>
+            <h2 style="margin:0 0 6px; font-size:24px;">模型配置</h2>
+            <div class="hint">这里维护可复用的模型档案。生成任务只需要下拉选择，不再每次手填 Base URL / API Key / Model。</div>
+          </div>
+          <span id="saved_badge" class="badge">已保存 API Key：{"是" if has_api_key else "否"}</span>
+        </div>
+        <div class="mini-grid">
+          <div>
+            <label for="profile_picker">已有模型档案</label>
+            <select id="profile_picker"></select>
+          </div>
+          <div>
+            <label for="profile_name">配置名称</label>
+            <input id="profile_name" placeholder="例如：MiniMax 主账号 / OpenRouter 备用">
+          </div>
+        </div>
+        <div class="grid">
+          <div>
+            <label for="profile_api_key">API Key</label>
+            <input id="profile_api_key" type="password" placeholder="sk-..." autocomplete="off">
+          </div>
+          <div>
+            <label for="profile_model">Model</label>
+            <input id="profile_model" value="{model}" spellcheck="false">
+          </div>
+        </div>
+        <div class="grid">
+          <div>
+            <label for="profile_base_url">Base URL</label>
+            <input id="profile_base_url" value="{base_url}" spellcheck="false">
+          </div>
+          <div>
+            <label for="saved_operation_mode">默认运行模式</label>
+            <select id="saved_operation_mode">
+              <option value="blackbox" {"selected" if operation_mode == "blackbox" else ""}>黑箱模式</option>
+              <option value="checkpoint" {"selected" if operation_mode == "checkpoint" else ""}>检查点模式</option>
+              <option value="copilot" {"selected" if operation_mode == "copilot" else ""}>共驾模式</option>
+            </select>
+            <div id="saved_mode_hint" class="hint" style="margin-top:6px;"></div>
+          </div>
+        </div>
+        <div class="row">
+          <label style="display:flex; gap:10px; align-items:flex-start; margin:0;">
+            <input id="saved_freeze_failed_candidates" type="checkbox" style="width:auto; margin-top:4px;" {"checked" if freeze_failed_candidates else ""}>
+            <span>状态写入失败时冻结 candidate artifact</span>
+          </label>
+          <label style="display:flex; gap:10px; align-items:flex-start; margin:0;">
+            <input id="profile_set_default" type="checkbox" style="width:auto; margin-top:4px;">
+            <span>保存后设为默认模型</span>
+          </label>
+        </div>
+        <div class="row">
+          <button class="primary" onclick="saveProfile()">保存模型配置</button>
+          <button class="secondary" onclick="saveRuntimePreferences()">保存运行偏好</button>
+          <button class="secondary" onclick="resetProfileForm()">新建配置</button>
+          <button class="secondary" onclick="setDefaultProfile()">设为默认</button>
+          <button class="secondary danger" onclick="deleteProfile()">删除当前配置</button>
+        </div>
+        <div id="settings_status" class="status">模型配置尚未修改。</div>
+        <div id="profile_list" class="profile-list"></div>
+      </section>
+
+      <section class="panel projects" id="task_panels">
+        <div class="projects-head">
+          <div>
+            <h2 style="margin:0 0 6px; font-size:24px;">平台与任务</h2>
+            <div class="hint">首页直接看扩展状态和最近队列，必要时再跳转到平台安装与排障页。</div>
+          </div>
+          <a class="button secondary" href="/publishers">高级发布页</a>
+        </div>
+        <div id="platform_list" class="platform-list"></div>
+        <div class="task-shell">
+          <div class="task-toolbar">
+            <div class="task-filter-group">
+              <button id="task_filter_all" class="filter-chip active" onclick="setTaskView('all')">全部任务</button>
+              <button id="task_filter_generation" class="filter-chip" onclick="setTaskView('generation')">只看生成</button>
+              <button id="task_filter_publish" class="filter-chip" onclick="setTaskView('publish')">只看上传</button>
+            </div>
+            <div class="section-note">根据当前工作切换任务视图，空态也会跟着切换。</div>
+          </div>
+          <div id="task_columns" class="task-columns">
+            <div id="generation_task_pane" class="task-pane">
+              <div class="task-pane-head">
+                <h3>生成任务</h3>
+                <button class="secondary" onclick="loadTasks()">刷新</button>
+              </div>
+              <div id="generation_tasks" class="task-list"></div>
+            </div>
+            <div id="publish_task_pane" class="task-pane">
+              <div class="task-pane-head">
+                <h3>发布任务</h3>
+                <button class="secondary" onclick="loadUploadJobs()">刷新</button>
+              </div>
+              <div id="publish_tasks" class="task-list"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+
     <section class="panel projects">
       <div class="projects-head">
         <div>
           <h2 style="margin:0 0 6px; font-size:24px;">已有项目</h2>
-          <div class="hint">任务完成后会出现在这里，方便你继续查看章节或去发布页操作。</div>
+          <div class="hint">项目卡里可以直接删除项目、查看章节状态，并把指定章节直接丢进平台发布队列。</div>
         </div>
-        <a class="button secondary" href="/publishers">平台发布页</a>
+        <button class="secondary" onclick="loadProjects()">刷新项目列表</button>
       </div>
       <div id="project_list" class="project-list"></div>
     </section>
   </div>
   <script>
     let currentTaskId = null;
+    let settingsState = null;
+    let platformsState = [];
+    let currentProfileId = '';
+    let taskViewMode = 'all';
+    let tasksPollTimer = null;
+    let uploadsPollTimer = null;
 
     function setStatus(text) {{
       document.getElementById('task_status').textContent = text;
@@ -379,6 +788,120 @@ def render_home_page(
       document.getElementById('mode_hint').textContent = modeHintText(document.getElementById('operation_mode').value);
     }}
 
+    function setTaskView(mode) {{
+      taskViewMode = mode;
+      const columns = document.getElementById('task_columns');
+      const generationPane = document.getElementById('generation_task_pane');
+      const publishPane = document.getElementById('publish_task_pane');
+      const allButton = document.getElementById('task_filter_all');
+      const generationButton = document.getElementById('task_filter_generation');
+      const publishButton = document.getElementById('task_filter_publish');
+
+      allButton.classList.toggle('active', mode === 'all');
+      generationButton.classList.toggle('active', mode === 'generation');
+      publishButton.classList.toggle('active', mode === 'publish');
+
+      generationPane.classList.toggle('hidden', mode === 'publish');
+      publishPane.classList.toggle('hidden', mode === 'generation');
+
+      columns.style.gridTemplateColumns = mode === 'all' ? 'repeat(2, minmax(0, 1fr))' : 'minmax(0, 1fr)';
+    }}
+
+    function selectedProfile() {{
+      if (!settingsState || !Array.isArray(settingsState.profiles)) return null;
+      const targetId = document.getElementById('generate_profile_id').value || settingsState.default_profile_id;
+      return settingsState.profiles.find((item) => item.id === targetId) || settingsState.profiles[0] || null;
+    }}
+
+    function updateGenerateProfileMeta() {{
+      const profile = selectedProfile();
+      const el = document.getElementById('generate_profile_meta');
+      if (!profile) {{
+        el.textContent = '还没有模型配置，请先在下面保存至少一条。';
+        return;
+      }}
+      el.textContent = `当前使用：${{profile.name}} | ${{profile.model}} | ${{profile.base_url}} | API Key：${{profile.has_api_key ? '已保存' : '未保存'}}`;
+    }}
+
+    function resetProfileForm() {{
+      currentProfileId = '';
+      document.getElementById('profile_picker').value = '';
+      document.getElementById('profile_name').value = '';
+      document.getElementById('profile_api_key').value = '';
+      document.getElementById('profile_base_url').value = {base_url_json};
+      document.getElementById('profile_model').value = {model_json};
+      document.getElementById('profile_set_default').checked = false;
+    }}
+
+    function fillProfileForm(profileId) {{
+      currentProfileId = profileId || '';
+      const profile = (settingsState?.profiles || []).find((item) => item.id === currentProfileId);
+      if (!profile) {{
+        resetProfileForm();
+        return;
+      }}
+      document.getElementById('profile_picker').value = profile.id;
+      document.getElementById('profile_name').value = profile.name || '';
+      document.getElementById('profile_api_key').value = '';
+      document.getElementById('profile_base_url').value = profile.base_url || {base_url_json};
+      document.getElementById('profile_model').value = profile.model || {model_json};
+      document.getElementById('profile_set_default').checked = profile.id === settingsState.default_profile_id;
+    }}
+
+    function renderProfiles() {{
+      const list = document.getElementById('profile_list');
+      const picker = document.getElementById('profile_picker');
+      const generate = document.getElementById('generate_profile_id');
+      clearNode(list);
+      clearNode(picker);
+      clearNode(generate);
+
+      const blank = document.createElement('option');
+      blank.value = '';
+      blank.textContent = '新建模型配置';
+      picker.appendChild(blank);
+
+      const profiles = Array.isArray(settingsState?.profiles) ? settingsState.profiles : [];
+      if (!profiles.length) {{
+        list.appendChild(createNode('div', '还没有模型配置，请先保存一条。', 'profile-card'));
+        updateGenerateProfileMeta();
+        return;
+      }}
+
+      profiles.forEach((profile) => {{
+        const pickerOption = document.createElement('option');
+        pickerOption.value = profile.id;
+        pickerOption.textContent = profile.name;
+        picker.appendChild(pickerOption);
+
+        const genOption = document.createElement('option');
+        genOption.value = profile.id;
+        genOption.textContent = `${{profile.name}}${{profile.id === settingsState.default_profile_id ? ' · 默认' : ''}}`;
+        if (profile.id === settingsState.default_profile_id) {{
+          genOption.selected = true;
+        }}
+        generate.appendChild(genOption);
+
+        const card = createNode('article', '', 'profile-card');
+        card.appendChild(createNode('strong', profile.name));
+        if (profile.id === settingsState.default_profile_id) {{
+          card.appendChild(createNode('span', '默认模型', 'badge'));
+        }}
+        card.appendChild(createNode('div', `${{profile.model}} | ${{profile.base_url}}`, 'task-meta'));
+        card.appendChild(createNode('div', `API Key：${{profile.has_api_key ? '已保存' : '未保存'}}`, 'task-meta'));
+        const actions = createNode('div', '', 'row');
+        actions.style.marginTop = '10px';
+        actions.appendChild(createButton('编辑', () => fillProfileForm(profile.id), 'secondary'));
+        actions.appendChild(createButton('设为生成模型', () => {{
+          generate.value = profile.id;
+          updateGenerateProfileMeta();
+        }}, 'secondary'));
+        card.appendChild(actions);
+        list.appendChild(card);
+      }});
+      updateGenerateProfileMeta();
+    }}
+
     async function startGeneration() {{
       const premise = document.getElementById('premise').value.trim();
       if (!premise) {{
@@ -390,9 +913,7 @@ def render_home_page(
         premise,
         genre: document.getElementById('genre').value,
         num_chapters: Number(document.getElementById('num_chapters').value || '3'),
-        api_key: document.getElementById('api_key').value.trim() || null,
-        base_url: document.getElementById('base_url').value.trim(),
-        model: document.getElementById('model').value.trim(),
+        model_profile_id: document.getElementById('generate_profile_id').value || null,
         operation_mode: document.getElementById('operation_mode').value,
         freeze_failed_candidates: document.getElementById('freeze_failed_candidates').checked,
       }};
@@ -412,6 +933,7 @@ def render_home_page(
       currentTaskId = data.task_id;
       setStatus(`任务已创建：${{data.task_id}}\\n${{data.message}}`);
       pollTask();
+      loadTasks();
     }}
 
     async function loadSettings() {{
@@ -421,29 +943,26 @@ def render_home_page(
         document.getElementById('settings_status').textContent = data.detail || '读取配置失败';
         return;
       }}
-      document.getElementById('saved_api_key').value = '';
-      document.getElementById('saved_base_url').value = data.base_url;
-      document.getElementById('saved_model').value = data.model;
+      settingsState = data;
+      document.getElementById('profile_base_url').value = data.base_url;
+      document.getElementById('profile_model').value = data.model;
       document.getElementById('saved_operation_mode').value = data.operation_mode;
       document.getElementById('saved_freeze_failed_candidates').checked = Boolean(data.freeze_failed_candidates);
-      document.getElementById('base_url').value = data.base_url;
-      document.getElementById('model').value = data.model;
       document.getElementById('operation_mode').value = data.operation_mode;
       document.getElementById('freeze_failed_candidates').checked = Boolean(data.freeze_failed_candidates);
       document.getElementById('saved_badge').textContent = `已保存 API Key：${{data.has_api_key ? '是' : '否'}}`;
       document.getElementById('settings_status').textContent = data.message || '已读取默认配置';
+      renderProfiles();
+      fillProfileForm(data.default_profile_id || '');
       updateModeHints();
     }}
 
-    async function saveSettings() {{
+    async function saveRuntimePreferences() {{
       const payload = {{
-        api_key: document.getElementById('saved_api_key').value.trim(),
-        base_url: document.getElementById('saved_base_url').value.trim(),
-        model: document.getElementById('saved_model').value.trim(),
         operation_mode: document.getElementById('saved_operation_mode').value,
         freeze_failed_candidates: document.getElementById('saved_freeze_failed_candidates').checked,
       }};
-      const res = await fetch('/api/settings/llm', {{
+      const res = await fetch('/api/settings/llm/preferences', {{
         method: 'POST',
         headers: {{ 'Content-Type': 'application/json' }},
         body: JSON.stringify(payload),
@@ -453,14 +972,85 @@ def render_home_page(
         document.getElementById('settings_status').textContent = data.detail || '保存失败';
         return;
       }}
-      document.getElementById('saved_api_key').value = '';
-      document.getElementById('base_url').value = data.base_url;
-      document.getElementById('model').value = data.model;
+      settingsState = data;
       document.getElementById('operation_mode').value = data.operation_mode;
       document.getElementById('freeze_failed_candidates').checked = Boolean(data.freeze_failed_candidates);
       document.getElementById('saved_badge').textContent = `已保存 API Key：${{data.has_api_key ? '是' : '否'}}`;
-      document.getElementById('settings_status').textContent = data.message || '已保存默认配置';
+      document.getElementById('settings_status').textContent = data.message || '已保存运行偏好';
       updateModeHints();
+    }}
+
+    async function saveProfile() {{
+      const payload = {{
+        profile_id: currentProfileId || null,
+        name: document.getElementById('profile_name').value.trim(),
+        api_key: document.getElementById('profile_api_key').value.trim(),
+        base_url: document.getElementById('profile_base_url').value.trim(),
+        model: document.getElementById('profile_model').value.trim(),
+        set_as_default: document.getElementById('profile_set_default').checked,
+      }};
+      if (!payload.name) {{
+        document.getElementById('settings_status').textContent = '请先填写配置名称。';
+        return;
+      }}
+      const res = await fetch('/api/settings/llm/profiles', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify(payload),
+      }});
+      const data = await res.json();
+      if (!res.ok) {{
+        document.getElementById('settings_status').textContent = data.detail || '保存模型配置失败';
+        return;
+      }}
+      settingsState = data;
+      document.getElementById('settings_status').textContent = data.message || '模型配置已保存';
+      document.getElementById('profile_api_key').value = '';
+      renderProfiles();
+      fillProfileForm(data.default_profile_id || payload.profile_id || '');
+    }}
+
+    async function setDefaultProfile() {{
+      const profileId = document.getElementById('profile_picker').value || currentProfileId;
+      if (!profileId) {{
+        document.getElementById('settings_status').textContent = '请先选择一条模型配置。';
+        return;
+      }}
+      const res = await fetch('/api/settings/llm/default-profile', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ profile_id: profileId }}),
+      }});
+      const data = await res.json();
+      if (!res.ok) {{
+        document.getElementById('settings_status').textContent = data.detail || '切换默认模型失败';
+        return;
+      }}
+      settingsState = data;
+      document.getElementById('settings_status').textContent = data.message || '默认模型已切换';
+      renderProfiles();
+      fillProfileForm(profileId);
+    }}
+
+    async function deleteProfile() {{
+      const profileId = document.getElementById('profile_picker').value || currentProfileId;
+      if (!profileId) {{
+        document.getElementById('settings_status').textContent = '请先选择要删除的模型配置。';
+        return;
+      }}
+      if (!window.confirm('确定删除这条模型配置吗？')) return;
+      const res = await fetch(`/api/settings/llm/profiles/${{profileId}}`, {{
+        method: 'DELETE',
+      }});
+      const data = await res.json();
+      if (!res.ok) {{
+        document.getElementById('settings_status').textContent = data.detail || '删除模型配置失败';
+        return;
+      }}
+      settingsState = data;
+      document.getElementById('settings_status').textContent = data.message || '模型配置已删除';
+      renderProfiles();
+      fillProfileForm(data.default_profile_id || '');
     }}
 
     async function pollTask() {{
@@ -484,6 +1074,7 @@ def render_home_page(
         return;
       }}
       loadProjects();
+      loadTasks();
     }}
 
     async function showReview(projectId, chapterNumber) {{
@@ -584,7 +1175,14 @@ def render_home_page(
         const chapters = Array.isArray(item.chapters) ? item.chapters : [];
         const card = document.createElement('article');
         card.className = 'project-card';
-        card.appendChild(createNode('h3', item.title || '未命名项目'));
+        const head = createNode('div', '', 'row');
+        head.style.justifyContent = 'space-between';
+        head.style.alignItems = 'flex-start';
+        const titleWrap = document.createElement('div');
+        titleWrap.appendChild(createNode('h3', item.title || '未命名项目'));
+        head.appendChild(titleWrap);
+        head.appendChild(createButton('删除项目', () => deleteProject(item.id, item.title || '未命名项目'), 'secondary danger'));
+        card.appendChild(head);
         card.appendChild(createNode('p', item.premise || ''));
         card.appendChild(createNode('p', `题材：${{item.genre}}`, 'muted'));
         card.appendChild(createNode('p', `创建时间：${{item.created_at || ''}}`, 'muted'));
@@ -657,6 +1255,80 @@ def render_home_page(
           chapterSummary.appendChild(createNode('div', '还没有章节。', 'muted'));
         }}
         card.appendChild(chapterSummary);
+
+        const publishTools = createNode('div', '', 'project-tools');
+        publishTools.appendChild(createNode('div', '发布到平台', 'muted'));
+        const toolGrid = createNode('div', '', 'grid');
+        toolGrid.style.marginTop = '8px';
+        const chapterWrap = document.createElement('div');
+        const chapterLabelSelect = createNode('label', '章节');
+        chapterLabelSelect.setAttribute('for', `publish_chapter_${{item.id}}`);
+        chapterWrap.appendChild(chapterLabelSelect);
+        const chapterSelect = document.createElement('select');
+        chapterSelect.id = `publish_chapter_${{item.id}}`;
+        chapters.filter((chapter) => chapter.status !== 'planned').forEach((chapter) => {{
+          const option = document.createElement('option');
+          option.value = String(chapter.chapter_number);
+          option.textContent = `第${{chapter.chapter_number}}章 · ${{chapter.status}}`;
+          chapterSelect.appendChild(option);
+        }});
+        chapterWrap.appendChild(chapterSelect);
+        toolGrid.appendChild(chapterWrap);
+
+        const platformWrap = document.createElement('div');
+        const platformLabel = createNode('label', '平台');
+        platformLabel.setAttribute('for', `publish_platform_${{item.id}}`);
+        platformWrap.appendChild(platformLabel);
+        const platformSelect = document.createElement('select');
+        platformSelect.id = `publish_platform_${{item.id}}`;
+        (platformsState.length ? platformsState : [
+          {{ platform_id: 'fanqie', display_name: '番茄小说' }},
+          {{ platform_id: 'qidian', display_name: '起点小说' }},
+        ]).forEach((platform) => {{
+          const option = document.createElement('option');
+          option.value = platform.platform_id;
+          option.textContent = platform.display_name;
+          platformSelect.appendChild(option);
+        }});
+        platformWrap.appendChild(platformSelect);
+        toolGrid.appendChild(platformWrap);
+        publishTools.appendChild(toolGrid);
+
+        const bookLabel = createNode('label', '平台作品名');
+        bookLabel.setAttribute('for', `publish_book_${{item.id}}`);
+        publishTools.appendChild(bookLabel);
+        const bookInput = document.createElement('input');
+        bookInput.id = `publish_book_${{item.id}}`;
+        bookInput.value = item.title || '';
+        publishTools.appendChild(bookInput);
+
+        const publishOptions = createNode('div', '', 'row');
+        publishOptions.style.marginTop = '8px';
+        const createCheckboxLabel = document.createElement('label');
+        createCheckboxLabel.style.display = 'flex';
+        createCheckboxLabel.style.gap = '10px';
+        createCheckboxLabel.style.alignItems = 'flex-start';
+        const createCheckbox = document.createElement('input');
+        createCheckbox.type = 'checkbox';
+        createCheckbox.style.width = 'auto';
+        createCheckbox.style.marginTop = '4px';
+        createCheckbox.id = `publish_create_${{item.id}}`;
+        createCheckboxLabel.appendChild(createCheckbox);
+        createCheckboxLabel.appendChild(createNode('span', '找不到作品时自动创建新书'));
+        publishOptions.appendChild(createCheckboxLabel);
+        publishTools.appendChild(publishOptions);
+
+        const publishActions = createNode('div', '', 'row');
+        publishActions.style.marginTop = '10px';
+        publishActions.appendChild(createButton('直接发布', () => createPublishJob(item.id, true), 'primary'));
+        publishActions.appendChild(createButton('保存草稿', () => createPublishJob(item.id, false), 'secondary'));
+        publishTools.appendChild(publishActions);
+
+        const publishStatus = createNode('div', chapters.length ? '选择章节后即可直接入队上传任务。' : '没有可发布章节。', 'status');
+        publishStatus.id = `publish_status_${{item.id}}`;
+        publishTools.appendChild(publishStatus);
+        card.appendChild(publishTools);
+
         const projectLink = document.createElement('a');
         projectLink.className = 'button secondary';
         projectLink.href = `/api/projects/${{item.id}}`;
@@ -673,10 +1345,172 @@ def render_home_page(
       }}
     }}
 
+    async function deleteProject(projectId, title) {{
+      if (!window.confirm(`确定删除项目《${{title}}》吗？`)) return;
+      const res = await fetch(`/api/projects/${{projectId}}`, {{
+        method: 'DELETE',
+      }});
+      const data = await res.json();
+      if (!res.ok) {{
+        setStatus(data.detail || '删除项目失败');
+        return;
+      }}
+      setStatus(data.message || '项目已删除');
+      loadProjects();
+      loadTasks();
+      loadUploadJobs();
+    }}
+
+    async function loadPlatforms() {{
+      const list = document.getElementById('platform_list');
+      const res = await fetch('/api/publishers/platforms');
+      const data = await res.json();
+      clearNode(list);
+      platformsState = Array.isArray(data) ? data : [];
+      if (!platformsState.length) {{
+        list.appendChild(createNode('div', '尚未读取到平台状态。', 'platform-card'));
+        return;
+      }}
+      platformsState.forEach((item) => {{
+        const card = createNode('article', '', 'platform-card');
+        card.appendChild(createNode('strong', item.display_name));
+        const statusText = `${{item.connected ? '已登录' : '未登录'}} | ${{item.extension_online ? '扩展在线' : '扩展离线'}}`;
+        card.appendChild(createNode('div', statusText, `status ${{item.connected ? 'ok' : 'warn'}}`));
+        card.appendChild(createNode('div', `执行端：${{item.extension_client_id || '未绑定'}}`, 'task-meta'));
+        card.appendChild(createNode('div', `最近心跳：${{item.last_heartbeat_at || '无'}}`, 'task-meta'));
+        if (item.last_error) {{
+          card.appendChild(createNode('div', `最近错误：${{item.last_error}}`, 'task-meta'));
+        }}
+        list.appendChild(card);
+      }});
+    }}
+
+    async function loadTasks() {{
+      const list = document.getElementById('generation_tasks');
+      const res = await fetch('/api/tasks?limit=20');
+      const data = await res.json();
+      clearNode(list);
+      if (!Array.isArray(data) || !data.length) {{
+        list.appendChild(createNode('div', '还没有生成任务。', 'task-card empty-state'));
+        return;
+      }}
+      let hasRunning = false;
+      data.forEach((item) => {{
+        if (item.status === 'running' || item.status === 'starting') {{
+          hasRunning = true;
+        }}
+        const card = createNode('article', '', 'task-card');
+        card.appendChild(createNode('strong', `${{item.task_id}} · ${{item.status}}`));
+        if (item.project_id) {{
+          card.appendChild(createNode('div', `项目：${{item.project_id}}`, 'task-meta'));
+        }}
+        if (item.message) {{
+          card.appendChild(createNode('div', item.message, 'task-meta'));
+        }}
+        if (item.error) {{
+          card.appendChild(createNode('div', `错误：${{item.error}}`, 'task-meta'));
+        }}
+        card.appendChild(createNode('div', `创建：${{item.created_at || ''}} | 更新：${{item.updated_at || ''}}`, 'task-meta'));
+        list.appendChild(card);
+      }});
+      if (tasksPollTimer) clearTimeout(tasksPollTimer);
+      if (hasRunning) {{
+        tasksPollTimer = window.setTimeout(loadTasks, 2000);
+      }}
+    }}
+
+    async function loadUploadJobs() {{
+      const list = document.getElementById('publish_tasks');
+      const res = await fetch('/api/publishers/upload-jobs?limit=20');
+      const data = await res.json();
+      clearNode(list);
+      if (!Array.isArray(data) || !data.length) {{
+        list.appendChild(createNode('div', '还没有发布任务。', 'task-card empty-state'));
+        return;
+      }}
+      let hasRunning = false;
+      data.forEach((item) => {{
+        if (item.status === 'pending' || item.status === 'running') {{
+          hasRunning = true;
+        }}
+        const card = createNode('article', '', 'task-card');
+        card.appendChild(createNode('strong', `${{item.display_name}} · ${{item.status}}`));
+        card.appendChild(createNode('div', `《${{item.book_name}}》 · ${{item.chapter_title}}`, 'task-meta'));
+        card.appendChild(createNode('div', `执行端：${{item.extension_client_id || '待领取'}}`, 'task-meta'));
+        card.appendChild(createNode('div', `创建：${{item.created_at || ''}}`, 'task-meta'));
+        if (item.message) {{
+          card.appendChild(createNode('div', item.message, 'task-meta'));
+        }}
+        if (item.error) {{
+          card.appendChild(createNode('div', `错误：${{item.error}}`, 'task-meta'));
+        }}
+        if (item.current_url) {{
+          const link = document.createElement('a');
+          link.href = item.current_url;
+          link.target = '_blank';
+          link.rel = 'noreferrer';
+          link.textContent = item.current_url;
+          card.appendChild(link);
+        }}
+        list.appendChild(card);
+      }});
+      if (uploadsPollTimer) clearTimeout(uploadsPollTimer);
+      if (hasRunning) {{
+        uploadsPollTimer = window.setTimeout(loadUploadJobs, 2500);
+      }}
+    }}
+
+    async function createPublishJob(projectId, publish) {{
+      const chapterSelect = document.getElementById(`publish_chapter_${{projectId}}`);
+      const platformSelect = document.getElementById(`publish_platform_${{projectId}}`);
+      const bookInput = document.getElementById(`publish_book_${{projectId}}`);
+      const createCheckbox = document.getElementById(`publish_create_${{projectId}}`);
+      const status = document.getElementById(`publish_status_${{projectId}}`);
+      if (!chapterSelect || !chapterSelect.value) {{
+        status.textContent = '请先选择章节。';
+        status.className = 'status warn';
+        return;
+      }}
+      const payload = {{
+        platform: platformSelect.value,
+        chapter_number: Number(chapterSelect.value),
+        book_name: bookInput.value.trim(),
+        publish: Boolean(publish),
+        create_if_missing: Boolean(createCheckbox.checked),
+      }};
+      if (!payload.book_name) {{
+        status.textContent = '请先填写平台作品名。';
+        status.className = 'status warn';
+        return;
+      }}
+      status.textContent = '正在创建发布任务...';
+      status.className = 'status';
+      const res = await fetch(`/api/projects/${{projectId}}/publishers/upload-jobs`, {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify(payload),
+      }});
+      const data = await res.json();
+      if (!res.ok) {{
+        status.textContent = data.detail || '创建发布任务失败';
+        status.className = 'status error';
+        return;
+      }}
+      status.textContent = `发布任务已创建：${{data.job_id}}\\n${{data.message || ''}}`;
+      status.className = 'status ok';
+      loadUploadJobs();
+    }}
+
+    document.getElementById('profile_picker').addEventListener('change', (event) => fillProfileForm(event.target.value));
+    document.getElementById('generate_profile_id').addEventListener('change', updateGenerateProfileMeta);
     document.getElementById('saved_operation_mode').addEventListener('change', updateModeHints);
     document.getElementById('operation_mode').addEventListener('change', updateModeHints);
     updateModeHints();
+    setTaskView('all');
     loadSettings();
+    loadPlatforms();
+    loadTasks();
+    loadUploadJobs();
     loadProjects();
   </script>
 </body>
@@ -697,55 +1531,234 @@ def render_publishers_page(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>平台发布管理</title>
   <style>
-    :root {{ --bg:#f4efe6; --card:#fffaf1; --ink:#1f2a24; --accent:#b64b2a; --line:#e7d7bf; --muted:#755b3d; --ok:#226b37; --warn:#a25920; }}
-    body {{ margin:0; font-family:"Noto Serif SC","Source Han Serif SC",serif; background:
-      radial-gradient(circle at top left,#fff6df 0,transparent 35%),
-      linear-gradient(135deg,#f4efe6,#efe2cf); color:var(--ink); }}
-    .wrap {{ max-width:1100px; margin:0 auto; padding:40px 20px 80px; }}
-    h1 {{ margin:0 0 8px; font-size:40px; }}
-    p {{ line-height:1.6; }}
-    .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:18px; margin-top:28px; }}
-    .card {{ background:var(--card); border:1px solid var(--line); border-radius:20px; padding:22px; box-shadow:0 18px 50px rgba(73,52,28,.08); }}
-    .actions {{ display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; }}
-    button {{ border:0; background:var(--accent); color:#fff; border-radius:999px; padding:10px 16px; cursor:pointer; }}
-    button.secondary {{ background:#e8d9c1; color:#5b4630; }}
-    .muted {{ color:var(--muted); }}
-    input, textarea, select {{ width:100%; margin-top:8px; margin-bottom:12px; border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#fff; font:inherit; box-sizing:border-box; }}
+    :root {{
+      --bg:#f2eadf;
+      --card:#fffaf3;
+      --card-strong:#fffdf9;
+      --ink:#17211d;
+      --accent:#b64b2a;
+      --accent-2:#284d46;
+      --line:#ddceb7;
+      --muted:#725f49;
+      --ok:#226b37;
+      --warn:#a25920;
+      --ui:"Inter","SF Pro Display","Segoe UI","PingFang SC","Noto Sans SC",sans-serif;
+      --serif:"Iowan Old Style","Palatino Linotype","Noto Serif SC","Source Han Serif SC",serif;
+    }}
+    * {{ box-sizing:border-box; }}
+    body {{
+      margin:0;
+      font-family:var(--serif);
+      background:
+        radial-gradient(circle at top left,#fff6df 0,transparent 32%),
+        radial-gradient(circle at 92% 8%, rgba(182,75,42,.12), transparent 18%),
+        linear-gradient(135deg,#f4efe6,#efe2cf);
+      color:var(--ink);
+      min-height:100vh;
+    }}
+    body::before {{
+      content:"";
+      position:fixed;
+      inset:0;
+      background:repeating-linear-gradient(90deg, rgba(120,96,64,.04) 0, rgba(120,96,64,.04) 1px, transparent 1px, transparent 108px);
+      pointer-events:none;
+    }}
+    .wrap {{ position:relative; max-width:1220px; margin:0 auto; padding:32px 24px 80px; }}
+    .masthead {{
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      gap:16px;
+      padding-bottom:18px;
+      margin-bottom:22px;
+      border-bottom:1px solid rgba(114,95,73,.16);
+    }}
+    .masthead-note {{
+      font:500 13px/1.6 var(--ui);
+      color:var(--muted);
+      max-width:44ch;
+    }}
+    .hero {{
+      display:grid;
+      grid-template-columns:minmax(0, 1.08fr) minmax(320px, .92fr);
+      gap:22px;
+      align-items:stretch;
+    }}
+    .hero-card, .card {{
+      background:linear-gradient(180deg, rgba(255,253,249,.95), rgba(248,241,231,.93));
+      border:1px solid rgba(205,184,155,.62);
+      border-radius:28px;
+      padding:26px;
+      box-shadow:0 20px 56px rgba(73,52,28,.10);
+      backdrop-filter:blur(8px);
+    }}
+    .hero-card {{
+      min-height:280px;
+      display:flex;
+      flex-direction:column;
+      justify-content:space-between;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.34), rgba(255,255,255,0)),
+        radial-gradient(circle at bottom right, rgba(182,75,42,.12), transparent 28%),
+        linear-gradient(135deg, rgba(40,77,70,.05), transparent 55%);
+    }}
+    .eyebrow {{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:8px 14px;
+      border-radius:999px;
+      border:1px solid rgba(182,75,42,.18);
+      color:var(--accent);
+      background:rgba(182,75,42,.06);
+      font:600 12px/1 var(--ui);
+      text-transform:uppercase;
+      letter-spacing:.14em;
+    }}
+    h1 {{ margin:18px 0 10px; font-size:52px; line-height:.98; letter-spacing:-.03em; max-width:10ch; }}
+    h2 {{ margin:0 0 8px; font-size:28px; line-height:1.08; }}
+    p {{ line-height:1.75; color:var(--muted); }}
+    .hero-copy {{ max-width:56ch; }}
+    .hero-actions, .actions {{ display:flex; gap:10px; flex-wrap:wrap; align-items:center; }}
+    .hero-actions {{ margin-top:20px; }}
+    .layout-grid {{ display:grid; grid-template-columns:minmax(0, 1fr) minmax(340px, .96fr); gap:22px; margin-top:24px; }}
+    .stack {{ display:grid; gap:22px; }}
+    .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:18px; margin-top:20px; }}
+    button, a.button {{
+      border:1px solid transparent;
+      background:linear-gradient(135deg, var(--accent), #ce6a41);
+      color:#fff;
+      border-radius:999px;
+      padding:11px 16px;
+      cursor:pointer;
+      font:600 14px/1.1 var(--ui);
+      text-decoration:none;
+      transition:transform .18s ease, box-shadow .18s ease;
+      box-shadow:0 12px 24px rgba(182,75,42,.18);
+    }}
+    button:hover, a.button:hover {{ transform:translateY(-1px); }}
+    button.secondary, a.button.secondary {{
+      background:rgba(40,77,70,.06);
+      color:var(--accent-2);
+      border-color:rgba(40,77,70,.14);
+      box-shadow:none;
+    }}
+    .muted {{ color:var(--muted); font-family:var(--ui); }}
+    label {{
+      display:block;
+      margin-bottom:6px;
+      font:600 12px/1.2 var(--ui);
+      color:var(--muted);
+      text-transform:uppercase;
+      letter-spacing:.08em;
+    }}
+    input, textarea, select {{
+      width:100%;
+      margin-top:8px;
+      margin-bottom:12px;
+      border:1px solid rgba(205,184,155,.78);
+      border-radius:16px;
+      padding:12px 14px;
+      background:rgba(255,253,248,.98);
+      font:500 14px/1.45 var(--ui);
+      box-sizing:border-box;
+      color:var(--ink);
+    }}
+    input:focus, textarea:focus, select:focus {{
+      outline:none;
+      border-color:rgba(182,75,42,.42);
+      box-shadow:0 0 0 4px rgba(182,75,42,.08);
+    }}
     textarea {{ min-height:180px; resize:vertical; }}
-    .status {{ margin-top:10px; font-size:14px; color:var(--muted); white-space:pre-wrap; }}
+    .status {{
+      margin-top:10px;
+      padding:14px 16px;
+      border-radius:18px;
+      border:1px solid rgba(205,184,155,.72);
+      background:rgba(255,255,255,.58);
+      font:500 14px/1.6 var(--ui);
+      color:var(--muted);
+      white-space:pre-wrap;
+    }}
     .ok {{ color:var(--ok); }}
     .warn {{ color:var(--warn); }}
     .summary-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; margin-top:18px; }}
     .task-list {{ display:grid; gap:12px; margin-top:16px; }}
-    .task-item {{ border:1px solid var(--line); border-radius:16px; padding:16px; background:#fffdf8; }}
-    .task-item strong {{ display:block; margin-bottom:6px; }}
+    .task-item {{
+      border:1px solid rgba(205,184,155,.72);
+      border-radius:20px;
+      padding:18px;
+      background:linear-gradient(180deg, rgba(255,255,255,.62), rgba(252,247,240,.56));
+    }}
+    .task-item strong {{ display:block; margin-bottom:8px; font-size:18px; line-height:1.2; }}
     .task-item a {{ color:var(--accent); }}
     code {{ font-family:"SFMono-Regular","Consolas",monospace; font-size:13px; }}
+    .card-title {{ display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:12px; }}
+    .section-note {{ font:500 13px/1.6 var(--ui); color:var(--muted); }}
+    @media (max-width: 980px) {{
+      .masthead, .hero, .layout-grid {{ grid-template-columns:1fr; display:grid; }}
+      .masthead {{ gap:12px; }}
+      h1 {{ font-size:42px; max-width:11ch; }}
+    }}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>平台发布管理</h1>
-    <p>ForWin 现在把登录、上传和后续评论采集都交给浏览器扩展执行。后端只负责保存任务、接收扩展心跳和持久化结果，不再在服务器里偷偷跑浏览器。</p>
-    <div class="summary-grid">
-      <div class="card">
-        <h2 style="margin-top:0;">扩展状态</h2>
-        <div id="extension_summary" class="status">正在检测浏览器扩展...</div>
-        <div class="actions">
-          <button class="secondary" onclick="openExtensionOptions()">打开扩展设置</button>
-          <a href="/api/publishers/extension-package" style="display:inline-flex;align-items:center;text-decoration:none;border:0;background:#e8d9c1;color:#5b4630;border-radius:999px;padding:10px 16px;">下载扩展包</a>
+    <header class="masthead">
+      <div>
+        <div class="eyebrow">Publisher Control</div>
+        <h1>平台发布管理</h1>
+      </div>
+      <div class="masthead-note">这一页只负责扩展安装、平台登录和上传排障。日常的项目生成与一键发布已经回到首页控制台。</div>
+    </header>
+
+    <section class="hero">
+      <article class="hero-card">
+        <div class="hero-copy">
+          <h2>让浏览器扩展接管真实平台操作</h2>
+          <p>ForWin 把登录、上传和后续评论采集都交给浏览器扩展执行。后端只保存任务、接收心跳并持久化结果，不再在服务器里偷偷跑浏览器。</p>
         </div>
-      </div>
-      <div class="card">
-        <h2 style="margin-top:0;">安装提示</h2>
-        <p class="muted">如果你是用 macOS 浏览器访问这台 Linux 后端，请先把扩展包下载到你的 Mac，再解压后用开发者模式加载。不要直接把 Linux 服务器路径当成本机路径使用。</p>
+        <div class="hero-actions">
+          <a class="button secondary" href="/">返回首页控制台</a>
+          <button class="secondary" onclick="openExtensionOptions()">打开扩展设置</button>
+          <a class="button secondary" href="/api/publishers/extension-package">下载扩展包</a>
+        </div>
+      </article>
+      <aside class="card">
+        <div class="card-title">
+          <div>
+            <h2 style="margin-top:0;">安装提示</h2>
+            <div class="section-note">如果你通过 Mac 或笔记本访问这台 Linux 后端，请在本机浏览器安装扩展。</div>
+          </div>
+        </div>
+        <p class="muted">不要直接把 Linux 服务器路径当成本机路径使用。先下载 zip，再用浏览器开发者模式加载解压目录。</p>
         <p><code>{extension_install_path}</code></p>
-        <p class="muted">扩展里要填当前 ForWin 后端 URL 和共享 API Key。页面只通过扩展桥接登录，不再回退到旧的服务端扫码逻辑。首次安装时，请先在浏览器扩展管理页手动打开扩展选项；页面里的“打开扩展设置”按钮要等扩展已经完成首次配置后才会生效。</p>
+        <p class="muted">扩展里要填当前 ForWin 后端 URL 和共享 API Key。首次安装时，请先在浏览器扩展管理页手动打开扩展选项；页面里的“打开扩展设置”按钮要等扩展已经完成首次配置后才会生效。</p>
+      </aside>
+    </section>
+
+    <section class="layout-grid">
+      <div class="stack">
+        <div class="card">
+          <div class="card-title">
+            <div>
+              <h2 style="margin-top:0;">扩展状态</h2>
+              <div class="section-note">确认桥接是否在线、后端地址是否一致。</div>
+            </div>
+          </div>
+          <div id="extension_summary" class="status">正在检测浏览器扩展...</div>
+        </div>
+        <div id="platforms" class="grid"></div>
       </div>
-    </div>
-    <div id="platforms" class="grid"></div>
-    <div class="card" style="margin-top:22px;">
-      <h2>上传任务</h2>
+
+      <div class="stack">
+        <div class="card">
+          <div class="card-title">
+            <div>
+              <h2 style="margin-top:0;">上传任务</h2>
+              <div class="section-note">这里仍然保留手动上传入口，适合直接验证平台链路。</div>
+            </div>
+          </div>
       <label>平台</label>
       <select id="platform"></select>
       <label>作品名</label>
@@ -791,12 +1804,19 @@ def render_publishers_page(
         <button class="secondary" onclick="upload(false)">保存草稿</button>
       </div>
       <div id="upload_status" class="status"></div>
-    </div>
-    <div class="card" style="margin-top:22px;">
-      <h2>最近上传任务</h2>
-      <div id="upload_jobs_status" class="status">正在加载任务列表...</div>
-      <div id="upload_jobs_list" class="task-list"></div>
-    </div>
+        </div>
+        <div class="card">
+          <div class="card-title">
+            <div>
+              <h2 style="margin-top:0;">最近上传任务</h2>
+              <div class="section-note">这里会自动刷新排队和执行中的任务。</div>
+            </div>
+          </div>
+          <div id="upload_jobs_status" class="status">正在加载任务列表...</div>
+          <div id="upload_jobs_list" class="task-list"></div>
+        </div>
+      </div>
+    </section>
   </div>
   <script>
     const EXTENSION_BRIDGE_CHANNEL = 'forwin-publisher-extension';

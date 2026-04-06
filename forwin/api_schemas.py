@@ -11,6 +11,7 @@ class GenerateRequest(BaseModel):
     premise: str
     genre: str = "玄幻"
     num_chapters: int = 3
+    model_profile_id: str | None = None
     api_key: str | None = None
     base_url: str = DEFAULT_MINIMAX_BASE_URL
     model: str = DEFAULT_MINIMAX_MODEL
@@ -26,10 +27,38 @@ class LLMSettingsRequest(BaseModel):
     freeze_failed_candidates: bool = True
 
 
+class ModelProfile(BaseModel):
+    id: str
+    name: str
+    has_api_key: bool
+    base_url: str
+    model: str
+
+
+class LLMProfileUpsertRequest(BaseModel):
+    profile_id: str | None = None
+    name: str
+    api_key: str = ""
+    base_url: str = DEFAULT_MINIMAX_BASE_URL
+    model: str = DEFAULT_MINIMAX_MODEL
+    set_as_default: bool = False
+
+
+class LLMDefaultProfileRequest(BaseModel):
+    profile_id: str
+
+
+class LLMPreferencesRequest(BaseModel):
+    operation_mode: str = "blackbox"
+    freeze_failed_candidates: bool = True
+
+
 class LLMSettingsResponse(BaseModel):
     has_api_key: bool
     base_url: str
     model: str
+    profiles: list[ModelProfile] = Field(default_factory=list)
+    default_profile_id: str = ""
     operation_mode: str = "blackbox"
     freeze_failed_candidates: bool = True
     message: str = ""
@@ -44,6 +73,11 @@ class TaskResponse(BaseModel):
     failed_chapters: list[int] = Field(default_factory=list)
     paused_chapters: list[int] = Field(default_factory=list)
     frozen_artifacts: list[str] = Field(default_factory=list)
+
+
+class TaskSummaryResponse(TaskResponse):
+    created_at: str = ""
+    updated_at: str = ""
 
 
 class ProjectArcSnapshotFields(BaseModel):
@@ -129,6 +163,12 @@ class ProjectDetail(ProjectArcSnapshotFields):
     world_pressure_summary: str = ""
     npc_intent_count: int = 0
     recent_npc_intents: list[dict[str, object]] = []
+
+
+class ProjectDeleteResponse(BaseModel):
+    ok: bool
+    project_id: str
+    message: str
 
 
 class ChapterDetail(BaseModel):
@@ -242,6 +282,16 @@ class PublisherUploadJobCreateRequest(BaseModel):
     upload_url: str | None = None
     publish: bool = True
     prefer_extension: bool = False
+    create_if_missing: bool = False
+    book_meta: PublisherBookMetaRequest | None = None
+
+
+class ProjectChapterPublishRequest(BaseModel):
+    platform: str
+    chapter_number: int
+    book_name: str
+    upload_url: str | None = None
+    publish: bool = True
     create_if_missing: bool = False
     book_meta: PublisherBookMetaRequest | None = None
 

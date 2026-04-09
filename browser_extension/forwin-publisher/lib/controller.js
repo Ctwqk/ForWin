@@ -260,6 +260,73 @@ export class PublisherExtensionController {
     const clientId = await this.deps.getClientId();
     const adapter = getPlatformAdapter(job.platform);
     const taskKey = `upload:${job.job_id}`;
+    const refreshJob = async () => {
+      if (typeof this.deps.backend?.getUploadJob !== 'function') {
+        return job;
+      }
+      try {
+        const latest = await this.deps.backend.getUploadJob(job.job_id);
+        return latest && latest.job_id ? { ...job, ...latest } : job;
+      } catch (_error) {
+        return job;
+      }
+    };
+    const cancelUpload = async (phase, currentUrl = '') => {
+      this.forgetExecutionTask(taskKey);
+      await this.deps.backend.updateUploadJobResult(job.job_id, {
+        client_id: clientId,
+        status: 'cancelled',
+        message: '浏览器扩展已响应终止请求，上传任务已取消。',
+        current_url: currentUrl,
+        error: '',
+        result_payload: { phase },
+      });
+      await this.deps.notifyPage(originTabId, 'upload-status', {
+        jobId: job.job_id,
+        status: 'cancelled',
+        platform: job.platform,
+        message: '上传任务已取消。',
+      });
+      return { message: '浏览器扩展已取消上传任务。' };
+    };
+    const createAbortWatcher = (pollMs = 1000) => {
+      let active = true;
+      let timerId = null;
+      const promise = new Promise((resolve) => {
+        const loop = async () => {
+          while (active) {
+            const latestJob = await refreshJob();
+            if (latestJob.abort_requested || latestJob.status === 'terminating' || latestJob.status === 'cancelled') {
+              active = false;
+              await this.cleanupExecutionTabs(taskKey).catch(() => ({ attempted: false }));
+              resolve({
+                __forwinAborted: true,
+                currentUrl: '',
+              });
+              return;
+            }
+            await new Promise((resume) => {
+              timerId = globalThis.setTimeout(resume, pollMs);
+            });
+          }
+        };
+        loop().catch(() => resolve({ __forwinAbortWatcherFailed: true }));
+      });
+      return {
+        promise,
+        stop() {
+          active = false;
+          if (timerId) {
+            globalThis.clearTimeout(timerId);
+            timerId = null;
+          }
+        },
+      };
+    };
+    const initialJob = Object.prototype.hasOwnProperty.call(job || {}, 'status') ? job : await refreshJob();
+    if (initialJob.abort_requested || initialJob.status === 'terminating' || initialJob.status === 'cancelled') {
+      return cancelUpload('abort-before-start');
+    }
 
     if (job.status !== 'running') {
       await this.deps.backend.updateUploadJobResult(job.job_id, {
@@ -284,6 +351,11 @@ export class PublisherExtensionController {
       this.registerExecutionTask(taskKey, tab.tabId);
       await this.waitForOpenedUploadTab(tab.tabId, job.platform, 6000);
       const openedTab = await this.deps.getTab(tab.tabId);
+      const latestJob = await refreshJob();
+      if (latestJob.abort_requested || latestJob.status === 'terminating' || latestJob.status === 'cancelled') {
+        await this.cleanupExecutionTabs(taskKey);
+        return cancelUpload('abort-before-execute', String(openedTab?.url || targetUrl || ''));
+      }
       await this.deps.backend.updateUploadJobResult(job.job_id, {
         client_id: clientId,
         status: 'running',
@@ -305,12 +377,26 @@ export class PublisherExtensionController {
         create_if_missing: Boolean(job.result_payload?.create_if_missing),
         book_meta: job.result_payload?.book_meta || null,
       };
+      const abortWatcher = createAbortWatcher(1000);
+      let timeoutId = null;
       const timedResult = await Promise.race([
-        this.runUploadWithPageReadyRetries(tab.tabId, job.platform, uploadPayload),
+        this.runUploadWithPageReadyRetries(tab.tabId, job.platform, uploadPayload)
+          .catch((error) => ({ __forwinUploadError: error })),
         new Promise((resolve) => {
-          globalThis.setTimeout(() => resolve({ __forwinTimedOut: true }), 90000);
+          timeoutId = globalThis.setTimeout(() => resolve({ __forwinTimedOut: true }), 90000);
         }),
+        abortWatcher.promise,
       ]);
+      abortWatcher.stop();
+      if (timeoutId) {
+        globalThis.clearTimeout(timeoutId);
+      }
+      if (timedResult?.__forwinAborted) {
+        return cancelUpload('abort-during-execute', String((await this.deps.getTab(tab.tabId))?.url || ''));
+      }
+      if (timedResult?.__forwinUploadError) {
+        throw timedResult.__forwinUploadError;
+      }
       const result = timedResult?.__forwinTimedOut
         ? {
           ok: false,

@@ -65,9 +65,12 @@ class RunResult:
     failed_chapters: list[int] = field(default_factory=list)
     paused_chapters: list[int] = field(default_factory=list)
     frozen_artifacts: list[str] = field(default_factory=list)
+    cancelled: bool = False
 
     @property
     def status(self) -> str:
+        if self.cancelled:
+            return "cancelled"
         if self.paused_chapters:
             return "needs_review"
         if self.failed_chapters and not self.completed_chapters:
@@ -84,9 +87,11 @@ class WritingOrchestrator:
         self,
         config: Config | None = None,
         progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
+        should_abort: Callable[[], bool] | None = None,
     ) -> None:
         self.config = config or Config.from_env()
         self.progress_callback = progress_callback
+        self.should_abort = should_abort
 
         # Ensure the database directory exists.
         db_dir = Path(self.config.db_path).parent
@@ -224,14 +229,31 @@ class WritingOrchestrator:
         session: Session = self._SessionFactory()
         try:
             repo, updater, checker = self._make_state_helpers(session)
+            project_id = ""
 
             # Step 1: Plan arc -----------------------------------------------
+            self._emit_progress(
+                "stage_changed",
+                stage="planning_arc",
+                requested_chapters=num_chapters,
+                current_chapter=0,
+            )
+            if self._abort_requested():
+                return self._cancelled_result(project_id, num_chapters)
             print(f"\n{'='*60}")
             print("正在规划故事大纲...")
             print(f"{'='*60}")
             arc_plan = self.arc_director.plan_arc(premise, genre, num_chapters)
 
             # Step 2: Create project + seed state ----------------------------
+            self._emit_progress(
+                "stage_changed",
+                stage="creating_project",
+                requested_chapters=num_chapters,
+                current_chapter=0,
+            )
+            if self._abort_requested():
+                return self._cancelled_result(project_id, num_chapters)
             title = arc_plan.get("arc_synopsis", premise[:30])[:60]
             setting_summary = arc_plan.get("setting_summary", "")
             project = updater.create_project(
@@ -248,8 +270,18 @@ class WritingOrchestrator:
                 "project_created",
                 project_id=project_id,
                 title=project.title,
+                requested_chapters=num_chapters,
             )
 
+            self._emit_progress(
+                "stage_changed",
+                stage="resolving_arc_envelope",
+                project_id=project_id,
+                requested_chapters=num_chapters,
+                current_chapter=0,
+            )
+            if self._abort_requested():
+                return self._cancelled_result(project_id, num_chapters)
             self.arc_envelope_manager.ensure_active_arc_resolution(
                 session=session,
                 project_id=project_id,
@@ -291,10 +323,26 @@ class WritingOrchestrator:
             print(f"数据库: {self.config.db_path}")
             print(f"{'='*60}\n")
 
+            self._emit_progress(
+                "stage_changed",
+                stage="paused_for_review" if result.status == "needs_review" else (
+                    "failed" if result.status in {"failed", "partial_failed"} else (
+                        "cancelled" if result.status == "cancelled" else "completed"
+                    )
+                ),
+                project_id=project_id,
+                requested_chapters=num_chapters,
+                current_chapter=result.completed_chapters[-1] if result.completed_chapters else 0,
+                completed_chapters=result.completed_chapters,
+                failed_chapters=result.failed_chapters,
+                paused_chapters=result.paused_chapters,
+                frozen_artifacts=result.frozen_artifacts,
+            )
             return result
 
         except Exception:
             session.rollback()
+            self._emit_progress("stage_changed", stage="failed")
             raise
         finally:
             session.close()
@@ -341,6 +389,15 @@ class WritingOrchestrator:
                     requested_chapters=len(chapter_plans),
                 )
 
+            self._emit_progress(
+                "stage_changed",
+                stage="resolving_arc_envelope",
+                project_id=project_id,
+                requested_chapters=len(chapter_plans),
+                current_chapter=min(chapter_numbers) - 1,
+            )
+            if self._abort_requested():
+                return self._cancelled_result(project_id, len(chapter_plans))
             self.arc_envelope_manager.ensure_active_arc_resolution(
                 session=session,
                 project_id=project_id,
@@ -465,6 +522,16 @@ class WritingOrchestrator:
         frozen_artifacts: list[str] = []
 
         for chapter_num in chapter_numbers:
+            if self._abort_requested():
+                return self._cancelled_result(
+                    project_id,
+                    requested_chapters,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                    frozen_artifacts=frozen_artifacts,
+                    current_chapter=chapter_num,
+                )
             print(f"\n{'─'*60}")
             print(f"正在生成第 {chapter_num} 章...")
             print(f"{'─'*60}")
@@ -476,10 +543,40 @@ class WritingOrchestrator:
                 continue
 
             try:
+                self._emit_progress(
+                    "stage_changed",
+                    stage="assembling_context",
+                    project_id=project_id,
+                    requested_chapters=requested_chapters,
+                    current_chapter=chapter_num,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                )
                 context = self.retrieval_broker.build_chapter_context(
                     repo, project_id, chapter_plan
                 )
 
+                if self._abort_requested():
+                    return self._cancelled_result(
+                        project_id,
+                        requested_chapters,
+                        completed_chapters=completed_chapters,
+                        failed_chapters=failed_chapters,
+                        paused_chapters=paused_chapters,
+                        frozen_artifacts=frozen_artifacts,
+                        current_chapter=chapter_num,
+                    )
+                self._emit_progress(
+                    "stage_changed",
+                    stage="writing_chapter",
+                    project_id=project_id,
+                    requested_chapters=requested_chapters,
+                    current_chapter=chapter_num,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                )
                 writer_output = self._write_chapter_with_attention_fallback(
                     context=context,
                     project_id=project_id,
@@ -489,6 +586,16 @@ class WritingOrchestrator:
                     frozen_artifacts=frozen_artifacts,
                 )
                 if writer_output is None:
+                    if self._abort_requested():
+                        return self._cancelled_result(
+                            project_id,
+                            requested_chapters,
+                            completed_chapters=completed_chapters,
+                            failed_chapters=failed_chapters,
+                            paused_chapters=paused_chapters,
+                            frozen_artifacts=frozen_artifacts,
+                            current_chapter=chapter_num,
+                        )
                     session.commit()
                     break
                 artifact_paths = self.artifact_store.save_writer_output(
@@ -505,6 +612,16 @@ class WritingOrchestrator:
                     }
                 )
 
+                self._emit_progress(
+                    "stage_changed",
+                    stage="continuity_review",
+                    project_id=project_id,
+                    requested_chapters=requested_chapters,
+                    current_chapter=chapter_num,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                )
                 verdict = checker.check(project_id, writer_output)
 
                 draft = updater.save_draft(
@@ -521,13 +638,43 @@ class WritingOrchestrator:
                     updater.mark_chapter_status(project_id, chapter_num, "needs_review")
                     session.commit()
                     paused_chapters.append(chapter_num)
+                    self._emit_progress(
+                        "stage_changed",
+                        stage="paused_for_review",
+                        project_id=project_id,
+                        requested_chapters=requested_chapters,
+                        current_chapter=chapter_num,
+                        completed_chapters=completed_chapters,
+                        failed_chapters=failed_chapters,
+                        paused_chapters=paused_chapters,
+                    )
                     break
                 if self.config.operation_mode == "copilot" and verdict.verdict != "pass":
                     updater.mark_chapter_status(project_id, chapter_num, "needs_review")
                     session.commit()
                     paused_chapters.append(chapter_num)
+                    self._emit_progress(
+                        "stage_changed",
+                        stage="paused_for_review",
+                        project_id=project_id,
+                        requested_chapters=requested_chapters,
+                        current_chapter=chapter_num,
+                        completed_chapters=completed_chapters,
+                        failed_chapters=failed_chapters,
+                        paused_chapters=paused_chapters,
+                    )
                     break
 
+                self._emit_progress(
+                    "stage_changed",
+                    stage="applying_canon",
+                    project_id=project_id,
+                    requested_chapters=requested_chapters,
+                    current_chapter=chapter_num,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                )
                 frozen_path = self._apply_canon_candidate(
                     session=session,
                     repo=repo,
@@ -542,12 +689,33 @@ class WritingOrchestrator:
                     updater.mark_chapter_status(project_id, chapter_num, "needs_review")
                     session.commit()
                     paused_chapters.append(chapter_num)
+                    self._emit_progress(
+                        "stage_changed",
+                        stage="paused_for_review",
+                        project_id=project_id,
+                        requested_chapters=requested_chapters,
+                        current_chapter=chapter_num,
+                        completed_chapters=completed_chapters,
+                        failed_chapters=failed_chapters,
+                        paused_chapters=paused_chapters,
+                        frozen_artifacts=frozen_artifacts,
+                    )
                     repo, updater, checker = self._make_state_helpers(session)
                     break
 
                 status = "accepted" if verdict.verdict != "fail" else "drafted"
                 updater.mark_chapter_status(project_id, chapter_num, status)
                 if status == "accepted":
+                    self._emit_progress(
+                        "stage_changed",
+                        stage="running_post_acceptance",
+                        project_id=project_id,
+                        requested_chapters=requested_chapters,
+                        current_chapter=chapter_num,
+                        completed_chapters=completed_chapters,
+                        failed_chapters=failed_chapters,
+                        paused_chapters=paused_chapters,
+                    )
                     self.retrieval_broker.memory_index.upsert_chapter(
                         project_id=project_id,
                         chapter_number=chapter_num,
@@ -569,10 +737,29 @@ class WritingOrchestrator:
                 updater.mark_chapter_status(project_id, chapter_num, "failed")
                 session.commit()
                 failed_chapters.append(chapter_num)
+                self._emit_progress(
+                    "stage_changed",
+                    stage="failed",
+                    project_id=project_id,
+                    requested_chapters=requested_chapters,
+                    current_chapter=chapter_num,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                )
                 print(f"  ✗ 第{chapter_num}章失败: {exc}")
                 continue
 
             completed_chapters.append(chapter_num)
+            self._emit_progress(
+                "chapter_completed",
+                project_id=project_id,
+                requested_chapters=requested_chapters,
+                current_chapter=chapter_num,
+                completed_chapters=completed_chapters,
+                failed_chapters=failed_chapters,
+                paused_chapters=paused_chapters,
+            )
 
             issue_summary = ""
             if verdict.issues:
@@ -607,6 +794,8 @@ class WritingOrchestrator:
         max_attempts = max(1, int(self.config.blackbox_writer_attention_retries))
         last_error: Exception | None = None
         for attempt in range(1, max_attempts + 1):
+            if self._abort_requested():
+                return None
             try:
                 return self.writer.write_chapter(context)
             except Exception as exc:  # noqa: BLE001
@@ -824,6 +1013,12 @@ class WritingOrchestrator:
     ) -> ProvisionalBandPreview | None:
         if not chapter_plans or not self.config.minimax_api_key.strip():
             return None
+        self._emit_progress(
+            "stage_changed",
+            stage="running_provisional_preview",
+            project_id=project_id,
+            current_chapter=chapter_plans[0].chapter_number if chapter_plans else 0,
+        )
 
         repo, _updater, _checker = self._make_state_helpers(session)
         preview_checker = ContinuityChecker(
@@ -1085,6 +1280,45 @@ class WritingOrchestrator:
             failure_count=failure_count,
             chapter_numbers=chapter_numbers,
             summary_lines=summaries,
+        )
+
+    def _abort_requested(self) -> bool:
+        try:
+            return bool(self.should_abort and self.should_abort())
+        except Exception:  # noqa: BLE001
+            logger.debug("Ignoring abort predicate failure.", exc_info=True)
+            return False
+
+    def _cancelled_result(
+        self,
+        project_id: str,
+        requested_chapters: int,
+        *,
+        completed_chapters: list[int] | None = None,
+        failed_chapters: list[int] | None = None,
+        paused_chapters: list[int] | None = None,
+        frozen_artifacts: list[str] | None = None,
+        current_chapter: int = 0,
+    ) -> RunResult:
+        self._emit_progress(
+            "stage_changed",
+            stage="cancelled",
+            project_id=project_id,
+            requested_chapters=requested_chapters,
+            current_chapter=current_chapter,
+            completed_chapters=completed_chapters or [],
+            failed_chapters=failed_chapters or [],
+            paused_chapters=paused_chapters or [],
+            frozen_artifacts=frozen_artifacts or [],
+        )
+        return RunResult(
+            project_id=project_id,
+            requested_chapters=requested_chapters,
+            completed_chapters=list(completed_chapters or []),
+            failed_chapters=list(failed_chapters or []),
+            paused_chapters=list(paused_chapters or []),
+            frozen_artifacts=list(frozen_artifacts or []),
+            cancelled=True,
         )
 
     @staticmethod

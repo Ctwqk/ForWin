@@ -749,5 +749,32 @@ def upgrade_db(engine: Engine) -> None:
                 )
         migrations.append(MigrationSpec("phase3_replan_strategy_v1", apply_phase3_replan_strategy_v1))
 
+        def apply_publisher_upload_job_abort_v1(conn) -> None:
+            columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(publisher_upload_jobs)"))
+            }
+            if "abort_requested" not in columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE publisher_upload_jobs
+                        ADD COLUMN abort_requested INTEGER NOT NULL DEFAULT 0
+                        """
+                    )
+                )
+            if "deleted_at" not in columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE publisher_upload_jobs
+                        ADD COLUMN deleted_at TEXT NULL
+                        """
+                    )
+                )
+        migrations.append(
+            MigrationSpec("publisher_upload_job_abort_v1", apply_publisher_upload_job_abort_v1)
+        )
+
         for migration in migrations:
             _run_migration(conn, migration.version, migration.apply_fn)

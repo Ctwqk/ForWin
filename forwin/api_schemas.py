@@ -65,19 +65,72 @@ class LLMSettingsResponse(BaseModel):
 
 
 class TaskResponse(BaseModel):
+    task_kind: str = "generation"
     task_id: str
     status: str
+    title: str = ""
+    subtitle: str = ""
     project_id: str | None = None
+    extension_client_id: str = ""
     error: str | None = None
     message: str = ""
+    current_stage: str = "queued"
+    stage_history: list[dict[str, Any]] = Field(default_factory=list)
+    requested_chapters: int = 0
+    current_chapter: int = 0
+    completed_chapters: list[int] = Field(default_factory=list)
     failed_chapters: list[int] = Field(default_factory=list)
     paused_chapters: list[int] = Field(default_factory=list)
     frozen_artifacts: list[str] = Field(default_factory=list)
+    terminable: bool = False
+    deletable: bool = False
 
 
 class TaskSummaryResponse(TaskResponse):
     created_at: str = ""
     updated_at: str = ""
+
+
+class TaskCenterItemResponse(BaseModel):
+    task_kind: str
+    task_id: str
+    status: str
+    title: str = ""
+    subtitle: str = ""
+    project_id: str | None = None
+    extension_client_id: str = ""
+    message: str = ""
+    error: str | None = None
+    current_stage: str = ""
+    stage_history: list[dict[str, Any]] = Field(default_factory=list)
+    requested_chapters: int = 0
+    current_chapter: int = 0
+    completed_chapters: list[int] = Field(default_factory=list)
+    failed_chapters: list[int] = Field(default_factory=list)
+    paused_chapters: list[int] = Field(default_factory=list)
+    frozen_artifacts: list[str] = Field(default_factory=list)
+    current_url: str = ""
+    upload_url: str | None = None
+    platform: str = ""
+    display_name: str = ""
+    publish: bool | None = None
+    result_payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+    updated_at: str = ""
+    claimed_at: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    abort_requested: bool = False
+    terminable: bool = False
+    deletable: bool = False
+
+
+class TaskMutationResponse(BaseModel):
+    ok: bool
+    task_kind: str
+    task_id: str
+    status: str
+    message: str
 
 
 class ProjectArcSnapshotFields(BaseModel):
@@ -297,6 +350,7 @@ class ProjectChapterPublishRequest(BaseModel):
 
 
 class PublisherUploadJobResponse(BaseModel):
+    task_kind: str = "upload"
     job_id: str
     platform: str
     display_name: str
@@ -311,10 +365,14 @@ class PublisherUploadJobResponse(BaseModel):
     message: str
     error: str = ""
     result_payload: dict[str, Any] = Field(default_factory=dict)
+    abort_requested: bool = False
     created_at: str = ""
+    updated_at: str = ""
     claimed_at: str = ""
     started_at: str = ""
     finished_at: str = ""
+    terminable: bool = False
+    deletable: bool = False
 
 
 class ExtensionBrowserCookie(BaseModel):

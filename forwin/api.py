@@ -75,6 +75,8 @@ from forwin.api_schemas import (
     PublisherUploadJobCreateRequest,
     PublisherUploadJobResponse,
     TaskResponse,
+    TaskCenterItemResponse,
+    TaskMutationResponse,
     TaskSummaryResponse,
     ThreadInfo,
     UploadJobResultRequest,
@@ -121,6 +123,25 @@ _tasks_lock = threading.Lock()
 _TASK_RETENTION_SECONDS = 6 * 60 * 60
 _MAX_TASKS = 256
 _DISPLAY_TZ = ZoneInfo("America/Los_Angeles")
+_GENERATION_TERMINAL_STATUSES = {"completed", "partial_failed", "failed", "needs_review", "cancelled"}
+_UPLOAD_TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
+_GENERATION_STAGE_ORDER = [
+    "queued",
+    "planning_arc",
+    "creating_project",
+    "resolving_arc_envelope",
+    "running_provisional_preview",
+    "assembling_context",
+    "writing_chapter",
+    "continuity_review",
+    "applying_canon",
+    "running_post_acceptance",
+    "paused_for_review",
+    "completed",
+    "failed",
+    "terminating",
+    "cancelled",
+]
 
 
 def _get_session():
@@ -145,12 +166,15 @@ def _prune_tasks() -> None:
             return
 
         now = _utcnow()
-        terminal_statuses = {"completed", "partial_failed", "failed", "needs_review"}
+        terminal_statuses = _GENERATION_TERMINAL_STATUSES
         stale_ids = [
             task_id
             for task_id, task in _tasks.items()
-            if task.get("status") in terminal_statuses
-            and (now - task.get("updated_at", now)).total_seconds() > _TASK_RETENTION_SECONDS
+            if task.get("deleted")
+            or (
+                task.get("status") in terminal_statuses
+                and (now - task.get("updated_at", now)).total_seconds() > _TASK_RETENTION_SECONDS
+            )
         ]
         for task_id in stale_ids:
             _tasks.pop(task_id, None)
@@ -167,17 +191,63 @@ def _prune_tasks() -> None:
             _tasks.pop(task_id, None)
 
 
-def _create_task_record(message: str = "") -> dict[str, Any]:
+def _new_stage_history_entry(
+    stage: str,
+    *,
+    now: datetime | None = None,
+    current_chapter: int = 0,
+    message: str = "",
+) -> dict[str, Any]:
+    timestamp = now or _utcnow()
+    return {
+        "stage": stage,
+        "at": _display_datetime(timestamp),
+        "chapter": int(current_chapter or 0),
+        "message": str(message or "").strip(),
+    }
+
+
+def _task_is_terminal(status: str) -> bool:
+    return status in _GENERATION_TERMINAL_STATUSES
+
+
+def _task_is_terminable(task: dict[str, Any]) -> bool:
+    return not task.get("deleted") and not task.get("cancel_requested") and not _task_is_terminal(str(task.get("status", "")))
+
+
+def _task_is_deletable(task: dict[str, Any]) -> bool:
+    return not task.get("deleted") and _task_is_terminal(str(task.get("status", "")))
+
+
+def _create_task_record(
+    message: str = "",
+    *,
+    title: str = "",
+    subtitle: str = "",
+    requested_chapters: int = 0,
+    task_kind: str = "generation",
+) -> dict[str, Any]:
     now = _utcnow()
     _prune_tasks()
     return {
+        "task_kind": task_kind,
         "status": "starting",
+        "title": title,
+        "subtitle": subtitle,
         "project_id": None,
+        "extension_client_id": "",
         "error": None,
         "message": message,
+        "current_stage": "queued",
+        "stage_history": [_new_stage_history_entry("queued", now=now, message=message)],
+        "requested_chapters": int(requested_chapters or 0),
+        "current_chapter": 0,
+        "completed_chapters": [],
         "failed_chapters": [],
         "paused_chapters": [],
         "frozen_artifacts": [],
+        "cancel_requested": False,
+        "deleted": False,
         "created_at": now,
         "updated_at": now,
     }
@@ -185,17 +255,164 @@ def _create_task_record(message: str = "") -> dict[str, Any]:
 
 def _serialize_task(task_id: str, task: dict[str, Any]) -> TaskSummaryResponse:
     return TaskSummaryResponse(
+        task_kind=str(task.get("task_kind", "generation")),
         task_id=task_id,
         status=task["status"],
+        title=str(task.get("title", "")).strip(),
+        subtitle=str(task.get("subtitle", "")).strip(),
         project_id=task.get("project_id"),
+        extension_client_id=str(task.get("extension_client_id", "")).strip(),
         error=task.get("error"),
         message=task.get("message", ""),
+        current_stage=str(task.get("current_stage", "queued")).strip(),
+        stage_history=list(task.get("stage_history", [])),
+        requested_chapters=int(task.get("requested_chapters", 0) or 0),
+        current_chapter=int(task.get("current_chapter", 0) or 0),
+        completed_chapters=list(task.get("completed_chapters", [])),
         failed_chapters=task.get("failed_chapters", []),
         paused_chapters=task.get("paused_chapters", []),
         frozen_artifacts=task.get("frozen_artifacts", []),
+        terminable=_task_is_terminable(task),
+        deletable=_task_is_deletable(task),
         created_at=_display_datetime(task.get("created_at")),
         updated_at=_display_datetime(task.get("updated_at")),
     )
+
+
+def _serialize_generation_task_center_item(task_id: str, task: dict[str, Any]) -> TaskCenterItemResponse:
+    serialized = _serialize_task(task_id, task)
+    return TaskCenterItemResponse.model_validate(serialized.model_dump())
+
+
+def _serialize_upload_task_center_item(payload: dict[str, Any]) -> TaskCenterItemResponse:
+    return TaskCenterItemResponse(
+        task_kind="upload",
+        task_id=str(payload.get("job_id", "")).strip(),
+        status=str(payload.get("status", "")).strip(),
+        title=str(payload.get("book_name", "")).strip() or str(payload.get("display_name", "")).strip(),
+        subtitle=str(payload.get("chapter_title", "")).strip(),
+        extension_client_id=str(payload.get("extension_client_id", "")).strip(),
+        message=str(payload.get("message", "")).strip(),
+        error=str(payload.get("error", "")).strip(),
+        current_url=str(payload.get("current_url", "")).strip(),
+        upload_url=payload.get("upload_url"),
+        platform=str(payload.get("platform", "")).strip(),
+        display_name=str(payload.get("display_name", "")).strip(),
+        publish=payload.get("publish"),
+        result_payload=payload.get("result_payload", {}) or {},
+        created_at=str(payload.get("created_at", "")).strip(),
+        updated_at=str(payload.get("updated_at", "")).strip(),
+        claimed_at=str(payload.get("claimed_at", "")).strip(),
+        started_at=str(payload.get("started_at", "")).strip(),
+        finished_at=str(payload.get("finished_at", "")).strip(),
+        abort_requested=bool(payload.get("abort_requested")),
+        terminable=bool(payload.get("terminable")),
+        deletable=bool(payload.get("deletable")),
+    )
+
+
+def _project_task_id(project_id: str) -> str:
+    return f"project-{project_id}"
+
+
+def _parse_project_task_id(task_id: str) -> str | None:
+    normalized = str(task_id or "").strip()
+    if not normalized.startswith("project-"):
+        return None
+    project_id = normalized[len("project-"):].strip()
+    return project_id or None
+
+
+def _build_project_task_center_item(session, project: Project) -> TaskCenterItemResponse:
+    plans = session.execute(
+        select(ChapterPlan).where(ChapterPlan.project_id == project.id).order_by(ChapterPlan.chapter_number)
+    ).scalars().all()
+    requested = len(plans)
+    completed = [
+        int(plan.chapter_number)
+        for plan in plans
+        if plan.status in {"accepted", "drafted"}
+    ]
+    failed = [int(plan.chapter_number) for plan in plans if plan.status == "failed"]
+    paused = [int(plan.chapter_number) for plan in plans if plan.status == "needs_review"]
+    if paused:
+        status = "needs_review"
+        current_stage = "paused_for_review"
+    elif failed and not completed:
+        status = "failed"
+        current_stage = "failed"
+    elif failed:
+        status = "partial_failed"
+        current_stage = "failed"
+    else:
+        status = "completed"
+        current_stage = "completed"
+    current_chapter = max(completed + failed + paused, default=0)
+    message = "项目入口（当前没有活跃生成任务）"
+    stage_history = [
+        _new_stage_history_entry(
+            current_stage,
+            now=project.updated_at,
+            current_chapter=current_chapter,
+            message=message,
+        )
+    ]
+    return TaskCenterItemResponse(
+        task_kind="generation",
+        task_id=_project_task_id(project.id),
+        status=status,
+        title=project.title,
+        subtitle=f"项目入口 · {project.genre}",
+        project_id=project.id,
+        message=message,
+        current_stage=current_stage,
+        stage_history=stage_history,
+        requested_chapters=requested,
+        current_chapter=current_chapter,
+        completed_chapters=completed,
+        failed_chapters=failed,
+        paused_chapters=paused,
+        created_at=_display_datetime(project.created_at),
+        updated_at=_display_datetime(project.updated_at),
+        terminable=False,
+        deletable=False,
+    )
+
+
+def _list_project_backed_task_items(limit: int) -> list[TaskCenterItemResponse]:
+    with _tasks_lock:
+        live_project_ids = {
+            str(task.get("project_id", "")).strip()
+            for task in _tasks.values()
+            if not task.get("deleted") and str(task.get("project_id", "")).strip()
+        }
+    session = _get_session()
+    try:
+        projects = session.execute(
+            select(Project).order_by(Project.updated_at.desc()).limit(max(1, min(int(limit or 50), 200)))
+        ).scalars().all()
+        items: list[TaskCenterItemResponse] = []
+        for project in projects:
+            if project.id in live_project_ids:
+                continue
+            items.append(_build_project_task_center_item(session, project))
+        return items
+    finally:
+        session.close()
+
+
+def _get_project_backed_task_item_or_404(task_id: str) -> TaskCenterItemResponse:
+    project_id = _parse_project_task_id(task_id)
+    if not project_id:
+        raise HTTPException(404, "任务不存在")
+    session = _get_session()
+    try:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        return _build_project_task_center_item(session, project)
+    finally:
+        session.close()
 
 
 def _serialize_model_profiles(payload: dict[str, object]) -> list[ModelProfile]:
@@ -298,10 +515,75 @@ def _delete_project(session, project_id: str) -> None:
 def _update_task(task_id: str, **changes: Any) -> None:
     with _tasks_lock:
         task = _tasks.get(task_id)
-        if task is None:
+        if task is None or task.get("deleted"):
             return
-        task.update(changes)
-        task["updated_at"] = _utcnow()
+        normalized = dict(changes)
+        if task.get("cancel_requested") and normalized.get("status") in {"starting", "running", "needs_review"}:
+            normalized.pop("status", None)
+        if task.get("cancel_requested") and normalized.get("current_stage") not in {"terminating", "cancelled"}:
+            normalized.pop("current_stage", None)
+        if "message" in normalized:
+            normalized["message"] = str(normalized.get("message") or "")
+        if "status" in normalized and normalized["status"] == "cancelled":
+            normalized["current_stage"] = "cancelled"
+        elif "status" in normalized and normalized["status"] == "terminating":
+            normalized["current_stage"] = "terminating"
+        if "current_chapter" in normalized:
+            try:
+                normalized["current_chapter"] = int(normalized["current_chapter"] or 0)
+            except (TypeError, ValueError):
+                normalized["current_chapter"] = 0
+
+        now = _utcnow()
+        next_stage = str(normalized.get("current_stage", "")).strip()
+        if next_stage and next_stage != str(task.get("current_stage", "")).strip():
+            history = list(task.get("stage_history", []))
+            history.append(
+                _new_stage_history_entry(
+                    next_stage,
+                    now=now,
+                    current_chapter=int(normalized.get("current_chapter", task.get("current_chapter", 0)) or 0),
+                    message=str(normalized.get("message", task.get("message", ""))).strip(),
+                )
+            )
+            normalized["stage_history"] = history
+
+        task.update(normalized)
+        task["updated_at"] = now
+
+
+def _task_should_abort(task_id: str) -> bool:
+    with _tasks_lock:
+        task = _tasks.get(task_id)
+        if task is None or task.get("deleted"):
+            return True
+        return bool(task.get("cancel_requested"))
+
+
+def _get_generation_task_or_404(task_id: str) -> dict[str, Any]:
+    _prune_tasks()
+    with _tasks_lock:
+        task_row = _tasks.get(task_id)
+        task = dict(task_row) if task_row is not None else None
+    if task is None or task.get("deleted"):
+        raise HTTPException(404, "任务不存在")
+    return task
+
+
+def _list_generation_tasks(limit: int) -> list[tuple[str, dict[str, Any]]]:
+    _prune_tasks()
+    normalized_limit = max(1, min(int(limit or 30), 100))
+    with _tasks_lock:
+        ordered = [
+            (task_id, dict(task))
+            for task_id, task in sorted(
+                _tasks.items(),
+                key=lambda item: item[1].get("updated_at", _utcnow()),
+                reverse=True,
+            )
+            if not task.get("deleted")
+        ][:normalized_limit]
+    return ordered
 
 
 def _shutdown_runtime_state() -> None:
@@ -413,6 +695,11 @@ def home_page():
         base_config=_config,
         runtime_settings=_runtime_settings,
     )
+    backend_ready = (
+        _publisher_manager.backend_ready_payload()
+        if _publisher_manager is not None
+        else {"extension_api_key_configured": False}
+    )
     return HTMLResponse(
         render_home_page(
             has_api_key=bool(settings["api_key"]),
@@ -420,6 +707,8 @@ def home_page():
             model=str(settings["model"]),
             operation_mode=str(settings["operation_mode"]),
             freeze_failed_candidates=bool(settings["freeze_failed_candidates"]),
+            extension_api_key_configured=bool(backend_ready.get("extension_api_key_configured")),
+            extension_install_path="browser_extension/forwin-publisher",
         )
     )
 
@@ -453,7 +742,12 @@ def generate(req: GenerateRequest):
         raise HTTPException(400, "MINIMAX_API_KEY 未设置。请在页面填写 API Key，或通过环境变量配置。")
 
     task_id = uuid.uuid4().hex[:12]
-    task_record = _create_task_record()
+    task_record = _create_task_record(
+        message=f"开始生成 {req.num_chapters} 章。",
+        title=(req.premise or "").strip()[:36] or "未命名生成任务",
+        subtitle=f"{req.genre} · {req.num_chapters} 章",
+        requested_chapters=req.num_chapters,
+    )
     with _tasks_lock:
         _tasks[task_id] = task_record
 
@@ -467,16 +761,13 @@ def generate(req: GenerateRequest):
             runtime_config,
             _update_task,
             logger,
+            lambda: _task_should_abort(task_id),
         ),
         daemon=True,
     )
     t.start()
 
-    return TaskResponse(
-        task_id=task_id,
-        status="running",
-        message=f"开始生成 {req.num_chapters} 章，请通过 /api/tasks/{task_id} 查询进度",
-    )
+    return _serialize_task(task_id, task_record)
 
 
 @app.get("/api/settings/llm", response_model=LLMSettingsResponse)
@@ -554,26 +845,89 @@ def delete_llm_profile(profile_id: str):
 
 @app.get("/api/tasks/{task_id}", response_model=TaskResponse)
 def get_task(task_id: str):
-    _prune_tasks()
-    with _tasks_lock:
-        task_row = _tasks.get(task_id)
-        task = dict(task_row) if task_row is not None else None
-    if task is None:
-        raise HTTPException(404, "任务不存在")
+    task = _get_generation_task_or_404(task_id)
     return _serialize_task(task_id, task)
 
 
 @app.get("/api/tasks", response_model=list[TaskSummaryResponse])
 def list_tasks(limit: int = 30):
-    _prune_tasks()
-    normalized_limit = max(1, min(int(limit or 30), 100))
-    with _tasks_lock:
-        ordered = sorted(
-            _tasks.items(),
-            key=lambda item: item[1].get("updated_at", _utcnow()),
-            reverse=True,
-        )[:normalized_limit]
-    return [_serialize_task(task_id, dict(task)) for task_id, task in ordered]
+    ordered = _list_generation_tasks(limit)
+    return [_serialize_task(task_id, task) for task_id, task in ordered]
+
+
+@app.get("/api/task-center/items", response_model=list[TaskCenterItemResponse])
+def list_task_center_items(limit: int = 50):
+    normalized_limit = max(1, min(int(limit or 50), 100))
+    generation_items = [
+        _serialize_generation_task_center_item(task_id, task)
+        for task_id, task in _list_generation_tasks(normalized_limit)
+    ]
+    project_items = _list_project_backed_task_items(normalized_limit)
+    upload_items = [
+        _serialize_upload_task_center_item(item)
+        for item in _publisher_manager.list_upload_jobs(
+            limit=normalized_limit,
+            include_deleted=False,
+        )
+    ]
+    combined = generation_items + project_items + upload_items
+    combined.sort(key=lambda item: item.updated_at or item.created_at, reverse=True)
+    return combined[:normalized_limit]
+
+
+@app.get("/api/task-center/items/{task_kind}/{task_id}", response_model=TaskCenterItemResponse)
+def get_task_center_item(task_kind: str, task_id: str):
+    normalized_kind = str(task_kind or "").strip()
+    if normalized_kind == "generation":
+        project_task_id = _parse_project_task_id(task_id)
+        if project_task_id:
+            return _get_project_backed_task_item_or_404(task_id)
+        task = _get_generation_task_or_404(task_id)
+        return _serialize_generation_task_center_item(task_id, task)
+    if normalized_kind == "upload":
+        try:
+            payload = _publisher_manager.get_upload_job(task_id)
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        return _serialize_upload_task_center_item(payload)
+    raise HTTPException(404, "任务类型不存在")
+
+
+@app.post("/api/tasks/{task_id}/terminate", response_model=TaskMutationResponse)
+def terminate_task(task_id: str):
+    task = _get_generation_task_or_404(task_id)
+    if not _task_is_terminable(task):
+        raise HTTPException(400, "当前任务状态不支持终止")
+    _update_task(
+        task_id,
+        cancel_requested=True,
+        status="terminating",
+        current_stage="terminating",
+        message="已请求终止生成任务，系统会在下一个安全检查点停止。",
+    )
+    updated = _get_generation_task_or_404(task_id)
+    return TaskMutationResponse(
+        ok=True,
+        task_kind="generation",
+        task_id=task_id,
+        status=str(updated.get("status", "")),
+        message=str(updated.get("message", "")),
+    )
+
+
+@app.delete("/api/tasks/{task_id}", response_model=TaskMutationResponse)
+def delete_task(task_id: str):
+    task = _get_generation_task_or_404(task_id)
+    if not _task_is_deletable(task):
+        raise HTTPException(400, "只有终态任务可以删除")
+    _update_task(task_id, deleted=True, message="任务已删除。")
+    return TaskMutationResponse(
+        ok=True,
+        task_kind="generation",
+        task_id=task_id,
+        status=str(task.get("status", "")),
+        message="任务已删除。",
+    )
 
 
 def _build_extension_package() -> bytes:
@@ -656,6 +1010,36 @@ def list_publisher_upload_jobs(
         limit=limit,
     )
     return [PublisherUploadJobResponse(**item) for item in payload]
+
+
+@app.post("/api/publishers/upload-jobs/{job_id}/terminate", response_model=TaskMutationResponse)
+def terminate_publisher_upload_job(job_id: str):
+    try:
+        payload = _publisher_manager.terminate_upload_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return TaskMutationResponse(
+        ok=True,
+        task_kind="upload",
+        task_id=job_id,
+        status=str(payload.get("status", "")),
+        message=str(payload.get("message", "")),
+    )
+
+
+@app.delete("/api/publishers/upload-jobs/{job_id}", response_model=TaskMutationResponse)
+def delete_publisher_upload_job(job_id: str):
+    try:
+        _publisher_manager.delete_upload_job(job_id)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return TaskMutationResponse(
+        ok=True,
+        task_kind="upload",
+        task_id=job_id,
+        status="deleted",
+        message="任务已删除。",
+    )
 
 
 @app.post("/api/publishers/extension/heartbeat", response_model=ExtensionHeartbeatResponse)
@@ -1085,9 +1469,19 @@ def approve_chapter_review(
     task_id = ""
     message = result["message"]
     if req.continue_generation:
+        session = _get_session()
+        try:
+            total_chapters = session.execute(
+                select(func.count(ChapterPlan.id)).where(ChapterPlan.project_id == project_id)
+            ).scalar_one()
+        finally:
+            session.close()
         task_id = uuid.uuid4().hex[:12]
         task_record = _create_task_record(
-            message=f"已接受第{chapter_number}章，准备继续后续章节。"
+            message=f"已接受第{chapter_number}章，准备继续后续章节。",
+            title=f"继续生成 {project_id}",
+            subtitle=f"项目 {project_id}",
+            requested_chapters=int(total_chapters or 0),
         )
         with _tasks_lock:
             _tasks[task_id] = task_record
@@ -1098,7 +1492,7 @@ def approve_chapter_review(
         )
         thread = threading.Thread(
             target=run_continue_project_with_config,
-            args=(task_id, project_id, runtime_config, _update_task, logger),
+            args=(task_id, project_id, runtime_config, _update_task, logger, lambda: _task_should_abort(task_id)),
             daemon=True,
         )
         thread.start()

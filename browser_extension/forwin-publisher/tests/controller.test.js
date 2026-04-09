@@ -206,6 +206,46 @@ test('controller marks upload job running then succeeded', async () => {
   assert.equal(uploadResults.at(-1).status, 'succeeded');
 });
 
+test('controller cancels upload job before execution when abort was requested', async () => {
+  const { controller, uploadResults } = makeController({
+    runUploadCommand: async () => {
+      throw new Error('should not execute aborted upload');
+    },
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
+      getBrowserSession: async () => null,
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      claimNextCommentSyncJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => ({
+        job_id: 'job-1',
+        platform: 'qidian',
+        display_name: '起点小说',
+        status: 'terminating',
+        abort_requested: true,
+        book_name: '测试书',
+        chapter_title: '第一章',
+        body: '正文',
+        upload_url: null,
+        publish: true,
+      }),
+      updateUploadJobResult: async (_jobId, payload) => {
+        uploadResults.push(payload);
+        return { ok: true };
+      },
+      updateCommentSyncJobResult: async () => ({ ok: true }),
+    },
+  });
+
+  await controller.handleMessage(
+    { action: 'execute-upload-job', payload: { jobId: 'job-1' } },
+    { tab: { id: 100 } },
+  );
+
+  assert.equal(uploadResults.at(-1).status, 'cancelled');
+  assert.equal(uploadResults.at(-1).result_payload.phase, 'abort-before-start');
+});
+
 test('controller closes execution tabs after successful upload', async () => {
   let controllerRef = null;
   const { controller, closedTabs, uploadResults } = makeController({

@@ -125,9 +125,11 @@ def run_orchestrator_task(
     error_message: str,
     default_project_id: str | None = None,
     progress_handler=None,
+    should_abort: Callable[[], bool] | None = None,
 ) -> None:
     try:
-        update_task(task_id, status="running")
+        if not (should_abort and should_abort()):
+            update_task(task_id, status="running")
         result = operation()
         update_task(
             task_id,
@@ -161,19 +163,58 @@ def run_generation_with_config(
     config: Config,
     update_task: TaskUpdater,
     logger: logging.Logger,
+    should_abort: Callable[[], bool] | None = None,
 ) -> None:
     def _handle_progress(event: str, payload: dict[str, Any]) -> None:
+        changes: dict[str, Any] = {}
         if event == "project_created":
-            update_task(
-                task_id,
-                project_id=payload.get("project_id"),
-                message=f"项目已创建：{payload.get('title', '')}",
-            )
+            changes["project_id"] = payload.get("project_id")
+            changes["title"] = payload.get("title") or "未命名项目"
+            changes["message"] = f"项目已创建：{payload.get('title', '')}"
+        stage = str(payload.get("stage", "")).strip()
+        if stage:
+            changes["current_stage"] = stage
+            if stage == "cancelled":
+                changes["status"] = "cancelled"
+            elif stage == "paused_for_review":
+                changes["status"] = "needs_review"
+            elif stage == "failed":
+                changes["status"] = "failed"
+            elif stage == "completed":
+                changes["status"] = "completed"
+            elif stage == "terminating":
+                changes["status"] = "terminating"
+        for key in (
+            "project_id",
+            "requested_chapters",
+            "current_chapter",
+            "completed_chapters",
+            "failed_chapters",
+            "paused_chapters",
+            "frozen_artifacts",
+        ):
+            if key in payload:
+                changes[key] = payload.get(key)
+        if changes:
+            update_task(task_id, **changes)
 
-    orchestrator = WritingOrchestrator(config, progress_callback=_handle_progress)
+    orchestrator = WritingOrchestrator(
+        config,
+        progress_callback=_handle_progress,
+        should_abort=should_abort,
+    )
 
     def _handle_result(result) -> None:
-        if result.failed_chapters:
+        if result.status == "cancelled":
+            update_task(
+                task_id,
+                status="cancelled",
+                message=(
+                    f"生成任务已取消。已完成 {len(result.completed_chapters)} / "
+                    f"{result.requested_chapters} 章"
+                ),
+            )
+        elif result.failed_chapters:
             failed_str = ", ".join(str(chapter) for chapter in result.failed_chapters)
             update_task(
                 task_id,
@@ -204,6 +245,7 @@ def run_generation_with_config(
         logger=logger,
         error_message="生成任务失败",
         progress_handler=_handle_result,
+        should_abort=should_abort,
     )
 
 
@@ -213,11 +255,52 @@ def run_continue_project_with_config(
     config: Config,
     update_task: TaskUpdater,
     logger: logging.Logger,
+    should_abort: Callable[[], bool] | None = None,
 ) -> None:
-    orchestrator = WritingOrchestrator(config)
+    def _handle_progress(event: str, payload: dict[str, Any]) -> None:
+        changes: dict[str, Any] = {}
+        stage = str(payload.get("stage", "")).strip()
+        if stage:
+            changes["current_stage"] = stage
+            if stage == "cancelled":
+                changes["status"] = "cancelled"
+            elif stage == "paused_for_review":
+                changes["status"] = "needs_review"
+            elif stage == "failed":
+                changes["status"] = "failed"
+            elif stage == "completed":
+                changes["status"] = "completed"
+        for key in (
+            "project_id",
+            "requested_chapters",
+            "current_chapter",
+            "completed_chapters",
+            "failed_chapters",
+            "paused_chapters",
+            "frozen_artifacts",
+        ):
+            if key in payload:
+                changes[key] = payload.get(key)
+        if changes:
+            update_task(task_id, **changes)
+
+    orchestrator = WritingOrchestrator(
+        config,
+        progress_callback=_handle_progress,
+        should_abort=should_abort,
+    )
 
     def _handle_result(result) -> None:
-        if result.failed_chapters:
+        if result.status == "cancelled":
+            update_task(
+                task_id,
+                status="cancelled",
+                message=(
+                    f"继续生成已取消。已完成 {len(result.completed_chapters)} / "
+                    f"{result.requested_chapters} 章"
+                ),
+            )
+        elif result.failed_chapters:
             failed_str = ", ".join(str(chapter) for chapter in result.failed_chapters)
             update_task(
                 task_id,
@@ -245,4 +328,5 @@ def run_continue_project_with_config(
         error_message="继续生成失败",
         default_project_id=project_id,
         progress_handler=_handle_result,
+        should_abort=should_abort,
     )

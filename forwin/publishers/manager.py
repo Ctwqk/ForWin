@@ -221,12 +221,15 @@ class PublisherManager:
         status: str = "",
         platform: str = "",
         limit: int = 30,
+        include_deleted: bool = False,
     ) -> list[dict[str, Any]]:
         normalized_status = str(status or "").strip()
         normalized_platform = str(platform or "").strip()
         normalized_limit = max(1, min(int(limit or 30), 100))
         with self.session_factory() as session:
-            stmt = select(PublisherUploadJob).order_by(PublisherUploadJob.created_at.desc())
+            stmt = select(PublisherUploadJob).order_by(PublisherUploadJob.updated_at.desc())
+            if not include_deleted:
+                stmt = stmt.where(PublisherUploadJob.deleted_at.is_(None))
             if normalized_status:
                 stmt = stmt.where(PublisherUploadJob.status == normalized_status)
             if normalized_platform:
@@ -262,6 +265,7 @@ class PublisherManager:
                 body_text=body,
                 upload_url=upload_url or "",
                 publish=publish,
+                abort_requested=False,
                 result_message=f"{spec.display_name} 上传任务已创建，等待浏览器扩展执行。",
                 result_payload_json=json.dumps(job_payload, ensure_ascii=False),
             )
@@ -273,8 +277,43 @@ class PublisherManager:
     def get_upload_job(self, job_id: str) -> dict[str, Any]:
         with self.session_factory() as session:
             job = session.get(PublisherUploadJob, job_id)
-            if job is None:
+            if job is None or job.deleted_at is not None:
                 raise ValueError("上传任务不存在。")
+            return self._serialize_upload_job(job)
+
+    def terminate_upload_job(self, job_id: str) -> dict[str, Any]:
+        now = _utc_now()
+        with self.session_factory() as session:
+            job = session.get(PublisherUploadJob, job_id)
+            if job is None or job.deleted_at is not None:
+                raise ValueError("上传任务不存在。")
+            if job.status in {"succeeded", "failed", "cancelled"}:
+                raise ValueError("终态上传任务不能再次终止。")
+            if job.status == "pending":
+                job.status = "cancelled"
+                job.abort_requested = True
+                job.finished_at = now
+                job.result_message = "上传任务已在排队阶段取消。"
+                job.error_message = ""
+            else:
+                job.status = "terminating"
+                job.abort_requested = True
+                job.result_message = "已请求浏览器扩展终止上传任务，等待执行端确认。"
+            session.commit()
+            session.refresh(job)
+            return self._serialize_upload_job(job)
+
+    def delete_upload_job(self, job_id: str) -> dict[str, Any]:
+        now = _utc_now()
+        with self.session_factory() as session:
+            job = session.get(PublisherUploadJob, job_id)
+            if job is None or job.deleted_at is not None:
+                raise ValueError("上传任务不存在。")
+            if job.status not in {"succeeded", "failed", "cancelled"}:
+                raise ValueError("运行中的上传任务不能删除，请先终止。")
+            job.deleted_at = now
+            session.commit()
+            session.refresh(job)
             return self._serialize_upload_job(job)
 
     def record_browser_session(
@@ -406,8 +445,9 @@ class PublisherManager:
             job = session.execute(
                 select(PublisherUploadJob)
                 .where(
-                    PublisherUploadJob.status == "running",
+                    PublisherUploadJob.status.in_(["running", "terminating"]),
                     PublisherUploadJob.finished_at.is_(None),
+                    PublisherUploadJob.deleted_at.is_(None),
                     PublisherUploadJob.extension_client_id == client_id,
                     PublisherUploadJob.platform_id.in_(platforms),
                 )
@@ -421,6 +461,8 @@ class PublisherManager:
                 select(PublisherUploadJob)
                 .where(
                     PublisherUploadJob.status == "pending",
+                    PublisherUploadJob.abort_requested.is_(False),
+                    PublisherUploadJob.deleted_at.is_(None),
                     PublisherUploadJob.platform_id.in_(platforms),
                 )
                 .order_by(PublisherUploadJob.created_at.asc())
@@ -436,6 +478,7 @@ class PublisherManager:
                 job.extension_client_id = client_id
                 job.claimed_at = job.claimed_at or now
                 job.started_at = job.started_at or now
+                job.abort_requested = False
                 job.result_message = "上传任务已被浏览器扩展自动领取。"
                 job.error_message = ""
 
@@ -512,21 +555,27 @@ class PublisherManager:
         with self.session_factory() as session:
             jobs = session.execute(
                 select(PublisherUploadJob).where(
-                    PublisherUploadJob.status == "running",
+                    PublisherUploadJob.status.in_(["running", "terminating"]),
                     PublisherUploadJob.finished_at.is_(None),
+                    PublisherUploadJob.deleted_at.is_(None),
                 )
             ).scalars().all()
             for job in jobs:
-                job.status = "pending"
-                job.started_at = None
-                job.extension_client_id = ""
-                job.current_url = ""
-                job.error_message = ""
-                job.result_payload_json = json.dumps(
-                    {"phase": "requeued-after-restart"},
-                    ensure_ascii=False,
-                )
-                job.result_message = "服务重启后，上传任务已重新排队。"
+                if job.abort_requested:
+                    job.status = "cancelled"
+                    job.finished_at = now
+                    job.result_message = "服务重启时检测到终止请求，任务已取消。"
+                else:
+                    job.status = "pending"
+                    job.started_at = None
+                    job.extension_client_id = ""
+                    job.current_url = ""
+                    job.error_message = ""
+                    job.result_payload_json = json.dumps(
+                        {"phase": "requeued-after-restart"},
+                        ensure_ascii=False,
+                    )
+                    job.result_message = "服务重启后，上传任务已重新排队。"
                 recovered_platforms.add(job.platform_id)
 
                 state = session.get(PublisherConnectionState, job.platform_id)
@@ -596,30 +645,40 @@ class PublisherManager:
         error: str,
         result_payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if status not in {"running", "succeeded", "failed"}:
+        if status not in {"running", "succeeded", "failed", "cancelled"}:
             raise ValueError("不支持的上传任务状态。")
 
         now = _utc_now()
         with self.session_factory() as session:
             job = session.get(PublisherUploadJob, job_id)
-            if job is None:
+            if job is None or job.deleted_at is not None:
                 raise ValueError("上传任务不存在。")
 
             self._ensure_extension_client(session, client_id)
             if client_id:
                 job.extension_client_id = client_id
-            if status == "running":
+            effective_status = status
+            if job.abort_requested and status in {"succeeded", "failed", "cancelled"}:
+                effective_status = "cancelled"
+            elif job.abort_requested and status == "running":
+                effective_status = "terminating"
+
+            if effective_status == "running":
                 job.claimed_at = job.claimed_at or now
                 job.started_at = job.started_at or now
                 job.error_message = ""
-            elif status in {"succeeded", "failed"}:
+            elif effective_status in {"succeeded", "failed", "cancelled"}:
                 job.started_at = job.started_at or now
                 job.finished_at = now
 
-            job.status = status
+            job.status = effective_status
             job.current_url = current_url
-            job.result_message = message
-            job.error_message = error
+            job.result_message = (
+                "上传任务已取消。"
+                if effective_status == "cancelled"
+                else message
+            )
+            job.error_message = "" if effective_status == "cancelled" else error
             merged_payload = {}
             try:
                 merged_payload = json.loads(job.result_payload_json or "{}")
@@ -639,10 +698,10 @@ class PublisherManager:
                 if client_id:
                     state.extension_client_id = client_id
                 state.last_heartbeat_at = now
-                if status == "succeeded":
+                if effective_status == "succeeded":
                     state.connected = True
                     state.last_error = ""
-                elif status == "failed" and current_url and "login" in current_url:
+                elif effective_status == "failed" and current_url and "login" in current_url:
                     state.connected = False
                     state.last_error = error or message
                 self._upsert_extension_platform_state(
@@ -936,6 +995,7 @@ class PublisherManager:
     def _serialize_upload_job(self, job: PublisherUploadJob) -> dict[str, Any]:
         spec = self._spec(job.platform_id)
         payload = json.loads(job.result_payload_json or "{}")
+        terminal = job.status in {"succeeded", "failed", "cancelled"}
         return {
             "job_id": job.id,
             "platform": job.platform_id,
@@ -951,10 +1011,14 @@ class PublisherManager:
             "message": job.result_message,
             "error": job.error_message,
             "result_payload": payload,
+            "abort_requested": bool(job.abort_requested),
             "created_at": _isoformat(job.created_at),
+            "updated_at": _isoformat(job.updated_at),
             "claimed_at": _isoformat(job.claimed_at),
             "started_at": _isoformat(job.started_at),
             "finished_at": _isoformat(job.finished_at),
+            "terminable": bool(job.deleted_at is None and not terminal and not job.abort_requested),
+            "deletable": bool(job.deleted_at is None and terminal),
         }
 
     def _serialize_comment_sync_job(self, job: PublisherCommentSyncJob) -> dict[str, Any]:

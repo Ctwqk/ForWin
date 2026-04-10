@@ -1162,7 +1162,7 @@ def _render_home_page_v2(
           item.current_stage ? `阶段：${stageLabel(item.current_stage)}` : '',
           item.message ? `消息：${item.message}` : '',
           item.error ? `错误：${item.error}` : '',
-        ].filter(Boolean).join('\n');
+        ].filter(Boolean).join('\\n');
         node.appendChild(createNode('div', meta, 'meta-line'));
         const actions = createNode('div', '', 'action-row');
         actions.appendChild(createButton('查看详情', () => openTaskDrawer(item.task_kind, item.task_id), 'secondary'));
@@ -1397,10 +1397,10 @@ def _render_home_page_v2(
           `状态：${data.status}`,
           `Verdict：${data.verdict}`,
           Array.isArray(data.issues) && data.issues.length
-            ? data.issues.map((issue, index) => `${index + 1}. [${issue.severity}] ${issue.description}`).join('\n')
+            ? data.issues.map((issue, index) => `${index + 1}. [${issue.severity}] ${issue.description}`).join('\\n')
             : '无问题',
         ];
-        window.alert(lines.join('\n'));
+        window.alert(lines.join('\\n'));
       } catch (error) {
         setGlobalStatus(error.message || String(error), 'Review 读取失败');
       }
@@ -1455,7 +1455,7 @@ def _render_home_page_v2(
       if (item.error) misc.appendChild(createNode('div', `错误：${item.error}`, 'meta-line'));
       if (Array.isArray(item.failed_chapters) && item.failed_chapters.length) misc.appendChild(createNode('div', `失败章节：${item.failed_chapters.join(', ')}`, 'meta-line'));
       if (Array.isArray(item.paused_chapters) && item.paused_chapters.length) misc.appendChild(createNode('div', `暂停章节：${item.paused_chapters.join(', ')}`, 'meta-line'));
-      if (Array.isArray(item.frozen_artifacts) && item.frozen_artifacts.length) misc.appendChild(createNode('div', `冻结产物：${item.frozen_artifacts.join('\n')}`, 'meta-line'));
+      if (Array.isArray(item.frozen_artifacts) && item.frozen_artifacts.length) misc.appendChild(createNode('div', `冻结产物：${item.frozen_artifacts.join('\\n')}`, 'meta-line'));
       body.appendChild(misc);
 
       if (!item.project_id) return;
@@ -1470,30 +1470,41 @@ def _render_home_page_v2(
         } else {
           visibleChapters.forEach((chapter) => {
             const row = createNode('div', '', 'chapter-row');
+            const hasDraft = Boolean(chapter.has_draft);
+            const hasReview = Boolean(chapter.has_review);
             row.appendChild(createNode('strong', `第${chapter.chapter_number}章《${chapter.title}》`));
             row.appendChild(createNode('div', `状态：${chapter.status} | 字数：${chapter.char_count || 0}`, 'meta-line'));
             if (chapter.summary) row.appendChild(createNode('div', chapter.summary, 'meta-line'));
             const actions = createNode('div', '', 'action-row');
             const bodyId = `chapter_body_${item.project_id}_${chapter.chapter_number}`;
-            actions.appendChild(createButton('查看正文', () => toggleChapterBody(item.project_id, chapter.chapter_number, bodyId), 'ghost'));
-            actions.appendChild(createButton('创建上传任务', async () => {
-              try {
-                const chapterDetail = await requestJson(`/api/projects/${item.project_id}/chapters/${chapter.chapter_number}`);
-                openTaskModal('upload', {
-                  book_name: item.title || '',
-                  chapter_title: chapter.title,
-                  body: chapterDetail.body || '',
-                });
-              } catch (error) {
-                setGlobalStatus(error.message || String(error), '章节读取失败');
-              }
-            }, 'secondary'));
-            if (chapter.status === 'needs_review') {
+            if (hasDraft) {
+              actions.appendChild(createButton('查看正文', () => toggleChapterBody(item.project_id, chapter.chapter_number, bodyId), 'ghost'));
+              actions.appendChild(createButton('创建上传任务', async () => {
+                try {
+                  const chapterDetail = await requestJson(`/api/projects/${item.project_id}/chapters/${chapter.chapter_number}`);
+                  openTaskModal('upload', {
+                    book_name: item.title || '',
+                    chapter_title: chapter.title,
+                    body: chapterDetail.body || '',
+                  });
+                } catch (error) {
+                  setGlobalStatus(error.message || String(error), '章节读取失败');
+                }
+              }, 'secondary'));
+            }
+            if (chapter.status === 'needs_review' && hasReview) {
               actions.appendChild(createButton('查看 Review', () => showReview(item.project_id, chapter.chapter_number), 'ghost'));
               actions.appendChild(createButton('接受', () => approveReview(item.project_id, chapter.chapter_number, false), 'ghost'));
               actions.appendChild(createButton('接受并继续', () => approveReview(item.project_id, chapter.chapter_number, true), 'primary'));
             }
-            row.appendChild(actions);
+            if (!actions.childNodes.length) {
+              const reason = chapter.status === 'needs_review'
+                ? '该章当前停在待处理状态，但还没有可查看的 draft / review。'
+                : '该章目前只有计划信息，还没有可查看正文。';
+              row.appendChild(createNode('div', reason, 'meta-line'));
+            } else {
+              row.appendChild(actions);
+            }
             const bodyBlock = createNode('div', '', 'chapter-body');
             bodyBlock.id = bodyId;
             row.appendChild(bodyBlock);
@@ -1524,7 +1535,7 @@ def _render_home_page_v2(
         item.finished_at ? `结束：${item.finished_at}` : '',
         item.message ? `消息：${item.message}` : '',
         item.error ? `错误：${item.error}` : '',
-      ].filter(Boolean).join('\n');
+      ].filter(Boolean).join('\\n');
       top.appendChild(createNode('div', lines, 'meta-line'));
       body.appendChild(top);
 

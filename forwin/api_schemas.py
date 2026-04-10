@@ -193,6 +193,8 @@ class ChapterInfo(BaseModel):
     status: str
     char_count: int = 0
     summary: str = ""
+    has_draft: bool = False
+    has_review: bool = False
 
 
 class ProjectDetail(ProjectArcSnapshotFields):

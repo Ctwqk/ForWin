@@ -1296,6 +1296,14 @@ def list_chapters(project_id: str):
             select(ChapterPlan).where(ChapterPlan.project_id == project_id).order_by(ChapterPlan.chapter_number)
         ).scalars().all()
         draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
+        review_draft_ids = {
+            draft_id
+            for draft_id in session.execute(
+                select(ChapterReview.draft_id)
+                .where(ChapterReview.draft_id.in_([draft.id for draft in draft_map.values()]))
+                .distinct()
+            ).scalars().all()
+        } if draft_map else set()
 
         result = []
         for p in plans:
@@ -1306,6 +1314,8 @@ def list_chapters(project_id: str):
                 status=p.status,
                 char_count=draft.char_count if draft else 0,
                 summary=draft.summary if draft else "",
+                has_draft=draft is not None,
+                has_review=bool(draft and draft.id in review_draft_ids),
             ))
         return result
     finally:

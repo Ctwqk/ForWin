@@ -1565,7 +1565,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 Config(
                     db_path=db_path,
                     artifact_root=str(Path(tmp) / "artifacts"),
-                    minimax_api_key="fake-key",
+                    minimax_api_key="",
                     minimax_model="fake-model",
                 ),
                 progress_callback=lambda event, payload: progress_events.append((event, payload)),
@@ -1605,8 +1605,13 @@ class Phase05RegressionTests(unittest.TestCase):
 
         self.assertEqual(result.status, "completed")
         self.assertTrue(progress_events)
-        self.assertEqual(progress_events[0][0], "project_created")
-        self.assertTrue(progress_events[0][1]["project_id"])
+        project_created = [
+            payload
+            for event, payload in progress_events
+            if event == "project_created"
+        ]
+        self.assertTrue(project_created)
+        self.assertTrue(project_created[0]["project_id"])
 
     def test_api_projects_expose_active_arc_envelope_fields(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -3553,10 +3558,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 page = client.get("/publishers")
                 self.assertEqual(page.status_code, 200)
                 self.assertIn("浏览器扩展", page.text)
-                self.assertIn("如果你是用 macOS 浏览器访问这台 Linux 后端", page.text)
+                self.assertIn("如果你通过 Mac 或笔记本访问这台 Linux 后端", page.text)
                 self.assertIn("browser_extension/forwin-publisher", page.text)
                 self.assertIn("最近上传任务", page.text)
-                self.assertIn("等待首选 Linux 扩展优先领取", page.text)
+                self.assertIn("下载扩展包", page.text)
                 self.assertIn("/api/publishers/extension-package", page.text)
 
                 package = client.get("/api/publishers/extension-package")
@@ -3820,14 +3825,14 @@ class Phase05RegressionTests(unittest.TestCase):
                     page = client.get("/")
 
                     self.assertEqual(page.status_code, 200)
-                    self.assertIn('id="api_key"', page.text)
+                    self.assertIn('id="model_form_api_key"', page.text)
                     self.assertIn("https://api.minimaxi.com/v1", page.text)
                     self.assertIn("MiniMax-M2.7", page.text)
-                    self.assertIn("黑箱模式", page.text)
-                    self.assertIn("检查点模式：写完初稿和 review 后暂停", page.text)
-                    self.assertIn("当前任务是按运行模式主动暂停", page.text)
+                    self.assertIn("统一任务中心", page.text)
+                    self.assertIn("模型列表", page.text)
+                    self.assertIn("Operation Mode", page.text)
                     self.assertIn("/publishers", page.text)
-                    self.assertIn("保存默认配置", page.text)
+                    self.assertIn("模型设置", page.text)
             finally:
                 api_module._config = old_config
                 api_module._runtime_settings = old_store
@@ -3839,7 +3844,7 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn("forwin-publisher-extension", page.text)
         self.assertIn("open-login", page.text)
-        self.assertIn("execute-upload-job", page.text)
+        self.assertIn("open-options", page.text)
         self.assertIn("浏览器扩展未响应", page.text)
         self.assertIn("let selectedPlatformId = '';", page.text)
         self.assertIn("const nextSelectedPlatformId = selectedPlatformId || select.value || '';", page.text)

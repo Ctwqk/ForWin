@@ -2707,7 +2707,45 @@
     return matched ? String(matched[1] || '').trim() : '';
   }
 
+  async function ensureFanqieDraftTabVisible() {
+    await dismissFanqieGuideModal();
+    const hasDraftListSignal = () => {
+      const text = pageText();
+      const href = String(window.location.href || '');
+      return href.includes('type=2')
+        || text.includes('共') && text.includes('篇草稿')
+        || text.includes('新建草稿');
+    };
+    if (hasDraftListSignal()) {
+      return true;
+    }
+    const draftTab = Array.from(document.querySelectorAll('button, [role="button"], a, div, span'))
+      .find((node) => {
+        const text = String(node?.innerText || node?.textContent || '').trim();
+        if (text !== '草稿箱') {
+          return false;
+        }
+        const clickable = node instanceof HTMLElement
+          ? (node.closest?.('button, [role="button"], a, [tabindex]') || node)
+          : null;
+        return isVisibleElement(clickable);
+      });
+    const clickableDraftTab = draftTab instanceof HTMLElement
+      ? (draftTab.closest?.('button, [role="button"], a, [tabindex]') || draftTab)
+      : null;
+    if (clickableDraftTab instanceof HTMLElement) {
+      clickableDraftTab.click();
+      await Promise.race([
+        waitForCondition(() => hasDraftListSignal(), 5000),
+        sleep(1200),
+      ]);
+      await dismissFanqieGuideModal();
+    }
+    return hasDraftListSignal();
+  }
+
   async function verifyFanqieDraftSavedOnCurrentPage(chapterTitle) {
+    await ensureFanqieDraftTabVisible();
     const text = pageText();
     const title = String(chapterTitle || '').trim();
     if (title && text.includes(title)) {
@@ -2755,14 +2793,14 @@
       currentUrl: window.location.href,
       error: '番茄需要跳转章节管理页核验草稿。',
       errorCode: 'fanqie-draft-verify-required',
-      resultPayload: {
-        mode: 'draft',
-        chapter_title: chapterTitle,
-        verify_phase: 'pending-chapter-manage',
-        verify_url: `https://fanqienovel.com/main/writer/chapter-manage/${workId}?type=1`,
-      },
-    };
-  }
+        resultPayload: {
+          mode: 'draft',
+          chapter_title: chapterTitle,
+          verify_phase: 'pending-chapter-manage',
+          verify_url: `https://fanqienovel.com/main/writer/chapter-manage/${workId}?type=2`,
+        },
+      };
+    }
 
   function locateFanqieTrustedBodyTarget() {
     const paragraph = document.querySelector('.ProseMirror[contenteditable="true"] p');

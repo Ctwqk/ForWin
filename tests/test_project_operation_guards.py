@@ -1,0 +1,307 @@
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+
+from fastapi import HTTPException
+
+import forwin.api as api_module
+from forwin.api_schemas import (
+    ChapterReviewApproveRequest,
+    GenerateRequest,
+    ProjectBulkDeleteRequest,
+    ProjectCreateRequest,
+    ProjectGovernanceUpdateRequest,
+)
+from forwin.config import Config
+from forwin.models.base import get_engine, get_session_factory, init_db, new_id
+from forwin.models.governance import BandCheckpoint
+from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.publisher import PublisherUploadJob
+from forwin.models.task import GenerationTask
+
+
+class ProjectOperationGuardTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmpdir = TemporaryDirectory()
+        self.engine = get_engine(str(Path(self.tmpdir.name) / "operation-guards.db"))
+        init_db(self.engine)
+        self.session_factory = get_session_factory(self.engine)
+
+        self.old_session_factory = api_module._SessionFactory
+        self.old_config = api_module._config
+        self.old_runtime_settings = api_module._runtime_settings
+        self.old_orchestrator = api_module._orchestrator
+
+        api_module._SessionFactory = self.session_factory
+        api_module._config = Config(
+            db_path=str(Path(self.tmpdir.name) / "operation-guards.db"),
+            minimax_api_key="saved-key",
+            minimax_base_url="https://api.minimaxi.com/v1",
+            minimax_model="MiniMax-M2.7",
+        )
+        api_module._runtime_settings = None
+        api_module._orchestrator = None
+
+    def tearDown(self) -> None:
+        api_module._SessionFactory = self.old_session_factory
+        api_module._config = self.old_config
+        api_module._runtime_settings = self.old_runtime_settings
+        api_module._orchestrator = self.old_orchestrator
+        self.engine.dispose()
+        self.tmpdir.cleanup()
+
+    def _create_project(self, *, project_id: str | None = None) -> Project:
+        with self.session_factory() as session:
+            project = Project(
+                id=project_id or new_id(),
+                title="测试书",
+                premise="测试 premise",
+                genre="玄幻",
+                setting_summary="测试设定",
+            )
+            session.add(project)
+            session.commit()
+            return project
+
+    def test_generate_rejects_existing_project_with_active_generation_task(self) -> None:
+        project = self._create_project(project_id="proj-active-generate")
+        with self.session_factory() as session:
+            session.add(
+                GenerationTask(
+                    id="task-active-generate",
+                    project_id=project.id,
+                    task_kind="generation",
+                    status="running",
+                    current_stage="writing_chapter",
+                    message="still running",
+                )
+            )
+            session.commit()
+
+        with self.assertRaises(HTTPException) as ctx:
+            api_module.generate(
+                GenerateRequest(
+                    project_id=project.id,
+                    premise="测试 premise",
+                    genre="玄幻",
+                    num_chapters=1,
+                    api_key="sk-inline",
+                )
+            )
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("运行中的生成任务", str(ctx.exception.detail))
+
+    def test_approve_review_rejects_continue_when_active_generation_task_exists(self) -> None:
+        project = self._create_project(project_id="proj-active-continue")
+        with self.session_factory() as session:
+            arc = ArcPlanVersion(
+                id="arc-active-continue",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+            )
+            session.add(
+                ChapterPlan(
+                    id="plan-active-continue",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=1,
+                    title="第一章",
+                    status="accepted",
+                )
+            )
+            session.add(arc)
+            session.add(
+                GenerationTask(
+                    id="task-active-continue",
+                    project_id=project.id,
+                    task_kind="generation",
+                    status="running",
+                    current_stage="writing_chapter",
+                    message="still running",
+                )
+            )
+            session.commit()
+
+        api_module._orchestrator = SimpleNamespace(
+            accept_review=lambda *_args, **_kwargs: {
+                "message": "accepted",
+                "frozen_artifact": "",
+            }
+        )
+
+        with self.assertRaises(HTTPException) as ctx:
+            api_module.approve_chapter_review(
+                project.id,
+                1,
+                ChapterReviewApproveRequest(continue_generation=True, reason="guard regression"),
+            )
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("运行中的生成任务", str(ctx.exception.detail))
+
+    def test_delete_project_rejects_running_generation_task(self) -> None:
+        project = self._create_project(project_id="proj-delete-generation")
+        with self.session_factory() as session:
+            session.add(
+                GenerationTask(
+                    id="task-delete-generation",
+                    project_id=project.id,
+                    task_kind="generation",
+                    status="running",
+                    current_stage="writing_chapter",
+                    message="still running",
+                )
+            )
+            session.commit()
+
+        with self.assertRaises(HTTPException) as ctx:
+            api_module.delete_project(project.id)
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        with self.session_factory() as session:
+            self.assertIsNotNone(session.get(Project, project.id))
+
+    def test_delete_project_rejects_running_upload_job(self) -> None:
+        project = self._create_project(project_id="proj-delete-upload")
+        with self.session_factory() as session:
+            session.add(
+                PublisherUploadJob(
+                    id="upload-delete-running",
+                    project_id=project.id,
+                    platform_id="fanqie",
+                    status="running",
+                    book_name="测试书",
+                    chapter_title="第一章",
+                    body_text="正文",
+                    publish=False,
+                    result_message="running",
+                )
+            )
+            session.commit()
+
+        with self.assertRaises(HTTPException) as ctx:
+            api_module.delete_project(project.id)
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("发布任务", str(ctx.exception.detail))
+
+    def test_bulk_delete_projects_skips_projects_with_active_operations(self) -> None:
+        blocked = self._create_project(project_id="proj-blocked")
+        deletable = self._create_project(project_id="proj-deletable")
+        with self.session_factory() as session:
+            session.add(
+                GenerationTask(
+                    id="task-bulk-blocked",
+                    project_id=blocked.id,
+                    task_kind="generation",
+                    status="running",
+                    current_stage="writing_chapter",
+                    message="still running",
+                )
+            )
+            session.commit()
+
+        response = api_module.bulk_delete_projects(
+            ProjectBulkDeleteRequest(project_ids=[blocked.id, deletable.id])
+        )
+
+        self.assertTrue(response.ok)
+        self.assertEqual(response.deleted_ids, [deletable.id])
+        self.assertEqual(response.skipped_ids, [blocked.id])
+        with self.session_factory() as session:
+            self.assertIsNotNone(session.get(Project, blocked.id))
+            self.assertIsNone(session.get(Project, deletable.id))
+
+    def test_create_project_defaults_to_strict_governance(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest(
+                title="治理测试书",
+                premise="一个关于治理层的 premise",
+                genre="玄幻",
+            )
+        )
+
+        governance = api_module.get_project_governance(created.project_id)
+        self.assertTrue(governance.ok)
+        self.assertEqual(governance.governance.progression_mode, "serial_canon_band_guard")
+        self.assertTrue(governance.governance.auto_band_checkpoint)
+        self.assertTrue(governance.governance.manual_checkpoints_enabled)
+        self.assertTrue(governance.governance.future_constraints_enabled)
+
+    def test_continue_generation_rejects_failed_band_checkpoint(self) -> None:
+        project = self._create_project(project_id="proj-band-checkpoint")
+        with self.session_factory() as session:
+            arc = ArcPlanVersion(
+                id="arc-band-checkpoint",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+            )
+            session.add(arc)
+            session.flush()
+            session.add(
+                ChapterPlan(
+                    id="plan-band-1",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=1,
+                    title="第一章",
+                    status="accepted",
+                )
+            )
+            session.add(
+                ChapterPlan(
+                    id="plan-band-2",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=2,
+                    title="第二章",
+                    status="planned",
+                )
+            )
+            session.add(
+                BandCheckpoint(
+                    id="checkpoint-band-1",
+                    project_id=project.id,
+                    arc_id=arc.id,
+                    band_id="band-1",
+                    chapter_start=1,
+                    chapter_end=1,
+                    boundary_chapter=1,
+                    status="fail",
+                    summary="上一 band checkpoint 未通过",
+                )
+            )
+            session.commit()
+
+        with self.assertRaises(HTTPException) as ctx:
+            api_module.continue_project_generation(project.id)
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("checkpoint", str(ctx.exception.detail))
+
+    def test_update_governance_writes_decision_event(self) -> None:
+        project = self._create_project(project_id="proj-governance-event")
+
+        response = api_module.update_project_governance(
+            project.id,
+            ProjectGovernanceUpdateRequest(
+                progression_mode="serial_canon",
+                reason="切换到更严格的串行 canon gate",
+            ),
+        )
+
+        self.assertTrue(response.ok)
+        events = api_module.list_project_decision_events(project.id)
+        self.assertTrue(events.items)
+        self.assertEqual(events.items[0].event_type, "governance_updated")
+        self.assertIn("串行 canon gate", events.items[0].reason)
+
+
+if __name__ == "__main__":
+    unittest.main()

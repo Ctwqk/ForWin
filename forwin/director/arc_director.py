@@ -204,7 +204,75 @@ class ArcDirector:
                 item.get("title") or item.get("one_line") or f"第{index + 1}章压缩候选"
                 for index, item in enumerate(chapter_seed[2:4])
             ],
+            "reader_promise": {
+                "genre_promise": f"{genre}网文",
+                "pleasure_promise": f"{genre}读者期待稳定获得爽点与悬念回报",
+                "core_pleasures": ["稳定回报", "悬念升级", "高压翻盘"],
+                "acceptable_drag_level": "low",
+                "acceptable_exposition_density": "medium",
+                "cliffhanger_aggressiveness": "high",
+                "ambiguity_mode": "managed",
+                "world_legibility_target": "规则需要足够清晰，让关键反转显得合理而非强行。",
+            },
+            "arc_payoff_map": {
+                "macro_payoffs": [
+                    {
+                        "payoff_id": "payoff-1",
+                        "category": "mystery",
+                        "template_id": "mystery-locked-clue",
+                        "target_chapter_hint": "arc-mid",
+                        "setup_requirement": "前期埋下异象与错误认知",
+                        "success_signal": "读者感到真相逼近但未完全揭晓",
+                    },
+                    {
+                        "payoff_id": "payoff-2",
+                        "category": "power",
+                        "template_id": "power-hidden-edge",
+                        "target_chapter_hint": "arc-late",
+                        "setup_requirement": "主角先承受压制",
+                        "success_signal": "主角在关键节点翻盘",
+                    },
+                ],
+                "awe_kit": ["失控异象", "身份反转", "代价换胜"],
+                "revelation_layers": [
+                    {
+                        "layer_id": "rule-layer-1",
+                        "layer_type": "rule",
+                        "summary": "揭开一条可被理解的世界规则，并明确其限制。",
+                        "chapter_window": "arc-mid",
+                    },
+                    {
+                        "layer_id": "faction-layer-1",
+                        "layer_type": "faction",
+                        "summary": "暴露一个隐藏势力对当前冲突的真实意图。",
+                        "chapter_window": "arc-late",
+                    },
+                ],
+                "ambiguity_constraints": [
+                    "超常现象可以误导认知，但不能无代价地改写既有因果。",
+                    "关键翻盘必须能回指前文线索或规则。",
+                ],
+            },
         }
+        trend_text = " ".join(normalized_trends)
+        if "character_heat" in trend_text or "relationship_interest" in trend_text:
+            fallback["reader_promise"]["core_pleasures"].append("角色关系与地位波动")
+            fallback["arc_payoff_map"]["macro_payoffs"].append(
+                {
+                    "payoff_id": "payoff-3",
+                    "category": "emotion",
+                    "template_id": "emotion-knife-turn",
+                    "target_chapter_hint": "arc-late",
+                    "setup_requirement": "让关键角色先建立情感或立场连结",
+                    "success_signal": "角色关系发生明确变化并增强追读意图",
+                }
+            )
+        if "confusion" in trend_text or "risk" in trend_text or "prediction" in trend_text:
+            fallback["reader_promise"]["world_legibility_target"] = "每个关键反转都要让读者看得懂代价、边界与因果。"
+            fallback["arc_payoff_map"]["ambiguity_constraints"].append("所有认知反转都必须回指前文线索。")
+        if "pacing" in trend_text:
+            fallback["reader_promise"]["acceptable_drag_level"] = "low"
+            fallback["reader_promise"]["cliffhanger_aggressiveness"] = "high"
         prompt = [
             {
                 "role": "system",
@@ -215,8 +283,15 @@ class ArcDirector:
                 "content": (
                     "请为当前 active arc 生成中层结构草案，只返回 JSON。\n"
                     "字段必须包含：phase_layout、key_beats、thread_priorities、"
-                    "hotspot_candidates、compression_candidates。\n"
+                    "hotspot_candidates、compression_candidates、reader_promise、arc_payoff_map。\n"
                     "thread_priorities 中每项必须有 name/priority/reason。\n\n"
+                    "reader_promise 必须包含：genre_promise、pleasure_promise、core_pleasures、"
+                    "acceptable_drag_level、acceptable_exposition_density、cliffhanger_aggressiveness、"
+                    "ambiguity_mode、world_legibility_target。\n"
+                    "arc_payoff_map 必须包含：macro_payoffs、awe_kit、revelation_layers、ambiguity_constraints；"
+                    "macro_payoffs 中每项必须有 payoff_id/category/template_id/"
+                    "target_chapter_hint/setup_requirement/success_signal。\n\n"
+                    "revelation_layers 中每项必须有 layer_id、layer_type、summary、chapter_window。\n\n"
                     f"类型：{genre}\n"
                     f"全书目标章节数：{total_chapters}\n"
                     f"当前 policy tier：{policy_tier}\n"

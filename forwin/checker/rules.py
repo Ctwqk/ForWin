@@ -25,7 +25,7 @@ DEAD_STATUS_KEYWORDS = {
 class ContinuityChecker:
     """Checks chapter output for basic continuity issues."""
 
-    def __init__(self, repo: StateRepository, min_chars: int = 1500, max_chars: int = 2200):
+    def __init__(self, repo: StateRepository, min_chars: int = 2500, max_chars: int = 3200):
         self.repo = repo
         self.min_chars = min_chars
         self.max_chars = max_chars
@@ -53,7 +53,12 @@ class ContinuityChecker:
         else:
             verdict = "pass"
 
-        return ReviewVerdict(verdict=verdict, issues=issues)
+        return ReviewVerdict(
+            verdict=verdict,
+            issues=issues,
+            recommended_action="rewrite" if verdict == "fail" else "continue",
+            review_summary=f"continuity issues={len(issues)}",
+        )
 
     def _check_char_count(self, output: WriterOutput) -> list[ContinuityIssue]:
         """Check if chapter body is within acceptable length."""
@@ -65,12 +70,18 @@ class ContinuityChecker:
                 rule_name="char_count_low",
                 severity="warning",
                 description=f"章节正文仅{char_count}字，低于最低要求{self.min_chars}字",
+                reviewer="continuity",
+                issue_type="continuity",
+                target_scope="chapter",
             ))
         elif char_count > self.max_chars * 1.5:  # Allow some overflow but flag extreme
             issues.append(ContinuityIssue(
                 rule_name="char_count_high",
                 severity="warning",
                 description=f"章节正文{char_count}字，远超目标{self.max_chars}字",
+                reviewer="continuity",
+                issue_type="continuity",
+                target_scope="chapter",
             ))
 
         return issues
@@ -82,6 +93,10 @@ class ContinuityChecker:
                 rule_name="empty_body",
                 severity="error",
                 description="章节正文为空或过短（不足100字）",
+                reviewer="continuity",
+                issue_type="continuity",
+                target_scope="chapter",
+                evidence_refs=[f"body_chars={len(output.body.strip())}"],
             )]
         return []
 
@@ -118,6 +133,10 @@ class ContinuityChecker:
                             severity="error",
                             description=f"已死亡角色「{name}」在事件中被标记为{role}",
                             entity_names=[name],
+                            reviewer="continuity",
+                            issue_type="continuity",
+                            target_scope="scene",
+                            evidence_refs=[f"event={event.summary[:60]}", f"entity={name}", f"role={role}"],
                         ))
 
         return issues
@@ -134,6 +153,9 @@ class ContinuityChecker:
                     severity="warning",
                     description=f"情节线「{beat.thread_name}」已{thread.status}，但本章仍有相关推进",
                     entity_names=[],
+                    reviewer="continuity",
+                    issue_type="continuity",
+                    target_scope="chapter",
                 ))
 
         return issues
@@ -148,6 +170,9 @@ class ContinuityChecker:
                     rule_name="empty_entity_name",
                     severity="warning",
                     description="状态变更中存在空的实体名称",
+                    reviewer="continuity",
+                    issue_type="continuity",
+                    target_scope="chapter",
                 ))
             if not sc.field.strip():
                 issues.append(ContinuityIssue(
@@ -155,6 +180,9 @@ class ContinuityChecker:
                     severity="warning",
                     description=f"实体「{sc.entity_name}」的状态变更中字段名为空",
                     entity_names=[sc.entity_name],
+                    reviewer="continuity",
+                    issue_type="continuity",
+                    target_scope="chapter",
                 ))
 
         return issues
@@ -169,6 +197,9 @@ class ContinuityChecker:
                     rule_name="event_role_mismatch",
                     severity="warning",
                     description=f"事件「{event.summary[:30]}」的参与者数量与角色数量不匹配",
+                    reviewer="continuity",
+                    issue_type="continuity",
+                    target_scope="chapter",
                 ))
 
         return issues

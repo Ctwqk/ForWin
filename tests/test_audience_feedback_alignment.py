@@ -18,8 +18,11 @@ from forwin.models import (
     SignalWindowAggregate,
     new_id,
 )
-from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.orchestrator.feedback_aggregator import run_feedback_aggregation_pass
+from forwin.models.base import get_engine, get_session_factory, init_db, upgrade_db
+from forwin.orchestrator.feedback_aggregator import (
+    run_feedback_aggregation_pass,
+    score_signal_aggregate_v1,
+)
 from forwin.orchestrator.phase24 import ArcEnvelopeManager, policy_for_total_chapters
 from forwin.orchestrator.phase3 import PacingStrategist
 from forwin.orchestrator.phase4 import CommentAnalyzer, classify_signal_level
@@ -85,6 +88,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
     def _add_comment(
         self,
         *,
+        project_id: str = "",
         work_name: str,
         body: str,
         remote_comment_id: str,
@@ -96,6 +100,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
     ) -> PublisherRawComment:
         row = PublisherRawComment(
             id=new_id(),
+            project_id=project_id,
             platform_id="fanqie",
             remote_comment_id=remote_comment_id,
             work_name=work_name,
@@ -159,6 +164,83 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
             self.assertIn("signal_window_aggregates", table_names)
             self.assertIn("reader_scale_snapshots", table_names)
             self.assertIn("feedback_action_records", table_names)
+
+    def test_upgrade_db_backfills_reader_scale_meta_columns_for_existing_audience_schema(self) -> None:
+        with self.engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS signal_window_aggregates"))
+            conn.execute(text("DROP TABLE IF EXISTS reader_scale_snapshots"))
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE signal_window_aggregates (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        signal_key TEXT NOT NULL,
+                        signal_type TEXT NOT NULL DEFAULT '',
+                        target_type TEXT NOT NULL DEFAULT '',
+                        target_name TEXT NOT NULL DEFAULT '',
+                        window_type TEXT NOT NULL DEFAULT 'short',
+                        window_chapter_start INTEGER NOT NULL DEFAULT 0,
+                        window_chapter_end INTEGER NOT NULL DEFAULT 0,
+                        hit_comment_count INTEGER NOT NULL DEFAULT 0,
+                        unique_user_count INTEGER NOT NULL DEFAULT 0,
+                        total_comment_count INTEGER NOT NULL DEFAULT 0,
+                        reader_estimate INTEGER NOT NULL DEFAULT 0,
+                        reader_tier INTEGER NOT NULL DEFAULT 0,
+                        max_severity INTEGER NOT NULL DEFAULT 0,
+                        avg_confidence FLOAT NOT NULL DEFAULT 0,
+                        signal_level TEXT NOT NULL DEFAULT 'noise',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE reader_scale_snapshots (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        chapter_number INTEGER NOT NULL DEFAULT 0,
+                        reader_estimate INTEGER NOT NULL DEFAULT 0,
+                        tier INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT OR IGNORE INTO schema_migrations(version)
+                    VALUES ('audience_feedback_v1')
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM schema_migrations
+                    WHERE version = 'audience_feedback_scale_meta_v1'
+                    """
+                )
+            )
+
+        upgrade_db(self.engine)
+
+        with self.engine.begin() as conn:
+            aggregate_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(signal_window_aggregates)"))
+            }
+            self.assertIn("estimation_method", aggregate_columns)
+            self.assertIn("scale_confidence", aggregate_columns)
+
+            snapshot_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(reader_scale_snapshots)"))
+            }
+            self.assertIn("estimation_method", snapshot_columns)
 
     def test_publisher_manager_ingest_comments_batch_persists_like_and_reply_counts(self) -> None:
         manager = PublisherManager(self.SessionFactory)
@@ -266,6 +348,54 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertIn("confusion", signal_types)
         self.assertIn("pacing", signal_types)
 
+    def test_comment_analyzer_accepts_extended_signal_type_schema(self) -> None:
+        project = self._create_project()
+        comment = self._add_comment(
+            work_name=project.title,
+            body="我猜他们迟早会在一起，这条关系线肯定还要反转。",
+            remote_comment_id="comment-llm-2",
+            author_id="user-3",
+            author_name="读者C",
+        )
+        self.session.commit()
+
+        llm = _FakeLLM(
+            json.dumps(
+                {
+                    "signals": [
+                        {
+                            "comment_index": 0,
+                            "signal_type": "relationship_interest",
+                            "target_type": "character",
+                            "target_name": "两人关系线",
+                            "severity": 2,
+                            "confidence": 0.82,
+                            "evidence_span": "迟早会在一起",
+                        },
+                        {
+                            "comment_index": 0,
+                            "signal_type": "prediction",
+                            "target_type": "plot",
+                            "target_name": "关系线反转",
+                            "severity": 1,
+                            "confidence": 0.77,
+                            "evidence_span": "肯定还要反转",
+                        },
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        )
+        analyzer = CommentAnalyzer(llm_client=llm)
+        rows = analyzer.analyze_and_store(
+            session=self.session,
+            project_id=project.id,
+            comments=[comment],
+            chapter_number=2,
+        )
+
+        self.assertEqual({row.signal_type for row in rows}, {"relationship_interest", "prediction"})
+
     def test_classify_signal_level_matches_strict_spec(self) -> None:
         self.assertEqual(
             classify_signal_level(unique_users=1, spans_chapters=1, severity=3, signal_type="risk"),
@@ -288,32 +418,48 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
             "candidate",
         )
 
-    def test_state_repository_reader_feedback_prefers_structured_signals(self) -> None:
+    def test_feedback_aggregation_updates_candidate_levels_by_exact_signal_identity(self) -> None:
         project = self._create_project()
-        comment_a = self._add_comment(
+
+        arc_comment_a = self._add_comment(
             work_name=project.title,
-            body="太拖了",
-            remote_comment_id="feedback-1",
-            author_id="user-a",
+            body="这一段节奏还是慢。",
+            remote_comment_id="signal-arc-1",
+            author_id="arc-user-1",
             author_name="读者A",
         )
-        comment_b = self._add_comment(
+        arc_comment_b = self._add_comment(
             work_name=project.title,
-            body="还是有点拖",
-            remote_comment_id="feedback-2",
-            author_id="user-b",
+            body="同意，节奏偏慢。",
+            remote_comment_id="signal-arc-2",
+            author_id="arc-user-2",
             author_name="读者B",
         )
-        comment_c = self._add_comment(
+        plot_comment_a = self._add_comment(
             work_name=project.title,
-            body="节奏再快一点就好了",
-            remote_comment_id="feedback-3",
-            author_id="user-c",
+            body="主线节奏得再快一点。",
+            remote_comment_id="signal-plot-1",
+            author_id="plot-user-1",
             author_name="读者C",
         )
+        plot_comment_b = self._add_comment(
+            work_name=project.title,
+            body="主线推进太慢了。",
+            remote_comment_id="signal-plot-2",
+            author_id="plot-user-2",
+            author_name="读者D",
+        )
+        plot_comment_c = self._add_comment(
+            work_name=project.title,
+            body="主线确实拖了。",
+            remote_comment_id="signal-plot-3",
+            author_id="plot-user-3",
+            author_name="读者E",
+        )
+
         self._add_signal(
             project_id=project.id,
-            comment_id=comment_a.id,
+            comment_id=arc_comment_a.id,
             signal_type="pacing",
             target_type="arc",
             target_name="节奏",
@@ -322,7 +468,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         )
         self._add_signal(
             project_id=project.id,
-            comment_id=comment_b.id,
+            comment_id=arc_comment_b.id,
             signal_type="pacing",
             target_type="arc",
             target_name="节奏",
@@ -331,12 +477,97 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         )
         self._add_signal(
             project_id=project.id,
-            comment_id=comment_c.id,
+            comment_id=plot_comment_a.id,
             signal_type="pacing",
-            target_type="arc",
+            target_type="plot",
+            target_name="节奏",
+            severity=2,
+            chapter_number=1,
+        )
+        self._add_signal(
+            project_id=project.id,
+            comment_id=plot_comment_b.id,
+            signal_type="pacing",
+            target_type="plot",
             target_name="节奏",
             severity=2,
             chapter_number=2,
+        )
+        self._add_signal(
+            project_id=project.id,
+            comment_id=plot_comment_c.id,
+            signal_type="pacing",
+            target_type="plot",
+            target_name="节奏",
+            severity=2,
+            chapter_number=3,
+        )
+        self.session.commit()
+
+        run_feedback_aggregation_pass(
+            self.session,
+            project.id,
+            3,
+            cooldown_chapters=3,
+            comment_to_reader_ratio=50,
+        )
+
+        rows = self.session.execute(
+            select(CommentSignalCandidate).order_by(
+                CommentSignalCandidate.target_type.asc(),
+                CommentSignalCandidate.chapter_number.asc(),
+            )
+        ).scalars().all()
+        levels_by_target_type: dict[str, set[str]] = {}
+        for row in rows:
+            levels_by_target_type.setdefault(row.target_type, set()).add(row.signal_level)
+
+        self.assertEqual(levels_by_target_type["arc"], {"candidate"})
+        self.assertEqual(levels_by_target_type["plot"], {"confirmed"})
+
+    def test_state_repository_reader_feedback_prefers_structured_signals(self) -> None:
+        project = self._create_project()
+        self._add_comment(
+            work_name=project.title,
+            body="太拖了",
+            remote_comment_id="feedback-1",
+            author_id="user-a",
+            author_name="读者A",
+        )
+        self._add_comment(
+            work_name=project.title,
+            body="还是有点拖",
+            remote_comment_id="feedback-2",
+            author_id="user-b",
+            author_name="读者B",
+        )
+        self._add_comment(
+            work_name=project.title,
+            body="节奏再快一点就好了",
+            remote_comment_id="feedback-3",
+            author_id="user-c",
+            author_name="读者C",
+        )
+        self.session.add(
+            SignalWindowAggregate(
+                id=new_id(),
+                project_id=project.id,
+                signal_key="pacing:arc:节奏",
+                signal_type="pacing",
+                target_type="arc",
+                target_name="节奏",
+                window_type="short",
+                window_chapter_start=1,
+                window_chapter_end=2,
+                hit_comment_count=3,
+                unique_user_count=3,
+                total_comment_count=3,
+                reader_estimate=240,
+                reader_tier=1,
+                max_severity=2,
+                avg_confidence=0.82,
+                signal_level="confirmed",
+            )
         )
         self.session.add(
             ReaderScaleSnapshot(
@@ -455,6 +686,140 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         )
         self.assertEqual(second.actionable, [])
 
+    def test_estimate_reader_scale_uses_raw_comment_volume_not_signal_count(self) -> None:
+        from forwin.orchestrator.feedback_aggregator import estimate_reader_scale
+
+        project = self._create_project()
+        for index in range(4):
+            self._add_comment(
+                project_id=project.id,
+                work_name=project.title,
+                body=f"第{index + 1}条评论",
+                remote_comment_id=f"reader-scale-{index + 1}",
+                author_id=f"user-{index + 1}",
+                author_name=f"读者{index + 1}",
+                chapter_title="第一章",
+            )
+        first_comment_id = self.session.execute(
+            select(PublisherRawComment.id).order_by(PublisherRawComment.remote_comment_id.asc()).limit(1)
+        ).scalar_one()
+        self._add_signal(
+            project_id=project.id,
+            comment_id=first_comment_id,
+            signal_type="pacing",
+            target_type="arc",
+            target_name="节奏",
+            severity=2,
+            chapter_number=1,
+        )
+        self.session.commit()
+
+        snapshot = estimate_reader_scale(
+            self.session,
+            project.id,
+            chapter_number=1,
+            comment_to_reader_ratio=50,
+        )
+
+        self.assertEqual(snapshot.reader_estimate, 200)
+        self.assertEqual(snapshot.tier, 1)
+
+    def test_estimate_reader_scale_prefers_platform_metric(self) -> None:
+        from forwin.orchestrator.feedback_aggregator import estimate_reader_scale
+
+        project = self._create_project()
+        self._add_comment(
+            project_id=project.id,
+            work_name=project.title,
+            body="好看",
+            remote_comment_id="platform-scale-1",
+            author_id="user-platform",
+            author_name="读者",
+            chapter_title="第一章",
+        )
+        row = self.session.execute(select(PublisherRawComment)).scalar_one()
+        row.raw_payload_json = json.dumps(
+            {"book_stats": {"read_count": 1234, "favorite_count": 88}},
+            ensure_ascii=False,
+        )
+        self.session.commit()
+
+        snapshot = estimate_reader_scale(
+            self.session,
+            project.id,
+            chapter_number=1,
+            comment_to_reader_ratio=50,
+        )
+
+        self.assertEqual(snapshot.reader_estimate, 1234)
+        self.assertEqual(snapshot.estimation_method, "platform_metric:fanqie:read_count")
+        self.assertEqual(snapshot.tier, 2)
+
+    def test_action_effectiveness_marks_score_drop_improved(self) -> None:
+        from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
+
+        project = self._create_project()
+        self.session.add(
+            FeedbackActionRecord(
+                id=new_id(),
+                project_id=project.id,
+                signal_key="pacing:arc:节奏",
+                signal_type="pacing",
+                action_type="boost_reward_density",
+                triggered_at_chapter=5,
+                cooldown_until_chapter=8,
+                notes="缩短 reward gap",
+            )
+        )
+        self.session.add_all(
+            [
+                SignalWindowAggregate(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="pacing:arc:节奏",
+                    signal_type="pacing",
+                    target_type="arc",
+                    target_name="节奏",
+                    window_type="long",
+                    window_chapter_start=1,
+                    window_chapter_end=5,
+                    hit_comment_count=6,
+                    unique_user_count=5,
+                    total_comment_count=8,
+                    reader_estimate=400,
+                    reader_tier=2,
+                    max_severity=3,
+                    avg_confidence=0.9,
+                    signal_level="confirmed",
+                ),
+                SignalWindowAggregate(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="pacing:arc:节奏",
+                    signal_type="pacing",
+                    target_type="arc",
+                    target_name="节奏",
+                    window_type="long",
+                    window_chapter_start=4,
+                    window_chapter_end=8,
+                    hit_comment_count=1,
+                    unique_user_count=1,
+                    total_comment_count=10,
+                    reader_estimate=400,
+                    reader_tier=2,
+                    max_severity=1,
+                    avg_confidence=0.6,
+                    signal_level="candidate",
+                ),
+            ]
+        )
+        self.session.commit()
+
+        outcomes = derive_action_effectiveness(self.session, project.id)
+
+        self.assertEqual(outcomes[0]["outcome"], "improved")
+        self.assertEqual(outcomes[0]["action_type"], "boost_reward_density")
+
     def test_pacing_strategist_uses_medium_window_audience_signal_only(self) -> None:
         project = self._create_project()
         strategist = PacingStrategist()
@@ -572,6 +937,207 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         self.assertEqual(structure.phase_layout, ["setup", "pressure", "turn", "payoff"])
         assert director.last_kwargs is not None
         self.assertEqual(director.last_kwargs["audience_trends"], ["主角动机:confusion:confirmed"])
+
+    def test_score_v1_and_repo_trends_surface_rising_signal(self) -> None:
+        project = self._create_project()
+        older = SignalWindowAggregate(
+            id=new_id(),
+            project_id=project.id,
+            signal_key="relationship_interest:character:两人关系线",
+            signal_type="relationship_interest",
+            target_type="character",
+            target_name="两人关系线",
+            window_type="long",
+            window_chapter_start=1,
+            window_chapter_end=8,
+            hit_comment_count=2,
+            unique_user_count=2,
+            total_comment_count=12,
+            reader_estimate=600,
+            reader_tier=2,
+            max_severity=1,
+            avg_confidence=0.72,
+            signal_level="candidate",
+        )
+        newer = SignalWindowAggregate(
+            id=new_id(),
+            project_id=project.id,
+            signal_key="relationship_interest:character:两人关系线",
+            signal_type="relationship_interest",
+            target_type="character",
+            target_name="两人关系线",
+            window_type="long",
+            window_chapter_start=5,
+            window_chapter_end=12,
+            hit_comment_count=5,
+            unique_user_count=4,
+            total_comment_count=10,
+            reader_estimate=500,
+            reader_tier=2,
+            max_severity=2,
+            avg_confidence=0.88,
+            signal_level="confirmed",
+        )
+        self.session.add_all([older, newer])
+        self.session.commit()
+
+        self.assertGreater(score_signal_aggregate_v1(newer), score_signal_aggregate_v1(older))
+
+        trends = StateRepository(self.session).get_audience_trends(
+            project.id,
+            before_chapter=13,
+            window_type="long",
+        )
+
+        self.assertEqual(len(trends), 1)
+        self.assertEqual(trends[0].signal_type, "relationship_interest")
+        self.assertEqual(trends[0].current_level, "confirmed")
+        self.assertEqual(trends[0].trend_type, "rising")
+        self.assertGreater(trends[0].current_score, trends[0].previous_score)
+
+    def test_arc_envelope_manager_calibrates_overlay_from_audience_signals(self) -> None:
+        from forwin.orchestrator.phase24 import ArcStructureDraftData
+        from forwin.protocol.experience import ArcPayoffMap, ReaderPromise
+
+        project = self._create_project()
+        self.session.add_all(
+            [
+                SignalWindowAggregate(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="pacing:arc:节奏",
+                    signal_type="pacing",
+                    target_type="arc",
+                    target_name="节奏",
+                    window_type="long",
+                    window_chapter_start=1,
+                    window_chapter_end=10,
+                    hit_comment_count=5,
+                    unique_user_count=4,
+                    total_comment_count=10,
+                    reader_estimate=400,
+                    reader_tier=2,
+                    max_severity=2,
+                    avg_confidence=0.82,
+                    signal_level="confirmed",
+                ),
+                SignalWindowAggregate(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="confusion:setting:规则边界",
+                    signal_type="confusion",
+                    target_type="setting",
+                    target_name="规则边界",
+                    window_type="long",
+                    window_chapter_start=1,
+                    window_chapter_end=10,
+                    hit_comment_count=4,
+                    unique_user_count=4,
+                    total_comment_count=10,
+                    reader_estimate=400,
+                    reader_tier=2,
+                    max_severity=2,
+                    avg_confidence=0.81,
+                    signal_level="confirmed",
+                ),
+                SignalWindowAggregate(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="relationship_interest:character:两人关系线",
+                    signal_type="relationship_interest",
+                    target_type="character",
+                    target_name="两人关系线",
+                    window_type="long",
+                    window_chapter_start=1,
+                    window_chapter_end=10,
+                    hit_comment_count=5,
+                    unique_user_count=5,
+                    total_comment_count=10,
+                    reader_estimate=400,
+                    reader_tier=2,
+                    max_severity=2,
+                    avg_confidence=0.87,
+                    signal_level="confirmed",
+                ),
+            ]
+        )
+        self.session.commit()
+
+        manager = ArcEnvelopeManager(director=_CapturingDirector())
+        profile = manager._build_audience_calibration_profile(  # noqa: SLF001
+            session=self.session,
+            project_id=project.id,
+        )
+        self.assertTrue(profile.boost_reward_density)
+        self.assertTrue(profile.clarify_rule_legibility)
+        self.assertTrue(profile.protect_character_heat)
+
+        chapter_plans = [
+            ChapterPlan(
+                id=new_id(),
+                project_id=project.id,
+                arc_plan_id="arc-1",
+                chapter_number=1,
+                title="第一章",
+                one_line="开局承压",
+                goals_json='["推进主线"]',
+            ),
+            ChapterPlan(
+                id=new_id(),
+                project_id=project.id,
+                arc_plan_id="arc-1",
+                chapter_number=2,
+                title="第二章",
+                one_line="压力扩大",
+                goals_json='["确认代价"]',
+            ),
+            ChapterPlan(
+                id=new_id(),
+                project_id=project.id,
+                arc_plan_id="arc-1",
+                chapter_number=3,
+                title="第三章",
+                one_line="悬念抬升",
+                goals_json='["抬高问题"]',
+            ),
+        ]
+        structure = ArcStructureDraftData(
+            phase_layout=["setup", "pressure", "payoff"],
+            key_beats=["开局承压", "确认代价", "抬高问题"],
+            thread_priorities=[],
+            hotspot_candidates=[],
+            compression_candidates=[],
+            reader_promise=ReaderPromise(
+                genre_promise="悬疑网文",
+                pleasure_promise="稳定给出悬念和兑现",
+                core_pleasures=["悬念", "翻盘"],
+                ambiguity_mode="stable",
+                world_legibility_target="规则必须看得懂",
+            ),
+            arc_payoff_map=ArcPayoffMap(ambiguity_constraints=["翻盘必须遵守代价"]),
+        )
+        schedule = manager._derive_band_delight_schedule(  # noqa: SLF001
+            band_id="band:1:3",
+            chapter_start=1,
+            chapter_end=3,
+            structure=structure,
+            active_band=chapter_plans,
+            calibration=profile,
+        )
+        plan = manager._derive_chapter_experience_plan(  # noqa: SLF001
+            chapter_number=2,
+            structure=structure,
+            schedule=schedule,
+            chapter_plan=chapter_plans[1],
+            calibration=profile,
+        )
+
+        reward_categories = [item.category for item in schedule.scheduled_rewards]
+        self.assertGreaterEqual(reward_categories.count("power"), 3)
+        self.assertIn("emotion", reward_categories)
+        self.assertTrue(any("规则" in item.question_resolve or "代价" in item.question_resolve for item in schedule.curiosity_beats))
+        self.assertTrue(any("规则" in item or "代价" in item for item in plan.rule_anchors))
+        self.assertIn("relationship", plan.minimum_progress_channels)
 
 
 if __name__ == "__main__":

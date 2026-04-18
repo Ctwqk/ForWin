@@ -11,6 +11,7 @@ from typing import Sequence
 
 from sqlalchemy.orm import Session
 
+from forwin.audience_metrics import score_signal_aggregate_v1
 from forwin.models import SignalWindowAggregate
 from forwin.orchestrator.feedback_aggregator import FeedbackCooldown
 
@@ -23,23 +24,31 @@ _RESPONSE_WINDOWS: dict[str, int] = {
     "pacing": 5,
     "confusion": 10,
     "character_heat": 10,
+    "relationship_interest": 10,
+    "prediction": 6,
 }
 
 # ── Action types per signal type + level ─────────────────────────────
 
 _ACTION_MAP: dict[str, dict[str, str]] = {
     "risk": {
-        "watchlist": "monitor_risk",
-        "confirmed": "patch_current_band",
+        "watchlist": "hold_managed_ambiguity",
+        "confirmed": "repair_immersion",
     },
     "pacing": {
-        "confirmed": "reband_candidate",
+        "confirmed": "boost_reward_density",
     },
     "confusion": {
-        "confirmed": "clarification_backlog",
+        "confirmed": "clarify_rule_legibility",
     },
     "character_heat": {
-        "confirmed": "boost_future_band",
+        "confirmed": "protect_character_heat",
+    },
+    "relationship_interest": {
+        "confirmed": "protect_character_heat",
+    },
+    "prediction": {
+        "confirmed": "hold_managed_ambiguity",
     },
 }
 
@@ -80,8 +89,12 @@ class ActionMapper:
         actions: list[FeedbackAction] = []
         seen_keys: set[str] = set()
 
-        # Sort by severity desc so strongest signals come first
-        sorted_aggs = sorted(actionable, key=lambda a: (-a.max_severity, a.signal_key))
+        # Use score_v1 as the formal ranking key so Phase C has a stable
+        # quantitative ordering instead of ad-hoc severity-only sorting.
+        sorted_aggs = sorted(
+            actionable,
+            key=lambda agg: (-score_signal_aggregate_v1(agg), -agg.max_severity, agg.signal_key),
+        )
 
         for agg in sorted_aggs:
             if agg.signal_key in seen_keys:
@@ -122,7 +135,7 @@ class ActionMapper:
                 pack.pacing_hints.append(hint)
             elif action.signal_type == "confusion":
                 pack.clarity_hints.append(hint)
-            elif action.signal_type == "character_heat":
+            elif action.signal_type in {"character_heat", "relationship_interest"}:
                 pack.character_heat_changes.append(hint)
             elif action.signal_type == "risk":
                 pack.risk_flags.append(hint)
@@ -164,22 +177,24 @@ def _build_action_description(agg: SignalWindowAggregate, action_type: str) -> s
     users = agg.unique_user_count
 
     if agg.signal_type == "risk":
-        if action_type == "patch_current_band":
-            return f"读者指出[{target}]存在风险({window}, {users}人), 建议在近1-3章自然修补"
-        return f"[{target}]收到风险预警({window}), 持续关注"
+        if action_type == "repair_immersion":
+            return f"读者指出[{target}]有沉浸/风险问题({window}, {users}人), 近端补规则边界、因果和代价"
+        return f"[{target}]存在受控不确定性风险({window}), 保持 managed ambiguity，别让信息失真失控"
 
     if agg.signal_type == "pacing":
-        if action_type == "reband_candidate":
-            return f"读者反馈节奏问题({window}, {users}人), 建议调整近端计划"
+        if action_type == "boost_reward_density":
+            return f"读者反馈回报偏干({window}, {users}人), 近1-5章缩短 reward gap 并提高兑现密度"
         return f"节奏信号待观察({window})"
 
     if agg.signal_type == "confusion":
-        return f"[{target}]有待放清({window}), 可在后续情节中自然补充"
+        return f"[{target}]可读性不足({window}), 后续补 rule anchor、clarification beat 和因果解释"
 
-    if agg.signal_type == "character_heat":
-        if action_type == "boost_future_band":
-            return f"[{target}]持续受关注({window}, {users}人), 可适当增加后续出场"
+    if agg.signal_type in {"character_heat", "relationship_interest"}:
+        if action_type == "protect_character_heat":
+            return f"[{target}]持续受关注({window}, {users}人), 保护角色热度并提高 social/emotion 模板权重"
         return f"[{target}]热度上升({window}), 保持关注"
+    if agg.signal_type == "prediction":
+        return f"读者对[{target}]形成稳定预测({window}, {users}人), 保持 managed ambiguity，别为了迎合猜测硬拐剧情"
 
     return f"{agg.signal_type}:{target}({window})"
 

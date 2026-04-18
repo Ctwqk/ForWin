@@ -5,12 +5,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
+from forwin.models.project import Project
 from forwin.models.publisher import (
     PublisherBrowserSession,
+    PublisherBrowserSessionEntry,
     PublisherCommentSyncJob,
     PublisherConnectionState,
     PublisherExtensionClient,
@@ -63,6 +65,36 @@ class PublisherManager:
         self.heartbeat_stale_seconds = heartbeat_stale_seconds
         self.preferred_client_id = str(preferred_client_id or "").strip()
 
+    @staticmethod
+    def _browser_session_sort_key(row) -> tuple[datetime, datetime, datetime]:
+        epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        synced_at = _as_utc(getattr(row, "synced_at", None)) or epoch
+        verified_at = _as_utc(getattr(row, "last_verified_at", None)) or epoch
+        updated_at = _as_utc(getattr(row, "updated_at", None)) or epoch
+        return (synced_at, verified_at, updated_at)
+
+    def _pick_browser_session_entry(
+        self,
+        entries: list[PublisherBrowserSessionEntry],
+    ) -> PublisherBrowserSessionEntry | None:
+        if not entries:
+            return None
+        return max(entries, key=self._browser_session_sort_key)
+
+    def _pick_browser_sessions_by_platform(
+        self,
+        entries: list[PublisherBrowserSessionEntry],
+    ) -> dict[str, PublisherBrowserSessionEntry]:
+        grouped: dict[str, list[PublisherBrowserSessionEntry]] = {}
+        for entry in entries:
+            grouped.setdefault(entry.platform_id, []).append(entry)
+        selected: dict[str, PublisherBrowserSessionEntry] = {}
+        for platform_id, rows in grouped.items():
+            picked = self._pick_browser_session_entry(rows)
+            if picked is not None:
+                selected[platform_id] = picked
+        return selected
+
     def list_platforms(self) -> list[dict[str, Any]]:
         platform_ids = list(SUPPORTED_PLATFORMS.keys())
         with self.session_factory() as session:
@@ -83,6 +115,14 @@ class PublisherManager:
                     PublisherBrowserSession.last_error,
                 ).where(PublisherBrowserSession.platform_id.in_(platform_ids))
             ).all()
+            browser_session_entry_rows = session.execute(
+                select(PublisherBrowserSessionEntry).where(
+                    PublisherBrowserSessionEntry.platform_id.in_(platform_ids)
+                )
+            ).scalars().all()
+            browser_sessions_by_platform = self._pick_browser_sessions_by_platform(
+                browser_session_entry_rows
+            )
             client_ids = {
                 client_id
                 for row in state_rows
@@ -92,6 +132,11 @@ class PublisherManager:
                 client_id
                 for row in browser_session_rows
                 for client_id in [row.extension_client_id]
+                if client_id
+            } | {
+                client_id
+                for row in browser_session_entry_rows
+                for client_id in [row.client_id]
                 if client_id
             }
             client_rows = (
@@ -131,7 +176,8 @@ class PublisherManager:
         items: list[dict[str, Any]] = []
         for spec in SUPPORTED_PLATFORMS.values():
             state = states.get(spec.platform_id)
-            browser_session = browser_sessions.get(spec.platform_id)
+            browser_session = browser_sessions_by_platform.get(spec.platform_id)
+            summary_browser_session = browser_sessions.get(spec.platform_id)
             preferred_state = preferred_states.get(spec.platform_id)
             client = (
                 clients.get(state.extension_client_id)
@@ -144,8 +190,8 @@ class PublisherManager:
                 else None
             )
             session_client = (
-                clients.get(browser_session.extension_client_id)
-                if browser_session and browser_session.extension_client_id
+                clients.get(browser_session.client_id)
+                if browser_session and browser_session.client_id
                 else None
             )
             last_heartbeat_at = None
@@ -162,9 +208,9 @@ class PublisherManager:
 
             extension_online = self._is_recent(last_heartbeat_at)
             connected = False
-            if preferred_state and preferred_state.connected:
+            if preferred_state and preferred_state.connected and self._is_recent(preferred_state.last_heartbeat_at):
                 connected = True
-            elif state and state.connected:
+            elif state and state.connected and self._is_recent(state.last_heartbeat_at):
                 connected = True
             elif browser_session and self._is_browser_session_connected(
                 spec.platform_id,
@@ -175,11 +221,13 @@ class PublisherManager:
 
             last_error = (
                 preferred_state.last_error
-                if preferred_state
-                else (state.last_error if state else "")
+                if preferred_state and self._is_recent(preferred_state.last_heartbeat_at)
+                else (state.last_error if state and self._is_recent(state.last_heartbeat_at) else "")
             )
             if not last_error and browser_session:
                 last_error = browser_session.last_error
+            if not last_error and summary_browser_session:
+                last_error = summary_browser_session.last_error
 
             items.append(
                 {
@@ -206,7 +254,15 @@ class PublisherManager:
                                 else (
                                     session_client.client_id
                                     if session_client
-                                    else (browser_session.extension_client_id if browser_session else "")
+                                    else (
+                                        browser_session.client_id
+                                        if browser_session
+                                        else (
+                                            summary_browser_session.extension_client_id
+                                            if summary_browser_session
+                                            else ""
+                                        )
+                                    )
                                 )
                             )
                         )
@@ -240,6 +296,7 @@ class PublisherManager:
     def create_upload_job(
         self,
         *,
+        project_id: str = "",
         platform: str,
         book_name: str,
         chapter_title: str,
@@ -257,7 +314,15 @@ class PublisherManager:
         if normalized_book_meta:
             job_payload["book_meta"] = normalized_book_meta
         with self.session_factory() as session:
+            resolved_project_id = self._resolve_project_id(
+                session,
+                explicit_project_id=project_id,
+                work_name=book_name,
+            )
+            if resolved_project_id:
+                job_payload["project_id"] = resolved_project_id
             job = PublisherUploadJob(
+                project_id=resolved_project_id,
                 platform_id=platform,
                 status="pending",
                 book_name=book_name,
@@ -332,6 +397,21 @@ class PublisherManager:
         ]
         with self.session_factory() as session:
             self._ensure_extension_client(session, client_id)
+            entry = session.get(
+                PublisherBrowserSessionEntry,
+                {"client_id": client_id, "platform_id": platform},
+            )
+            if entry is None:
+                entry = PublisherBrowserSessionEntry(
+                    client_id=client_id,
+                    platform_id=platform,
+                )
+                session.add(entry)
+            entry.cookie_count = len(normalized)
+            entry.cookies_json = json.dumps(normalized, ensure_ascii=False)
+            entry.synced_at = now
+            entry.last_error = ""
+
             stored = session.get(PublisherBrowserSession, platform)
             if stored is None:
                 stored = PublisherBrowserSession(platform_id=platform)
@@ -388,6 +468,22 @@ class PublisherManager:
     def get_browser_session(self, platform: str) -> dict[str, Any] | None:
         self._spec(platform)
         with self.session_factory() as session:
+            entries = session.execute(
+                select(PublisherBrowserSessionEntry).where(
+                    PublisherBrowserSessionEntry.platform_id == platform
+                )
+            ).scalars().all()
+            selected_entry = self._pick_browser_session_entry(entries)
+            if selected_entry is not None:
+                return {
+                    "platform": selected_entry.platform_id,
+                    "client_id": selected_entry.client_id,
+                    "cookie_count": selected_entry.cookie_count,
+                    "cookies": json.loads(selected_entry.cookies_json or "[]"),
+                    "synced_at": _isoformat(selected_entry.synced_at),
+                    "last_error": selected_entry.last_error,
+                }
+
             stored = session.get(PublisherBrowserSession, platform)
             if stored is None:
                 return None
@@ -417,13 +513,25 @@ class PublisherManager:
         last_error: str = "",
         verified: bool = False,
     ) -> None:
+        now = _utc_now()
         with self.session_factory() as session:
             stored = session.get(PublisherBrowserSession, platform)
-            if stored is None:
+            if stored is not None:
+                stored.last_error = last_error.strip()
+                if verified:
+                    stored.last_verified_at = now
+            entries = session.execute(
+                select(PublisherBrowserSessionEntry).where(
+                    PublisherBrowserSessionEntry.platform_id == platform
+                )
+            ).scalars().all()
+            selected_entry = self._pick_browser_session_entry(entries)
+            if stored is None and selected_entry is None:
                 return
-            stored.last_error = last_error.strip()
-            if verified:
-                stored.last_verified_at = _utc_now()
+            if selected_entry is not None:
+                selected_entry.last_error = last_error.strip()
+                if verified:
+                    selected_entry.last_verified_at = now
             session.commit()
 
     def claim_next_upload_job(
@@ -457,30 +565,52 @@ class PublisherManager:
             if job is not None:
                 return self._serialize_upload_job(job)
 
-            pending_jobs = session.execute(
-                select(PublisherUploadJob)
-                .where(
-                    PublisherUploadJob.status == "pending",
-                    PublisherUploadJob.abort_requested.is_(False),
-                    PublisherUploadJob.deleted_at.is_(None),
-                    PublisherUploadJob.platform_id.in_(platforms),
+            claimable_platforms = self._claimable_platforms(
+                session,
+                client_id=client_id,
+                platforms=platforms,
+            )
+            if not claimable_platforms:
+                return None
+
+            while True:
+                job = session.execute(
+                    select(PublisherUploadJob)
+                    .where(
+                        PublisherUploadJob.status == "pending",
+                        PublisherUploadJob.abort_requested.is_(False),
+                        PublisherUploadJob.deleted_at.is_(None),
+                        PublisherUploadJob.platform_id.in_(claimable_platforms),
+                    )
+                    .order_by(PublisherUploadJob.created_at.asc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                if job is None:
+                    return None
+
+                claimed_at = job.claimed_at or now
+                started_at = job.started_at or now
+                claimed = session.execute(
+                    update(PublisherUploadJob)
+                    .where(
+                        PublisherUploadJob.id == job.id,
+                        PublisherUploadJob.status == "pending",
+                        PublisherUploadJob.abort_requested.is_(False),
+                        PublisherUploadJob.deleted_at.is_(None),
+                    )
+                    .values(
+                        status="running",
+                        extension_client_id=client_id,
+                        claimed_at=claimed_at,
+                        started_at=started_at,
+                        abort_requested=False,
+                        result_message="上传任务已被浏览器扩展自动领取。",
+                        error_message="",
+                    )
                 )
-                .order_by(PublisherUploadJob.created_at.asc())
-            ).scalars().all()
-            for job in pending_jobs:
-                if not self._client_can_claim_platform(
-                    session,
-                    client_id=client_id,
-                    platform_id=job.platform_id,
-                ):
+                if not claimed.rowcount:
+                    session.rollback()
                     continue
-                job.status = "running"
-                job.extension_client_id = client_id
-                job.claimed_at = job.claimed_at or now
-                job.started_at = job.started_at or now
-                job.abort_requested = False
-                job.result_message = "上传任务已被浏览器扩展自动领取。"
-                job.error_message = ""
 
                 session.commit()
                 session.refresh(job)
@@ -520,29 +650,48 @@ class PublisherManager:
             if job is not None:
                 return self._serialize_comment_sync_job(job)
 
-            pending_jobs = session.execute(
-                select(PublisherCommentSyncJob)
-                .where(
-                    PublisherCommentSyncJob.status == "pending",
-                    PublisherCommentSyncJob.platform_id.in_(platforms),
+            claimable_platforms = self._claimable_platforms(
+                session,
+                client_id=client_id,
+                platforms=platforms,
+            )
+            if not claimable_platforms:
+                return None
+
+            while True:
+                job = session.execute(
+                    select(PublisherCommentSyncJob)
+                    .where(
+                        PublisherCommentSyncJob.status == "pending",
+                        PublisherCommentSyncJob.platform_id.in_(claimable_platforms),
+                    )
+                    .order_by(PublisherCommentSyncJob.created_at.asc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                if job is None:
+                    return None
+
+                started_at = job.started_at or now
+                claimed = session.execute(
+                    update(PublisherCommentSyncJob)
+                    .where(
+                        PublisherCommentSyncJob.id == job.id,
+                        PublisherCommentSyncJob.status == "pending",
+                    )
+                    .values(
+                        status="running",
+                        extension_client_id=client_id,
+                        started_at=started_at,
+                        error_message="",
+                        result_summary_json=json.dumps(
+                            {"phase": "claimed", "message": "评论同步任务已被浏览器扩展自动领取。"},
+                            ensure_ascii=False,
+                        ),
+                    )
                 )
-                .order_by(PublisherCommentSyncJob.created_at.asc())
-            ).scalars().all()
-            for job in pending_jobs:
-                if not self._client_can_claim_platform(
-                    session,
-                    client_id=client_id,
-                    platform_id=job.platform_id,
-                ):
+                if not claimed.rowcount:
+                    session.rollback()
                     continue
-                job.status = "running"
-                job.extension_client_id = client_id
-                job.started_at = job.started_at or now
-                job.error_message = ""
-                job.result_summary_json = json.dumps(
-                    {"phase": "claimed", "message": "评论同步任务已被浏览器扩展自动领取。"},
-                    ensure_ascii=False,
-                )
 
                 session.commit()
                 session.refresh(job)
@@ -728,6 +877,7 @@ class PublisherManager:
     def create_comment_sync_job(
         self,
         *,
+        project_id: str = "",
         platform: str,
         work_id: str,
         work_name: str,
@@ -738,6 +888,11 @@ class PublisherManager:
         self._spec(platform)
         with self.session_factory() as session:
             job = PublisherCommentSyncJob(
+                project_id=self._resolve_project_id(
+                    session,
+                    explicit_project_id=project_id,
+                    work_name=work_name,
+                ),
                 platform_id=platform,
                 status="pending",
                 work_id=work_id,
@@ -751,6 +906,7 @@ class PublisherManager:
             session.refresh(job)
             return {
                 "job_id": job.id,
+                "project_id": job.project_id,
                 "platform": job.platform_id,
                 "status": job.status,
                 "work_id": job.work_id,
@@ -827,12 +983,14 @@ class PublisherManager:
 
         with self.session_factory() as session:
             self._ensure_extension_client(session, client_id)
+            resolved_job_project_id = ""
             if job_id:
                 job = session.get(PublisherCommentSyncJob, job_id)
                 if job is not None:
                     job.extension_client_id = client_id
                     job.status = "running"
                     job.started_at = job.started_at or now
+                    resolved_job_project_id = str(job.project_id or "").strip()
 
             remote_ids = [
                 str(item.get("remote_comment_id", "")).strip()
@@ -853,6 +1011,43 @@ class PublisherManager:
                 row.remote_comment_id: row
                 for row in existing_rows
             }
+            valid_project_ids = set()
+            unique_project_ids_by_work_name: dict[str, str] = {}
+            if not resolved_job_project_id:
+                explicit_project_ids = {
+                    str(item.get("project_id", "")).strip()
+                    for item in comments
+                    if str(item.get("project_id", "")).strip()
+                }
+                if explicit_project_ids:
+                    valid_project_ids = set(
+                        session.execute(
+                            select(Project.id).where(Project.id.in_(explicit_project_ids))
+                        ).scalars().all()
+                    )
+                work_names = {
+                    str(item.get("work_name", "")).strip()
+                    for item in comments
+                    if str(item.get("work_name", "")).strip()
+                }
+                if work_names:
+                    title_rows = session.execute(
+                        select(Project.title, Project.id)
+                        .where(Project.title.in_(work_names))
+                        .order_by(Project.title.asc(), Project.id.asc())
+                    ).all()
+                    title_matches: dict[str, list[str]] = {}
+                    for title, project_id in title_rows:
+                        normalized_title = str(title or "").strip()
+                        normalized_project_id = str(project_id or "").strip()
+                        if not normalized_title or not normalized_project_id:
+                            continue
+                        title_matches.setdefault(normalized_title, []).append(normalized_project_id)
+                    unique_project_ids_by_work_name = {
+                        title: project_ids[0]
+                        for title, project_ids in title_matches.items()
+                        if len(project_ids) == 1
+                    }
 
             for item in comments:
                 remote_comment_id = str(item.get("remote_comment_id", "")).strip()
@@ -861,6 +1056,7 @@ class PublisherManager:
                 row = row_map.get(remote_comment_id)
                 if row is None:
                     row = PublisherRawComment(
+                        project_id=resolved_job_project_id,
                         platform_id=platform,
                         remote_comment_id=remote_comment_id,
                     )
@@ -870,8 +1066,16 @@ class PublisherManager:
                 else:
                     updated += 1
 
+                explicit_project_id = str(item.get("project_id", "")).strip()
+                work_name = str(item.get("work_name", "")).strip()
+                if resolved_job_project_id:
+                    row.project_id = resolved_job_project_id
+                elif explicit_project_id and explicit_project_id in valid_project_ids:
+                    row.project_id = explicit_project_id
+                else:
+                    row.project_id = unique_project_ids_by_work_name.get(work_name, "")
                 row.work_id = str(item.get("work_id", "")).strip()
-                row.work_name = str(item.get("work_name", "")).strip()
+                row.work_name = work_name
                 row.chapter_id = str(item.get("chapter_id", "")).strip()
                 row.chapter_title = str(item.get("chapter_title", "")).strip()
                 row.author_id = str(item.get("author_id", "")).strip()
@@ -998,6 +1202,7 @@ class PublisherManager:
         terminal = job.status in {"succeeded", "failed", "cancelled"}
         return {
             "job_id": job.id,
+            "project_id": job.project_id,
             "platform": job.platform_id,
             "display_name": spec.display_name,
             "status": job.status,
@@ -1025,6 +1230,7 @@ class PublisherManager:
         payload = json.loads(job.result_summary_json or "{}")
         return {
             "job_id": job.id,
+            "project_id": job.project_id,
             "platform": job.platform_id,
             "status": job.status,
             "work_id": job.work_id,
@@ -1041,6 +1247,27 @@ class PublisherManager:
             "finished_at": _isoformat(job.finished_at),
         }
 
+    @staticmethod
+    def _resolve_project_id(
+        session,
+        *,
+        explicit_project_id: str = "",
+        work_name: str = "",
+    ) -> str:
+        normalized_project_id = str(explicit_project_id or "").strip()
+        if normalized_project_id:
+            if session.get(Project, normalized_project_id) is not None:
+                return normalized_project_id
+        normalized_work_name = str(work_name or "").strip()
+        if not normalized_work_name:
+            return ""
+        matches = session.execute(
+            select(Project.id).where(Project.title == normalized_work_name).limit(2)
+        ).scalars().all()
+        if len(matches) == 1:
+            return str(matches[0] or "").strip()
+        return ""
+
     def _client_can_claim_platform(
         self,
         session,
@@ -1055,6 +1282,27 @@ class PublisherManager:
             session,
             platform_id=platform_id,
         )
+
+    def _claimable_platforms(
+        self,
+        session,
+        *,
+        client_id: str,
+        platforms: list[str],
+    ) -> list[str]:
+        if not platforms:
+            return []
+        preferred_client_id = self.preferred_client_id
+        if not preferred_client_id or client_id == preferred_client_id:
+            return list(platforms)
+        return [
+            platform_id
+            for platform_id in platforms
+            if not self._preferred_client_can_claim_platform(
+                session,
+                platform_id=platform_id,
+            )
+        ]
 
     def _preferred_client_can_claim_platform(self, session, *, platform_id: str) -> bool:
         preferred_client_id = self.preferred_client_id

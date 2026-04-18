@@ -5,15 +5,17 @@ import json
 import logging
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from forwin.audience_metrics import derive_audience_trends
 from forwin.director.arc_director import ArcDirector
 from forwin.models import (
     ArcEnvelope,
     ArcEnvelopeAnalysis,
     ArcPlanVersion,
     ArcStructureDraft,
+    BandExperiencePlan,
     ChapterPlan,
     Project,
     ProvisionalBandExecution,
@@ -22,6 +24,16 @@ from forwin.models import (
     new_id,
 )
 from forwin.orchestrator.goals import load_goals_json
+from forwin.protocol.experience import (
+    AmbiguityPayoff,
+    ArcPayoffMap,
+    BandDelightSchedule,
+    BandRewardItem,
+    ChapterExperiencePlan,
+    CuriosityBeat,
+    ReaderPromise,
+)
+from forwin.protocol.trope_library import TROPE_TEMPLATE_LIBRARY, trope_templates_by_category
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +62,48 @@ def _load_long_window_audience_trends(
         )
         .limit(limit)
     ).scalars().all()
+    if not rows:
+        return []
+    trend_views = derive_audience_trends(rows, window_type="long", limit=limit)
+    if trend_views:
+        return [
+            f"{row.target_name or '整体'}:{row.signal_type}:{row.current_level}"
+            for row in trend_views
+        ]
     return [
         f"{row.target_name or '整体'}:{row.signal_type}:{row.signal_level}"
         for row in rows
     ]
+
+
+@dataclass(slots=True)
+class AudienceCalibrationProfile:
+    boost_reward_density: bool = False
+    clarify_rule_legibility: bool = False
+    protect_character_heat: bool = False
+    hold_managed_ambiguity: bool = False
+
+
+def _load_long_window_audience_trend_views(
+    session: Session,
+    project_id: str,
+    *,
+    limit: int = 6,
+):
+    rows = session.execute(
+        select(SignalWindowAggregate)
+        .where(
+            SignalWindowAggregate.project_id == project_id,
+            SignalWindowAggregate.window_type == "long",
+            SignalWindowAggregate.signal_level.in_(("confirmed", "watchlist", "candidate")),
+        )
+        .order_by(
+            SignalWindowAggregate.window_chapter_end.desc(),
+            SignalWindowAggregate.unique_user_count.desc(),
+            SignalWindowAggregate.max_severity.desc(),
+        )
+    ).scalars().all()
+    return derive_audience_trends(rows, window_type="long", limit=limit)
 
 
 @dataclass(slots=True)
@@ -73,6 +123,8 @@ class ArcStructureDraftData:
     thread_priorities: list[dict[str, object]]
     hotspot_candidates: list[str]
     compression_candidates: list[str]
+    reader_promise: ReaderPromise
+    arc_payoff_map: ArcPayoffMap
 
 
 @dataclass(slots=True)
@@ -163,6 +215,42 @@ class ArcEnvelopeManager:
                 existing.current_projected_size,
                 min(existing.resolved_soft_max, max(activation_chapter, existing.resolved_target_size)),
             )
+            chapter_plans = session.execute(
+                select(ChapterPlan)
+                .where(ChapterPlan.arc_plan_id == active_arc.id)
+                .order_by(ChapterPlan.chapter_number.asc())
+            ).scalars().all()
+            latest_structure = session.execute(
+                select(ArcStructureDraft)
+                .where(
+                    ArcStructureDraft.project_id == project_id,
+                    ArcStructureDraft.arc_id == active_arc.id,
+                )
+                .order_by(ArcStructureDraft.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if latest_structure is not None and chapter_plans:
+                self._persist_experience_overlay(
+                    session=session,
+                    project_id=project_id,
+                    arc_id=active_arc.id,
+                    chapter_plans=chapter_plans,
+                    activation_chapter=activation_chapter,
+                    detailed_band_size=existing.detailed_band_size,
+                    structure=ArcStructureDraftData(
+                        phase_layout=json.loads(latest_structure.phase_layout_json or "[]") or [],
+                        key_beats=json.loads(latest_structure.key_beats_json or "[]") or [],
+                        thread_priorities=json.loads(latest_structure.thread_priorities_json or "[]") or [],
+                        hotspot_candidates=json.loads(latest_structure.hotspot_candidates_json or "[]") or [],
+                        compression_candidates=json.loads(latest_structure.compression_candidates_json or "[]") or [],
+                        reader_promise=ReaderPromise.model_validate(
+                            json.loads(latest_structure.reader_promise_json or "{}") or {}
+                        ),
+                        arc_payoff_map=ArcPayoffMap.model_validate(
+                            json.loads(latest_structure.arc_payoff_map_json or "{}") or {}
+                        ),
+                    ),
+                )
             return existing
 
         chapter_plans = session.execute(
@@ -170,10 +258,11 @@ class ArcEnvelopeManager:
             .where(ChapterPlan.arc_plan_id == active_arc.id)
             .order_by(ChapterPlan.chapter_number.asc())
         ).scalars().all()
-        total_chapter_count = len(
+        total_chapter_count = int(
             session.execute(
-                select(ChapterPlan.id).where(ChapterPlan.project_id == project_id)
-            ).scalars().all()
+                select(func.count(ChapterPlan.id)).where(ChapterPlan.project_id == project_id)
+            ).scalar_one()
+            or 0
         )
         project = session.get(Project, project_id)
         if project is None:
@@ -208,6 +297,14 @@ class ArcEnvelopeManager:
             thread_priorities_json=json.dumps(structure.thread_priorities, ensure_ascii=False),
             hotspot_candidates_json=json.dumps(structure.hotspot_candidates, ensure_ascii=False),
             compression_candidates_json=json.dumps(structure.compression_candidates, ensure_ascii=False),
+            reader_promise_json=json.dumps(
+                structure.reader_promise.model_dump(mode="json"),
+                ensure_ascii=False,
+            ),
+            arc_payoff_map_json=json.dumps(
+                structure.arc_payoff_map.model_dump(mode="json"),
+                ensure_ascii=False,
+            ),
         )
         session.add(structure_row)
         session.flush()
@@ -281,6 +378,15 @@ class ArcEnvelopeManager:
                     failure_count=preview.failure_count,
                 )
             )
+        self._persist_experience_overlay(
+            session=session,
+            project_id=project_id,
+            arc_id=active_arc.id,
+            chapter_plans=chapter_plans,
+            activation_chapter=activation_chapter,
+            detailed_band_size=resolution.detailed_band_size,
+            structure=structure,
+        )
         session.flush()
         return envelope
 
@@ -434,6 +540,8 @@ class ArcEnvelopeManager:
                     ],
                     hotspot_candidates=[str(item) for item in drafted.get("hotspot_candidates") or []],
                     compression_candidates=[str(item) for item in drafted.get("compression_candidates") or []],
+                    reader_promise=ReaderPromise.model_validate(drafted.get("reader_promise") or {}),
+                    arc_payoff_map=ArcPayoffMap.model_validate(drafted.get("arc_payoff_map") or {}),
                 )
         return ArcStructureDraftData(
             phase_layout=["setup", "pressure", "turn", "payoff"],
@@ -458,6 +566,404 @@ class ArcEnvelopeManager:
                 for plan in chapter_plans[2:4]
                 if plan.one_line
             ],
+            reader_promise=ReaderPromise(
+                genre_promise=f"{project.genre}网文",
+                pleasure_promise=f"{project.genre}读者会稳定获得悬念和回报",
+                core_pleasures=["稳定微回报", "阶段性翻盘", "真相逐层揭开"],
+                acceptable_drag_level="low",
+                acceptable_exposition_density="medium",
+                cliffhanger_aggressiveness="high",
+                ambiguity_mode="managed",
+                world_legibility_target="关键冲突的规则与代价必须能被读者读懂。",
+            ),
+            arc_payoff_map=ArcPayoffMap(
+                macro_payoffs=[],
+                awe_kit=["反转", "线索揭面", "代价升级"],
+                revelation_layers=[],
+                ambiguity_constraints=["关键结果必须能回指既有线索与规则。"],
+            ),
+        )
+
+    def _persist_experience_overlay(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+        arc_id: str,
+        chapter_plans: list[ChapterPlan],
+        activation_chapter: int,
+        detailed_band_size: int,
+        structure: ArcStructureDraftData,
+    ) -> None:
+        if not chapter_plans:
+            return
+        calibration = self._build_audience_calibration_profile(session=session, project_id=project_id)
+        band_size = max(1, int(detailed_band_size or 1))
+        current_index = max(0, activation_chapter - 1)
+        band_start = (current_index // band_size) * band_size + 1
+        band_end = min(len(chapter_plans), band_start + band_size - 1)
+        band_id = f"band:{band_start}:{band_end}"
+        active_band = [
+            plan
+            for plan in chapter_plans
+            if band_start <= plan.chapter_number <= band_end
+        ]
+        schedule = self._derive_band_delight_schedule(
+            band_id=band_id,
+            chapter_start=band_start,
+            chapter_end=band_end,
+            structure=structure,
+            active_band=active_band,
+            calibration=calibration,
+        )
+        session.query(BandExperiencePlan).filter(
+            BandExperiencePlan.project_id == project_id,
+            BandExperiencePlan.arc_id == arc_id,
+            BandExperiencePlan.band_id == band_id,
+        ).delete(synchronize_session=False)
+        session.add(
+            BandExperiencePlan(
+                id=new_id(),
+                project_id=project_id,
+                arc_id=arc_id,
+                band_id=schedule.band_id,
+                chapter_start=schedule.chapter_start,
+                chapter_end=schedule.chapter_end,
+                stall_guard_max_gap=schedule.stall_guard_max_gap,
+                schedule_json=json.dumps(schedule.model_dump(mode="json"), ensure_ascii=False),
+            )
+        )
+        for plan in active_band:
+            experience_plan = self._derive_chapter_experience_plan(
+                chapter_number=plan.chapter_number,
+                structure=structure,
+                schedule=schedule,
+                chapter_plan=plan,
+                calibration=calibration,
+            )
+            plan.experience_plan_json = json.dumps(
+                experience_plan.model_dump(mode="json"),
+                ensure_ascii=False,
+            )
+            session.add(plan)
+
+    def _build_audience_calibration_profile(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+    ) -> AudienceCalibrationProfile:
+        trends = _load_long_window_audience_trend_views(session, project_id)
+        profile = AudienceCalibrationProfile()
+        for trend in trends:
+            strong_signal = trend.current_level in {"confirmed", "watchlist"} or trend.current_score >= 0.28
+            if trend.signal_type == "pacing" and strong_signal and trend.trend_type != "falling":
+                profile.boost_reward_density = True
+            elif trend.signal_type in {"confusion", "risk"} and strong_signal:
+                profile.clarify_rule_legibility = True
+            elif trend.signal_type in {"character_heat", "relationship_interest"} and strong_signal and trend.trend_type != "falling":
+                profile.protect_character_heat = True
+            elif trend.signal_type == "prediction" and strong_signal:
+                profile.hold_managed_ambiguity = True
+        return profile
+
+    def _derive_band_delight_schedule(
+        self,
+        *,
+        band_id: str,
+        chapter_start: int,
+        chapter_end: int,
+        structure: ArcStructureDraftData,
+        active_band: list[ChapterPlan],
+        calibration: AudienceCalibrationProfile | None = None,
+    ) -> BandDelightSchedule:
+        calibration = calibration or AudienceCalibrationProfile()
+        band_length = max(1, chapter_end - chapter_start + 1)
+        stall_guard_max_gap = max(1, min(2, band_length - 1 if band_length > 1 else 1))
+        scheduled_rewards: list[BandRewardItem] = []
+        curiosity_beats: list[CuriosityBeat] = []
+        ambiguity_payoffs: list[AmbiguityPayoff] = []
+        macro_by_category = {
+            item.category: item
+            for item in structure.arc_payoff_map.macro_payoffs
+            if item.category not in {"emotion"}
+        }
+
+        def chapter_for(slot: str) -> int:
+            if slot == "early":
+                return chapter_start
+            if slot == "late":
+                return chapter_end
+            if slot == "mid":
+                return chapter_start + max(0, (band_length - 1) // 2)
+            return chapter_start
+
+        def template_for(category: str, fallback_index: int) -> str:
+            macro = macro_by_category.get(category)
+            if macro is not None and macro.template_id:
+                return macro.template_id
+            template_candidates = trope_templates_by_category(category)
+            if template_candidates:
+                return template_candidates[fallback_index % len(template_candidates)].template_id
+            return TROPE_TEMPLATE_LIBRARY[fallback_index % len(TROPE_TEMPLATE_LIBRARY)].template_id
+
+        blueprint: list[tuple[str, str, str]] = [
+            ("power", "early", "micro_progress_power"),
+            ("social", "mid" if band_length >= 2 else "early", "social_dominance"),
+            ("mystery", "late", "mystery_clue_or_reveal"),
+        ]
+        if calibration.boost_reward_density and band_length >= 3:
+            blueprint.insert(1, ("power", "mid" if band_length >= 4 else "late", "micro_progress_power"))
+        pleasures_text = " ".join(structure.reader_promise.core_pleasures)
+        if band_length >= 3:
+            blueprint.insert(1, ("power", "mid", "micro_progress_power"))
+        if any(item.category == "justice" for item in structure.arc_payoff_map.macro_payoffs):
+            blueprint.append(("justice", "late", "justice_snap"))
+        elif any(item.category == "emotion" for item in structure.arc_payoff_map.macro_payoffs) or any(
+            token in pleasures_text for token in ("角色", "关系", "情感")
+        ):
+            blueprint.append(("emotion", "late", "emotion_knife"))
+        elif calibration.protect_character_heat:
+            blueprint.append(("emotion", "late", "emotion_knife"))
+
+        for index, (category, slot, intent) in enumerate(blueprint):
+            chapter_hint = chapter_for(slot)
+            scheduled_rewards.append(
+                BandRewardItem(
+                    chapter_hint=chapter_hint,
+                    category=category,
+                    template_id=template_for(category, index),
+                    intent=intent,
+                )
+            )
+
+        reward_chapters = sorted(set(item.chapter_hint for item in scheduled_rewards))
+        cursor = chapter_start
+        while cursor <= chapter_end:
+            if reward_chapters and any(abs(cursor - chapter) <= stall_guard_max_gap for chapter in reward_chapters):
+                cursor += 1
+                continue
+            scheduled_rewards.append(
+                BandRewardItem(
+                    chapter_hint=cursor,
+                    category="power" if cursor < chapter_end else "mystery",
+                    template_id=template_for("power" if cursor < chapter_end else "mystery", cursor - chapter_start),
+                    intent="stall_guard_cover",
+                )
+            )
+            reward_chapters = sorted(set(item.chapter_hint for item in scheduled_rewards))
+            cursor += 1
+
+        first_question = (
+            active_band[0].one_line
+            if active_band and active_band[0].one_line
+            else (structure.key_beats[0] if structure.key_beats else "当前局面真正的问题是什么")
+        )
+        opened_question = (
+            structure.key_beats[1]
+            if len(structure.key_beats) > 1
+            else "当前危机背后还有谁在推动局势"
+        )
+        curiosity_beats.append(
+            CuriosityBeat(
+                chapter_hint=chapter_start,
+                question_open=first_question,
+                question_resolve=(
+                    structure.key_beats[0]
+                    if structure.key_beats
+                    else "本 band 至少确认一条线索不是偶然"
+                ),
+                escalated_question=opened_question,
+            )
+        )
+        if band_length >= 3:
+            curiosity_beats.append(
+                CuriosityBeat(
+                    chapter_hint=chapter_for("late"),
+                    question_open=opened_question,
+                    question_resolve="确认一个阶段性真相或代价",
+                    escalated_question=(
+                        structure.key_beats[2]
+                        if len(structure.key_beats) > 2
+                        else "真正的规则限制究竟是什么"
+                    ),
+                )
+            )
+        if calibration.clarify_rule_legibility:
+            curiosity_beats.append(
+                CuriosityBeat(
+                    chapter_hint=chapter_for("mid"),
+                    question_open="这条规则到底限制了什么",
+                    question_resolve="明确一条正在生效的代价、边界或因果限制",
+                    escalated_question="如果继续逼近真相，会触发什么新的代价",
+                )
+            )
+
+        ambiguity_constraints = [
+            item for item in structure.arc_payoff_map.ambiguity_constraints if str(item).strip()
+        ]
+        ambiguity_mode = (structure.reader_promise.ambiguity_mode or "managed").strip()
+        if calibration.hold_managed_ambiguity and ambiguity_mode == "stable":
+            ambiguity_mode = "managed"
+        ambiguity_payoffs.append(
+            AmbiguityPayoff(
+                chapter_hint=chapter_start,
+                payoff_type="confirmation",
+                summary="先确认一条小事实，证明叙事并非随机失真。",
+                constraint_ref=ambiguity_constraints[0] if ambiguity_constraints else "",
+            )
+        )
+        ambiguity_payoffs.append(
+            AmbiguityPayoff(
+                chapter_hint=chapter_for("mid"),
+                payoff_type="constraint",
+                summary="明确这一段不允许被打破的规则边界或代价。",
+                constraint_ref=ambiguity_constraints[0] if ambiguity_constraints else "",
+            )
+        )
+        ambiguity_payoffs.append(
+            AmbiguityPayoff(
+                chapter_hint=chapter_end,
+                payoff_type="reversal",
+                summary=(
+                    "在不破坏规则边界的前提下给出一次认知反转。"
+                    if ambiguity_mode == "high"
+                    else "预置或兑现一次受控认知转向，但不能破坏已确认事实。"
+                ),
+                constraint_ref=(
+                    ambiguity_constraints[1]
+                    if len(ambiguity_constraints) > 1
+                    else (ambiguity_constraints[0] if ambiguity_constraints else "")
+                ),
+            )
+        )
+
+        immersion_anchor_chapter = chapter_for("mid") if band_length > 1 else chapter_start
+
+        return BandDelightSchedule(
+            band_id=band_id,
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
+            scheduled_rewards=sorted(
+                scheduled_rewards,
+                key=lambda item: (item.chapter_hint, item.category, item.template_id),
+            ),
+            immersion_anchor_scene_goal=(
+                f"第{immersion_anchor_chapter}章必须给出一个可感知现场的沉浸 anchor scene："
+                + (
+                    structure.key_beats[0]
+                    if structure.key_beats
+                    else (active_band[0].one_line if active_band else "让读者进入现场")
+                )
+            ),
+            stall_guard_max_gap=stall_guard_max_gap,
+            curiosity_beats=curiosity_beats,
+            ambiguity_payoffs=ambiguity_payoffs,
+        )
+
+    def _derive_chapter_experience_plan(
+        self,
+        *,
+        chapter_number: int,
+        structure: ArcStructureDraftData,
+        schedule: BandDelightSchedule,
+        chapter_plan: ChapterPlan,
+        calibration: AudienceCalibrationProfile | None = None,
+    ) -> ChapterExperiencePlan:
+        calibration = calibration or AudienceCalibrationProfile()
+        chapter_rewards = [
+            item for item in schedule.scheduled_rewards if item.chapter_hint == chapter_number
+        ]
+        goals = load_goals_json(chapter_plan.goals_json)
+        reward_tags = [item.category for item in chapter_rewards]
+        hook_type = "cliffhanger_question"
+        if "power" in reward_tags:
+            hook_type = "advantage_reveal"
+        elif "emotion" in reward_tags:
+            hook_type = "emotional_knife"
+        elif "justice" in reward_tags:
+            hook_type = "retribution_snap"
+        elif "social" in reward_tags:
+            hook_type = "status_flip"
+        immersion_anchors = [
+            schedule.immersion_anchor_scene_goal if chapter_number == schedule.chapter_start + max(0, (schedule.chapter_end - schedule.chapter_start) // 2) else "",
+            chapter_plan.one_line,
+            *goals[:2],
+        ]
+        progress_markers = (
+            goals[:3]
+            or [chapter_plan.one_line or chapter_plan.title]
+        )
+        if any(item.intent == "micro_progress_power" for item in chapter_rewards):
+            progress_markers = [*(progress_markers[:2]), "给主角一个可验证的微进展/实力兑现"]
+        if any(item.intent == "social_dominance" for item in chapter_rewards):
+            progress_markers = [*progress_markers[:2], "让社会地位或公开场面出现明确逆转"]
+        if any(item.intent == "mystery_clue_or_reveal" for item in chapter_rewards):
+            progress_markers = [*progress_markers[:2], "给出一条真实可追踪的新线索或半揭晓"]
+        chapter_curiosity = next(
+            (item for item in schedule.curiosity_beats if item.chapter_hint == chapter_number),
+            None,
+        )
+        question_hook = (
+            chapter_curiosity.question_open
+            if chapter_curiosity is not None
+            else (chapter_plan.one_line or chapter_plan.title)
+        )
+        question_resolution = (
+            chapter_curiosity.question_resolve
+            if chapter_curiosity is not None
+            else (
+                "至少解决一个小问题，并换来更大的问题"
+                if "mystery" in reward_tags
+                else "至少兑现一个可验证的局面变化"
+            )
+        )
+        rule_anchors = [
+            item.summary
+            for item in structure.arc_payoff_map.revelation_layers[:2]
+            if str(item.summary).strip()
+        ]
+        rule_anchors.extend(
+            item
+            for item in structure.arc_payoff_map.ambiguity_constraints[:2]
+            if str(item).strip()
+        )
+        if structure.reader_promise.world_legibility_target:
+            rule_anchors.append(structure.reader_promise.world_legibility_target)
+        if calibration.clarify_rule_legibility:
+            rule_anchors.append("把当前冲突涉及的规则、代价与因果关系讲清楚。")
+            progress_markers.append("明确一条正在生效的规则边界或代价")
+        minimum_progress_channels = ["event", "thread"]
+        if "power" in reward_tags or "justice" in reward_tags:
+            minimum_progress_channels.append("state")
+        if "social" in reward_tags:
+            minimum_progress_channels.append("status")
+        if "emotion" in reward_tags:
+            minimum_progress_channels.append("relationship")
+        if "mystery" in reward_tags:
+            minimum_progress_channels.append("rule")
+        if calibration.clarify_rule_legibility and "rule" not in minimum_progress_channels:
+            minimum_progress_channels.append("rule")
+        if calibration.protect_character_heat and "relationship" not in minimum_progress_channels:
+            minimum_progress_channels.append("relationship")
+        relationship_or_status_shift = ""
+        if "social" in reward_tags:
+            relationship_or_status_shift = "本章至少要让公开地位、评价或权力排序发生一次明确变化。"
+        elif "emotion" in reward_tags:
+            relationship_or_status_shift = "本章至少要让角色关系或情感站位发生一次明确变化。"
+        elif calibration.protect_character_heat:
+            relationship_or_status_shift = "给当前高热角色一处可记忆的互动、态度变化或存在感强化。"
+        return ChapterExperiencePlan(
+            planned_reward_tags=reward_tags,
+            selected_template_ids=[item.template_id for item in chapter_rewards],
+            hook_type=hook_type,
+            question_hook=question_hook,
+            question_resolution=question_resolution,
+            immersion_anchors=[str(item).strip() for item in immersion_anchors if str(item).strip()],
+            progress_markers=[str(item).strip() for item in progress_markers if str(item).strip()],
+            rule_anchors=[str(item).strip() for item in rule_anchors if str(item).strip()],
+            relationship_or_status_shift=relationship_or_status_shift,
+            minimum_progress_channels=list(dict.fromkeys(minimum_progress_channels)),
         )
 
     def _resolve_envelope(

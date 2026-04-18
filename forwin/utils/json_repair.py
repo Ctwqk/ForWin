@@ -148,6 +148,46 @@ def _try_parse_dict(text: str) -> dict | None:
     return None
 
 
+def _decode_jsonish_string(text: str) -> str:
+    return (
+        text.replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\r", "\r")
+        .replace("\\t", "\t")
+        .replace('\\"', '"')
+        .replace("\\\\", "\\")
+        .strip()
+    )
+
+
+def _extract_text_like_object(text: str) -> dict | None:
+    candidates = [text]
+    balanced = _extract_balanced_object(text)
+    if balanced and balanced != text:
+        candidates.append(balanced)
+
+    for candidate in candidates:
+        normalized = candidate.strip()
+        if not normalized:
+            continue
+        for field in ("body", "text"):
+            match = re.search(
+                rf'"{field}"\s*:\s*"(?P<content>.*)"\s*}}',
+                normalized,
+                flags=re.DOTALL,
+            )
+            if match is None:
+                continue
+            content = _decode_jsonish_string(match.group("content"))
+            if not content:
+                continue
+            payload = {field: content}
+            if field == "text":
+                payload["body"] = content
+            return payload
+    return None
+
+
 def parse_llm_json(raw: str, *, error_prefix: str = "LLM JSON parser") -> dict:
     original = _normalize_json_punctuation(strip_reasoning(raw))
     candidate = original.strip()
@@ -210,6 +250,10 @@ def parse_llm_json(raw: str, *, error_prefix: str = "LLM JSON parser") -> dict:
             parsed = _try_parse_dict(normalized)
             if parsed is not None:
                 return parsed
+
+    text_like = _extract_text_like_object(original)
+    if text_like is not None:
+        return text_like
 
     snippet = original[:300].replace("\n", " ")
     raise LLMJSONParseError(

@@ -88,10 +88,37 @@ class PublisherBrowserSession(Base):
     )
 
 
+class PublisherBrowserSessionEntry(Base):
+    __tablename__ = "publisher_browser_session_entries"
+    __table_args__ = (
+        Index(
+            "ix_publisher_browser_session_entries_platform_synced",
+            "platform_id",
+            "synced_at",
+        ),
+    )
+
+    client_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("publisher_extension_clients.client_id"),
+        primary_key=True,
+    )
+    platform_id: Mapped[str] = mapped_column(String, primary_key=True)
+    cookie_count: Mapped[int] = mapped_column(Integer, default=0)
+    cookies_json: Mapped[str] = mapped_column(Text, default="[]")
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
 class PublisherUploadJob(Base):
     __tablename__ = "publisher_upload_jobs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(String, default="")
     platform_id: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, default="pending")
     book_name: Mapped[str] = mapped_column(String, default="")
@@ -119,6 +146,7 @@ class PublisherCommentSyncJob(Base):
     __tablename__ = "publisher_comment_sync_jobs"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(String, default="")
     platform_id: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, default="pending")
     work_id: Mapped[str] = mapped_column(String, default="")
@@ -146,9 +174,11 @@ class PublisherRawComment(Base):
             name="uq_publisher_raw_comments_platform_remote",
         ),
         Index("ix_publisher_raw_comments_work_name", "work_name"),
+        Index("ix_publisher_raw_comments_project", "project_id"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(String, default="")
     platform_id: Mapped[str] = mapped_column(String, nullable=False)
     remote_comment_id: Mapped[str] = mapped_column(String, nullable=False)
     work_id: Mapped[str] = mapped_column(String, default="")
@@ -219,6 +249,8 @@ class SignalWindowAggregate(Base):
     total_comment_count: Mapped[int] = mapped_column(Integer, default=0)
     reader_estimate: Mapped[int] = mapped_column(Integer, default=0)
     reader_tier: Mapped[int] = mapped_column(Integer, default=0)
+    estimation_method: Mapped[str] = mapped_column(String, default="comment_proxy")
+    scale_confidence: Mapped[float] = mapped_column(Float, default=0.35)
     max_severity: Mapped[int] = mapped_column(Integer, default=0)
     avg_confidence: Mapped[float] = mapped_column(Float, default=0.0)
     signal_level: Mapped[str] = mapped_column(String, default="noise")

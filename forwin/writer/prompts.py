@@ -42,6 +42,73 @@ def _chapter_plan_section(context: ChapterContextPack, title: str) -> str:
     )
 
 
+def _experience_overlay_section(context: ChapterContextPack) -> str | None:
+    plan = getattr(context, "chapter_experience_plan", None)
+    band = getattr(context, "band_delight_schedule", None)
+    promise = getattr(context, "reader_promise", None)
+    if not any((plan, band, promise)):
+        return None
+    lines = ["【读者体验 Overlay】"]
+    if promise is not None:
+        if promise.genre_promise:
+            lines.append(f"  · 题材承诺：{promise.genre_promise}")
+        if promise.pleasure_promise:
+            lines.append(f"  · 阅读快感承诺：{promise.pleasure_promise}")
+        if promise.core_pleasures:
+            lines.append(f"  · 核心快感：{'、'.join(promise.core_pleasures[:4])}")
+        if promise.cliffhanger_aggressiveness:
+            lines.append(f"  · 章末钩子强度：{promise.cliffhanger_aggressiveness}")
+        if promise.acceptable_drag_level:
+            lines.append(f"  · 可接受拖感：{promise.acceptable_drag_level}")
+        if promise.acceptable_exposition_density:
+            lines.append(f"  · 可接受说明密度：{promise.acceptable_exposition_density}")
+        if promise.ambiguity_mode:
+            lines.append(f"  · 模糊度策略：{promise.ambiguity_mode}")
+        if promise.world_legibility_target:
+            lines.append(f"  · 规则可读性目标：{promise.world_legibility_target}")
+    if band is not None:
+        lines.append(
+            f"  · 当前 band：{band.band_id}（第 {band.chapter_start}-{band.chapter_end} 章，stall guard {band.stall_guard_max_gap}）"
+        )
+        if band.immersion_anchor_scene_goal:
+            lines.append(f"  · band 沉浸锚点：{band.immersion_anchor_scene_goal}")
+        if band.curiosity_beats:
+            lines.append("  · 问题梯子：")
+            lines.extend(
+                f"    · 第{item.chapter_hint}章：开={item.question_open}；解={item.question_resolve}；再开={item.escalated_question}"
+                for item in band.curiosity_beats[:2]
+            )
+        if band.ambiguity_payoffs:
+            lines.append("  · ambiguity payoff：")
+            lines.extend(
+                f"    · 第{item.chapter_hint}章 {item.payoff_type}：{item.summary}"
+                for item in band.ambiguity_payoffs[:3]
+            )
+    if plan is not None:
+        if plan.planned_reward_tags:
+            lines.append(f"  · 本章计划奖励：{'、'.join(plan.planned_reward_tags)}")
+        if plan.selected_template_ids:
+            lines.append(f"  · 选用模板：{'、'.join(plan.selected_template_ids)}")
+        if plan.hook_type:
+            lines.append(f"  · 钩子类型：{plan.hook_type}")
+        if plan.question_hook:
+            lines.append(f"  · 本章要提的问题：{plan.question_hook}")
+        if plan.question_resolution:
+            lines.append(f"  · 本章至少解决：{plan.question_resolution}")
+        if plan.immersion_anchors:
+            lines.append("  · 沉浸锚点：")
+            lines.extend(f"    · {item}" for item in plan.immersion_anchors[:3])
+        if plan.progress_markers:
+            lines.append("  · 进展标记：")
+            lines.extend(f"    · {item}" for item in plan.progress_markers[:3])
+        if plan.rule_anchors:
+            lines.append("  · 规则锚点：")
+            lines.extend(f"    · {item}" for item in plan.rule_anchors[:3])
+        if plan.relationship_or_status_shift:
+            lines.append(f"  · 关系/地位变化：{plan.relationship_or_status_shift}")
+    return "\n".join(lines)
+
+
 def _previous_summaries_section(context: ChapterContextPack, *, limit: int) -> str | None:
     if not context.previous_chapter_summaries:
         return None
@@ -121,25 +188,6 @@ def _world_pressure_section(context: ChapterContextPack) -> str | None:
         f"  · 等级：{pressure.pressure_level}\n"
         f"  · 概览：{pressure.pressure_summary}"
     )
-
-
-def _reader_feedback_section(context: ChapterContextPack, *, detailed: bool) -> str | None:
-    feedback = getattr(context, "reader_feedback", None)
-    if not feedback:
-        return None
-    if detailed:
-        return "【读者反馈】\n" + "\n".join(
-            [
-                f"  · 评论数：{feedback.comment_count}",
-                f"  · 主情绪：{feedback.dominant_sentiment}",
-                f"  · 摘要：{feedback.feedback_summary}",
-                *[
-                    f"  · {item.author_name or '读者'}@{item.platform_id}：{item.body_text}"
-                    for item in feedback.recent_highlights[:3]
-                ],
-            ]
-        )
-    return "【读者反馈】\n" f"  · {feedback.feedback_summary}"
 
 
 def _audience_hints_section(context: ChapterContextPack) -> str | None:
@@ -233,6 +281,7 @@ def _scene_prompt_sections(
         _previous_summaries_section(context, limit=previous_limit),
         _active_entities_section(context, limit=entity_limit),
         _active_threads_section(context, limit=thread_limit),
+        _experience_overlay_section(context),
         _arc_envelope_section(context, compact=envelope_compact),
         _npc_intents_section(
             context,
@@ -241,7 +290,6 @@ def _scene_prompt_sections(
         ),
         _world_pressure_section(context),
         _audience_hints_section(context),
-        _reader_feedback_section(context, detailed=feedback_detailed),
         _retrieved_memories_section(context, limit=memory_limit, excerpt_chars=80),
         _timeline_section(context),
     ]
@@ -253,9 +301,9 @@ def _scene_prompt_sections(
 def build_single_chapter_draft_prompt(
     context: ChapterContextPack,
     *,
-    target_chars: int = 1800,
-    min_chars: int = 1500,
-    max_chars: int = 2200,
+    target_chars: int = 2800,
+    min_chars: int = 2500,
+    max_chars: int = 3200,
 ) -> list[dict]:
     target_chars, min_chars, max_chars = _normalize_char_targets(
         target_chars=target_chars,
@@ -268,37 +316,34 @@ def build_single_chapter_draft_prompt(
         _previous_summaries_section(context, limit=3),
         _active_entities_section(context, limit=6),
         _active_threads_section(context, limit=3),
+        _experience_overlay_section(context),
         _arc_envelope_section(context, compact=False),
         _npc_intents_section(context, limit=4, detailed=True),
         _world_pressure_section(context),
         _audience_hints_section(context),
-        _reader_feedback_section(context, detailed=True),
         _retrieved_memories_section(context, limit=3, excerpt_chars=80),
         _timeline_section(context),
     )
 
-    schema_example = json.dumps(
-        {
-            "title": "章节标题",
-            "body": "完整章节正文",
-            "end_of_chapter_summary": "本章结尾总结",
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
     user_content = (
         user_sections
         + "\n\n【输出要求】\n"
-        f"1. 只输出一个合法 JSON 对象，目标正文长度 {target_chars} 到 {max_chars} 中文字，"
+        f"1. 请写出一章可直接落稿的完整正文，目标正文长度 {target_chars} 到 {max_chars} 中文字，"
         f"不得低于 {min_chars} 中文字。\n"
         "2. 正文必须是自然流畅的网文叙事，不要分点，不要写提纲。\n"
         "3. 本章结尾必须留下明确钩子。\n"
-        "4. JSON 只能包含 title、body、end_of_chapter_summary 三个字段。\n"
-        "5. 不要输出 markdown，不要输出解释。\n\n"
-        f"【JSON 结构示例】\n{schema_example}"
+        "4. 不要输出 JSON，不要输出 markdown，不要解释。\n"
+        "5. 严格使用下面这个纯文本结构输出，并保留标签本身：\n"
+        "<<FORWIN_TITLE>>\n"
+        "这里写章节标题\n"
+        "<<FORWIN_BODY>>\n"
+        "这里写完整正文\n"
+        "<<FORWIN_SUMMARY>>\n"
+        "这里写一句到两句总结\n"
+        "如果你更习惯，也可以使用【标题】【正文】【摘要】这一组标签，但整篇只保留一组最终结果。"
     )
     return [
-        {"role": "system", "content": "你是中文网文作者，只输出 JSON 对象，不要解释。"},
+        {"role": "system", "content": "你是中文网文作者，只输出指定标签格式的纯文本，不要解释。"},
         {"role": "user", "content": user_content},
     ]
 
@@ -321,11 +366,11 @@ def build_preview_chapter_prompt(
         _previous_summaries_section(context, limit=2),
         _active_entities_section(context, limit=5),
         _active_threads_section(context, limit=3),
+        _experience_overlay_section(context),
         _arc_envelope_section(context, compact=True),
         _npc_intents_section(context, limit=3, detailed=False),
         _world_pressure_section(context),
         _audience_hints_section(context),
-        _reader_feedback_section(context, detailed=False),
         _retrieved_memories_section(context, limit=2, excerpt_chars=60),
         _timeline_section(context),
     )
@@ -371,6 +416,9 @@ def build_scene_breakdown_prompt(
                     "involved_entities": ["角色A", "角色B"],
                     "micro_hook": "该 scene 结尾的小钩子",
                     "target_chars": 850,
+                    "reward_beat_tag": "mystery",
+                    "immersion_anchor": "让读者感到置身现场的感官锚点",
+                    "progress_marker": "这一 scene 明确推进了什么",
                 }
             ]
         },
@@ -395,6 +443,7 @@ def build_scene_breakdown_prompt(
         "要求：\n"
         "1. 每个 scene 都要有明确目标和必须推进点。\n"
         "2. scenes 合起来必须覆盖本章全部目标。\n"
+        "3. 每个 scene 还必须给出 reward_beat_tag、immersion_anchor、progress_marker。\n"
         "3. 只输出 JSON，不要解释。\n\n"
         "JSON 结构参考：\n"
         f"{schema}"
@@ -409,17 +458,6 @@ def build_scene_generation_prompt(
     context: ChapterContextPack,
     scene_plan: ScenePlan,
 ) -> list[dict]:
-    schema = json.dumps(
-        {
-            "text": "本 scene 正文",
-            "micro_summary": "本 scene 的一句话小结",
-            "scene_time_point": "scene 时间点",
-            "scene_location_id": "scene 地点名或 id",
-            "involved_entities": ["角色A", "角色B"],
-        },
-        ensure_ascii=False,
-        indent=2,
-    )
     scene_sections = _scene_prompt_sections(
         context,
         plan_title="本章计划",
@@ -434,11 +472,42 @@ def build_scene_generation_prompt(
     )
     user_content = (
         f"{scene_sections}\n\n"
-        "请显式参考当前 NPC 意图、世界压力和读者反馈来组织这个 scene。\n\n"
-        f"只输出 JSON，不要解释。\n\n{schema}"
+        "请显式参考当前 NPC 意图、世界压力和读者信号提示来组织这个 scene。\n\n"
+        "输出要求：\n"
+        "1. 只写当前这个 scene，不要偷跑到下一 scene。\n"
+        "2. 不要输出 JSON，不要解释。\n"
+        "3. 严格使用下面这个纯文本结构输出，并保留标签本身：\n"
+        "<<FORWIN_BODY>>\n"
+        "这里写 scene 正文\n"
+        "<<FORWIN_SUMMARY>>\n"
+        "这里写一句话 scene 小结\n"
+        "<<FORWIN_TIME>>\n"
+        "这里写 scene 时间点，没有就写沿用上一场景\n"
+        "<<FORWIN_LOCATION>>\n"
+        "这里写 scene 地点，没有就写沿用当前地点\n"
+        "<<FORWIN_ENTITIES>>\n"
+        "这里写本 scene 直接出场或被明确提及的实体，使用顿号或逗号分隔\n"
+        "<<FORWIN_REWARD>>\n"
+        "这里写 reward tag，必须从 power、social、justice、mystery、emotion 中选一个；拿不准就写 scene_plan 里的 reward tag\n"
+        "<<FORWIN_IMMERSION>>\n"
+        "这里写感官锚点\n"
+        "<<FORWIN_PROGRESS>>\n"
+        "这里写这一 scene 推进了什么\n"
+        "<<FORWIN_CONTINUITY_ANCHOR>>\n"
+        "这里写下一 scene 必须承接的动作、信息或情绪锚点\n"
+        "<<FORWIN_UNRESOLVED_HOOK>>\n"
+        "这里写本 scene 结尾仍未解决的小钩子\n"
+        "<<FORWIN_NEXT_BRIDGE>>\n"
+        "这里写下一 scene 最自然的衔接方向\n"
+        "<<FORWIN_TIME_CONTINUITY>>\n"
+        "这里写时间如何承接，没有变化就写沿用上一场景\n"
+        "<<FORWIN_LOCATION_CONTINUITY>>\n"
+        "这里写地点如何承接，没有变化就写沿用当前地点\n"
+        "<<FORWIN_CHARACTER_FOCUS>>\n"
+        "这里写下一 scene 应优先关注的角色，使用顿号或逗号分隔"
     )
     return [
-        {"role": "system", "content": "你是中文网文写手，只负责写单个 scene。"},
+        {"role": "system", "content": "你是中文网文写手，只负责写单个 scene，并按指定标签输出纯文本。"},
         {"role": "user", "content": user_content},
     ]
 
@@ -448,17 +517,18 @@ def build_scene_stitch_prompt(
     scene_outputs: list[SceneOutput],
 ) -> list[dict]:
     stitched_input = "\n\n".join(
-        f"[Scene {scene.scene_no}]\n目标：{scene.scene_objective}\n摘要：{scene.micro_summary}\n正文：\n{scene.text}"
+        (
+            f"[Scene {scene.scene_no}]\n"
+            f"目标：{scene.scene_objective}\n"
+            f"摘要：{scene.micro_summary}\n"
+            f"continuation：锚点={scene.continuation.continuity_anchor}；"
+            f"未解钩子={scene.continuation.unresolved_micro_hook}；"
+            f"下一衔接={scene.continuation.next_scene_bridge}；"
+            f"时间={scene.continuation.time_continuity}；地点={scene.continuation.location_continuity}；"
+            f"角色焦点={'、'.join(scene.continuation.character_focus)}\n"
+            f"正文：\n{scene.text}"
+        )
         for scene in scene_outputs
-    )
-    schema = json.dumps(
-        {
-            "title": "章节标题",
-            "body": "拼接后的完整章节正文",
-            "end_of_chapter_summary": "1-2句章节总结",
-        },
-        ensure_ascii=False,
-        indent=2,
     )
     user_sections = _scene_prompt_sections(
         context,
@@ -479,18 +549,25 @@ def build_scene_stitch_prompt(
         f"{user_sections}\n\n"
         "要求：\n"
         "1. 保持人称、文风、时间地点衔接一致。\n"
-        "2. 只做轻量衔接和润色，不要改写核心事件。\n"
-        "3. 保留章末钩子。\n"
-        "4. 只输出 JSON。\n\n"
-        f"{schema}"
+        "2. 必须显式利用每个 scene 的 continuation 信息承接动作、时间、地点和角色焦点。\n"
+        "3. 只做轻量衔接和润色，不要改写核心事件。\n"
+        "4. 保留章末钩子。\n"
+        "5. 不要输出 JSON，不要解释。\n"
+        "6. 严格使用下面这个纯文本结构输出，并保留标签本身：\n"
+        "<<FORWIN_TITLE>>\n"
+        "这里写章节标题\n"
+        "<<FORWIN_BODY>>\n"
+        "这里写拼接后的完整章节正文\n"
+        "<<FORWIN_SUMMARY>>\n"
+        "这里写 1-2 句章节总结"
     )
     return [
-        {"role": "system", "content": "你是章节拼接编辑，只做 scenes 的轻量 stitch。"},
+        {"role": "system", "content": "你是章节拼接编辑，只做 scenes 的轻量 stitch，并按指定标签输出纯文本。"},
         {"role": "user", "content": user_content},
     ]
 
 
-def build_structured_extraction_prompt(
+def build_state_event_extraction_prompt(
     context: ChapterContextPack,
     chapter_title: str,
     chapter_body: str,
@@ -515,6 +592,33 @@ def build_structured_extraction_prompt(
                     "roles": ["protagonist"],
                 }
             ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_content = (
+        f"请从《{context.project_title}》第 {context.chapter_number} 章《{chapter_title}》中抽取结构化事实。\n"
+        "要求：\n"
+        "1. 只抽取正文真实发生的内容。\n"
+        "2. state_changes.entity_kind 只能是 character、location、faction、item、rule 之一。\n"
+        "3. new_events.significance 只能是 major、minor、background 之一。\n"
+        "4. 没有对应内容就返回空数组。\n"
+        "5. 只输出 JSON。\n\n"
+        f"正文：\n{chapter_body}\n\n{schema}"
+    )
+    return [
+        {"role": "system", "content": "你是结构化提取器，只负责从正文抽取状态变化和事件。"},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def build_thread_time_extraction_prompt(
+    context: ChapterContextPack,
+    chapter_title: str,
+    chapter_body: str,
+) -> list[dict]:
+    schema = json.dumps(
+        {
             "thread_beats": [
                 {
                     "thread_name": "线索名",
@@ -531,15 +635,79 @@ def build_structured_extraction_prompt(
         indent=2,
     )
     user_content = (
-        f"请从《{context.project_title}》第 {context.chapter_number} 章《{chapter_title}》中抽取结构化元数据。\n"
+        f"请从《{context.project_title}》第 {context.chapter_number} 章《{chapter_title}》中抽取剧情线推进和时间推进信息。\n"
         "要求：\n"
         "1. 只抽取正文真实发生的内容。\n"
-        "2. state_changes 的字段名遵循固定 schema。\n"
+        "2. thread_beats.beat_type 只能是 setup、escalation、twist、climax、resolution 之一。\n"
         "3. 若没有时间推进，time_advance 设为 null。\n"
-        "4. 只输出 JSON。\n\n"
+        "4. 若没有明确的剧情线推进，thread_beats 返回空数组。\n"
+        "5. 只输出 JSON。\n\n"
         f"正文：\n{chapter_body}\n\n{schema}"
     )
     return [
-        {"role": "system", "content": "你是结构化提取器，只负责从正文抽取元数据。"},
+        {"role": "system", "content": "你是结构化提取器，只负责从正文抽取剧情线推进和时间推进。"},
         {"role": "user", "content": user_content},
     ]
+
+
+def build_lore_timeline_notes_extraction_prompt(
+    context: ChapterContextPack,
+    chapter_title: str,
+    chapter_body: str,
+) -> list[dict]:
+    schema = json.dumps(
+        {
+            "lore_candidates": [
+                {
+                    "subject_name": "设定/规则/地点/组织/物品名称",
+                    "subject_type": "rule",
+                    "description": "正文中新出现或被强化的设定事实",
+                    "evidence_refs": ["body:关键短语"],
+                    "confidence": 0.7,
+                }
+            ],
+            "timeline_hints": [
+                {
+                    "current_time_label": "当前章节明确时间",
+                    "projected_time_label": "下一章自然承接时间",
+                    "duration_hint": "时间跨度提示",
+                    "evidence_refs": ["body:关键短语"],
+                    "confidence": 0.7,
+                }
+            ],
+            "writer_notes": [
+                {
+                    "note_type": "continuity",
+                    "target_name": "角色/线索/设定",
+                    "note": "下一章写作必须记住的提示",
+                    "evidence_refs": ["body:关键短语"],
+                }
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    user_content = (
+        f"请从《{context.project_title}》第 {context.chapter_number} 章《{chapter_title}》中抽取写作续航信息。\n"
+        "要求：\n"
+        "1. 只抽取正文中有证据的设定、时间提示和下一章写作注意事项。\n"
+        "2. lore_candidates 只放可进入后续设定候选池的事实，不要写评价。\n"
+        "3. timeline_hints 用来帮助下一章保持时间连续，不确定就返回空数组。\n"
+        "4. writer_notes 是给下一章 writer 的短提示，不能改 canon。\n"
+        "5. evidence_refs 使用 body:短语 格式指向正文证据。\n"
+        "6. 没有对应内容就返回空数组。\n"
+        "7. 只输出 JSON。\n\n"
+        f"正文：\n{chapter_body}\n\n{schema}"
+    )
+    return [
+        {"role": "system", "content": "你是写作续航信息抽取器，只输出 JSON。"},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def build_structured_extraction_prompt(
+    context: ChapterContextPack,
+    chapter_title: str,
+    chapter_body: str,
+) -> list[dict]:
+    return build_state_event_extraction_prompt(context, chapter_title, chapter_body)

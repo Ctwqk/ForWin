@@ -1,6 +1,9 @@
-const fanqieCookieNames = new Set([
+const fanqieSessionCookieNames = new Set([
   'sessionid',
   'sessionid_ss',
+]);
+
+const fanqieWriterSignalCookieNames = new Set([
   'passport_auth_status',
   'passport_auth_status_ss',
   'has_biz_token',
@@ -59,16 +62,25 @@ export function getCookieNameSet(cookies = []) {
   );
 }
 
+function hasAnyCookie(cookieNames, requiredNames) {
+  for (const name of requiredNames) {
+    if (cookieNames.has(name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function qidianCookieConnected(cookieNames) {
   if (!cookieNames.has('AppAuthToken')) {
     return false;
   }
-  return ['pubtoken', 'ywopenid', 'ywkey', 'ywKey', 'ywtab'].some((name) => cookieNames.has(name));
+  return hasAnyCookie(cookieNames, ['pubtoken', 'ywopenid', 'ywkey', 'ywKey', 'ywtab']);
 }
 
 function fanqieCookieConnected(cookieNames) {
-  const hasSession = cookieNames.has('sessionid') || cookieNames.has('sessionid_ss');
-  const hasWriterSignal = Array.from(fanqieCookieNames).some((name) => cookieNames.has(name));
+  const hasSession = hasAnyCookie(cookieNames, fanqieSessionCookieNames);
+  const hasWriterSignal = hasAnyCookie(cookieNames, fanqieWriterSignalCookieNames);
   return hasSession && hasWriterSignal;
 }
 

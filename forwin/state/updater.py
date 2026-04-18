@@ -7,17 +7,33 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.governance import (
+    BandCheckpointDetail,
+    DecisionEventInfo,
+    NarrativeConstraintInfo,
+    derive_band_task_contract,
+    derive_chapter_task_contract,
+    governance_to_json,
+    issue_group_for_issue,
+    new_project_governance,
+    plan_task_contract_to_json,
+)
 from forwin.models import (
     ArcPlanVersion,
+    BandCheckpoint,
+    BandExperiencePlan,
     CanonEvent,
     ChapterDraft,
     ChapterPlan,
+    ChapterRewriteAttempt,
     ChapterReview,
     ChapterTimeline,
+    DecisionEvent,
     Entity,
     EntityAlias,
     EntityState,
     EventEntityLink,
+    NarrativeConstraint,
     PlotThread,
     PlotThreadBeat,
     Project,
@@ -26,6 +42,8 @@ from forwin.models import (
     new_id,
 )
 from forwin.protocol import (
+    BandDelightSchedule,
+    ChapterExperiencePlan,
     EventCandidate,
     ReviewVerdict,
     StateChangeCandidate,
@@ -62,15 +80,33 @@ class StateUpdater:
         premise: str,
         genre: str,
         setting_summary: str = "",
+        target_total_chapters: int = 3,
+        governance=None,
     ) -> Project:
         """Create a new project and flush to the session."""
+        resolved_governance = governance or new_project_governance()
         project = Project(
             id=new_id(),
             title=title,
             premise=premise,
             genre=genre,
             setting_summary=setting_summary,
+            target_total_chapters=max(1, int(target_total_chapters or 1)),
+            governance_json=governance_to_json(resolved_governance),
         )
+        self.session.add(project)
+        self.session.flush()
+        return project
+
+    def update_project_governance(
+        self,
+        project_id: str,
+        governance,
+    ) -> Project | None:
+        project = self._repo.get_project(project_id)
+        if project is None:
+            return None
+        project.governance_json = governance_to_json(governance)
         self.session.add(project)
         self.session.flush()
         return project
@@ -101,8 +137,11 @@ class StateUpdater:
         title: str,
         one_line: str,
         goals: list[str],
+        experience_plan: ChapterExperiencePlan | None = None,
+        task_contract=None,
     ) -> ChapterPlan:
         """Create a chapter plan."""
+        resolved_task_contract = task_contract or derive_chapter_task_contract(goals)
         plan = ChapterPlan(
             id=new_id(),
             project_id=project_id,
@@ -111,7 +150,29 @@ class StateUpdater:
             title=title,
             one_line=one_line,
             goals_json=json.dumps(goals, ensure_ascii=False),
+            experience_plan_json=json.dumps(
+                (experience_plan or ChapterExperiencePlan()).model_dump(mode="json"),
+                ensure_ascii=False,
+            ),
+            task_contract_json=plan_task_contract_to_json(resolved_task_contract),
             status="planned",
+        )
+        self.session.add(plan)
+        self.session.flush()
+        return plan
+
+    def update_chapter_experience_plan(
+        self,
+        project_id: str,
+        chapter_number: int,
+        experience_plan: ChapterExperiencePlan,
+    ) -> ChapterPlan | None:
+        plan = self._repo.get_chapter_plan(project_id, chapter_number)
+        if plan is None:
+            return None
+        plan.experience_plan_json = json.dumps(
+            experience_plan.model_dump(mode="json"),
+            ensure_ascii=False,
         )
         self.session.add(plan)
         self.session.flush()
@@ -531,16 +592,223 @@ class StateUpdater:
         verdict: ReviewVerdict,
     ) -> ChapterReview:
         """Save a review verdict."""
-        issues_data = [issue.model_dump() for issue in verdict.issues]
+        issues_data = []
+        for issue in verdict.issues:
+            payload = issue.model_dump()
+            if not str(payload.get("issue_group") or "").strip():
+                payload["issue_group"] = issue_group_for_issue(
+                    issue_type=str(payload.get("issue_type") or ""),
+                    rule_name=str(payload.get("rule_name") or ""),
+                )
+            issues_data.append(payload)
+        review_meta = verdict.model_dump(mode="json", exclude_none=True)
+        review_meta.pop("verdict", None)
+        review_meta.pop("issues", None)
         review = ChapterReview(
             id=new_id(),
             draft_id=draft_id,
             verdict=verdict.verdict,
             issues_json=json.dumps(issues_data, ensure_ascii=False),
+            review_meta_json=json.dumps(review_meta, ensure_ascii=False),
         )
         self.session.add(review)
         self.session.flush()
         return review
+
+    def save_band_experience_plan(
+        self,
+        *,
+        project_id: str,
+        arc_id: str,
+        schedule: BandDelightSchedule,
+        task_contract=None,
+    ) -> BandExperiencePlan:
+        resolved_task_contract = task_contract or derive_band_task_contract(schedule)
+        self.session.query(BandExperiencePlan).filter(
+            BandExperiencePlan.project_id == project_id,
+            BandExperiencePlan.arc_id == arc_id,
+            BandExperiencePlan.band_id == schedule.band_id,
+        ).delete(synchronize_session=False)
+        row = BandExperiencePlan(
+            id=new_id(),
+            project_id=project_id,
+            arc_id=arc_id,
+            band_id=schedule.band_id,
+            chapter_start=schedule.chapter_start,
+            chapter_end=schedule.chapter_end,
+            stall_guard_max_gap=schedule.stall_guard_max_gap,
+            schedule_json=json.dumps(schedule.model_dump(mode="json"), ensure_ascii=False),
+            task_contract_json=plan_task_contract_to_json(resolved_task_contract),
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def save_band_checkpoint(
+        self,
+        detail: BandCheckpointDetail,
+        *,
+        related_task_id: str = "",
+    ) -> BandCheckpoint:
+        row = BandCheckpoint(
+            id=detail.id or new_id(),
+            project_id=detail.project_id,
+            arc_id=detail.arc_id,
+            band_id=detail.band_id,
+            chapter_start=detail.chapter_start,
+            chapter_end=detail.chapter_end,
+            trigger_source=detail.trigger_source,
+            boundary_kind=detail.boundary_kind,
+            boundary_chapter=detail.boundary_chapter,
+            status=detail.status,
+            summary=detail.summary,
+            reason=detail.reason,
+            issues_json=json.dumps(
+                [
+                    {
+                        **issue.model_dump(mode="json"),
+                        "issue_group": issue.issue_group
+                        or issue_group_for_issue(code=issue.code),
+                    }
+                    for issue in detail.issues
+                ],
+                ensure_ascii=False,
+            ),
+            related_task_id=related_task_id,
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def update_band_checkpoint(
+        self,
+        checkpoint_id: str,
+        *,
+        status: str | None = None,
+        summary: str | None = None,
+        reason: str | None = None,
+        issues: list[dict[str, object]] | None = None,
+    ) -> BandCheckpoint | None:
+        row = self.session.get(BandCheckpoint, checkpoint_id)
+        if row is None:
+            return None
+        if status is not None:
+            row.status = status
+        if summary is not None:
+            row.summary = summary
+        if reason is not None:
+            row.reason = reason
+        if issues is not None:
+            row.issues_json = json.dumps(issues, ensure_ascii=False)
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def save_narrative_constraint(
+        self,
+        info: NarrativeConstraintInfo,
+    ) -> NarrativeConstraint:
+        row = NarrativeConstraint(
+            id=info.id or new_id(),
+            project_id=info.project_id,
+            arc_id=info.arc_id,
+            band_id=info.band_id,
+            constraint_type=info.constraint_type,
+            level=info.level,
+            subject_name=info.subject_name,
+            description=info.description,
+            payload_json=json.dumps(info.payload, ensure_ascii=False),
+            effective_from_chapter=info.effective_from_chapter,
+            protect_until_chapter=info.protect_until_chapter,
+            status=info.status,
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def update_narrative_constraint(
+        self,
+        constraint_id: str,
+        info: NarrativeConstraintInfo,
+    ) -> NarrativeConstraint | None:
+        row = self.session.get(NarrativeConstraint, constraint_id)
+        if row is None:
+            return None
+        row.arc_id = info.arc_id
+        row.band_id = info.band_id
+        row.constraint_type = info.constraint_type
+        row.level = info.level
+        row.subject_name = info.subject_name
+        row.description = info.description
+        row.payload_json = json.dumps(info.payload, ensure_ascii=False)
+        row.effective_from_chapter = info.effective_from_chapter
+        row.protect_until_chapter = info.protect_until_chapter
+        row.status = info.status
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def save_decision_event(
+        self,
+        info: DecisionEventInfo,
+    ) -> DecisionEvent:
+        row = DecisionEvent(
+            id=info.id or new_id(),
+            project_id=info.project_id,
+            task_id=info.task_id,
+            band_id=info.band_id,
+            chapter_number=info.chapter_number,
+            scope=info.scope,
+            event_family=info.event_family,
+            event_type=info.event_type,
+            actor_type=info.actor_type,
+            actor_id=info.actor_id,
+            summary=info.summary,
+            reason=info.reason,
+            payload_json=json.dumps(info.payload, ensure_ascii=False),
+            related_object_type=info.related_object_type,
+            related_object_id=info.related_object_id,
+            parent_event_id=info.parent_event_id,
+            causal_root_id=info.causal_root_id,
+        )
+        self.session.add(row)
+        self.session.flush()
+        if not str(row.causal_root_id or "").strip():
+            row.causal_root_id = row.id
+            self.session.add(row)
+            self.session.flush()
+        return row
+
+    def save_chapter_rewrite_attempt(
+        self,
+        *,
+        project_id: str,
+        chapter_number: int,
+        attempt_no: int,
+        trigger_review_id: str,
+        repair_scope: str,
+        design_patch: dict[str, object],
+        source_draft_id: str,
+        result_draft_id: str,
+        result_verdict: str,
+        forced_accept_applied: bool,
+    ) -> ChapterRewriteAttempt:
+        row = ChapterRewriteAttempt(
+            id=new_id(),
+            project_id=project_id,
+            chapter_number=chapter_number,
+            attempt_no=attempt_no,
+            trigger_review_id=trigger_review_id,
+            repair_scope=repair_scope,
+            design_patch_json=json.dumps(design_patch, ensure_ascii=False),
+            source_draft_id=source_draft_id,
+            result_draft_id=result_draft_id,
+            result_verdict=result_verdict,
+            forced_accept_applied=forced_accept_applied,
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
 
     # ------------------------------------------------------------------
     # Chapter status

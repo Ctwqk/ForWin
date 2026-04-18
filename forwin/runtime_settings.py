@@ -20,6 +20,13 @@ class RuntimeSettingsStore:
         default_model: str = DEFAULT_MINIMAX_MODEL,
         default_operation_mode: str = "blackbox",
         default_freeze_failed_candidates: bool = True,
+        default_min_chapter_chars: int = 2500,
+        default_review_interval_chapters: int = 0,
+        default_progression_mode: str = "serial_canon_band_guard",
+        default_auto_band_checkpoint: bool = True,
+        default_band_warn_action: str = "pause",
+        default_manual_checkpoints_enabled: bool = True,
+        default_future_constraints_enabled: bool = True,
     ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,12 +43,50 @@ class RuntimeSettingsStore:
             "default_profile_id": self._default_profile["id"],
             "operation_mode": default_operation_mode,
             "freeze_failed_candidates": default_freeze_failed_candidates,
+            "min_chapter_chars": self._normalize_min_chapter_chars(default_min_chapter_chars, fallback=2500),
+            "review_interval_chapters": self._normalize_review_interval(
+                default_review_interval_chapters,
+                fallback=0,
+            ),
+            "progression_mode": self._normalize_progression_mode(default_progression_mode),
+            "auto_band_checkpoint": bool(default_auto_band_checkpoint),
+            "band_warn_action": self._normalize_band_warn_action(default_band_warn_action),
+            "manual_checkpoints_enabled": bool(default_manual_checkpoints_enabled),
+            "future_constraints_enabled": bool(default_future_constraints_enabled),
         }
         self._cache: dict[str, object] | None = None
 
     @staticmethod
     def _clone(payload: dict[str, object]) -> dict[str, object]:
         return json.loads(json.dumps(payload, ensure_ascii=False))
+
+    @staticmethod
+    def _normalize_min_chapter_chars(value: object, *, fallback: int) -> int:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            normalized = int(fallback)
+        return max(500, min(normalized, 50000))
+
+    @staticmethod
+    def _normalize_review_interval(value: object, *, fallback: int) -> int:
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            normalized = int(fallback)
+        return max(0, min(normalized, 200))
+
+    @staticmethod
+    def _normalize_progression_mode(value: object) -> str:
+        normalized = str(value or "").strip()
+        if normalized in {"legacy_relaxed", "serial_canon", "serial_canon_band_guard"}:
+            return normalized
+        return "serial_canon_band_guard"
+
+    @staticmethod
+    def _normalize_band_warn_action(value: object) -> str:
+        normalized = str(value or "").strip()
+        return "pause" if normalized != "pause" else normalized
 
     def _normalize_profile(self, raw: object, fallback_name: str) -> dict[str, str]:
         data = raw if isinstance(raw, dict) else {}
@@ -124,12 +169,36 @@ class RuntimeSettingsStore:
                 raw = json.loads(self.path.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 raw = {}
-            profiles, default_profile_id = self._normalize_profiles(raw if isinstance(raw, dict) else {})
+            raw = raw if isinstance(raw, dict) else {}
+            profiles, default_profile_id = self._normalize_profiles(raw)
             payload["profiles"] = profiles
             payload["default_profile_id"] = default_profile_id
             payload["operation_mode"] = str(raw.get("operation_mode", payload["operation_mode"]))
             payload["freeze_failed_candidates"] = bool(
                 raw.get("freeze_failed_candidates", payload["freeze_failed_candidates"])
+            )
+            payload["min_chapter_chars"] = self._normalize_min_chapter_chars(
+                raw.get("min_chapter_chars", payload["min_chapter_chars"]),
+                fallback=int(payload["min_chapter_chars"]),
+            )
+            payload["review_interval_chapters"] = self._normalize_review_interval(
+                raw.get("review_interval_chapters", payload["review_interval_chapters"]),
+                fallback=int(payload["review_interval_chapters"]),
+            )
+            payload["progression_mode"] = self._normalize_progression_mode(
+                raw.get("progression_mode", payload["progression_mode"])
+            )
+            payload["auto_band_checkpoint"] = bool(
+                raw.get("auto_band_checkpoint", payload["auto_band_checkpoint"])
+            )
+            payload["band_warn_action"] = self._normalize_band_warn_action(
+                raw.get("band_warn_action", payload["band_warn_action"])
+            )
+            payload["manual_checkpoints_enabled"] = bool(
+                raw.get("manual_checkpoints_enabled", payload["manual_checkpoints_enabled"])
+            )
+            payload["future_constraints_enabled"] = bool(
+                raw.get("future_constraints_enabled", payload["future_constraints_enabled"])
             )
         payload = self._with_selected_profile(payload)
         self._cache = self._clone(payload)
@@ -148,6 +217,13 @@ class RuntimeSettingsStore:
         profile_id: str | None = None,
         operation_mode: str | None = None,
         freeze_failed_candidates: bool | None = None,
+        min_chapter_chars: int | None = None,
+        review_interval_chapters: int | None = None,
+        progression_mode: str | None = None,
+        auto_band_checkpoint: bool | None = None,
+        band_warn_action: str | None = None,
+        manual_checkpoints_enabled: bool | None = None,
+        future_constraints_enabled: bool | None = None,
     ) -> dict[str, object]:
         with self._lock:
             payload = self._load_unlocked()
@@ -175,6 +251,26 @@ class RuntimeSettingsStore:
                 payload["operation_mode"] = operation_mode.strip() or self._defaults["operation_mode"]
             if freeze_failed_candidates is not None:
                 payload["freeze_failed_candidates"] = bool(freeze_failed_candidates)
+            if min_chapter_chars is not None:
+                payload["min_chapter_chars"] = self._normalize_min_chapter_chars(
+                    min_chapter_chars,
+                    fallback=int(self._defaults["min_chapter_chars"]),
+                )
+            if review_interval_chapters is not None:
+                payload["review_interval_chapters"] = self._normalize_review_interval(
+                    review_interval_chapters,
+                    fallback=int(self._defaults["review_interval_chapters"]),
+                )
+            if progression_mode is not None:
+                payload["progression_mode"] = self._normalize_progression_mode(progression_mode)
+            if auto_band_checkpoint is not None:
+                payload["auto_band_checkpoint"] = bool(auto_band_checkpoint)
+            if band_warn_action is not None:
+                payload["band_warn_action"] = self._normalize_band_warn_action(band_warn_action)
+            if manual_checkpoints_enabled is not None:
+                payload["manual_checkpoints_enabled"] = bool(manual_checkpoints_enabled)
+            if future_constraints_enabled is not None:
+                payload["future_constraints_enabled"] = bool(future_constraints_enabled)
             return self._persist_unlocked(payload)
 
     def save_profile(

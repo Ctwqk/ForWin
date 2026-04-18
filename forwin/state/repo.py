@@ -4,32 +4,59 @@ import json
 import logging
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from forwin.audience_metrics import derive_audience_trends
+from forwin.governance import (
+    DecisionEventInfo,
+    NarrativeConstraintInfo,
+    NextBandSummary,
+    PlanTaskItem,
+    load_plan_task_contract,
+    normalize_project_governance,
+)
 from forwin.models import (
     ArcEnvelope,
     ArcPlanVersion,
+    ArcStructureDraft,
+    BandCheckpoint,
+    BandExperiencePlan,
+    CanonEvent,
     ChapterDraft,
     ChapterPlan,
+    ChapterReview,
+    ChapterRewriteAttempt,
+    DecisionEvent,
     Entity,
     EntityAlias,
+    EventEntityLink,
     FeedbackActionRecord,
+    NarrativeConstraint,
     NPCIntentSnapshot,
     PlotThread,
     Project,
+    PublisherRawComment,
     ReaderScaleSnapshot,
     RelationEdge,
+    SignalWindowAggregate,
     StoryTimePoint,
     WorldSimulationTurn,
 )
 from forwin.protocol import (
+    ArcPayoffMap,
+    AudienceTrendView,
+    BandDelightSchedule,
+    CanonEventEvidence,
+    ChapterExperiencePlan,
     EntitySnapshot,
     NPCIntentView,
     PlotThreadSnapshot,
+    ReaderPromise,
     ReaderCommentView,
     ReaderFeedbackView,
     RelationSnapshot,
+    ReviewNote,
     SignalSummaryView,
     TimelineSnapshot,
     WorldPressureView,
@@ -40,6 +67,87 @@ from forwin.state.query_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+_READER_FEEDBACK_LEVEL_ORDER = {
+    "noise": 0,
+    "candidate": 1,
+    "watchlist": 2,
+    "confirmed": 3,
+}
+_READER_FEEDBACK_SIGNAL_PRIORITY = {
+    "risk": 3,
+    "confusion": 2,
+    "prediction": 2,
+    "pacing": 1,
+    "relationship_interest": 1,
+    "character_heat": 0,
+}
+_READER_FEEDBACK_WINDOW_PRIORITY = {
+    "short": 0,
+    "medium": 1,
+    "long": 2,
+}
+_POSITIVE_COMMENT_KEYWORDS = ("喜欢", "精彩", "好看", "期待", "爽", "牛", "神")
+_NEGATIVE_COMMENT_KEYWORDS = ("水", "拖", "崩", "失望", "弃", "烂", "短", "乱")
+_QUESTION_COMMENT_KEYWORDS = ("为什么", "怎么", "是不是", "会不会", "求", "能不能")
+
+
+def _load_json_object(raw: str, default):
+    try:
+        return json.loads(raw or "")
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
+def _reader_feedback_target_label(target_name: str) -> str:
+    return str(target_name or "").strip() or "整体"
+
+
+def _reader_feedback_sort_key(row: SignalWindowAggregate) -> tuple[int, int, int, int, str]:
+    level = str(row.signal_level or "noise")
+    signal_type = str(row.signal_type or "")
+    boost = 2 if signal_type == "risk" and level in {"watchlist", "confirmed"} else 0
+    return (
+        _READER_FEEDBACK_LEVEL_ORDER.get(level, 0) + boost,
+        _READER_FEEDBACK_SIGNAL_PRIORITY.get(signal_type, 0),
+        int(row.max_severity or 0),
+        int(row.hit_comment_count or 0),
+        _reader_feedback_target_label(str(row.target_name or "")),
+    )
+
+
+def _keyword_dominant_sentiment(comments: list[PublisherRawComment]) -> str:
+    positive = 0
+    negative = 0
+    curious = 0
+    for comment in comments:
+        text = str(comment.body_text or "")
+        if any(keyword in text for keyword in _POSITIVE_COMMENT_KEYWORDS):
+            positive += 1
+        if any(keyword in text for keyword in _NEGATIVE_COMMENT_KEYWORDS):
+            negative += 1
+        if any(keyword in text for keyword in _QUESTION_COMMENT_KEYWORDS):
+            curious += 1
+    if negative > max(positive, curious):
+        return "negative"
+    if positive > max(negative, curious):
+        return "positive"
+    if curious:
+        return "curious"
+    return "neutral"
+
+
+def _keyword_feedback_summary(comment_count: int, dominant_sentiment: str) -> str:
+    summary_parts = [f"最近 {comment_count} 条评论"]
+    if dominant_sentiment == "negative":
+        summary_parts.append("整体情绪偏担忧")
+    elif dominant_sentiment == "positive":
+        summary_parts.append("整体情绪偏积极")
+    elif dominant_sentiment == "curious":
+        summary_parts.append("读者对悬念追问较多")
+    else:
+        summary_parts.append("暂无明确结构化信号")
+    return "，".join(summary_parts) + "。"
 
 
 class _AudienceHintData:
@@ -101,6 +209,39 @@ class StateRepository:
         )
         return self.session.execute(stmt).scalar_one_or_none()
 
+    def get_latest_arc_structure_draft(self, project_id: str) -> ArcStructureDraft | None:
+        active_arc = self.get_active_arc_plan(project_id)
+        if active_arc is None:
+            return None
+        stmt = (
+            select(ArcStructureDraft)
+            .where(
+                ArcStructureDraft.project_id == project_id,
+                ArcStructureDraft.arc_id == active_arc.id,
+            )
+            .order_by(ArcStructureDraft.created_at.desc())
+            .limit(1)
+        )
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def get_reader_promise(self, project_id: str) -> ReaderPromise | None:
+        structure = self.get_latest_arc_structure_draft(project_id)
+        if structure is None:
+            return None
+        payload = _load_json_object(structure.reader_promise_json, {})
+        if not isinstance(payload, dict) or not payload:
+            return None
+        return ReaderPromise.model_validate(payload)
+
+    def get_arc_payoff_map(self, project_id: str) -> ArcPayoffMap | None:
+        structure = self.get_latest_arc_structure_draft(project_id)
+        if structure is None:
+            return None
+        payload = _load_json_object(structure.arc_payoff_map_json, {})
+        if not isinstance(payload, dict) or not payload:
+            return None
+        return ArcPayoffMap.model_validate(payload)
+
     # ------------------------------------------------------------------
     # Chapter Plan
     # ------------------------------------------------------------------
@@ -114,6 +255,282 @@ class StateRepository:
             ChapterPlan.chapter_number == chapter_number,
         )
         return self.session.execute(stmt).scalar_one_or_none()
+
+    def get_chapter_experience_plan(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> ChapterExperiencePlan | None:
+        plan = self.get_chapter_plan(project_id, chapter_number)
+        if plan is None:
+            return None
+        payload = _load_json_object(plan.experience_plan_json, {})
+        if not isinstance(payload, dict):
+            return None
+        return ChapterExperiencePlan.model_validate(payload)
+
+    def get_chapter_task_contract(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> list[PlanTaskItem]:
+        plan = self.get_chapter_plan(project_id, chapter_number)
+        if plan is None:
+            return []
+        return load_plan_task_contract(getattr(plan, "task_contract_json", "[]"))
+
+    def get_band_row_for_chapter(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> BandExperiencePlan | None:
+        active_arc = self.get_active_arc_plan(project_id)
+        if active_arc is None:
+            return None
+        return self.session.execute(
+            select(BandExperiencePlan)
+            .where(
+                BandExperiencePlan.project_id == project_id,
+                BandExperiencePlan.arc_id == active_arc.id,
+                BandExperiencePlan.chapter_start <= chapter_number,
+                BandExperiencePlan.chapter_end >= chapter_number,
+            )
+            .order_by(BandExperiencePlan.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+    def get_band_experience_plan_for_chapter(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> BandDelightSchedule | None:
+        row = self.get_band_row_for_chapter(project_id, chapter_number)
+        if row is None:
+            return None
+        payload = _load_json_object(row.schedule_json, {})
+        if not isinstance(payload, dict):
+            return None
+        return BandDelightSchedule.model_validate(payload)
+
+    def get_band_task_contract_for_chapter(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> list[PlanTaskItem]:
+        row = self.get_band_row_for_chapter(project_id, chapter_number)
+        if row is None:
+            return []
+        return load_plan_task_contract(getattr(row, "task_contract_json", "[]"))
+
+    def get_next_band_summary(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> NextBandSummary | None:
+        active_arc = self.get_active_arc_plan(project_id)
+        if active_arc is None:
+            return None
+        row = self.session.execute(
+            select(BandExperiencePlan)
+            .where(
+                BandExperiencePlan.project_id == project_id,
+                BandExperiencePlan.arc_id == active_arc.id,
+                BandExperiencePlan.chapter_start > chapter_number,
+            )
+            .order_by(BandExperiencePlan.chapter_start.asc(), BandExperiencePlan.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        plans = self.session.execute(
+            select(ChapterPlan)
+            .where(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number >= row.chapter_start,
+                ChapterPlan.chapter_number <= row.chapter_end,
+            )
+            .order_by(ChapterPlan.chapter_number.asc())
+        ).scalars().all()
+        return NextBandSummary(
+            band_id=row.band_id,
+            chapter_start=row.chapter_start,
+            chapter_end=row.chapter_end,
+            chapter_titles=[str(plan.title or "") for plan in plans if str(plan.title or "").strip()],
+            band_task_contract=load_plan_task_contract(getattr(row, "task_contract_json", "[]")),
+        )
+
+    def get_latest_band_checkpoint(
+        self,
+        project_id: str,
+        *,
+        band_id: str,
+    ) -> BandCheckpoint | None:
+        return self.session.execute(
+            select(BandCheckpoint)
+            .where(
+                BandCheckpoint.project_id == project_id,
+                BandCheckpoint.band_id == band_id,
+            )
+            .order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+
+    def list_band_checkpoints(
+        self,
+        project_id: str,
+        *,
+        band_id: str = "",
+        status: str = "",
+    ) -> list[BandCheckpoint]:
+        stmt = select(BandCheckpoint).where(BandCheckpoint.project_id == project_id)
+        if band_id:
+            stmt = stmt.where(BandCheckpoint.band_id == band_id)
+        if status:
+            stmt = stmt.where(BandCheckpoint.status == status)
+        return list(
+            self.session.execute(
+                stmt.order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
+            ).scalars().all()
+        )
+
+    def list_chapter_rewrite_attempts(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> list[ChapterRewriteAttempt]:
+        return self.session.execute(
+            select(ChapterRewriteAttempt)
+            .where(
+                ChapterRewriteAttempt.project_id == project_id,
+                ChapterRewriteAttempt.chapter_number == chapter_number,
+            )
+            .order_by(ChapterRewriteAttempt.attempt_no.asc(), ChapterRewriteAttempt.created_at.asc())
+        ).scalars().all()
+
+    def get_recent_canon_events(
+        self,
+        project_id: str,
+        *,
+        before_chapter: int,
+        entity_names: list[str] | None = None,
+        thread_names: list[str] | None = None,
+        limit: int = 5,
+    ) -> list[CanonEventEvidence]:
+        rows = self.session.execute(
+            select(CanonEvent)
+            .where(
+                CanonEvent.project_id == project_id,
+                CanonEvent.chapter_number < before_chapter,
+            )
+            .order_by(CanonEvent.chapter_number.desc(), CanonEvent.created_at.desc())
+            .limit(max(limit * 4, limit))
+        ).scalars().all()
+        if not rows:
+            return []
+        event_ids = [row.id for row in rows]
+        link_rows = self.session.execute(
+            select(EventEntityLink.event_id, Entity.name)
+            .join(Entity, Entity.id == EventEntityLink.entity_id)
+            .where(EventEntityLink.event_id.in_(event_ids))
+        ).all()
+        names_by_event: dict[str, list[str]] = {}
+        for event_id, entity_name in link_rows:
+            names_by_event.setdefault(event_id, []).append(entity_name)
+
+        entity_set = {str(item).strip() for item in (entity_names or []) if str(item).strip()}
+        thread_set = {str(item).strip() for item in (thread_names or []) if str(item).strip()}
+        ranked: list[tuple[float, CanonEventEvidence]] = []
+        for row in rows:
+            involved_names = names_by_event.get(row.id, [])
+            overlap_score = float(len(entity_set & set(involved_names))) * 3.0
+            thread_score = float(
+                sum(1 for thread_name in thread_set if thread_name in row.summary)
+            ) * 2.0
+            recency_score = max(0.0, 10.0 - float(before_chapter - row.chapter_number))
+            ranked.append(
+                (
+                    overlap_score + thread_score + recency_score,
+                    CanonEventEvidence(
+                        event_id=row.id,
+                        chapter_number=row.chapter_number,
+                        summary=row.summary,
+                        significance=row.significance,
+                        involved_entity_names=involved_names,
+                        evidence_id=f"canon_event:{row.id}",
+                    ),
+                )
+            )
+        ranked.sort(key=lambda item: (-item[0], -item[1].chapter_number, item[1].event_id))
+        return [event for _, event in ranked[:limit]]
+
+    def get_recent_review_notes(
+        self,
+        project_id: str,
+        *,
+        before_chapter: int,
+        band_start: int | None = None,
+        band_end: int | None = None,
+        limit: int = 5,
+    ) -> list[ReviewNote]:
+        rows = self.session.execute(
+            select(ChapterReview, ChapterDraft, ChapterPlan)
+            .join(ChapterDraft, ChapterDraft.id == ChapterReview.draft_id)
+            .join(ChapterPlan, ChapterPlan.id == ChapterDraft.chapter_plan_id)
+            .where(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number < before_chapter,
+            )
+            .order_by(ChapterPlan.chapter_number.desc(), ChapterReview.created_at.desc())
+        ).all()
+        notes: list[ReviewNote] = []
+        seen_chapters: set[int] = set()
+        for review, draft, plan in rows:
+            chapter_number = int(plan.chapter_number)
+            if chapter_number in seen_chapters:
+                continue
+            if band_start is not None and chapter_number < band_start:
+                continue
+            if band_end is not None and chapter_number > band_end:
+                continue
+            meta = _load_json_object(review.review_meta_json, {})
+            if not isinstance(meta, dict):
+                meta = {}
+            notes.append(
+                ReviewNote(
+                    chapter_number=chapter_number,
+                    verdict=str(review.verdict or ""),
+                    summary=str(meta.get("review_summary") or draft.summary or ""),
+                    issue_types=[
+                        str(item.get("issue_type") or item.get("rule_name") or "")
+                        for item in _load_json_object(review.issues_json, [])
+                        if isinstance(item, dict)
+                    ],
+                    planned_reward_tags=[
+                        str(item)
+                        for item in (meta.get("planned_reward_tags") or [])
+                        if str(item).strip()
+                    ],
+                    delivered_reward_tags=[
+                        str(item)
+                        for item in (meta.get("delivered_reward_tags") or [])
+                        if str(item).strip()
+                    ],
+                    review_notes=[
+                        str(item)
+                        for item in (meta.get("review_notes") or [])
+                        if str(item).strip()
+                    ],
+                    evidence_refs=[
+                        str(item)
+                        for item in (meta.get("evidence_refs") or [])
+                        if str(item).strip()
+                    ],
+                )
+            )
+            seen_chapters.add(chapter_number)
+            if len(notes) >= limit:
+                break
+        return notes
 
     # ------------------------------------------------------------------
     # Entities
@@ -175,6 +592,13 @@ class StateRepository:
             )
 
         return snapshots
+
+    def get_active_rule_entities(self, project_id: str) -> list[EntitySnapshot]:
+        return [
+            entity
+            for entity in self.get_active_entities(project_id)
+            if entity.kind == "rule"
+        ]
 
     # ------------------------------------------------------------------
     # Relations
@@ -249,6 +673,123 @@ class StateRepository:
             )
 
         return snapshots
+
+    def list_active_narrative_constraints(
+        self,
+        project_id: str,
+        *,
+        chapter_number: int,
+    ) -> list[NarrativeConstraintInfo]:
+        rows = self.session.execute(
+            select(NarrativeConstraint)
+            .where(
+                NarrativeConstraint.project_id == project_id,
+                NarrativeConstraint.status == "active",
+                NarrativeConstraint.effective_from_chapter <= chapter_number,
+                or_(
+                    NarrativeConstraint.protect_until_chapter == 0,
+                    NarrativeConstraint.protect_until_chapter >= chapter_number,
+                ),
+            )
+            .order_by(
+                NarrativeConstraint.level.asc(),
+                NarrativeConstraint.protect_until_chapter.desc(),
+                NarrativeConstraint.created_at.desc(),
+            )
+        ).scalars().all()
+        return [
+            NarrativeConstraintInfo(
+                id=row.id,
+                project_id=row.project_id,
+                arc_id=row.arc_id,
+                band_id=row.band_id,
+                constraint_type=row.constraint_type,
+                level=row.level,
+                subject_name=row.subject_name,
+                description=row.description,
+                payload=_load_json_object(row.payload_json, {}),
+                effective_from_chapter=row.effective_from_chapter,
+                protect_until_chapter=row.protect_until_chapter,
+                status=row.status,
+            )
+            for row in rows
+        ]
+
+    def future_constraints_enabled(self, project_id: str) -> bool:
+        project = self.session.get(Project, project_id)
+        if project is None:
+            return False
+        return bool(normalize_project_governance(getattr(project, "governance_json", "") or "").future_constraints_enabled)
+
+    def list_narrative_constraints(
+        self,
+        project_id: str,
+    ) -> list[NarrativeConstraint]:
+        return list(
+            self.session.execute(
+                select(NarrativeConstraint)
+                .where(NarrativeConstraint.project_id == project_id)
+                .order_by(NarrativeConstraint.created_at.desc(), NarrativeConstraint.id.desc())
+            ).scalars().all()
+        )
+
+    def list_decision_events(
+        self,
+        project_id: str,
+        *,
+        scope: str = "",
+        band_id: str = "",
+        chapter_number: int = 0,
+        task_id: str = "",
+        event_family: str = "",
+        related_object_type: str = "",
+        related_object_id: str = "",
+        causal_root_id: str = "",
+        limit: int = 50,
+    ) -> list[DecisionEventInfo]:
+        stmt = select(DecisionEvent).where(DecisionEvent.project_id == project_id)
+        if scope:
+            stmt = stmt.where(DecisionEvent.scope == scope)
+        if band_id:
+            stmt = stmt.where(DecisionEvent.band_id == band_id)
+        if chapter_number > 0:
+            stmt = stmt.where(DecisionEvent.chapter_number == chapter_number)
+        if task_id:
+            stmt = stmt.where(DecisionEvent.task_id == task_id)
+        if event_family:
+            stmt = stmt.where(DecisionEvent.event_family == event_family)
+        if related_object_type:
+            stmt = stmt.where(DecisionEvent.related_object_type == related_object_type)
+        if related_object_id:
+            stmt = stmt.where(DecisionEvent.related_object_id == related_object_id)
+        if causal_root_id:
+            stmt = stmt.where(DecisionEvent.causal_root_id == causal_root_id)
+        rows = self.session.execute(
+            stmt.order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc()).limit(max(1, limit))
+        ).scalars().all()
+        return [
+            DecisionEventInfo(
+                id=row.id,
+                project_id=row.project_id,
+                task_id=row.task_id,
+                band_id=row.band_id,
+                chapter_number=row.chapter_number,
+                scope=row.scope,
+                event_family=row.event_family,
+                event_type=row.event_type,
+                actor_type=row.actor_type,
+                actor_id=row.actor_id,
+                summary=row.summary,
+                reason=row.reason,
+                payload=_load_json_object(row.payload_json, {}),
+                related_object_type=row.related_object_type,
+                related_object_id=row.related_object_id,
+                parent_event_id=str(getattr(row, "parent_event_id", "") or ""),
+                causal_root_id=str(getattr(row, "causal_root_id", "") or ""),
+                created_at=row.created_at.isoformat() if row.created_at else "",
+            )
+            for row in rows
+        ]
 
     # ------------------------------------------------------------------
     # Chapter summaries
@@ -370,17 +911,96 @@ class StateRepository:
         work_name = str(project.title or "").strip()
         if not work_name:
             return None
-        from forwin.orchestrator.comment_analysis import build_reader_feedback_snapshot
 
-        snapshot = build_reader_feedback_snapshot(
-            self.session,
-            work_name,
-            project_id=project_id,
-            before_chapter=before_chapter,
-            limit=limit,
-            analyze_missing=False,
+        allowed_chapter_titles = self.session.execute(
+            select(ChapterPlan.title)
+            .where(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number < before_chapter,
+            )
+            .order_by(ChapterPlan.chapter_number.desc())
+        ).scalars().all()
+        normalized_allowed_titles = {
+            str(item).strip()
+            for item in allowed_chapter_titles
+            if str(item).strip()
+        }
+        has_project_scoped_comments = bool(
+            self.session.execute(
+                select(func.count(PublisherRawComment.id)).where(
+                    PublisherRawComment.project_id == project_id
+                )
+            ).scalar_one()
         )
-        if not snapshot["recent_comments"] and snapshot["comment_count"] <= 0:
+
+        comments_stmt = select(PublisherRawComment)
+        if has_project_scoped_comments:
+            comments_stmt = comments_stmt.where(PublisherRawComment.project_id == project_id)
+        else:
+            comments_stmt = comments_stmt.where(
+                or_(
+                    PublisherRawComment.project_id == project_id,
+                    PublisherRawComment.project_id == "",
+                ),
+                PublisherRawComment.work_name == work_name,
+            )
+        if normalized_allowed_titles:
+            comments_stmt = comments_stmt.where(
+                or_(
+                    PublisherRawComment.chapter_title.in_(sorted(normalized_allowed_titles)),
+                    PublisherRawComment.chapter_title == "",
+                )
+            )
+        recent_comments = self.session.execute(
+            comments_stmt
+            .order_by(PublisherRawComment.synced_at.desc(), PublisherRawComment.updated_at.desc())
+            .limit(limit)
+        ).scalars().all()
+
+        aggregate_rows = self.session.execute(
+            select(SignalWindowAggregate)
+            .where(
+                SignalWindowAggregate.project_id == project_id,
+                SignalWindowAggregate.window_chapter_end < before_chapter,
+            )
+            .order_by(SignalWindowAggregate.window_chapter_end.desc())
+        ).scalars().all()
+        structured_snapshot: list[SignalWindowAggregate] = []
+        if aggregate_rows:
+            anchor_row = sorted(
+                aggregate_rows,
+                key=lambda row: (
+                    int(row.window_chapter_end or 0),
+                    -_READER_FEEDBACK_WINDOW_PRIORITY.get(str(row.window_type or ""), 99),
+                ),
+                reverse=True,
+            )[0]
+            structured_snapshot = [
+                row
+                for row in aggregate_rows
+                if row.window_chapter_end == anchor_row.window_chapter_end
+                and row.window_type == anchor_row.window_type
+            ]
+
+        structured_signals = sorted(
+            [
+                row
+                for row in structured_snapshot
+                if str(row.signal_level or "noise") != "noise"
+            ],
+            key=_reader_feedback_sort_key,
+            reverse=True,
+        )
+
+        comment_count = (
+            max(
+                len(recent_comments),
+                max((int(row.total_comment_count or 0) for row in structured_snapshot), default=0),
+            )
+            if structured_snapshot
+            else len(recent_comments)
+        )
+        if not recent_comments and comment_count <= 0 and not structured_signals:
             return None
         highlights = [
             ReaderCommentView(
@@ -390,19 +1010,48 @@ class StateRepository:
                 chapter_title=row.chapter_title,
                 remote_created_at=row.remote_created_at,
             )
-            for row in snapshot["recent_comments"]
+            for row in recent_comments[:4]
         ]
-        confirmed_signals = [
-            SignalSummaryView(
-                signal_key=str(item.get("signal_key") or ""),
-                signal_type=str(item.get("signal_type") or ""),
-                target_name=str(item.get("target_name") or ""),
-                level=str(item.get("level") or "noise"),
-                hit_count=int(item.get("hit_count") or 0),
-                max_severity=int(item.get("max_severity") or 0),
-            )
-            for item in snapshot["confirmed_signals"]
-        ]
+        if structured_signals:
+            dominant = structured_signals[0]
+            dominant_sentiment = f"{dominant.signal_type}:{dominant.signal_level}"
+            highlighted_topics = [
+                f"{_reader_feedback_target_label(str(row.target_name or ''))}:{row.signal_type}:{row.signal_level}"
+                for row in structured_signals[:3]
+            ]
+            confirmed_signals = [
+                SignalSummaryView(
+                    signal_key=str(row.signal_key or ""),
+                    signal_type=str(row.signal_type or ""),
+                    target_name=str(row.target_name or ""),
+                    level=str(row.signal_level or "noise"),
+                    hit_count=int(row.hit_comment_count or 0),
+                    max_severity=int(row.max_severity or 0),
+                )
+                for row in structured_signals
+                if str(row.signal_level or "noise") in {"confirmed", "watchlist"}
+            ][:6]
+            summary_parts = [
+                f"最近 {comment_count} 条评论",
+                "主导信号："
+                f"{_reader_feedback_target_label(str(dominant.target_name or ''))}:"
+                f"{dominant.signal_type}:{dominant.signal_level}",
+            ]
+            if len(structured_signals) > 1:
+                summary_parts.append(
+                    "关注点："
+                    + "、".join(
+                        f"{_reader_feedback_target_label(str(row.target_name or ''))}:"
+                        f"{row.signal_type}:{row.signal_level}"
+                        for row in structured_signals[:3]
+                    )
+                )
+            feedback_summary = "，".join(summary_parts) + "。"
+        else:
+            dominant_sentiment = _keyword_dominant_sentiment(recent_comments)
+            highlighted_topics = []
+            confirmed_signals = []
+            feedback_summary = _keyword_feedback_summary(comment_count, dominant_sentiment)
 
         # ── Load reader tier from latest snapshot ──
         reader_tier = 0
@@ -416,13 +1065,40 @@ class StateRepository:
             reader_tier = scale_row.tier
 
         return ReaderFeedbackView(
-            comment_count=int(snapshot["comment_count"]),
-            dominant_sentiment=str(snapshot["dominant_sentiment"] or "neutral"),
-            feedback_summary=str(snapshot["feedback_summary"] or ""),
+            comment_count=int(comment_count),
+            dominant_sentiment=str(dominant_sentiment or "neutral"),
+            feedback_summary=str(feedback_summary or ""),
             recent_highlights=highlights[:4],
-            highlighted_topics=list(snapshot["highlighted_topics"]),
+            highlighted_topics=highlighted_topics,
             confirmed_signals=confirmed_signals,
             reader_tier=reader_tier,
+        )
+
+    def get_audience_trends(
+        self,
+        project_id: str,
+        before_chapter: int,
+        *,
+        window_type: str = "long",
+        limit: int = 6,
+    ) -> list[AudienceTrendView]:
+        rows = self.session.execute(
+            select(SignalWindowAggregate)
+            .where(
+                SignalWindowAggregate.project_id == project_id,
+                SignalWindowAggregate.window_chapter_end < before_chapter,
+            )
+            .order_by(
+                SignalWindowAggregate.window_chapter_end.desc(),
+                SignalWindowAggregate.created_at.desc(),
+            )
+        ).scalars().all()
+        if not rows:
+            return []
+        return derive_audience_trends(
+            rows,
+            window_type=window_type,
+            limit=limit,
         )
 
     # ------------------------------------------------------------------
@@ -461,7 +1137,7 @@ class StateRepository:
                 pacing.append(note)
             elif rec.signal_type == "confusion":
                 clarity.append(note)
-            elif rec.signal_type == "character_heat":
+            elif rec.signal_type in {"character_heat", "relationship_interest"}:
                 heat.append(note)
             elif rec.signal_type == "risk":
                 risk.append(note)

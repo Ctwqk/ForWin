@@ -64,22 +64,70 @@ def assemble_context(
         if callable(world_pressure_getter)
         else None
     )
-    reader_feedback_getter = getattr(repo, "get_recent_reader_feedback", None)
-    reader_feedback = (
-        reader_feedback_getter(project_id, before_chapter=chapter_plan.chapter_number)
-        if callable(reader_feedback_getter)
-        else None
-    )
     arc_envelope_getter = getattr(repo, "get_active_arc_envelope", None)
     arc_envelope_row = (
         arc_envelope_getter(project_id)
         if callable(arc_envelope_getter)
         else None
     )
+    reader_promise_getter = getattr(repo, "get_reader_promise", None)
+    reader_promise = (
+        reader_promise_getter(project_id)
+        if callable(reader_promise_getter)
+        else None
+    )
+    arc_payoff_map_getter = getattr(repo, "get_arc_payoff_map", None)
+    arc_payoff_map = (
+        arc_payoff_map_getter(project_id)
+        if callable(arc_payoff_map_getter)
+        else None
+    )
+    band_schedule_getter = getattr(repo, "get_band_experience_plan_for_chapter", None)
+    band_schedule = (
+        band_schedule_getter(project_id, chapter_plan.chapter_number)
+        if callable(band_schedule_getter)
+        else None
+    )
+    chapter_experience_getter = getattr(repo, "get_chapter_experience_plan", None)
+    chapter_experience_plan = (
+        chapter_experience_getter(project_id, chapter_plan.chapter_number)
+        if callable(chapter_experience_getter)
+        else None
+    )
     audience_hints_getter = getattr(repo, "get_audience_hints", None)
     audience_hints_raw = (
         audience_hints_getter(project_id, before_chapter=chapter_plan.chapter_number)
         if callable(audience_hints_getter)
+        else None
+    )
+    chapter_task_contract_getter = getattr(repo, "get_chapter_task_contract", None)
+    chapter_task_contract = (
+        chapter_task_contract_getter(project_id, chapter_plan.chapter_number)
+        if callable(chapter_task_contract_getter)
+        else []
+    )
+    band_task_contract_getter = getattr(repo, "get_band_task_contract_for_chapter", None)
+    band_task_contract = (
+        band_task_contract_getter(project_id, chapter_plan.chapter_number)
+        if callable(band_task_contract_getter)
+        else []
+    )
+    constraints_enabled_getter = getattr(repo, "future_constraints_enabled", None)
+    constraints_enabled = (
+        bool(constraints_enabled_getter(project_id))
+        if callable(constraints_enabled_getter)
+        else True
+    )
+    active_constraints_getter = getattr(repo, "list_active_narrative_constraints", None)
+    active_constraints = (
+        active_constraints_getter(project_id, chapter_number=chapter_plan.chapter_number)
+        if constraints_enabled and callable(active_constraints_getter)
+        else []
+    )
+    next_band_summary_getter = getattr(repo, "get_next_band_summary", None)
+    next_band_summary = (
+        next_band_summary_getter(project_id, chapter_plan.chapter_number)
+        if callable(next_band_summary_getter)
         else None
     )
 
@@ -107,7 +155,7 @@ def assemble_context(
         timeline=timeline,
         npc_intents=npc_intents,
         world_pressure=world_pressure,
-        reader_feedback=reader_feedback,
+        reader_feedback=None,
         current_arc_envelope=(
             ArcEnvelopeView(
                 source_policy_tier=arc_envelope_row.source_policy_tier,
@@ -135,4 +183,12 @@ def assemble_context(
             if audience_hints_raw is not None
             else None
         ),
+        reader_promise=reader_promise,
+        arc_payoff_map=arc_payoff_map,
+        band_delight_schedule=band_schedule,
+        chapter_experience_plan=chapter_experience_plan,
+        chapter_task_contract=chapter_task_contract,
+        band_task_contract=band_task_contract,
+        active_future_constraints=active_constraints,
+        next_band_summary=next_band_summary,
     )

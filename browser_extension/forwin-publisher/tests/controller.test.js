@@ -95,8 +95,31 @@ test('controller opens login popup and closes it after successful tab update', a
 
   await controller.handleTabUpdated(42, { url: 'https://write.qq.com/portal/dashboard' }, { id: 42 });
 
-  assert.equal(events.length >= 2, true);
+  assert.equal(events.length, 2);
   assert.equal(events.at(-1).payload.connected, true);
+});
+
+test('controller dispatches upload and comment jobs after successful login confirmation', async () => {
+  const { controller } = makeController();
+  let uploadDispatches = 0;
+  let commentDispatches = 0;
+  controller.dispatchPendingUploadJobs = async () => {
+    uploadDispatches += 1;
+    return { found: false };
+  };
+  controller.dispatchPendingCommentSyncJobs = async () => {
+    commentDispatches += 1;
+    return { found: false };
+  };
+
+  await controller.handleMessage(
+    { action: 'open-login', payload: { platform: 'qidian' } },
+    { tab: { id: 99 } },
+  );
+  await controller.handleTabUpdated(42, { url: 'https://write.qq.com/portal/dashboard' }, { id: 42 });
+
+  assert.equal(uploadDispatches, 1);
+  assert.equal(commentDispatches, 1);
 });
 
 test('controller still opens login popup when heartbeat sync fails', async () => {
@@ -133,10 +156,14 @@ test('controller still opens login popup when heartbeat sync fails', async () =>
   assert.match(events[0].payload.message, /状态同步稍后重试/);
 });
 
-test('controller restores backend sessions before heartbeat when local browser is disconnected', async () => {
+test('controller restores backend sessions before heartbeat even when local browser already has cookies', async () => {
   const heartbeatCalls = [];
   const { controller, restoredCookies } = makeController({
-    getCookies: async (platformId) => (platformId === 'fanqie' ? [{ name: 'serial_uuid' }] : []),
+    getCookies: async (platformId) => (
+      platformId === 'fanqie'
+        ? [{ name: 'sessionid' }, { name: 'sid_tt' }]
+        : []
+    ),
     backend: {
       heartbeat: async (payload) => {
         heartbeatCalls.push(payload);
@@ -191,7 +218,7 @@ test('controller restores backend sessions before heartbeat when local browser i
   assert.equal(restoredCookies.length, 1);
   assert.equal(restoredCookies[0].platformId, 'fanqie');
   assert.equal(restoredCookies[0].cookies.length, 2);
-  assert.equal(heartbeatCalls.length >= 1, true);
+  assert.equal(heartbeatCalls.length, 1);
 });
 
 test('controller marks upload job running then succeeded', async () => {
@@ -299,6 +326,7 @@ test('controller keeps execution tabs open when upload fails', async () => {
 test('controller forwards create-if-missing book metadata to upload command', async () => {
   const payloads = [];
   const { controller } = makeController({
+    getTab: async () => ({ id: 77, url: 'https://fanqienovel.com/main/writer/' }),
     runUploadCommand: async (_tabId, payload) => {
       payloads.push(payload);
       return {
@@ -393,6 +421,7 @@ test('controller auto-dispatches claimed comment sync job for connected platform
   const commentResults = [];
   const syncedPayloads = [];
   const { controller } = makeController({
+    getTab: async () => ({ id: 77, url: 'https://fanqienovel.com/main/writer/' }),
     getPlatformState: async (platformId) => (platformId === 'fanqie' ? { connected: true } : {}),
     runCommentSyncCommand: async (_tabId, payload) => ({
       ok: true,
@@ -464,6 +493,7 @@ test('controller auto-dispatches claimed comment sync job for connected platform
 test('controller resumes an already running claimed upload job for the same client', async () => {
   let claimedOnce = false;
   const { controller, uploadResults } = makeController({
+    getTab: async () => ({ id: 77, url: 'https://fanqienovel.com/main/writer/' }),
     getPlatformState: async (platformId) => (platformId === 'fanqie' ? { connected: true } : {}),
     backend: {
       heartbeat: async () => ({ ok: true }),
@@ -507,6 +537,7 @@ test('controller resumes an already running claimed upload job for the same clie
 test('controller records extension error code in upload job payload', async () => {
   const uploadResults = [];
   const { controller } = makeController({
+    getTab: async () => ({ id: 77, url: 'https://fanqienovel.com/main/writer/' }),
     runUploadCommand: async () => ({
       ok: false,
       currentUrl: 'https://fanqienovel.com/main/writer/create',
@@ -684,7 +715,7 @@ test('controller syncs and dispatches when strong cookies exist before saved con
   await controller.syncConnectedSessionsToBackend();
   await controller.dispatchPendingUploadJobs();
 
-  assert.equal(synced >= 1, true);
+  assert.equal(synced, 2);
   assert.equal(uploadResults.at(-1).status, 'succeeded');
 });
 

@@ -115,8 +115,83 @@ function cookieSetDetails(cookie) {
   return details;
 }
 
+function cookieDebuggerDetails(cookie) {
+  const name = String(cookie?.name || '').trim();
+  const domain = String(cookie?.domain || '').trim();
+  if (!name || !domain) {
+    return null;
+  }
+  const details = {
+    name,
+    value: String(cookie?.value || ''),
+    domain,
+    path: String(cookie?.path || '/').trim() || '/',
+    secure: Boolean(cookie?.secure),
+    httpOnly: Boolean(cookie?.httpOnly),
+  };
+  const sameSite = normalizeSameSite(cookie?.sameSite);
+  if (sameSite === 'strict') {
+    details.sameSite = 'Strict';
+  } else if (sameSite === 'no_restriction') {
+    details.sameSite = 'None';
+  } else {
+    details.sameSite = 'Lax';
+  }
+  const expirationDate = Number(cookie?.expirationDate);
+  if (Number.isFinite(expirationDate) && expirationDate > 0) {
+    details.expires = expirationDate;
+  }
+  return details;
+}
+
+async function setCookiesViaDebugger(platformId, cookies = []) {
+  const adapter = getPlatformAdapter(platformId);
+  const cookieDetails = cookies
+    .map((item) => cookieDebuggerDetails(item))
+    .filter(Boolean);
+  if (!cookieDetails.length) {
+    return { applied: 0, mode: 'debugger' };
+  }
+
+  const tab = await wrapCall(extensionApi.tabs, 'create', {
+    url: adapter.dashboardUrl,
+    active: false,
+  });
+  const tabId = tab?.id || 0;
+  if (!tabId) {
+    throw new Error(`未能为 ${platformId} 创建临时恢复标签页。`);
+  }
+
+  let applied = 0;
+  try {
+    await sleep(1200);
+    await attachDebugger(tabId);
+    try {
+      await sendDebuggerCommand(tabId, 'Network.enable');
+      for (const details of cookieDetails) {
+        const result = await sendDebuggerCommand(tabId, 'Network.setCookie', details);
+        if (result?.success) {
+          applied += 1;
+        }
+      }
+      await sleep(400);
+    } finally {
+      await detachDebugger(tabId);
+    }
+  } finally {
+    await closeTab(tabId);
+  }
+
+  return { applied, mode: 'debugger' };
+}
+
 async function setCookies(platformId, cookies = []) {
   getPlatformAdapter(platformId);
+  try {
+    return await setCookiesViaDebugger(platformId, cookies);
+  } catch (error) {
+    reportBackgroundError(`setCookies debugger restore (${platformId})`, error);
+  }
   let applied = 0;
   for (const item of cookies) {
     const details = cookieSetDetails(item);
@@ -126,7 +201,7 @@ async function setCookies(platformId, cookies = []) {
     await wrapCall(extensionApi.cookies, 'set', details);
     applied += 1;
   }
-  return { applied };
+  return { applied, mode: 'cookies-api' };
 }
 
 async function openLoginPopup(url) {
@@ -284,6 +359,48 @@ async function inspectFanqieEditorState(tabId) {
   }
 }
 
+async function inspectQidianEditorState(tabId) {
+  if (!tabId) {
+    return {
+      ok: false,
+      wordCount: 0,
+      trustedTitleTarget: null,
+      trustedBodyTarget: null,
+      currentUrl: '',
+    };
+  }
+  const ready = await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 5000);
+  if (!ready) {
+    return {
+      ok: false,
+      wordCount: 0,
+      trustedTitleTarget: null,
+      trustedBodyTarget: null,
+      currentUrl: '',
+    };
+  }
+  try {
+    return await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
+      channel: PLATFORM_AGENT_CHANNEL,
+      action: 'inspect-qidian-editor-state',
+    }) || {
+      ok: false,
+      wordCount: 0,
+      trustedTitleTarget: null,
+      trustedBodyTarget: null,
+      currentUrl: '',
+    };
+  } catch (_error) {
+    return {
+      ok: false,
+      wordCount: 0,
+      trustedTitleTarget: null,
+      trustedBodyTarget: null,
+      currentUrl: '',
+    };
+  }
+}
+
 async function inspectPlatformAgentDebug(tabId) {
   if (!tabId) {
     return { ok: false, debug: null, currentUrl: '' };
@@ -431,6 +548,13 @@ async function trustedSelectAllAndDelete(tabId) {
   await sleep(120);
 }
 
+async function trustedDeleteChars(tabId, count, delayMs = 50) {
+  for (let index = 0; index < count; index += 1) {
+    await trustedKeyPress(tabId, 'Backspace', 'Backspace', 8, 0);
+    await sleep(delayMs);
+  }
+}
+
 async function trustedFanqieEditorNudge(tabId, target) {
   if (!target?.x || !target?.y) {
     throw new Error('未能定位番茄正文编辑器。');
@@ -501,6 +625,40 @@ async function applyTrustedQidianPublishConfirm(tabId, target) {
   try {
     await trustedClick(tabId, target.x, target.y);
     await sleep(1200);
+  } finally {
+    await detachDebugger(tabId);
+  }
+}
+
+async function applyTrustedQidianEditorInput(tabId, chapterTitle, body, titleTarget, bodyTarget) {
+  if ((!titleTarget?.x || !titleTarget?.y) && (!bodyTarget?.x || !bodyTarget?.y)) {
+    throw new Error('未能定位起点编辑器输入区域。');
+  }
+  const normalizedTitle = String(chapterTitle || '');
+  const normalizedBody = String(body || '');
+  const triggerText = 'x';
+  await attachDebugger(tabId);
+  try {
+    if (titleTarget?.x && titleTarget?.y) {
+      await trustedClick(tabId, titleTarget.x, titleTarget.y);
+      await sleep(220);
+      await trustedSelectAllAndDelete(tabId);
+      await trustedInsertText(tabId, normalizedTitle);
+      await sleep(320);
+    }
+    if (bodyTarget?.x && bodyTarget?.y) {
+      await trustedClick(tabId, bodyTarget.x, bodyTarget.y);
+      await sleep(260);
+      await trustedSelectAllAndDelete(tabId);
+      await trustedInsertText(tabId, normalizedBody);
+      await sleep(400);
+      await trustedKeyPress(tabId, 'End', 'End', 35, 0);
+      await sleep(120);
+      await trustedInsertText(tabId, triggerText);
+      await sleep(220);
+      await trustedDeleteChars(tabId, triggerText.length, 60);
+      await sleep(1200);
+    }
   } finally {
     await detachDebugger(tabId);
   }
@@ -591,6 +749,29 @@ async function runUploadCommand(tabId, payload) {
           payload = {
             ...payload,
             trustedBodyDone: true,
+          };
+          continue;
+        }
+        if (
+          !response.ok
+          && (
+            response.errorCode === 'trusted-qidian-editor-input-required'
+            || response.errorCode === 'trusted-qidian-editor-input-missing'
+          )
+        ) {
+          await applyTrustedQidianEditorInput(
+            activeTabId,
+            payload.chapter_title,
+            payload.body,
+            response.trustedTitleTarget,
+            response.trustedBodyTarget,
+          );
+          await sleep(1200);
+          await inspectQidianEditorState(activeTabId);
+          ready = await tabReadyRegistry.waitFor(activeTabId, READY_CHANNELS.PLATFORM_AGENT, 1500);
+          payload = {
+            ...payload,
+            trustedQidianEditorDone: true,
           };
           continue;
         }
@@ -972,6 +1153,9 @@ const controller = new PublisherExtensionController({
     },
     async syncBrowserSession(payload) {
       return withBackendClient((client) => client.syncBrowserSession(payload));
+    },
+    async getBrowserSession(platformId) {
+      return withBackendClient((client) => client.getBrowserSession(platformId));
     },
     async syncCommentsBatch(payload) {
       return withBackendClient((client) => client.syncCommentsBatch(payload));

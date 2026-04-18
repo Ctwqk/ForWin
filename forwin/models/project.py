@@ -17,6 +17,9 @@ class Project(Base):
     premise: Mapped[str] = mapped_column(Text, nullable=False)
     genre: Mapped[str] = mapped_column(String, default="玄幻")
     setting_summary: Mapped[str] = mapped_column(Text, default="")
+    target_total_chapters: Mapped[int] = mapped_column(Integer, default=3)
+    automation_json: Mapped[str] = mapped_column(Text, default="{}")
+    governance_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()
@@ -57,5 +60,7 @@ class ChapterPlan(Base):
     title: Mapped[str] = mapped_column(String, default="")
     one_line: Mapped[str] = mapped_column(Text, default="")
     goals_json: Mapped[str] = mapped_column(Text, default="[]")
+    task_contract_json: Mapped[str] = mapped_column(Text, default="[]")
+    experience_plan_json: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String, default="planned")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())

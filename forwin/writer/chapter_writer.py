@@ -6,26 +6,29 @@ import logging
 import re
 
 from forwin.protocol.context import ChapterContextPack
-from forwin.protocol.scene import SceneOutput, ScenePlan
+from forwin.protocol.scene import SceneContinuation, SceneOutput, ScenePlan
 from forwin.protocol.state_change import (
     EventCandidate,
     StateChangeCandidate,
     ThreadBeatCandidate,
     TimeAdvance,
 )
-from forwin.protocol.writer import WriterOutput
+from forwin.protocol.writer import LoreCandidate, TimelineHint, WriterNote, WriterOutput
 from .llm_client import LLMClient
 from .prompts import (
     build_preview_chapter_prompt,
+    build_lore_timeline_notes_extraction_prompt,
+    build_state_event_extraction_prompt,
     build_single_chapter_draft_prompt,
     build_scene_breakdown_prompt,
     build_scene_generation_prompt,
     build_scene_stitch_prompt,
-    build_structured_extraction_prompt,
+    build_thread_time_extraction_prompt,
 )
 from forwin.utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
+_VALID_REWARD_TAGS = {"power", "social", "justice", "mystery", "emotion"}
 
 
 class ChapterWriter:
@@ -47,9 +50,9 @@ class ChapterWriter:
         writer_mode: str = "scene",
         default_scene_count: int = 3,
         max_scene_count: int = 4,
-        min_chapter_chars: int = 1500,
-        max_chapter_chars: int = 2200,
-        target_chapter_chars: int = 2000,
+        min_chapter_chars: int = 2500,
+        max_chapter_chars: int = 3200,
+        target_chapter_chars: int = 2800,
         single_call_timeout_seconds: float = 90.0,
         scene_call_timeout_seconds: float = 45.0,
     ) -> None:
@@ -150,6 +153,7 @@ class ChapterWriter:
                 "structured_extraction": "skipped",
             },
         )
+        self._attach_llm_fallback_events(output)
         logger.info(
             "write_preview_chapter: done – chapter=%d char_count=%d",
             output.chapter_number,
@@ -178,7 +182,7 @@ class ChapterWriter:
             self.max_tokens,
             max(2600, int(target_chars * 1.8)),
         )
-        draft_data = self._chat_json(
+        raw_draft = self._chat_preview_text(
             build_single_chapter_draft_prompt(
                 context,
                 target_chars=target_chars,
@@ -191,6 +195,10 @@ class ChapterWriter:
             max_attempts=max_attempts,
             retry_on_timeout=retry_on_timeout,
         )
+        draft_data = self._parse_preview_text(
+            raw_draft,
+            fallback_title=context.chapter_plan_title or f"第{context.chapter_number}章",
+        )
         extracted = self._extract_structured(
             context,
             draft_data.get("title", context.chapter_plan_title or f"第{context.chapter_number}章"),
@@ -200,7 +208,7 @@ class ChapterWriter:
         merged.update(extracted)
         output = self._writer_output_from_dict(context, merged)
         output.generation_meta.update(
-            {"mode": "single", "call_count": 2, "scene_count": len(output.scene_outputs)}
+            {"mode": "single", "call_count": 4, "scene_count": len(output.scene_outputs)}
         )
         return output
 
@@ -229,7 +237,7 @@ class ChapterWriter:
                 {
                     "mode": "scene",
                     "scene_count": len(scene_outputs),
-                    "call_count": len(scene_outputs) + 3,
+                    "call_count": len(scene_outputs) + 5,
                 }
             )
             return output
@@ -261,6 +269,9 @@ class ChapterWriter:
         state_changes = self._build_list(data, "state_changes", StateChangeCandidate)
         new_events = self._build_list(data, "new_events", EventCandidate)
         thread_beats = self._build_list(data, "thread_beats", ThreadBeatCandidate)
+        lore_candidates = self._build_list(data, "lore_candidates", LoreCandidate)
+        timeline_hints = self._build_list(data, "timeline_hints", TimelineHint)
+        writer_notes = self._build_list(data, "writer_notes", WriterNote)
         time_advance: TimeAdvance | None = None
         if data.get("time_advance"):
             try:
@@ -273,6 +284,7 @@ class ChapterWriter:
                 )
 
         body: str = data.get("body", "")
+        resolved_scene_outputs = scene_outputs or []
         output = WriterOutput(
             project_id=getattr(context, "project_id", ""),
             chapter_number=context.chapter_number,
@@ -280,13 +292,22 @@ class ChapterWriter:
             body=body,
             char_count=len(body),
             end_of_chapter_summary=data.get("end_of_chapter_summary", ""),
-            scene_outputs=scene_outputs or [],
+            scene_outputs=resolved_scene_outputs,
             state_changes=state_changes,
             new_events=new_events,
             thread_beats=thread_beats,
             time_advance=time_advance,
+            scene_continuation=[
+                scene.continuation
+                for scene in resolved_scene_outputs
+                if scene.continuation.scene_no or scene.continuation.continuity_anchor
+            ],
+            lore_candidates=lore_candidates,
+            timeline_hints=timeline_hints,
+            writer_notes=writer_notes,
             generation_meta=dict(data.get("_generation_meta") or {}),
         )
+        self._attach_llm_fallback_events(output)
         logger.info(
             "write_chapter: done – chapter=%d char_count=%d "
             "state_changes=%d new_events=%d thread_beats=%d",
@@ -335,6 +356,9 @@ class ChapterWriter:
                 scene_no=index + 1,
                 objective=goals[min(index, len(goals) - 1)],
                 must_progress_points=[goals[min(index, len(goals) - 1)]],
+                reward_beat_tag=self._fallback_reward_tag(context, index),
+                immersion_anchor=self._fallback_immersion_anchor(context, index),
+                progress_marker=self._fallback_progress_marker(context, index),
                 target_chars=base_target,
             )
             for index in range(fallback_count)
@@ -345,7 +369,7 @@ class ChapterWriter:
             self.max_tokens,
             max(1400, int(max(scene_plan.target_chars, 600) * 1.8)),
         )
-        data = self._chat_json(
+        raw_scene = self._chat_preview_text(
             build_scene_generation_prompt(context, scene_plan),
             temperature=self.temperature,
             max_tokens=max_output_tokens,
@@ -353,14 +377,76 @@ class ChapterWriter:
             max_attempts=2,
             retry_on_timeout=False,
         )
+        data = self._parse_tagged_text(
+            raw_scene,
+            fallback_title="",
+            extra_markers={
+                "<<FORWIN_TIME>>": "scene_time_point",
+                "<<FORWIN_LOCATION>>": "scene_location_id",
+                "<<FORWIN_ENTITIES>>": "involved_entities",
+                "<<FORWIN_REWARD>>": "reward_beat_tag",
+                "<<FORWIN_IMMERSION>>": "immersion_anchor",
+                "<<FORWIN_PROGRESS>>": "progress_marker",
+                "<<FORWIN_MICRO_SUMMARY>>": "micro_summary",
+                "<<FORWIN_CONTINUITY_ANCHOR>>": "continuity_anchor",
+                "<<FORWIN_UNRESOLVED_HOOK>>": "unresolved_micro_hook",
+                "<<FORWIN_NEXT_BRIDGE>>": "next_scene_bridge",
+                "<<FORWIN_TIME_CONTINUITY>>": "time_continuity",
+                "<<FORWIN_LOCATION_CONTINUITY>>": "location_continuity",
+                "<<FORWIN_CHARACTER_FOCUS>>": "character_focus",
+            },
+        )
+        involved_entities = self._parse_list_field(
+            data.get("involved_entities", ""),
+            default=scene_plan.involved_entities,
+        )
+        reward_tag = str(data.get("reward_beat_tag", "") or "").strip()
+        if reward_tag not in _VALID_REWARD_TAGS:
+            reward_tag = scene_plan.reward_beat_tag
         return SceneOutput(
             scene_no=scene_plan.scene_no,
             scene_objective=scene_plan.objective,
             scene_time_point=data.get("scene_time_point", scene_plan.time_hint),
             scene_location_id=data.get("scene_location_id", scene_plan.location_hint),
-            involved_entities=data.get("involved_entities", scene_plan.involved_entities),
-            text=data.get("text", ""),
-            micro_summary=data.get("micro_summary", ""),
+            involved_entities=involved_entities,
+            text=str(data.get("body", data.get("text", "")) or ""),
+            micro_summary=str(
+                data.get("micro_summary", data.get("end_of_chapter_summary", "")) or ""
+            ),
+            reward_beat_tag=reward_tag,
+            immersion_anchor=data.get("immersion_anchor", scene_plan.immersion_anchor),
+            progress_marker=data.get("progress_marker", scene_plan.progress_marker),
+            continuation=SceneContinuation(
+                scene_no=scene_plan.scene_no,
+                continuity_anchor=str(
+                    data.get("continuity_anchor")
+                    or scene_plan.micro_hook
+                    or scene_plan.objective
+                    or ""
+                ).strip(),
+                unresolved_micro_hook=str(
+                    data.get("unresolved_micro_hook")
+                    or scene_plan.micro_hook
+                    or ""
+                ).strip(),
+                next_scene_bridge=str(data.get("next_scene_bridge") or "").strip(),
+                time_continuity=str(
+                    data.get("time_continuity")
+                    or data.get("scene_time_point")
+                    or scene_plan.time_hint
+                    or ""
+                ).strip(),
+                location_continuity=str(
+                    data.get("location_continuity")
+                    or data.get("scene_location_id")
+                    or scene_plan.location_hint
+                    or ""
+                ).strip(),
+                character_focus=self._parse_list_field(
+                    data.get("character_focus", ""),
+                    default=involved_entities,
+                ),
+            ),
         )
 
     def _stitch_scenes(
@@ -368,13 +454,17 @@ class ChapterWriter:
         context: ChapterContextPack,
         scene_outputs: list[SceneOutput],
     ) -> dict:
-        return self._chat_json(
+        raw_stitched = self._chat_preview_text(
             build_scene_stitch_prompt(context, scene_outputs),
             temperature=0.5,
             max_tokens=min(self.max_tokens, 2400),
             timeout_seconds=self.scene_call_timeout_seconds,
             max_attempts=2,
             retry_on_timeout=False,
+        )
+        return self._parse_preview_text(
+            raw_stitched,
+            fallback_title=context.chapter_plan_title or f"第{context.chapter_number}章",
         )
 
     def _extract_structured(
@@ -383,49 +473,128 @@ class ChapterWriter:
         chapter_title: str,
         chapter_body: str,
     ) -> dict:
-        prompt = build_structured_extraction_prompt(context, chapter_title, chapter_body)
+        metadata: dict[str, object] = {
+            "new_events": [],
+            "state_changes": [],
+            "thread_beats": [],
+            "time_advance": None,
+            "lore_candidates": [],
+            "timeline_hints": [],
+            "writer_notes": [],
+        }
+        meta_notes: dict[str, object] = {
+            "structured_extraction_calls": 3,
+        }
+
+        state_event = self._extract_structured_part(
+            label="state_event_extraction",
+            prompt_builder=build_state_event_extraction_prompt,
+            context=context,
+            chapter_title=chapter_title,
+            chapter_body=chapter_body,
+            primary_temperature=0.25,
+            primary_max_tokens=min(self.max_tokens, 1000),
+            retry_temperature=0.2,
+            retry_max_tokens=min(self.max_tokens, 700),
+        )
+        thread_time = self._extract_structured_part(
+            label="thread_time_extraction",
+            prompt_builder=build_thread_time_extraction_prompt,
+            context=context,
+            chapter_title=chapter_title,
+            chapter_body=chapter_body,
+            primary_temperature=0.2,
+            primary_max_tokens=min(self.max_tokens, 700),
+            retry_temperature=0.15,
+            retry_max_tokens=min(self.max_tokens, 520),
+        )
+        lore_timeline_notes = self._extract_structured_part(
+            label="lore_timeline_notes_extraction",
+            prompt_builder=build_lore_timeline_notes_extraction_prompt,
+            context=context,
+            chapter_title=chapter_title,
+            chapter_body=chapter_body,
+            primary_temperature=0.2,
+            primary_max_tokens=min(self.max_tokens, 900),
+            retry_temperature=0.15,
+            retry_max_tokens=min(self.max_tokens, 560),
+        )
+
+        metadata.update(state_event)
+        metadata.update(thread_time)
+        metadata.update(lore_timeline_notes)
+        for key, value in (
+            state_event.get("_generation_meta") or {}
+        ).items():
+            meta_notes[key] = value
+        for key, value in (
+            thread_time.get("_generation_meta") or {}
+        ).items():
+            meta_notes[key] = value
+        for key, value in (
+            lore_timeline_notes.get("_generation_meta") or {}
+        ).items():
+            meta_notes[key] = value
+
+        degraded_parts = [
+            key
+            for key in (
+                "state_event_extraction",
+                "thread_time_extraction",
+                "lore_timeline_notes_extraction",
+            )
+            if meta_notes.get(key) == "degraded"
+        ]
+        if degraded_parts:
+            meta_notes["structured_extraction"] = (
+                "degraded" if len(degraded_parts) == 3 else "partial_degraded"
+            )
+            metadata["_generation_meta"] = meta_notes
+        else:
+            metadata["_generation_meta"] = meta_notes
+        return metadata
+
+    def _extract_structured_part(
+        self,
+        *,
+        label: str,
+        prompt_builder,
+        context: ChapterContextPack,
+        chapter_title: str,
+        chapter_body: str,
+        primary_temperature: float,
+        primary_max_tokens: int,
+        retry_temperature: float,
+        retry_max_tokens: int,
+    ) -> dict[str, object]:
         try:
             return self._chat_json(
-                prompt,
-                temperature=0.3,
-                max_tokens=min(self.max_tokens, 1400),
+                prompt_builder(context, chapter_title, chapter_body),
+                temperature=primary_temperature,
+                max_tokens=primary_max_tokens,
                 timeout_seconds=self.scene_call_timeout_seconds,
                 max_attempts=2,
                 retry_on_timeout=False,
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "structured extraction primary pass failed, retrying with reduced body: %s",
-                exc,
-            )
+            logger.warning("%s primary pass failed, retrying with reduced body: %s", label, exc)
             shortened_body = chapter_body[: max(800, min(len(chapter_body), 1800))]
             try:
                 return self._chat_json(
-                    build_structured_extraction_prompt(
-                        context,
-                        chapter_title,
-                        shortened_body,
-                    ),
-                    temperature=0.2,
-                    max_tokens=min(self.max_tokens, 900),
+                    prompt_builder(context, chapter_title, shortened_body),
+                    temperature=retry_temperature,
+                    max_tokens=retry_max_tokens,
                     timeout_seconds=self.scene_call_timeout_seconds,
                     max_attempts=1,
                     retry_on_timeout=False,
                 )
             except Exception as repair_exc:  # noqa: BLE001
-                logger.warning(
-                    "structured extraction degraded to empty metadata after retry: %s",
-                    repair_exc,
-                )
+                logger.warning("%s degraded to empty metadata after retry: %s", label, repair_exc)
                 return {
-                    "new_events": [],
-                    "state_changes": [],
-                    "thread_beats": [],
-                    "time_advance": None,
                     "_generation_meta": {
-                        "structured_extraction": "degraded",
-                        "structured_extraction_error": str(repair_exc),
-                    },
+                        label: "degraded",
+                        f"{label}_error": str(repair_exc),
+                    }
                 }
 
     @staticmethod
@@ -441,6 +610,47 @@ class ChapterWriter:
         if cleaned:
             return cleaned[:120]
         return title
+
+    @staticmethod
+    def _fallback_reward_tag(context: ChapterContextPack, index: int) -> str:
+        plan = getattr(context, "chapter_experience_plan", None)
+        tags = list(getattr(plan, "planned_reward_tags", []) or [])
+        if tags:
+            return str(tags[min(index, len(tags) - 1)])
+        return "mystery"
+
+    @staticmethod
+    def _fallback_immersion_anchor(context: ChapterContextPack, index: int) -> str:
+        plan = getattr(context, "chapter_experience_plan", None)
+        anchors = list(getattr(plan, "immersion_anchors", []) or [])
+        if anchors:
+            return str(anchors[min(index, len(anchors) - 1)])
+        timeline = getattr(getattr(context, "timeline", None), "current_time_label", "")
+        return timeline or "沿用当前场景感官细节"
+
+    @staticmethod
+    def _fallback_progress_marker(context: ChapterContextPack, index: int) -> str:
+        plan = getattr(context, "chapter_experience_plan", None)
+        markers = list(getattr(plan, "progress_markers", []) or [])
+        if markers:
+            return str(markers[min(index, len(markers) - 1)])
+        goals = context.chapter_goals or [context.chapter_plan_one_line or "推进主线"]
+        return str(goals[min(index, len(goals) - 1)])
+
+    @staticmethod
+    def _parse_list_field(value: object, *, default: list[str]) -> list[str]:
+        if isinstance(value, list):
+            items = [str(item).strip() for item in value if str(item).strip()]
+            return items or list(default)
+        text = str(value or "").strip()
+        if not text:
+            return list(default)
+        parts = [
+            item.strip(" -•\t")
+            for item in re.split(r"[、,，/;\n]+", text.replace("\r", "\n"))
+            if item.strip(" -•\t")
+        ]
+        return parts or list(default)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -543,7 +753,7 @@ class ChapterWriter:
                     retry_on_timeout=retry_on_timeout,
                 )
                 parsed = self._parse_preview_text(raw, fallback_title="")
-                if parsed.get("body", "").strip():
+                if str(parsed.get("body", "") or "").strip():
                     return raw
                 raise ValueError("preview response body is empty")
             except Exception as exc:  # noqa: BLE001
@@ -579,60 +789,142 @@ class ChapterWriter:
             kwargs["retry_on_timeout"] = retry_on_timeout
         return self.llm_client.chat(messages, **kwargs)
 
+    def _attach_llm_fallback_events(self, output: WriterOutput) -> None:
+        drain = getattr(self.llm_client, "drain_model_fallback_events", None)
+        if not callable(drain):
+            return
+        events = drain()
+        if events:
+            output.generation_meta["model_fallbacks"] = events
+
     @staticmethod
-    def _parse_preview_text(raw: str, *, fallback_title: str) -> dict[str, str]:
+    def _parse_jsonish_text_payload(raw: str) -> dict[str, object]:
         cleaned = str(raw or "").strip()
+        if not cleaned.startswith(("{", "[")):
+            return {}
+        try:
+            data = parse_llm_json(cleaned, error_prefix="ChapterWriter tagged parser")
+        except Exception:  # noqa: BLE001
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        normalized: dict[str, object] = {}
+        for key in (
+            "title",
+            "body",
+            "text",
+            "micro_summary",
+            "end_of_chapter_summary",
+            "scene_time_point",
+            "scene_location_id",
+            "reward_beat_tag",
+            "immersion_anchor",
+            "progress_marker",
+            "continuity_anchor",
+            "unresolved_micro_hook",
+            "next_scene_bridge",
+            "time_continuity",
+            "location_continuity",
+        ):
+            if key in data and data.get(key) is not None:
+                normalized[key] = str(data.get(key) or "").strip()
+        if isinstance(data.get("involved_entities"), list):
+            normalized["involved_entities"] = [
+                str(item).strip() for item in data["involved_entities"] if str(item).strip()
+            ]
+        elif data.get("involved_entities") is not None:
+            normalized["involved_entities"] = str(data.get("involved_entities") or "").strip()
+        if isinstance(data.get("character_focus"), list):
+            normalized["character_focus"] = [
+                str(item).strip() for item in data["character_focus"] if str(item).strip()
+            ]
+        elif data.get("character_focus") is not None:
+            normalized["character_focus"] = str(data.get("character_focus") or "").strip()
+        if isinstance(data.get("continuation"), dict):
+            continuation = data["continuation"]
+            for source_key, target_key in (
+                ("continuity_anchor", "continuity_anchor"),
+                ("unresolved_micro_hook", "unresolved_micro_hook"),
+                ("next_scene_bridge", "next_scene_bridge"),
+                ("time_continuity", "time_continuity"),
+                ("location_continuity", "location_continuity"),
+            ):
+                if continuation.get(source_key) is not None and target_key not in normalized:
+                    normalized[target_key] = str(continuation.get(source_key) or "").strip()
+            if isinstance(continuation.get("character_focus"), list) and "character_focus" not in normalized:
+                normalized["character_focus"] = [
+                    str(item).strip()
+                    for item in continuation["character_focus"]
+                    if str(item).strip()
+                ]
+        if not normalized.get("body") and normalized.get("text"):
+            normalized["body"] = normalized["text"]
+        if not normalized.get("end_of_chapter_summary") and normalized.get("micro_summary"):
+            normalized["end_of_chapter_summary"] = normalized["micro_summary"]
+        return normalized
+
+    @classmethod
+    def _parse_tagged_text(
+        cls,
+        raw: str,
+        *,
+        fallback_title: str,
+        extra_markers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        cleaned = str(raw or "").strip()
+        jsonish = cls._parse_jsonish_text_payload(cleaned)
+        if jsonish.get("body"):
+            if fallback_title and not jsonish.get("title"):
+                jsonish["title"] = fallback_title
+            return jsonish
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```[^\n]*\n?", "", cleaned)
             cleaned = re.sub(r"\n?```$", "", cleaned).strip()
 
-        marker_groups = [
-            ("<<FORWIN_TITLE>>", "<<FORWIN_BODY>>", "<<FORWIN_SUMMARY>>"),
-            ("【标题】", "【正文】", "【摘要】"),
-        ]
+        marker_map = {
+            "<<FORWIN_TITLE>>": "title",
+            "<<FORWIN_BODY>>": "body",
+            "<<FORWIN_SUMMARY>>": "end_of_chapter_summary",
+            "【标题】": "title",
+            "【正文】": "body",
+            "【摘要】": "end_of_chapter_summary",
+        }
+        if extra_markers:
+            marker_map.update(extra_markers)
+        fields: dict[str, object] = {}
+        pattern = "|".join(
+            re.escape(marker)
+            for marker in sorted(marker_map.keys(), key=len, reverse=True)
+        )
+        if pattern:
+            matches = list(re.finditer(pattern, cleaned))
+            for index, match in enumerate(matches):
+                field_name = marker_map[match.group(0)]
+                start = match.end()
+                end = matches[index + 1].start() if index + 1 < len(matches) else len(cleaned)
+                value = cleaned[start:end].strip()
+                if value:
+                    fields[field_name] = value
 
-        def extract_with_markers(title_marker: str, body_marker: str, summary_marker: str) -> tuple[str, str, str]:
-            title_pos = cleaned.rfind(title_marker)
-            body_pos = cleaned.rfind(body_marker)
-            summary_pos = cleaned.rfind(summary_marker)
-            if body_pos < 0:
-                return "", "", ""
-            title = ""
-            if title_pos >= 0 and title_pos < body_pos:
-                title = cleaned[title_pos + len(title_marker):body_pos].strip()
-            body_end = summary_pos if summary_pos > body_pos else len(cleaned)
-            body = cleaned[body_pos + len(body_marker):body_end].strip()
-            summary = ""
-            if summary_pos >= 0 and summary_pos > body_pos:
-                summary = cleaned[summary_pos + len(summary_marker):].strip()
-            return title, body, summary
-
-        title = ""
-        body = ""
-        summary = ""
-        for title_marker, body_marker, summary_marker in marker_groups:
-            title, body, summary = extract_with_markers(title_marker, body_marker, summary_marker)
-            if body:
-                break
-
-        if not body:
+        if not fields.get("body"):
             title_match = re.search(r"标题[:：]\s*(.+)", cleaned)
-            if title_match and not title:
-                title = title_match.group(1).strip()
+            if title_match and not fields.get("title"):
+                fields["title"] = title_match.group(1).strip()
             body_match = re.search(r"正文[:：]\s*(.+?)(?:摘要[:：]|$)", cleaned, re.S)
             if body_match:
-                body = body_match.group(1).strip()
+                fields["body"] = body_match.group(1).strip()
             summary_match = re.search(r"摘要[:：]\s*(.+)$", cleaned, re.S)
-            if summary_match and not summary:
-                summary = summary_match.group(1).strip()
+            if summary_match and not fields.get("end_of_chapter_summary"):
+                fields["end_of_chapter_summary"] = summary_match.group(1).strip()
 
-        if not body:
+        if not fields.get("body"):
             lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
             if lines:
-                if not title:
-                    title = lines[0][:40]
-                body = "\n".join(lines[1:] if len(lines) > 1 else lines)
+                if not fields.get("title"):
+                    fields["title"] = lines[0][:40]
+                fields["body"] = "\n".join(lines[1:] if len(lines) > 1 else lines)
 
+        body = str(fields.get("body", "") or "")
         if body and len(body.strip()) < 100 and len(cleaned) > 300:
             stripped_lines = []
             for line in cleaned.splitlines():
@@ -648,10 +940,23 @@ class ChapterWriter:
                 stripped_lines.append(candidate)
             rebuilt = "\n".join(stripped_lines).strip()
             if len(rebuilt) > len(body):
-                body = rebuilt
+                fields["body"] = rebuilt
 
+        if fallback_title and not fields.get("title"):
+            fields["title"] = fallback_title
+        return fields
+
+    @classmethod
+    def _parse_preview_text(cls, raw: str, *, fallback_title: str) -> dict[str, str]:
+        fields = cls._parse_tagged_text(raw, fallback_title=fallback_title)
         return {
-            "title": title or fallback_title,
-            "body": body.strip(),
-            "end_of_chapter_summary": summary.strip(),
+            "title": str(fields.get("title", fallback_title) or fallback_title),
+            "body": str(fields.get("body", "") or "").strip(),
+            "end_of_chapter_summary": str(
+                fields.get(
+                    "end_of_chapter_summary",
+                    fields.get("micro_summary", ""),
+                )
+                or ""
+            ).strip(),
         }

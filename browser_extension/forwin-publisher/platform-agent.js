@@ -2324,7 +2324,7 @@
     }, timeoutMs);
   }
 
-  async function ensureQidianSavedDraftIfNeeded() {
+  async function ensureQidianSavedDraftIfNeeded(chapterTitle = '') {
     const href = String(window.location.href || '');
     if (href.includes('#ccid=') && !href.includes('#ccid=-1')) {
       return true;
@@ -2338,7 +2338,22 @@
       waitForPageSignal(['保存成功', '已保存'], 5000),
       sleep(800),
     ]);
-    return Boolean(await waitForQidianRealCcid(15000));
+    const realCcid = await waitForQidianRealCcid(6000);
+    if (realCcid) {
+      return true;
+    }
+    const saved = await waitForCondition(() => {
+      const signals = readQidianDraftSaveSignals(chapterTitle);
+      if (
+        signals.titleMatched
+        && signals.wordCount > 0
+        && (signals.hasRealCcid || (signals.hasSavedBanner && signals.chapterListed))
+      ) {
+        return true;
+      }
+      return null;
+    }, 10000);
+    return Boolean(saved);
   }
 
   function fanqieModalTexts() {
@@ -2520,6 +2535,9 @@
       if (platform === 'fanqie') {
         return buildFanqieDraftVerifyRequest(chapterTitle);
       }
+      if (platform === 'qidian') {
+        return verifyQidianDraftSavedOnCurrentPage(chapterTitle);
+      }
       return {
         ok: true,
         currentUrl: window.location.href,
@@ -2549,7 +2567,7 @@
     ) {
       const titleNode = document.querySelector('#inputTitle');
       const titleValue = String(titleNode?.value || titleNode?.textContent || '').trim();
-      const titleMatched = titleValue ? titleValue === String(chapterTitle || '').trim() : text.includes(String(chapterTitle || '').trim());
+      const titleMatched = qidianTitleMatchesExpected(titleValue, chapterTitle, text);
       const wordCount = readQidianWordCount();
       if (titleMatched && wordCount > 0) {
         return {
@@ -2684,6 +2702,81 @@
     return Boolean(ready);
   }
 
+  function readQidianEditorStatus() {
+    const text = pageText();
+    const titleNode = document.querySelector('#inputTitle');
+    const titleValue = String(titleNode?.value || titleNode?.textContent || '').trim();
+    const frame = document.querySelector('iframe#mce_0_ifr');
+    const frameDoc = frame?.contentDocument || frame?.contentWindow?.document || null;
+    const frameBody = frameDoc?.body || null;
+    const textarea = document.querySelector('textarea#mce_0');
+    let activeEditorText = '';
+    try {
+      activeEditorText = String(
+        window.tinymce?.activeEditor?.getContent?.({ format: 'text' })
+          || window.tinyMCE?.activeEditor?.getContent?.({ format: 'text' })
+          || '',
+      ).trim();
+    } catch (_error) {
+      activeEditorText = '';
+    }
+    const active = document.activeElement;
+    return {
+      titleValue,
+      wordCount: readQidianWordCount(),
+      frameTextLength: String(frameBody?.innerText || frameBody?.textContent || '').trim().length,
+      textareaLength: String(textarea?.value || '').length,
+      activeEditorTextLength: activeEditorText.length,
+      activeTag: active ? String(active.tagName || '') : '',
+      activeClass: active ? String(active.className || '') : '',
+    };
+  }
+
+  function locateQidianTrustedTitleTarget() {
+    const input = document.querySelector('#inputTitle');
+    if (!(input instanceof HTMLElement)) {
+      return null;
+    }
+    const rect = input.getBoundingClientRect();
+    if (!rect.width && !rect.height) {
+      return null;
+    }
+    return {
+      x: Math.round(rect.left + (rect.width / 2)),
+      y: Math.round(rect.top + (rect.height / 2)),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      selector: '#inputTitle',
+    };
+  }
+
+  function locateQidianTrustedBodyTarget() {
+    const target = document.querySelector('iframe#mce_0_ifr')
+      || document.querySelector('textarea#mce_0');
+    if (!(target instanceof HTMLElement)) {
+      return null;
+    }
+    const rect = target.getBoundingClientRect();
+    if (!rect.width && !rect.height) {
+      return null;
+    }
+    return {
+      x: Math.round(rect.left + Math.max(40, rect.width / 2)),
+      y: Math.round(rect.top + Math.max(40, rect.height / 2)),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      selector: target.tagName.toLowerCase() === 'iframe' ? 'iframe#mce_0_ifr' : 'textarea#mce_0',
+    };
+  }
+
+  async function fillQidianTitle(value) {
+    const node = await waitForSelector(['#inputTitle', ...selectorsForTitle()], 8000);
+    if (!(node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)) {
+      return false;
+    }
+    return fillInputExact(node, value, { perCharDelayMs: 25 });
+  }
+
   function getFanqieWordCount() {
     return readFanqieEditorStatus().bodyCharCount;
   }
@@ -2771,6 +2864,145 @@
         verify_phase: 'chapter-manage',
       },
     };
+  }
+
+  function qidianTitleMatchesExpected(actualTitle, expectedTitle, fallbackText = '') {
+    const expected = String(expectedTitle || '').trim();
+    if (!expected) {
+      return true;
+    }
+    const actual = String(actualTitle || '').trim();
+    if (actual) {
+      return actual === expected;
+    }
+    return String(fallbackText || '').includes(expected);
+  }
+
+  function countOccurrences(text, needle) {
+    const source = String(text || '');
+    const target = String(needle || '');
+    if (!source || !target) {
+      return 0;
+    }
+    let count = 0;
+    let fromIndex = 0;
+    while (fromIndex < source.length) {
+      const foundAt = source.indexOf(target, fromIndex);
+      if (foundAt === -1) {
+        break;
+      }
+      count += 1;
+      fromIndex = foundAt + target.length;
+    }
+    return count;
+  }
+
+  function readQidianDraftSaveSignals(chapterTitle) {
+    const href = String(window.location.href || '');
+    const text = pageText();
+    const editorStatus = readQidianEditorStatus();
+    const hasRealCcid = href.includes('#ccid=') && !href.includes('#ccid=-1');
+    const title = String(chapterTitle || '').trim();
+    const titleMatched = qidianTitleMatchesExpected(editorStatus.titleValue, chapterTitle, text);
+    const titleOccurrences = title ? countOccurrences(text, title) : 0;
+    const wordCountTag = editorStatus.wordCount > 0 ? `${editorStatus.wordCount}字` : '';
+    const chapterListed = Boolean(
+      title
+      && titleOccurrences >= 2
+      && wordCountTag
+      && text.includes(wordCountTag),
+    );
+    const hasSavedBanner = includesAny(text, ['保存于', '已保存', '保存成功']);
+    return {
+      hasRealCcid,
+      titleMatched,
+      chapterListed,
+      hasSavedBanner,
+      wordCount: editorStatus.wordCount,
+      titleOccurrences,
+      editorStatus,
+    };
+  }
+
+  function buildQidianEditorRetryResult(chapterTitle, publish, editorStatus, trustedRetry = false) {
+    const titleMatched = qidianTitleMatchesExpected(editorStatus?.titleValue, chapterTitle);
+    const missingPart = !titleMatched ? 'title' : 'body';
+    return {
+      ok: false,
+      currentUrl: window.location.href,
+      error: missingPart === 'title'
+        ? '起点章节标题尚未真正写入编辑器状态。'
+        : '起点正文尚未真正写入编辑器状态。',
+      errorCode: trustedRetry ? 'trusted-qidian-editor-input-missing' : 'trusted-qidian-editor-input-required',
+      trustedTitleTarget: locateQidianTrustedTitleTarget(),
+      trustedBodyTarget: locateQidianTrustedBodyTarget(),
+      editorStatus,
+      resultPayload: {
+        mode: publish ? 'publish' : 'draft',
+        chapter_title: chapterTitle,
+        verify_phase: 'editor-status',
+        missing: missingPart,
+        trusted_retry: trustedRetry,
+      },
+    };
+  }
+
+  async function verifyQidianDraftSavedOnCurrentPage(chapterTitle) {
+    const text = pageText();
+    const saveSignals = readQidianDraftSaveSignals(chapterTitle);
+    const editorStatus = saveSignals.editorStatus;
+    const hasValidationError = includesAny(text, ['保存失败', '请输入1~20000字以内的章节内容']);
+    const verified = saveSignals.titleMatched
+      && editorStatus.wordCount > 0
+      && !hasValidationError
+      && (saveSignals.hasRealCcid || (saveSignals.hasSavedBanner && saveSignals.chapterListed));
+    if (verified) {
+      return {
+        ok: true,
+        currentUrl: window.location.href,
+        message: '章节草稿已保存到起点。',
+        resultPayload: {
+          mode: 'draft',
+          official_status: 'drafted',
+          verified_via: saveSignals.hasRealCcid ? 'chapter-page' : 'chapter-list',
+          word_count: editorStatus.wordCount,
+        },
+      };
+    }
+    return {
+      ok: false,
+      currentUrl: window.location.href,
+      error: '起点页面未确认章节草稿已经真实保存。',
+      errorCode: 'publish-not-confirmed',
+      resultPayload: {
+        mode: 'draft',
+        chapter_title: chapterTitle,
+        verify_phase: 'chapter-page',
+        has_real_ccid: saveSignals.hasRealCcid,
+        chapter_listed: saveSignals.chapterListed,
+        has_saved_banner: saveSignals.hasSavedBanner,
+        title_value: editorStatus.titleValue,
+        word_count: editorStatus.wordCount,
+        editor_status: editorStatus,
+      },
+    };
+  }
+
+  async function waitForQidianDraftSaved(chapterTitle, timeoutMs = 30000) {
+    return waitForCondition(() => {
+      const text = pageText();
+      const signals = readQidianDraftSaveSignals(chapterTitle);
+      const hasValidationError = includesAny(text, ['保存失败', '请输入1~20000字以内的章节内容']);
+      if (
+        signals.titleMatched
+        && signals.wordCount > 0
+        && !hasValidationError
+        && (signals.hasRealCcid || (signals.hasSavedBanner && signals.chapterListed))
+      ) {
+        return signals;
+      }
+      return null;
+    }, timeoutMs);
   }
 
   function buildFanqieDraftVerifyRequest(chapterTitle) {
@@ -2893,13 +3125,28 @@
           errorCode: qidianChapterReady.errorCode || 'editor-navigation-pending',
         };
       }
-      await fillField(['#inputTitle', ...selectorsForTitle()], payload.chapter_title, '章节标题');
-      const filled = await fillQidianBody(payload.body);
-      if (!filled) {
-        await fillField(selectorsForBody(), payload.body, '正文内容');
+      if (!payload.trustedQidianEditorDone) {
+        await fillQidianTitle(payload.chapter_title);
+        const filled = await fillQidianBody(payload.body);
+        if (!filled) {
+          await fillField(selectorsForBody(), payload.body, '正文内容');
+        }
+      }
+      const qidianEditorStatus = readQidianEditorStatus();
+      const qidianTitleMatched = qidianTitleMatchesExpected(
+        qidianEditorStatus.titleValue,
+        payload.chapter_title,
+      );
+      if (!qidianTitleMatched || qidianEditorStatus.wordCount <= 0) {
+        return buildQidianEditorRetryResult(
+          payload.chapter_title,
+          Boolean(payload.publish),
+          qidianEditorStatus,
+          Boolean(payload.trustedQidianEditorDone),
+        );
       }
       if (payload.publish) {
-        const saved = await ensureQidianSavedDraftIfNeeded();
+        const saved = await ensureQidianSavedDraftIfNeeded(payload.chapter_title);
         if (!saved) {
           return {
             ok: false,
@@ -2995,6 +3242,11 @@
       waitForCondition(() => !window.location.href.includes('login'), 4000),
       sleep(800),
     ]);
+    if (window.location.href.includes('write.qq.com') && !payload.publish) {
+      setDebugStep('run-upload-qidian-draft-save-wait-start');
+      await waitForQidianDraftSaved(payload.chapter_title, 30000);
+      setDebugStep('run-upload-qidian-draft-save-wait-done');
+    }
     setDebugStep('run-upload-verify-start');
     return verifyPublishOutcome(
       window.location.href.includes('write.qq.com') ? 'qidian' : 'fanqie',
@@ -3018,6 +3270,17 @@
         wordCount: getFanqieWordCount(),
         trustedBodyTarget: locateFanqieTrustedBodyTarget(),
         editorStatus: readFanqieEditorStatus(),
+      });
+      return false;
+    }
+    if (message.action === 'inspect-qidian-editor-state') {
+      sendResponse({
+        ok: true,
+        currentUrl: window.location.href,
+        wordCount: readQidianWordCount(),
+        trustedTitleTarget: locateQidianTrustedTitleTarget(),
+        trustedBodyTarget: locateQidianTrustedBodyTarget(),
+        editorStatus: readQidianEditorStatus(),
       });
       return false;
     }

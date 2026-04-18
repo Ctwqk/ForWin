@@ -37,4 +37,5 @@ class ChapterReview(Base):
     )
     verdict: Mapped[str] = mapped_column(String, nullable=False)
     issues_json: Mapped[str] = mapped_column(Text, default="[]")
+    review_meta_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())

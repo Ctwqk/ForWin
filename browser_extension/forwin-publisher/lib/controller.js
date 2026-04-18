@@ -74,12 +74,6 @@ export class PublisherExtensionController {
     }
     let restored = 0;
     for (const platformId of Object.keys(PLATFORM_ADAPTERS)) {
-      const savedState = await this.deps.getPlatformState(platformId);
-      const cookies = await this.deps.getCookies(platformId);
-      const heartbeatState = buildHeartbeatState(platformId, cookies, savedState);
-      if (heartbeatState.connected || heartbeatState.raw_state?.cookie_signal) {
-        continue;
-      }
       const session = await this.deps.backend.getBrowserSession(platformId);
       if (!session?.cookies?.length) {
         continue;
@@ -292,6 +286,7 @@ export class PublisherExtensionController {
     const createAbortWatcher = (pollMs = 1000) => {
       let active = true;
       let timerId = null;
+      let resumeWait = null;
       const promise = new Promise((resolve) => {
         const loop = async () => {
           while (active) {
@@ -306,7 +301,15 @@ export class PublisherExtensionController {
               return;
             }
             await new Promise((resume) => {
-              timerId = globalThis.setTimeout(resume, pollMs);
+              resumeWait = resume;
+              timerId = globalThis.setTimeout(() => {
+                timerId = null;
+                const wake = resumeWait;
+                resumeWait = null;
+                if (wake) {
+                  wake();
+                }
+              }, pollMs);
             });
           }
         };
@@ -319,6 +322,11 @@ export class PublisherExtensionController {
           if (timerId) {
             globalThis.clearTimeout(timerId);
             timerId = null;
+          }
+          if (resumeWait) {
+            const wake = resumeWait;
+            resumeWait = null;
+            wake();
           }
         },
       };
@@ -804,6 +812,7 @@ export class PublisherExtensionController {
       });
       await this.sendHeartbeat();
       await this.syncConnectedSessionsToBackend();
+      await this.dispatchPendingUploadJobs();
       await this.dispatchPendingCommentSyncJobs();
       await this.deps.notifyPage(session.originTabId, 'login-status', {
         platform: session.platformId,

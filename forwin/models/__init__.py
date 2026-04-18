@@ -4,10 +4,13 @@ from .base import Base, get_engine, get_session_factory, init_db, new_id
 from .draft import ChapterDraft, ChapterReview
 from .entity import Entity, EntityAlias, EntityState, RelationEdge
 from .event import CanonEvent, EventEntityLink
+from .governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
 from .phase import (
     ArcEnvelope,
     ArcEnvelopeAnalysis,
     ArcStructureDraft,
+    BandExperiencePlan,
+    ChapterRewriteAttempt,
     ProjectReplanEvent,
     ProjectStageAnalysis,
     ProvisionalChapterLedger,
@@ -19,6 +22,7 @@ from .publisher import (
     CommentSignalCandidate,
     FeedbackActionRecord,
     PublisherBrowserSession,
+    PublisherBrowserSessionEntry,
     PublisherCommentSyncJob,
     PublisherConnectionState,
     PublisherExtensionClient,
@@ -29,6 +33,7 @@ from .publisher import (
     SignalWindowAggregate,
 )
 from .project import ArcPlanVersion, ChapterPlan, Project
+from .task import GenerationTask
 from .thread import PlotThread, PlotThreadBeat
 from .timeline import ChapterTimeline, StoryTimePoint
 
@@ -42,6 +47,7 @@ __all__ = [
     "Project",
     "ArcPlanVersion",
     "ChapterPlan",
+    "GenerationTask",
     # entity
     "Entity",
     "EntityAlias",
@@ -50,11 +56,16 @@ __all__ = [
     # event
     "CanonEvent",
     "EventEntityLink",
+    "BandCheckpoint",
+    "NarrativeConstraint",
+    "DecisionEvent",
     "ProjectStageAnalysis",
     "ProjectReplanEvent",
     "ArcEnvelope",
     "ArcStructureDraft",
     "ArcEnvelopeAnalysis",
+    "BandExperiencePlan",
+    "ChapterRewriteAttempt",
     "ProvisionalChapterLedger",
     "ProvisionalBandExecution",
     "ProvisionalPromotionRecord",
@@ -76,6 +87,7 @@ __all__ = [
     "PublisherExtensionPlatformState",
     "PublisherConnectionState",
     "PublisherBrowserSession",
+    "PublisherBrowserSessionEntry",
     "PublisherUploadJob",
     "PublisherCommentSyncJob",
     "PublisherRawComment",

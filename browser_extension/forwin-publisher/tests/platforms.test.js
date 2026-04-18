@@ -45,6 +45,19 @@ test('fanqie heartbeat auto-connects when strong writer cookies are present', ()
   assert.equal(state.raw_state.cookie_signal, true);
 });
 
+test('fanqie heartbeat does not auto-connect from session cookies alone', () => {
+  const state = buildHeartbeatState('fanqie', [
+    { name: 'sessionid' },
+  ], {
+    connected: false,
+    loginMethod: 'scan',
+    lastError: '',
+  });
+
+  assert.equal(state.connected, false);
+  assert.equal(state.raw_state.cookie_signal, false);
+});
+
 test('fanqie probe url points to the modern writer console', () => {
   assert.equal(getProbeUrl('fanqie', 0), 'https://fanqienovel.com/main/writer/');
   assert.equal(

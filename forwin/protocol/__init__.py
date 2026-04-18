@@ -7,11 +7,16 @@ from .state_change import (
 )
 from .context import (
     AudienceHintView,
+    AudienceTrendView,
+    CanonEventEvidence,
     EntitySnapshot,
+    LintSignal,
     MemorySnippet,
     NPCIntentView,
     ReaderCommentView,
     ReaderFeedbackView,
+    ReviewContextPack,
+    ReviewNote,
     RelationSnapshot,
     PlotThreadSnapshot,
     SignalSummaryView,
@@ -19,9 +24,22 @@ from .context import (
     WorldPressureView,
     ChapterContextPack,
 )
-from .scene import ScenePlan, SceneOutput
-from .writer import WriterOutput
-from .review import ContinuityIssue, ReviewVerdict
+from .experience import (
+    AmbiguityPayoff,
+    ArcPayoffMap,
+    BandDelightSchedule,
+    BandRewardItem,
+    ChapterExperiencePlan,
+    CuriosityBeat,
+    MacroPayoff,
+    ProgressChannel,
+    RevelationLayer,
+    ReaderPromise,
+    RewardTag,
+)
+from .scene import SceneContinuation, ScenePlan, SceneOutput
+from .writer import LoreCandidate, TimelineHint, WriterNote, WriterOutput
+from .review import ContinuityIssue, RepairInstruction, ReviewVerdict
 
 __all__ = [
     # state_change
@@ -32,23 +50,44 @@ __all__ = [
     "TimeAdvance",
     # context
     "AudienceHintView",
+    "AudienceTrendView",
+    "CanonEventEvidence",
     "EntitySnapshot",
+    "LintSignal",
     "MemorySnippet",
     "NPCIntentView",
     "ReaderCommentView",
     "ReaderFeedbackView",
+    "ReviewContextPack",
+    "ReviewNote",
     "SignalSummaryView",
     "RelationSnapshot",
     "PlotThreadSnapshot",
     "TimelineSnapshot",
     "WorldPressureView",
     "ChapterContextPack",
+    "ReaderPromise",
+    "MacroPayoff",
+    "RevelationLayer",
+    "ArcPayoffMap",
+    "BandRewardItem",
+    "CuriosityBeat",
+    "AmbiguityPayoff",
+    "BandDelightSchedule",
+    "ChapterExperiencePlan",
+    "ProgressChannel",
+    "RewardTag",
     # scene
+    "SceneContinuation",
     "ScenePlan",
     "SceneOutput",
     # writer
+    "LoreCandidate",
+    "TimelineHint",
+    "WriterNote",
     "WriterOutput",
     # review
     "ContinuityIssue",
+    "RepairInstruction",
     "ReviewVerdict",
 ]

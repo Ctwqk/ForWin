@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import gc
+import logging
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
@@ -12,22 +14,30 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
-from fastapi.testclient import TestClient
-from sqlalchemy import func, select, text
+import fastapi.routing
+import starlette.concurrency
+import starlette.responses
+from sqlalchemy import event, func, select, text
 from sqlalchemy.orm import close_all_sessions
 
 import forwin.api as api_module
+import forwin.api_project_payloads as api_project_payloads_module
+import forwin.api_runtime as api_runtime_module
 from forwin import cli as cli_module
+from forwin.api_pages import render_home_page
 from forwin.config import Config
 from forwin.director import ArcDirector
-from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.entity import EntityState
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.event import CanonEvent, EventEntityLink
+from forwin.models.governance import BandCheckpoint
 from forwin.models.phase import (
     ArcEnvelope,
     ArcEnvelopeAnalysis,
     ArcStructureDraft,
+    BandExperiencePlan,
+    ChapterRewriteAttempt,
     ProjectReplanEvent,
     ProjectStageAnalysis,
     ProvisionalChapterLedger,
@@ -38,6 +48,7 @@ from forwin.models.phase4 import NPCIntentSnapshot, WorldSimulationTurn
 from forwin.models.publisher import (
     PublisherCommentSyncJob,
     PublisherBrowserSession,
+    PublisherBrowserSessionEntry,
     PublisherExtensionClient,
     PublisherRawComment,
     PublisherUploadJob,
@@ -49,10 +60,12 @@ from forwin.orchestrator.phase24 import ArcEnvelopeManager
 from forwin.orchestrator.phase24 import policy_for_total_chapters
 from forwin.orchestrator.phase4 import NPCIntentGenerator, WorldSimulator
 from forwin.orchestrator.thread_sampling import sample_active_threads
-from forwin.protocol.review import ContinuityIssue, ReviewVerdict
+from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
+from forwin.reviewer.hub import HistoricalReviewHub
 from forwin.protocol.context import (
     ChapterContextPack,
     ArcEnvelopeView,
+    AudienceHintView,
     EntitySnapshot,
     MemorySnippet,
     NPCIntentView,
@@ -76,9 +89,156 @@ from forwin.storage import ArtifactStore
 from forwin.utils import LLMJSONParseError, parse_llm_json
 from forwin.writer.chapter_writer import ChapterWriter
 from forwin.writer.prompts import (
+    build_preview_chapter_prompt,
     build_scene_generation_prompt,
     build_single_chapter_draft_prompt,
 )
+
+
+class _TestClientResponse:
+    __test__ = False
+
+    def __init__(self, *, status_code: int, headers: dict[str, str], content: bytes) -> None:
+        self.status_code = int(status_code)
+        self.headers = dict(headers)
+        self.content = bytes(content)
+        charset = "utf-8"
+        content_type = str(self.headers.get("content-type", ""))
+        if "charset=" in content_type:
+            charset = content_type.split("charset=", 1)[1].split(";", 1)[0].strip() or "utf-8"
+        self.text = self.content.decode(charset, errors="replace")
+
+    def json(self) -> object:
+        return json.loads(self.content.decode("utf-8"))
+
+
+class TestClient:
+    """Minimal sync client for Python 3.13 where Starlette TestClient blocks on AnyIO."""
+
+    __test__ = False
+
+    def __init__(self, app, base_url: str = "http://testserver") -> None:
+        self.app = app
+        self.base_url = base_url
+        self._runner: asyncio.Runner | None = None
+        self._lifespan_cm = None
+        self._patches = []
+
+    def __enter__(self) -> "TestClient":
+        async def inline_run_in_threadpool(func, *args, **inner_kwargs):
+            return func(*args, **inner_kwargs)
+
+        async def inline_iterate_in_threadpool(iterator):
+            for item in iterator:
+                yield item
+
+        self._patches = [
+            patch.object(fastapi.routing, "run_in_threadpool", inline_run_in_threadpool),
+            patch.object(starlette.concurrency, "run_in_threadpool", inline_run_in_threadpool),
+            patch.object(starlette.responses, "iterate_in_threadpool", inline_iterate_in_threadpool),
+            patch.object(api_module, "_start_automation_scheduler", lambda: None),
+            patch.object(api_module, "_stop_automation_scheduler", lambda: None),
+        ]
+        for active_patch in self._patches:
+            active_patch.start()
+        self._runner = asyncio.Runner()
+        self._lifespan_cm = self.app.router.lifespan_context(self.app)
+        self._runner.run(self._lifespan_cm.__aenter__())
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        try:
+            if self._runner is not None and self._lifespan_cm is not None:
+                self._runner.run(self._lifespan_cm.__aexit__(exc_type, exc, tb))
+        finally:
+            if self._runner is not None:
+                self._runner.close()
+                self._runner = None
+            self._lifespan_cm = None
+            while self._patches:
+                self._patches.pop().stop()
+        return False
+
+    def get(self, url: str, **kwargs) -> _TestClientResponse:
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url: str, **kwargs) -> _TestClientResponse:
+        return self.request("POST", url, **kwargs)
+
+    def request(self, method: str, url: str, **kwargs) -> _TestClientResponse:
+        async def run_request() -> _TestClientResponse:
+            body = b""
+            headers: list[tuple[bytes, bytes]] = [(b"host", b"testserver")]
+            request_headers = kwargs.get("headers") or {}
+            json_body = kwargs.get("json")
+            content = kwargs.get("content")
+            if json_body is not None:
+                body = json.dumps(json_body, ensure_ascii=False).encode("utf-8")
+                headers.append((b"content-type", b"application/json"))
+            elif content is not None:
+                body = content if isinstance(content, bytes) else str(content).encode("utf-8")
+            for key, value in request_headers.items():
+                headers.append((str(key).lower().encode("utf-8"), str(value).encode("utf-8")))
+            if body:
+                headers.append((b"content-length", str(len(body)).encode("utf-8")))
+
+            request_sent = False
+            sent_messages: list[dict[str, object]] = []
+
+            async def receive() -> dict[str, object]:
+                nonlocal request_sent
+                if request_sent:
+                    return {"type": "http.disconnect"}
+                request_sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+
+            async def send(message: dict[str, object]) -> None:
+                sent_messages.append(message)
+
+            request = httpx.Request(method.upper(), f"{self.base_url}{url}")
+            raw_path = request.url.raw_path
+            query_string = request.url.query if isinstance(request.url.query, bytes) else str(request.url.query).encode("utf-8")
+            scope = {
+                "type": "http",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "method": method.upper(),
+                "scheme": request.url.scheme,
+                "path": request.url.path,
+                "raw_path": raw_path,
+                "query_string": query_string,
+                "root_path": "",
+                "headers": headers,
+                "client": ("testclient", 50000),
+                "server": (request.url.host or "testserver", request.url.port or 80),
+                "state": {},
+                "app": self.app,
+            }
+
+            await self.app(scope, receive, send)
+
+            status_code = 500
+            response_headers: dict[str, str] = {}
+            chunks: list[bytes] = []
+            for message in sent_messages:
+                message_type = message.get("type")
+                if message_type == "http.response.start":
+                    status_code = int(message.get("status", 500))
+                    response_headers = {
+                        bytes(key).decode("utf-8").lower(): bytes(value).decode("utf-8")
+                        for key, value in message.get("headers", [])
+                    }
+                elif message_type == "http.response.body":
+                    chunks.append(bytes(message.get("body", b"")))
+            return _TestClientResponse(
+                status_code=status_code,
+                headers=response_headers,
+                content=b"".join(chunks),
+            )
+
+        if self._runner is None:
+            raise RuntimeError("TestClient must be used as a context manager.")
+        return self._runner.run(run_request())
 
 
 class Phase05RegressionTests(unittest.TestCase):
@@ -90,6 +250,17 @@ class Phase05RegressionTests(unittest.TestCase):
 
         self.assertIn("archived", str(ctx.exception).lower())
         self.assertIn("browser extension", str(ctx.exception).lower())
+
+    def test_home_page_exposes_publish_action_label(self) -> None:
+        html = render_home_page(
+            has_api_key=False,
+            base_url="https://api.minimaxi.com/v1",
+            model="MiniMax-M2.7",
+            operation_mode="copilot",
+            freeze_failed_candidates=False,
+        )
+
+        self.assertIn("发布到平台", html)
 
     def test_config_from_env_reads_shared_fields_once(self) -> None:
         with patch.dict(
@@ -120,6 +291,129 @@ class Phase05RegressionTests(unittest.TestCase):
             config = Config.from_env()
 
         self.assertEqual(config.target_chapter_chars, 2600)
+
+    def test_build_task_progress_changes_includes_project_created_fields(self) -> None:
+        changes = api_runtime_module._build_task_progress_changes(
+            "project_created",
+            {
+                "project_id": "project-1",
+                "title": "测试项目",
+                "requested_chapters": 3,
+            },
+            include_project_created=True,
+        )
+
+        self.assertEqual(changes["project_id"], "project-1")
+        self.assertEqual(changes["title"], "测试项目")
+        self.assertEqual(changes["message"], "项目已创建：测试项目")
+        self.assertEqual(changes["requested_chapters"], 3)
+
+    def test_build_task_progress_changes_reuses_stage_mapping_for_continue_tasks(self) -> None:
+        changes = api_runtime_module._build_task_progress_changes(
+            "stage_changed",
+            {
+                "stage": "terminating",
+                "current_chapter": 2,
+                "completed_chapters": [1],
+            },
+        )
+
+        self.assertEqual(changes["current_stage"], "terminating")
+        self.assertEqual(changes["status"], "terminating")
+        self.assertEqual(changes["current_chapter"], 2)
+        self.assertEqual(changes["completed_chapters"], [1])
+        self.assertNotIn("title", changes)
+
+    def test_project_task_center_items_batch_load_chapter_plans(self) -> None:
+        tmp = TemporaryDirectory()
+        engine = get_engine(str(Path(tmp.name) / "task-center.db"))
+        init_db(engine)
+        session_factory = get_session_factory(engine)
+        old_session_factory = api_module._SessionFactory
+        with api_module._tasks_lock:
+            old_tasks = dict(api_module._tasks)
+            api_module._tasks.clear()
+
+        select_statements: list[str] = []
+
+        def record_selects(
+            _conn,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ) -> None:
+            normalized = " ".join(str(statement or "").split())
+            if normalized.upper().startswith("SELECT"):
+                select_statements.append(normalized)
+
+        try:
+            with session_factory() as session:
+                for index in range(3):
+                    project = Project(
+                        id=new_id(),
+                        title=f"项目{index + 1}",
+                        premise="测试前提",
+                        genre="玄幻",
+                        setting_summary="设定",
+                    )
+                    session.add(project)
+                    session.commit()
+                    arc = ArcPlanVersion(
+                        id=new_id(),
+                        project_id=project.id,
+                        version=1,
+                        arc_synopsis="弧线",
+                        status="active",
+                    )
+                    session.add(arc)
+                    session.commit()
+                    session.add_all(
+                        [
+                            ChapterPlan(
+                                id=new_id(),
+                                project_id=project.id,
+                                arc_plan_id=arc.id,
+                                chapter_number=1,
+                                title="第一章",
+                                one_line="推进一",
+                                goals_json='["g1"]',
+                                status="accepted",
+                            ),
+                            ChapterPlan(
+                                id=new_id(),
+                                project_id=project.id,
+                                arc_plan_id=arc.id,
+                                chapter_number=2,
+                                title="第二章",
+                                one_line="推进二",
+                                goals_json='["g2"]',
+                                status="needs_review",
+                            ),
+                        ]
+                    )
+                    session.commit()
+
+            api_module._SessionFactory = session_factory
+            event.listen(engine, "before_cursor_execute", record_selects)
+
+            items = api_module._list_project_backed_task_items(limit=10)
+
+            self.assertEqual(len(items), 3)
+            self.assertEqual(sum("FROM projects" in stmt for stmt in select_statements), 1)
+            self.assertEqual(sum("FROM chapter_plans" in stmt for stmt in select_statements), 1)
+        finally:
+            try:
+                event.remove(engine, "before_cursor_execute", record_selects)
+            except Exception:  # noqa: BLE001
+                pass
+            api_module._SessionFactory = old_session_factory
+            with api_module._tasks_lock:
+                api_module._tasks.clear()
+                api_module._tasks.update(old_tasks)
+            engine.dispose()
+            tmp.cleanup()
 
     def test_config_reads_embedding_and_pacing_controls(self) -> None:
         with patch.dict(
@@ -207,13 +501,13 @@ class Phase05RegressionTests(unittest.TestCase):
                                 "chapter_number": 1,
                                 "title": "第一章",
                                 "one_line": "一",
-                                "goals": ["g1"],
+                                "goals": ["正文"],
                             },
                             {
                                 "chapter_number": 2,
                                 "title": "第二章",
                                 "one_line": "二",
-                                "goals": ["g2"],
+                                "goals": ["正文"],
                             },
                         ],
                         "characters": [],
@@ -227,7 +521,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 def fake_write_chapter(context) -> WriterOutput:
                     if context.chapter_number == 2:
                         raise RuntimeError("simulated writer failure")
-                    body = "正文" * 800
+                    body = "正文" * 1300
                     return WriterOutput(
                         chapter_number=1,
                         title="第一章",
@@ -655,8 +949,8 @@ class Phase05RegressionTests(unittest.TestCase):
                         "arc_synopsis": "继续执行",
                         "setting_summary": "无",
                         "chapters": [
-                            {"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]},
-                            {"chapter_number": 2, "title": "第二章", "one_line": "延续", "goals": ["继续推进"]},
+                            {"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["第1章正文"]},
+                            {"chapter_number": 2, "title": "第二章", "one_line": "延续", "goals": ["第2章正文"]},
                         ],
                         "characters": [],
                         "locations": [],
@@ -667,7 +961,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     }
 
                 def fake_write_chapter(context) -> WriterOutput:
-                    body = f"第{context.chapter_number}章正文" * 300
+                    body = f"第{context.chapter_number}章正文" * 520
                     return WriterOutput(
                         chapter_number=context.chapter_number,
                         title=f"第{context.chapter_number}章",
@@ -1088,6 +1382,477 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(payload[0].chapters[0]["summary"], "摘要一")
         self.assertEqual(payload[0].chapters[1]["char_count"], 200)
 
+    def test_api_projects_include_generation_and_upload_counts(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "projects-with-counts.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session_factory = get_session_factory(engine)
+            session = session_factory()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="测试书", premise="前提", genre="玄幻")
+                arc = updater.create_arc_plan(project.id, "剧情")
+                first_plan = updater.create_chapter_plan(
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=1,
+                    title="第一章",
+                    one_line="开场",
+                    goals=["推进"],
+                )
+                updater.create_chapter_plan(
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=2,
+                    title="第二章",
+                    one_line="承压",
+                    goals=["加压"],
+                )
+                session.add(
+                    ChapterDraft(
+                        chapter_plan_id=first_plan.id,
+                        version=1,
+                        body_text="正文一",
+                        summary="摘要一",
+                        char_count=100,
+                    )
+                )
+                session.add(
+                    PublisherUploadJob(
+                        project_id=project.id,
+                        platform_id="qidian",
+                        status="succeeded",
+                        book_name="测试书",
+                        chapter_title="第一章",
+                        body_text="正文一",
+                    )
+                )
+                session.add(
+                    PublisherUploadJob(
+                        project_id=project.id,
+                        platform_id="qidian",
+                        status="pending",
+                        book_name="测试书",
+                        chapter_title="第二章",
+                        body_text="正文二",
+                    )
+                )
+                session.commit()
+
+                old_engine = api_module._engine
+                old_factory = api_module._SessionFactory
+                try:
+                    api_module._engine = engine
+                    api_module._SessionFactory = session_factory
+                    summary = api_module.list_projects()[0]
+                    detail = api_module.get_project(project.id)
+                finally:
+                    api_module._engine = old_engine
+                    api_module._SessionFactory = old_factory
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertEqual(summary.chapter_count, 2)
+        self.assertEqual(summary.generated_chapter_count, 1)
+        self.assertEqual(summary.upload_task_count, 2)
+        self.assertEqual(summary.uploaded_chapter_count, 1)
+        self.assertEqual(detail.upload_task_count, 2)
+        self.assertEqual(detail.uploaded_chapter_count, 1)
+
+    def test_create_project_api_creates_book_without_generation_task(self) -> None:
+        with TemporaryDirectory() as tmp:
+            old_config = api_module._config
+            old_engine = api_module._engine
+            old_factory = api_module._SessionFactory
+            old_tasks = api_module._tasks
+            temp_engine = None
+            try:
+                api_module._config = Config(
+                    db_path=str(Path(tmp) / "books.db"),
+                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
+                    minimax_api_key="",
+                    minimax_base_url="https://api.minimaxi.com/v1",
+                    minimax_model="MiniMax-M2.7",
+                )
+                temp_engine = get_engine(api_module._config.db_path)
+                init_db(temp_engine)
+                api_module._engine = temp_engine
+                api_module._SessionFactory = get_session_factory(temp_engine)
+                api_module._tasks = {}
+
+                created_payload = api_module.create_project(
+                    api_module.ProjectCreateRequest(
+                        title="测试书",
+                        premise="一个从灰城底层醒来的少年",
+                        genre="玄幻",
+                        setting_summary="高墙外有雾海",
+                        target_total_chapters=24,
+                    )
+                ).model_dump(mode="json")
+                projects_payload = [
+                    item.model_dump(mode="json")
+                    for item in api_module.list_projects()
+                ]
+
+                self.assertTrue(created_payload["ok"])
+                self.assertEqual(len(projects_payload), 1)
+                self.assertEqual(projects_payload[0]["title"], "测试书")
+                self.assertEqual(created_payload["target_total_chapters"], 24)
+                self.assertEqual(projects_payload[0]["target_total_chapters"], 24)
+                self.assertEqual(projects_payload[0]["chapter_count"], 0)
+                self.assertEqual(projects_payload[0]["uploaded_chapter_count"], 0)
+                self.assertEqual(api_module._tasks, {})
+            finally:
+                if temp_engine is not None:
+                    temp_engine.dispose()
+                api_module._config = old_config
+                api_module._engine = old_engine
+                api_module._SessionFactory = old_factory
+                api_module._tasks = old_tasks
+
+    def test_create_project_api_persists_platform_book_creation_mode(self) -> None:
+        with TemporaryDirectory() as tmp:
+            old_config = api_module._config
+            old_engine = api_module._engine
+            old_factory = api_module._SessionFactory
+            temp_engine = None
+            try:
+                api_module._config = Config(
+                    db_path=str(Path(tmp) / "book-publish-defaults.db"),
+                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
+                    minimax_api_key="",
+                    minimax_base_url="https://api.minimaxi.com/v1",
+                    minimax_model="MiniMax-M2.7",
+                )
+                temp_engine = get_engine(api_module._config.db_path)
+                init_db(temp_engine)
+                api_module._engine = temp_engine
+                api_module._SessionFactory = get_session_factory(temp_engine)
+
+                created = api_module.create_project(
+                    api_module.ProjectCreateRequest(
+                        title="测试书",
+                        premise="一个从灰城底层醒来的少年",
+                        genre="玄幻",
+                        setting_summary="高墙外有雾海",
+                        target_total_chapters=18,
+                        publish_platform="qidian",
+                        publish_book_name="灰城见习医师",
+                        publish_upload_url="https://writer.example/upload",
+                        platform_has_existing_book=False,
+                    )
+                )
+                detail = api_module.get_project(created.project_id)
+
+                self.assertEqual(detail.automation.publish.platform, "qidian")
+                self.assertEqual(detail.automation.publish.book_name, "灰城见习医师")
+                self.assertEqual(detail.automation.publish.upload_url, "https://writer.example/upload")
+                self.assertTrue(detail.automation.publish.create_if_missing)
+                self.assertEqual(detail.target_total_chapters, 18)
+            finally:
+                if temp_engine is not None:
+                    temp_engine.dispose()
+                api_module._config = old_config
+                api_module._engine = old_engine
+                api_module._SessionFactory = old_factory
+
+    def test_project_payloads_expose_at_least_planned_chapter_count_as_total(self) -> None:
+        with TemporaryDirectory() as tmp:
+            old_config = api_module._config
+            old_engine = api_module._engine
+            old_factory = api_module._SessionFactory
+            temp_engine = None
+            try:
+                api_module._config = Config(
+                    db_path=str(Path(tmp) / "book-total-consistency.db"),
+                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
+                    minimax_api_key="",
+                    minimax_base_url="https://api.minimaxi.com/v1",
+                    minimax_model="MiniMax-M2.7",
+                )
+                temp_engine = get_engine(api_module._config.db_path)
+                init_db(temp_engine)
+                api_module._engine = temp_engine
+                api_module._SessionFactory = get_session_factory(temp_engine)
+
+                with api_module._SessionFactory() as session:
+                    project = Project(
+                        title="测试书",
+                        premise="前提",
+                        genre="玄幻",
+                        setting_summary="设定",
+                        target_total_chapters=3,
+                    )
+                    session.add(project)
+                    session.flush()
+                    arc = ArcPlanVersion(
+                        project_id=project.id,
+                        version=1,
+                        arc_synopsis="弧线",
+                        status="active",
+                    )
+                    session.add(arc)
+                    session.flush()
+                    session.add_all(
+                        [
+                            ChapterPlan(
+                                project_id=project.id,
+                                arc_plan_id=arc.id,
+                                chapter_number=chapter_number,
+                                title=f"第{chapter_number}章",
+                                one_line="推进",
+                                goals_json='["目标"]',
+                                status="planned",
+                            )
+                            for chapter_number in range(1, 11)
+                        ]
+                    )
+                    session.commit()
+                    project_id = project.id
+
+                summary = api_module.list_projects()[0]
+                detail = api_module.get_project(project_id)
+
+                self.assertEqual(summary.chapter_count, 10)
+                self.assertEqual(summary.target_total_chapters, 10)
+                self.assertEqual(detail.chapter_count, 10)
+                self.assertEqual(detail.target_total_chapters, 10)
+            finally:
+                if temp_engine is not None:
+                    temp_engine.dispose()
+                api_module._config = old_config
+                api_module._engine = old_engine
+                api_module._SessionFactory = old_factory
+
+    def test_project_automation_update_roundtrip_exposes_summary_and_detail(self) -> None:
+        with TemporaryDirectory() as tmp:
+            old_config = api_module._config
+            old_engine = api_module._engine
+            old_factory = api_module._SessionFactory
+            temp_engine = None
+            try:
+                api_module._config = Config(
+                    db_path=str(Path(tmp) / "book-automation.db"),
+                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
+                    minimax_api_key="saved-key",
+                    minimax_base_url="https://api.minimaxi.com/v1",
+                    minimax_model="MiniMax-M2.7",
+                )
+                temp_engine = get_engine(api_module._config.db_path)
+                init_db(temp_engine)
+                api_module._engine = temp_engine
+                api_module._SessionFactory = get_session_factory(temp_engine)
+
+                created = api_module.create_project(
+                    api_module.ProjectCreateRequest(
+                        title="自动化测试书",
+                        premise="主角被迫卷入旧城阴谋",
+                        genre="悬疑",
+                        setting_summary="旧城与雾海相连",
+                    )
+                )
+                updated = api_module.update_project_automation(
+                    created.project_id,
+                    api_module.ProjectAutomationUpdateRequest.model_validate(
+                        {
+                            "enabled": True,
+                            "daily_start_time": "25:77",
+                            "daily_chapter_quota": 99,
+                            "auto_publish": True,
+                            "publish": {
+                                "platform": "qidian",
+                                "book_name": "自动化测试书",
+                                "upload_url": "https://writer.example/upload",
+                                "create_if_missing": True,
+                                "book_meta": {
+                                    "audience": "男频",
+                                    "primary_category": "都市异能",
+                                    "protagonist_names": ["沈砚", "顾临"],
+                                    "intro": "一场雾夜事故后，主角发现整座旧城都在撒谎。",
+                                },
+                            },
+                        }
+                    ),
+                )
+                summary = api_module.list_projects()[0]
+                detail = api_module.get_project(created.project_id)
+
+                self.assertTrue(updated.ok)
+                self.assertEqual(updated.automation.daily_start_time, "23:59")
+                self.assertEqual(updated.automation.daily_chapter_quota, 20)
+                self.assertTrue(updated.automation.auto_publish)
+                self.assertEqual(updated.automation.publish.platform, "qidian")
+                self.assertEqual(summary.automation.daily_start_time, "23:59")
+                self.assertEqual(summary.automation.daily_chapter_quota, 20)
+                self.assertTrue(summary.automation.enabled)
+                self.assertEqual(detail.automation.publish.book_name, "自动化测试书")
+                self.assertEqual(detail.automation.publish.book_meta.protagonist_names, ["沈砚", "顾临"])
+            finally:
+                if temp_engine is not None:
+                    temp_engine.dispose()
+                api_module._config = old_config
+                api_module._engine = old_engine
+                api_module._SessionFactory = old_factory
+
+    def test_automation_scheduler_batches_project_metric_queries(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "automation-scheduler.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session_factory = get_session_factory(engine)
+            old_config = api_module._config
+            old_factory = api_module._SessionFactory
+            initial_calls: list[tuple[str, int]] = []
+            continue_calls: list[tuple[str, int, int]] = []
+            select_statements: list[str] = []
+
+            def record_selects(
+                _conn,
+                _cursor,
+                statement,
+                _parameters,
+                _context,
+                _executemany,
+            ) -> None:
+                normalized = " ".join(str(statement or "").split()).lower()
+                if normalized.startswith("select"):
+                    select_statements.append(normalized)
+
+            try:
+                with session_factory() as session:
+                    ready_payload = json.dumps(
+                        {
+                            "enabled": True,
+                            "daily_start_time": "09:00",
+                            "daily_chapter_quota": 2,
+                        },
+                        ensure_ascii=False,
+                    )
+                    project_initial = Project(
+                        id=new_id(),
+                        title="自动调度-首批",
+                        premise="前提",
+                        genre="玄幻",
+                        setting_summary="设定",
+                        automation_json=ready_payload,
+                    )
+                    project_continue = Project(
+                        id=new_id(),
+                        title="自动调度-续跑",
+                        premise="前提",
+                        genre="玄幻",
+                        setting_summary="设定",
+                        automation_json=ready_payload,
+                    )
+                    project_waiting = Project(
+                        id=new_id(),
+                        title="自动调度-待审",
+                        premise="前提",
+                        genre="玄幻",
+                        setting_summary="设定",
+                        automation_json=ready_payload,
+                    )
+                    session.add_all([project_initial, project_continue, project_waiting])
+                    session.flush()
+
+                    for project in (project_continue, project_waiting):
+                        arc = ArcPlanVersion(
+                            id=new_id(),
+                            project_id=project.id,
+                            version=1,
+                            arc_synopsis="弧线",
+                            status="active",
+                        )
+                        session.add(arc)
+                        session.flush()
+                        session.add(
+                            ChapterPlan(
+                                id=new_id(),
+                                project_id=project.id,
+                                arc_plan_id=arc.id,
+                                chapter_number=1,
+                                title="第一章",
+                                one_line="推进",
+                                goals_json='["目标"]',
+                                status="planned" if project.id == project_continue.id else "needs_review",
+                            )
+                        )
+                    session.commit()
+
+                api_module._config = Config(db_path=db_path)
+                api_module._SessionFactory = session_factory
+                event.listen(engine, "before_cursor_execute", record_selects)
+
+                fixed_now = datetime(2026, 4, 18, 17, 0, tzinfo=timezone.utc)
+
+                with patch.object(api_module, "_utcnow", return_value=fixed_now), patch.object(
+                    api_module,
+                    "_saved_runtime_config_or_503",
+                    return_value=Config(db_path=db_path),
+                ), patch.object(
+                    api_module,
+                    "_create_generation_task",
+                    side_effect=lambda **kwargs: initial_calls.append(
+                        (str(kwargs.get("title") or ""), int(kwargs.get("num_chapters") or 0))
+                    ) or "task-initial",
+                ), patch.object(
+                    api_module,
+                    "_create_continue_generation_task",
+                    side_effect=lambda **kwargs: continue_calls.append(
+                        (
+                            str(kwargs.get("title") or ""),
+                            int(kwargs.get("requested_chapters") or 0),
+                            int(kwargs.get("max_chapters") or 0),
+                        )
+                    ) or "task-continue",
+                ):
+                    api_module._run_automation_scheduler_pass()
+
+                project_selects = [
+                    statement for statement in select_statements if " from projects" in statement
+                ]
+                chapter_plan_selects = [
+                    statement for statement in select_statements if " from chapter_plans" in statement
+                ]
+                generation_task_selects = [
+                    statement for statement in select_statements if " from generation_tasks" in statement
+                ]
+                event.remove(engine, "before_cursor_execute", record_selects)
+
+                with session_factory() as session:
+                    projects = {
+                        project.title: json.loads(project.automation_json)
+                        for project in session.execute(select(Project)).scalars().all()
+                    }
+
+                self.assertEqual(len(project_selects), 1)
+                self.assertEqual(len(chapter_plan_selects), 2)
+                self.assertEqual(len(generation_task_selects), 1)
+                self.assertEqual(initial_calls, [("自动调度-首批", 2)])
+                self.assertEqual(continue_calls, [("自动调度-续跑", 1, 2)])
+                self.assertEqual(
+                    projects["自动调度-首批"]["last_scheduler_action"],
+                    "started_initial_generation",
+                )
+                self.assertEqual(
+                    projects["自动调度-续跑"]["last_scheduler_action"],
+                    "started_continue_generation",
+                )
+                self.assertEqual(
+                    projects["自动调度-待审"]["last_scheduler_action"],
+                    "waiting_review",
+                )
+            finally:
+                try:
+                    event.remove(engine, "before_cursor_execute", record_selects)
+                except Exception:  # noqa: BLE001
+                    pass
+                api_module._config = old_config
+                api_module._SessionFactory = old_factory
+                engine.dispose()
+
     def test_local_memory_index_persists_and_searches_across_instances(self) -> None:
         with TemporaryDirectory() as tmp:
             index = LocalChapterMemoryIndex(root_dir=tmp)
@@ -1132,6 +1897,7 @@ class Phase05RegressionTests(unittest.TestCase):
                         "model": "external-model",
                         "operation_mode": "checkpoint",
                         "freeze_failed_candidates": False,
+                        "min_chapter_chars": 2800,
                     },
                     ensure_ascii=False,
                 ),
@@ -1142,8 +1908,10 @@ class Phase05RegressionTests(unittest.TestCase):
             third = store.get()
 
         self.assertEqual(first["api_key"], "sk-default")
+        self.assertEqual(first["min_chapter_chars"], 2500)
         self.assertEqual(second["api_key"], "sk-default")
         self.assertEqual(saved["model"], "saved-model")
+        self.assertEqual(saved["min_chapter_chars"], 2500)
         self.assertEqual(third["model"], "saved-model")
 
     def test_thread_sampling_balances_stale_and_hot_threads(self) -> None:
@@ -1936,6 +2704,9 @@ class Phase05RegressionTests(unittest.TestCase):
                 pressure_summary="悬置线程开始反噬主角。",
                 notable_shifts=["失踪信号开始扩散"],
             ),
+            audience_hints=AudienceHintView(
+                pacing_hints=["下一章尽快推进失踪信号主线。"],
+            ),
             reader_feedback=ReaderFeedbackView(
                 comment_count=12,
                 dominant_sentiment="期待",
@@ -1984,7 +2755,8 @@ class Phase05RegressionTests(unittest.TestCase):
         )
         self.assertIn("【NPC 当前意图】", prompt[1]["content"])
         self.assertIn("【世界压力】", prompt[1]["content"])
-        self.assertIn("【读者反馈】", prompt[1]["content"])
+        self.assertIn("【读者信号提示（仅供参考，自然融入情节）】", prompt[1]["content"])
+        self.assertNotIn("【读者反馈】", prompt[1]["content"])
         self.assertIn("【检索到的关键记忆】", prompt[1]["content"])
         self.assertIn("【当前 Arc Envelope】", prompt[1]["content"])
         self.assertIn("【当前时间】", prompt[1]["content"])
@@ -2004,7 +2776,8 @@ class Phase05RegressionTests(unittest.TestCase):
         )
         self.assertIn("当前 NPC 意图", scene_prompt[1]["content"])
         self.assertIn("世界压力", scene_prompt[1]["content"])
-        self.assertIn("读者反馈", scene_prompt[1]["content"])
+        self.assertIn("读者信号提示", scene_prompt[1]["content"])
+        self.assertNotIn("读者反馈", scene_prompt[1]["content"])
         self.assertIn("检索到的关键记忆", scene_prompt[1]["content"])
         self.assertIn("当前 Arc Envelope", scene_prompt[1]["content"])
         self.assertIn("当前时间", scene_prompt[1]["content"])
@@ -2050,7 +2823,7 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(snapshots[0].current_state["location"], "新站台")
         self.assertEqual(snapshots[0].current_state["status"], "alert")
 
-    def test_prompt_includes_reader_feedback(self) -> None:
+    def test_prompt_excludes_reader_feedback_but_keeps_audience_hints(self) -> None:
         context = ChapterContextPack(
             project_id="p1",
             project_title="书",
@@ -2061,6 +2834,10 @@ class Phase05RegressionTests(unittest.TestCase):
             chapter_plan_title="第二章",
             chapter_plan_one_line="继续推进",
             chapter_goals=["推进主线"],
+            audience_hints=AudienceHintView(
+                pacing_hints=["下一章更快兑现主线推进。"],
+                risk_flags=["避免连续两章只堆设定。"],
+            ),
             reader_feedback=ReaderFeedbackView(
                 comment_count=3,
                 dominant_sentiment="curious",
@@ -2077,8 +2854,169 @@ class Phase05RegressionTests(unittest.TestCase):
             min_chars=1500,
             max_chars=2200,
         )
-        self.assertIn("【读者反馈】", prompt[1]["content"])
-        self.assertIn("为什么林夜还不反击", prompt[1]["content"])
+        self.assertIn("【读者信号提示（仅供参考，自然融入情节）】", prompt[1]["content"])
+        self.assertIn("下一章更快兑现主线推进。", prompt[1]["content"])
+        self.assertIn("避免连续两章只堆设定。", prompt[1]["content"])
+        self.assertNotIn("【读者反馈】", prompt[1]["content"])
+        self.assertNotIn("最近 3 条评论，读者对悬念追问较多。", prompt[1]["content"])
+        self.assertNotIn("悬念追问", prompt[1]["content"])
+        self.assertNotIn("为什么林夜还不反击", prompt[1]["content"])
+
+    def test_phase24_bridge_chapter_does_not_invent_reward_tags(self) -> None:
+        from forwin.orchestrator.phase24 import ArcStructureDraftData
+        from forwin.protocol.experience import (
+            ArcPayoffMap,
+            BandDelightSchedule,
+            BandRewardItem,
+            CuriosityBeat,
+            ReaderPromise,
+        )
+
+        manager = ArcEnvelopeManager(director=SimpleNamespace())
+        plan = manager._derive_chapter_experience_plan(
+            chapter_number=2,
+            structure=ArcStructureDraftData(
+                phase_layout=["setup", "pressure", "payoff"],
+                key_beats=["主角被盯上", "确认代价", "发现反扑入口"],
+                thread_priorities=[],
+                hotspot_candidates=[],
+                compression_candidates=[],
+                reader_promise=ReaderPromise(world_legibility_target="规则必须可验证"),
+                arc_payoff_map=ArcPayoffMap(ambiguity_constraints=["每次动用异象都要付出代价"]),
+            ),
+            schedule=BandDelightSchedule(
+                band_id="band:1:3",
+                chapter_start=1,
+                chapter_end=3,
+                scheduled_rewards=[
+                    BandRewardItem(
+                        chapter_hint=1,
+                        category="power",
+                        template_id="power-micro-win",
+                        intent="micro_progress_power",
+                    ),
+                    BandRewardItem(
+                        chapter_hint=3,
+                        category="mystery",
+                        template_id="mystery-locked-clue",
+                        intent="mystery_clue_or_reveal",
+                    ),
+                ],
+                immersion_anchor_scene_goal="让读者听见站台风声",
+                stall_guard_max_gap=1,
+                curiosity_beats=[
+                    CuriosityBeat(
+                        chapter_hint=2,
+                        question_open="这次代价到底落在谁身上",
+                        question_resolve="确认异象不是无成本外挂",
+                        escalated_question="真正的操盘者为什么主动放出线索",
+                    )
+                ],
+            ),
+            chapter_plan=ChapterPlan(
+                id=new_id(),
+                project_id="p1",
+                arc_plan_id="arc-1",
+                chapter_number=2,
+                title="第二章",
+                one_line="桥段承压",
+                goals_json=json.dumps(["推进后果", "确认代价"], ensure_ascii=False),
+                status="planned",
+            ),
+        )
+
+        self.assertEqual(plan.planned_reward_tags, [])
+        self.assertEqual(plan.selected_template_ids, [])
+        self.assertEqual(plan.question_hook, "这次代价到底落在谁身上")
+        self.assertTrue(plan.progress_markers)
+
+    def test_single_and_preview_prompts_include_experience_overlay(self) -> None:
+        from forwin.protocol.experience import (
+            BandDelightSchedule,
+            BandRewardItem,
+            ChapterExperiencePlan,
+            ReaderPromise,
+        )
+
+        context = ChapterContextPack(
+            project_id="p1",
+            project_title="书",
+            genre="玄幻",
+            premise="前提",
+            setting_summary="设定",
+            chapter_number=2,
+            chapter_plan_title="第二章",
+            chapter_plan_one_line="继续推进",
+            chapter_goals=["推进主线"],
+            reader_promise=ReaderPromise(
+                genre_promise="玄幻升级文",
+                pleasure_promise="稳定爽点与悬念回报",
+                core_pleasures=["悬念", "翻盘"],
+                cliffhanger_aggressiveness="high",
+            ),
+            band_delight_schedule=BandDelightSchedule(
+                band_id="band:1:3",
+                chapter_start=1,
+                chapter_end=3,
+                scheduled_rewards=[
+                    BandRewardItem(
+                        chapter_hint=2,
+                        category="mystery",
+                        template_id="mystery-locked-clue",
+                        intent="mystery_clue_or_reveal",
+                    )
+                ],
+                immersion_anchor_scene_goal="让读者进入现场",
+                stall_guard_max_gap=1,
+            ),
+            chapter_experience_plan=ChapterExperiencePlan(
+                planned_reward_tags=["mystery"],
+                selected_template_ids=["mystery-locked-clue"],
+                hook_type="cliffhanger_question",
+                question_hook="幕后推手到底是谁",
+                question_resolution="确认一条真线索",
+                immersion_anchors=["雨夜站台的风声"],
+                progress_markers=["主角确认线索来源"],
+                rule_anchors=["异象必须遵守代价"],
+            ),
+        )
+
+        single_prompt = build_single_chapter_draft_prompt(context)
+        preview_prompt = build_preview_chapter_prompt(context)
+
+        self.assertIn("【读者体验 Overlay】", single_prompt[1]["content"])
+        self.assertIn("本章计划奖励：mystery", single_prompt[1]["content"])
+        self.assertIn("幕后推手到底是谁", single_prompt[1]["content"])
+        self.assertIn("【读者体验 Overlay】", preview_prompt[1]["content"])
+        self.assertIn("异象必须遵守代价", preview_prompt[1]["content"])
+
+    def test_lint_signal_collector_does_not_autorun_reviewdog_for_plain_text(self) -> None:
+        from forwin.reviewer.lint import LintSignalCollector
+
+        collector = LintSignalCollector(enabled=True)
+        invoked_tools: list[str] = []
+
+        with patch("forwin.reviewer.lint.shutil.which", return_value="/usr/bin/fake-tool"):
+            with patch.object(
+                collector,
+                "_run_tool",
+                side_effect=lambda tool, _path: invoked_tools.append(tool) or [],
+            ):
+                collector.collect(
+                    WriterOutput(
+                        chapter_number=1,
+                        title="第一章",
+                        body="这是一段普通正文，不是 rdjson 诊断流。",
+                        char_count=18,
+                        end_of_chapter_summary="ok",
+                        state_changes=[],
+                        new_events=[],
+                        thread_beats=[],
+                        time_advance=None,
+                    )
+                )
+
+        self.assertEqual(invoked_tools, ["vale", "textlint", "languagetool"])
 
     def test_phase4_generators_can_use_llm_output(self) -> None:
         class FakeIntentLLM:
@@ -2259,6 +3197,69 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertTrue(feedback.feedback_summary)
         self.assertGreaterEqual(len(feedback.recent_highlights), 1)
 
+    def test_repo_reader_feedback_prefers_project_scope_and_respects_before_chapter_titles(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "reader-feedback-scope.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project_a = updater.create_project(title="重名书", premise="前提A", genre="玄幻")
+                project_b = updater.create_project(title="重名书", premise="前提B", genre="玄幻")
+                arc_a = updater.create_arc_plan(project_a.id, "弧线A")
+                arc_b = updater.create_arc_plan(project_b.id, "弧线B")
+                updater.create_chapter_plan(project_a.id, arc_a.id, 1, "第一章", "一", ["g1"])
+                updater.create_chapter_plan(project_a.id, arc_a.id, 2, "第二章", "二", ["g2"])
+                updater.create_chapter_plan(project_b.id, arc_b.id, 1, "第一章", "一", ["g1"])
+                updater.create_chapter_plan(project_b.id, arc_b.id, 2, "第二章", "二", ["g2"])
+                session.add_all(
+                    [
+                        PublisherRawComment(
+                            project_id=project_a.id,
+                            platform_id="qidian",
+                            remote_comment_id="a-c1",
+                            work_name="重名书",
+                            chapter_title="第一章",
+                            author_name="读者A",
+                            body_text="A 项目的第一章反馈",
+                        ),
+                        PublisherRawComment(
+                            project_id=project_a.id,
+                            platform_id="qidian",
+                            remote_comment_id="a-c2",
+                            work_name="重名书",
+                            chapter_title="第二章",
+                            author_name="读者A2",
+                            body_text="A 项目的第二章反馈，不该出现在 before_chapter=2 中",
+                        ),
+                        PublisherRawComment(
+                            project_id=project_b.id,
+                            platform_id="fanqie",
+                            remote_comment_id="b-c1",
+                            work_name="重名书",
+                            chapter_title="第一章",
+                            author_name="读者B",
+                            body_text="B 项目的反馈，不该串到 A",
+                        ),
+                    ]
+                )
+                session.commit()
+
+                feedback = StateRepository(session).get_recent_reader_feedback(
+                    project_a.id,
+                    before_chapter=2,
+                )
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertIsNotNone(feedback)
+        assert feedback is not None
+        self.assertEqual(feedback.comment_count, 1)
+        self.assertEqual(len(feedback.recent_highlights), 1)
+        self.assertIn("A 项目的第一章反馈", feedback.recent_highlights[0].body_text)
+
     def test_phase4_rule_fallback_uses_reader_feedback(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "phase4-feedback.db")
@@ -2311,7 +3312,7 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertTrue(any("节奏" in item.tactic or "悬念" in item.tactic for item in intents))
         self.assertIn(world.pressure_level, {"rising", "critical"})
 
-    def test_blackbox_writer_failure_degrades_to_needs_review(self) -> None:
+    def test_blackbox_writer_failure_fails_without_empty_review(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "blackbox-attention.db")
             orchestrator = WritingOrchestrator(
@@ -2356,9 +3357,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 orchestrator.llm_client.close()
                 orchestrator.engine.dispose()
 
-            self.assertEqual(result.status, "needs_review")
-            self.assertEqual(result.paused_chapters, [1])
-            self.assertEqual(plan.status, "needs_review")
+            self.assertEqual(result.status, "failed")
+            self.assertEqual(result.paused_chapters, [])
+            self.assertEqual(result.failed_chapters, [1])
+            self.assertEqual(plan.status, "failed")
             self.assertEqual(len(result.frozen_artifacts), 1)
 
     def test_blackbox_timeout_stops_extra_writer_retries(self) -> None:
@@ -2400,8 +3402,90 @@ class Phase05RegressionTests(unittest.TestCase):
                 orchestrator.llm_client.close()
                 orchestrator.engine.dispose()
 
-            self.assertEqual(result.status, "needs_review")
+            self.assertEqual(result.status, "failed")
+            self.assertEqual(result.failed_chapters, [1])
             self.assertEqual(calls["count"], 1)
+
+    def test_provisional_failure_blocks_formal_writing(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "provisional-gate.db")
+            events: list[tuple[str, dict[str, object]]] = []
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    minimax_api_key="test-key",
+                    minimax_model="fake-model",
+                    operation_mode="blackbox",
+                ),
+                progress_callback=lambda event, payload: events.append((event, dict(payload))),
+            )
+            try:
+                orchestrator.arc_director.plan_arc = lambda premise, genre, num_chapters: {
+                    "arc_synopsis": "预演失败",
+                    "setting_summary": "无",
+                    "chapters": [
+                        {"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]}
+                    ],
+                    "characters": [],
+                    "locations": [],
+                    "factions": [],
+                    "relations": [],
+                    "plot_threads": [],
+                    "initial_time": {"label": "开始", "description": "开始"},
+                }
+                orchestrator.arc_envelope_manager.director = None
+                orchestrator.provisional_writer.write_preview_chapter = (
+                    lambda _context, **_kwargs: (_ for _ in ()).throw(
+                        RuntimeError("529 Unknown Status Code")
+                    )
+                )
+                orchestrator.writer.write_chapter = lambda _context: WriterOutput(
+                    chapter_number=1,
+                    title="第一章",
+                    body="正文" * 800,
+                    char_count=len("正文" * 800),
+                    end_of_chapter_summary="正式正文摘要",
+                    state_changes=[],
+                    new_events=[],
+                    thread_beats=[],
+                    time_advance=None,
+                )
+
+                result = orchestrator.run("p", "g", 1)
+
+                engine = get_engine(db_path)
+                session = get_session_factory(engine)()
+                try:
+                    plan = session.execute(select(ChapterPlan)).scalar_one()
+                    preview = session.execute(
+                        select(ProvisionalBandExecution)
+                        .where(ProvisionalBandExecution.project_id == result.project_id)
+                        .limit(1)
+                    ).scalar_one()
+                    ledger = session.execute(
+                        select(ProvisionalChapterLedger)
+                        .where(ProvisionalChapterLedger.project_id == result.project_id)
+                        .limit(1)
+                    ).scalar_one()
+                finally:
+                    session.close()
+                    engine.dispose()
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(result.failed_chapters, [])
+        self.assertEqual(result.paused_chapters, [])
+        self.assertEqual(plan.status, "accepted")
+        self.assertEqual(preview.aggregate_verdict, "warn")
+        self.assertEqual(preview.failure_count, 0)
+        self.assertEqual(ledger.verdict, "warn")
+        self.assertIn("529", ledger.error_text)
+        self.assertNotIn(
+            "provisional_failed",
+            [payload.get("stage") for event, payload in events if event == "stage_changed"],
+        )
 
     def test_api_project_detail_includes_phase4_fields(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -2498,6 +3582,107 @@ class Phase05RegressionTests(unittest.TestCase):
 
         self.assertEqual(payload[0].last_replan_strategy, "reband")
         self.assertEqual(detail.recent_replans[0]["strategy"], "reband")
+
+    def test_project_runtime_history_queries_use_windowed_limits(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "runtime-history.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session = get_session_factory(engine)()
+            select_statements: list[str] = []
+
+            def record_selects(
+                _conn,
+                _cursor,
+                statement,
+                _parameters,
+                _context,
+                _executemany,
+            ) -> None:
+                normalized = " ".join(str(statement or "").split()).lower()
+                if normalized.startswith("select"):
+                    select_statements.append(normalized)
+
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="测试书", premise="前提", genre="玄幻")
+                entity = updater.create_entity(
+                    project_id=project.id,
+                    kind="character",
+                    name="林夜",
+                    description="主角",
+                )
+                session.add_all(
+                    [
+                        ProjectReplanEvent(
+                            project_id=project.id,
+                            trigger_chapter=chapter_number,
+                            risk_level="medium",
+                            reason=f"replan-{chapter_number}",
+                            focus_threads_json='["主线"]',
+                            strategy="reband",
+                            status="applied",
+                            cooldown_until_chapter=chapter_number + 2,
+                        )
+                        for chapter_number in range(1, 9)
+                    ]
+                )
+                session.add_all(
+                    [
+                        NPCIntentSnapshot(
+                            project_id=project.id,
+                            chapter_number=chapter_number,
+                            entity_id=entity.id,
+                            entity_name="林夜",
+                            intent_kind="pursue",
+                            objective=f"目标-{chapter_number}",
+                            tactic="制造信息差",
+                            urgency=chapter_number,
+                            notes="下章前生效",
+                        )
+                        for chapter_number in range(1, 10)
+                    ]
+                )
+                session.commit()
+
+                event.listen(engine, "before_cursor_execute", record_selects)
+
+                recent_replans = api_project_payloads_module.load_recent_replan_events_by_project(
+                    session,
+                    [project.id],
+                    limit=5,
+                )
+                recent_intents = api_project_payloads_module.load_recent_npc_intents_by_project(
+                    session,
+                    [project.id],
+                    limit=6,
+                )
+            finally:
+                try:
+                    event.remove(engine, "before_cursor_execute", record_selects)
+                except Exception:  # noqa: BLE001
+                    pass
+                session.close()
+                engine.dispose()
+
+        self.assertEqual(
+            [item.trigger_chapter for item in recent_replans[project.id]],
+            [8, 7, 6, 5, 4],
+        )
+        self.assertEqual(
+            [item.chapter_number for item in recent_intents[project.id]],
+            [9, 8, 7, 6, 5, 4],
+        )
+        replan_queries = [
+            statement for statement in select_statements if "project_replan_events" in statement
+        ]
+        npc_queries = [
+            statement for statement in select_statements if "npc_intent_snapshots" in statement
+        ]
+        self.assertEqual(len(replan_queries), 1)
+        self.assertEqual(len(npc_queries), 1)
+        self.assertIn("row_number() over", replan_queries[0])
+        self.assertIn("row_number() over", npc_queries[0])
 
     def test_apply_events_rejects_partial_event_writes(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -2980,7 +4165,9 @@ class Phase05RegressionTests(unittest.TestCase):
                     '{"text":"scene one","micro_summary":"相遇总结","scene_time_point":"清晨","scene_location_id":"荒原","involved_entities":["林夜"]}',
                     '{"text":"scene two","micro_summary":"逃离总结","scene_time_point":"午后","scene_location_id":"峡谷","involved_entities":["林夜"]}',
                     '{"title":"拼接章","body":"scene one\\nscene two","end_of_chapter_summary":"本章完成逃离"}',
-                    '{"state_changes":[{"entity_name":"林夜","entity_kind":"character","field":"location","old_value":"荒原","new_value":"峡谷","reason":"逃离成功"}],"new_events":[{"summary":"林夜逃离","significance":"major","involved_entity_names":["林夜"],"roles":["protagonist"]}],"thread_beats":[{"thread_name":"主线","beat_type":"escalation","description":"危机升级"}],"time_advance":{"new_time_label":"第二天","duration_description":"半日后"}}',
+                    '{"state_changes":[{"entity_name":"林夜","entity_kind":"character","field":"location","old_value":"荒原","new_value":"峡谷","reason":"逃离成功"}],"new_events":[{"summary":"林夜逃离","significance":"major","involved_entity_names":["林夜"],"roles":["protagonist"]}]}',
+                    '{"thread_beats":[{"thread_name":"主线","beat_type":"escalation","description":"危机升级"}],"time_advance":{"new_time_label":"第二天","duration_description":"半日后"}}',
+                    '{"lore_candidates":[],"timeline_hints":[],"writer_notes":[]}',
                 ]
 
             def chat(self, messages, temperature: float, max_tokens: int) -> str:
@@ -3013,7 +4200,7 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(output.title, "拼接章")
         self.assertEqual(len(output.scene_outputs), 2)
         self.assertEqual(output.generation_meta["mode"], "scene")
-        self.assertEqual(output.generation_meta["call_count"], 5)
+        self.assertEqual(output.generation_meta["call_count"], 7)
         self.assertEqual(output.state_changes[0].field, "location")
 
     def test_scene_writer_falls_back_when_scene_breakdown_json_fails(self) -> None:
@@ -3024,7 +4211,9 @@ class Phase05RegressionTests(unittest.TestCase):
                     '{"text":"scene one","micro_summary":"相遇总结","scene_time_point":"清晨","scene_location_id":"荒原","involved_entities":["林夜"]}',
                     '{"text":"scene two","micro_summary":"推进总结","scene_time_point":"午后","scene_location_id":"旧站台","involved_entities":["林夜"]}',
                     '{"title":"回退章","body":"scene one\\nscene two","end_of_chapter_summary":"本章完成推进"}',
-                    '{"state_changes":[],"new_events":[],"thread_beats":[]}',
+                    '{"state_changes":[],"new_events":[]}',
+                    '{"thread_beats":[],"time_advance":null}',
+                    '{"lore_candidates":[],"timeline_hints":[],"writer_notes":[]}',
                 ]
 
             def chat(self, messages, temperature: float, max_tokens: int, response_format=None) -> str:
@@ -3070,7 +4259,9 @@ class Phase05RegressionTests(unittest.TestCase):
                     httpx.ReadTimeout("scene timed out"),
                     httpx.ReadTimeout("scene timed out again"),
                     '{"title":"单章回退","body":"主角在暴雨夜踏入站台，听见远处传来列车进站的怪响。","end_of_chapter_summary":"主角抵达异变现场"}',
-                    '{"state_changes":[],"new_events":[],"thread_beats":[]}',
+                    '{"state_changes":[],"new_events":[]}',
+                    '{"thread_beats":[],"time_advance":null}',
+                    '{"lore_candidates":[],"timeline_hints":[],"writer_notes":[]}',
                 ]
 
             def chat(self, messages, temperature: float, max_tokens: int, **kwargs) -> str:
@@ -3230,6 +4421,11 @@ class Phase05RegressionTests(unittest.TestCase):
     def test_publisher_manager_upload_jobs_and_comment_upsert(self) -> None:
         tmp, engine, manager = self._make_publisher_manager()
         try:
+            with manager.session_factory() as session:
+                updater = StateUpdater(session)
+                updater.create_project(title="测试书", premise="前提", genre="玄幻")
+                session.commit()
+
             job = manager.create_upload_job(
                 platform="qidian",
                 book_name="测试书",
@@ -3239,6 +4435,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 publish=True,
             )
             self.assertEqual(job["status"], "pending")
+            self.assertTrue(job["project_id"])
 
             claimed = manager.claim_next_upload_job(
                 client_id="client-1",
@@ -3399,6 +4596,148 @@ class Phase05RegressionTests(unittest.TestCase):
             engine.dispose()
             tmp.cleanup()
 
+    def test_publisher_manager_ingest_comments_batch_resolves_titles_once_per_batch(self) -> None:
+        tmp, engine, manager = self._make_publisher_manager()
+        select_statements: list[str] = []
+
+        def record_selects(
+            _conn,
+            _cursor,
+            statement,
+            _parameters,
+            _context,
+            _executemany,
+        ) -> None:
+            normalized = " ".join(str(statement or "").split()).lower()
+            if normalized.startswith("select"):
+                select_statements.append(normalized)
+
+        try:
+            with manager.session_factory() as session:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="测试书", premise="前提", genre="玄幻")
+                session.commit()
+
+            event.listen(engine, "before_cursor_execute", record_selects)
+            batch = manager.ingest_comments_batch(
+                client_id="client-1",
+                platform="fanqie",
+                comments=[
+                    {
+                        "remote_comment_id": f"comment-{index}",
+                        "work_id": "book-1",
+                        "work_name": "测试书",
+                        "chapter_id": "chapter-1",
+                        "chapter_title": "第一章",
+                        "author_id": f"user-{index}",
+                        "author_name": f"读者{index}",
+                        "body": "催更",
+                        "created_at": "2026-03-31T12:00:00Z",
+                    }
+                    for index in range(1, 4)
+                ],
+            )
+
+            with manager.session_factory() as session:
+                stored_comments = session.execute(
+                    select(PublisherRawComment)
+                    .order_by(PublisherRawComment.remote_comment_id.asc())
+                ).scalars().all()
+        finally:
+            try:
+                event.remove(engine, "before_cursor_execute", record_selects)
+            except Exception:  # noqa: BLE001
+                pass
+            engine.dispose()
+            tmp.cleanup()
+
+        self.assertEqual(batch["inserted"], 3)
+        self.assertEqual(
+            len([statement for statement in select_statements if " from projects" in statement]),
+            1,
+        )
+        self.assertEqual(
+            [comment.project_id for comment in stored_comments],
+            [project.id, project.id, project.id],
+        )
+
+    def test_publisher_manager_keeps_browser_sessions_per_client_and_restores_latest_synced_one(self) -> None:
+        tmp, engine, manager = self._make_publisher_manager(preferred_client_id="server-client")
+        try:
+            manager.record_browser_session(
+                client_id="laptop-client",
+                platform="qidian",
+                cookies=[
+                    {
+                        "name": "AppAuthToken",
+                        "value": "token-laptop",
+                        "domain": ".write.qq.com",
+                        "path": "/",
+                    },
+                    {
+                        "name": "pubtoken",
+                        "value": "pub-laptop",
+                        "domain": ".write.qq.com",
+                        "path": "/",
+                    },
+                ],
+            )
+            manager.record_browser_session(
+                client_id="server-client",
+                platform="qidian",
+                cookies=[
+                    {
+                        "name": "AppAuthToken",
+                        "value": "token-server",
+                        "domain": ".write.qq.com",
+                        "path": "/",
+                    }
+                ],
+            )
+
+            restored = manager.get_browser_session("qidian")
+            assert restored is not None
+            self.assertEqual(restored["client_id"], "server-client")
+            self.assertEqual(restored["cookie_count"], 1)
+            self.assertFalse(manager.has_browser_session("qidian"))
+
+            with manager.session_factory() as session:
+                entries = session.execute(
+                    select(PublisherBrowserSessionEntry)
+                    .where(PublisherBrowserSessionEntry.platform_id == "qidian")
+                    .order_by(PublisherBrowserSessionEntry.client_id.asc())
+                ).scalars().all()
+                self.assertEqual([entry.client_id for entry in entries], ["laptop-client", "server-client"])
+                summary = session.get(PublisherBrowserSession, "qidian")
+                assert summary is not None
+                self.assertEqual(summary.extension_client_id, "server-client")
+        finally:
+            engine.dispose()
+            tmp.cleanup()
+
+    def test_publisher_manager_fanqie_session_cookie_alone_does_not_mark_connected(self) -> None:
+        tmp, engine, manager = self._make_publisher_manager()
+        try:
+            manager.record_browser_session(
+                client_id="client-1",
+                platform="fanqie",
+                cookies=[
+                    {
+                        "name": "sessionid",
+                        "value": "token",
+                        "domain": ".fanqienovel.com",
+                        "path": "/",
+                    }
+                ],
+            )
+
+            self.assertFalse(manager.has_browser_session("fanqie"))
+            items = {item["platform_id"]: item for item in manager.list_platforms()}
+            self.assertFalse(items["fanqie"]["connected"])
+        finally:
+            engine.dispose()
+            tmp.cleanup()
+
     def test_publisher_manager_requeues_running_jobs_after_restart(self) -> None:
         tmp, engine, manager = self._make_publisher_manager()
         try:
@@ -3552,9 +4891,8 @@ class Phase05RegressionTests(unittest.TestCase):
         tmp, engine, manager = self._make_publisher_manager()
         old_manager = api_module._publisher_manager
         try:
+            api_module._publisher_manager = manager
             with TestClient(api_module.app) as client:
-                api_module._publisher_manager = manager
-
                 page = client.get("/publishers")
                 self.assertEqual(page.status_code, 200)
                 self.assertIn("浏览器扩展", page.text)
@@ -3807,27 +5145,29 @@ class Phase05RegressionTests(unittest.TestCase):
             old_config = api_module._config
             old_store = api_module._runtime_settings
             try:
+                api_module._config = Config(
+                    db_path=":memory:",
+                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
+                    minimax_api_key="",
+                    minimax_base_url="https://api.minimaxi.com/v1",
+                    minimax_model="MiniMax-M2.7",
+                )
+                api_module._runtime_settings = RuntimeSettingsStore(
+                    api_module._config.runtime_settings_path,
+                    default_api_key="",
+                    default_base_url=api_module._config.minimax_base_url,
+                    default_model=api_module._config.minimax_model,
+                )
                 with TestClient(api_module.app) as client:
-                    api_module._config = Config(
-                        db_path=":memory:",
-                        runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
-                        minimax_api_key="",
-                        minimax_base_url="https://api.minimaxi.com/v1",
-                        minimax_model="MiniMax-M2.7",
-                    )
-                    api_module._runtime_settings = RuntimeSettingsStore(
-                        api_module._config.runtime_settings_path,
-                        default_api_key="",
-                        default_base_url=api_module._config.minimax_base_url,
-                        default_model=api_module._config.minimax_model,
-                    )
-
                     page = client.get("/")
 
                     self.assertEqual(page.status_code, 200)
                     self.assertIn('id="model_form_api_key"', page.text)
                     self.assertIn("https://api.minimaxi.com/v1", page.text)
                     self.assertIn("MiniMax-M2.7", page.text)
+                    self.assertIn("Kimi 中文站 / Moonshot.cn", page.text)
+                    self.assertIn("https://api.moonshot.cn/v1", page.text)
+                    self.assertIn("kimi-k2.5", page.text)
                     self.assertIn("统一任务中心", page.text)
                     self.assertIn("模型列表", page.text)
                     self.assertIn("Operation Mode", page.text)
@@ -3881,8 +5221,8 @@ class Phase05RegressionTests(unittest.TestCase):
                         "arc_synopsis": "Review API",
                         "setting_summary": "无",
                         "chapters": [
-                            {"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]},
-                            {"chapter_number": 2, "title": "第二章", "one_line": "延续", "goals": ["继续推进"]},
+                            {"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["第1章正文"]},
+                            {"chapter_number": 2, "title": "第二章", "one_line": "延续", "goals": ["第2章正文"]},
                         ],
                         "characters": [],
                         "locations": [],
@@ -3893,7 +5233,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     }
 
                 def fake_write_chapter(context) -> WriterOutput:
-                    body = f"第{context.chapter_number}章正文" * 300
+                    body = f"第{context.chapter_number}章正文" * 520
                     return WriterOutput(
                         chapter_number=context.chapter_number,
                         title=f"第{context.chapter_number}章",
@@ -3951,7 +5291,10 @@ class Phase05RegressionTests(unittest.TestCase):
                     approve_payload = api_module.approve_chapter_review(
                         run_result.project_id,
                         1,
-                        api_module.ChapterReviewApproveRequest(continue_generation=True),
+                        api_module.ChapterReviewApproveRequest(
+                            continue_generation=True,
+                            reason="phase05 continue review",
+                        ),
                     )
                     task_payload = api_module.get_task(approve_payload.task_id)
 
@@ -3985,18 +5328,17 @@ class Phase05RegressionTests(unittest.TestCase):
             def start(self):
                 self.started = True
 
-        with TestClient(api_module.app) as client:
-            old_config = api_module._config
-            old_tasks = api_module._tasks
-            try:
-                api_module._config = Config(
-                    db_path=":memory:",
-                    minimax_api_key="",
-                    minimax_base_url="https://api.minimaxi.com/v1",
-                    minimax_model="MiniMax-M2.7",
-                )
-                api_module._tasks = {}
-
+        old_config = api_module._config
+        old_tasks = api_module._tasks
+        try:
+            api_module._config = Config(
+                db_path=":memory:",
+                minimax_api_key="",
+                minimax_base_url="https://api.minimaxi.com/v1",
+                minimax_model="MiniMax-M2.7",
+            )
+            api_module._tasks = {}
+            with TestClient(api_module.app) as client:
                 with patch.object(api_module.threading, "Thread", FakeThread):
                     response = client.post(
                         "/api/generate",
@@ -4010,18 +5352,173 @@ class Phase05RegressionTests(unittest.TestCase):
                         },
                     )
 
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(len(FakeThread.created), 1)
+            thread = FakeThread.created[0]
+            self.assertTrue(thread.started)
+            self.assertIs(thread.target, api_module._run_generation_with_config)
+            runtime_config = thread.args[4]
+            self.assertEqual(runtime_config.minimax_api_key, "sk-inline")
+            self.assertEqual(runtime_config.minimax_base_url, "https://example.test/v1")
+            self.assertEqual(runtime_config.minimax_model, "custom-model")
+        finally:
+            api_module._config = old_config
+            api_module._tasks = old_tasks
+
+    def test_generate_for_existing_project_keeps_book_context(self) -> None:
+        class FakeThread:
+            created: list["FakeThread"] = []
+
+            def __init__(self, target=None, args=None, daemon=None):
+                self.target = target
+                self.args = args or ()
+                self.daemon = daemon
+                self.started = False
+                FakeThread.created.append(self)
+
+            def start(self):
+                self.started = True
+
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "existing-project-generate.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session_factory = get_session_factory(engine)
+            with session_factory() as session:
+                updater = StateUpdater(session)
+                project = updater.create_project("测试书", "前提", "玄幻", "设定")
+                session.commit()
+
+            old_config = api_module._config
+            old_engine = api_module._engine
+            old_factory = api_module._SessionFactory
+            old_tasks = api_module._tasks
+            try:
+                api_module._config = Config(
+                    db_path=db_path,
+                    minimax_api_key="saved-key",
+                    minimax_base_url="https://api.minimaxi.com/v1",
+                    minimax_model="MiniMax-M2.7",
+                )
+                api_module._engine = engine
+                api_module._SessionFactory = session_factory
+                api_module._tasks = {}
+                with TestClient(api_module.app) as client:
+                    with patch.object(api_module.threading, "Thread", FakeThread):
+                        response = client.post(
+                            "/api/generate",
+                            json={
+                                "project_id": project.id,
+                                "premise": "前提",
+                                "genre": "玄幻",
+                                "num_chapters": 3,
+                            },
+                        )
                 self.assertEqual(response.status_code, 200)
+                payload = response.json()
+                self.assertEqual(payload["project_id"], project.id)
+                self.assertEqual(payload["title"], "测试书")
                 self.assertEqual(len(FakeThread.created), 1)
-                thread = FakeThread.created[0]
-                self.assertTrue(thread.started)
-                self.assertIs(thread.target, api_module._run_generation_with_config)
-                runtime_config = thread.args[4]
-                self.assertEqual(runtime_config.minimax_api_key, "sk-inline")
-                self.assertEqual(runtime_config.minimax_base_url, "https://example.test/v1")
-                self.assertEqual(runtime_config.minimax_model, "custom-model")
+                self.assertIs(FakeThread.created[0].target, api_module._run_generation_with_config)
+                self.assertEqual(FakeThread.created[0].args[7], project.id)
             finally:
                 api_module._config = old_config
+                api_module._engine = old_engine
+                api_module._SessionFactory = old_factory
                 api_module._tasks = old_tasks
+                engine.dispose()
+
+    def test_run_generation_with_config_uses_existing_project_path_when_project_id_present(self) -> None:
+        class FakeOrchestrator:
+            def __init__(self, config, progress_callback=None, should_abort=None):
+                self.config = config
+                self.progress_callback = progress_callback
+                self.should_abort = should_abort
+                self.run_calls = []
+                self.run_existing_calls = []
+                self.llm_client = SimpleNamespace(close=lambda: None)
+                self.engine = SimpleNamespace(dispose=lambda: None)
+
+            def run(self, **kwargs):
+                self.run_calls.append(kwargs)
+                return RunResult(project_id="new-project", requested_chapters=3)
+
+            def run_existing_project(self, project_id: str, *, num_chapters: int):
+                self.run_existing_calls.append((project_id, num_chapters))
+                return RunResult(project_id=project_id, requested_chapters=num_chapters)
+
+        updates: list[dict[str, object]] = []
+
+        def update_task(_task_id: str, **changes):
+            updates.append(changes)
+
+        config = Config(
+            db_path=":memory:",
+            minimax_api_key="saved-key",
+            minimax_base_url="https://api.minimaxi.com/v1",
+            minimax_model="MiniMax-M2.7",
+        )
+        fake = FakeOrchestrator(config)
+        with patch.object(api_runtime_module, "WritingOrchestrator", return_value=fake):
+            api_runtime_module.run_generation_with_config(
+                "task-1",
+                "前提",
+                "玄幻",
+                4,
+                config,
+                update_task,
+                logging.getLogger("test"),
+                project_id="book-1",
+                should_abort=lambda: False,
+            )
+
+        self.assertEqual(fake.run_calls, [])
+        self.assertEqual(fake.run_existing_calls, [("book-1", 4)])
+        self.assertTrue(any(item.get("project_id") == "book-1" for item in updates))
+
+    def test_run_continue_project_with_config_passes_max_chapters(self) -> None:
+        class FakeOrchestrator:
+            def __init__(self, config, progress_callback=None, should_abort=None):
+                self.config = config
+                self.progress_callback = progress_callback
+                self.should_abort = should_abort
+                self.continue_calls = []
+                self.llm_client = SimpleNamespace(close=lambda: None)
+                self.engine = SimpleNamespace(dispose=lambda: None)
+
+            def continue_project(self, project_id: str, max_chapters: int | None = None):
+                self.continue_calls.append((project_id, max_chapters))
+                return RunResult(
+                    project_id=project_id,
+                    requested_chapters=6,
+                    completed_chapters=[4, 5],
+                )
+
+        updates: list[dict[str, object]] = []
+
+        def update_task(_task_id: str, **changes):
+            updates.append(changes)
+
+        config = Config(
+            db_path=":memory:",
+            minimax_api_key="saved-key",
+            minimax_base_url="https://api.minimaxi.com/v1",
+            minimax_model="MiniMax-M2.7",
+        )
+        fake = FakeOrchestrator(config)
+        with patch.object(api_runtime_module, "WritingOrchestrator", return_value=fake):
+            api_runtime_module.run_continue_project_with_config(
+                "task-2",
+                "book-2",
+                config,
+                update_task,
+                logging.getLogger("test"),
+                should_abort=lambda: False,
+                max_chapters=2,
+            )
+
+        self.assertEqual(fake.continue_calls, [("book-2", 2)])
+        self.assertTrue(any(item.get("message") == "继续执行完成章节: 4, 5" for item in updates))
 
     def test_approve_review_reuses_existing_orchestrator(self) -> None:
         class FakeOrchestrator:
@@ -4059,7 +5556,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 payload = api_module.approve_chapter_review(
                     "proj-1",
                     1,
-                    api_module.ChapterReviewApproveRequest(continue_generation=False),
+                    api_module.ChapterReviewApproveRequest(
+                        continue_generation=False,
+                        reason="phase05 plain approve",
+                    ),
                 )
 
             self.assertTrue(payload.ok)
@@ -4087,20 +5587,20 @@ class Phase05RegressionTests(unittest.TestCase):
             old_config = api_module._config
             old_store = api_module._runtime_settings
             try:
+                api_module._config = Config(
+                    db_path=":memory:",
+                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
+                    minimax_api_key="",
+                    minimax_base_url="https://api.minimaxi.com/v1",
+                    minimax_model="MiniMax-M2.7",
+                )
+                api_module._runtime_settings = RuntimeSettingsStore(
+                    api_module._config.runtime_settings_path,
+                    default_api_key="",
+                    default_base_url=api_module._config.minimax_base_url,
+                    default_model=api_module._config.minimax_model,
+                )
                 with TestClient(api_module.app) as client:
-                    api_module._config = Config(
-                        db_path=":memory:",
-                        runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
-                        minimax_api_key="",
-                        minimax_base_url="https://api.minimaxi.com/v1",
-                        minimax_model="MiniMax-M2.7",
-                    )
-                    api_module._runtime_settings = RuntimeSettingsStore(
-                        api_module._config.runtime_settings_path,
-                        default_api_key="",
-                        default_base_url=api_module._config.minimax_base_url,
-                        default_model=api_module._config.minimax_model,
-                    )
                     saved = client.post(
                         "/api/settings/llm",
                         json={
@@ -4118,6 +5618,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.assertEqual(current.json()["model"], "saved-model")
                 self.assertEqual(current.json()["operation_mode"], "blackbox")
                 self.assertEqual(current.json()["freeze_failed_candidates"], True)
+                self.assertEqual(current.json()["min_chapter_chars"], 2500)
             finally:
                 api_module._config = old_config
                 api_module._runtime_settings = old_store
@@ -4127,20 +5628,20 @@ class Phase05RegressionTests(unittest.TestCase):
             old_config = api_module._config
             old_store = api_module._runtime_settings
             try:
+                api_module._config = Config(
+                    db_path=":memory:",
+                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
+                    minimax_api_key="",
+                    minimax_base_url="https://api.minimaxi.com/v1",
+                    minimax_model="MiniMax-M2.7",
+                )
+                api_module._runtime_settings = RuntimeSettingsStore(
+                    api_module._config.runtime_settings_path,
+                    default_api_key="",
+                    default_base_url=api_module._config.minimax_base_url,
+                    default_model=api_module._config.minimax_model,
+                )
                 with TestClient(api_module.app) as client:
-                    api_module._config = Config(
-                        db_path=":memory:",
-                        runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
-                        minimax_api_key="",
-                        minimax_base_url="https://api.minimaxi.com/v1",
-                        minimax_model="MiniMax-M2.7",
-                    )
-                    api_module._runtime_settings = RuntimeSettingsStore(
-                        api_module._config.runtime_settings_path,
-                        default_api_key="",
-                        default_base_url=api_module._config.minimax_base_url,
-                        default_model=api_module._config.minimax_model,
-                    )
                     saved = client.post(
                         "/api/settings/llm",
                         json={
@@ -4149,6 +5650,7 @@ class Phase05RegressionTests(unittest.TestCase):
                             "model": "MiniMax-M2.7",
                             "operation_mode": "checkpoint",
                             "freeze_failed_candidates": False,
+                            "min_chapter_chars": 2800,
                         },
                     )
                     current = client.get("/api/settings/llm")
@@ -4157,6 +5659,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.assertEqual(current.status_code, 200)
                 self.assertEqual(current.json()["operation_mode"], "checkpoint")
                 self.assertEqual(current.json()["freeze_failed_candidates"], False)
+                self.assertEqual(current.json()["min_chapter_chars"], 2800)
             finally:
                 api_module._config = old_config
                 api_module._runtime_settings = old_store
@@ -4194,6 +5697,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     api_module.LLMPreferencesRequest(
                         operation_mode="checkpoint",
                         freeze_failed_candidates=False,
+                        min_chapter_chars=3100,
                     )
                 )
                 current = api_module.get_llm_settings()
@@ -4203,6 +5707,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.assertEqual(current.default_profile_id, profile_id)
                 self.assertEqual(current.operation_mode, "checkpoint")
                 self.assertEqual(current.freeze_failed_candidates, False)
+                self.assertEqual(current.min_chapter_chars, 3100)
                 self.assertGreaterEqual(len(current.profiles), 2)
                 self.assertNotEqual(deleted.default_profile_id, profile_id)
             finally:
@@ -4386,26 +5891,26 @@ class Phase05RegressionTests(unittest.TestCase):
             old_store = api_module._runtime_settings
             old_tasks = api_module._tasks
             try:
+                api_module._config = Config(
+                    db_path=":memory:",
+                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
+                    minimax_api_key="",
+                    minimax_base_url="https://api.minimaxi.com/v1",
+                    minimax_model="MiniMax-M2.7",
+                )
+                api_module._runtime_settings = RuntimeSettingsStore(
+                    api_module._config.runtime_settings_path,
+                    default_api_key="",
+                    default_base_url=api_module._config.minimax_base_url,
+                    default_model=api_module._config.minimax_model,
+                )
+                api_module._runtime_settings.save(
+                    api_key="sk-from-store",
+                    base_url="https://stored.example/v1",
+                    model="stored-model",
+                )
+                api_module._tasks = {}
                 with TestClient(api_module.app) as client:
-                    api_module._config = Config(
-                        db_path=":memory:",
-                        runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
-                        minimax_api_key="",
-                        minimax_base_url="https://api.minimaxi.com/v1",
-                        minimax_model="MiniMax-M2.7",
-                    )
-                    api_module._runtime_settings = RuntimeSettingsStore(
-                        api_module._config.runtime_settings_path,
-                        default_api_key="",
-                        default_base_url=api_module._config.minimax_base_url,
-                        default_model=api_module._config.minimax_model,
-                    )
-                    api_module._runtime_settings.save(
-                        api_key="sk-from-store",
-                        base_url="https://stored.example/v1",
-                        model="stored-model",
-                    )
-                    api_module._tasks = {}
                     with patch.object(api_module.threading, "Thread", FakeThread):
                         response = client.post(
                             "/api/generate",
@@ -4428,6 +5933,1173 @@ class Phase05RegressionTests(unittest.TestCase):
                 api_module._config = old_config
                 api_module._runtime_settings = old_store
                 api_module._tasks = old_tasks
+
+    def test_phase24_persists_experience_overlay_artifacts(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "overlay.db")
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="checkpoint",
+                )
+            )
+            try:
+                orchestrator.arc_director.plan_arc = lambda premise, genre, num_chapters: {
+                    "arc_synopsis": "Overlay 测试",
+                    "setting_summary": "无",
+                    "chapters": [
+                        {"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]},
+                        {"chapter_number": 2, "title": "第二章", "one_line": "升级", "goals": ["兑现回报"]},
+                    ],
+                    "characters": [],
+                    "locations": [],
+                    "factions": [],
+                    "relations": [],
+                    "plot_threads": [],
+                    "initial_time": {"label": "开始", "description": "开始"},
+                }
+                orchestrator.arc_director.draft_arc_structure = lambda **kwargs: {
+                    "phase_layout": ["setup", "pressure", "payoff"],
+                    "key_beats": ["开场受压", "第一次反击", "留下悬念"],
+                    "thread_priorities": [{"name": "主线", "priority": 1, "reason": "核心推进"}],
+                    "hotspot_candidates": ["第一次反击"],
+                    "compression_candidates": [],
+                    "reader_promise": {
+                        "pleasure_promise": "稳定给出悬念与反击快感",
+                        "acceptable_drag_level": "low",
+                        "acceptable_exposition_density": "medium",
+                        "cliffhanger_aggressiveness": "high",
+                    },
+                    "arc_payoff_map": {
+                        "macro_payoffs": [
+                            {
+                                "payoff_id": "p1",
+                                "category": "mystery",
+                                "template_id": "mystery-locked-clue",
+                                "target_chapter_hint": "band-mid",
+                                "setup_requirement": "先埋异象",
+                                "success_signal": "读者确认有真相在逼近",
+                            }
+                        ],
+                        "awe_kit": ["异象", "反转"],
+                    },
+                }
+                orchestrator.writer.write_chapter = lambda context: WriterOutput(
+                    chapter_number=context.chapter_number,
+                    title=f"第{context.chapter_number}章",
+                    body="正文" * 800,
+                    char_count=1600,
+                    end_of_chapter_summary="ok",
+                    state_changes=[],
+                    new_events=[],
+                    thread_beats=[],
+                    time_advance=None,
+                )
+                orchestrator.run("p", "g", 2)
+
+                session = get_session_factory(get_engine(db_path))()
+                try:
+                    structure = session.execute(select(ArcStructureDraft)).scalar_one()
+                    band_plan = session.execute(select(BandExperiencePlan)).scalar_one()
+                    chapter_plan = session.execute(
+                        select(ChapterPlan).where(ChapterPlan.chapter_number == 1)
+                    ).scalar_one()
+                finally:
+                    session.close()
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+            self.assertIn("pleasure_promise", json.loads(structure.reader_promise_json))
+            self.assertIn("macro_payoffs", json.loads(structure.arc_payoff_map_json))
+            self.assertGreaterEqual(band_plan.stall_guard_max_gap, 1)
+            self.assertEqual(
+                {"confirmation", "constraint", "reversal"},
+                {
+                    item["payoff_type"]
+                    for item in json.loads(band_plan.schedule_json)["ambiguity_payoffs"]
+                },
+            )
+            self.assertIn("planned_reward_tags", json.loads(chapter_plan.experience_plan_json))
+
+    def test_scene_generation_parser_supports_experience_fields(self) -> None:
+        writer = ChapterWriter(llm_client=SimpleNamespace(chat=lambda *args, **kwargs: {}))
+        writer._chat_preview_text = lambda *args, **kwargs: (
+            "<<FORWIN_BODY>>\n"
+            "scene body\n"
+            "<<FORWIN_SUMMARY>>\n"
+            "summary\n"
+            "<<FORWIN_TIME>>\n"
+            "夜里\n"
+            "<<FORWIN_LOCATION>>\n"
+            "废楼\n"
+            "<<FORWIN_ENTITIES>>\n"
+            "林夜\n"
+            "<<FORWIN_REWARD>>\n"
+            "mystery\n"
+            "<<FORWIN_IMMERSION>>\n"
+            "雨声压着窗框\n"
+            "<<FORWIN_PROGRESS>>\n"
+            "确认第一条线索"
+        )
+        context = ChapterContextPack(
+            project_title="测试书",
+            premise="前提",
+            genre="玄幻",
+            setting_summary="设定",
+            chapter_number=1,
+            chapter_plan_title="第一章",
+            chapter_plan_one_line="开场",
+            chapter_goals=["推进主线"],
+        )
+        scene = writer._generate_scene(
+            context,
+            ScenePlan(
+                scene_no=1,
+                objective="推进",
+                reward_beat_tag="power",
+                immersion_anchor="默认锚点",
+                progress_marker="默认进展",
+            ),
+        )
+        self.assertEqual(scene.reward_beat_tag, "mystery")
+        self.assertEqual(scene.immersion_anchor, "雨声压着窗框")
+        self.assertEqual(scene.progress_marker, "确认第一条线索")
+
+    def test_copilot_fail_runs_three_rewrites_then_pauses(self) -> None:
+        class AlwaysFailReviewHub:
+            def __init__(self):
+                self.calls = 0
+
+            def review(self, **kwargs):
+                self.calls += 1
+                return ReviewVerdict(
+                    verdict="fail",
+                    issues=[
+                        ContinuityIssue(
+                            rule_name="reward_delivery_miss",
+                            severity="error",
+                            description="奖励未兑现",
+                            reviewer="webnovel_experience",
+                            issue_type="payoff_miss",
+                            target_scope="scene",
+                            evidence_refs=["planned_reward_tags=['mystery']"],
+                        )
+                    ],
+                    repair_instruction=RepairInstruction(
+                        repair_scope="scene",
+                        failure_type="payoff_miss",
+                        must_fix=["奖励未兑现"],
+                        must_preserve=["第一章", "开场"],
+                        design_patch={"planned_reward_tags": ["mystery"]},
+                        evidence_refs=["planned_reward_tags=['mystery']"],
+                    ),
+                )
+
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "copilot-rewrite.db")
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="copilot",
+                )
+            )
+            apply_calls = {"count": 0}
+            try:
+                orchestrator.arc_director.plan_arc = lambda premise, genre, num_chapters: {
+                    "arc_synopsis": "重写回路",
+                    "setting_summary": "无",
+                    "chapters": [{"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]}],
+                    "characters": [],
+                    "locations": [],
+                    "factions": [],
+                    "relations": [],
+                    "plot_threads": [],
+                    "initial_time": {"label": "开始", "description": "开始"},
+                }
+                orchestrator.writer.write_chapter = lambda context: WriterOutput(
+                    chapter_number=context.chapter_number,
+                    title=f"第{context.chapter_number}章",
+                    body="正文" * 900,
+                    char_count=1800,
+                    end_of_chapter_summary="ok",
+                    state_changes=[],
+                    new_events=[],
+                    thread_beats=[],
+                    time_advance=None,
+                )
+                orchestrator.review_hub = AlwaysFailReviewHub()
+                original_apply = orchestrator._apply_canon_candidate
+
+                def record_apply(**kwargs):
+                    apply_calls["count"] += 1
+                    return original_apply(**kwargs)
+
+                orchestrator._apply_canon_candidate = record_apply
+                result = orchestrator.run("p", "g", 1)
+
+                session = get_session_factory(get_engine(db_path))()
+                try:
+                    attempts = session.execute(select(ChapterRewriteAttempt)).scalars().all()
+                    plan = session.execute(select(ChapterPlan)).scalar_one()
+                finally:
+                    session.close()
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+            self.assertEqual(result.status, "needs_review")
+            self.assertEqual(result.paused_chapters, [1])
+            self.assertEqual(len(attempts), 3)
+            self.assertEqual(plan.status, "needs_review")
+            self.assertEqual(apply_calls["count"], 0)
+
+    def test_blackbox_exhausted_fail_force_accepts_after_third_rewrite(self) -> None:
+        class AlwaysFailReviewHub:
+            def review(self, **kwargs):
+                return ReviewVerdict(
+                    verdict="fail",
+                    issues=[
+                        ContinuityIssue(
+                            rule_name="progress_stall",
+                            severity="error",
+                            description="推进停滞",
+                            reviewer="webnovel_experience",
+                            issue_type="stall",
+                            target_scope="band",
+                            evidence_refs=["progress_markers=['推进主线']"],
+                        )
+                    ],
+                    repair_instruction=RepairInstruction(
+                        repair_scope="scene",
+                        failure_type="stall",
+                        must_fix=["推进停滞"],
+                        must_preserve=["第一章", "开场"],
+                        design_patch={"progress_markers": ["推进主线"]},
+                        evidence_refs=["progress_markers=['推进主线']"],
+                    ),
+                )
+
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "blackbox-force.db")
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="blackbox",
+                )
+            )
+            apply_calls = {"count": 0}
+            try:
+                orchestrator.arc_director.plan_arc = lambda premise, genre, num_chapters: {
+                    "arc_synopsis": "强制接受",
+                    "setting_summary": "无",
+                    "chapters": [{"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]}],
+                    "characters": [],
+                    "locations": [],
+                    "factions": [],
+                    "relations": [],
+                    "plot_threads": [],
+                    "initial_time": {"label": "开始", "description": "开始"},
+                }
+                orchestrator.writer.write_chapter = lambda context: WriterOutput(
+                    chapter_number=context.chapter_number,
+                    title=f"第{context.chapter_number}章",
+                    body="正文" * 900,
+                    char_count=1800,
+                    end_of_chapter_summary="ok",
+                    state_changes=[],
+                    new_events=[],
+                    thread_beats=[],
+                    time_advance=None,
+                )
+                orchestrator.review_hub = AlwaysFailReviewHub()
+
+                def record_apply(**kwargs):
+                    apply_calls["count"] += 1
+                    return None
+
+                orchestrator._apply_canon_candidate = record_apply
+                result = orchestrator.run("p", "g", 1)
+
+                session = get_session_factory(get_engine(db_path))()
+                try:
+                    attempts = session.execute(
+                        select(ChapterRewriteAttempt).order_by(ChapterRewriteAttempt.attempt_no)
+                    ).scalars().all()
+                    latest_draft = session.execute(
+                        select(ChapterDraft).order_by(ChapterDraft.version.desc()).limit(1)
+                    ).scalar_one()
+                    review = session.execute(
+                        select(ChapterReview)
+                        .where(ChapterReview.draft_id == latest_draft.id)
+                        .order_by(ChapterReview.created_at.desc())
+                        .limit(1)
+                    ).scalar_one()
+                    plan = session.execute(select(ChapterPlan)).scalar_one()
+                    checkpoint = session.execute(
+                        select(BandCheckpoint)
+                        .where(BandCheckpoint.project_id == plan.project_id)
+                        .order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
+                        .limit(1)
+                    ).scalar_one()
+                finally:
+                    session.close()
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+            self.assertEqual(result.status, "paused")
+            self.assertEqual(len(attempts), 3)
+            self.assertTrue(attempts[-1].forced_accept_applied)
+            self.assertTrue(json.loads(review.review_meta_json).get("forced_accept_applied"))
+            self.assertEqual(plan.status, "accepted")
+            self.assertEqual(checkpoint.status, "fail")
+            self.assertIn("intra_band_consistency", checkpoint.issues_json)
+            self.assertEqual(apply_calls["count"], 1)
+
+    def test_historical_review_hub_merges_continuity_and_experience_repairs(self) -> None:
+        hub = HistoricalReviewHub(experience_review_enabled=True, lint_review_enabled=False)
+        context = ChapterContextPack(
+            project_title="测试书",
+            premise="前提",
+            genre="玄幻",
+            setting_summary="设定",
+            chapter_number=1,
+            chapter_plan_title="第一章",
+            chapter_plan_one_line="开场",
+            chapter_goals=["推进主线"],
+        )
+        writer_output = WriterOutput(
+            chapter_number=1,
+            title="第一章",
+            body="正文" * 500,
+            char_count=1000,
+            end_of_chapter_summary="ok",
+            state_changes=[],
+            new_events=[],
+            thread_beats=[],
+            time_advance=None,
+        )
+
+        class FakeChecker:
+            def check(self, project_id: str, output: WriterOutput) -> ReviewVerdict:
+                return ReviewVerdict(
+                    verdict="fail",
+                    issues=[
+                        ContinuityIssue(
+                            rule_name="dead_character_active",
+                            severity="error",
+                            description="死人仍在行动",
+                            reviewer="continuity",
+                            issue_type="continuity",
+                            target_scope="scene",
+                            evidence_refs=["event=死人出手"],
+                        )
+                    ],
+                )
+
+        hub.experience_reviewer.review = lambda context, writer_output: ReviewVerdict(
+            verdict="fail",
+            issues=[
+                ContinuityIssue(
+                    rule_name="progress_stall",
+                    severity="error",
+                    description="推进停滞",
+                    reviewer="webnovel_experience",
+                    issue_type="stall",
+                    target_scope="band",
+                    evidence_refs=["thread=主线无推进"],
+                )
+            ],
+            repair_instruction=RepairInstruction(
+                repair_scope="band",
+                failure_type="stall",
+                must_fix=["推进停滞"],
+                must_preserve=["第一章"],
+                design_patch={"progress_markers": ["推进主线"]},
+                evidence_refs=["thread=主线无推进"],
+            ),
+        )
+
+        review = hub.review(
+            project_id="p1",
+            context=context,
+            writer_output=writer_output,
+            continuity_checker=FakeChecker(),
+        )
+
+        self.assertEqual(review.verdict, "fail")
+        self.assertIsNotNone(review.repair_instruction)
+        assert review.repair_instruction is not None
+        self.assertEqual(review.repair_instruction.repair_scope, "band")
+        self.assertEqual(review.repair_instruction.failure_type, "mixed")
+        self.assertIn("死人仍在行动", review.repair_instruction.must_fix)
+        self.assertIn("推进停滞", review.repair_instruction.must_fix)
+
+    def test_copilot_rewrite_writer_error_pauses_instead_of_failed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "copilot-rewrite-error.db")
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="copilot",
+                )
+            )
+            calls = {"count": 0}
+            try:
+                orchestrator.arc_director.plan_arc = lambda premise, genre, num_chapters: {
+                    "arc_synopsis": "rewrite error",
+                    "setting_summary": "无",
+                    "chapters": [{"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]}],
+                    "characters": [],
+                    "locations": [],
+                    "factions": [],
+                    "relations": [],
+                    "plot_threads": [],
+                    "initial_time": {"label": "开始", "description": "开始"},
+                }
+
+                def flaky_writer(context):
+                    calls["count"] += 1
+                    if calls["count"] == 1:
+                        return WriterOutput(
+                            chapter_number=context.chapter_number,
+                            title="第一章",
+                            body="正文" * 900,
+                            char_count=1800,
+                            end_of_chapter_summary="ok",
+                            state_changes=[],
+                            new_events=[],
+                            thread_beats=[],
+                            time_advance=None,
+                        )
+                    raise RuntimeError("rewrite writer exploded")
+
+                orchestrator.writer.write_chapter = flaky_writer
+                orchestrator.review_hub.review = lambda **kwargs: ReviewVerdict(
+                    verdict="fail",
+                    issues=[
+                        ContinuityIssue(
+                            rule_name="progress_stall",
+                            severity="error",
+                            description="推进停滞",
+                            reviewer="webnovel_experience",
+                            issue_type="stall",
+                            target_scope="band",
+                            evidence_refs=["thread=主线无推进"],
+                        )
+                    ],
+                    repair_instruction=RepairInstruction(
+                        repair_scope="band",
+                        failure_type="stall",
+                        must_fix=["推进停滞"],
+                        must_preserve=["第一章"],
+                        design_patch={"progress_markers": ["推进主线"]},
+                        evidence_refs=["thread=主线无推进"],
+                    ),
+                )
+
+                result = orchestrator.run("p", "g", 1)
+                session = get_session_factory(get_engine(db_path))()
+                try:
+                    attempts = session.execute(select(ChapterRewriteAttempt)).scalars().all()
+                    plan = session.execute(select(ChapterPlan)).scalar_one()
+                finally:
+                    session.close()
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+            self.assertEqual(result.status, "needs_review")
+            self.assertEqual(plan.status, "needs_review")
+            self.assertEqual(len(attempts), 3)
+            ordered_attempts = sorted(attempts, key=lambda item: item.attempt_no)
+            self.assertEqual([item.repair_scope for item in ordered_attempts[:2]], ["band", "arc"])
+            self.assertTrue(all(item.result_verdict == "fail" for item in attempts))
+
+    def test_blackbox_rewrite_writer_error_force_accepts_latest_draft(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "blackbox-rewrite-error.db")
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="blackbox",
+                )
+            )
+            calls = {"count": 0}
+            apply_calls = {"count": 0}
+            try:
+                orchestrator.arc_director.plan_arc = lambda premise, genre, num_chapters: {
+                    "arc_synopsis": "rewrite error",
+                    "setting_summary": "无",
+                    "chapters": [{"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]}],
+                    "characters": [],
+                    "locations": [],
+                    "factions": [],
+                    "relations": [],
+                    "plot_threads": [],
+                    "initial_time": {"label": "开始", "description": "开始"},
+                }
+
+                def flaky_writer(context):
+                    calls["count"] += 1
+                    if calls["count"] == 1:
+                        return WriterOutput(
+                            chapter_number=context.chapter_number,
+                            title="第一章",
+                            body="正文" * 900,
+                            char_count=1800,
+                            end_of_chapter_summary="ok",
+                            state_changes=[],
+                            new_events=[],
+                            thread_beats=[],
+                            time_advance=None,
+                        )
+                    raise RuntimeError("rewrite writer exploded")
+
+                orchestrator.writer.write_chapter = flaky_writer
+                orchestrator.review_hub.review = lambda **kwargs: ReviewVerdict(
+                    verdict="fail",
+                    issues=[
+                        ContinuityIssue(
+                            rule_name="progress_stall",
+                            severity="error",
+                            description="推进停滞",
+                            reviewer="webnovel_experience",
+                            issue_type="stall",
+                            target_scope="band",
+                            evidence_refs=["thread=主线无推进"],
+                        )
+                    ],
+                    repair_instruction=RepairInstruction(
+                        repair_scope="band",
+                        failure_type="stall",
+                        must_fix=["推进停滞"],
+                        must_preserve=["第一章"],
+                        design_patch={"progress_markers": ["推进主线"]},
+                        evidence_refs=["thread=主线无推进"],
+                    ),
+                )
+                orchestrator._apply_canon_candidate = lambda **kwargs: apply_calls.__setitem__("count", apply_calls["count"] + 1) or None
+
+                result = orchestrator.run("p", "g", 1)
+                session = get_session_factory(get_engine(db_path))()
+                try:
+                    attempts = session.execute(select(ChapterRewriteAttempt)).scalars().all()
+                    latest_draft = session.execute(select(ChapterDraft).order_by(ChapterDraft.version.desc()).limit(1)).scalar_one()
+                    latest_review = session.execute(
+                        select(ChapterReview).where(ChapterReview.draft_id == latest_draft.id).limit(1)
+                    ).scalar_one()
+                    plan = session.execute(select(ChapterPlan)).scalar_one()
+                    checkpoint = session.execute(
+                        select(BandCheckpoint)
+                        .where(BandCheckpoint.project_id == plan.project_id)
+                        .order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
+                        .limit(1)
+                    ).scalar_one()
+                finally:
+                    session.close()
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+            self.assertEqual(result.status, "paused")
+            self.assertEqual(plan.status, "accepted")
+            self.assertEqual(checkpoint.status, "fail")
+            self.assertIn("intra_band_consistency", checkpoint.issues_json)
+            self.assertEqual(len(attempts), 3)
+            ordered_attempts = sorted(attempts, key=lambda item: item.attempt_no)
+            self.assertEqual([item.repair_scope for item in ordered_attempts[:2]], ["band", "arc"])
+            self.assertTrue(attempts[-1].forced_accept_applied)
+            self.assertTrue(json.loads(latest_review.review_meta_json).get("forced_accept_applied"))
+            self.assertEqual(apply_calls["count"], 1)
+
+    def test_wener_falls_back_to_heuristics_when_llm_json_is_invalid(self) -> None:
+        from forwin.protocol.context import ReviewContextPack
+        from forwin.protocol.experience import (
+            BandDelightSchedule,
+            BandRewardItem,
+            ChapterExperiencePlan,
+        )
+        from forwin.reviewer.webnovel import WebNovelExperienceReviewer
+
+        class FakeLLM:
+            def chat(self, *args, **kwargs):  # noqa: ANN002, ANN003
+                return "not-json-at-all"
+
+        reviewer = WebNovelExperienceReviewer(
+            enabled=True,
+            llm_client=FakeLLM(),
+            llm_enabled=True,
+        )
+        context = ReviewContextPack(
+            project_title="测试书",
+            chapter_number=3,
+            chapter_plan_title="第三章",
+            chapter_plan_one_line="主角发现新的真相",
+            chapter_goals=["确认一条线索", "推进主线"],
+            chapter_experience_plan=ChapterExperiencePlan(
+                planned_reward_tags=["mystery", "power"],
+                question_hook="幕后黑手是谁",
+                question_resolution="确认有第三方势力介入",
+                rule_anchors=["异象只能在付出代价后触发"],
+                progress_markers=["主角确认一条真线索"],
+                minimum_progress_channels=["event", "thread", "rule"],
+            ),
+            band_delight_schedule=BandDelightSchedule(
+                band_id="band:1:3",
+                chapter_start=1,
+                chapter_end=3,
+                scheduled_rewards=[
+                    BandRewardItem(
+                        chapter_hint=1,
+                        category="power",
+                        template_id="power-hidden-edge",
+                        intent="micro_progress_power",
+                    ),
+                    BandRewardItem(
+                        chapter_hint=2,
+                        category="social",
+                        template_id="social-face-slap",
+                        intent="social_dominance",
+                    ),
+                    BandRewardItem(
+                        chapter_hint=3,
+                        category="mystery",
+                        template_id="mystery-locked-clue",
+                        intent="mystery_clue_or_reveal",
+                    )
+                ],
+                stall_guard_max_gap=1,
+            ),
+        )
+        writer_output = WriterOutput(
+            chapter_number=3,
+            title="第三章",
+            body="他终于意识到这一切并非偶然。下一刻，门外传来了更危险的脚步声。",
+            char_count=40,
+            end_of_chapter_summary="主角确认了幕后另有其人，但更大的危险已经逼近。",
+            new_events=[
+                EventCandidate(
+                    summary="主角确认黑雾异象背后还有第三方操盘者",
+                    significance="major",
+                    involved_entity_names=["主角"],
+                )
+            ],
+            thread_beats=[
+                ThreadBeatCandidate(
+                    thread_name="主线",
+                    beat_type="twist",
+                    description="真相逼近但危机升级",
+                )
+            ],
+            state_changes=[],
+            time_advance=None,
+        )
+
+        verdict = reviewer.review(context, writer_output)
+
+        self.assertIn(verdict.verdict, {"pass", "warn"})
+        self.assertEqual(verdict.planned_reward_tags, ["mystery", "power"])
+        self.assertIn("narrative_understanding", verdict.experience_scores)
+        self.assertIn("stall_tolerance", verdict.experience_scores)
+        self.assertTrue(verdict.review_notes)
+        self.assertEqual(verdict.reviewer_mode, "heuristic_fallback")
+
+    def test_wener_repairs_llm_json_and_rejects_unanchored_evidence(self) -> None:
+        from forwin.protocol.context import ReviewContextPack
+        from forwin.protocol.experience import ChapterExperiencePlan
+        from forwin.reviewer.webnovel import WebNovelExperienceReviewer
+
+        class RepairingLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def chat(self, *args, **kwargs):  # noqa: ANN002, ANN003
+                self.calls += 1
+                if self.calls == 1:
+                    return json.dumps(
+                        {
+                            "verdict": "warn",
+                            "planned_reward_tags": ["mystery"],
+                            "delivered_reward_tags": [],
+                            "experience_scores": {
+                                "narrative_understanding": 0.7,
+                                "attentional_focus": 0.6,
+                                "emotional_engagement": 0.4,
+                                "narrative_presence": 0.6,
+                                "payoff_delivery": 0.3,
+                                "stall_tolerance": 0.6,
+                                "hook_efficiency": 0.5,
+                            },
+                            "issues": [
+                                {
+                                    "rule_name": "bad_ref",
+                                    "severity": "warning",
+                                    "description": "证据引用非法",
+                                    "issue_type": "payoff_miss",
+                                    "target_scope": "chapter",
+                                    "evidence_refs": ["not-in-pack"],
+                                    "suggested_fix": "修复证据",
+                                }
+                            ],
+                            "review_notes": ["需要修复"],
+                            "repair_instruction": None,
+                            "evidence_refs": ["not-in-pack"],
+                            "review_summary": "bad",
+                        },
+                        ensure_ascii=False,
+                    )
+                return json.dumps(
+                    {
+                        "verdict": "warn",
+                        "planned_reward_tags": ["mystery"],
+                        "delivered_reward_tags": [],
+                        "experience_scores": {
+                            "narrative_understanding": 0.7,
+                            "attentional_focus": 0.6,
+                            "emotional_engagement": 0.4,
+                            "narrative_presence": 0.6,
+                            "payoff_delivery": 0.3,
+                            "stall_tolerance": 0.6,
+                            "hook_efficiency": 0.5,
+                        },
+                        "issues": [
+                            {
+                                "rule_name": "anchored_ref",
+                                "severity": "warning",
+                                "description": "证据引用已修复",
+                                "issue_type": "payoff_miss",
+                                "target_scope": "chapter",
+                                "evidence_refs": ["overlay:chapter_experience_plan"],
+                                "suggested_fix": "按计划补 reward",
+                            }
+                        ],
+                        "review_notes": ["已修复"],
+                        "repair_instruction": None,
+                        "evidence_refs": ["overlay:chapter_experience_plan"],
+                        "review_summary": "ok",
+                    },
+                    ensure_ascii=False,
+                )
+
+        llm = RepairingLLM()
+        reviewer = WebNovelExperienceReviewer(enabled=True, llm_client=llm, llm_enabled=True)
+        context = ReviewContextPack(
+            project_title="测试书",
+            chapter_number=1,
+            chapter_plan_title="第一章",
+            chapter_plan_one_line="出现谜题",
+            chapter_goals=["提出问题"],
+            chapter_experience_plan=ChapterExperiencePlan(
+                planned_reward_tags=["mystery"],
+                question_hook="门后是谁",
+            ),
+        )
+        writer_output = WriterOutput(
+            chapter_number=1,
+            title="第一章",
+            body="门后传来声音。",
+            char_count=7,
+            end_of_chapter_summary="门后传来声音。",
+        )
+
+        verdict = reviewer.review(context, writer_output)
+
+        self.assertEqual(llm.calls, 2)
+        self.assertEqual(verdict.verdict, "warn")
+        self.assertEqual(verdict.issues[0].evidence_refs, ["overlay:chapter_experience_plan"])
+        self.assertEqual(verdict.reviewer_mode, "llm")
+
+    def test_wener_promotes_confirmed_signals_to_evidence_but_rejects_audience_only_fail(self) -> None:
+        from forwin.protocol.context import ReaderFeedbackView, ReviewContextPack, SignalSummaryView
+        from forwin.protocol.experience import ChapterExperiencePlan
+        from forwin.reviewer.webnovel import WebNovelExperienceReviewer
+
+        class AudienceOnlyFailLLM:
+            def __init__(self):
+                self.prompts = []
+
+            def chat(self, messages, **kwargs):  # noqa: ANN002, ANN003
+                self.prompts.append(messages)
+                return json.dumps(
+                    {
+                        "verdict": "fail",
+                        "planned_reward_tags": ["mystery"],
+                        "delivered_reward_tags": [],
+                        "experience_scores": {
+                            "narrative_understanding": 0.5,
+                            "attentional_focus": 0.5,
+                            "emotional_engagement": 0.5,
+                            "narrative_presence": 0.5,
+                            "payoff_delivery": 0.1,
+                            "stall_tolerance": 0.2,
+                            "hook_efficiency": 0.4,
+                        },
+                        "issues": [
+                            {
+                                "rule_name": "audience_only_fail",
+                                "severity": "error",
+                                "description": "只凭读者信号判 fail",
+                                "issue_type": "payoff_miss",
+                                "target_scope": "chapter",
+                                "evidence_refs": ["audience_signal:pacing:arc:节奏"],
+                                "suggested_fix": "补回报",
+                            }
+                        ],
+                        "review_notes": ["读者说节奏慢"],
+                        "repair_instruction": None,
+                        "evidence_refs": ["audience_signal:pacing:arc:节奏"],
+                        "review_summary": "bad",
+                    },
+                    ensure_ascii=False,
+                )
+
+        llm = AudienceOnlyFailLLM()
+        reviewer = WebNovelExperienceReviewer(enabled=True, llm_client=llm, llm_enabled=True)
+        context = ReviewContextPack(
+            project_title="测试书",
+            chapter_number=2,
+            chapter_plan_title="第二章",
+            chapter_plan_one_line="继续铺垫",
+            chapter_goals=["保持悬念"],
+            reader_feedback=ReaderFeedbackView(
+                confirmed_signals=[
+                    SignalSummaryView(
+                        signal_key="pacing:arc:节奏",
+                        signal_type="pacing",
+                        target_name="节奏",
+                        level="confirmed",
+                        hit_count=4,
+                        max_severity=3,
+                    )
+                ]
+            ),
+            chapter_experience_plan=ChapterExperiencePlan(planned_reward_tags=["mystery"]),
+        )
+        writer_output = WriterOutput(
+            chapter_number=2,
+            title="第二章",
+            body="他推开门，发现线索仍然指向更深的雨夜。",
+            char_count=20,
+            end_of_chapter_summary="线索继续延伸。",
+        )
+
+        verdict = reviewer.review(context, writer_output)
+
+        prompt_text = json.dumps(llm.prompts[0], ensure_ascii=False)
+        self.assertIn("audience_signal:pacing:arc:节奏", prompt_text)
+        self.assertEqual(verdict.reviewer_mode, "heuristic_fallback")
+        self.assertIn("audience_signal:pacing:arc:节奏", verdict.confirmed_signal_refs)
+
+    def test_project_arc_snapshot_payload_exposes_v27_overlay_fields(self) -> None:
+        from forwin.api_project_payloads import project_arc_snapshot_payload
+
+        payload = project_arc_snapshot_payload(
+            latest_arc_envelope=None,
+            latest_arc_analysis=None,
+            latest_provisional=None,
+            latest_arc_structure=SimpleNamespace(
+                reader_promise_json=json.dumps({"genre_promise": "悬疑网文"}),
+                arc_payoff_map_json=json.dumps(
+                    {
+                        "revelation_layers": [
+                            {"layer_id": "rule-1", "layer_type": "rule", "summary": "规则显影", "chapter_window": "mid"}
+                        ]
+                    }
+                ),
+            ),
+            latest_band_experience=SimpleNamespace(
+                schedule_json=json.dumps(
+                    {
+                        "scheduled_rewards": [
+                            {"category": "power", "template_id": "power-hidden-edge"},
+                            {"category": "mystery", "template_id": "mystery-locked-clue"},
+                        ],
+                        "stall_guard_max_gap": 1,
+                        "curiosity_beats": [
+                            {
+                                "chapter_hint": 1,
+                                "question_open": "谁在背后布局",
+                                "question_resolve": "确认不是偶然",
+                                "escalated_question": "真正的规则边界是什么",
+                            }
+                        ],
+                    }
+                ),
+                stall_guard_max_gap=1,
+            ),
+        )
+
+        self.assertEqual(payload["active_reader_promise"]["genre_promise"], "悬疑网文")
+        self.assertEqual(payload["active_revelation_layers"][0]["layer_id"], "rule-1")
+        self.assertEqual(payload["active_band_curiosity_beats"][0]["question_open"], "谁在背后布局")
+        self.assertEqual(payload["active_band_template_ids"], ["power-hidden-edge", "mystery-locked-clue"])
+
+    def test_chapter_review_api_exposes_v27_fields(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "review-detail-v27.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session_factory = get_session_factory(engine)
+            with session_factory() as session:
+                updater = StateUpdater(session)
+                project = updater.create_project("测试书", "前提", "玄幻", "设定")
+                arc = updater.create_arc_plan(project.id, "主线", 1)
+                plan = updater.create_chapter_plan(
+                    project.id,
+                    arc.id,
+                    1,
+                    "第一章",
+                    "开场",
+                    ["推进主线"],
+                )
+                draft = updater.save_draft(
+                    chapter_plan_id=plan.id,
+                    writer_output=WriterOutput(
+                        project_id=project.id,
+                        chapter_number=1,
+                        title="第一章",
+                        body="正文",
+                        char_count=2,
+                        end_of_chapter_summary="总结",
+                    ),
+                    raw_response="artifact/meta.json",
+                    model_name="fake",
+                )
+                session.add(
+                    ChapterReview(
+                        id=new_id(),
+                        draft_id=draft.id,
+                        verdict="warn",
+                        issues_json=json.dumps(
+                            [
+                                {
+                                    "rule_name": "hook_soft",
+                                    "severity": "warning",
+                                    "description": "钩子偏弱",
+                                    "entity_names": [],
+                                    "evidence_refs": ["tail:正文"],
+                                    "suggested_fix": "补强章末问题",
+                                }
+                            ],
+                            ensure_ascii=False,
+                        ),
+                        review_meta_json=json.dumps(
+                            {
+                                "recommended_action": "pause_for_review",
+                                "review_summary": "计划奖励 vs 实际奖励",
+                                "planned_reward_tags": ["mystery"],
+                                "delivered_reward_tags": ["mystery"],
+                                "experience_scores": {
+                                    "narrative_understanding": 0.8,
+                                    "attentional_focus": 0.7,
+                                    "emotional_engagement": 0.4,
+                                    "narrative_presence": 0.6,
+                                    "payoff_delivery": 0.8,
+                                    "stall_tolerance": 0.7,
+                                    "hook_efficiency": 0.4,
+                                },
+                                "review_notes": ["问题梯子存在，但章末钩子偏软"],
+                                "lint_signals": [
+                                    {
+                                        "tool": "vale",
+                                        "code": "HookSoft",
+                                        "severity": "warning",
+                                        "message": "章末力度不足",
+                                        "line": 10,
+                                        "column": 1,
+                                        "evidence_refs": ["line=10"],
+                                    }
+                                ],
+                                "evidence_refs": ["tail:正文", "line=10"],
+                                "confirmed_signal_refs": ["audience_signal:pacing:arc:节奏"],
+                                "reviewer_mode": "llm",
+                                "repair_instruction": {
+                                    "repair_scope": "scene",
+                                    "failure_type": "hook_failure",
+                                    "must_fix": ["补强章末钩子"],
+                                    "must_preserve": ["第一章"],
+                                    "design_patch": {"hook_type": "hard_cliffhanger"},
+                                    "evidence_refs": ["tail:正文"],
+                                },
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                )
+                session.commit()
+
+            old_engine = api_module._engine
+            old_factory = api_module._SessionFactory
+            try:
+                api_module._engine = engine
+                api_module._SessionFactory = session_factory
+                payload = api_module.get_chapter_review(project.id, 1).model_dump(mode="json")
+                self.assertEqual(payload["review_notes"], ["问题梯子存在，但章末钩子偏软"])
+                self.assertEqual(payload["lint_signals"][0]["tool"], "vale")
+                self.assertEqual(payload["evidence_refs"], ["tail:正文", "line=10"])
+                self.assertEqual(payload["confirmed_signal_refs"], ["audience_signal:pacing:arc:节奏"])
+                self.assertEqual(payload["reviewer_mode"], "llm")
+                self.assertEqual(payload["proposed_design_patch"]["hook_type"], "hard_cliffhanger")
+            finally:
+                api_module._engine = old_engine
+                api_module._SessionFactory = old_factory
+                engine.dispose()
+
+    def test_trope_templates_and_band_experience_override_api(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "band-override-v27.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session_factory = get_session_factory(engine)
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                )
+            )
+            with session_factory() as session:
+                updater = StateUpdater(session)
+                project = updater.create_project("测试书", "前提", "玄幻", "设定")
+                arc = updater.create_arc_plan(project.id, "主线", 1)
+                updater.create_chapter_plan(project.id, arc.id, 1, "第一章", "开场", ["推进主线"])
+                updater.create_chapter_plan(project.id, arc.id, 2, "第二章", "承压", ["加压"])
+                session.add(
+                    ArcStructureDraft(
+                        id=new_id(),
+                        project_id=project.id,
+                        arc_id=arc.id,
+                        phase_layout_json="[]",
+                        key_beats_json=json.dumps(["开场遇险", "揭开新线索"], ensure_ascii=False),
+                        thread_priorities_json="[]",
+                        hotspot_candidates_json="[]",
+                        compression_candidates_json="[]",
+                        reader_promise_json=json.dumps(
+                            {
+                                "genre_promise": "玄幻网文",
+                                "pleasure_promise": "稳定爽点与悬念",
+                                "core_pleasures": ["翻盘", "揭秘"],
+                                "ambiguity_mode": "managed",
+                                "world_legibility_target": "规则要看得懂",
+                            },
+                            ensure_ascii=False,
+                        ),
+                        arc_payoff_map_json=json.dumps(
+                            {
+                                "macro_payoffs": [],
+                                "awe_kit": ["反转"],
+                                "revelation_layers": [],
+                                "ambiguity_constraints": ["关键翻盘必须回指规则"],
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                )
+                updater.save_band_experience_plan(
+                    project_id=project.id,
+                    arc_id=arc.id,
+                    schedule=__import__("forwin.protocol.experience", fromlist=["BandDelightSchedule"]).BandDelightSchedule(
+                        band_id="band:1:2",
+                        chapter_start=1,
+                        chapter_end=2,
+                        scheduled_rewards=[
+                            __import__("forwin.protocol.experience", fromlist=["BandRewardItem"]).BandRewardItem(
+                                chapter_hint=1,
+                                category="power",
+                                template_id="power-hidden-edge",
+                                intent="micro_progress_power",
+                            )
+                        ],
+                        stall_guard_max_gap=1,
+                    ),
+                )
+                session.commit()
+
+            old_engine = api_module._engine
+            old_factory = api_module._SessionFactory
+            old_orchestrator = api_module._orchestrator
+            try:
+                api_module._engine = engine
+                api_module._SessionFactory = session_factory
+                api_module._orchestrator = orchestrator
+                categories = {item.category for item in api_module.get_trope_templates()}
+                self.assertTrue({"power", "social", "justice", "mystery", "emotion"}.issubset(categories))
+                power_templates = api_module.get_trope_templates(category="power")
+                self.assertTrue(all(item.category == "power" for item in power_templates))
+                summary = api_module.get_trope_template_summary()
+                self.assertGreaterEqual(summary.total_count, 5)
+                self.assertFalse(summary.is_full_library)
+                invalid_validation = api_module.validate_trope_templates(
+                    api_module.TropeTemplateValidationRequest(
+                        templates=[{"template_id": "only-one", "category": "power"}],
+                        require_full=True,
+                    )
+                )
+                self.assertFalse(invalid_validation.ok)
+                self.assertIn("full trope library", " ".join(invalid_validation.errors))
+
+                override = api_module.override_band_experience(
+                    project.id,
+                    "band:1:2",
+                    api_module.BandExperienceOverrideRequest.model_validate(
+                        {
+                            "scheduled_rewards": [
+                                {
+                                    "chapter_hint": 1,
+                                    "category": "social",
+                                    "template_id": "social-face-slap",
+                                    "intent": "social_dominance",
+                                },
+                                {
+                                    "chapter_hint": 2,
+                                    "category": "mystery",
+                                    "template_id": "mystery-locked-clue",
+                                    "intent": "mystery_clue_or_reveal",
+                                },
+                            ],
+                            "curiosity_beats": [
+                                {
+                                    "chapter_hint": 1,
+                                    "question_open": "谁在背后逼迫主角",
+                                    "question_resolve": "确认有人盯上主角",
+                                    "escalated_question": "那条规则到底是谁制定的",
+                                }
+                            ],
+                            "immersion_anchor_scene_goal": "第一章必须给出雨夜压迫感",
+                        }
+                    ),
+                )
+                self.assertEqual(override.chapter_start, 1)
+                with session_factory() as session:
+                    band = session.execute(select(BandExperiencePlan).limit(1)).scalar_one()
+                    plan_one = session.execute(
+                        select(ChapterPlan).where(ChapterPlan.project_id == project.id, ChapterPlan.chapter_number == 1)
+                    ).scalar_one()
+                band_payload = json.loads(band.schedule_json)
+                chapter_payload = json.loads(plan_one.experience_plan_json)
+                self.assertEqual(band_payload["scheduled_rewards"][0]["category"], "social")
+                self.assertEqual(band_payload["curiosity_beats"][0]["question_open"], "谁在背后逼迫主角")
+                self.assertIn("social-face-slap", chapter_payload["selected_template_ids"])
+                self.assertEqual(chapter_payload["question_hook"], "谁在背后逼迫主角")
+            finally:
+                api_module._engine = old_engine
+                api_module._SessionFactory = old_factory
+                api_module._orchestrator = old_orchestrator
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+                engine.dispose()
 
 
 if __name__ == "__main__":

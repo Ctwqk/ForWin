@@ -4,10 +4,14 @@ WORKDIR /app
 
 COPY pyproject.toml .
 COPY forwin/ forwin/
-COPY browser_extension/ browser_extension/
 
 RUN pip install --no-cache-dir .
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends xvfb xauth ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 RUN python -m playwright install --with-deps chromium
+COPY browser_extension/ browser_extension/
+COPY scripts/ scripts/
 
 RUN mkdir -p /app/data
 

@@ -1,5 +1,15 @@
 from __future__ import annotations
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+from .experience import (
+    ArcPayoffMap,
+    BandDelightSchedule,
+    ChapterExperiencePlan,
+    ReaderPromise,
+)
+from forwin.governance import NarrativeConstraintInfo, NextBandSummary, PlanTaskItem
 
 
 class EntitySnapshot(BaseModel):
@@ -109,6 +119,50 @@ class AudienceHintView(BaseModel):
     risk_flags: list[str] = Field(default_factory=list)
 
 
+class AudienceTrendView(BaseModel):
+    signal_key: str = ""
+    signal_type: str = ""
+    target_name: str = ""
+    window_type: str = "long"
+    current_level: str = "noise"
+    previous_score: float = 0.0
+    current_score: float = 0.0
+    delta: float = 0.0
+    scale_confidence: float = 0.0
+    estimation_method: str = ""
+    trend_type: Literal["rising", "falling", "stable"] = "stable"
+
+
+class CanonEventEvidence(BaseModel):
+    event_id: str = ""
+    chapter_number: int = 0
+    summary: str = ""
+    significance: str = ""
+    involved_entity_names: list[str] = Field(default_factory=list)
+    evidence_id: str = ""
+
+
+class ReviewNote(BaseModel):
+    chapter_number: int = 0
+    verdict: str = ""
+    summary: str = ""
+    issue_types: list[str] = Field(default_factory=list)
+    planned_reward_tags: list[str] = Field(default_factory=list)
+    delivered_reward_tags: list[str] = Field(default_factory=list)
+    review_notes: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class LintSignal(BaseModel):
+    tool: str
+    code: str = ""
+    severity: Literal["error", "warning", "info"] = "warning"
+    message: str
+    line: int = 0
+    column: int = 0
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
 class ChapterContextPack(BaseModel):
     """Everything a Writer needs to write one chapter."""
     project_id: str = ""
@@ -137,3 +191,40 @@ class ChapterContextPack(BaseModel):
     reader_feedback: ReaderFeedbackView | None = None
     current_arc_envelope: ArcEnvelopeView | None = None
     audience_hints: AudienceHintView | None = None
+    reader_promise: ReaderPromise | None = None
+    arc_payoff_map: ArcPayoffMap | None = None
+    band_delight_schedule: BandDelightSchedule | None = None
+    band_task_contract: list[PlanTaskItem] = Field(default_factory=list)
+    chapter_experience_plan: ChapterExperiencePlan | None = None
+    chapter_task_contract: list[PlanTaskItem] = Field(default_factory=list)
+    active_future_constraints: list[NarrativeConstraintInfo] = Field(default_factory=list)
+    next_band_summary: NextBandSummary | None = None
+
+
+class ReviewContextPack(BaseModel):
+    project_id: str = ""
+    project_title: str
+    chapter_number: int
+    chapter_plan_title: str
+    chapter_plan_one_line: str
+    chapter_goals: list[str] = Field(default_factory=list)
+    previous_chapter_summaries: list[str] = Field(default_factory=list)
+    active_entities: list[EntitySnapshot] = Field(default_factory=list)
+    active_rules: list[EntitySnapshot] = Field(default_factory=list)
+    active_threads: list[PlotThreadSnapshot] = Field(default_factory=list)
+    timeline: TimelineSnapshot | None = None
+    world_pressure: WorldPressureView | None = None
+    reader_feedback: ReaderFeedbackView | None = None
+    audience_hints: AudienceHintView | None = None
+    reader_promise: ReaderPromise | None = None
+    arc_payoff_map: ArcPayoffMap | None = None
+    band_delight_schedule: BandDelightSchedule | None = None
+    band_task_contract: list[PlanTaskItem] = Field(default_factory=list)
+    chapter_experience_plan: ChapterExperiencePlan | None = None
+    chapter_task_contract: list[PlanTaskItem] = Field(default_factory=list)
+    active_future_constraints: list[NarrativeConstraintInfo] = Field(default_factory=list)
+    next_band_summary: NextBandSummary | None = None
+    recent_canon_events: list[CanonEventEvidence] = Field(default_factory=list)
+    recent_rule_events: list[CanonEventEvidence] = Field(default_factory=list)
+    recent_review_notes: list[ReviewNote] = Field(default_factory=list)
+    lint_signals: list[LintSignal] = Field(default_factory=list)

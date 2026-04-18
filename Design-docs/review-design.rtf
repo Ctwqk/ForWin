@@ -1,0 +1,314 @@
+
+下面内容可直接保存为 review_node_plan.md。
+
+Review Node 规划（基于 v2.3 + v2.6，不含 Proxy Review Layer）
+1. 目标
+
+本节点的目标是做一个章节级历史审稿节点：
+在 Writer 产出当前章后，结合当前章计划、近期章节、当前 arc、相关 canon 真值、当前 thread、时间线，判断这章是否：
+
+和过往章节 / 真值冲突
+在近几章里显得拖、空转或重复
+对当前 chapter objective / active arc 有真实推进
+对读者来说理解负担过高
+适合 pass / patch / rewrite / replan 中的哪一种处理方式。
+
+这个定位与现有第三版一致：
+系统顶层仍由 Writing Orchestrator 调度 Arc Director / Canon & State System / Chapter Writer / Continuity Reviewer / Serial Pacing Strategist；Writer 只负责当前章生成，Reviewer 负责“不崩”，Pacing 负责“不水”，而状态真值只能由 State Updater 在事务边界内写入。
+
+2. 非目标
+
+本节点不做以下事情：
+
+不直接修改 canon
+不直接修改 State Updater / Timeline Manager / Canon Repository
+不直接生成 AudienceSignal 替代评论层
+不把评论当作必需输入
+不把“语言流畅”当成唯一标准。
+
+因此，它是一个内部历史审稿节点，不是 v2.6 的评论反馈替身。
+它的主要输出仍然是 ReviewVerdict、issues、patch / rewrite 指令、以及供后续 pacing / planning 使用的 review notes。
+
+3. 推荐使用 / 参考的开源工具
+3.1 直接使用
+Vale
+
+Vale 是一个跨平台的命令行 prose linter，官方将其定义为“把代码式 lint 带到 prose”，并强调可自定义规则。它适合做你的规则化审查层，例如：
+
+章末 hook 缺失
+解释性段落过密
+FAQ 式解释句式
+禁用词 / 口头禅
+角色称呼一致性
+叙述黑名单模板。
+textlint
+
+textlint 是开源、插件化的自然语言 linter，官方将其类比为“面向自然语言的 ESLint”。它很适合承载你的章节 / scene 级插件规则体系，例如：
+
+summary 与正文矛盾
+scene note 缺失
+标题格式
+冗余句式
+连续 exposition 过长。
+LanguageTool
+
+LanguageTool 的核心功能是开源的，支持自建本地或云端服务，也提供 HTTP API。它更适合放在最底层做句子卫生检查，例如：
+
+基础语法
+部分风格问题
+明显拼写 / 标点 / 句法错误。
+它支持多种语言，中文可用，但官方也说明不同语言支持程度不同，中文没有拼写检查，因此不应把它当成中文网文审稿主引擎。
+reviewdog
+
+reviewdog 本身不是文本审稿器，但它能把各类 linter 输出统一转成 review comments。它适合做审稿意见汇总与展示层，把 Vale、textlint、LanguageTool、以及你自定义 review engine 的输出统一成章节批注流。
+
+3.2 参考 / 可选
+LangGraph
+
+你的文件里已经把 LangGraph 作为正式阶段推荐的运行时编排层。它适合做多步骤、可回退、可重试、状态清晰的工作流，因此很适合承载 Review Hub 这种多子审查器并行或串行汇总的结构。
+
+4. Reviewer 的总结构
+
+建议正式命名为：
+
+Historical Chapter Review Hub
+
+它是一个复合 reviewer，内部由五层组成：
+
+Layer 0：Review Context Builder
+
+复用现有 Context Assembler + Retrieval Broker，为 reviewer 组装 ReviewContextPack。
+Reviewer 的 retrieval policy 应采用中等窗口、真值优先、相关事件和规则优先，而不是像 Writer 一样只看小窗口。
+
+Layer 1：Deterministic Historical Checks
+
+
+时间线冲突
+人物 / 地点 / 事件 / thread 冲突
+must_progress_points 覆盖率
+当前 objective 是否完成
+是否遗漏上一章硬约束
+是否重复近几章相同功能。
+Layer 2：Rule-based Prose / Style Checks
+
+由 Vale + textlint + LanguageTool 组成：
+
+Vale：风格 / 模板 / 黑名单 / hook / exposition 规则
+textlint：章节 / scene 级插件规则
+LanguageTool：句子级卫生检查。
+Layer 3：LLM Editorial Judgment
+
+这一层是建立在前两层硬事实之上的编辑判断层。
+输入是：
+
+当前 draft
+近邻章节摘要
+当前 band / arc 目标
+deterministic facts
+prose/style findings。
+
+输出是更像编辑的判断：
+
+这章为什么显得拖
+动机链哪里断
+哪些问题 patch 能修
+哪些已经要 rewrite / replan。
+Layer 4：Verdict Aggregator
+
+把前面各层结论汇总成正式 ReviewVerdict，并只允许以下结果：
+
+pass
+patch
+rewrite
+replan。
+5. Reviewer 内部的四个子审查器
+
+在业务层面，建议按四个子审查器组织，而不是按工具组织。
+
+5.1 Continuity Review
+
+职责：审“不崩”。
+检查：
+
+设定是否冲突
+人物状态是否冲突
+时间 / 地点是否冲突
+事件链是否冲突
+thread 是否冲突。
+5.2 Serial Pacing Review
+
+职责：审“不水”。
+检查：
+
+最近几章是否拖
+主线是否停滞
+冲突 / 爽点密度是否下降
+关系线或 thread 是否长期不动
+本章是否只是重复前章功能。
+5.3 Historical Progress Review
+
+职责：审“这章值不值”。
+检查：
+
+chapter_objective 是否完成
+must_progress_points 是否推进
+是否对 active arc 产生真实进展
+是否产生有意义的 event / state / thread 变化
+是否属于 filler / 空转章。
+5.4 Clarity & Reader Burden Review
+
+职责：审“人能不能顺畅看懂”。
+检查：
+
+动机链是否足够显化
+因果桥是否缺失
+新规则是否无支撑投放
+是否依赖读者记住过多旧信息
+是否出现作者下场式解释。
+这里与 v2.6 的 confusion / risk 边界一致，但不直接生成 AudienceSignal。
+6. 输入与输出
+输入
+
+建议 reviewer 至少读取：
+
+WriterOutput
+ChapterPlan
+ChapterTimeline
+ChapterContextPack
+ReviewContextPack
+近 1~3 章摘要
+当前 band 目标
+active arc goal
+相关 entity state / canon events / plot threads / timeline。
+输出
+
+建议正式输出对象：
+
+ReviewVerdict
+draft_id
+reviewer_type = historical_review_hub
+verdict
+severity
+continuity_issues
+pacing_issues
+progress_issues
+clarity_issues
+strengths
+rewrite_instruction
+keeper_feedback
+director_feedback。
+这与现有 ReviewVerdict 思路兼容，只是扩充到更适合历史章节审稿。
+ReviewNote（建议新增）
+project_id
+chapter_id
+issue_type
+target_scope（scene / chapter / band / arc）
+evidence_refs
+suggested_action
+created_at
+
+这个对象不写真值，只作为后续 Pacing、Director、以及未来 v2.6 共振项的内部证据。
+
+7. 接入现有结构的位置
+
+最小侵入式接法如下：
+
+现有主链
+
+Writer -> Continuity Reviewer -> State Updater，并且每 5~15 章由 Serial Pacing Strategist 读取 PacingAnalysisPack 再判断是否 patch / reband / rearc。
+
+建议改成
+
+Writer -> Historical Chapter Review Hub -> State Updater
+
+其中：
+
+Historical Chapter Review Hub 内部包含现有 Continuity Review
+并在内部增加 Historical Progress Review 与 Clarity & Reader Burden Review
+Serial Pacing Strategist 仍然保留为周期性节点，不直接塞进单章路径，但会读取 Review Hub 产出的 review notes。
+
+这样做的好处是：
+
+不破坏 v2.3 主链
+不让单章 reviewer 胀成全能神类
+仍保持“单章审稿”和“阶段节奏循环”分离。
+8. 与 v2.6 的连接方式
+
+本节点不直接替代评论层。
+它与 v2.6 的关系应保持为：
+
+Review Hub 产出 clarity / pacing / risk 相关 review notes
+后续 v2.6 若需要内部共振项 A，可以读取这些 review notes
+但 Review Hub 不直接写入 AudienceSignal / AudienceTrend。
+
+在 v2.6 的接入边界上，要继续遵守：
+
+评论优先作用于 future band / reband / next active arc / clarification placement
+不重写已 canonical 部分
+Writer 不直接看原始评论，只能看极小型 AudienceHintPack
+State Updater / Timeline Manager / Canon Repository 绝不受评论直接影响。
+
+因此，这个 Review Hub 最多只做两件事：
+
+给单章做历史审稿
+给 v2.6 留下可复用的内部 review evidence
+9. 推荐的运行流程
+单章流程
+Orchestrator 读取 active ArcPlanVersion / current ChapterPlan / current ChapterTimeline
+Context Assembler + Retrieval Broker 生成 ChapterContextPack
+Writer 生成 WriterOutput
+Historical Chapter Review Hub 审查
+若 pass → State Updater 写 canon
+若 patch → Writer patch
+若 rewrite → Writer rewrite
+若 replan → Director 决定 patch / reband / rearc。
+阶段流程
+
+每 5~15 章：
+
+Serial Pacing Strategist 读取 PacingAnalysisPack
+同时可读取近几章的 ReviewNote
+输出阶段反馈
+Orchestrator 判断是否 只记录 / patch chapter / reband / rearc。
+10. 最小实现顺序
+Phase 1：规则闭环
+
+先实现：
+
+deterministic historical checks
+Vale 规则
+textlint 规则
+LanguageTool 句子卫生检查
+verdict 聚合器。
+这一阶段就可以支持“审当前章与过往章节”的最硬需求。
+Phase 2：LLM 编辑判断
+
+再接入 LLM judgment 层，但要求：
+
+只能读结构化事实 + 历史摘要
+只能输出结构化 verdict 和 patch 指令
+不允许自由长篇点评替代机器输出。
+Phase 3：与阶段节奏和 v2.6 轻连接
+
+最后再做：
+
+review notes 进入 PacingAnalysisPack
+review notes 可供 v2.6 后续共振使用
+保持不生成 proxy audience signal。
+11. 最终建议
+
+最适合你现有 2.3 + 2.6 的方案，不是“纯 LLM reviewer”，也不是“纯语法工具链”，而是：
+
+Deterministic Historical Checks + Vale + textlint + LanguageTool + LLM Editorial Judgment + Verdict Aggregator
+
+其中：
+
+底层负责硬事实与规则
+上层负责像编辑一样判断
+汇总层负责接入你现有的 pass / patch / rewrite / replan 主链
+整体仍然服从现有 Writing Orchestrator -> Writer -> Reviewer -> State Updater 的骨架。
+
+这套接法和你的三级 plan 不冲突，反而很贴合：
+它把 review 明确拆成单章历史审稿与阶段节奏审稿两层，而不是把所有问题都塞进一个 reviewer 里。
+
+

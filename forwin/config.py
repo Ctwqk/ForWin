@@ -4,6 +4,8 @@ import os
 
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_MINIMAX_MODEL = "MiniMax-M2.7"
+DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1"
+DEFAULT_MOONSHOT_MODEL = "kimi-k2.5"
 
 try:
     from pydantic_settings import BaseSettings as _ConfigBaseModel
@@ -57,17 +59,30 @@ def _env_values() -> dict[str, object]:
         ),
         "minimax_model": os.environ.get("MINIMAX_MODEL", DEFAULT_MINIMAX_MODEL),
         "llm_timeout_seconds": float(os.environ.get("LLM_TIMEOUT_SECONDS", "90")),
+        "llm_retry_attempts": int(os.environ.get("LLM_RETRY_ATTEMPTS", "2")),
+        "llm_retry_initial_delay_seconds": float(
+            os.environ.get("LLM_RETRY_INITIAL_DELAY_SECONDS", "2")
+        ),
+        "llm_retry_max_delay_seconds": float(
+            os.environ.get("LLM_RETRY_MAX_DELAY_SECONDS", "15")
+        ),
         "scene_call_timeout_seconds": float(
             os.environ.get("SCENE_CALL_TIMEOUT_SECONDS", "45")
         ),
-        "max_chapter_chars": int(os.environ.get("MAX_CHAPTER_CHARS", "2200")),
-        "min_chapter_chars": int(os.environ.get("MIN_CHAPTER_CHARS", "1500")),
+        "max_chapter_chars": int(os.environ.get("MAX_CHAPTER_CHARS", "3200")),
+        "min_chapter_chars": int(os.environ.get("MIN_CHAPTER_CHARS", "2500")),
         "target_chapter_chars": int(
-            os.environ.get("TARGET_CHAPTER_CHARS", "2000")
+            os.environ.get("TARGET_CHAPTER_CHARS", "2800")
         ),
         "writer_mode": os.environ.get("WRITER_MODE", "scene"),
         "operation_mode": os.environ.get("OPERATION_MODE", "blackbox"),
         "freeze_failed_candidates": os.environ.get("FREEZE_FAILED_CANDIDATES", "true").strip().lower() not in {"0", "false", "no"},
+        "review_interval_chapters": int(os.environ.get("REVIEW_INTERVAL_CHAPTERS", "0")),
+        "progression_mode": os.environ.get("PROGRESSION_MODE", "serial_canon_band_guard"),
+        "auto_band_checkpoint": os.environ.get("AUTO_BAND_CHECKPOINT", "true").strip().lower() in {"1", "true", "yes"},
+        "band_warn_action": os.environ.get("BAND_WARN_ACTION", "pause"),
+        "manual_checkpoints_enabled": os.environ.get("MANUAL_CHECKPOINTS_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
+        "future_constraints_enabled": os.environ.get("FUTURE_CONSTRAINTS_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
         "default_scene_count": int(os.environ.get("DEFAULT_SCENE_COUNT", "3")),
         "max_scene_count": int(os.environ.get("MAX_SCENE_COUNT", "4")),
         "context_budget_chars": int(os.environ.get("CONTEXT_BUDGET_CHARS", "6000")),
@@ -92,6 +107,15 @@ def _env_values() -> dict[str, object]:
         ),
         "blackbox_writer_attention_retries": int(
             os.environ.get("BLACKBOX_WRITER_ATTENTION_RETRIES", "3")
+        ),
+        "experience_review_enabled": os.environ.get(
+            "EXPERIENCE_REVIEW_ENABLED", "true"
+        ).strip().lower() not in {"0", "false", "no"},
+        "lint_review_enabled": os.environ.get(
+            "LINT_REVIEW_ENABLED", "true"
+        ).strip().lower() not in {"0", "false", "no"},
+        "review_fail_max_rewrites": int(
+            os.environ.get("REVIEW_FAIL_MAX_REWRITES", "3")
         ),
         "phase4_use_llm": os.environ.get("PHASE4_USE_LLM", "true").strip().lower() not in {"0", "false", "no"},
         "feedback_cooldown_chapters": int(os.environ.get("FEEDBACK_COOLDOWN_CHAPTERS", "3")),
@@ -127,13 +151,25 @@ class _ConfigFields:
     minimax_base_url: str = DEFAULT_MINIMAX_BASE_URL
     minimax_model: str = DEFAULT_MINIMAX_MODEL
     llm_timeout_seconds: float = 90.0
+    llm_retry_attempts: int = 2
+    llm_retry_initial_delay_seconds: float = 2.0
+    llm_retry_max_delay_seconds: float = 15.0
     scene_call_timeout_seconds: float = 45.0
-    max_chapter_chars: int = 2200
-    min_chapter_chars: int = 1500
-    target_chapter_chars: int = 2000
+    max_chapter_chars: int = 3200
+    min_chapter_chars: int = 2500
+    target_chapter_chars: int = 2800
     writer_mode: str = "scene"
     operation_mode: str = "blackbox"
     freeze_failed_candidates: bool = True
+    review_interval_chapters: int = 0
+    progression_mode: str = "serial_canon_band_guard"
+    auto_band_checkpoint: bool = True
+    band_warn_action: str = "pause"
+    manual_checkpoints_enabled: bool = True
+    future_constraints_enabled: bool = True
+    governance_task_id: str = ""
+    governance_causal_root_id: str = ""
+    llm_fallback_profiles: list[dict[str, str]] = []
     default_scene_count: int = 3
     max_scene_count: int = 4
     context_budget_chars: int = 6000
@@ -147,6 +183,9 @@ class _ConfigFields:
     phase_active_thread_limit: int = 20
     replan_cooldown_chapters: int = 3
     blackbox_writer_attention_retries: int = 3
+    experience_review_enabled: bool = True
+    lint_review_enabled: bool = True
+    review_fail_max_rewrites: int = 3
     phase4_use_llm: bool = True
     feedback_cooldown_chapters: int = 3
     comment_to_reader_ratio: int = 80

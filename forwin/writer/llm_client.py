@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 import time
+from email.utils import parsedate_to_datetime
 
 import httpx
 
 from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
 
 logger = logging.getLogger(__name__)
+_RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 
 
 class LLMClient:
@@ -19,11 +21,23 @@ class LLMClient:
         base_url: str = DEFAULT_MINIMAX_BASE_URL,
         model: str = DEFAULT_MINIMAX_MODEL,
         timeout_seconds: float = 90.0,
+        retry_attempts: int = 2,
+        retry_initial_delay_seconds: float = 2.0,
+        retry_max_delay_seconds: float = 15.0,
+        fallback_profiles: list[dict[str, str]] | None = None,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout_seconds = max(10.0, float(timeout_seconds))
+        self.retry_attempts = max(1, int(retry_attempts or 1))
+        self.retry_initial_delay_seconds = max(0.0, float(retry_initial_delay_seconds))
+        self.retry_max_delay_seconds = max(
+            self.retry_initial_delay_seconds,
+            float(retry_max_delay_seconds),
+        )
+        self.fallback_profiles = list(fallback_profiles or [])
+        self.model_fallback_events: list[dict[str, str]] = []
         self.client = httpx.Client(
             timeout=httpx.Timeout(self.timeout_seconds, connect=min(10.0, self.timeout_seconds))
         )
@@ -40,24 +54,10 @@ class LLMClient:
         """Send a chat completion request and return the content string.
 
         Retry policy:
-        - 429 (rate limit): wait 5 s, retry once.
-        - ReadTimeout / TimeoutException: wait 10 s, retry once.
+        - 429/5xx/529 and other transient HTTP statuses: retry with bounded backoff.
+        - ReadTimeout / TimeoutException: retry with bounded backoff when retry_on_timeout is true.
         - Any other HTTP error: raise immediately.
         """
-        payload = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        }
-        if response_format:
-            payload["response_format"] = response_format
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        url = f"{self.base_url}/chat/completions"
-
         request_timeout = httpx.Timeout(
             max(5.0, float(timeout_seconds if timeout_seconds is not None else self.timeout_seconds)),
             connect=min(
@@ -66,13 +66,81 @@ class LLMClient:
             ),
         )
 
-        for attempt in range(2):  # attempt 0 = first try, attempt 1 = single retry
+        profiles = self._request_profiles()
+        last_exc: Exception | None = None
+        for profile_index, profile in enumerate(profiles):
+            try:
+                return self._chat_with_profile(
+                    profile,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format=response_format,
+                    request_timeout=request_timeout,
+                    retry_on_timeout=retry_on_timeout,
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if profile_index >= len(profiles) - 1 or not self._is_fallback_retryable(exc):
+                    raise
+                next_profile = profiles[profile_index + 1]
+                event = {
+                    "from_profile_id": profile.get("id", ""),
+                    "from_model": profile["model"],
+                    "from_base_url": profile["base_url"],
+                    "to_profile_id": next_profile.get("id", ""),
+                    "to_model": next_profile["model"],
+                    "to_base_url": next_profile["base_url"],
+                    "reason": str(exc),
+                }
+                self.model_fallback_events.append(event)
+                logger.warning(
+                    "LLM profile fallback: %s (%s) -> %s (%s) after retries failed: %s",
+                    event["from_model"],
+                    event["from_base_url"],
+                    event["to_model"],
+                    event["to_base_url"],
+                    exc,
+                )
+                continue
+
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("LLMClient.chat: no usable LLM profile")
+
+    def _chat_with_profile(
+        self,
+        profile: dict[str, str],
+        *,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+        response_format: dict | None,
+        request_timeout: httpx.Timeout,
+        retry_on_timeout: bool,
+    ) -> str:
+        payload = {
+            "model": profile["model"],
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if response_format:
+            payload["response_format"] = response_format
+        headers = {
+            "Authorization": f"Bearer {profile['api_key']}",
+            "Content-Type": "application/json",
+        }
+        url = f"{profile['base_url'].rstrip('/')}/chat/completions"
+
+        for attempt in range(self.retry_attempts):
             try:
                 started_at = time.perf_counter()
                 logger.debug(
-                    "LLMClient.chat attempt=%d model=%s messages=%d max_tokens=%d",
-                    attempt,
-                    self.model,
+                    "LLMClient.chat attempt=%d/%d model=%s messages=%d max_tokens=%d",
+                    attempt + 1,
+                    self.retry_attempts,
+                    profile["model"],
                     len(messages),
                     max_tokens,
                 )
@@ -83,15 +151,19 @@ class LLMClient:
                     timeout=request_timeout,
                 )
 
-                if response.status_code == 429:
-                    if attempt == 0:
+                if response.status_code in _RETRYABLE_HTTP_STATUS_CODES:
+                    if attempt < self.retry_attempts - 1:
+                        delay = self._retry_delay(attempt, response)
                         logger.warning(
-                            "Rate limited (429). Waiting 5 s before retry."
+                            "Transient LLM HTTP status %d. Waiting %.1f s before retry %d/%d.",
+                            response.status_code,
+                            delay,
+                            attempt + 2,
+                            self.retry_attempts,
                         )
-                        time.sleep(5)
+                        time.sleep(delay)
                         continue
-                    else:
-                        response.raise_for_status()
+                    response.raise_for_status()
 
                 response.raise_for_status()
 
@@ -105,16 +177,121 @@ class LLMClient:
                 return content
 
             except (httpx.ReadTimeout, httpx.TimeoutException) as exc:
-                if retry_on_timeout and attempt == 0:
+                if retry_on_timeout and attempt < self.retry_attempts - 1:
+                    delay = self._retry_delay(attempt)
                     logger.warning(
-                        "Request timed out (%s). Waiting 10 s before retry.", exc
+                        "Request timed out (%s). Waiting %.1f s before retry %d/%d.",
+                        exc,
+                        delay,
+                        attempt + 2,
+                        self.retry_attempts,
                     )
-                    time.sleep(10)
+                    time.sleep(delay)
                     continue
                 raise
 
         # Should never reach here, but make the type-checker happy.
         raise RuntimeError("LLMClient.chat: unexpected exit from retry loop")
+
+    def _request_profiles(self) -> list[dict[str, str]]:
+        candidates = [
+            {
+                "id": "",
+                "name": "",
+                "api_key": self.api_key,
+                "base_url": self.base_url,
+                "model": self.model,
+            }
+        ]
+        candidates.extend(self.fallback_profiles)
+        profiles: list[dict[str, str]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for item in candidates:
+            profile = {
+                "id": str(item.get("id", "")).strip(),
+                "name": str(item.get("name", "")).strip(),
+                "api_key": str(item.get("api_key", "")).strip(),
+                "base_url": str(item.get("base_url", "")).strip().rstrip("/"),
+                "model": str(item.get("model", "")).strip(),
+            }
+            if not profile["api_key"] or not profile["base_url"] or not profile["model"]:
+                continue
+            key = (profile["api_key"], profile["base_url"], profile["model"])
+            if key in seen:
+                continue
+            seen.add(key)
+            profiles.append(profile)
+        return profiles
+
+    def drain_model_fallback_events(self) -> list[dict[str, str]]:
+        events = list(self.model_fallback_events)
+        self.model_fallback_events.clear()
+        return events
+
+    @classmethod
+    def _is_fallback_retryable(cls, exc: Exception) -> bool:
+        if isinstance(exc, (httpx.ReadTimeout, httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError, httpx.NetworkError)):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            status_code = exc.response.status_code if exc.response is not None else 0
+            return status_code in _RETRYABLE_HTTP_STATUS_CODES
+        current: BaseException | None = exc
+        while current is not None:
+            message = str(current).lower()
+            if any(
+                token in message
+                for token in (
+                    "http 529",
+                    "status code 529",
+                    "429",
+                    "500",
+                    "502",
+                    "503",
+                    "504",
+                    "temporarily unavailable",
+                    "service unavailable",
+                    "rate limit",
+                    "too many requests",
+                    "overloaded",
+                    "connection reset",
+                    "server disconnected",
+                    "network error",
+                    "timed out",
+                    "timeout",
+                )
+            ):
+                return True
+            current = current.__cause__ or current.__context__
+        return False
+
+    def _retry_delay(
+        self,
+        attempt: int,
+        response: httpx.Response | None = None,
+    ) -> float:
+        retry_after = response.headers.get("retry-after") if response is not None else None
+        parsed_retry_after = self._parse_retry_after(retry_after)
+        if parsed_retry_after is not None:
+            return min(self.retry_max_delay_seconds, max(0.0, parsed_retry_after))
+        delay = self.retry_initial_delay_seconds * (2 ** max(0, attempt))
+        return min(self.retry_max_delay_seconds, max(0.0, delay))
+
+    @staticmethod
+    def _parse_retry_after(value: str | None) -> float | None:
+        if not value:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return float(stripped)
+        except ValueError:
+            pass
+        try:
+            retry_at = parsedate_to_datetime(stripped)
+        except (TypeError, ValueError, IndexError, OverflowError):
+            return None
+        return max(0.0, retry_at.timestamp() - time.time())
 
     def embed(
         self,

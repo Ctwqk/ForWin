@@ -1,0 +1,62 @@
+[
+  {
+    "template_id": "power-hidden-edge",
+    "display_name": "藏锋翻盘",
+    "category": "power",
+    "setup_requirement": "先展示主角被轻视、受限或被压制。",
+    "payoff_shape": "在关键场合亮出底牌，形成实力或资源上的明确兑现。",
+    "risk_flags": ["power_creep", "cheap_win"],
+    "best_window": "band_early",
+    "recommended_hook_types": ["advantage_reveal", "cliffhanger_question"]
+  },
+  {
+    "template_id": "power-micro-breakthrough",
+    "display_name": "微突破到账",
+    "category": "power",
+    "setup_requirement": "前文已经积累训练、消耗或受挫。",
+    "payoff_shape": "给出小而明确的能力/资源进展，保证本章不白读。",
+    "risk_flags": ["repetition", "inflation"],
+    "best_window": "band_mid",
+    "recommended_hook_types": ["advantage_reveal", "status_flip"]
+  },
+  {
+    "template_id": "social-face-slap",
+    "display_name": "公开打脸",
+    "category": "social",
+    "setup_requirement": "先建立公开场合的误判、羞辱或轻视。",
+    "payoff_shape": "借对比或揭示完成地位逆转，让旁观者态度变化落地。",
+    "risk_flags": ["repetition", "crowd_exposition"],
+    "best_window": "band_mid",
+    "recommended_hook_types": ["status_flip", "cliffhanger_question"]
+  },
+  {
+    "template_id": "justice-debt-collected",
+    "display_name": "报应到账",
+    "category": "justice",
+    "setup_requirement": "恶行、受害者与代价必须被清楚建立。",
+    "payoff_shape": "让报应落到具体人和具体后果，形成正义回报。",
+    "risk_flags": ["moralizing", "villain_thin"],
+    "best_window": "band_late",
+    "recommended_hook_types": ["retribution_snap", "status_flip"]
+  },
+  {
+    "template_id": "mystery-locked-clue",
+    "display_name": "锁孔线索",
+    "category": "mystery",
+    "setup_requirement": "先抛出无法立即解释的异象、矛盾或秘密。",
+    "payoff_shape": "给出新线索或半揭晓，同时打开更高价值的问题。",
+    "risk_flags": ["confusion", "withheld_logic"],
+    "best_window": "band_any",
+    "recommended_hook_types": ["cliffhanger_question", "danger_hook"]
+  },
+  {
+    "template_id": "emotion-knife-turn",
+    "display_name": "情感刀口",
+    "category": "emotion",
+    "setup_requirement": "先建立关系稳定感、信任或脆弱承诺。",
+    "payoff_shape": "在推进主线时刺中情感软肋，增强人物黏性。",
+    "risk_flags": ["melodrama", "ooc"],
+    "best_window": "band_late",
+    "recommended_hook_types": ["emotional_knife", "cliffhanger_question"]
+  }
+]

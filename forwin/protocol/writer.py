@@ -1,7 +1,30 @@
 from __future__ import annotations
 from pydantic import BaseModel, Field
-from .scene import SceneOutput
+from .scene import SceneContinuation, SceneOutput
 from .state_change import StateChangeCandidate, EventCandidate, ThreadBeatCandidate, TimeAdvance
+
+
+class LoreCandidate(BaseModel):
+    subject_name: str = ""
+    subject_type: str = ""
+    description: str = ""
+    evidence_refs: list[str] = Field(default_factory=list)
+    confidence: float = 0.5
+
+
+class TimelineHint(BaseModel):
+    current_time_label: str = ""
+    projected_time_label: str = ""
+    duration_hint: str = ""
+    evidence_refs: list[str] = Field(default_factory=list)
+    confidence: float = 0.5
+
+
+class WriterNote(BaseModel):
+    note_type: str = ""
+    target_name: str = ""
+    note: str = ""
+    evidence_refs: list[str] = Field(default_factory=list)
 
 
 class WriterOutput(BaseModel):
@@ -18,4 +41,8 @@ class WriterOutput(BaseModel):
     new_events: list[EventCandidate] = Field(default_factory=list)
     thread_beats: list[ThreadBeatCandidate] = Field(default_factory=list)
     time_advance: TimeAdvance | None = None
+    scene_continuation: list[SceneContinuation] = Field(default_factory=list)
+    lore_candidates: list[LoreCandidate] = Field(default_factory=list)
+    timeline_hints: list[TimelineHint] = Field(default_factory=list)
+    writer_notes: list[WriterNote] = Field(default_factory=list)
     generation_meta: dict[str, object] = Field(default_factory=dict)

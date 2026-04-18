@@ -240,6 +240,93 @@ def upgrade_db(engine: Engine) -> None:
             )
         migrations.append(MigrationSpec("phase3_analysis_v1", apply_phase3_analysis_v1))
 
+        def apply_generation_tasks_v1(conn) -> None:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS generation_tasks (
+                        id TEXT PRIMARY KEY,
+                        task_kind TEXT NOT NULL DEFAULT 'generation',
+                        status TEXT NOT NULL DEFAULT 'starting',
+                        title TEXT NOT NULL DEFAULT '',
+                        subtitle TEXT NOT NULL DEFAULT '',
+                        project_id TEXT NOT NULL DEFAULT '',
+                        extension_client_id TEXT NOT NULL DEFAULT '',
+                        error_message TEXT NOT NULL DEFAULT '',
+                        message TEXT NOT NULL DEFAULT '',
+                        current_stage TEXT NOT NULL DEFAULT 'queued',
+                        stage_history_json TEXT NOT NULL DEFAULT '[]',
+                        requested_chapters INTEGER NOT NULL DEFAULT 0,
+                        current_chapter INTEGER NOT NULL DEFAULT 0,
+                        completed_chapters_json TEXT NOT NULL DEFAULT '[]',
+                        failed_chapters_json TEXT NOT NULL DEFAULT '[]',
+                        paused_chapters_json TEXT NOT NULL DEFAULT '[]',
+                        frozen_artifacts_json TEXT NOT NULL DEFAULT '[]',
+                        cancel_requested INTEGER NOT NULL DEFAULT 0,
+                        pause_requested INTEGER NOT NULL DEFAULT 0,
+                        paused_at TEXT NULL,
+                        started_at TEXT NULL,
+                        finished_at TEXT NULL,
+                        deleted_at TEXT NULL,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_generation_tasks_status_updated
+                    ON generation_tasks(status, updated_at)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_generation_tasks_project_updated
+                    ON generation_tasks(project_id, updated_at)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_generation_tasks_deleted_updated
+                    ON generation_tasks(deleted_at, updated_at)
+                    """
+                )
+            )
+
+        migrations.append(MigrationSpec("generation_tasks_v1", apply_generation_tasks_v1))
+
+        def apply_generation_task_pause_v1(conn) -> None:
+            columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(generation_tasks)")).fetchall()
+            }
+            if "pause_requested" not in columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE generation_tasks
+                        ADD COLUMN pause_requested INTEGER NOT NULL DEFAULT 0
+                        """
+                    )
+                )
+            if "paused_at" not in columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE generation_tasks
+                        ADD COLUMN paused_at TEXT NULL
+                        """
+                    )
+                )
+
+        migrations.append(MigrationSpec("generation_task_pause_v1", apply_generation_task_pause_v1))
+
         def apply_phase24_arc_envelope_v1(conn) -> None:
             conn.execute(
                 text(
@@ -491,6 +578,120 @@ def upgrade_db(engine: Engine) -> None:
                 conn.execute(text(statement))
         migrations.append(MigrationSpec("performance_indexes_v1", apply_performance_indexes_v1))
 
+        def apply_experience_overlay_v1(conn) -> None:
+            chapter_plan_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(chapter_plans)"))
+            }
+            if "experience_plan_json" not in chapter_plan_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE chapter_plans
+                        ADD COLUMN experience_plan_json TEXT NOT NULL DEFAULT '{}'
+                        """
+                    )
+                )
+
+            arc_structure_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(arc_structure_drafts)"))
+            }
+            if "reader_promise_json" not in arc_structure_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE arc_structure_drafts
+                        ADD COLUMN reader_promise_json TEXT NOT NULL DEFAULT '{}'
+                        """
+                    )
+                )
+            if "arc_payoff_map_json" not in arc_structure_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE arc_structure_drafts
+                        ADD COLUMN arc_payoff_map_json TEXT NOT NULL DEFAULT '{}'
+                        """
+                    )
+                )
+
+            chapter_review_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(chapter_reviews)"))
+            }
+            if "review_meta_json" not in chapter_review_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE chapter_reviews
+                        ADD COLUMN review_meta_json TEXT NOT NULL DEFAULT '{}'
+                        """
+                    )
+                )
+
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS band_experience_plans (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        arc_id TEXT NOT NULL,
+                        band_id TEXT NOT NULL,
+                        chapter_start INTEGER NOT NULL DEFAULT 1,
+                        chapter_end INTEGER NOT NULL DEFAULT 1,
+                        stall_guard_max_gap INTEGER NOT NULL DEFAULT 0,
+                        schedule_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id),
+                        FOREIGN KEY(arc_id) REFERENCES arc_plan_versions(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_band_experience_plans_project_arc_band
+                    ON band_experience_plans(project_id, arc_id, band_id)
+                    """
+                )
+            )
+
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS chapter_rewrite_attempts (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        chapter_number INTEGER NOT NULL,
+                        attempt_no INTEGER NOT NULL,
+                        trigger_review_id TEXT NOT NULL,
+                        repair_scope TEXT NOT NULL DEFAULT '',
+                        design_patch_json TEXT NOT NULL DEFAULT '{}',
+                        source_draft_id TEXT NOT NULL,
+                        result_draft_id TEXT NOT NULL,
+                        result_verdict TEXT NOT NULL DEFAULT '',
+                        forced_accept_applied INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id),
+                        FOREIGN KEY(trigger_review_id) REFERENCES chapter_reviews(id),
+                        FOREIGN KEY(source_draft_id) REFERENCES chapter_drafts(id),
+                        FOREIGN KEY(result_draft_id) REFERENCES chapter_drafts(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_chapter_rewrite_attempts_project_chapter_attempt
+                    ON chapter_rewrite_attempts(project_id, chapter_number, attempt_no)
+                    """
+                )
+            )
+        migrations.append(MigrationSpec("experience_overlay_v1", apply_experience_overlay_v1))
+
         def apply_audience_feedback_v1(conn) -> None:
             raw_comment_columns = {
                 row[1]
@@ -572,6 +773,8 @@ def upgrade_db(engine: Engine) -> None:
                         total_comment_count INTEGER NOT NULL DEFAULT 0,
                         reader_estimate INTEGER NOT NULL DEFAULT 0,
                         reader_tier INTEGER NOT NULL DEFAULT 0,
+                        estimation_method TEXT NOT NULL DEFAULT 'comment_proxy',
+                        scale_confidence FLOAT NOT NULL DEFAULT 0.35,
                         max_severity INTEGER NOT NULL DEFAULT 0,
                         avg_confidence FLOAT NOT NULL DEFAULT 0,
                         signal_level TEXT NOT NULL DEFAULT 'noise',
@@ -589,6 +792,29 @@ def upgrade_db(engine: Engine) -> None:
                     """
                 )
             )
+
+            existing_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(signal_window_aggregates)")).fetchall()
+            }
+            if "estimation_method" not in existing_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE signal_window_aggregates
+                        ADD COLUMN estimation_method TEXT NOT NULL DEFAULT 'comment_proxy'
+                        """
+                    )
+                )
+            if "scale_confidence" not in existing_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE signal_window_aggregates
+                        ADD COLUMN scale_confidence FLOAT NOT NULL DEFAULT 0.35
+                        """
+                    )
+                )
 
             conn.execute(
                 text(
@@ -642,6 +868,154 @@ def upgrade_db(engine: Engine) -> None:
                 )
             )
         migrations.append(MigrationSpec("audience_feedback_v1", apply_audience_feedback_v1))
+
+        def apply_audience_feedback_scale_meta_v1(conn) -> None:
+            existing_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(signal_window_aggregates)")).fetchall()
+            }
+            if existing_columns and "estimation_method" not in existing_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE signal_window_aggregates
+                        ADD COLUMN estimation_method TEXT NOT NULL DEFAULT 'comment_proxy'
+                        """
+                    )
+                )
+            if existing_columns and "scale_confidence" not in existing_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE signal_window_aggregates
+                        ADD COLUMN scale_confidence FLOAT NOT NULL DEFAULT 0.35
+                        """
+                    )
+                )
+
+            reader_scale_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(reader_scale_snapshots)")).fetchall()
+            }
+            if reader_scale_columns and "estimation_method" not in reader_scale_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE reader_scale_snapshots
+                        ADD COLUMN estimation_method TEXT NOT NULL DEFAULT 'comment_proxy'
+                        """
+                    )
+                )
+
+        migrations.append(
+            MigrationSpec(
+                "audience_feedback_scale_meta_v1",
+                apply_audience_feedback_scale_meta_v1,
+            )
+        )
+
+        def apply_audience_feedback_project_scope_v1(conn) -> None:
+            raw_comment_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(publisher_raw_comments)"))
+            }
+            if "project_id" not in raw_comment_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE publisher_raw_comments
+                        ADD COLUMN project_id TEXT NOT NULL DEFAULT ''
+                        """
+                    )
+                )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_publisher_raw_comments_project
+                    ON publisher_raw_comments(project_id)
+                    """
+                )
+            )
+
+            sync_job_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(publisher_comment_sync_jobs)"))
+            }
+            if "project_id" not in sync_job_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE publisher_comment_sync_jobs
+                        ADD COLUMN project_id TEXT NOT NULL DEFAULT ''
+                        """
+                    )
+                )
+
+            exact_title_map: dict[str, str] = {}
+            duplicate_titles: set[str] = set()
+            for project_id, title in conn.execute(
+                text("SELECT id, title FROM projects")
+            ).all():
+                normalized_title = str(title or "").strip()
+                if not normalized_title:
+                    continue
+                if normalized_title in exact_title_map:
+                    duplicate_titles.add(normalized_title)
+                    exact_title_map.pop(normalized_title, None)
+                    continue
+                exact_title_map[normalized_title] = str(project_id)
+            for title in duplicate_titles:
+                exact_title_map.pop(title, None)
+
+            if exact_title_map:
+                raw_rows = conn.execute(
+                    text("SELECT id, work_name, project_id FROM publisher_raw_comments")
+                ).all()
+                for row_id, work_name, project_id in raw_rows:
+                    normalized_title = str(work_name or "").strip()
+                    if str(project_id or "").strip() or normalized_title not in exact_title_map:
+                        continue
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE publisher_raw_comments
+                            SET project_id = :project_id
+                            WHERE id = :row_id
+                            """
+                        ),
+                        {
+                            "project_id": exact_title_map[normalized_title],
+                            "row_id": row_id,
+                        },
+                    )
+
+                job_rows = conn.execute(
+                    text("SELECT id, work_name, project_id FROM publisher_comment_sync_jobs")
+                ).all()
+                for row_id, work_name, project_id in job_rows:
+                    normalized_title = str(work_name or "").strip()
+                    if str(project_id or "").strip() or normalized_title not in exact_title_map:
+                        continue
+                    conn.execute(
+                        text(
+                            """
+                            UPDATE publisher_comment_sync_jobs
+                            SET project_id = :project_id
+                            WHERE id = :row_id
+                            """
+                        ),
+                        {
+                            "project_id": exact_title_map[normalized_title],
+                            "row_id": row_id,
+                        },
+                    )
+
+        migrations.append(
+            MigrationSpec(
+                "audience_feedback_project_scope_v1",
+                apply_audience_feedback_project_scope_v1,
+            )
+        )
 
         def apply_publisher_extension_platform_state_v1(conn) -> None:
             conn.execute(
@@ -749,6 +1123,31 @@ def upgrade_db(engine: Engine) -> None:
                 )
         migrations.append(MigrationSpec("phase3_replan_strategy_v1", apply_phase3_replan_strategy_v1))
 
+        def apply_project_automation_v1(conn) -> None:
+            columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(projects)"))
+            }
+            if "automation_json" not in columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE projects
+                        ADD COLUMN automation_json TEXT NOT NULL DEFAULT '{}'
+                        """
+                    )
+                )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_projects_updated_at
+                    ON projects(updated_at DESC)
+                    """
+                )
+            )
+
+        migrations.append(MigrationSpec("project_automation_v1", apply_project_automation_v1))
+
         def apply_publisher_upload_job_abort_v1(conn) -> None:
             columns = {
                 row[1]
@@ -775,6 +1174,490 @@ def upgrade_db(engine: Engine) -> None:
         migrations.append(
             MigrationSpec("publisher_upload_job_abort_v1", apply_publisher_upload_job_abort_v1)
         )
+
+        def apply_publisher_upload_job_project_v1(conn) -> None:
+            columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(publisher_upload_jobs)"))
+            }
+            if "project_id" not in columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE publisher_upload_jobs
+                        ADD COLUMN project_id TEXT NOT NULL DEFAULT ''
+                        """
+                    )
+                )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_publisher_upload_jobs_project
+                    ON publisher_upload_jobs(project_id, updated_at DESC)
+                    """
+                )
+            )
+
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT id, book_name, project_id
+                    FROM publisher_upload_jobs
+                    """
+                )
+            ).fetchall()
+            for row in rows:
+                existing_project_id = str(row[2] or "").strip()
+                if existing_project_id:
+                    continue
+                book_name = str(row[1] or "").strip()
+                if not book_name:
+                    continue
+                matches = conn.execute(
+                    text(
+                        """
+                        SELECT id
+                        FROM projects
+                        WHERE title = :title
+                        LIMIT 2
+                        """
+                    ),
+                    {"title": book_name},
+                ).fetchall()
+                if len(matches) != 1:
+                    continue
+                conn.execute(
+                    text(
+                        """
+                        UPDATE publisher_upload_jobs
+                        SET project_id = :project_id
+                        WHERE id = :job_id
+                        """
+                    ),
+                    {
+                        "project_id": str(matches[0][0] or ""),
+                        "job_id": str(row[0] or ""),
+                    },
+                )
+
+        migrations.append(
+            MigrationSpec("publisher_upload_job_project_v1", apply_publisher_upload_job_project_v1)
+        )
+
+        def apply_publisher_browser_session_entries_v1(conn) -> None:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS publisher_browser_session_entries (
+                        client_id TEXT NOT NULL,
+                        platform_id TEXT NOT NULL,
+                        cookie_count INTEGER NOT NULL DEFAULT 0,
+                        cookies_json TEXT NOT NULL DEFAULT '[]',
+                        synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        last_verified_at TEXT NULL,
+                        last_error TEXT NOT NULL DEFAULT '',
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        PRIMARY KEY (client_id, platform_id),
+                        FOREIGN KEY(client_id) REFERENCES publisher_extension_clients(client_id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_publisher_browser_session_entries_platform_synced
+                    ON publisher_browser_session_entries(platform_id, synced_at)
+                    """
+                )
+            )
+            existing_rows = conn.execute(
+                text(
+                    """
+                    SELECT platform_id, extension_client_id, cookie_count, cookies_json,
+                           synced_at, last_verified_at, last_error, updated_at
+                    FROM publisher_browser_sessions
+                    """
+                )
+            ).mappings()
+            for row in existing_rows:
+                client_id = str(row["extension_client_id"] or "").strip() or "legacy-browser-session"
+                try:
+                    conn.execute(
+                        text(
+                            """
+                            INSERT OR IGNORE INTO publisher_extension_clients(
+                                client_id,
+                                extension_version,
+                                browser_name,
+                                browser_version,
+                                backend_base_url
+                            )
+                            VALUES (
+                                :client_id,
+                                '',
+                                'legacy',
+                                '',
+                                ''
+                            )
+                            """
+                        ),
+                        {"client_id": client_id},
+                    )
+                    conn.execute(
+                        text(
+                            """
+                            INSERT OR IGNORE INTO publisher_browser_session_entries(
+                                client_id,
+                                platform_id,
+                                cookie_count,
+                                cookies_json,
+                                synced_at,
+                                last_verified_at,
+                                last_error,
+                                updated_at
+                            )
+                            VALUES (
+                                :client_id,
+                                :platform_id,
+                                :cookie_count,
+                                :cookies_json,
+                                :synced_at,
+                                :last_verified_at,
+                                :last_error,
+                                :updated_at
+                            )
+                            """
+                        ),
+                        {
+                            "client_id": client_id,
+                            "platform_id": row["platform_id"],
+                            "cookie_count": row["cookie_count"],
+                            "cookies_json": row["cookies_json"],
+                            "synced_at": row["synced_at"],
+                            "last_verified_at": row["last_verified_at"],
+                            "last_error": row["last_error"],
+                            "updated_at": row["updated_at"],
+                        },
+                    )
+                except Exception:
+                    continue
+
+        migrations.append(
+            MigrationSpec(
+                "publisher_browser_session_entries_v1",
+                apply_publisher_browser_session_entries_v1,
+            )
+        )
+
+        def apply_project_target_total_chapters_v1(conn) -> None:
+            columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(projects)")).fetchall()
+            }
+            if "target_total_chapters" not in columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE projects
+                        ADD COLUMN target_total_chapters INTEGER NOT NULL DEFAULT 3
+                        """
+                    )
+                )
+            conn.execute(
+                text(
+                    """
+                    UPDATE projects
+                    SET target_total_chapters = 3
+                    WHERE target_total_chapters IS NULL OR target_total_chapters <= 0
+                    """
+                )
+            )
+
+        migrations.append(
+            MigrationSpec(
+                "project_target_total_chapters_v1",
+                apply_project_target_total_chapters_v1,
+            )
+        )
+
+        def apply_project_target_total_chapters_consistency_v1(conn) -> None:
+            columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(projects)")).fetchall()
+            }
+            if "target_total_chapters" not in columns:
+                return
+            conn.execute(
+                text(
+                    """
+                    UPDATE projects
+                    SET target_total_chapters = (
+                        SELECT COUNT(*)
+                        FROM chapter_plans
+                        WHERE chapter_plans.project_id = projects.id
+                    )
+                    WHERE COALESCE(target_total_chapters, 0) < (
+                        SELECT COUNT(*)
+                        FROM chapter_plans
+                        WHERE chapter_plans.project_id = projects.id
+                    )
+                    """
+                )
+            )
+
+        migrations.append(
+            MigrationSpec(
+                "project_target_total_chapters_consistency_v1",
+                apply_project_target_total_chapters_consistency_v1,
+            )
+        )
+
+        def apply_governance_layer_v1(conn) -> None:
+            project_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(projects)"))
+            }
+            if "governance_json" not in project_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE projects
+                        ADD COLUMN governance_json TEXT NOT NULL DEFAULT '{}'
+                        """
+                    )
+                )
+
+            chapter_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(chapter_plans)"))
+            }
+            if "task_contract_json" not in chapter_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE chapter_plans
+                        ADD COLUMN task_contract_json TEXT NOT NULL DEFAULT '[]'
+                        """
+                    )
+                )
+
+            band_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(band_experience_plans)"))
+            }
+            if "task_contract_json" not in band_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE band_experience_plans
+                        ADD COLUMN task_contract_json TEXT NOT NULL DEFAULT '[]'
+                        """
+                    )
+                )
+
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS band_checkpoints (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        arc_id TEXT NOT NULL,
+                        band_id TEXT NOT NULL DEFAULT '',
+                        chapter_start INTEGER NOT NULL DEFAULT 0,
+                        chapter_end INTEGER NOT NULL DEFAULT 0,
+                        trigger_source TEXT NOT NULL DEFAULT 'auto_band_end',
+                        boundary_kind TEXT NOT NULL DEFAULT 'band_end',
+                        boundary_chapter INTEGER NOT NULL DEFAULT 0,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        summary TEXT NOT NULL DEFAULT '',
+                        reason TEXT NOT NULL DEFAULT '',
+                        issues_json TEXT NOT NULL DEFAULT '[]',
+                        related_task_id TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        resolved_at TEXT NULL,
+                        FOREIGN KEY(project_id) REFERENCES projects(id),
+                        FOREIGN KEY(arc_id) REFERENCES arc_plan_versions(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_band_checkpoints_project_band_created
+                    ON band_checkpoints(project_id, band_id, created_at)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_band_checkpoints_project_status_created
+                    ON band_checkpoints(project_id, status, created_at)
+                    """
+                )
+            )
+
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS narrative_constraints (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        arc_id TEXT NOT NULL DEFAULT '',
+                        band_id TEXT NOT NULL DEFAULT '',
+                        constraint_type TEXT NOT NULL DEFAULT 'character_availability',
+                        level TEXT NOT NULL DEFAULT 'hard',
+                        subject_name TEXT NOT NULL DEFAULT '',
+                        description TEXT NOT NULL DEFAULT '',
+                        payload_json TEXT NOT NULL DEFAULT '{}',
+                        effective_from_chapter INTEGER NOT NULL DEFAULT 1,
+                        protect_until_chapter INTEGER NOT NULL DEFAULT 0,
+                        status TEXT NOT NULL DEFAULT 'active',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_narrative_constraints_project_status
+                    ON narrative_constraints(project_id, status)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_narrative_constraints_project_band
+                    ON narrative_constraints(project_id, band_id)
+                    """
+                )
+            )
+
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS decision_events (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        task_id TEXT NOT NULL DEFAULT '',
+                        band_id TEXT NOT NULL DEFAULT '',
+                        chapter_number INTEGER NOT NULL DEFAULT 0,
+                        scope TEXT NOT NULL DEFAULT 'project',
+                        event_family TEXT NOT NULL DEFAULT 'business_event',
+                        event_type TEXT NOT NULL DEFAULT '',
+                        actor_type TEXT NOT NULL DEFAULT 'system',
+                        actor_id TEXT NOT NULL DEFAULT '',
+                        summary TEXT NOT NULL DEFAULT '',
+                        reason TEXT NOT NULL DEFAULT '',
+                        payload_json TEXT NOT NULL DEFAULT '{}',
+                        related_object_type TEXT NOT NULL DEFAULT '',
+                        related_object_id TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_decision_events_project_created
+                    ON decision_events(project_id, created_at)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_decision_events_project_scope_created
+                    ON decision_events(project_id, scope, created_at)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_decision_events_project_band_created
+                    ON decision_events(project_id, band_id, created_at)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_decision_events_project_chapter_created
+                    ON decision_events(project_id, chapter_number, created_at)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_decision_events_task_created
+                    ON decision_events(task_id, created_at)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_decision_events_related_object
+                    ON decision_events(related_object_type, related_object_id, created_at)
+                    """
+                )
+            )
+
+        migrations.append(MigrationSpec("governance_layer_v1", apply_governance_layer_v1))
+
+        def apply_decision_event_causality_v1(conn) -> None:
+            decision_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(decision_events)"))
+            }
+            if "parent_event_id" not in decision_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE decision_events
+                        ADD COLUMN parent_event_id TEXT NOT NULL DEFAULT ''
+                        """
+                    )
+                )
+            if "causal_root_id" not in decision_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE decision_events
+                        ADD COLUMN causal_root_id TEXT NOT NULL DEFAULT ''
+                        """
+                    )
+                )
+            conn.execute(
+                text(
+                    """
+                    UPDATE decision_events
+                    SET causal_root_id = id
+                    WHERE IFNULL(causal_root_id, '') = ''
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_decision_events_causal_root_created
+                    ON decision_events(causal_root_id, created_at)
+                    """
+                )
+            )
+
+        migrations.append(MigrationSpec("decision_event_causality_v1", apply_decision_event_causality_v1))
 
         for migration in migrations:
             _run_migration(conn, migration.version, migration.apply_fn)

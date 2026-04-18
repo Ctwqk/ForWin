@@ -15,6 +15,9 @@ services:
       - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
       - MINIMAX_BASE_URL=${MINIMAX_BASE_URL:-https://api.minimaxi.com/v1}
       - MINIMAX_MODEL=${MINIMAX_MODEL:-MiniMax-M2.7}
+      - LLM_RETRY_ATTEMPTS=${LLM_RETRY_ATTEMPTS:-2}
+      - LLM_RETRY_INITIAL_DELAY_SECONDS=${LLM_RETRY_INITIAL_DELAY_SECONDS:-2}
+      - LLM_RETRY_MAX_DELAY_SECONDS=${LLM_RETRY_MAX_DELAY_SECONDS:-15}
       - WRITER_MODE=${WRITER_MODE:-scene}
       - FORWIN_RETRIEVAL_BACKEND=${FORWIN_RETRIEVAL_BACKEND:-qdrant}
       - FORWIN_QDRANT_URL=${FORWIN_QDRANT_URL:-http://qdrant:6333}
@@ -26,6 +29,38 @@ services:
       - FORWIN_MINIO_BUCKET=${FORWIN_MINIO_BUCKET:-forwin-artifacts}
       - FORWIN_MINIO_PREFIX=${FORWIN_MINIO_PREFIX:-artifacts}
       - FORWIN_MINIO_SECURE=${FORWIN_MINIO_SECURE:-false}
+    restart: unless-stopped
+
+  publisher-browser:
+    build: .
+    container_name: forwin-publisher-browser
+    depends_on:
+      forwin:
+        condition: service_healthy
+    command: ["bash", "-lc", "exec scripts/launch_linux_extension_browser.sh"]
+    environment:
+      - FORWIN_BACKEND_URL=${FORWIN_PUBLISHER_BROWSER_BACKEND_URL:-http://forwin:8899}
+      - FORWIN_PUBLISHER_EXTENSION_API_KEY=${FORWIN_PUBLISHER_EXTENSION_API_KEY:-}
+      - FORWIN_PUBLISHER_PREFERRED_CLIENT_ID=${FORWIN_PUBLISHER_PREFERRED_CLIENT_ID:-}
+      - FORWIN_EXTENSION_TEST_PROFILE=${FORWIN_EXTENSION_TEST_PROFILE:-/app/data/chrome_profiles/forwin-extension}
+      - FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE=${FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE:-true}
+      - FORWIN_EXTENSION_AUTO_QUALIFY_PROFILE=${FORWIN_EXTENSION_AUTO_QUALIFY_PROFILE:-true}
+      - FORWIN_EXTENSION_DISPLAY=${FORWIN_EXTENSION_DISPLAY:-:100}
+      - FORWIN_EXTENSION_XVFB_SERVER_NUM=${FORWIN_EXTENSION_XVFB_SERVER_NUM:-100}
+      - FORWIN_EXTENSION_NO_SANDBOX=${FORWIN_EXTENSION_NO_SANDBOX:-auto}
+      - FORWIN_EXTENSION_TEST_REMOTE_DEBUGGING_PORT=${FORWIN_EXTENSION_TEST_REMOTE_DEBUGGING_PORT:-9222}
+      - FORWIN_EXTENSION_TEST_REMOTE_DEBUGGING_ADDRESS=${FORWIN_EXTENSION_TEST_REMOTE_DEBUGGING_ADDRESS:-0.0.0.0}
+    volumes:
+      - forwin-data:/app/data
+    ports:
+      - "${FORWIN_EXTENSION_DEBUG_BIND:-127.0.0.1:9222}:9222"
+    shm_size: "1gb"
+    healthcheck:
+      test: ["CMD", "python", "scripts/qualify_linux_extension_profile.py", "--check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
 
   qdrant:

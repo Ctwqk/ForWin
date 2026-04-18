@@ -11,9 +11,55 @@ from forwin.runtime_settings import RuntimeSettingsStore
 
 TaskUpdater = Callable[..., None]
 
+_PROGRESS_STAGE_STATUS = {
+    "cancelled": "cancelled",
+    "paused": "paused",
+    "paused_for_review": "needs_review",
+    "provisional_failed": "failed",
+    "failed": "failed",
+    "completed": "completed",
+    "terminating": "terminating",
+}
+_PROGRESS_PAYLOAD_KEYS = (
+    "project_id",
+    "requested_chapters",
+    "current_chapter",
+    "completed_chapters",
+    "failed_chapters",
+    "paused_chapters",
+    "frozen_artifacts",
+)
+
 
 def copy_config(base_config: Config, **updates: object) -> Config:
     return base_config.model_copy(update=updates)
+
+
+def _build_task_progress_changes(
+    event: str,
+    payload: dict[str, Any],
+    *,
+    include_project_created: bool = False,
+) -> dict[str, Any]:
+    changes: dict[str, Any] = {}
+    if include_project_created and event == "project_created":
+        changes["project_id"] = payload.get("project_id")
+        changes["title"] = payload.get("title") or "未命名项目"
+        changes["message"] = f"项目已创建：{payload.get('title', '')}"
+
+    stage = str(payload.get("stage", "")).strip()
+    if stage:
+        changes["current_stage"] = stage
+        status = _PROGRESS_STAGE_STATUS.get(stage)
+        if status:
+            changes["status"] = status
+        elif stage != "queued":
+            changes["status"] = "running"
+
+    for key in _PROGRESS_PAYLOAD_KEYS:
+        if key in payload:
+            changes[key] = payload.get(key)
+    return changes
 
 
 def build_home_page_settings(
@@ -29,6 +75,13 @@ def build_home_page_settings(
         "model": base_config.minimax_model if base_config else DEFAULT_MINIMAX_MODEL,
         "operation_mode": base_config.operation_mode if base_config else "blackbox",
         "freeze_failed_candidates": base_config.freeze_failed_candidates if base_config else True,
+        "min_chapter_chars": base_config.min_chapter_chars if base_config else 2500,
+        "review_interval_chapters": base_config.review_interval_chapters if base_config else 0,
+        "progression_mode": base_config.progression_mode if base_config else "serial_canon_band_guard",
+        "auto_band_checkpoint": base_config.auto_band_checkpoint if base_config else True,
+        "band_warn_action": base_config.band_warn_action if base_config else "pause",
+        "manual_checkpoints_enabled": base_config.manual_checkpoints_enabled if base_config else True,
+        "future_constraints_enabled": base_config.future_constraints_enabled if base_config else True,
     }
 
 
@@ -59,10 +112,44 @@ def _resolve_profile(
             "model": str(stored.get("model", "")).strip(),
         }
     return {
+        "id": str(selected.get("id", "")).strip(),
+        "name": str(selected.get("name", "")).strip(),
         "api_key": str(selected.get("api_key", "")).strip(),
         "base_url": str(selected.get("base_url", "")).strip(),
         "model": str(selected.get("model", "")).strip(),
     }
+
+
+def _runtime_fallback_profiles(
+    stored: dict[str, object],
+    *,
+    primary: dict[str, str],
+) -> list[dict[str, str]]:
+    candidates: list[dict[str, str]] = []
+    if primary.get("api_key") and primary.get("base_url") and primary.get("model"):
+        candidates.append(dict(primary))
+    for item in stored.get("profiles", []):
+        if not isinstance(item, dict):
+            continue
+        profile = {
+            "id": str(item.get("id", "")).strip(),
+            "name": str(item.get("name", "")).strip(),
+            "api_key": str(item.get("api_key", "")).strip(),
+            "base_url": str(item.get("base_url", "")).strip(),
+            "model": str(item.get("model", "")).strip(),
+        }
+        if not profile["api_key"] or not profile["base_url"] or not profile["model"]:
+            continue
+        candidates.append(profile)
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for profile in candidates:
+        key = (profile["api_key"], profile["base_url"].rstrip("/"), profile["model"])
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(profile)
+    return deduped
 
 
 def build_runtime_config(
@@ -87,6 +174,39 @@ def build_runtime_config(
         if req.freeze_failed_candidates is not None
         else bool(stored.get("freeze_failed_candidates", base_config.freeze_failed_candidates))
     )
+    review_interval_chapters = (
+        req.review_interval_chapters
+        if req.review_interval_chapters is not None
+        else int(stored.get("review_interval_chapters", base_config.review_interval_chapters))
+    )
+    progression_mode = (req.progression_mode or "").strip() or str(
+        stored.get("progression_mode", base_config.progression_mode)
+    )
+    auto_band_checkpoint = (
+        req.auto_band_checkpoint
+        if req.auto_band_checkpoint is not None
+        else bool(stored.get("auto_band_checkpoint", base_config.auto_band_checkpoint))
+    )
+    band_warn_action = (req.band_warn_action or "").strip() or str(
+        stored.get("band_warn_action", base_config.band_warn_action)
+    )
+    manual_checkpoints_enabled = (
+        req.manual_checkpoints_enabled
+        if req.manual_checkpoints_enabled is not None
+        else bool(stored.get("manual_checkpoints_enabled", base_config.manual_checkpoints_enabled))
+    )
+    future_constraints_enabled = (
+        req.future_constraints_enabled
+        if req.future_constraints_enabled is not None
+        else bool(stored.get("future_constraints_enabled", base_config.future_constraints_enabled))
+    )
+    min_chapter_chars = max(500, int(
+        req.min_chapter_chars
+        if req.min_chapter_chars is not None
+        else int(stored.get("min_chapter_chars", base_config.min_chapter_chars))
+    ))
+    target_chapter_chars = max(min_chapter_chars, int(base_config.target_chapter_chars))
+    max_chapter_chars = max(target_chapter_chars, int(base_config.max_chapter_chars))
     return copy_config(
         base_config,
         minimax_api_key=api_key,
@@ -94,6 +214,25 @@ def build_runtime_config(
         minimax_model=model,
         operation_mode=operation_mode,
         freeze_failed_candidates=freeze_failed_candidates,
+        review_interval_chapters=max(0, int(review_interval_chapters)),
+        progression_mode=progression_mode or "legacy_relaxed",
+        auto_band_checkpoint=bool(auto_band_checkpoint),
+        band_warn_action=band_warn_action or "pause",
+        manual_checkpoints_enabled=bool(manual_checkpoints_enabled),
+        future_constraints_enabled=bool(future_constraints_enabled),
+        llm_fallback_profiles=_runtime_fallback_profiles(
+            stored,
+            primary={
+                "id": selected.get("id", ""),
+                "name": selected.get("name", ""),
+                "api_key": api_key,
+                "base_url": base_url,
+                "model": model,
+            },
+        ),
+        min_chapter_chars=min_chapter_chars,
+        target_chapter_chars=target_chapter_chars,
+        max_chapter_chars=max_chapter_chars,
     )
 
 
@@ -103,6 +242,9 @@ def build_saved_runtime_config(
     runtime_settings: RuntimeSettingsStore | None,
 ) -> Config:
     stored = runtime_settings.get() if runtime_settings else {}
+    min_chapter_chars = max(500, int(stored.get("min_chapter_chars", base_config.min_chapter_chars)))
+    target_chapter_chars = max(min_chapter_chars, int(base_config.target_chapter_chars))
+    max_chapter_chars = max(target_chapter_chars, int(base_config.max_chapter_chars))
     return copy_config(
         base_config,
         minimax_api_key=str(stored.get("api_key", base_config.minimax_api_key)),
@@ -112,6 +254,34 @@ def build_saved_runtime_config(
         freeze_failed_candidates=bool(
             stored.get("freeze_failed_candidates", base_config.freeze_failed_candidates)
         ),
+        review_interval_chapters=max(
+            0,
+            int(stored.get("review_interval_chapters", base_config.review_interval_chapters)),
+        ),
+        progression_mode=str(stored.get("progression_mode", base_config.progression_mode)),
+        auto_band_checkpoint=bool(
+            stored.get("auto_band_checkpoint", base_config.auto_band_checkpoint)
+        ),
+        band_warn_action=str(stored.get("band_warn_action", base_config.band_warn_action)),
+        manual_checkpoints_enabled=bool(
+            stored.get("manual_checkpoints_enabled", base_config.manual_checkpoints_enabled)
+        ),
+        future_constraints_enabled=bool(
+            stored.get("future_constraints_enabled", base_config.future_constraints_enabled)
+        ),
+        llm_fallback_profiles=_runtime_fallback_profiles(
+            stored,
+            primary={
+                "id": str(stored.get("default_profile_id", "")).strip(),
+                "name": "",
+                "api_key": str(stored.get("api_key", base_config.minimax_api_key)),
+                "base_url": str(stored.get("base_url", base_config.minimax_base_url)),
+                "model": str(stored.get("model", base_config.minimax_model)),
+            },
+        ),
+        min_chapter_chars=min_chapter_chars,
+        target_chapter_chars=target_chapter_chars,
+        max_chapter_chars=max_chapter_chars,
     )
 
 
@@ -125,7 +295,9 @@ def run_orchestrator_task(
     error_message: str,
     default_project_id: str | None = None,
     progress_handler=None,
+    completion_handler=None,
     should_abort: Callable[[], bool] | None = None,
+    should_pause: Callable[[], bool] | None = None,
 ) -> None:
     try:
         if not (should_abort and should_abort()):
@@ -141,6 +313,11 @@ def run_orchestrator_task(
         )
         if progress_handler is not None:
             progress_handler(result)
+        if completion_handler is not None:
+            try:
+                completion_handler(result)
+            except Exception:  # noqa: BLE001
+                logger.exception("Post-completion handler failed for task %s", task_id)
     except Exception as exc:
         logger.exception("%s for task %s", error_message, task_id)
         update_task(
@@ -163,38 +340,19 @@ def run_generation_with_config(
     config: Config,
     update_task: TaskUpdater,
     logger: logging.Logger,
+    project_id: str | None = None,
     should_abort: Callable[[], bool] | None = None,
+    should_pause: Callable[[], bool] | None = None,
+    completion_handler: Callable[[object], None] | None = None,
 ) -> None:
+    normalized_project_id = str(project_id or "").strip()
+
     def _handle_progress(event: str, payload: dict[str, Any]) -> None:
-        changes: dict[str, Any] = {}
-        if event == "project_created":
-            changes["project_id"] = payload.get("project_id")
-            changes["title"] = payload.get("title") or "未命名项目"
-            changes["message"] = f"项目已创建：{payload.get('title', '')}"
-        stage = str(payload.get("stage", "")).strip()
-        if stage:
-            changes["current_stage"] = stage
-            if stage == "cancelled":
-                changes["status"] = "cancelled"
-            elif stage == "paused_for_review":
-                changes["status"] = "needs_review"
-            elif stage == "failed":
-                changes["status"] = "failed"
-            elif stage == "completed":
-                changes["status"] = "completed"
-            elif stage == "terminating":
-                changes["status"] = "terminating"
-        for key in (
-            "project_id",
-            "requested_chapters",
-            "current_chapter",
-            "completed_chapters",
-            "failed_chapters",
-            "paused_chapters",
-            "frozen_artifacts",
-        ):
-            if key in payload:
-                changes[key] = payload.get(key)
+        changes = _build_task_progress_changes(
+            event,
+            payload,
+            include_project_created=True,
+        )
         if changes:
             update_task(task_id, **changes)
 
@@ -202,6 +360,7 @@ def run_generation_with_config(
         config,
         progress_callback=_handle_progress,
         should_abort=should_abort,
+        should_pause=should_pause,
     )
 
     def _handle_result(result) -> None:
@@ -211,6 +370,15 @@ def run_generation_with_config(
                 status="cancelled",
                 message=(
                     f"生成任务已取消。已完成 {len(result.completed_chapters)} / "
+                    f"{result.requested_chapters} 章"
+                ),
+            )
+        elif result.status == "paused":
+            update_task(
+                task_id,
+                status="paused",
+                message=(
+                    f"生成任务已安全暂停。已完成 {len(result.completed_chapters)} / "
                     f"{result.requested_chapters} 章"
                 ),
             )
@@ -233,19 +401,30 @@ def run_generation_with_config(
                 message=f"已完成 {result.requested_chapters} / {result.requested_chapters} 章",
             )
 
-    run_orchestrator_task(
-        task_id,
-        orchestrator,
-        lambda: orchestrator.run(
+    if normalized_project_id:
+        operation = lambda: orchestrator.run_existing_project(  # noqa: E731
+            normalized_project_id,
+            num_chapters=num_chapters,
+        )
+    else:
+        operation = lambda: orchestrator.run(  # noqa: E731
             premise=premise,
             genre=genre,
             num_chapters=num_chapters,
-        ),
+        )
+
+    run_orchestrator_task(
+        task_id,
+        orchestrator,
+        operation,
         update_task=update_task,
         logger=logger,
         error_message="生成任务失败",
+        default_project_id=normalized_project_id or None,
         progress_handler=_handle_result,
+        completion_handler=completion_handler,
         should_abort=should_abort,
+        should_pause=should_pause,
     )
 
 
@@ -256,31 +435,12 @@ def run_continue_project_with_config(
     update_task: TaskUpdater,
     logger: logging.Logger,
     should_abort: Callable[[], bool] | None = None,
+    should_pause: Callable[[], bool] | None = None,
+    max_chapters: int | None = None,
+    completion_handler: Callable[[object], None] | None = None,
 ) -> None:
     def _handle_progress(event: str, payload: dict[str, Any]) -> None:
-        changes: dict[str, Any] = {}
-        stage = str(payload.get("stage", "")).strip()
-        if stage:
-            changes["current_stage"] = stage
-            if stage == "cancelled":
-                changes["status"] = "cancelled"
-            elif stage == "paused_for_review":
-                changes["status"] = "needs_review"
-            elif stage == "failed":
-                changes["status"] = "failed"
-            elif stage == "completed":
-                changes["status"] = "completed"
-        for key in (
-            "project_id",
-            "requested_chapters",
-            "current_chapter",
-            "completed_chapters",
-            "failed_chapters",
-            "paused_chapters",
-            "frozen_artifacts",
-        ):
-            if key in payload:
-                changes[key] = payload.get(key)
+        changes = _build_task_progress_changes(event, payload)
         if changes:
             update_task(task_id, **changes)
 
@@ -288,6 +448,7 @@ def run_continue_project_with_config(
         config,
         progress_callback=_handle_progress,
         should_abort=should_abort,
+        should_pause=should_pause,
     )
 
     def _handle_result(result) -> None:
@@ -298,6 +459,14 @@ def run_continue_project_with_config(
                 message=(
                     f"继续生成已取消。已完成 {len(result.completed_chapters)} / "
                     f"{result.requested_chapters} 章"
+                ),
+            )
+        elif result.status == "paused":
+            update_task(
+                task_id,
+                status="paused",
+                message=(
+                    f"继续生成已安全暂停。已完成 {len(result.completed_chapters)} 章"
                 ),
             )
         elif result.failed_chapters:
@@ -322,11 +491,13 @@ def run_continue_project_with_config(
     run_orchestrator_task(
         task_id,
         orchestrator,
-        lambda: orchestrator.continue_project(project_id),
+        lambda: orchestrator.continue_project(project_id, max_chapters=max_chapters),
         update_task=update_task,
         logger=logger,
         error_message="继续生成失败",
         default_project_id=project_id,
         progress_handler=_handle_result,
+        completion_handler=completion_handler,
         should_abort=should_abort,
+        should_pause=should_pause,
     )

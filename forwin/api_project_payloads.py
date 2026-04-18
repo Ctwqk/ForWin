@@ -674,10 +674,6 @@ def _load_latest_band_experience_by_project(
     )
 
 
-def latest_draft_map(session: Session, chapter_plan_ids: list[str]) -> dict[str, ChapterDraft]:
-    return load_latest_drafts_by_plan_id(session, chapter_plan_ids)
-
-
 def normalize_project_automation(raw: str | dict[str, Any] | None) -> ProjectAutomationSettings:
     payload: dict[str, Any]
     if isinstance(raw, dict):
@@ -871,7 +867,7 @@ def build_project_summaries(
         if project_ids
         else []
     )
-    draft_map = latest_draft_map(session, [plan.id for plan in plans])
+    draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
     runtime_maps = load_project_runtime_maps(session, project_ids)
     upload_stats = load_project_upload_stats(session, project_ids)
     latest_checkpoint_map = _latest_band_checkpoint_by_project(session, project_ids)
@@ -1021,7 +1017,7 @@ def build_project_detail(
     plans = session.execute(
         select(ChapterPlan).where(ChapterPlan.project_id == project_id).order_by(ChapterPlan.chapter_number)
     ).scalars().all()
-    draft_map = latest_draft_map(session, [plan.id for plan in plans])
+    draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
     upload_stats = load_project_upload_stats(session, [project_id]).get(project_id, {})
     chapter_infos = [
         ChapterInfo(
@@ -1144,29 +1140,6 @@ def latest_provisional_band_execution(
     ).scalar_one_or_none()
 
 
-def provisional_chapter_ledgers(
-    session: Session,
-    *,
-    project_id: str,
-    arc_id: str,
-    band_id: str,
-) -> list[ProvisionalChapterLedger]:
-    return list(
-        session.execute(
-            select(ProvisionalChapterLedger)
-            .where(
-                ProvisionalChapterLedger.project_id == project_id,
-                ProvisionalChapterLedger.arc_id == arc_id,
-                ProvisionalChapterLedger.band_id == band_id,
-            )
-            .order_by(
-                ProvisionalChapterLedger.chapter_number.asc(),
-                ProvisionalChapterLedger.created_at.asc(),
-            )
-        ).scalars().all()
-    )
-
-
 def build_provisional_band_detail(
     *,
     session: Session,
@@ -1174,11 +1147,19 @@ def build_provisional_band_detail(
     latest: ProvisionalBandExecution,
     display_datetime: DisplayDatetime,
 ) -> ProvisionalBandDetail:
-    ledgers = provisional_chapter_ledgers(
-        session,
-        project_id=project_id,
-        arc_id=latest.arc_id,
-        band_id=latest.band_id,
+    ledgers = list(
+        session.execute(
+            select(ProvisionalChapterLedger)
+            .where(
+                ProvisionalChapterLedger.project_id == project_id,
+                ProvisionalChapterLedger.arc_id == latest.arc_id,
+                ProvisionalChapterLedger.band_id == latest.band_id,
+            )
+            .order_by(
+                ProvisionalChapterLedger.chapter_number.asc(),
+                ProvisionalChapterLedger.created_at.asc(),
+            )
+        ).scalars().all()
     )
     chapter_numbers = []
     try:
@@ -1211,7 +1192,7 @@ def build_provisional_band_detail(
                 state_changes=_load_json_list(row.state_changes_json),
                 events=_load_json_list(row.events_json),
                 thread_beats=_load_json_list(row.thread_beats_json),
-                time_advance=_load_json_dict(row.time_advance_json),
+                time_advance=_json_object(row.time_advance_json),
                 issues=_load_json_list(row.issues_json),
                 error=row.error_text,
                 created_at=display_datetime(row.created_at),
@@ -1243,11 +1224,3 @@ def _load_json_list(raw: str) -> list[dict[str, Any]]:
     except (json.JSONDecodeError, TypeError):
         return []
     return [item for item in payload if isinstance(item, dict)]
-
-
-def _load_json_dict(raw: str) -> dict[str, Any]:
-    try:
-        payload = json.loads(raw or "{}") or {}
-    except (json.JSONDecodeError, TypeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}

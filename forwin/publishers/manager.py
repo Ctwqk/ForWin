@@ -1268,21 +1268,6 @@ class PublisherManager:
             return str(matches[0] or "").strip()
         return ""
 
-    def _client_can_claim_platform(
-        self,
-        session,
-        *,
-        client_id: str,
-        platform_id: str,
-    ) -> bool:
-        preferred_client_id = self.preferred_client_id
-        if not preferred_client_id or client_id == preferred_client_id:
-            return True
-        return not self._preferred_client_can_claim_platform(
-            session,
-            platform_id=platform_id,
-        )
-
     def _claimable_platforms(
         self,
         session,

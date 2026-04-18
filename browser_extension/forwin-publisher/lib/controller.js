@@ -20,10 +20,7 @@ export class PublisherExtensionController {
     await this.deps.ensureClientId();
     await this.deps.ensureHeartbeatAlarm();
     await this.restoreDisconnectedSessionsFromBackend();
-    await this.sendHeartbeat();
-    await this.syncConnectedSessionsToBackend();
-    await this.dispatchPendingUploadJobs();
-    await this.dispatchPendingCommentSyncJobs();
+    await this._syncBackendStateAndDispatchPendingJobs();
   }
 
   async handleMessage(message, sender = {}) {
@@ -39,10 +36,7 @@ export class PublisherExtensionController {
     if (action === 'settings-updated') {
       await this.deps.refreshContentBridge();
       await this.restoreDisconnectedSessionsFromBackend();
-      await this.sendHeartbeat();
-      await this.syncConnectedSessionsToBackend();
-      await this.dispatchPendingUploadJobs();
-      await this.dispatchPendingCommentSyncJobs();
+      await this._syncBackendStateAndDispatchPendingJobs();
       return { message: '扩展设置已更新。' };
     }
     if (action === 'open-login') {
@@ -621,6 +615,26 @@ export class PublisherExtensionController {
     }
   }
 
+  async _syncBackendStateAndDispatchPendingJobs() {
+    await this.sendHeartbeat();
+    await this.syncConnectedSessionsToBackend();
+    await this.dispatchPendingUploadJobs();
+    await this.dispatchPendingCommentSyncJobs();
+  }
+
+  async _collectConnectedPlatforms() {
+    const connectedPlatforms = [];
+    for (const platformId of Object.keys(PLATFORM_ADAPTERS)) {
+      const savedState = await this.deps.getPlatformState(platformId);
+      const cookies = await this.deps.getCookies(platformId);
+      const heartbeatState = buildHeartbeatState(platformId, cookies, savedState);
+      if (heartbeatState.connected || heartbeatState.raw_state?.cookie_signal) {
+        connectedPlatforms.push(platformId);
+      }
+    }
+    return connectedPlatforms;
+  }
+
   async sendHeartbeat() {
     const settings = await this.deps.getSettings();
     if (!settings.backendBaseUrl || !settings.apiKey) {
@@ -702,29 +716,21 @@ export class PublisherExtensionController {
     }
   }
 
-  async _dispatchPendingUploadJobs() {
+  async _dispatchPendingJobs({ claimJob, executeJob }) {
     const settings = await this.deps.getSettings();
     if (!settings.backendBaseUrl || !settings.apiKey) {
       return { skipped: true };
     }
 
     const clientId = await this.deps.getClientId();
-    const connectedPlatforms = [];
-    for (const platformId of Object.keys(PLATFORM_ADAPTERS)) {
-      const savedState = await this.deps.getPlatformState(platformId);
-      const cookies = await this.deps.getCookies(platformId);
-      const heartbeatState = buildHeartbeatState(platformId, cookies, savedState);
-      if (heartbeatState.connected || heartbeatState.raw_state?.cookie_signal) {
-        connectedPlatforms.push(platformId);
-      }
-    }
+    const connectedPlatforms = await this._collectConnectedPlatforms();
     if (!connectedPlatforms.length) {
       return { skipped: true };
     }
     let handled = 0;
     const MAX_JOBS_PER_DISPATCH = 8;
     while (handled < MAX_JOBS_PER_DISPATCH) {
-      const claimed = await this.deps.backend.claimNextUploadJob({
+      const claimed = await claimJob({
         client_id: clientId,
         connected_platforms: connectedPlatforms,
       });
@@ -732,9 +738,16 @@ export class PublisherExtensionController {
         return handled ? { found: true, handled } : { found: false };
       }
       handled += 1;
-      await this.executeUploadJobPayload(claimed.job, 0);
+      await executeJob(claimed.job);
     }
     return { found: true, handled, truncated: true };
+  }
+
+  async _dispatchPendingUploadJobs() {
+    return this._dispatchPendingJobs({
+      claimJob: (payload) => this.deps.backend.claimNextUploadJob(payload),
+      executeJob: (job) => this.executeUploadJobPayload(job, 0),
+    });
   }
 
   async _dispatchPendingCommentSyncJobs() {
@@ -746,35 +759,10 @@ export class PublisherExtensionController {
     ) {
       return { skipped: true };
     }
-
-    const clientId = await this.deps.getClientId();
-    const connectedPlatforms = [];
-    for (const platformId of Object.keys(PLATFORM_ADAPTERS)) {
-      const savedState = await this.deps.getPlatformState(platformId);
-      const cookies = await this.deps.getCookies(platformId);
-      const heartbeatState = buildHeartbeatState(platformId, cookies, savedState);
-      if (heartbeatState.connected || heartbeatState.raw_state?.cookie_signal) {
-        connectedPlatforms.push(platformId);
-      }
-    }
-    if (!connectedPlatforms.length) {
-      return { skipped: true };
-    }
-
-    let handled = 0;
-    const MAX_JOBS_PER_DISPATCH = 8;
-    while (handled < MAX_JOBS_PER_DISPATCH) {
-      const claimed = await this.deps.backend.claimNextCommentSyncJob({
-        client_id: clientId,
-        connected_platforms: connectedPlatforms,
-      });
-      if (!claimed?.found || !claimed.job) {
-        return handled ? { found: true, handled } : { found: false };
-      }
-      handled += 1;
-      await this.executeCommentSyncJobPayload(claimed.job, 0);
-    }
-    return { found: true, handled, truncated: true };
+    return this._dispatchPendingJobs({
+      claimJob: (payload) => this.deps.backend.claimNextCommentSyncJob(payload),
+      executeJob: (job) => this.executeCommentSyncJobPayload(job, 0),
+    });
   }
 
   async closeExistingPlatformSession(platformId) {
@@ -810,10 +798,7 @@ export class PublisherExtensionController {
         loginMethod: 'scan',
         lastError: '',
       });
-      await this.sendHeartbeat();
-      await this.syncConnectedSessionsToBackend();
-      await this.dispatchPendingUploadJobs();
-      await this.dispatchPendingCommentSyncJobs();
+      await this._syncBackendStateAndDispatchPendingJobs();
       await this.deps.notifyPage(session.originTabId, 'login-status', {
         platform: session.platformId,
         connected: true,

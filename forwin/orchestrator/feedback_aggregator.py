@@ -202,17 +202,36 @@ def derive_action_effectiveness(
         .order_by(FeedbackActionRecord.created_at.desc())
         .limit(max(1, limit))
     ).scalars().all()
-    results: list[dict[str, object]] = []
-    for record in records:
-        rows = session.execute(
+    signal_keys = {
+        str(record.signal_key or "").strip()
+        for record in records
+        if str(record.signal_key or "").strip()
+    }
+    aggregate_rows = (
+        session.execute(
             select(SignalWindowAggregate)
             .where(
                 SignalWindowAggregate.project_id == project_id,
-                SignalWindowAggregate.signal_key == record.signal_key,
                 SignalWindowAggregate.window_type == window_type,
+                SignalWindowAggregate.signal_key.in_(signal_keys),
             )
-            .order_by(SignalWindowAggregate.window_chapter_end.asc(), SignalWindowAggregate.created_at.asc())
+            .order_by(
+                SignalWindowAggregate.signal_key.asc(),
+                SignalWindowAggregate.window_chapter_end.asc(),
+                SignalWindowAggregate.created_at.asc(),
+            )
         ).scalars().all()
+        if signal_keys
+        else []
+    )
+    rows_by_signal_key: dict[str, list[SignalWindowAggregate]] = defaultdict(list)
+    for row in aggregate_rows:
+        signal_key = str(row.signal_key or "").strip()
+        if signal_key:
+            rows_by_signal_key[signal_key].append(row)
+    results: list[dict[str, object]] = []
+    for record in records:
+        rows = rows_by_signal_key.get(str(record.signal_key or "").strip(), [])
         before_rows = [
             row
             for row in rows
@@ -694,6 +713,51 @@ class FeedbackCooldown:
             return True
         return chapter_number >= last_action.cooldown_until_chapter
 
+    def _latest_actions_by_signal_key(
+        self,
+        session: Session,
+        *,
+        project_id: str,
+        signal_keys: Sequence[str],
+    ) -> dict[str, FeedbackActionRecord]:
+        normalized_signal_keys = [
+            str(signal_key or "").strip()
+            for signal_key in signal_keys
+            if str(signal_key or "").strip()
+        ]
+        if not normalized_signal_keys:
+            return {}
+        ranked = (
+            select(
+                FeedbackActionRecord.id.label("row_id"),
+                FeedbackActionRecord.signal_key.label("signal_key"),
+                func.row_number()
+                .over(
+                    partition_by=FeedbackActionRecord.signal_key,
+                    order_by=(
+                        FeedbackActionRecord.created_at.desc(),
+                        FeedbackActionRecord.id.desc(),
+                    ),
+                )
+                .label("rn"),
+            )
+            .where(
+                FeedbackActionRecord.project_id == project_id,
+                FeedbackActionRecord.signal_key.in_(normalized_signal_keys),
+            )
+            .subquery()
+        )
+        rows = session.execute(
+            select(FeedbackActionRecord)
+            .join(ranked, FeedbackActionRecord.id == ranked.c.row_id)
+            .where(ranked.c.rn == 1)
+        ).scalars().all()
+        return {
+            str(row.signal_key or "").strip(): row
+            for row in rows
+            if str(row.signal_key or "").strip()
+        }
+
     def record_action(
         self,
         session: Session,
@@ -729,11 +793,21 @@ class FeedbackCooldown:
     ) -> list[SignalWindowAggregate]:
         """Return only aggregates that are confirmed+ and past cooldown."""
         _ACTIONABLE_LEVELS = frozenset({"confirmed", "watchlist"})
+        latest_actions = self._latest_actions_by_signal_key(
+            session,
+            project_id=project_id,
+            signal_keys=[
+                str(agg.signal_key or "").strip()
+                for agg in aggregates
+                if agg.signal_level in _ACTIONABLE_LEVELS
+            ],
+        )
         result: list[SignalWindowAggregate] = []
         for agg in aggregates:
             if agg.signal_level not in _ACTIONABLE_LEVELS:
                 continue
-            if not self.is_cooled(session, project_id, agg.signal_key, chapter_number):
+            last_action = latest_actions.get(str(agg.signal_key or "").strip())
+            if last_action is not None and chapter_number < last_action.cooldown_until_chapter:
                 continue
             result.append(agg)
         return result

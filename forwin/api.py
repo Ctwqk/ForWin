@@ -1708,6 +1708,16 @@ def _build_causal_replay(
             ):
                 scoped_rows.append(row)
         items = [_serialize_decision_event(row) for row in scoped_rows]
+        scope_rank = {"arc": 0, "band": 1, "chapter": 2, "project": 3, "task": 4}
+        items.sort(
+            key=lambda item: (
+                int(item.chapter_number or 0),
+                0 if not str(item.parent_event_id or "").strip() else 1,
+                scope_rank.get(str(item.scope or ""), 99),
+                str(item.created_at or ""),
+                str(item.id or ""),
+            )
+        )
         by_parent: dict[str, list[DecisionEventInfo]] = defaultdict(list)
         for item in items:
             if item.parent_event_id:
@@ -1720,7 +1730,7 @@ def _build_causal_replay(
         elif bands:
             current_outcome = f"arc {target_arc_id} has {len(bands)} band(s), no decision events"
         return CausalReplayResponse(
-            root_event=items[0] if items else None,
+            root_event=next((item for item in items if not item.parent_event_id), items[0] if items else None),
             timeline=items,
             branches=dict(by_parent),
             current_outcome=current_outcome,
@@ -2254,11 +2264,11 @@ def _create_continue_generation_task(
 
 def _maybe_enqueue_auto_publish_jobs(result) -> None:
     project_id = str(getattr(result, "project_id", "") or "").strip()
-    chapter_numbers = [
+    chapter_numbers = sorted({
         int(item)
         for item in getattr(result, "completed_chapters", []) or []
         if str(item).isdigit() or isinstance(item, int)
-    ]
+    })
     if not project_id or not chapter_numbers or _publisher_manager is None:
         return
 
@@ -2275,44 +2285,47 @@ def _maybe_enqueue_auto_publish_jobs(result) -> None:
         book_name = str(publish.book_name or "").strip() or project.title
         if not platform or not book_name:
             return
-
-        for chapter_number in sorted(set(chapter_numbers)):
-            plan = session.execute(
-                select(ChapterPlan).where(
-                    ChapterPlan.project_id == project_id,
-                    ChapterPlan.chapter_number == chapter_number,
-                )
-            ).scalar_one_or_none()
+        plans = session.execute(
+            select(ChapterPlan)
+            .where(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number.in_(chapter_numbers),
+            )
+            .order_by(ChapterPlan.chapter_number.asc())
+        ).scalars().all()
+        if not plans:
+            return
+        plan_by_number = {
+            int(plan.chapter_number): plan
+            for plan in plans
+        }
+        draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
+        jobs = []
+        for chapter_number in chapter_numbers:
+            plan = plan_by_number.get(chapter_number)
             if plan is None:
                 continue
-            existing = session.execute(
-                select(PublisherUploadJob.id).where(
-                    PublisherUploadJob.project_id == project_id,
-                    PublisherUploadJob.chapter_title == plan.title,
-                    PublisherUploadJob.deleted_at.is_(None),
-                ).limit(1)
-            ).scalar_one_or_none()
-            if existing is not None:
-                continue
-            draft = session.execute(
-                select(ChapterDraft)
-                .where(ChapterDraft.chapter_plan_id == plan.id)
-                .order_by(ChapterDraft.version.desc())
-                .limit(1)
-            ).scalar_one_or_none()
+            draft = draft_map.get(plan.id)
             if draft is None:
                 continue
-            _publisher_manager.create_upload_job(
-                project_id=project_id,
-                platform=platform,
-                book_name=book_name,
-                chapter_title=plan.title,
-                body=draft.body_text,
-                upload_url=publish.upload_url or None,
-                publish=True,
-                create_if_missing=bool(publish.create_if_missing),
-                book_meta=publish.book_meta.model_dump(mode="json"),
+            jobs.append(
+                {
+                    "chapter_title": plan.title,
+                    "body": draft.body_text,
+                }
             )
+        if not jobs:
+            return
+        _publisher_manager.create_upload_jobs_batch(
+            project_id=project_id,
+            platform=platform,
+            book_name=book_name,
+            jobs=jobs,
+            upload_url=publish.upload_url or None,
+            publish=True,
+            create_if_missing=bool(publish.create_if_missing),
+            book_meta=publish.book_meta.model_dump(mode="json"),
+        )
     except Exception:  # noqa: BLE001
         logger.exception("Auto publish enqueue failed for project %s", project_id)
     finally:

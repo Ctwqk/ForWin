@@ -100,11 +100,13 @@ class ProjectPublishBindingTests(unittest.TestCase):
 
             response = api_module.create_project(req)
 
-            self.assertTrue(response.ok)
             with session_factory() as session:
                 project = session.execute(select(Project)).scalar_one()
                 automation = normalize_project_automation(project.automation_json)
 
+            self.assertEqual(response.project_id, project.id)
+            self.assertEqual(response.title, "双平台测试书")
+            self.assertEqual(response.message, "书本《双平台测试书》已创建。")
             self.assertEqual(automation.publish.platform, "fanqie")
             self.assertEqual(automation.publish.book_name, "番茄版作品名")
             self.assertTrue(automation.publish.create_if_missing)
@@ -163,7 +165,8 @@ class ProjectPublishBindingTests(unittest.TestCase):
                 ),
             )
 
-            self.assertTrue(updated.ok)
+            self.assertEqual(updated.project_id, created.project_id)
+            self.assertEqual(updated.message, "书本自动化设置已保存。")
             self.assertEqual(
                 [item.platform for item in updated.automation.publish_bindings],
                 ["fanqie", "qidian"],

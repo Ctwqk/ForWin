@@ -156,8 +156,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.failed_chapters, [1])
         self.assertEqual(statuses, [(1, "failed"), (2, "planned"), (3, "planned")])
-        self.assertTrue(chapter_calls)
-        self.assertTrue(all(chapter == 1 for chapter in chapter_calls))
+        self.assertEqual(chapter_calls, [1, 1])
 
 
 if __name__ == "__main__":

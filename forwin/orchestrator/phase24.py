@@ -396,6 +396,23 @@ class ArcEnvelopeManager:
             .where(ArcPlanVersion.status == "active")
             .distinct()
         ).scalars().all()
+        existing_project_ids = (
+            {
+                str(project_id or "").strip()
+                for project_id in session.execute(
+                    select(ArcPlanVersion.project_id)
+                    .join(ArcEnvelope, ArcEnvelope.arc_id == ArcPlanVersion.id)
+                    .where(
+                        ArcPlanVersion.status == "active",
+                        ArcPlanVersion.project_id.in_(project_ids),
+                    )
+                    .distinct()
+                ).scalars().all()
+                if str(project_id or "").strip()
+            }
+            if project_ids
+            else set()
+        )
         created = 0
         original_director = self.director
         original_executor = self.provisional_executor
@@ -403,16 +420,7 @@ class ArcEnvelopeManager:
         self.provisional_executor = None
         try:
             for project_id in project_ids:
-                existing = session.execute(
-                    select(ArcEnvelope.id)
-                    .join(ArcPlanVersion, ArcPlanVersion.id == ArcEnvelope.arc_id)
-                    .where(
-                        ArcPlanVersion.project_id == project_id,
-                        ArcPlanVersion.status == "active",
-                    )
-                    .limit(1)
-                ).scalar_one_or_none()
-                if existing:
+                if str(project_id or "").strip() in existing_project_ids:
                     continue
                 row = self.ensure_active_arc_resolution(
                     session=session,

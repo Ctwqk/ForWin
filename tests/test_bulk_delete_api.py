@@ -44,9 +44,11 @@ class BulkDeleteApiTests(unittest.TestCase):
             ProjectBulkDeleteRequest(project_ids=project_ids + ["missing-project"])
         )
 
-        self.assertTrue(response.ok)
         self.assertEqual(response.deleted_count, 2)
         self.assertEqual(response.skipped_count, 1)
+        self.assertEqual(response.deleted_ids, project_ids)
+        self.assertEqual(response.skipped_ids, ["missing-project"])
+        self.assertEqual(response.message, "已删除 2 本书，跳过 1 本。")
         with self.session_factory() as session:
             self.assertEqual(session.query(Project).count(), 0)
 
@@ -73,9 +75,11 @@ class BulkDeleteApiTests(unittest.TestCase):
             )
         )
 
-        self.assertTrue(response.ok)
         self.assertEqual(response.deleted_count, 1)
         self.assertEqual(response.skipped_count, 1)
+        self.assertEqual(response.deleted_ids, [f"generation:{task_id}"])
+        self.assertEqual(response.skipped_ids, ["generation:missing-task"])
+        self.assertEqual(response.message, "已删除 1 条任务，跳过 1 条。")
         with self.session_factory() as session:
             row = session.get(GenerationTask, task_id)
             self.assertTrue(row is None or row.deleted_at is not None)

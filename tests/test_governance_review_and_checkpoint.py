@@ -50,9 +50,43 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
             target_scope="band",
         )
 
-        self.assertTrue(issues)
-        self.assertTrue(all(issue.severity == "warning" for issue in issues))
-        self.assertTrue(all(issue.issue_group == "director_imbalance" for issue in issues))
+        self.assertEqual(
+            [
+                (
+                    issue.rule_name,
+                    issue.severity,
+                    issue.issue_group,
+                    tuple(issue.evidence_refs),
+                )
+                for issue in issues
+            ],
+            [
+                (
+                    "director_payoff_consecutive_missing",
+                    "warning",
+                    "director_imbalance",
+                    ("chapters=1,2",),
+                ),
+                (
+                    "director_reward_gap_exceeded",
+                    "warning",
+                    "director_imbalance",
+                    ("chapters=2", "stall_guard=1"),
+                ),
+                (
+                    "director_setup_without_delivery",
+                    "warning",
+                    "director_imbalance",
+                    ("setup_like_count=2", "delivery_count=0"),
+                ),
+                (
+                    "director_mystery_without_clarification",
+                    "warning",
+                    "director_imbalance",
+                    ("planned_mystery=2", "delivered_mystery=0"),
+                ),
+            ],
+        )
 
     def test_historical_review_warns_on_unfulfilled_chapter_task(self) -> None:
         hub = HistoricalReviewHub(
@@ -95,7 +129,20 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
         )
 
         self.assertEqual(verdict.verdict, "warn")
-        self.assertTrue(any(issue.issue_type == "plan_task_fulfillment" for issue in verdict.issues))
+        self.assertEqual(
+            [
+                (issue.issue_type, issue.rule_name, issue.severity, issue.description)
+                for issue in verdict.issues
+            ],
+            [
+                (
+                    "plan_task_fulfillment",
+                    "plan_task_unfulfilled",
+                    "warning",
+                    "规划任务未明显交付：拿到玉佩",
+                )
+            ],
+        )
 
     def test_historical_review_fails_on_hard_future_constraint(self) -> None:
         hub = HistoricalReviewHub(
@@ -154,7 +201,31 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
         )
 
         self.assertEqual(verdict.verdict, "fail")
-        self.assertTrue(any(issue.issue_type == "future_constraint" and issue.severity == "error" for issue in verdict.issues))
+        self.assertEqual(
+            [
+                (
+                    issue.issue_type,
+                    issue.rule_name,
+                    issue.severity,
+                    issue.description,
+                    tuple(issue.evidence_refs),
+                )
+                for issue in verdict.issues
+            ],
+            [
+                (
+                    "future_constraint",
+                    "future_constraint_violation",
+                    "error",
+                    "叙事约束被触发：小明后续 arc 仍需可用",
+                    (
+                        "constraint=nc-1",
+                        "constraint_type=character_availability",
+                        "state_change=小明:status->死亡",
+                    ),
+                )
+            ],
+        )
 
     def test_auto_band_checkpoint_warns_when_band_task_is_unfulfilled(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -260,10 +331,20 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
                         project_id=project_id,
                         chapter_number=1,
                     )
-                    self.assertIsNotNone(row)
                     self.assertEqual(row.status, "warn")
-                    issues = json.loads(row.issues_json or "[]")
-                    self.assertTrue(any(item.get("code") == "band_task_completion" for item in issues))
+                    self.assertEqual(
+                        json.loads(row.issues_json or "[]"),
+                        [
+                            {
+                                "code": "band_task_completion",
+                                "severity": "warning",
+                                "category": "",
+                                "issue_group": "director_imbalance",
+                                "description": "规划任务未明显交付：拿到玉佩",
+                                "detail": "task_type=plot_advance; task_source=manual",
+                            }
+                        ],
+                    )
                     row_again = orchestrator._create_auto_band_checkpoint(
                         session=session,
                         repo=repo,
@@ -301,10 +382,32 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
                     reviewer="governance",
                     target_scope="band",
                 )
-                self.assertTrue(issues)
-                refs = issues[0].evidence_refs
-                self.assertTrue(any(ref == f"category={category}" for ref in refs))
-                self.assertEqual(issues[0].severity, "warning")
+                target_name = {
+                    "character_locked_out": "小明",
+                    "thread_closed_too_early": "主线",
+                    "relationship_closed_too_early": "关系",
+                    "secret_over_explained": "秘密",
+                    "growth_arc_completed_too_early": "主角",
+                }[category]
+                self.assertEqual(
+                    [
+                        (
+                            issue.entity_names,
+                            issue.evidence_refs,
+                            issue.severity,
+                            issue.issue_group,
+                        )
+                        for issue in issues
+                    ],
+                    [
+                        (
+                            [target_name],
+                            [f"target={target_name}", f"category={category}"],
+                            "warning",
+                            "director_imbalance",
+                        )
+                    ],
+                )
 
     def test_future_constraint_protect_until_includes_boundary_chapter(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -446,8 +549,8 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
                         project_id=project_id,
                         chapter_number=1,
                     )
-                    self.assertIsNotNone(row)
                     self.assertEqual(row.status, "pass")
+                    self.assertEqual(json.loads(row.issues_json or "[]"), [])
                     session.query(Project).filter(Project.id == project_id).update(
                         {
                             "governance_json": governance_to_json(
@@ -467,11 +570,29 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
                         project_id=project_id,
                         chapter_number=1,
                     )
-                    self.assertIsNotNone(row)
                     self.assertEqual(row.status, "fail")
                     issues = json.loads(row.issues_json or "[]")
-                    self.assertTrue(any(item.get("code") == "next_band_compatibility" for item in issues))
-                    self.assertTrue(any(item.get("issue_group") == "fact_conflict" for item in issues))
+                    self.assertEqual(len(issues), 1)
+                    self.assertEqual(
+                        {
+                            "code": issues[0]["code"],
+                            "severity": issues[0]["severity"],
+                            "category": issues[0]["category"],
+                            "issue_group": issues[0]["issue_group"],
+                            "description": issues[0]["description"],
+                        },
+                        {
+                            "code": "next_band_compatibility",
+                            "severity": "error",
+                            "category": "",
+                            "issue_group": "fact_conflict",
+                            "description": "叙事约束被触发：小明后续仍需可用",
+                        },
+                    )
+                    self.assertRegex(
+                        issues[0]["detail"],
+                        r"^constraint=[0-9a-f]+; constraint_type=character_availability; subject=小明$",
+                    )
             finally:
                 orchestrator.llm_client.close()
                 orchestrator.engine.dispose()

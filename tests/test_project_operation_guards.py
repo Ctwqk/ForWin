@@ -210,7 +210,9 @@ class ProjectOperationGuardTests(unittest.TestCase):
             ProjectBulkDeleteRequest(project_ids=[blocked.id, deletable.id])
         )
 
-        self.assertTrue(response.ok)
+        self.assertEqual(response.deleted_count, 1)
+        self.assertEqual(response.skipped_count, 1)
+        self.assertEqual(response.message, "已删除 1 本书，跳过 1 本。")
         self.assertEqual(response.deleted_ids, [deletable.id])
         self.assertEqual(response.skipped_ids, [blocked.id])
         with self.session_factory() as session:
@@ -227,7 +229,8 @@ class ProjectOperationGuardTests(unittest.TestCase):
         )
 
         governance = api_module.get_project_governance(created.project_id)
-        self.assertTrue(governance.ok)
+        self.assertEqual(governance.project_id, created.project_id)
+        self.assertEqual(governance.message, "已读取项目治理设置。")
         self.assertEqual(governance.governance.progression_mode, "serial_canon_band_guard")
         self.assertTrue(governance.governance.auto_band_checkpoint)
         self.assertTrue(governance.governance.manual_checkpoints_enabled)
@@ -296,11 +299,14 @@ class ProjectOperationGuardTests(unittest.TestCase):
             ),
         )
 
-        self.assertTrue(response.ok)
+        self.assertEqual(response.project_id, project.id)
+        self.assertEqual(response.message, "项目治理设置已保存。")
+        self.assertEqual(response.governance.progression_mode, "serial_canon")
         events = api_module.list_project_decision_events(project.id)
-        self.assertTrue(events.items)
+        self.assertEqual(len(events.items), 1)
         self.assertEqual(events.items[0].event_type, "governance_updated")
-        self.assertIn("串行 canon gate", events.items[0].reason)
+        self.assertEqual(events.items[0].scope, "project")
+        self.assertEqual(events.items[0].reason, "切换到更严格的串行 canon gate")
 
 
 if __name__ == "__main__":

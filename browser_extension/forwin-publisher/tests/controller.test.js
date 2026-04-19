@@ -96,6 +96,8 @@ test('controller opens login popup and closes it after successful tab update', a
   await controller.handleTabUpdated(42, { url: 'https://write.qq.com/portal/dashboard' }, { id: 42 });
 
   assert.equal(events.length, 2);
+  assert.equal(events.at(-1).eventName, 'login-status');
+  assert.equal(events.at(-1).payload.platform, 'qidian');
   assert.equal(events.at(-1).payload.connected, true);
 });
 
@@ -530,8 +532,10 @@ test('controller resumes an already running claimed upload job for the same clie
 
   await controller.dispatchPendingUploadJobs();
 
+  assert.equal(uploadResults.length, 2);
+  assert.equal(uploadResults[0].status, 'running');
+  assert.equal(uploadResults[0].result_payload.phase, 'opened-upload-tab');
   assert.equal(uploadResults.at(-1).status, 'succeeded');
-  assert.equal(uploadResults.some((item) => item.result_payload?.phase === 'opened-upload-tab'), true);
 });
 
 test('controller records extension error code in upload job payload', async () => {
@@ -748,6 +752,36 @@ test('controller heartbeat reports cookie summary without leaking full cookies',
   assert.equal(Array.isArray(qidian.cookies), false);
   assert.equal(qidian.raw_state.cookie_count, 2);
   assert.deepEqual(qidian.raw_state.cookie_names, ['AppAuthToken', 'pubtoken']);
+});
+
+test('controller heartbeat does not keep sticky connected=true without current strong cookies', async () => {
+  const payloads = [];
+  const { controller } = makeController({
+    backend: {
+      heartbeat: async (payload) => {
+        payloads.push(payload);
+        return { ok: true };
+      },
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+    },
+    getPlatformState: async (platformId) => (
+      platformId === 'qidian'
+        ? { connected: true, loginMethod: 'scan', lastError: '' }
+        : {}
+    ),
+    getCookies: async () => [],
+  });
+
+  await controller.sendHeartbeat();
+
+  const qidian = payloads[0].platforms.find((item) => item.platform === 'qidian');
+  assert.equal(qidian.connected, false);
+  assert.equal(qidian.raw_state.cookie_signal, false);
 });
 
 test('controller session sync sends only cookie fields needed by the backend uploader', async () => {

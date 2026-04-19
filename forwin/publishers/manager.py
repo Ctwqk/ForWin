@@ -194,8 +194,29 @@ class PublisherManager:
                 if browser_session and browser_session.client_id
                 else None
             )
+            preferred_client_recent = bool(
+                preferred_client and self._is_recent(preferred_client.last_heartbeat_at)
+            )
+            preferred_state_recent = bool(
+                preferred_state and self._is_recent(preferred_state.last_heartbeat_at)
+            )
+            client_recent = bool(client and self._is_recent(client.last_heartbeat_at))
+            session_client_recent = bool(
+                session_client and self._is_recent(session_client.last_heartbeat_at)
+            )
+            state_recent = bool(state and self._is_recent(state.last_heartbeat_at))
             last_heartbeat_at = None
-            if preferred_client and preferred_client.last_heartbeat_at:
+            if preferred_client_recent and preferred_client.last_heartbeat_at:
+                last_heartbeat_at = preferred_client.last_heartbeat_at
+            elif preferred_state_recent and preferred_state.last_heartbeat_at:
+                last_heartbeat_at = preferred_state.last_heartbeat_at
+            elif client_recent and client.last_heartbeat_at:
+                last_heartbeat_at = client.last_heartbeat_at
+            elif session_client_recent and session_client.last_heartbeat_at:
+                last_heartbeat_at = session_client.last_heartbeat_at
+            elif state_recent and state.last_heartbeat_at:
+                last_heartbeat_at = state.last_heartbeat_at
+            elif preferred_client and preferred_client.last_heartbeat_at:
                 last_heartbeat_at = preferred_client.last_heartbeat_at
             elif preferred_state and preferred_state.last_heartbeat_at:
                 last_heartbeat_at = preferred_state.last_heartbeat_at
@@ -244,23 +265,47 @@ class PublisherManager:
                     "last_error": last_error,
                     "extension_client_id": (
                         preferred_client.client_id
-                        if preferred_client
+                        if preferred_client_recent
                         else (
                             preferred_state.client_id
-                            if preferred_state
+                            if preferred_state_recent
                             else (
                                 client.client_id
-                                if client
+                                if client_recent
                                 else (
                                     session_client.client_id
-                                    if session_client
+                                    if session_client_recent
                                     else (
-                                        browser_session.client_id
-                                        if browser_session
+                                        state.extension_client_id
+                                        if state_recent and state and state.extension_client_id
                                         else (
-                                            summary_browser_session.extension_client_id
-                                            if summary_browser_session
-                                            else ""
+                                            preferred_client.client_id
+                                            if preferred_client
+                                            else (
+                                                preferred_state.client_id
+                                                if preferred_state
+                                                else (
+                                                    client.client_id
+                                                    if client
+                                                    else (
+                                                        session_client.client_id
+                                                        if session_client
+                                                        else (
+                                                            state.extension_client_id
+                                                            if state and state.extension_client_id
+                                                            else (
+                                                                browser_session.client_id
+                                                                if browser_session
+                                                                else (
+                                                                    summary_browser_session.extension_client_id
+                                                                    if summary_browser_session
+                                                                    else ""
+                                                                )
+                                                            )
+                                                        )
+                                                    )
+                                                )
+                                            )
                                         )
                                     )
                                 )
@@ -307,37 +352,97 @@ class PublisherManager:
         book_meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         spec = self._spec(platform)
-        job_payload: dict[str, Any] = {}
-        if create_if_missing:
-            job_payload["create_if_missing"] = True
         normalized_book_meta = self._normalize_book_meta(book_meta)
-        if normalized_book_meta:
-            job_payload["book_meta"] = normalized_book_meta
         with self.session_factory() as session:
             resolved_project_id = self._resolve_project_id(
                 session,
                 explicit_project_id=project_id,
                 work_name=book_name,
             )
-            if resolved_project_id:
-                job_payload["project_id"] = resolved_project_id
-            job = PublisherUploadJob(
-                project_id=resolved_project_id,
-                platform_id=platform,
-                status="pending",
+            job = self._new_upload_job(
+                spec=spec,
+                resolved_project_id=resolved_project_id,
+                platform=platform,
                 book_name=book_name,
                 chapter_title=chapter_title,
-                body_text=body,
-                upload_url=upload_url or "",
+                body=body,
+                upload_url=upload_url,
                 publish=publish,
-                abort_requested=False,
-                result_message=f"{spec.display_name} 上传任务已创建，等待浏览器扩展执行。",
-                result_payload_json=json.dumps(job_payload, ensure_ascii=False),
+                create_if_missing=create_if_missing,
+                normalized_book_meta=normalized_book_meta,
             )
             session.add(job)
             session.commit()
             session.refresh(job)
             return self._serialize_upload_job(job)
+
+    def create_upload_jobs_batch(
+        self,
+        *,
+        project_id: str = "",
+        platform: str,
+        book_name: str,
+        jobs: list[dict[str, Any]],
+        upload_url: str | None,
+        publish: bool,
+        create_if_missing: bool = False,
+        book_meta: dict[str, Any] | None = None,
+    ) -> int:
+        spec = self._spec(platform)
+        normalized_book_meta = self._normalize_book_meta(book_meta)
+        normalized_jobs: list[tuple[str, str]] = []
+        seen_titles: set[str] = set()
+        for item in jobs:
+            chapter_title = str(item.get("chapter_title", "")).strip()
+            if not chapter_title or chapter_title in seen_titles:
+                continue
+            normalized_jobs.append((chapter_title, str(item.get("body", ""))))
+            seen_titles.add(chapter_title)
+        if not normalized_jobs:
+            return 0
+
+        with self.session_factory() as session:
+            resolved_project_id = self._resolve_project_id(
+                session,
+                explicit_project_id=project_id,
+                work_name=book_name,
+            )
+            chapter_titles = [chapter_title for chapter_title, _body in normalized_jobs]
+            existing_titles: set[str] = set()
+            if resolved_project_id and chapter_titles:
+                existing_titles = {
+                    str(title or "").strip()
+                    for title in session.execute(
+                        select(PublisherUploadJob.chapter_title).where(
+                            PublisherUploadJob.project_id == resolved_project_id,
+                            PublisherUploadJob.chapter_title.in_(chapter_titles),
+                            PublisherUploadJob.deleted_at.is_(None),
+                        )
+                    ).scalars().all()
+                    if str(title or "").strip()
+                }
+
+            rows = [
+                self._new_upload_job(
+                    spec=spec,
+                    resolved_project_id=resolved_project_id,
+                    platform=platform,
+                    book_name=book_name,
+                    chapter_title=chapter_title,
+                    body=body,
+                    upload_url=upload_url,
+                    publish=publish,
+                    create_if_missing=create_if_missing,
+                    normalized_book_meta=normalized_book_meta,
+                )
+                for chapter_title, body in normalized_jobs
+                if chapter_title not in existing_titles
+            ]
+            if not rows:
+                return 0
+            session.add_all(rows)
+            session.commit()
+            return len(rows)
 
     def get_upload_job(self, job_id: str) -> dict[str, Any]:
         with self.session_factory() as session:
@@ -763,7 +868,7 @@ class PublisherManager:
                     session.add(state)
                 state.extension_client_id = client_id
                 cookie_signal = bool(item.get("cookie_signal"))
-                state.connected = bool(item.get("connected")) or cookie_signal
+                state.connected = cookie_signal
                 state.login_method = str(item.get("login_method", "")).strip()
                 state.last_error = str(item.get("last_error", "")).strip()
                 state.status_json = json.dumps(item, ensure_ascii=False)
@@ -1246,6 +1351,44 @@ class PublisherManager:
             "started_at": _isoformat(job.started_at),
             "finished_at": _isoformat(job.finished_at),
         }
+
+    def _new_upload_job(
+        self,
+        *,
+        spec: PlatformSpec,
+        resolved_project_id: str,
+        platform: str,
+        book_name: str,
+        chapter_title: str,
+        body: str,
+        upload_url: str | None,
+        publish: bool,
+        create_if_missing: bool,
+        normalized_book_meta: dict[str, Any],
+    ) -> PublisherUploadJob:
+        payload: dict[str, Any] = {}
+        if resolved_project_id:
+            payload["project_id"] = resolved_project_id
+        if create_if_missing:
+            payload["create_if_missing"] = True
+        if normalized_book_meta:
+            payload["book_meta"] = normalized_book_meta
+        return PublisherUploadJob(
+            project_id=resolved_project_id,
+            platform_id=platform,
+            status="pending",
+            book_name=book_name,
+            chapter_title=chapter_title,
+            body_text=body,
+            upload_url=upload_url or "",
+            publish=publish,
+            abort_requested=False,
+            result_message=f"{spec.display_name} 上传任务已创建，等待浏览器扩展执行。",
+            result_payload_json=json.dumps(
+                payload,
+                ensure_ascii=False,
+            ),
+        )
 
     @staticmethod
     def _resolve_project_id(

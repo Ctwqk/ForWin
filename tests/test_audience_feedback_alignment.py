@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from sqlalchemy import select, text
+from tests_support import capture_select_statements
 
 from forwin.director.arc_director import ArcDirector
 from forwin.models import (
@@ -264,7 +265,9 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
                 }
             ],
         )
-        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["message"], "评论批次已入库。")
+        self.assertEqual(payload["inserted"], 1)
+        self.assertEqual(payload["updated"], 0)
 
         with self.SessionFactory() as session:
             row = session.execute(select(PublisherRawComment)).scalar_one()
@@ -343,10 +346,12 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
             chapter_number=3,
         )
 
-        self.assertGreaterEqual(len(rows), 2)
-        signal_types = {row.signal_type for row in rows}
-        self.assertIn("confusion", signal_types)
-        self.assertIn("pacing", signal_types)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            sorted((row.signal_type, row.target_type, row.severity) for row in rows),
+            [("confusion", "general", 1), ("pacing", "arc", 1)],
+        )
+        self.assertEqual({row.target_name for row in rows}, {""})
 
     def test_comment_analyzer_accepts_extended_signal_type_schema(self) -> None:
         project = self._create_project()
@@ -669,13 +674,66 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
             cooldown_chapters=3,
             comment_to_reader_ratio=50,
         )
-        actionable_levels = {row.signal_level for row in result.actionable}
-        self.assertTrue(actionable_levels.issubset({"confirmed", "watchlist"}))
-        self.assertTrue(result.hint_pack.pacing_hints)
-        self.assertTrue(result.hint_pack.risk_flags)
+        self.assertEqual(
+            {
+                (
+                    row.signal_key,
+                    row.signal_level,
+                    row.max_severity,
+                    row.unique_user_count,
+                    row.target_name,
+                    row.signal_type,
+                )
+                for row in result.actionable
+            },
+            {
+                ("pacing:arc:节奏", "confirmed", 2, 3, "节奏", "pacing"),
+                ("risk:plot:整体逻辑", "watchlist", 3, 1, "整体逻辑", "risk"),
+            },
+        )
+        self.assertEqual(
+            result.hint_pack.pacing_hints,
+            ["读者反馈回报偏干(1-3章, 3人), 近1-5章缩短 reward gap 并提高兑现密度"],
+        )
+        self.assertEqual(
+            result.hint_pack.risk_flags,
+            ["[整体逻辑]存在受控不确定性风险(1-3章), 保持 managed ambiguity，别让信息失真失控"],
+        )
 
-        records = self.session.execute(select(FeedbackActionRecord)).scalars().all()
-        self.assertEqual(len(records), 2)
+        records = self.session.execute(
+            select(FeedbackActionRecord).order_by(FeedbackActionRecord.signal_key.asc())
+        ).scalars().all()
+        self.assertEqual(
+            [
+                (
+                    row.signal_key,
+                    row.signal_type,
+                    row.action_type,
+                    row.triggered_at_chapter,
+                    row.cooldown_until_chapter,
+                    row.notes,
+                )
+                for row in records
+            ],
+            [
+                (
+                    "pacing:arc:节奏",
+                    "pacing",
+                    "boost_reward_density",
+                    3,
+                    6,
+                    "读者反馈回报偏干(1-3章, 3人), 近1-5章缩短 reward gap 并提高兑现密度",
+                ),
+                (
+                    "risk:plot:整体逻辑",
+                    "risk",
+                    "hold_managed_ambiguity",
+                    3,
+                    6,
+                    "[整体逻辑]存在受控不确定性风险(1-3章), 保持 managed ambiguity，别让信息失真失控",
+                ),
+            ],
+        )
 
         second = run_feedback_aggregation_pass(
             self.session,
@@ -819,6 +877,189 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
 
         self.assertEqual(outcomes[0]["outcome"], "improved")
         self.assertEqual(outcomes[0]["action_type"], "boost_reward_density")
+
+    def test_action_effectiveness_batches_signal_aggregate_reads(self) -> None:
+        from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
+
+        project = self._create_project()
+        self.session.add_all(
+            [
+                FeedbackActionRecord(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="pacing:arc:节奏",
+                    signal_type="pacing",
+                    action_type="boost_reward_density",
+                    triggered_at_chapter=5,
+                    cooldown_until_chapter=8,
+                ),
+                FeedbackActionRecord(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="hook:character:主角",
+                    signal_type="hook",
+                    action_type="strengthen_hook",
+                    triggered_at_chapter=4,
+                    cooldown_until_chapter=7,
+                ),
+            ]
+        )
+        self.session.add_all(
+            [
+                SignalWindowAggregate(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="pacing:arc:节奏",
+                    signal_type="pacing",
+                    target_type="arc",
+                    target_name="节奏",
+                    window_type="long",
+                    window_chapter_start=1,
+                    window_chapter_end=5,
+                    hit_comment_count=6,
+                    unique_user_count=5,
+                    total_comment_count=8,
+                    reader_estimate=400,
+                    reader_tier=2,
+                    max_severity=3,
+                    avg_confidence=0.9,
+                    signal_level="confirmed",
+                ),
+                SignalWindowAggregate(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="pacing:arc:节奏",
+                    signal_type="pacing",
+                    target_type="arc",
+                    target_name="节奏",
+                    window_type="long",
+                    window_chapter_start=4,
+                    window_chapter_end=8,
+                    hit_comment_count=1,
+                    unique_user_count=1,
+                    total_comment_count=10,
+                    reader_estimate=400,
+                    reader_tier=2,
+                    max_severity=1,
+                    avg_confidence=0.6,
+                    signal_level="candidate",
+                ),
+                SignalWindowAggregate(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="hook:character:主角",
+                    signal_type="hook",
+                    target_type="character",
+                    target_name="主角",
+                    window_type="long",
+                    window_chapter_start=1,
+                    window_chapter_end=4,
+                    hit_comment_count=4,
+                    unique_user_count=4,
+                    total_comment_count=7,
+                    reader_estimate=300,
+                    reader_tier=2,
+                    max_severity=2,
+                    avg_confidence=0.8,
+                    signal_level="watchlist",
+                ),
+                SignalWindowAggregate(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="hook:character:主角",
+                    signal_type="hook",
+                    target_type="character",
+                    target_name="主角",
+                    window_type="long",
+                    window_chapter_start=3,
+                    window_chapter_end=7,
+                    hit_comment_count=2,
+                    unique_user_count=2,
+                    total_comment_count=8,
+                    reader_estimate=300,
+                    reader_tier=2,
+                    max_severity=1,
+                    avg_confidence=0.5,
+                    signal_level="candidate",
+                ),
+            ]
+        )
+        self.session.commit()
+
+        with capture_select_statements(self.engine) as select_statements:
+            outcomes = derive_action_effectiveness(self.session, project.id, limit=8)
+
+        aggregate_queries = [
+            statement for statement in select_statements if " from signal_window_aggregates" in statement
+        ]
+        self.assertEqual(len(outcomes), 2)
+        self.assertEqual(len(aggregate_queries), 1)
+
+    def test_feedback_cooldown_batches_latest_action_lookup(self) -> None:
+        from forwin.orchestrator.feedback_aggregator import FeedbackCooldown
+
+        project = self._create_project()
+        self.session.add_all(
+            [
+                FeedbackActionRecord(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="pacing:arc:节奏",
+                    signal_type="pacing",
+                    action_type="boost_reward_density",
+                    triggered_at_chapter=3,
+                    cooldown_until_chapter=6,
+                ),
+                FeedbackActionRecord(
+                    id=new_id(),
+                    project_id=project.id,
+                    signal_key="hook:character:主角",
+                    signal_type="hook",
+                    action_type="strengthen_hook",
+                    triggered_at_chapter=2,
+                    cooldown_until_chapter=5,
+                ),
+            ]
+        )
+        self.session.commit()
+
+        aggregates = [
+            SignalWindowAggregate(
+                id=new_id(),
+                project_id=project.id,
+                signal_key="pacing:arc:节奏",
+                signal_level="confirmed",
+            ),
+            SignalWindowAggregate(
+                id=new_id(),
+                project_id=project.id,
+                signal_key="hook:character:主角",
+                signal_level="watchlist",
+            ),
+            SignalWindowAggregate(
+                id=new_id(),
+                project_id=project.id,
+                signal_key="emotion:scene:压抑",
+                signal_level="confirmed",
+            ),
+        ]
+
+        with capture_select_statements(self.engine) as select_statements:
+            result = FeedbackCooldown(cooldown_chapters=3).filter_actionable(
+                self.session,
+                project.id,
+                chapter_number=6,
+                aggregates=aggregates,
+            )
+
+        feedback_action_queries = [
+            statement for statement in select_statements if " from feedback_action_records" in statement
+        ]
+        self.assertEqual(
+            [agg.signal_key for agg in result],
+            ["pacing:arc:节奏", "hook:character:主角", "emotion:scene:压抑"],
+        )
+        self.assertEqual(len(feedback_action_queries), 1)
 
     def test_pacing_strategist_uses_medium_window_audience_signal_only(self) -> None:
         project = self._create_project()

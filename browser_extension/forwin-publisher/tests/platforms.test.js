@@ -58,6 +58,19 @@ test('fanqie heartbeat does not auto-connect from session cookies alone', () => 
   assert.equal(state.raw_state.cookie_signal, false);
 });
 
+test('fanqie heartbeat does not keep sticky connected=true without current strong cookies', () => {
+  const state = buildHeartbeatState('fanqie', [
+    { name: 'sessionid' },
+  ], {
+    connected: true,
+    loginMethod: 'scan',
+    lastError: '',
+  });
+
+  assert.equal(state.connected, false);
+  assert.equal(state.raw_state.cookie_signal, false);
+});
+
 test('fanqie probe url points to the modern writer console', () => {
   assert.equal(getProbeUrl('fanqie', 0), 'https://fanqienovel.com/main/writer/');
   assert.equal(
@@ -81,4 +94,15 @@ test('qidian heartbeat auto-connects when auth cookies are present', () => {
 
   assert.equal(state.connected, true);
   assert.equal(state.raw_state.cookie_signal, true);
+});
+
+test('qidian heartbeat does not keep sticky connected=true without current auth cookies', () => {
+  const state = buildHeartbeatState('qidian', [], {
+    connected: true,
+    loginMethod: 'scan',
+    lastError: '',
+  });
+
+  assert.equal(state.connected, false);
+  assert.equal(state.raw_state.cookie_signal, false);
 });

@@ -4,31 +4,6 @@
 
 本文档描述当前代码里的写作任务状态机。范围包括 API 任务状态、orchestrator 主流程、单章流水线、人工 review/continue、安全暂停/强制终止，以及 LLM retry/fallback。
 
-## 本次失败原因
-
-复现命令：
-
-```bash
-timeout 180s .venv/bin/python -m unittest tests.test_phase05_regressions
-```
-
-最初看到的 `TestClient.__enter__()` 卡住不是最终根因；重新跑完整回归后，真实失败收敛为两个断言失败：
-
-1. `test_orchestrator_surfaces_partial_failures` 期望 `partial_failed`，实际先进入 `needs_review`。
-2. `test_review_endpoints_expose_and_continue_paused_chapter` 期望 review verdict 为 `pass`，实际为 `warn`。
-
-根因是测试夹具造的章节正文太短。当前默认 `min_chapter_chars=2500`，`ContinuityChecker` 会对低于最少字数的正文产生 `char_count_low` warning。第一个用例在 `copilot` 模式下，warning 会进入人工 review checkpoint，所以还没执行到第二章失败路径就停在 `needs_review`。第二个用例在 `checkpoint` 模式下虽然本来就会暂停，但 review verdict 因正文太短从 `pass` 变成 `warn`。
-
-修复方式：把这两个测试里的 fake chapter body 扩到 2500 字以上，保持测试原意不变。
-
-验证结果：
-
-```bash
-timeout 180s .venv/bin/python -m unittest tests.test_phase05_regressions
-```
-
-结果：113 tests passed。
-
 ## 图形版
 
 ### 1. API 任务状态机
@@ -240,3 +215,6 @@ Continue 的规则：
 3. orchestrator run/continue/chapter loop：`forwin/orchestrator/loop.py`
 4. review 字数检查：`forwin/checker/rules.py`
 5. LLM retry/fallback：`forwin/writer/llm_client.py`
+
+
+

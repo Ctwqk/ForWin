@@ -123,7 +123,7 @@ export function buildHeartbeatState(platformId, cookies = [], savedState = {}) {
     const cookieSignal = qidianCookieConnected(cookieNames);
     return {
       platform: platformId,
-      connected: Boolean(savedState.connected || cookieSignal),
+      connected: cookieSignal,
       login_method: loginMethod,
       last_error: lastError,
       raw_state: {
@@ -136,7 +136,7 @@ export function buildHeartbeatState(platformId, cookies = [], savedState = {}) {
     const cookieSignal = fanqieCookieConnected(cookieNames);
     return {
       platform: platformId,
-      connected: Boolean(savedState.connected || cookieSignal),
+      connected: cookieSignal,
       login_method: loginMethod,
       last_error: lastError,
       raw_state: {

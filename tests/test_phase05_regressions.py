@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import gc
+import json
 import logging
 import unittest
 from contextlib import redirect_stdout
@@ -17,8 +17,9 @@ import httpx
 import fastapi.routing
 import starlette.concurrency
 import starlette.responses
-from sqlalchemy import event, func, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import close_all_sessions
+from tests_support import capture_select_statements, count_matching_statements
 
 import forwin.api as api_module
 import forwin.api_project_payloads as api_project_payloads_module
@@ -49,7 +50,9 @@ from forwin.models.publisher import (
     PublisherCommentSyncJob,
     PublisherBrowserSession,
     PublisherBrowserSessionEntry,
+    PublisherConnectionState,
     PublisherExtensionClient,
+    PublisherExtensionPlatformState,
     PublisherRawComment,
     PublisherUploadJob,
 )
@@ -334,20 +337,6 @@ class Phase05RegressionTests(unittest.TestCase):
             old_tasks = dict(api_module._tasks)
             api_module._tasks.clear()
 
-        select_statements: list[str] = []
-
-        def record_selects(
-            _conn,
-            _cursor,
-            statement,
-            _parameters,
-            _context,
-            _executemany,
-        ) -> None:
-            normalized = " ".join(str(statement or "").split())
-            if normalized.upper().startswith("SELECT"):
-                select_statements.append(normalized)
-
         try:
             with session_factory() as session:
                 for index in range(3):
@@ -396,18 +385,16 @@ class Phase05RegressionTests(unittest.TestCase):
                     session.commit()
 
             api_module._SessionFactory = session_factory
-            event.listen(engine, "before_cursor_execute", record_selects)
-
-            items = api_module._list_project_backed_task_items(limit=10)
+            with capture_select_statements(engine) as select_statements:
+                items = api_module._list_project_backed_task_items(limit=10)
 
             self.assertEqual(len(items), 3)
-            self.assertEqual(sum("FROM projects" in stmt for stmt in select_statements), 1)
-            self.assertEqual(sum("FROM chapter_plans" in stmt for stmt in select_statements), 1)
+            self.assertEqual(count_matching_statements(select_statements, " from projects"), 1)
+            self.assertEqual(
+                count_matching_statements(select_statements, " from chapter_plans"),
+                1,
+            )
         finally:
-            try:
-                event.remove(engine, "before_cursor_execute", record_selects)
-            except Exception:  # noqa: BLE001
-                pass
             api_module._SessionFactory = old_session_factory
             with api_module._tasks_lock:
                 api_module._tasks.clear()
@@ -1496,7 +1483,9 @@ class Phase05RegressionTests(unittest.TestCase):
                     for item in api_module.list_projects()
                 ]
 
-                self.assertTrue(created_payload["ok"])
+                self.assertEqual(created_payload["title"], "测试书")
+                self.assertEqual(created_payload["message"], "书本《测试书》已创建。")
+                self.assertTrue(created_payload["project_id"])
                 self.assertEqual(len(projects_payload), 1)
                 self.assertEqual(projects_payload[0]["title"], "测试书")
                 self.assertEqual(created_payload["target_total_chapters"], 24)
@@ -1679,7 +1668,8 @@ class Phase05RegressionTests(unittest.TestCase):
                 summary = api_module.list_projects()[0]
                 detail = api_module.get_project(created.project_id)
 
-                self.assertTrue(updated.ok)
+                self.assertEqual(updated.project_id, created.project_id)
+                self.assertEqual(updated.message, "书本自动化设置已保存。")
                 self.assertEqual(updated.automation.daily_start_time, "23:59")
                 self.assertEqual(updated.automation.daily_chapter_quota, 20)
                 self.assertTrue(updated.automation.auto_publish)
@@ -1706,19 +1696,6 @@ class Phase05RegressionTests(unittest.TestCase):
             old_factory = api_module._SessionFactory
             initial_calls: list[tuple[str, int]] = []
             continue_calls: list[tuple[str, int, int]] = []
-            select_statements: list[str] = []
-
-            def record_selects(
-                _conn,
-                _cursor,
-                statement,
-                _parameters,
-                _context,
-                _executemany,
-            ) -> None:
-                normalized = " ".join(str(statement or "").split()).lower()
-                if normalized.startswith("select"):
-                    select_statements.append(normalized)
 
             try:
                 with session_factory() as session:
@@ -1783,43 +1760,31 @@ class Phase05RegressionTests(unittest.TestCase):
 
                 api_module._config = Config(db_path=db_path)
                 api_module._SessionFactory = session_factory
-                event.listen(engine, "before_cursor_execute", record_selects)
-
                 fixed_now = datetime(2026, 4, 18, 17, 0, tzinfo=timezone.utc)
 
-                with patch.object(api_module, "_utcnow", return_value=fixed_now), patch.object(
-                    api_module,
-                    "_saved_runtime_config_or_503",
-                    return_value=Config(db_path=db_path),
-                ), patch.object(
-                    api_module,
-                    "_create_generation_task",
-                    side_effect=lambda **kwargs: initial_calls.append(
-                        (str(kwargs.get("title") or ""), int(kwargs.get("num_chapters") or 0))
-                    ) or "task-initial",
-                ), patch.object(
-                    api_module,
-                    "_create_continue_generation_task",
-                    side_effect=lambda **kwargs: continue_calls.append(
-                        (
-                            str(kwargs.get("title") or ""),
-                            int(kwargs.get("requested_chapters") or 0),
-                            int(kwargs.get("max_chapters") or 0),
-                        )
-                    ) or "task-continue",
-                ):
-                    api_module._run_automation_scheduler_pass()
-
-                project_selects = [
-                    statement for statement in select_statements if " from projects" in statement
-                ]
-                chapter_plan_selects = [
-                    statement for statement in select_statements if " from chapter_plans" in statement
-                ]
-                generation_task_selects = [
-                    statement for statement in select_statements if " from generation_tasks" in statement
-                ]
-                event.remove(engine, "before_cursor_execute", record_selects)
+                with capture_select_statements(engine) as select_statements:
+                    with patch.object(api_module, "_utcnow", return_value=fixed_now), patch.object(
+                        api_module,
+                        "_saved_runtime_config_or_503",
+                        return_value=Config(db_path=db_path),
+                    ), patch.object(
+                        api_module,
+                        "_create_generation_task",
+                        side_effect=lambda **kwargs: initial_calls.append(
+                            (str(kwargs.get("title") or ""), int(kwargs.get("num_chapters") or 0))
+                        ) or "task-initial",
+                    ), patch.object(
+                        api_module,
+                        "_create_continue_generation_task",
+                        side_effect=lambda **kwargs: continue_calls.append(
+                            (
+                                str(kwargs.get("title") or ""),
+                                int(kwargs.get("requested_chapters") or 0),
+                                int(kwargs.get("max_chapters") or 0),
+                            )
+                        ) or "task-continue",
+                    ):
+                        api_module._run_automation_scheduler_pass()
 
                 with session_factory() as session:
                     projects = {
@@ -1827,9 +1792,15 @@ class Phase05RegressionTests(unittest.TestCase):
                         for project in session.execute(select(Project)).scalars().all()
                     }
 
-                self.assertEqual(len(project_selects), 1)
-                self.assertEqual(len(chapter_plan_selects), 2)
-                self.assertEqual(len(generation_task_selects), 1)
+                self.assertEqual(count_matching_statements(select_statements, " from projects"), 1)
+                self.assertEqual(
+                    count_matching_statements(select_statements, " from chapter_plans"),
+                    2,
+                )
+                self.assertEqual(
+                    count_matching_statements(select_statements, " from generation_tasks"),
+                    1,
+                )
                 self.assertEqual(initial_calls, [("自动调度-首批", 2)])
                 self.assertEqual(continue_calls, [("自动调度-续跑", 1, 2)])
                 self.assertEqual(
@@ -1845,12 +1816,116 @@ class Phase05RegressionTests(unittest.TestCase):
                     "waiting_review",
                 )
             finally:
-                try:
-                    event.remove(engine, "before_cursor_execute", record_selects)
-                except Exception:  # noqa: BLE001
-                    pass
                 api_module._config = old_config
                 api_module._SessionFactory = old_factory
+                engine.dispose()
+
+    def test_auto_publish_enqueue_batches_plan_draft_and_upload_queries(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "auto-publish.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session_factory = get_session_factory(engine)
+            manager = PublisherManager(session_factory, extension_api_key="secret")
+            old_session_factory = api_module._SessionFactory
+            old_manager = api_module._publisher_manager
+
+            try:
+                with session_factory() as session:
+                    project = Project(
+                        id=new_id(),
+                        title="自动发布测试书",
+                        premise="前提",
+                        genre="玄幻",
+                        setting_summary="设定",
+                        automation_json=json.dumps(
+                            {
+                                "auto_publish": True,
+                                "publish": {
+                                    "platform": "fanqie",
+                                    "book_name": "自动发布测试书",
+                                    "create_if_missing": True,
+                                },
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                    session.add(project)
+                    session.flush()
+                    arc = ArcPlanVersion(
+                        id=new_id(),
+                        project_id=project.id,
+                        version=1,
+                        arc_synopsis="弧线",
+                        status="active",
+                    )
+                    session.add(arc)
+                    session.flush()
+                    plans: list[ChapterPlan] = []
+                    for chapter_number in range(1, 4):
+                        plan = ChapterPlan(
+                            id=new_id(),
+                            project_id=project.id,
+                            arc_plan_id=arc.id,
+                            chapter_number=chapter_number,
+                            title=f"第{chapter_number}章",
+                            one_line="推进",
+                            goals_json='["目标"]',
+                            status="accepted",
+                        )
+                        plans.append(plan)
+                    session.add_all(plans)
+                    session.flush()
+                    session.add_all(
+                        [
+                            ChapterDraft(
+                                id=new_id(),
+                                chapter_plan_id=plan.id,
+                                version=1,
+                                body_text=f"{plan.title} 正文",
+                                summary="摘要",
+                                char_count=1000,
+                            )
+                            for plan in plans
+                        ]
+                    )
+                    session.commit()
+                    project_id = project.id
+
+                api_module._SessionFactory = session_factory
+                api_module._publisher_manager = manager
+                with capture_select_statements(engine) as select_statements:
+                    api_module._maybe_enqueue_auto_publish_jobs(
+                        SimpleNamespace(
+                            project_id=project_id,
+                            completed_chapters=[1, 2, 3],
+                        )
+                    )
+
+                with session_factory() as session:
+                    stored_jobs = session.execute(
+                        select(PublisherUploadJob)
+                        .order_by(PublisherUploadJob.chapter_title.asc())
+                    ).scalars().all()
+
+                self.assertEqual(len(stored_jobs), 3)
+                self.assertEqual([job.chapter_title for job in stored_jobs], ["第1章", "第2章", "第3章"])
+                self.assertEqual(count_matching_statements(select_statements, " from projects"), 2)
+                self.assertEqual(
+                    count_matching_statements(select_statements, " from chapter_plans"),
+                    1,
+                )
+                self.assertEqual(
+                    count_matching_statements(select_statements, " from chapter_drafts"),
+                    1,
+                )
+                self.assertEqual(
+                    count_matching_statements(select_statements, " from publisher_upload_jobs"),
+                    1,
+                )
+            finally:
+                api_module._SessionFactory = old_session_factory
+                api_module._publisher_manager = old_manager
                 engine.dispose()
 
     def test_local_memory_index_persists_and_searches_across_instances(self) -> None:
@@ -1874,7 +1949,8 @@ class Phase05RegressionTests(unittest.TestCase):
             reloaded = LocalChapterMemoryIndex(root_dir=tmp)
             hits = reloaded.search(project_id="p1", query="末班车", limit=2)
 
-        self.assertGreaterEqual(len(hits), 1)
+        self.assertEqual(len(hits), 2)
+        self.assertEqual([hit.chapter_number for hit in hits], [1, 2])
         self.assertEqual(hits[0].chapter_number, 1)
         self.assertIn("末班车", hits[0].summary)
 
@@ -2038,6 +2114,66 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(structure_count, 1)
         self.assertEqual(analysis_count, 1)
         self.assertEqual(provisional_count, 1)
+
+    def test_arc_envelope_backfill_batches_existing_resolution_lookup(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "arc-envelope-backfill.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session = get_session_factory(engine)()
+
+            try:
+                updater = StateUpdater(session)
+                arc_ids: list[str] = []
+                project_ids: list[str] = []
+                for index in range(3):
+                    project = updater.create_project(
+                        title=f"测试书{index + 1}",
+                        premise="前提",
+                        genre="玄幻",
+                    )
+                    arc = updater.create_arc_plan(project.id, f"主线弧{index + 1}")
+                    arc_ids.append(arc.id)
+                    project_ids.append(project.id)
+                session.flush()
+                session.add_all(
+                    [
+                        ArcEnvelope(
+                            id=new_id(),
+                            project_id=project_id,
+                            arc_id=arc_id,
+                            base_target_size=12,
+                            base_soft_min=10,
+                            base_soft_max=14,
+                            resolved_target_size=12,
+                            resolved_soft_min=10,
+                            resolved_soft_max=14,
+                            detailed_band_size=4,
+                            frozen_zone_size=2,
+                            current_projected_size=12,
+                            current_confidence=0.8,
+                            source_policy_tier="short",
+                        )
+                        for project_id, arc_id in zip(project_ids, arc_ids, strict=False)
+                    ]
+                )
+                session.commit()
+
+                manager = ArcEnvelopeManager(director=None)
+                with capture_select_statements(engine) as select_statements:
+                    created = manager.backfill_missing_resolutions(session=session)
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertEqual(created, 0)
+        self.assertEqual(
+            count_matching_statements(
+                select_statements,
+                " from arc_plan_versions join arc_envelopes",
+            ),
+            1,
+        )
 
     def test_provisional_preview_falls_back_per_chapter_without_disabling_later_previews(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -2361,9 +2497,9 @@ class Phase05RegressionTests(unittest.TestCase):
                 ), patch.object(
                     orchestrator,
                     "_run_project_chapters",
-                    return_value=RunResult(
-                        project_id="placeholder",
-                        requested_chapters=1,
+                    side_effect=lambda **kwargs: RunResult(
+                        project_id=kwargs["project_id"],
+                        requested_chapters=kwargs["requested_chapters"],
                     ),
                 ):
                     result = orchestrator.run("前提", "玄幻", 1)
@@ -2372,14 +2508,15 @@ class Phase05RegressionTests(unittest.TestCase):
                 orchestrator.engine.dispose()
 
         self.assertEqual(result.status, "completed")
-        self.assertTrue(progress_events)
         project_created = [
             payload
             for event, payload in progress_events
             if event == "project_created"
         ]
-        self.assertTrue(project_created)
-        self.assertTrue(project_created[0]["project_id"])
+        self.assertEqual(len(project_created), 1)
+        self.assertEqual(project_created[0]["project_id"], result.project_id)
+        self.assertEqual(project_created[0]["requested_chapters"], 1)
+        self.assertEqual(project_created[0]["title"], "测试主线")
 
     def test_api_projects_expose_active_arc_envelope_fields(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -3148,8 +3285,34 @@ class Phase05RegressionTests(unittest.TestCase):
                 orchestrator.engine.dispose()
 
             self.assertEqual(result.status, "completed")
-            self.assertGreaterEqual(len(intents), 2)
-            self.assertEqual([turn.chapter_number for turn in turns], [1, 2])
+            self.assertEqual(
+                [
+                    (
+                        intent.chapter_number,
+                        intent.entity_name,
+                        intent.intent_kind,
+                        intent.tactic,
+                        intent.urgency,
+                    )
+                    for intent in intents
+                ],
+                [
+                    (1, "林夜", "pressure", "优先利用旧站台的地利；主动制造信息差", 5),
+                    (1, "周柒", "pursue", "优先利用调度室的地利；跟进主角留下的线索", 4),
+                    (2, "林夜", "pressure", "优先利用旧站台的地利；主动制造信息差", 5),
+                    (2, "周柒", "pursue", "优先利用调度室的地利；跟进主角留下的线索", 4),
+                ],
+            )
+            self.assertEqual(
+                [
+                    (turn.chapter_number, turn.pressure_level, turn.pressure_summary)
+                    for turn in turns
+                ],
+                [
+                    (1, "steady", "第1章后，世界压力为 steady。重点变化：主要矛盾仍处于可控推进状态。"),
+                    (2, "rising", "第2章后，世界压力为 rising。重点变化：悬置线程：失踪信号。"),
+                ],
+            )
 
     def test_repo_summarizes_reader_feedback_by_work_name(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -3194,8 +3357,13 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertIsNotNone(feedback)
         assert feedback is not None
         self.assertEqual(feedback.comment_count, 2)
-        self.assertTrue(feedback.feedback_summary)
-        self.assertGreaterEqual(len(feedback.recent_highlights), 1)
+        self.assertEqual(feedback.dominant_sentiment, "curious")
+        self.assertEqual(feedback.feedback_summary, "最近 2 条评论，读者对悬念追问较多。")
+        self.assertEqual(len(feedback.recent_highlights), 2)
+        self.assertEqual(
+            {item.author_name for item in feedback.recent_highlights},
+            {"读者A", "读者B"},
+        )
 
     def test_repo_reader_feedback_prefers_project_scope_and_respects_before_chapter_titles(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -3309,8 +3477,41 @@ class Phase05RegressionTests(unittest.TestCase):
                 session.close()
                 engine.dispose()
 
-        self.assertTrue(any("节奏" in item.tactic or "悬念" in item.tactic for item in intents))
-        self.assertIn(world.pressure_level, {"rising", "critical"})
+        self.assertEqual(
+            [
+                (
+                    item.entity_name,
+                    item.intent_kind,
+                    item.objective,
+                    item.tactic,
+                    item.urgency,
+                    item.notes,
+                )
+                for item in intents
+            ],
+            [
+                (
+                    "林夜",
+                    "pressure",
+                    "围绕失踪信号采取下一步行动，争取在下一章改变局面。",
+                    "主动制造信息差；优先回应读者困惑较多的悬念信息点",
+                    5,
+                    "重要度10，第3章前生效。",
+                )
+            ],
+        )
+        self.assertEqual(
+            (
+                world.pressure_level,
+                world.pressure_summary,
+                world.notable_shifts,
+            ),
+            (
+                "rising",
+                "第2章后，世界压力为 rising。重点变化：悬置线程：失踪信号；读者困惑点正在放大世界压迫感。",
+                ["悬置线程：失踪信号", "读者困惑点正在放大世界压迫感"],
+            ),
+        )
 
     def test_blackbox_writer_failure_fails_without_empty_review(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -3589,19 +3790,6 @@ class Phase05RegressionTests(unittest.TestCase):
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
-            select_statements: list[str] = []
-
-            def record_selects(
-                _conn,
-                _cursor,
-                statement,
-                _parameters,
-                _context,
-                _executemany,
-            ) -> None:
-                normalized = " ".join(str(statement or "").split()).lower()
-                if normalized.startswith("select"):
-                    select_statements.append(normalized)
 
             try:
                 updater = StateUpdater(session)
@@ -3645,23 +3833,18 @@ class Phase05RegressionTests(unittest.TestCase):
                 )
                 session.commit()
 
-                event.listen(engine, "before_cursor_execute", record_selects)
-
-                recent_replans = api_project_payloads_module.load_recent_replan_events_by_project(
-                    session,
-                    [project.id],
-                    limit=5,
-                )
-                recent_intents = api_project_payloads_module.load_recent_npc_intents_by_project(
-                    session,
-                    [project.id],
-                    limit=6,
-                )
+                with capture_select_statements(engine) as select_statements:
+                    recent_replans = api_project_payloads_module.load_recent_replan_events_by_project(
+                        session,
+                        [project.id],
+                        limit=5,
+                    )
+                    recent_intents = api_project_payloads_module.load_recent_npc_intents_by_project(
+                        session,
+                        [project.id],
+                        limit=6,
+                    )
             finally:
-                try:
-                    event.remove(engine, "before_cursor_execute", record_selects)
-                except Exception:  # noqa: BLE001
-                    pass
                 session.close()
                 engine.dispose()
 
@@ -4350,6 +4533,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     {
                         "platform": "qidian",
                         "connected": True,
+                        "cookie_signal": True,
                         "login_method": "scan",
                         "last_error": "",
                     },
@@ -4371,6 +4555,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     {
                         "platform": "qidian",
                         "connected": True,
+                        "cookie_signal": True,
                         "login_method": "scan",
                         "last_error": "",
                     },
@@ -4566,7 +4751,8 @@ class Phase05RegressionTests(unittest.TestCase):
                     }
                 ],
             )
-            self.assertTrue(session_sync["ok"])
+            self.assertEqual(session_sync["message"], "起点小说 浏览器会话已同步到后端。")
+            self.assertTrue(session_sync["server_time"])
             self.assertTrue(manager.has_browser_session("qidian"))
             stored = manager.get_browser_session("qidian")
             assert stored is not None
@@ -4598,19 +4784,6 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_publisher_manager_ingest_comments_batch_resolves_titles_once_per_batch(self) -> None:
         tmp, engine, manager = self._make_publisher_manager()
-        select_statements: list[str] = []
-
-        def record_selects(
-            _conn,
-            _cursor,
-            statement,
-            _parameters,
-            _context,
-            _executemany,
-        ) -> None:
-            normalized = " ".join(str(statement or "").split()).lower()
-            if normalized.startswith("select"):
-                select_statements.append(normalized)
 
         try:
             with manager.session_factory() as session:
@@ -4618,25 +4791,25 @@ class Phase05RegressionTests(unittest.TestCase):
                 project = updater.create_project(title="测试书", premise="前提", genre="玄幻")
                 session.commit()
 
-            event.listen(engine, "before_cursor_execute", record_selects)
-            batch = manager.ingest_comments_batch(
-                client_id="client-1",
-                platform="fanqie",
-                comments=[
-                    {
-                        "remote_comment_id": f"comment-{index}",
-                        "work_id": "book-1",
-                        "work_name": "测试书",
-                        "chapter_id": "chapter-1",
-                        "chapter_title": "第一章",
-                        "author_id": f"user-{index}",
-                        "author_name": f"读者{index}",
-                        "body": "催更",
-                        "created_at": "2026-03-31T12:00:00Z",
-                    }
-                    for index in range(1, 4)
-                ],
-            )
+            with capture_select_statements(engine) as select_statements:
+                batch = manager.ingest_comments_batch(
+                    client_id="client-1",
+                    platform="fanqie",
+                    comments=[
+                        {
+                            "remote_comment_id": f"comment-{index}",
+                            "work_id": "book-1",
+                            "work_name": "测试书",
+                            "chapter_id": "chapter-1",
+                            "chapter_title": "第一章",
+                            "author_id": f"user-{index}",
+                            "author_name": f"读者{index}",
+                            "body": "催更",
+                            "created_at": "2026-03-31T12:00:00Z",
+                        }
+                        for index in range(1, 4)
+                    ],
+                )
 
             with manager.session_factory() as session:
                 stored_comments = session.execute(
@@ -4644,18 +4817,11 @@ class Phase05RegressionTests(unittest.TestCase):
                     .order_by(PublisherRawComment.remote_comment_id.asc())
                 ).scalars().all()
         finally:
-            try:
-                event.remove(engine, "before_cursor_execute", record_selects)
-            except Exception:  # noqa: BLE001
-                pass
             engine.dispose()
             tmp.cleanup()
 
         self.assertEqual(batch["inserted"], 3)
-        self.assertEqual(
-            len([statement for statement in select_statements if " from projects" in statement]),
-            1,
-        )
+        self.assertEqual(count_matching_statements(select_statements, " from projects"), 1)
         self.assertEqual(
             [comment.project_id for comment in stored_comments],
             [project.id, project.id, project.id],
@@ -4818,7 +4984,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 browser_name="Chrome",
                 browser_version="146.0",
                 backend_base_url="http://10.0.0.150:8899",
-                platforms=[{"platform": "fanqie", "connected": True, "login_method": "scan", "last_error": ""}],
+                platforms=[{"platform": "fanqie", "connected": True, "cookie_signal": True, "login_method": "scan", "last_error": ""}],
             )
             manager.record_extension_heartbeat(
                 client_id="laptop-client",
@@ -4826,7 +4992,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 browser_name="Chrome",
                 browser_version="146.0",
                 backend_base_url="http://10.0.0.35:8899",
-                platforms=[{"platform": "fanqie", "connected": True, "login_method": "scan", "last_error": ""}],
+                platforms=[{"platform": "fanqie", "connected": True, "cookie_signal": True, "login_method": "scan", "last_error": ""}],
             )
             job = manager.create_upload_job(
                 platform="fanqie",
@@ -4883,6 +5049,78 @@ class Phase05RegressionTests(unittest.TestCase):
             assert fallback_claim is not None
             self.assertEqual(fallback_claim["job_id"], fallback_job["job_id"])
             self.assertEqual(fallback_claim["extension_client_id"], "laptop-client")
+        finally:
+            engine.dispose()
+            tmp.cleanup()
+
+    def test_publisher_manager_list_platforms_falls_back_from_stale_preferred_client(self) -> None:
+        tmp, engine, manager = self._make_publisher_manager(preferred_client_id="linux-client")
+        try:
+            manager.record_extension_heartbeat(
+                client_id="linux-client",
+                extension_version="0.1.0",
+                browser_name="Chrome",
+                browser_version="146.0",
+                backend_base_url="http://10.0.0.150:8899",
+                platforms=[{"platform": "fanqie", "connected": True, "cookie_signal": True, "login_method": "scan", "last_error": ""}],
+            )
+            manager.record_extension_heartbeat(
+                client_id="laptop-client",
+                extension_version="0.1.0",
+                browser_name="Chrome",
+                browser_version="146.0",
+                backend_base_url="http://10.0.0.35:8899",
+                platforms=[{"platform": "fanqie", "connected": True, "cookie_signal": True, "login_method": "scan", "last_error": ""}],
+            )
+
+            with manager.session_factory() as session:
+                client = session.get(PublisherExtensionClient, "linux-client")
+                platform_state = session.get(
+                    PublisherExtensionPlatformState,
+                    {"client_id": "linux-client", "platform_id": "fanqie"},
+                )
+                assert client is not None
+                assert platform_state is not None
+                stale_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+                client.last_heartbeat_at = stale_at
+                platform_state.last_heartbeat_at = stale_at
+                session.commit()
+
+            items = {item["platform_id"]: item for item in manager.list_platforms()}
+            self.assertTrue(items["fanqie"]["connected"])
+            self.assertTrue(items["fanqie"]["extension_online"])
+            self.assertEqual(items["fanqie"]["extension_client_id"], "laptop-client")
+            self.assertTrue(items["fanqie"]["last_heartbeat_at"].endswith("PDT"))
+        finally:
+            engine.dispose()
+            tmp.cleanup()
+
+    def test_publisher_manager_heartbeat_does_not_trust_sticky_connected_without_cookie_signal(self) -> None:
+        tmp, engine, manager = self._make_publisher_manager()
+        try:
+            manager.record_extension_heartbeat(
+                client_id="client-1",
+                extension_version="0.1.0",
+                browser_name="Chrome",
+                browser_version="123.0",
+                backend_base_url="http://192.168.31.10:8899",
+                platforms=[
+                    {
+                        "platform": "qidian",
+                        "connected": True,
+                        "cookie_signal": False,
+                        "login_method": "scan",
+                        "last_error": "",
+                    }
+                ],
+            )
+
+            items = {item["platform_id"]: item for item in manager.list_platforms()}
+            self.assertFalse(items["qidian"]["connected"])
+            with manager.session_factory() as session:
+                state = session.get(PublisherConnectionState, "qidian")
+                assert state is not None
+                self.assertFalse(state.connected)
         finally:
             engine.dispose()
             tmp.cleanup()
@@ -4986,10 +5224,14 @@ class Phase05RegressionTests(unittest.TestCase):
                     },
                 )
                 self.assertEqual(heartbeat.status_code, 200)
-                self.assertTrue(heartbeat.json()["ok"])
+                self.assertEqual(heartbeat.json()["message"], "扩展心跳已记录。")
+                self.assertTrue(heartbeat.json()["server_time"])
 
                 with manager.session_factory() as session:
+                    fanqie_state = session.get(PublisherConnectionState, "fanqie")
                     stored_session = session.get(PublisherBrowserSession, "fanqie")
+                    assert fanqie_state is not None
+                    self.assertFalse(fanqie_state.connected)
                     self.assertIsNone(stored_session)
 
                 session_sync = client.post(
@@ -5096,6 +5338,8 @@ class Phase05RegressionTests(unittest.TestCase):
                 )
                 self.assertEqual(claimed_comment_job.status_code, 200)
                 self.assertTrue(claimed_comment_job.json()["found"])
+                self.assertEqual(claimed_comment_job.json()["job"]["job_id"], comment_job.json()["job_id"])
+                self.assertEqual(claimed_comment_job.json()["job"]["status"], "running")
 
                 comments = client.post(
                     "/api/publishers/extension/comments/batch",
@@ -5299,7 +5543,9 @@ class Phase05RegressionTests(unittest.TestCase):
                     task_payload = api_module.get_task(approve_payload.task_id)
 
                 self.assertEqual(review_payload.verdict, "pass")
-                self.assertTrue(approve_payload.task_id)
+                self.assertEqual(approve_payload.project_id, run_result.project_id)
+                self.assertEqual(approve_payload.status, "accepted")
+                self.assertEqual(approve_payload.task_id, task_payload.task_id)
                 self.assertIn("已启动后续章节继续执行", approve_payload.message)
                 self.assertEqual(task_payload.project_id, run_result.project_id)
                 self.assertEqual(len(FakeThread.created), 1)
@@ -5470,11 +5716,22 @@ class Phase05RegressionTests(unittest.TestCase):
                 logging.getLogger("test"),
                 project_id="book-1",
                 should_abort=lambda: False,
-            )
+        )
 
         self.assertEqual(fake.run_calls, [])
         self.assertEqual(fake.run_existing_calls, [("book-1", 4)])
-        self.assertTrue(any(item.get("project_id") == "book-1" for item in updates))
+        self.assertEqual(updates[0], {"status": "running"})
+        self.assertEqual(
+            updates[1],
+            {
+                "status": "completed",
+                "project_id": "book-1",
+                "failed_chapters": [],
+                "paused_chapters": [],
+                "frozen_artifacts": [],
+            },
+        )
+        self.assertEqual(updates[2], {"message": "已完成 4 / 4 章"})
 
     def test_run_continue_project_with_config_passes_max_chapters(self) -> None:
         class FakeOrchestrator:
@@ -5518,7 +5775,12 @@ class Phase05RegressionTests(unittest.TestCase):
             )
 
         self.assertEqual(fake.continue_calls, [("book-2", 2)])
-        self.assertTrue(any(item.get("message") == "继续执行完成章节: 4, 5" for item in updates))
+        self.assertEqual(
+            updates[-1],
+            {
+                "message": "继续执行完成章节: 4, 5",
+            },
+        )
 
     def test_approve_review_reuses_existing_orchestrator(self) -> None:
         class FakeOrchestrator:
@@ -5562,7 +5824,10 @@ class Phase05RegressionTests(unittest.TestCase):
                     ),
                 )
 
-            self.assertTrue(payload.ok)
+            self.assertEqual(payload.project_id, "proj-1")
+            self.assertEqual(payload.chapter_number, 1)
+            self.assertEqual(payload.status, "accepted")
+            self.assertEqual(payload.message, "ok")
             self.assertEqual(fake.calls, [("proj-1", 1)])
         finally:
             api_module._config = old_config
@@ -5793,7 +6058,8 @@ class Phase05RegressionTests(unittest.TestCase):
 
             api_module._SessionFactory = session_factory
             response = api_module.delete_project("proj-delete")
-            self.assertTrue(response.ok)
+            self.assertEqual(response.project_id, "proj-delete")
+            self.assertEqual(response.message, "项目《待删项目》已删除。")
             with session_factory() as session:
                 self.assertIsNone(session.get(Project, "proj-delete"))
                 self.assertEqual(

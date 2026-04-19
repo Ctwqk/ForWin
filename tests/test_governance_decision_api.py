@@ -283,25 +283,55 @@ class GovernanceDecisionApiTests(unittest.TestCase):
                 session.commit()
 
             review_payload = api_module.get_chapter_review(project_id, 1)
-            self.assertTrue(review_payload.decision_refs)
-            self.assertTrue(
-                {"review_verdict_recorded", "repair_succeeded", "canon_commit", "review_approved"}.issubset(
-                    {item.event_type for item in review_payload.decision_refs}
-                )
+            self.assertEqual(len(review_payload.decision_refs), 5)
+            self.assertEqual(
+                {item.event_type for item in review_payload.decision_refs},
+                {
+                    "review_verdict_recorded",
+                    "repair_started",
+                    "repair_succeeded",
+                    "canon_commit",
+                    "review_approved",
+                },
+            )
+            self.assertEqual(
+                {item.related_object_type for item in review_payload.decision_refs},
+                {"chapter_review", "chapter_rewrite_attempt"},
             )
 
             checkpoint_payload = api_module.get_band_checkpoint(project_id, "band-1")
-            self.assertTrue(
-                {"band_checkpoint_created", "band_checkpoint_overridden"}.issubset(
-                    {item.event_type for item in checkpoint_payload.decision_refs}
-                )
+            self.assertEqual(
+                {item.event_type for item in checkpoint_payload.decision_refs},
+                {"band_checkpoint_created", "band_checkpoint_overridden"},
             )
 
             events_payload = api_module.list_project_decision_events(
                 project_id,
                 causal_root_id=review_payload.decision_refs[0].causal_root_id,
             )
-            self.assertTrue(all(item.causal_root_id == events_payload.items[0].causal_root_id for item in events_payload.items))
+            self.assertEqual(len(events_payload.items), 9)
+            self.assertEqual(
+                {item.event_type for item in events_payload.items},
+                {
+                    "continue_requested",
+                    "review_verdict_recorded",
+                    "repair_started",
+                    "repair_succeeded",
+                    "canon_commit",
+                    "review_approved",
+                    "band_checkpoint_created",
+                    "band_checkpoint_overridden",
+                    "hard_gate_hit",
+                },
+            )
+            self.assertEqual(
+                {item.causal_root_id for item in events_payload.items},
+                {events_payload.items[0].causal_root_id},
+            )
+            self.assertEqual(
+                {item.task_id for item in events_payload.items},
+                {"task-governance-1"},
+            )
 
             replay = api_module.get_project_causal_replay(
                 project_id,
@@ -311,17 +341,66 @@ class GovernanceDecisionApiTests(unittest.TestCase):
             self.assertIsNotNone(replay.root_event)
             assert replay.root_event is not None
             self.assertEqual(replay.root_event.event_type, "continue_requested")
-            self.assertTrue(any(item.event_type == "band_checkpoint_overridden" for item in replay.timeline))
-            self.assertTrue(replay.linked_review_refs)
-            self.assertTrue(replay.linked_checkpoint_refs)
+            self.assertEqual(len(replay.timeline), 9)
+            self.assertEqual(
+                {item.event_type for item in replay.timeline},
+                {
+                    "continue_requested",
+                    "review_verdict_recorded",
+                    "repair_started",
+                    "repair_succeeded",
+                    "canon_commit",
+                    "review_approved",
+                    "band_checkpoint_created",
+                    "band_checkpoint_overridden",
+                    "hard_gate_hit",
+                },
+            )
+            self.assertEqual(
+                {item.event_type for item in replay.linked_review_refs},
+                {
+                    "review_verdict_recorded",
+                    "repair_started",
+                    "canon_commit",
+                    "review_approved",
+                },
+            )
+            self.assertEqual(
+                {item.event_type for item in replay.linked_checkpoint_refs},
+                {"band_checkpoint_created", "band_checkpoint_overridden"},
+            )
 
             insights = api_module.get_project_governance_insights(project_id)
-            self.assertTrue(any(item["name"] == "band_checkpoint_override" for item in insights.top_override_rule_types))
-            self.assertTrue(any(item["name"] == "人工认为该 warn 可接受" for item in insights.top_override_reasons))
-            self.assertTrue(any(item["name"] == "band_checkpoint_warn" for item in insights.most_common_blocking_reasons))
-            self.assertTrue(any(item["name"] == "warn" for item in insights.recent_band_checkpoint_distribution))
-            self.assertTrue(insights.recommended_adjustments)
-            self.assertTrue(insights.recent_examples)
+            self.assertEqual(
+                insights.top_override_rule_types,
+                [{"name": "band_checkpoint_override", "count": 1}],
+            )
+            self.assertEqual(
+                insights.top_override_reasons,
+                [{"name": "人工认为该 warn 可接受", "count": 1}],
+            )
+            self.assertEqual(
+                insights.most_common_blocking_reasons,
+                [{"name": "band_checkpoint_warn", "count": 2}],
+            )
+            self.assertEqual(
+                insights.recent_band_checkpoint_distribution,
+                [{"name": "warn", "count": 1}],
+            )
+            self.assertEqual(
+                {
+                    (item["type"], item["target"], item["count"])
+                    for item in insights.recommended_adjustments
+                },
+                {
+                    ("review_constraint_quality", "next_band_compatibility", 1),
+                    ("review_fact_conflict_rules", "fact_conflict", 2),
+                },
+            )
+            self.assertEqual(
+                {item["event_type"] for item in insights.recent_examples},
+                {"band_checkpoint_overridden", "review_approved", "hard_gate_hit"},
+            )
 
     def test_reason_is_required_for_governance_actions(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -665,13 +744,46 @@ class GovernanceDecisionApiTests(unittest.TestCase):
             self.assertEqual(archived.status, "inactive")
 
             events = api_module.list_project_decision_events(project_id, related_object_id=constraint.id)
-            event_types = {event.event_type for event in events.items}
-            self.assertIn("constraint_created", event_types)
-            self.assertIn("constraint_archived", event_types)
+            self.assertEqual(
+                {
+                    (
+                        event.event_type,
+                        event.scope,
+                        event.reason,
+                        event.related_object_type,
+                    )
+                    for event in events.items
+                },
+                {
+                    (
+                        "constraint_created",
+                        "project",
+                        "人工声明未来可用性",
+                        "narrative_constraint",
+                    ),
+                    (
+                        "constraint_archived",
+                        "project",
+                        "约束已过期",
+                        "narrative_constraint",
+                    ),
+                },
+            )
 
             replay = api_module.get_project_causal_replay(project_id, scope="arc", arc_id=arc_id)
-            self.assertTrue(replay.timeline)
-            self.assertTrue(any(event.band_id == "band-arc" for event in replay.timeline))
+            self.assertIsNotNone(replay.root_event)
+            assert replay.root_event is not None
+            self.assertEqual(replay.root_event.event_type, "run_started")
+            self.assertEqual(
+                [
+                    (event.event_type, event.scope, event.band_id, event.chapter_number)
+                    for event in replay.timeline
+                ],
+                [
+                    ("run_started", "band", "band-arc", 1),
+                    ("canon_commit", "chapter", "band-arc", 2),
+                ],
+            )
 
 
 if __name__ == "__main__":

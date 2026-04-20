@@ -50,13 +50,19 @@ services:
       - FORWIN_EXTENSION_NO_SANDBOX=${FORWIN_EXTENSION_NO_SANDBOX:-auto}
       - FORWIN_EXTENSION_TEST_REMOTE_DEBUGGING_PORT=${FORWIN_EXTENSION_TEST_REMOTE_DEBUGGING_PORT:-9222}
       - FORWIN_EXTENSION_TEST_REMOTE_DEBUGGING_ADDRESS=${FORWIN_EXTENSION_TEST_REMOTE_DEBUGGING_ADDRESS:-0.0.0.0}
+      - FORWIN_EXTENSION_STARTUP_HEARTBEAT_TIMEOUT_SECONDS=${FORWIN_EXTENSION_STARTUP_HEARTBEAT_TIMEOUT_SECONDS:-75}
+      - FORWIN_PUBLISHER_HEARTBEAT_STALE_SECONDS=${FORWIN_PUBLISHER_HEARTBEAT_STALE_SECONDS:-90}
     volumes:
       - forwin-data:/app/data
     ports:
       - "${FORWIN_EXTENSION_DEBUG_BIND:-127.0.0.1:9222}:9222"
     shm_size: "1gb"
     healthcheck:
-      test: ["CMD", "python", "scripts/qualify_linux_extension_profile.py", "--check"]
+      test:
+        [
+          "CMD-SHELL",
+          "python scripts/qualify_linux_extension_profile.py --check && python scripts/check_publisher_browser_heartbeat.py",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3

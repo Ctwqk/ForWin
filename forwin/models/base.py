@@ -60,6 +60,9 @@ def get_session_factory(engine: Engine) -> sessionmaker[Session]:
 
 def init_db(engine: Engine) -> None:
     """Create all tables defined in the metadata."""
+    # Ensure every model module is imported so metadata includes all tables.
+    from forwin import models as _models  # noqa: F401
+
     Base.metadata.create_all(engine)
     upgrade_db(engine)
 
@@ -1658,6 +1661,332 @@ def upgrade_db(engine: Engine) -> None:
             )
 
         migrations.append(MigrationSpec("decision_event_causality_v1", apply_decision_event_causality_v1))
+
+        def apply_subworld_control_v1(conn) -> None:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS sub_worlds (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        origin_arc_id TEXT NULL,
+                        parent_subworld_id TEXT NULL,
+                        name TEXT NOT NULL DEFAULT '',
+                        purpose TEXT NOT NULL DEFAULT '',
+                        scope TEXT NOT NULL DEFAULT 'arc_local',
+                        status TEXT NOT NULL DEFAULT 'active',
+                        introduced_at_chapter INTEGER NOT NULL DEFAULT 0,
+                        retired_at_chapter INTEGER NULL,
+                        metadata_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_sub_worlds_project_status
+                    ON sub_worlds(project_id, status)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_sub_worlds_project_scope
+                    ON sub_worlds(project_id, scope)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_sub_worlds_project_origin_arc
+                    ON sub_worlds(project_id, origin_arc_id)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS sub_world_roster_items (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        subworld_id TEXT NOT NULL,
+                        entity_id TEXT NULL,
+                        entity_kind TEXT NOT NULL DEFAULT 'character',
+                        display_name TEXT NOT NULL DEFAULT '',
+                        slot_key TEXT NOT NULL DEFAULT '',
+                        role_hint TEXT NOT NULL DEFAULT '',
+                        description TEXT NOT NULL DEFAULT '',
+                        is_core INTEGER NOT NULL DEFAULT 0,
+                        status TEXT NOT NULL DEFAULT 'planned_slot',
+                        activation_chapter INTEGER NOT NULL DEFAULT 0,
+                        metadata_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id),
+                        FOREIGN KEY(subworld_id) REFERENCES sub_worlds(id),
+                        FOREIGN KEY(entity_id) REFERENCES entities(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_sub_world_roster_project_subworld
+                    ON sub_world_roster_items(project_id, subworld_id)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_sub_world_roster_project_status
+                    ON sub_world_roster_items(project_id, status)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_sub_world_roster_project_display
+                    ON sub_world_roster_items(project_id, display_name)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_sub_world_roster_project_slot
+                    ON sub_world_roster_items(project_id, slot_key)
+                    """
+                )
+            )
+
+            projects = conn.execute(text("SELECT id FROM projects")).mappings().all()
+            for project in projects:
+                project_id = str(project["id"])
+                global_row = conn.execute(
+                    text(
+                        """
+                        SELECT id
+                        FROM sub_worlds
+                        WHERE project_id = :project_id
+                          AND scope = 'global_core'
+                        ORDER BY created_at ASC, id ASC
+                        LIMIT 1
+                        """
+                    ),
+                    {"project_id": project_id},
+                ).mappings().first()
+                if global_row is None:
+                    global_id = new_id()
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO sub_worlds(
+                                id, project_id, origin_arc_id, parent_subworld_id,
+                                name, purpose, scope, status, introduced_at_chapter,
+                                retired_at_chapter, metadata_json, created_at, updated_at
+                            ) VALUES (
+                                :id, :project_id, NULL, NULL,
+                                :name, :purpose, 'global_core', 'active', 0,
+                                NULL, '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                            )
+                            """
+                        ),
+                        {
+                            "id": global_id,
+                            "project_id": project_id,
+                            "name": "global_core",
+                            "purpose": "项目级核心常驻角色池",
+                        },
+                    )
+                else:
+                    global_id = str(global_row["id"])
+
+                rostered_entity_ids = {
+                    str(row["entity_id"])
+                    for row in conn.execute(
+                        text(
+                            """
+                            SELECT entity_id
+                            FROM sub_world_roster_items
+                            WHERE project_id = :project_id
+                              AND entity_id IS NOT NULL
+                            """
+                        ),
+                        {"project_id": project_id},
+                    ).mappings().all()
+                    if str(row["entity_id"] or "").strip()
+                }
+                active_characters = conn.execute(
+                    text(
+                        """
+                        SELECT id, name, description
+                        FROM entities
+                        WHERE project_id = :project_id
+                          AND kind = 'character'
+                          AND is_active = 1
+                        """
+                    ),
+                    {"project_id": project_id},
+                ).mappings().all()
+                for entity in active_characters:
+                    entity_id = str(entity["id"])
+                    if entity_id in rostered_entity_ids:
+                        continue
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO sub_world_roster_items(
+                                id, project_id, subworld_id, entity_id, entity_kind,
+                                display_name, slot_key, role_hint, description,
+                                is_core, status, activation_chapter, metadata_json,
+                                created_at, updated_at
+                            ) VALUES (
+                                :id, :project_id, :subworld_id, :entity_id, 'character',
+                                :display_name, '', '', :description,
+                                1, 'seeded_named', 0, '{}',
+                                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                            )
+                            """
+                        ),
+                        {
+                            "id": new_id(),
+                            "project_id": project_id,
+                            "subworld_id": global_id,
+                            "entity_id": entity_id,
+                            "display_name": str(entity["name"] or ""),
+                            "description": str(entity["description"] or ""),
+                        },
+                    )
+
+        migrations.append(MigrationSpec("subworld_control_v1", apply_subworld_control_v1))
+
+        def apply_book_genesis_v1(conn) -> None:
+            def _column_names(table_name: str) -> set[str]:
+                rows = conn.execute(text(f"PRAGMA table_info({table_name})")).mappings().all()
+                return {str(row["name"]) for row in rows}
+
+            project_columns = _column_names("projects")
+            if "creation_status" not in project_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE projects
+                        ADD COLUMN creation_status TEXT NOT NULL DEFAULT 'legacy'
+                        """
+                    )
+                )
+            if "active_genesis_revision_id" not in project_columns:
+                conn.execute(
+                    text(
+                        """
+                        ALTER TABLE projects
+                        ADD COLUMN active_genesis_revision_id TEXT NOT NULL DEFAULT ''
+                        """
+                    )
+                )
+
+            arc_columns = _column_names("arc_plan_versions")
+            for column_name, ddl in (
+                ("arc_number", "ALTER TABLE arc_plan_versions ADD COLUMN arc_number INTEGER NOT NULL DEFAULT 1"),
+                ("chapter_start", "ALTER TABLE arc_plan_versions ADD COLUMN chapter_start INTEGER NOT NULL DEFAULT 1"),
+                ("chapter_end", "ALTER TABLE arc_plan_versions ADD COLUMN chapter_end INTEGER NOT NULL DEFAULT 0"),
+                (
+                    "planned_target_size",
+                    "ALTER TABLE arc_plan_versions ADD COLUMN planned_target_size INTEGER NOT NULL DEFAULT 0",
+                ),
+                (
+                    "planned_soft_min",
+                    "ALTER TABLE arc_plan_versions ADD COLUMN planned_soft_min INTEGER NOT NULL DEFAULT 0",
+                ),
+                (
+                    "planned_soft_max",
+                    "ALTER TABLE arc_plan_versions ADD COLUMN planned_soft_max INTEGER NOT NULL DEFAULT 0",
+                ),
+            ):
+                if column_name not in arc_columns:
+                    conn.execute(text(ddl))
+
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS book_genesis_revisions (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        revision INTEGER NOT NULL DEFAULT 1,
+                        based_on_revision_id TEXT NOT NULL DEFAULT '',
+                        status TEXT NOT NULL DEFAULT 'draft',
+                        pack_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_book_genesis_revisions_project_created
+                    ON book_genesis_revisions(project_id, created_at)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS prompt_traces (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        genesis_revision_id TEXT NOT NULL DEFAULT '',
+                        decision_event_id TEXT NOT NULL DEFAULT '',
+                        parent_trace_id TEXT NOT NULL DEFAULT '',
+                        trace_scope TEXT NOT NULL DEFAULT 'genesis',
+                        stage_key TEXT NOT NULL DEFAULT '',
+                        template_id TEXT NOT NULL DEFAULT '',
+                        template_version TEXT NOT NULL DEFAULT 'v1',
+                        effective_system_prompt TEXT NOT NULL DEFAULT '',
+                        prompt_layers_json TEXT NOT NULL DEFAULT '[]',
+                        input_snapshot_json TEXT NOT NULL DEFAULT '{}',
+                        model_profile_json TEXT NOT NULL DEFAULT '{}',
+                        attempts_json TEXT NOT NULL DEFAULT '[]',
+                        output_summary_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_prompt_traces_project_stage_created
+                    ON prompt_traces(project_id, stage_key, created_at)
+                    """
+                )
+            )
+
+            conn.execute(
+                text(
+                    """
+                    UPDATE projects
+                    SET creation_status = CASE
+                        WHEN COALESCE(creation_status, '') = '' THEN 'legacy'
+                        ELSE creation_status
+                    END
+                    """
+                )
+            )
+
+        migrations.append(MigrationSpec("book_genesis_v1", apply_book_genesis_v1))
 
         for migration in migrations:
             _run_migration(conn, migration.version, migration.apply_fn)

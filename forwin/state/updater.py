@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Optional
+from hashlib import md5
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +23,7 @@ from forwin.models import (
     ArcPlanVersion,
     BandCheckpoint,
     BandExperiencePlan,
+    BookGenesisRevision,
     CanonEvent,
     ChapterDraft,
     ChapterPlan,
@@ -37,8 +39,11 @@ from forwin.models import (
     PlotThread,
     PlotThreadBeat,
     Project,
+    PromptTrace,
     RelationEdge,
     StoryTimePoint,
+    SubWorld,
+    SubWorldRosterItem,
     new_id,
 )
 from forwin.protocol import (
@@ -57,6 +62,13 @@ from .query_helpers import load_latest_entity_states
 from .schema import prepare_state_change, validate_state_payload
 
 logger = logging.getLogger(__name__)
+
+_SUBWORLD_NAME_SURNAMES = (
+    "沈", "顾", "林", "陆", "苏", "许", "周", "谢", "秦", "江", "宋", "裴", "陈", "白",
+)
+_SUBWORLD_NAME_GIVEN = (
+    "临川", "知遥", "明序", "清和", "宴秋", "昭宁", "星野", "景川", "怀瑾", "时雨", "砚书", "听澜",
+)
 
 
 class StateUpdater:
@@ -82,6 +94,9 @@ class StateUpdater:
         setting_summary: str = "",
         target_total_chapters: int = 3,
         governance=None,
+        creation_status: str = "legacy",
+        active_genesis_revision_id: str = "",
+        automation_json: str = "{}",
     ) -> Project:
         """Create a new project and flush to the session."""
         resolved_governance = governance or new_project_governance()
@@ -92,6 +107,9 @@ class StateUpdater:
             genre=genre,
             setting_summary=setting_summary,
             target_total_chapters=max(1, int(target_total_chapters or 1)),
+            creation_status=str(creation_status or "legacy").strip() or "legacy",
+            active_genesis_revision_id=str(active_genesis_revision_id or "").strip(),
+            automation_json=str(automation_json or "{}"),
             governance_json=governance_to_json(resolved_governance),
         )
         self.session.add(project)
@@ -116,14 +134,27 @@ class StateUpdater:
         project_id: str,
         arc_synopsis: str,
         version: int = 1,
+        status: str = "active",
+        arc_number: int = 1,
+        chapter_start: int = 1,
+        chapter_end: int = 0,
+        planned_target_size: int = 0,
+        planned_soft_min: int = 0,
+        planned_soft_max: int = 0,
     ) -> ArcPlanVersion:
         """Create an arc plan version."""
         arc = ArcPlanVersion(
             id=new_id(),
             project_id=project_id,
             version=version,
+            arc_number=max(1, int(arc_number or 1)),
+            chapter_start=max(1, int(chapter_start or 1)),
+            chapter_end=max(0, int(chapter_end or 0)),
             arc_synopsis=arc_synopsis,
-            status="active",
+            planned_target_size=max(0, int(planned_target_size or 0)),
+            planned_soft_min=max(0, int(planned_soft_min or 0)),
+            planned_soft_max=max(0, int(planned_soft_max or 0)),
+            status=str(status or "active"),
         )
         self.session.add(arc)
         self.session.flush()
@@ -160,6 +191,66 @@ class StateUpdater:
         self.session.add(plan)
         self.session.flush()
         return plan
+
+    def create_book_genesis_revision(
+        self,
+        *,
+        project_id: str,
+        revision: int,
+        pack_json: str,
+        based_on_revision_id: str = "",
+        status: str = "draft",
+    ) -> BookGenesisRevision:
+        row = BookGenesisRevision(
+            id=new_id(),
+            project_id=project_id,
+            revision=max(1, int(revision or 1)),
+            based_on_revision_id=str(based_on_revision_id or "").strip(),
+            status=str(status or "draft").strip() or "draft",
+            pack_json=str(pack_json or "{}"),
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def save_prompt_trace(
+        self,
+        *,
+        project_id: str,
+        genesis_revision_id: str = "",
+        decision_event_id: str = "",
+        parent_trace_id: str = "",
+        trace_scope: str = "genesis",
+        stage_key: str = "",
+        template_id: str = "",
+        template_version: str = "v1",
+        effective_system_prompt: str = "",
+        prompt_layers_json: str = "[]",
+        input_snapshot_json: str = "{}",
+        model_profile_json: str = "{}",
+        attempts_json: str = "[]",
+        output_summary_json: str = "{}",
+    ) -> PromptTrace:
+        row = PromptTrace(
+            id=new_id(),
+            project_id=project_id,
+            genesis_revision_id=str(genesis_revision_id or "").strip(),
+            decision_event_id=str(decision_event_id or "").strip(),
+            parent_trace_id=str(parent_trace_id or "").strip(),
+            trace_scope=str(trace_scope or "genesis").strip() or "genesis",
+            stage_key=str(stage_key or "").strip(),
+            template_id=str(template_id or "").strip(),
+            template_version=str(template_version or "v1").strip() or "v1",
+            effective_system_prompt=str(effective_system_prompt or ""),
+            prompt_layers_json=str(prompt_layers_json or "[]"),
+            input_snapshot_json=str(input_snapshot_json or "{}"),
+            model_profile_json=str(model_profile_json or "{}"),
+            attempts_json=str(attempts_json or "[]"),
+            output_summary_json=str(output_summary_json or "{}"),
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
 
     def update_chapter_experience_plan(
         self,
@@ -241,6 +332,125 @@ class StateUpdater:
         self.session.add(es)
         self.session.flush()
         return es
+
+    def create_subworld(
+        self,
+        *,
+        project_id: str,
+        origin_arc_id: str | None,
+        parent_subworld_id: str | None,
+        name: str,
+        purpose: str,
+        scope: str,
+        status: str = "active",
+        introduced_at_chapter: int = 0,
+        retired_at_chapter: int | None = None,
+        metadata: dict | None = None,
+    ) -> SubWorld:
+        row = SubWorld(
+            id=new_id(),
+            project_id=project_id,
+            origin_arc_id=origin_arc_id,
+            parent_subworld_id=parent_subworld_id,
+            name=name,
+            purpose=purpose,
+            scope=scope,
+            status=status,
+            introduced_at_chapter=int(introduced_at_chapter or 0),
+            retired_at_chapter=retired_at_chapter,
+            metadata_json=json.dumps(metadata or {}, ensure_ascii=False),
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def create_roster_item(
+        self,
+        *,
+        project_id: str,
+        subworld_id: str,
+        entity_id: str | None,
+        entity_kind: str = "character",
+        display_name: str = "",
+        slot_key: str = "",
+        role_hint: str = "",
+        description: str = "",
+        is_core: bool = False,
+        status: str = "planned_slot",
+        activation_chapter: int = 0,
+        metadata: dict | None = None,
+    ) -> SubWorldRosterItem:
+        row = SubWorldRosterItem(
+            id=new_id(),
+            project_id=project_id,
+            subworld_id=subworld_id,
+            entity_id=entity_id,
+            entity_kind=entity_kind,
+            display_name=display_name,
+            slot_key=slot_key,
+            role_hint=role_hint,
+            description=description,
+            is_core=is_core,
+            status=status,
+            activation_chapter=int(activation_chapter or 0),
+            metadata_json=json.dumps(metadata or {}, ensure_ascii=False),
+        )
+        self.session.add(row)
+        self.session.flush()
+        return row
+
+    def materialize_roster_item(
+        self,
+        *,
+        roster_item_id: str,
+        chapter: int,
+    ) -> Entity:
+        roster_item = self.session.get(SubWorldRosterItem, roster_item_id)
+        if roster_item is None:
+            raise ValueError(f"Roster item {roster_item_id} not found.")
+        if roster_item.entity_kind != "character":
+            raise ValueError("Only character roster items can be materialized in v1.")
+
+        if roster_item.entity_id:
+            entity = self.session.get(Entity, roster_item.entity_id)
+            if entity is None:
+                raise ValueError(f"Roster item {roster_item_id} references missing entity.")
+            if roster_item.status == "planned_slot":
+                roster_item.status = "activated_named"
+            if not roster_item.activation_chapter:
+                roster_item.activation_chapter = int(chapter or 0)
+            self.session.add(roster_item)
+            self.session.flush()
+            return entity
+
+        display_name = str(roster_item.display_name or "").strip() or self._fallback_slot_name(
+            project_id=roster_item.project_id,
+            subworld_id=roster_item.subworld_id,
+            slot_key=roster_item.slot_key,
+            role_hint=roster_item.role_hint,
+        )
+        entity = self._repo.get_entities_by_names(
+            roster_item.project_id,
+            [display_name],
+        ).get(display_name)
+        if entity is not None and entity.kind != "character":
+            entity = None
+        if entity is None:
+            entity = self.create_entity(
+                project_id=roster_item.project_id,
+                kind="character",
+                name=display_name,
+                description=roster_item.description or roster_item.role_hint or "",
+                importance=7 if roster_item.is_core else 5,
+                chapter=int(chapter or 0),
+            )
+        roster_item.entity_id = entity.id
+        roster_item.display_name = entity.name
+        roster_item.status = "activated_named" if not roster_item.is_core else "seeded_named"
+        roster_item.activation_chapter = int(chapter or 0)
+        self.session.add(roster_item)
+        self.session.flush()
+        return entity
 
     # ------------------------------------------------------------------
     # Relations
@@ -335,7 +545,7 @@ class StateUpdater:
 
         For each change:
           1. Resolve entity_name to entity (via repo).
-          2. If not found, create a new entity with kind=change.entity_kind.
+          2. If not found, reject the change under strict subworld control.
           3. Get the latest EntityState for this entity.
           4. Parse state_json, update the specified field.
           5. Create a new EntityState with as_of_chapter=chapter_number.
@@ -354,6 +564,11 @@ class StateUpdater:
             entity = entity_lookup.get(change.entity_name)
 
             if entity is None:
+                if change.entity_kind == "character":
+                    raise ValueError(
+                        "State change references unknown or unapproved entity "
+                        f"'{change.entity_name}' in chapter {chapter_number}."
+                    )
                 logger.info(
                     "Entity '%s' not found; creating new %s entity.",
                     change.entity_name,
@@ -397,6 +612,20 @@ class StateUpdater:
                 as_of_chapter=chapter_number,
                 state_json=json.dumps(next_state, ensure_ascii=False),
             )
+
+    @staticmethod
+    def _fallback_slot_name(
+        *,
+        project_id: str,
+        subworld_id: str,
+        slot_key: str,
+        role_hint: str,
+    ) -> str:
+        payload = f"{project_id}:{subworld_id}:{slot_key}:{role_hint}".encode("utf-8")
+        digest = md5(payload).hexdigest()
+        surname = _SUBWORLD_NAME_SURNAMES[int(digest[:2], 16) % len(_SUBWORLD_NAME_SURNAMES)]
+        given = _SUBWORLD_NAME_GIVEN[int(digest[2:4], 16) % len(_SUBWORLD_NAME_GIVEN)]
+        return f"{surname}{given}"
 
     def apply_events(
         self,

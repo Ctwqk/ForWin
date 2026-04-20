@@ -1,0 +1,175 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]: ForWin Workspace
+        - heading "配置归配置，任务归任务。" [level=1] [ref=e6]
+        - paragraph [ref=e7]: 首页现在拆成书本、任务、配置三个视角。书本先进入 Genesis 创世，再启动写作；任务中心继续承接生成与上传执行流，配置页只保留模型与平台登录。
+      - generic [ref=e8]:
+        - link "高级发布页" [ref=e9] [cursor=pointer]:
+          - /url: /publishers
+        - button "扩展设置" [ref=e10] [cursor=pointer]
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - generic [ref=e13]:
+          - strong [ref=e14]: 系统状态
+          - generic [ref=e15]: 首页已加载。先看书本，再按需要进入任务中心。
+        - generic [ref=e16]:
+          - generic [ref=e17]: API Key：已保存
+          - generic [ref=e18]: 扩展回写：已配置
+      - generic [ref=e19]:
+        - button "书本" [ref=e20] [cursor=pointer]
+        - button "任务" [ref=e21] [cursor=pointer]
+        - button "配置" [ref=e22] [cursor=pointer]
+      - generic [ref=e23]:
+        - generic [ref=e24]:
+          - generic [ref=e27]:
+            - heading "书本管理" [level=2] [ref=e28]
+            - paragraph [ref=e29]: 这里看每本书的章节规划、已生成章节和已上传章节。建书和后续生成从这里发起。
+          - generic [ref=e30]:
+            - button "刷新" [ref=e31] [cursor=pointer]
+            - button "全选" [ref=e32] [cursor=pointer]
+            - button "批量删除" [disabled] [ref=e33]
+            - button "新建书本" [active] [ref=e34] [cursor=pointer]
+        - generic [ref=e35]:
+          - article [ref=e36]:
+            - generic [ref=e37]:
+              - generic [ref=e38]: 书本 · 00b889c433944991871d3edc6e2281a9
+              - generic [ref=e39]:
+                - checkbox "选择" [ref=e40]
+                - text: 选择
+            - generic [ref=e41]:
+              - generic [ref=e42]:
+                - strong [ref=e43]: 我的一本书dasdgasdf
+                - generic [ref=e44]: 玄幻 | 创建于 2026-04-16 19:05:52 PDT
+              - generic [ref=e45]:
+                - generic [ref=e46]: 目标 10 章
+                - generic [ref=e47]: 已规划 10
+                - generic [ref=e48]: 已生成 8
+                - generic [ref=e49]: 已上传 0
+            - generic [ref=e50]: Premise：核战后的世界陷入荒芜，人类在辐射中意外解开基因锁，异能者在这片土地上建立起新的文明。林明从废墟中崛起，收获美女同伴，走上人生巅峰。给人类打上基因锁的史前星际战争的胜利者，也即将归来 计划总章数：10 最近阶段：finale 节奏：关键线索长时间未推进；近期章节长度偏短 发布默认：fanqie · 平台已有书目，只传章节 已绑定平台：默认 fanqie（只传章节） 自动化：关闭
+            - generic [ref=e51]: 第8章 生成失败 · 第8章 第9章 已写入 Canon · 第9章 第10章 已写入 Canon · 第10章
+            - generic [ref=e52]:
+              - button "查看书本" [ref=e53] [cursor=pointer]
+              - button "发布到平台" [ref=e54] [cursor=pointer]
+              - button "继续生成剩余章节" [ref=e55] [cursor=pointer]
+              - button "删除书本" [ref=e56] [cursor=pointer]
+          - article [ref=e57]:
+            - generic [ref=e58]:
+              - generic [ref=e59]: 书本 · fd0167e660dc412eb340308c15523c5f
+              - generic [ref=e60]:
+                - checkbox "选择" [ref=e61]
+                - text: 选择
+            - generic [ref=e62]:
+              - generic [ref=e63]:
+                - strong [ref=e64]: 我的一本书dasdgasdf
+                - generic [ref=e65]: 玄幻 | 创建于 2026-04-16 00:07:40 PDT
+              - generic [ref=e66]:
+                - generic [ref=e67]: 目标 10 章
+                - generic [ref=e68]: 已规划 10
+                - generic [ref=e69]: 已生成 0
+                - generic [ref=e70]: 已上传 0
+            - generic [ref=e71]: Premise：核战后的世界陷入荒芜，人类在辐射中意外解开基因锁，异能者在这片土地上建立起新的文明。林明从废墟中崛起，收获美女同伴，走上人生巅峰。给人类打上基因锁的史前星际战争的胜利者，也即将归来 计划总章数：10 发布默认：fanqie · 平台已有书目，只传章节 已绑定平台：默认 fanqie（只传章节） 自动化：关闭
+            - generic [ref=e72]: 第8章 待生成正文 · 第8章 第9章 待生成正文 · 第9章 第10章 待生成正文 · 第10章
+            - generic [ref=e73]:
+              - button "查看书本" [ref=e74] [cursor=pointer]
+              - button "发布到平台" [disabled] [ref=e75]
+              - button "继续生成剩余章节" [ref=e76] [cursor=pointer]
+              - button "删除书本" [ref=e77] [cursor=pointer]
+  - generic [ref=e79]:
+    - generic [ref=e80]:
+      - generic [ref=e81]:
+        - heading "新建书本" [level=3] [ref=e82]
+        - paragraph [ref=e83]: 创建后会立即进入 Genesis 工作台，先敲定整本书的根蓝图，再决定何时启动写作。
+      - button "关闭" [ref=e84] [cursor=pointer]
+    - generic [ref=e85]:
+      - generic [ref=e86]:
+        - generic [ref=e87]: 书名
+        - textbox "书名" [ref=e88]:
+          - /placeholder: 例如：灰烬城的最后见习医师
+      - generic [ref=e89]:
+        - generic [ref=e90]: Genre
+        - textbox "Genre" [ref=e91]: 玄幻
+      - generic [ref=e92]:
+        - generic [ref=e93]: 总章节数
+        - spinbutton "总章节数" [ref=e94]: "3"
+      - generic [ref=e95]:
+        - generic [ref=e96]: 目标读者
+        - textbox "目标读者" [ref=e97]:
+          - /placeholder: 例如：男频 / 女频 / 泛读者
+      - generic [ref=e98]:
+        - generic [ref=e99]: 核心情绪
+        - textbox "核心情绪" [ref=e100]:
+          - /placeholder: 例如：压迫感、热血、悬疑、不安
+      - generic [ref=e101]:
+        - generic [ref=e102]: 核心爽点
+        - textbox "核心爽点" [ref=e103]:
+          - /placeholder: 例如：成长反杀、谜题揭示、权谋翻盘
+      - generic [ref=e104]:
+        - generic [ref=e105]: Premise / Prompt
+        - textbox "Premise / Prompt" [ref=e106]:
+          - /placeholder: 写清作品 premise、主角处境、冲突方向和你要的整体质感。
+      - generic [ref=e107]:
+        - generic [ref=e108]: Setting Summary
+        - textbox "Setting Summary" [ref=e109]:
+          - /placeholder: 可选。先填基础世界观和规则约束。
+      - generic [ref=e110]:
+        - generic [ref=e111]: 气质参考 / Inspiration Notes
+        - textbox "气质参考 / Inspiration Notes" [ref=e112]:
+          - /placeholder: 可选。写你想模仿的气质、节奏和表达方向，但不要直接照搬作品。
+      - generic [ref=e113]:
+        - generic [ref=e114]: 禁区 / Guardrails
+        - textbox "禁区 / Guardrails" [ref=e115]:
+          - /placeholder: 可选。写清不能碰的桥段、风格和设定边界。
+      - generic [ref=e116]:
+        - generic [ref=e117]: 绑定平台
+        - generic [ref=e118]:
+          - generic [ref=e119]:
+            - generic [ref=e120]:
+              - strong [ref=e121]: 平台 1 · 默认平台
+              - paragraph [ref=e122]: 用于自动发布和章节上传的默认预填值。
+            - generic [ref=e123]:
+              - generic [ref=e124]: 平台
+              - combobox "平台" [ref=e125]:
+                - option "暂不绑定平台" [selected]
+                - option "番茄小说"
+                - option "起点小说"
+            - generic [ref=e126]:
+              - generic [ref=e127]: 平台书目状态
+              - combobox "平台书目状态" [ref=e128]:
+                - option "平台已有书目，只创建章节" [selected]
+                - option "平台还没有书目，需要先建书"
+            - generic [ref=e129]:
+              - generic [ref=e130]: 平台作品名
+              - textbox "平台作品名" [ref=e131]:
+                - /placeholder: 默认与书名一致，可按平台作品名单独填写
+            - generic [ref=e132]:
+              - generic [ref=e133]: 默认上传页 URL
+              - textbox "默认上传页 URL" [ref=e134]:
+                - /placeholder: 可选。后续创建章节上传任务时会自动带上
+          - generic [ref=e135]:
+            - generic [ref=e136]:
+              - strong [ref=e137]: 平台 2 · 可选
+              - paragraph [ref=e138]: 可额外绑定第二个平台，后续手动上传时可直接切换使用。
+            - generic [ref=e139]:
+              - generic [ref=e140]: 平台
+              - combobox "平台" [ref=e141]:
+                - option "暂不绑定平台" [selected]
+                - option "番茄小说"
+                - option "起点小说"
+            - generic [ref=e142]:
+              - generic [ref=e143]: 平台书目状态
+              - combobox "平台书目状态" [ref=e144]:
+                - option "平台已有书目，只创建章节" [selected]
+                - option "平台还没有书目，需要先建书"
+            - generic [ref=e145]:
+              - generic [ref=e146]: 平台作品名
+              - textbox "平台作品名" [ref=e147]:
+                - /placeholder: 默认与书名一致，可按平台作品名单独填写
+            - generic [ref=e148]:
+              - generic [ref=e149]: 默认上传页 URL
+              - textbox "默认上传页 URL" [ref=e150]:
+                - /placeholder: 可选。后续创建章节上传任务时会自动带上
+    - generic [ref=e151]:
+      - button "取消" [ref=e152] [cursor=pointer]
+      - button "创建并进入创世" [ref=e153] [cursor=pointer]

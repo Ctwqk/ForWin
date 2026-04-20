@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from forwin.arc_sizing import ArcPolicyTier, policy_for_total_chapters
 from forwin.audience_metrics import derive_audience_trends
 from forwin.director.arc_director import ArcDirector
 from forwin.models import (
@@ -34,6 +35,8 @@ from forwin.protocol.experience import (
     ReaderPromise,
 )
 from forwin.protocol.trope_library import TROPE_TEMPLATE_LIBRARY, trope_templates_by_category
+from forwin.state.updater import StateUpdater
+from forwin.subworld_manager import SubWorldManager
 
 logger = logging.getLogger(__name__)
 
@@ -107,16 +110,6 @@ def _load_long_window_audience_trend_views(
 
 
 @dataclass(slots=True)
-class ArcPolicyTier:
-    name: str
-    ratio: float
-    min_size: int
-    max_size: int
-    soft_min_ratio: float
-    soft_max_ratio: float
-
-
-@dataclass(slots=True)
 class ArcStructureDraftData:
     phase_layout: list[str]
     key_beats: list[str]
@@ -159,31 +152,17 @@ class ProvisionalBandPreview:
     summary_lines: list[str]
 
 
-_ARC_POLICY_TIERS = [
-    ((1, 150), ArcPolicyTier("short", 0.18, 12, 24, 0.75, 1.25)),
-    ((151, 400), ArcPolicyTier("medium", 0.15, 16, 30, 0.65, 1.50)),
-    ((401, 800), ArcPolicyTier("long", 0.10, 20, 40, 0.55, 1.70)),
-    ((801, 10**9), ArcPolicyTier("ultra-long", 0.08, 24, 48, 0.50, 2.00)),
-]
-
-
-def policy_for_total_chapters(total_chapters: int) -> ArcPolicyTier:
-    total = max(1, int(total_chapters))
-    for (lower, upper), policy in _ARC_POLICY_TIERS:
-        if lower <= total <= upper:
-            return policy
-    return _ARC_POLICY_TIERS[0][1]
-
-
 class ArcEnvelopeManager:
     def __init__(
         self,
         *,
         director: ArcDirector | None = None,
         provisional_executor: Any | None = None,
+        subworld_manager: SubWorldManager | None = None,
     ) -> None:
         self.director = director
         self.provisional_executor = provisional_executor
+        self.subworld_manager = subworld_manager or SubWorldManager(director=director)
 
     def ensure_active_arc_resolution(
         self,
@@ -192,6 +171,11 @@ class ArcEnvelopeManager:
         project_id: str,
         activation_chapter: int = 1,
     ) -> ArcEnvelope | None:
+        self._activate_arc_for_chapter(
+            session=session,
+            project_id=project_id,
+            chapter_number=activation_chapter,
+        )
         active_arc = session.execute(
             select(ArcPlanVersion)
             .where(
@@ -203,6 +187,12 @@ class ArcEnvelopeManager:
         ).scalar_one_or_none()
         if active_arc is None:
             return None
+
+        self.subworld_manager.ensure_registry(session, project_id)
+        self.subworld_manager.ensure_initial_registry_for_active_arc(
+            session=session,
+            project_id=project_id,
+        )
 
         existing = session.execute(
             select(ArcEnvelope)
@@ -258,24 +248,33 @@ class ArcEnvelopeManager:
             .where(ChapterPlan.arc_plan_id == active_arc.id)
             .order_by(ChapterPlan.chapter_number.asc())
         ).scalars().all()
+        project = session.get(Project, project_id)
+        if project is None:
+            return None
         total_chapter_count = int(
-            session.execute(
+            getattr(project, "target_total_chapters", 0)
+            or session.execute(
                 select(func.count(ChapterPlan.id)).where(ChapterPlan.project_id == project_id)
             ).scalar_one()
             or 0
         )
-        project = session.get(Project, project_id)
-        if project is None:
-            return None
 
         policy = policy_for_total_chapters(total_chapter_count)
-        base_target_size = _clamp_int(
-            total_chapter_count * policy.ratio,
-            policy.min_size,
-            policy.max_size,
-        )
-        base_soft_min = max(1, int(round(base_target_size * policy.soft_min_ratio)))
-        base_soft_max = max(base_target_size, int(round(base_target_size * policy.soft_max_ratio)))
+        persisted_target = max(0, int(getattr(active_arc, "planned_target_size", 0) or 0))
+        persisted_soft_min = max(0, int(getattr(active_arc, "planned_soft_min", 0) or 0))
+        persisted_soft_max = max(0, int(getattr(active_arc, "planned_soft_max", 0) or 0))
+        if persisted_target > 0:
+            base_target_size = persisted_target
+            base_soft_min = persisted_soft_min or max(1, int(round(base_target_size * policy.soft_min_ratio)))
+            base_soft_max = persisted_soft_max or max(base_target_size, int(round(base_target_size * policy.soft_max_ratio)))
+        else:
+            base_target_size = _clamp_int(
+                total_chapter_count * policy.ratio,
+                policy.min_size,
+                policy.max_size,
+            )
+            base_soft_min = max(1, int(round(base_target_size * policy.soft_min_ratio)))
+            base_soft_max = max(base_target_size, int(round(base_target_size * policy.soft_max_ratio)))
         provisional_target = _clamp_int(base_target_size * 0.40, 4, 12)
         provisional_band = chapter_plans[: provisional_target]
         band_id = f"band:1:{provisional_target}"
@@ -389,6 +388,48 @@ class ArcEnvelopeManager:
         )
         session.flush()
         return envelope
+
+    @staticmethod
+    def _activate_arc_for_chapter(
+        *,
+        session: Session,
+        project_id: str,
+        chapter_number: int,
+    ) -> ArcPlanVersion | None:
+        if int(chapter_number or 0) <= 0:
+            return None
+        chapter_plan = session.execute(
+            select(ChapterPlan)
+            .where(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number == int(chapter_number),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        if chapter_plan is None:
+            return None
+        target_arc = session.get(ArcPlanVersion, chapter_plan.arc_plan_id)
+        if target_arc is None or target_arc.status == "active":
+            return target_arc
+        active_rows = session.execute(
+            select(ArcPlanVersion)
+            .where(
+                ArcPlanVersion.project_id == project_id,
+                ArcPlanVersion.status == "active",
+            )
+        ).scalars().all()
+        for row in active_rows:
+            if row.id == target_arc.id:
+                continue
+            max_chapter = session.execute(
+                select(func.max(ChapterPlan.chapter_number)).where(ChapterPlan.arc_plan_id == row.id)
+            ).scalar_one()
+            row.status = "completed" if int(max_chapter or 0) < int(chapter_number) else "planned"
+            session.add(row)
+        target_arc.status = "active"
+        session.add(target_arc)
+        session.flush()
+        return target_arc
 
     def backfill_missing_resolutions(self, *, session: Session) -> int:
         project_ids = session.execute(
@@ -605,6 +646,7 @@ class ArcEnvelopeManager:
     ) -> None:
         if not chapter_plans:
             return
+        updater = StateUpdater(session)
         calibration = self._build_audience_calibration_profile(session=session, project_id=project_id)
         band_size = max(1, int(detailed_band_size or 1))
         current_index = max(0, activation_chapter - 1)
@@ -623,6 +665,20 @@ class ArcEnvelopeManager:
             structure=structure,
             active_band=active_band,
             calibration=calibration,
+        )
+        activation_plan = self.subworld_manager.plan_band_activation(
+            session=session,
+            updater=updater,
+            project_id=project_id,
+            chapter_start=band_start,
+            chapter_end=band_end,
+            active_band=active_band,
+        )
+        schedule = schedule.model_copy(
+            update={
+                "active_subworld_ids": activation_plan.active_subworld_ids,
+                "chapter_entry_targets": activation_plan.chapter_entry_targets,
+            }
         )
         session.query(BandExperiencePlan).filter(
             BandExperiencePlan.project_id == project_id,
@@ -648,6 +704,18 @@ class ArcEnvelopeManager:
                 schedule=schedule,
                 chapter_plan=plan,
                 calibration=calibration,
+            )
+            chapter_targets = [
+                item
+                for item in schedule.chapter_entry_targets
+                if item.chapter_hint == plan.chapter_number
+            ]
+            experience_plan = experience_plan.model_copy(
+                update={
+                    "active_subworld_ids": list(schedule.active_subworld_ids),
+                    "chapter_entry_targets": chapter_targets,
+                    "entity_admission_rule": "strict_named_character",
+                }
             )
             plan.experience_plan_json = json.dumps(
                 experience_plan.model_dump(mode="json"),

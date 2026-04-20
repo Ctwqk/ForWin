@@ -1,0 +1,306 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]: ForWin Workspace
+        - heading "配置归配置，任务归任务。" [level=1] [ref=e6]
+        - paragraph [ref=e7]: 首页现在拆成书本、任务、配置三个视角。书本先进入 Genesis 创世，再启动写作；任务中心继续承接生成与上传执行流，配置页只保留模型与平台登录。
+      - generic [ref=e8]:
+        - link "高级发布页" [ref=e9] [cursor=pointer]:
+          - /url: /publishers
+        - button "扩展设置" [ref=e10] [cursor=pointer]
+    - generic [ref=e11]:
+      - generic [ref=e12]:
+        - generic [ref=e13]:
+          - strong [ref=e14]: Genesis 工作台
+          - generic [ref=e15]: 角色 已创建。
+        - generic [ref=e16]:
+          - generic [ref=e17]: API Key：已保存
+          - generic [ref=e18]: 扩展回写：已配置
+      - generic [ref=e19]:
+        - button "书本" [ref=e20] [cursor=pointer]
+        - button "任务" [ref=e21] [cursor=pointer]
+        - button "配置" [ref=e22] [cursor=pointer]
+      - generic [ref=e23]:
+        - generic [ref=e24]:
+          - generic [ref=e27]:
+            - heading "书本管理" [level=2] [ref=e28]
+            - paragraph [ref=e29]: 这里看每本书的章节规划、已生成章节和已上传章节。建书和后续生成从这里发起。
+          - generic [ref=e30]:
+            - button "刷新" [ref=e31] [cursor=pointer]
+            - button "全选" [ref=e32] [cursor=pointer]
+            - button "批量删除" [disabled] [ref=e33]
+            - button "新建书本" [ref=e34] [cursor=pointer]
+        - generic [ref=e35]:
+          - article [ref=e394]:
+            - generic [ref=e395]:
+              - generic [ref=e396]: 书本 · ae5fae3602ea4bcd8d0b55108ac9928a
+              - generic [ref=e397]:
+                - checkbox "选择" [ref=e398]
+                - text: 选择
+            - generic [ref=e399]:
+              - generic [ref=e400]:
+                - strong [ref=e401]: Genesis 模型选择 UI 检查
+                - generic [ref=e402]: 玄幻 | 创建于 2026-04-20 02:20:23 PDT
+              - generic [ref=e403]:
+                - generic [ref=e404]: Genesis · creating
+                - generic [ref=e405]: 目标 12 章
+                - generic [ref=e406]: 已规划 0
+                - generic [ref=e407]: 已生成 0
+                - generic [ref=e408]: 已上传 0
+            - generic [ref=e409]: Premise：测试 Genesis AI 模型选择。 计划总章数：12 Genesis：0/6 已锁定 · 当前 创意简报 自动化：关闭
+            - generic [ref=e410]:
+              - button "创世工作台" [ref=e411] [cursor=pointer]
+              - button "发布到平台" [disabled] [ref=e412]
+              - button "继续创世" [ref=e413] [cursor=pointer]
+              - button "删除书本" [ref=e414] [cursor=pointer]
+          - article [ref=e415]:
+            - generic [ref=e416]:
+              - generic [ref=e417]: 书本 · 37599693f5ba460fb319f6dae81ce7f3
+              - generic [ref=e418]:
+                - checkbox "选择" [ref=e419]
+                - text: 选择
+            - generic [ref=e420]:
+              - generic [ref=e421]:
+                - strong [ref=e422]: 我的一本书dasdgasdf
+                - generic [ref=e423]: 玄幻 | 创建于 2026-04-20 00:55:53 PDT
+              - generic [ref=e424]:
+                - generic [ref=e425]: Genesis · creating
+                - generic [ref=e426]: 目标 3 章
+                - generic [ref=e427]: 已规划 0
+                - generic [ref=e428]: 已生成 0
+                - generic [ref=e429]: 已上传 0
+            - generic [ref=e430]: Premise：核战后的世界陷入荒芜，人类在辐射中意外解开基因锁，异能者在这片土地上建立起新的文明。林明从废墟中崛起，收获美女同伴，走上人生巅峰。给人类打上基因锁的史前星际战争的胜利者，也即将归来 计划总章数：3 Genesis：0/6 已锁定 · 当前 创意简报 自动化：关闭
+            - generic [ref=e431]:
+              - button "创世工作台" [ref=e432] [cursor=pointer]
+              - button "发布到平台" [disabled] [ref=e433]
+              - button "继续创世" [ref=e434] [cursor=pointer]
+              - button "删除书本" [ref=e435] [cursor=pointer]
+          - article [ref=e436]:
+            - generic [ref=e437]:
+              - generic [ref=e438]: 书本 · 197568e915d54933baf8f06f2ca63008
+              - generic [ref=e439]:
+                - checkbox "选择" [ref=e440]
+                - text: 选择
+            - generic [ref=e441]:
+              - generic [ref=e442]:
+                - strong [ref=e443]: 创世按钮回归测试-20章
+                - generic [ref=e444]: 玄幻 | 创建于 2026-04-20 00:51:42 PDT
+              - generic [ref=e445]:
+                - generic [ref=e446]: Genesis · creating
+                - generic [ref=e447]: 目标 20 章
+                - generic [ref=e448]: 已规划 0
+                - generic [ref=e449]: 已生成 0
+                - generic [ref=e450]: 已上传 0
+            - generic [ref=e451]: Premise：一个在末法都市收尸为生的少年，意外继承能够听见遗物低语的能力，被卷入四座巨城围绕古代天庭残骸展开的争夺。整体要有悬疑、成长、势力博弈和逐步揭开世界真相的感觉。 计划总章数：20 Genesis：0/6 已锁定 · 当前 创意简报 自动化：关闭
+            - generic [ref=e452]:
+              - button "创世工作台" [ref=e453] [cursor=pointer]
+              - button "发布到平台" [disabled] [ref=e454]
+              - button "继续创世" [ref=e455] [cursor=pointer]
+              - button "删除书本" [ref=e456] [cursor=pointer]
+          - article [ref=e457]:
+            - generic [ref=e458]:
+              - generic [ref=e459]: 书本 · 98c976c59a2344fbb38c7d81cd8f7e73
+              - generic [ref=e460]:
+                - checkbox "选择" [ref=e461]
+                - text: 选择
+            - generic [ref=e462]:
+              - generic [ref=e463]:
+                - strong [ref=e464]: 测试创世按钮
+                - generic [ref=e465]: 玄幻 | 创建于 2026-04-20 00:48:34 PDT
+              - generic [ref=e466]:
+                - generic [ref=e467]: Genesis · creating
+                - generic [ref=e468]: 目标 3 章
+                - generic [ref=e469]: 已规划 0
+                - generic [ref=e470]: 已生成 0
+                - generic [ref=e471]: 已上传 0
+            - generic [ref=e472]: Premise：一个倒霉的底层修士在废墟都市里捡到一枚会说话的骨戒，被迫卷入跨城阴谋。 计划总章数：3 Genesis：0/6 已锁定 · 当前 创意简报 自动化：关闭
+            - generic [ref=e473]:
+              - button "创世工作台" [ref=e474] [cursor=pointer]
+              - button "发布到平台" [disabled] [ref=e475]
+              - button "继续创世" [ref=e476] [cursor=pointer]
+              - button "删除书本" [ref=e477] [cursor=pointer]
+          - article [ref=e478]:
+            - generic [ref=e479]:
+              - generic [ref=e480]: 书本 · 00b889c433944991871d3edc6e2281a9
+              - generic [ref=e481]:
+                - checkbox "选择" [ref=e482]
+                - text: 选择
+            - generic [ref=e483]:
+              - generic [ref=e484]:
+                - strong [ref=e485]: 我的一本书dasdgasdf
+                - generic [ref=e486]: 玄幻 | 创建于 2026-04-16 19:05:52 PDT
+              - generic [ref=e487]:
+                - generic [ref=e488]: 目标 10 章
+                - generic [ref=e489]: 已规划 10
+                - generic [ref=e490]: 已生成 8
+                - generic [ref=e491]: 已上传 0
+            - generic [ref=e492]: Premise：核战后的世界陷入荒芜，人类在辐射中意外解开基因锁，异能者在这片土地上建立起新的文明。林明从废墟中崛起，收获美女同伴，走上人生巅峰。给人类打上基因锁的史前星际战争的胜利者，也即将归来 计划总章数：10 最近阶段：finale 节奏：关键线索长时间未推进；近期章节长度偏短 发布默认：fanqie · 平台已有书目，只传章节 已绑定平台：默认 fanqie（只传章节） 自动化：关闭
+            - generic [ref=e493]: 第8章 生成失败 · 第8章 第9章 已写入 Canon · 第9章 第10章 已写入 Canon · 第10章
+            - generic [ref=e494]:
+              - button "查看书本" [ref=e495] [cursor=pointer]
+              - button "发布到平台" [ref=e496] [cursor=pointer]
+              - button "继续生成剩余章节" [ref=e497] [cursor=pointer]
+              - button "删除书本" [ref=e498] [cursor=pointer]
+          - article [ref=e499]:
+            - generic [ref=e500]:
+              - generic [ref=e501]: 书本 · fd0167e660dc412eb340308c15523c5f
+              - generic [ref=e502]:
+                - checkbox "选择" [ref=e503]
+                - text: 选择
+            - generic [ref=e504]:
+              - generic [ref=e505]:
+                - strong [ref=e506]: 我的一本书dasdgasdf
+                - generic [ref=e507]: 玄幻 | 创建于 2026-04-16 00:07:40 PDT
+              - generic [ref=e508]:
+                - generic [ref=e509]: 目标 10 章
+                - generic [ref=e510]: 已规划 10
+                - generic [ref=e511]: 已生成 0
+                - generic [ref=e512]: 已上传 0
+            - generic [ref=e513]: Premise：核战后的世界陷入荒芜，人类在辐射中意外解开基因锁，异能者在这片土地上建立起新的文明。林明从废墟中崛起，收获美女同伴，走上人生巅峰。给人类打上基因锁的史前星际战争的胜利者，也即将归来 计划总章数：10 发布默认：fanqie · 平台已有书目，只传章节 已绑定平台：默认 fanqie（只传章节） 自动化：关闭
+            - generic [ref=e514]: 第8章 待生成正文 · 第8章 第9章 待生成正文 · 第9章 第10章 待生成正文 · 第10章
+            - generic [ref=e515]:
+              - button "查看书本" [ref=e516] [cursor=pointer]
+              - button "发布到平台" [disabled] [ref=e517]
+              - button "继续生成剩余章节" [ref=e518] [cursor=pointer]
+              - button "删除书本" [ref=e519] [cursor=pointer]
+  - generic [ref=e163]:
+    - generic [ref=e164]:
+      - generic [ref=e165]:
+        - heading "Book Genesis · Genesis 模型选择 UI 检查" [level=3] [ref=e166]
+        - paragraph [ref=e167]: 项目 ae5fae3602ea4bcd8d0b55108ac9928a | 状态：creating | Revision：4
+      - generic [ref=e168]:
+        - button "启动写作" [disabled] [ref=e169]
+        - button "关闭" [ref=e170] [cursor=pointer]
+    - generic [ref=e171]:
+      - button "创意简报 · todo" [ref=e520] [cursor=pointer]
+      - button "世界观与背景 · todo" [ref=e521] [cursor=pointer]
+      - button "地图与空间拓扑 · edited" [ref=e522] [cursor=pointer]
+      - button "角色势力与叙事引擎 · edited" [ref=e523] [cursor=pointer]
+      - button "整本书多 Arc 路线图 · todo" [ref=e524] [cursor=pointer]
+      - button "执行契约与启动交接 · todo" [ref=e525] [cursor=pointer]
+    - generic [ref=e178]:
+      - generic [ref=e179]:
+        - generic [ref=e181]:
+          - heading "角色势力与叙事引擎" [level=3] [ref=e340]
+          - paragraph [ref=e183]: 状态：edited | 锁定：否 | 更新：2026-04-20T10:14:06.241289+00:00
+        - generic [ref=e184]:
+          - generic [ref=e186]:
+            - heading "结构化属性" [level=3] [ref=e187]
+            - paragraph [ref=e188]: 你可以直接编辑字段，不需要只改 JSON。下方原始 JSON 仍然保留，作为最终真值和高级编辑入口。
+          - generic [ref=e189]:
+            - generic [ref=e526]:
+              - generic [ref=e527]: 关系轴
+              - textbox [ref=e528]
+              - generic [ref=e529]: 每行一条长期关系轴。
+            - generic [ref=e530]:
+              - generic [ref=e531]: 读者承诺
+              - textbox [ref=e532]
+              - generic [ref=e533]: 每行一条要持续兑现的读者承诺。
+            - generic [ref=e534]:
+              - generic [ref=e535]: 长期叙事引擎
+              - textbox [ref=e536]
+              - generic [ref=e537]: 每行一条长期推动线。
+        - generic [ref=e259]:
+          - generic [ref=e261]:
+            - heading "子项工作台" [level=3] [ref=e262]
+            - paragraph [ref=e263]: 世界观、地图与空间、角色与势力、Arc 蓝图阶段都支持选中单个目标，再只针对这个目标和 AI 对话改写。
+          - generic [ref=e264]:
+            - generic [ref=e265]:
+              - generic [ref=e266]: 子项类型
+              - combobox "子项类型" [ref=e267]:
+                - option "角色" [selected]
+                - option "势力"
+                - option "对手盘"
+            - generic [ref=e268]:
+              - generic [ref=e269]: 当前子项
+              - combobox "当前子项" [ref=e270]:
+                - option "新角色1"
+                - option "新角色2" [selected]
+          - generic [ref=e271]:
+            - button "新增子项" [active] [ref=e272] [cursor=pointer]
+            - button "删除选中子项" [ref=e273] [cursor=pointer]
+          - generic [ref=e274]: 当前目标：角色 · 新角色2
+          - generic [ref=e275]:
+            - generic [ref=e538]:
+              - generic [ref=e539]: 角色名
+              - textbox [ref=e540]: 新角色2
+            - generic [ref=e541]:
+              - generic [ref=e542]: 角色定位
+              - textbox [ref=e543]
+            - generic [ref=e544]:
+              - generic [ref=e545]: 欲望 / 目标
+              - textbox [ref=e546]
+            - generic [ref=e547]:
+              - generic [ref=e548]: 恐惧 / 风险
+              - textbox [ref=e549]
+            - generic [ref=e550]:
+              - generic [ref=e551]: 秘密
+              - textbox [ref=e552]
+            - generic [ref=e553]:
+              - generic [ref=e554]: 家乡所在子世界
+              - combobox [ref=e555]:
+                - option "未设置" [selected]
+                - option "新小地图1"
+            - generic [ref=e556]:
+              - generic [ref=e557]: 家乡所在地区
+              - combobox [ref=e558]:
+                - option "未设置" [selected]
+            - generic [ref=e559]:
+              - generic [ref=e560]: 家乡地点
+              - combobox [ref=e561]:
+                - option "未设置" [selected]
+            - generic [ref=e562]:
+              - generic [ref=e563]: 当前活动地区
+              - combobox [ref=e564]:
+                - option "未设置" [selected]
+            - generic [ref=e565]:
+              - generic [ref=e566]: 当前据点
+              - combobox [ref=e567]:
+                - option "未设置" [selected]
+            - generic [ref=e568]:
+              - generic [ref=e569]: 隶属势力
+              - combobox [ref=e570]:
+                - option "未设置" [selected]
+            - generic [ref=e571]:
+              - generic [ref=e572]: 隶属家族 / 宗派
+              - textbox [ref=e573]
+            - generic [ref=e574]:
+              - generic [ref=e575]: 势力归属
+              - textbox [ref=e576]: "[]"
+              - generic [ref=e577]: 行内标签：每行：势力名 | 关系 | 身份/阶位 | primary(true/false)
+          - generic [ref=e318]: "{ \"name\": \"新角色2\", \"role\": \"\", \"desire\": \"\", \"fear\": \"\", \"secret\": \"\", \"home_subworld\": \"\", \"home_region\": \"\", \"home_location\": \"\", \"current_region\": \"\", \"current_base\": \"\", \"affiliated_faction\": \"\", \"affiliated_family\": \"\", \"faction_memberships\": [] }"
+        - generic [ref=e212]:
+          - generic [ref=e214]:
+            - heading "最终 JSON / 高级编辑" [level=3] [ref=e215]
+            - paragraph [ref=e216]: 结构化字段改动会同步回这里；你仍然可以直接编辑 JSON。
+          - textbox [ref=e217]: "{ \"core_cast\": [ { \"name\": \"新角色1\", \"role\": \"\", \"desire\": \"\", \"fear\": \"\", \"secret\": \"\", \"home_subworld\": \"\", \"home_location\": \"\", \"current_base\": \"\", \"affiliated_faction\": \"\", \"affiliated_family\": \"\" }, { \"name\": \"新角色2\", \"role\": \"\", \"desire\": \"\", \"fear\": \"\", \"secret\": \"\", \"home_subworld\": \"\", \"home_region\": \"\", \"home_location\": \"\", \"current_region\": \"\", \"current_base\": \"\", \"affiliated_faction\": \"\", \"affiliated_family\": \"\", \"faction_memberships\": [] } ] }"
+        - generic [ref=e218]:
+          - generic [ref=e219]: AI 对话改写
+          - generic [ref=e220]:
+            - generic [ref=e221]: Model Profile
+            - combobox "Model Profile" [ref=e222]:
+              - option "MiniMax 默认 · 默认" [selected]
+              - option "Kimi 主账号"
+          - textbox "AI 对话改写" [ref=e223]:
+            - /placeholder: 像聊天一样告诉 AI 你想怎么改。可以改写整个阶段，也可以在选择子项后只改一个规则 / 历史 / 命名 / 禁区 / 小地图 / 角色 / 势力。
+          - generic [ref=e224]: 当前可定向改写：core_cast[1]
+          - generic [ref=e225]:
+            - button "改写当前阶段" [ref=e226] [cursor=pointer]
+            - button "改写选中子项" [ref=e227] [cursor=pointer]
+        - generic [ref=e228]:
+          - button "保存编辑" [ref=e229] [cursor=pointer]
+          - button "生成" [ref=e230] [cursor=pointer]
+          - button "重生" [ref=e231] [cursor=pointer]
+          - button "锁定阶段" [ref=e232] [cursor=pointer]
+      - generic [ref=e233]:
+        - article [ref=e234]:
+          - generic [ref=e235]: 阶段概览
+          - generic [ref=e236]: 阶段：角色势力与叙事引擎 状态：edited 锁定：否 更新时间：2026-04-20T10:14:06.241289+00:00 角色数量：2
+          - generic [ref=e237]: "{ \"core_cast\": [ { \"name\": \"新角色1\", \"role\": \"\", \"desire\": \"\", \"fear\": \"\", \"secret\": \"\", \"home_subworld\": \"\", \"home_location\": \"\", \"current_base\": \"\", \"affiliated_faction\": \"\", \"affiliated_family\": \"\" }, { \"name\": \"新角色2\", \"role\": \"\", \"desire\": \"\", \"fear\": \"\", \"secret\": \"\", \"home_subworld\": \"\", \"home_region\": \"\", \"home_location\": \"\", \"current_region\": \"\", \"current_base\": \"\", \"affiliated_faction\": \"\", \"affiliated_family\": \"\", \"faction_memberships\": [] } ] }"
+        - article [ref=e238]:
+          - generic [ref=e239]: Prompt Trace
+          - generic [ref=e578]: 当前阶段还没有 Prompt Trace。可以先点“生成”或“重生”。
+    - generic [ref=e242]:
+      - generic [ref=e243]: 根蓝图总览
+      - generic [ref=e244]: 还没有生成整本书蓝图。

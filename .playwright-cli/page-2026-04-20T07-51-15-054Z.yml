@@ -1,0 +1,31 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e5]: ForWin Workspace
+      - heading "配置归配置，任务归任务。" [level=1] [ref=e6]
+      - paragraph [ref=e7]: 首页现在拆成书本、任务、配置三个视角。书本先进入 Genesis 创世，再启动写作；任务中心继续承接生成与上传执行流，配置页只保留模型与平台登录。
+    - generic [ref=e8]:
+      - link "高级发布页" [ref=e9] [cursor=pointer]:
+        - /url: /publishers
+      - button "扩展设置" [ref=e10] [cursor=pointer]
+  - generic [ref=e11]:
+    - generic [ref=e12]:
+      - generic [ref=e13]:
+        - strong [ref=e14]: 系统状态
+        - generic [ref=e15]: 等待加载首页数据。
+      - generic [ref=e16]:
+        - generic [ref=e17]: API Key：已保存
+        - generic [ref=e18]: 扩展回写：已配置
+    - generic [ref=e19]:
+      - button "书本" [ref=e20] [cursor=pointer]
+      - button "任务" [ref=e21] [cursor=pointer]
+      - button "配置" [ref=e22] [cursor=pointer]
+    - generic [ref=e24]:
+      - generic [ref=e27]:
+        - heading "书本管理" [level=2] [ref=e28]
+        - paragraph [ref=e29]: 这里看每本书的章节规划、已生成章节和已上传章节。建书和后续生成从这里发起。
+      - generic [ref=e30]:
+        - button "刷新" [ref=e31] [cursor=pointer]
+        - button "全选" [ref=e32] [cursor=pointer]
+        - button "批量删除" [disabled] [ref=e33]
+        - button "新建书本" [ref=e34] [cursor=pointer]

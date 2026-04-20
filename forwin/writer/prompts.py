@@ -24,12 +24,23 @@ def _normalize_char_targets(
 
 
 def _story_basics_section(context: ChapterContextPack) -> str:
-    return (
-        "【故事基本信息】\n"
-        f"类型：{context.genre}\n"
-        f"前提：{context.premise}\n"
-        f"世界背景：{context.setting_summary}"
-    )
+    lines = [
+        "【故事基本信息】",
+        f"类型：{context.genre}",
+        f"前提：{context.premise}",
+        f"世界背景：{context.setting_summary}",
+    ]
+    if getattr(context, "genesis_context_refs", None):
+        revision_id = str(context.genesis_context_refs.get("genesis_revision_id", "") or "")
+        if revision_id:
+            lines.append(f"Genesis 根层版本：{revision_id}")
+    if getattr(context, "genesis_world_overview", ""):
+        lines.append(f"Genesis 世界总览：{context.genesis_world_overview}")
+    if getattr(context, "genesis_map_overview", ""):
+        lines.append(f"Genesis 地图总览：{context.genesis_map_overview}")
+    if getattr(context, "genesis_story_engine_summary", ""):
+        lines.append(f"Genesis 长线引擎：{context.genesis_story_engine_summary}")
+    return "\n".join(lines)
 
 
 def _chapter_plan_section(context: ChapterContextPack, title: str) -> str:
@@ -120,10 +131,49 @@ def _previous_summaries_section(context: ChapterContextPack, *, limit: int) -> s
 def _active_entities_section(context: ChapterContextPack, *, limit: int) -> str | None:
     if not context.active_entities:
         return None
-    return "【当前主要角色】\n" + "\n".join(
+    return "【当前允许命名角色】\n" + "\n".join(
         f"  · {item.name}：{item.description}"
         for item in context.active_entities[:limit]
     )
+
+
+def _subworld_control_section(context: ChapterContextPack) -> str | None:
+    if not any(
+        (
+            getattr(context, "active_subworlds", None),
+            getattr(context, "allowed_entities", None),
+            getattr(context, "chapter_entry_targets", None),
+            getattr(context, "entity_admission_rule", ""),
+        )
+    ):
+        return None
+    lines = ["【人物准入规则】"]
+    if context.active_subworlds:
+        lines.append(
+            "  · 当前激活 subworld："
+            + "、".join(item.name for item in context.active_subworlds if str(item.name or "").strip())
+        )
+    if context.allowed_entities:
+        lines.append(
+            "  · 当前允许直接使用的命名人物："
+            + "、".join(context.allowed_entities[:10])
+        )
+    if context.chapter_entry_targets:
+        lines.append("  · 本章允许首次引入的新人物：")
+        lines.extend(
+            f"    · 第{item.chapter_hint}章：{item.entity_name}（{item.role_hint or '新角色'}）"
+            for item in context.chapter_entry_targets[:4]
+        )
+    if context.entity_admission_rule:
+        lines.append(f"  · 准入模式：{context.entity_admission_rule}")
+    lines.extend(
+        [
+            "  · 规则1：命名人物只能使用允许名单里的名字。",
+            "  · 规则2：若要引入新命名人物，只能使用上面的 chapter_entry_targets。",
+            "  · 规则3：可以写无名泛称路人，但不要把无名角色写成新的专名人物。",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _active_threads_section(context: ChapterContextPack, *, limit: int) -> str | None:
@@ -280,6 +330,7 @@ def _scene_prompt_sections(
         _chapter_plan_section(context, plan_title),
         _previous_summaries_section(context, limit=previous_limit),
         _active_entities_section(context, limit=entity_limit),
+        _subworld_control_section(context),
         _active_threads_section(context, limit=thread_limit),
         _experience_overlay_section(context),
         _arc_envelope_section(context, compact=envelope_compact),
@@ -315,6 +366,7 @@ def build_single_chapter_draft_prompt(
         _chapter_plan_section(context, "本章计划"),
         _previous_summaries_section(context, limit=3),
         _active_entities_section(context, limit=6),
+        _subworld_control_section(context),
         _active_threads_section(context, limit=3),
         _experience_overlay_section(context),
         _arc_envelope_section(context, compact=False),
@@ -683,6 +735,15 @@ def build_lore_timeline_notes_extraction_prompt(
                     "evidence_refs": ["body:关键短语"],
                 }
             ],
+            "entity_mentions": [
+                {
+                    "entity_name": "角色名",
+                    "entity_kind": "character",
+                    "is_named": True,
+                    "is_on_stage": True,
+                    "evidence_refs": ["body:关键短语"],
+                }
+            ],
         },
         ensure_ascii=False,
         indent=2,
@@ -694,9 +755,10 @@ def build_lore_timeline_notes_extraction_prompt(
         "2. lore_candidates 只放可进入后续设定候选池的事实，不要写评价。\n"
         "3. timeline_hints 用来帮助下一章保持时间连续，不确定就返回空数组。\n"
         "4. writer_notes 是给下一章 writer 的短提示，不能改 canon。\n"
-        "5. evidence_refs 使用 body:短语 格式指向正文证据。\n"
-        "6. 没有对应内容就返回空数组。\n"
-        "7. 只输出 JSON。\n\n"
+        "5. entity_mentions 只记录正文中出现的命名实体，尤其是命名角色；泛称路人不要记为 is_named=true。\n"
+        "6. evidence_refs 使用 body:短语 格式指向正文证据。\n"
+        "7. 没有对应内容就返回空数组。\n"
+        "8. 只输出 JSON。\n\n"
         f"正文：\n{chapter_body}\n\n{schema}"
     )
     return [

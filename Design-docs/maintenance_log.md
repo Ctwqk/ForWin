@@ -9,6 +9,267 @@
 - 如果改动尚未部署到 `8899`，必须明确写“未部署原因”和“切换条件”。
 - 旧的专项日志可保留，但关键结论需要汇总到这里。
 
+## 2026-04-20
+
+### V2.9.2A 文化背景与命名体系骨架（culture profiles / culture refs）
+
+给 Genesis 根层补上“文化背景 -> 人名/地区名/地点名”命名体系骨架，并把地图、角色、势力对象接到同一套文化引用上，方便后续补真实文化母本与命名词库。
+
+关键变化：
+
+- `world_bible` 新增 `culture_profiles[]`，每项包含 `id / name / summary / inspiration / social_markers / aesthetic_keywords / character_name_style / region_name_style / location_name_style / *_examples / usage_notes`。
+- `世界观与背景` 阶段新增 `文化背景` 子项工作台；可以逐条编辑文化背景，而不是只靠一个 `naming_style` 字符串。
+- `map_atlas.submaps[] / regions[] / nodes[]` 新增可选 `culture_profile_id`；后续可把小世界、地区、地点挂到对应文化背景。
+- `story_engine.core_cast[] / factions[] / opposition[]` 新增可选 `culture_profile_id`，为角色名、势力名与地域命名风格预留绑定点。
+- Genesis world/map/story 生成 prompt 与 fallback 已同步扩到文化背景和文化引用；world/map/story normalize 路径会收口这些字段，避免结构漂移。
+
+验证：
+
+- `python3 -m py_compile forwin/book_genesis.py forwin/api_pages.py tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py`
+- `PYTHONPATH=. pytest -q tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py`
+
+结果：
+
+- `11 passed`
+
+部署状态：未部署到 `8899`。原因：本轮只完成本地结构搭建与回归，还没有重建 `forwin` 容器。切换条件：先确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`，再执行 `docker compose build forwin` 与 `docker compose up -d forwin`。
+
+### V2.9.2A 地区层与运行时地区草案（Genesis regions / 多势力归属 / runtime region drafts）
+
+把 Genesis 地图从 `submaps + nodes` 升级为 `submaps + regions + nodes` 三层结构，并让运行时新 subworld 能携带地区草案；同时补齐角色多势力归属与势力跨地区分布。
+
+关键变化：
+
+- `BookGenesisPack.map_atlas` 新增 `regions[]`，固定支持 `subworld_name / parent_region_id / level / kind / culture_traits / climate / terrain / controller_factions / resource_themes`；地区层级限制为最多两级。
+- Genesis 地图工作台改为 `小世界 / 地区 / 地点` 三类子项，`地点` 可挂地区；结构化表单继续与最终 JSON 并存，子项级 AI 改写新增支持 `regions[n]`。
+- `story_engine.core_cast[]` 新增 `home_region / current_region / faction_memberships[]`；`faction_memberships` 允许多势力归属，但只允许唯一 primary。
+- `story_engine.factions[]` 新增 `headquarters_region / footprint[]`；`story_engine.opposition[]` 新增 `base_region / backing_factions[]`，同时保留旧字段兼容投影。
+- Genesis map fallback / generate prompt 统一扩到 `regions[]`；story engine fallback / generate prompt 同步消费地区层，而不是只靠 subworld/location。
+- `SubWorldPlanItem` 新增 `region_seeds[]`；runtime 新 subworld 生成时现在会顺手给出最小地区脚手架，`SubWorldManager.apply_arc_delta()` 会把它们写入 `SubWorld.metadata_json.region_drafts`，并标记 `region_source=runtime_generated`、`region_promotion_state=draft`。
+- `assemble_context()` 现在会同时汇总 Genesis 正式地区和当前 active subworld 的 runtime region drafts，作为 `genesis_map_overview` 的一部分喂给 writer / reviewer。
+
+验证：
+
+- `python3 -m py_compile forwin/protocol/subworld.py forwin/director/arc_director.py forwin/subworld_manager.py forwin/book_genesis.py forwin/api_pages.py forwin/state/repo.py forwin/context/assembler.py tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py tests/test_subworld_control.py`
+- `PYTHONPATH=. pytest -q tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py tests/test_subworld_control.py`
+- `PYTHONPATH=. pytest -q tests/test_arc_execution_scoping.py tests/test_continue_project_orphan_review.py tests/test_phase05_regressions.py -k "create_project or continue_project or subworld"`
+- `curl -fsS http://127.0.0.1:8899/health`
+- `curl -fsS http://127.0.0.1:8899/api/tasks/active-generation-check`
+- `docker compose build forwin`
+- `docker compose up -d forwin`
+- Playwright headless live check on `http://127.0.0.1:8899/`
+  - 打开 Genesis 工作台，确认 `地图与空间拓扑` 阶段可切换到 `地区` 子项类型
+  - 确认 `地区` 子项工作台显示 `subworld_name / parent_region_id / level / kind / culture_traits / climate / terrain / controller_factions / resource_themes`
+  - 确认 `角色势力与叙事引擎` 阶段显示 `home_region / current_region / faction_memberships`
+
+结果：
+
+- `tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py tests/test_subworld_control.py`: `20 passed`
+- `tests/test_arc_execution_scoping.py tests/test_continue_project_orphan_review.py tests/test_phase05_regressions.py -k "create_project or continue_project or subworld"`: `9 passed, 121 deselected`
+- `GET /health`: `{"status":"ok"}`
+- live Genesis 页面已确认地区层与角色地区/多势力字段可见并可进入工作台
+
+部署状态：已部署到 `8899`。部署前确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`；部署后 `GET /health` 正常，Playwright live 检查确认 Genesis 地图工作台已经暴露 `地区` 子项类型，角色工作台已经暴露 `home_region / current_region / faction_memberships`。
+
+### V2.9.2 Genesis 结构化编辑补齐（属性表单 / 子世界属性 / 角色-势力-子世界关联）
+
+把 Genesis 工作台从“主要改 JSON”推进到“结构化属性编辑 + 最终 JSON 并存”，并补齐 `subworld` 的文化/气候/地形维度，以及角色/势力与子世界的显式关联字段。
+
+关键变化：
+
+- Genesis 每个阶段现在都先显示结构化字段表单，再显示“最终 JSON / 高级编辑”；结构化字段改动会同步回 JSON，用户不再只能直接改原始 JSON。
+- `世界观与背景` 阶段保留 `规则 / 历史 / 命名 / 禁区` 子项工作台，可按字段定向对话改写，不要求整段重生。
+- `地图与空间拓扑` 的 `submaps` 扩展 `culture_traits`、`climate`、`terrain`、`governing_power`、`resident_factions`、`resource_themes`；`nodes` 也新增 `parent_subworld` 与气候/地形/文化备注。
+- `角色势力与叙事引擎` 的角色、势力、对手盘补齐跨对象关联：角色支持 `home_subworld / home_location / current_base / affiliated_faction / affiliated_family`，势力支持 `base_subworld / base_location / territory_scope / culture_keywords`，对手盘支持 `base_subworld / base_location / backing_faction`。
+- `整本书多 Arc 路线图` 继续保留自动生成优先，同时开放 Arc 级结构化子项编辑；用户可选中单个 Arc 做局部改写，但不强制手工逐 Arc 编排。
+- Genesis 前端新增本地 draft 同步和阶段/子项双层结构化表单渲染；原始 JSON 仍然保留为最终真值视图与高级编辑入口。
+
+验证：
+
+- `python3 -m py_compile forwin/book_genesis.py forwin/api_pages.py tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py`
+- `PYTHONPATH=. pytest -q tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py`
+- `node --check /tmp/forwin_home_script_debug.js`
+- `curl -fsS http://127.0.0.1:8899/health`
+- `curl -fsS http://127.0.0.1:8899/api/tasks/active-generation-check`
+- `docker compose build forwin`
+- `docker compose up -d forwin`
+- Playwright headless live check on `http://127.0.0.1:8899/`
+  - 确认 Genesis 阶段属性表单可见
+  - 确认 `地图与空间拓扑` 可新增 `小地图 / 子世界` 并显示文化/气候/地形等字段
+  - 确认 `角色势力与叙事引擎` 显示角色与势力的子世界/归属关联字段
+  - 确认 `整本书多 Arc 路线图` 显示 Arc 级子项工作台
+
+结果：
+
+- `tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py`: `11 passed`
+- live Genesis 页面已确认结构化编辑可用；当前剩余 console error 为 `favicon.ico 404`，未影响 Genesis 流程
+
+部署状态：已部署到 `8899`。部署前确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`；部署后 `GET /health` 正常，Playwright live 流程确认 Genesis 阶段属性表单、子项工作台与最终 JSON 同时可用。
+
+### V2.9.2 Genesis 模型选择补齐（每个 AI 入口可选 profile）
+
+Genesis 工作台里的 AI 入口补齐模型选择，避免阶段生成/重生/对话改写继续偷用默认模型。
+
+关键变化：
+
+- `生成`、`重生`、`改写当前阶段`、`改写选中子项` 统一支持 `model_profile_id`，Genesis 工作台新增共享 `Model Profile` 下拉。
+- Genesis API 新增阶段运行请求体；后端会按所选 profile 构建临时 runtime config，而不是继续隐式吃默认模型。
+- `PromptTrace.model_profile` 现在额外记录 `profile_id` / `profile_name`，Trace 面板可直接看到这次用了哪条模型配置。
+- 回归新增：验证 Genesis 阶段生成会吃到选中的 profile，并把 profile 信息持久化到 trace；页面渲染也校验 Genesis 模型选择控件存在。
+
+验证：
+
+- `python3 -m py_compile forwin/api.py forwin/api_schemas.py forwin/book_genesis.py forwin/api_pages.py tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py`
+- `PYTHONPATH=. pytest -q tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py`
+- `curl -fsS http://127.0.0.1:8899/api/tasks/active-generation-check`
+- `docker compose build forwin`
+- `docker compose up -d forwin`
+- `curl -fsS http://127.0.0.1:8899/health`
+- Playwright live 检查 `/?workspace=genesis&project_id=...`，确认 Genesis 工作台已显示 `Model Profile` 下拉
+
+部署状态：已部署到 `8899`。部署前确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`；本轮本地回归 `10 passed`，live Genesis 页面已确认模型选择控件存在。
+
+### V2.9.2 Genesis 交互补强（世界观子项工作台 / Arc 蓝图自动生成口径）
+
+把 Genesis 工作台从“地图/角色支持子项对话改写”继续扩到 `WorldBible`，同时明确 `BookArcBlueprint` 仍然沿用自动生成优先、手动编辑可选的产品边界。
+
+关键变化：
+
+- `世界观与背景` 阶段新增 4 个可选子目标：`规则`、`历史`、`命名`、`禁区`；可选中单个目标并通过 AI 对话只改该字段。
+- Genesis 子项工作台从“只支持数组对象”扩成“同时支持单字段目标”；地图/角色/势力原有子项工作流保持不变。
+- `BookGenesisService.refine_stage()` 对 `target_path` 不再只接受 dict 子对象；现在支持标量与数组字段，采用 `{ "value": ... }` 包装协议定向改写。
+- 前端在空的 `world_bible` 上直接点“改写选中子项”时，会先把默认模板同步进当前阶段 JSON，再发起 AI refine，避免 `target_path` 因字段不存在而失败。
+- `整本书多 Arc 路线图` 阶段补了明确文案：默认保留自动生成逻辑，用户可选手改 JSON 或对整阶段发指令调整，不强制拆成手工逐 Arc 编辑。
+
+验证：
+
+- `python3 -m py_compile forwin/api_pages.py forwin/book_genesis.py tests/test_api_pages_rendering.py tests/test_book_genesis_flow.py`
+- `PYTHONPATH=. pytest -q tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py`
+- Playwright headless live check on `http://127.0.0.1:8899/`
+  - 确认 `世界观与背景` 显示 `规则/历史/命名/禁区`
+  - 确认 `整本书多 Arc 路线图` 显示“Arc 蓝图默认沿用自动生成逻辑”
+
+部署状态：已部署到 `8899`。部署前确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`；部署后 `curl -fsS http://127.0.0.1:8899/health` 正常，`docker compose ps forwin` 为 `healthy`。
+
+## 2026-04-19
+
+### Linux 发布浏览器恢复在线（Chromium 切换 / 脏 profile 自愈 / preferred client 心跳恢复）
+
+修复后端 Linux 发布浏览器长期不 heartbeat 的根因，并把恢复逻辑做成启动期自愈。
+
+关键变化：
+
+- 根因定位为两段叠加：
+  - 旧的 Linux profile 曾在不支持命令行开发扩展的浏览器态下把 `ForWin Publisher Bridge` 标成 `DISABLED + unsupportedDeveloperExtension`
+  - 后续即使启动链、API key、backend URL 正确，也会持续复用这份坏 profile，导致扩展 worker 永远不启动、preferred client 不 heartbeat
+- `publisher-browser` 镜像改装系统 `chromium`，启动脚本优先使用 `/usr/bin/chromium`，不再依赖 Playwright 自带浏览器作为 Linux 发布浏览器主执行体。
+- `launch_linux_extension_browser.sh` 新增 profile 自愈：首次 heartbeat 失败时，自动清空脏 profile、重新 qualify、再启动一次；从而把历史残留的坏 profile 自动修复掉。
+- 命令行扩展加载统一补 `--enable-unsafe-extension-debugging`，并同步到 profile qualifier / probe 脚本，避免调试链与主链参数再分叉。
+
+验证：
+
+- `bash -n scripts/launch_linux_extension_browser.sh`
+- `python3 -m py_compile scripts/qualify_linux_extension_profile.py scripts/plugin_publish_probe.py scripts/fanqie_editor_probe.py scripts/fanqie_card_probe.py`
+- `docker compose build publisher-browser`
+- 调试验证：
+  - 用旧 profile 启动时，`chrome://extensions` 显示扩展 `state=DISABLED`、`unsupportedDeveloperExtension=true`
+  - 用 fresh profile + system `chromium` 启动时，preferred client `b361cd2a-fce3-4733-8636-de64d82db066` 成功恢复 recent heartbeat
+- 部署验证：
+  - `docker compose up -d publisher-browser`
+  - `docker compose logs --tail=120 publisher-browser`
+  - `docker compose ps forwin publisher-browser`
+  - 容器内查询 `/app/data/novel.db`，确认 `b361...` 的 `extension_version=0.1.17`、`backend_base_url=http://forwin:8899`、`last_heartbeat_at` 为最新，且 `fanqie/qidian` 两个平台 `connected=1`
+
+部署状态：已部署到 `8899`。当前 `forwin` 与 `publisher-browser` 都是 `healthy`；Linux 侧 preferred client `b361cd2a-fce3-4733-8636-de64d82db066` 已恢复在线并接管双平台心跳。
+
+### V2.9.2 Book Genesis 根层前置化（设计与代码前推，未部署）
+
+把“创建书本”从空壳项目创建，前推为 Genesis 根层工作流；当前主干统一规格已从 `V2.9.1` 前推到 `V2.9.2`。
+
+关键变化：
+
+- `Project` 新增 `creation_status` 与 `active_genesis_revision_id`；新增 `BookGenesisRevision` 与 `PromptTrace` 真值表，Genesis 根层以 `BookGenesisPack` 版本化保存。
+- `POST /api/projects` 改为新建即进入 `creating`，直接创建 Genesis revision；新增 Genesis API：读取、编辑、阶段生成、阶段锁定、阶段重生。
+- 新增 `POST /api/projects/{id}/start-writing`；Genesis 完成后默认停在 `genesis_ready`，显式启动写作时才 materialize 全书 arc 骨架，并且只为当前 active arc 生成 `ChapterPlan`。
+- `ArcPlanVersion` 新增 `arc_number/chapter_start/chapter_end/planned_target_size/planned_soft_min/planned_soft_max`；`phase24` 对 Genesis-backed 项目优先读取 arc 自己持久化的 sizing，不再从全书总章数反推。
+- writer / reviewer context 新增 Genesis 继承字段：`genesis_context_refs`、world/map/story engine 摘要；writer prompt 已开始显式引用根层信息。
+- 首页书本入口改成 Genesis 语义：新建后自动进入 Genesis 工作台；书本卡片按 `creating -> 继续创世`、`genesis_ready -> 启动写作`、`writing -> 继续沿用现有写作入口` 切换主按钮。
+- 新增/更新设计文档：新增 `V2_9_2.md` 作为当前统一规格；`V2_9_1.md` 退为历史统一基线；`V2_8_1_completion_status.md` 与历史文档顶部说明同步前推到 `V2.9.2`。
+
+验证：
+
+- `python3 -m py_compile forwin/book_genesis.py forwin/api.py forwin/api_project_payloads.py forwin/api_schemas.py forwin/models/project.py forwin/models/genesis.py forwin/models/base.py forwin/orchestrator/loop.py forwin/orchestrator/phase24.py forwin/context/assembler.py forwin/protocol/context.py forwin/writer/prompts.py forwin/reviewer/context_builder.py forwin/reviewer/webnovel.py forwin/state/updater.py forwin/state/repo.py forwin/governance.py`
+- `python3 -m py_compile forwin/api_pages.py tests/test_book_genesis_flow.py`
+- `PYTHONPATH=. pytest -q tests/test_book_genesis_flow.py`
+- `PYTHONPATH=. pytest -q tests/test_arc_execution_scoping.py tests/test_continue_project_orphan_review.py tests/test_project_publish_bindings.py`
+- `PYTHONPATH=. pytest -q tests/test_phase05_regressions.py -k "create_project or continue_project"`
+
+结果：
+
+- `tests/test_book_genesis_flow.py`: `4 passed`
+- `tests/test_arc_execution_scoping.py tests/test_continue_project_orphan_review.py tests/test_project_publish_bindings.py`: `11 passed`
+- `tests/test_phase05_regressions.py -k "create_project or continue_project"`: `4 passed, 119 deselected`
+
+部署状态：未部署到 `8899`。原因：本轮只完成代码、前端入口与设计文档前推，尚未执行容器重建与重启；当前也未做 `8899` smoke。切换条件：先确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`，再执行 `docker compose build forwin` 与 `docker compose up -d forwin`，随后 smoke `GET /`、`GET /api/projects?limit=5`、`GET /api/projects/{project_id}/genesis`、`POST /api/projects/{project_id}/start-writing`。
+
+## 2026-04-19
+
+### V2.9.2 Linux 发布浏览器心跳闭环（preferred client 健康检查 / 扩展错误持久化 / 启动等待）
+
+把 `publisher-browser` 从“Chrome 能启动就算活着”改成“preferred Linux client 真正 heartbeat 成功才算在线”，收紧后端浏览器在线判定。
+
+关键变化：
+
+- 新增 `forwin.publishers.healthcheck` 与 `scripts/check_publisher_browser_heartbeat.py`：直接读取 `publisher_extension_clients` / `publisher_extension_platform_states`，检查 `FORWIN_PUBLISHER_PREFERRED_CLIENT_ID`（或 profile marker 里的 client id）是否在新鲜心跳窗口内。
+- `publisher-browser` 启动脚本新增 heartbeat 等待：Chrome 拉起并恢复 session 后，会等待 preferred client 在后端数据库里形成 recent heartbeat；超时则杀掉 Chrome 并退出，让容器重启而不是假装 healthy。
+- `docker-compose.yml` 里的 `publisher-browser` healthcheck 改为“双重校验”：既检查 profile qualified，也检查 preferred client heartbeat。
+- 扩展 `background.js` 新增持久化运行态：
+  - `forwinPublisherBackgroundStatus`
+  - `forwinPublisherBackgroundErrors`
+  用于记录 worker 加载、bootstrap 尝试/成功/失败、heartbeat 尝试/成功/失败，不再只靠 `console.warn`。
+
+验证：
+
+- `python3 -m py_compile forwin/publishers/healthcheck.py scripts/check_publisher_browser_heartbeat.py`
+- `PYTHONPATH=. pytest -q tests/test_publisher_browser_healthcheck.py tests/test_project_publish_bindings.py`
+- `cd browser_extension/forwin-publisher && npm test`
+- `docker compose build forwin publisher-browser`
+- `docker compose up -d forwin publisher-browser`
+- `curl -fsS http://127.0.0.1:8899/health`
+- `curl -fsS http://127.0.0.1:8899/api/publishers/platforms`
+- `docker compose logs --tail=120 publisher-browser`
+
+部署状态：已部署到 `8899`。`forwin` 容器 healthy；`publisher-browser` 也已切到新逻辑，并按预期在 preferred Linux client `b361cd2a-fce3-4733-8636-de64d82db066` 没有 recent heartbeat 时输出明确 JSON 诊断并重启，而不是继续伪装成健康在线。当前最新诊断显示：preferred client 仍 stale，最近在线的仍是 macOS 侧 client `5ade19c9-a5b4-45c2-aea6-5f4f63af1b3e`。
+
+### V2.8.1 正式收口（版本对齐 / subworld 兼容 / 发布验收）
+
+在保留当前主干 `V2.9` subworld 基线能力的前提下，完成 `V2.8.1` 的正式收口，对齐代码、回归、版本文档和部署口径。
+
+关键变化：
+
+- subworld 对旧 arc 规划输出改为保守 fallback：当 `ArcDirector.plan_arc()` 没有返回 `subworld_delta` 时，只保留 bootstrap，不再凭空补造 canonical 新角色或新 slot，避免污染既有 2.8.1 主链语义。
+- `assemble_context()` 对旧 repo / test double 保持兼容；缺失 `get_allowed_entity_snapshots()` 时回退旧接口，relations 过滤也兼容老签名。
+- 修复 `sub_worlds` / `sub_world_roster_items` 的迁移插入口径：bootstrap backfill 显式写入 `created_at` / `updated_at`，模型同步补 `server_default`，避免 fresh DB 在 API lifespan 中触发 `NOT NULL` 失败。
+- publisher 平台概览里的 `extension_online` 改为以 extension client heartbeat 为准，不再让 platform state 伪装扩展仍在线。
+- 重写 `V2_8_1_completion_status.md`，明确当前可以正式宣告 `V2.8.1` 完成；`V2_9.md` 增加版本边界说明，明确 subworld 属于 2.9 规格但已前置落地。
+
+验证：
+
+- `python3 -m py_compile forwin/subworld_manager.py forwin/context/assembler.py forwin/publishers/manager.py forwin/models/subworld.py forwin/models/base.py tests/test_phase05_regressions.py`
+- `PYTHONPATH=. pytest -q tests/test_phase05_regressions.py -k 'test_orchestrator_records_phase4_outputs or test_publisher_manager_tracks_extension_heartbeat_and_stale_state or test_publishers_page_and_extension_api_routes or test_publishers_page_uses_extension_bridge_flow or test_retrieval_broker_applies_budget or test_tasks_list_endpoint_returns_recent_items'`
+- `PYTHONPATH=. pytest -q`
+- `curl -fsS http://127.0.0.1:8899/health`
+- `curl -fsS http://127.0.0.1:8899/api/tasks/active-generation-check`
+- `docker compose build forwin`
+- `docker compose up -d forwin`
+- `curl -fsS http://127.0.0.1:8899/`
+- `curl -fsS 'http://127.0.0.1:8899/api/projects?limit=5'`
+- `curl -fsS 'http://127.0.0.1:8899/api/task-center/items?limit=20'`
+- `curl -fsS 'http://127.0.0.1:8899/api/projects/00b889c433944991871d3edc6e2281a9/causal-replay?scope=arc'`
+- `curl -fsS 'http://127.0.0.1:8899/api/projects/00b889c433944991871d3edc6e2281a9/governance-insights'`
+
+部署状态：已部署到 `8899`。部署前检查 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`；部署后 smoke 通过，当前本地全量回归为 `208 passed, 8 subtests passed`。
+
 ## 2026-04-18
 
 ### V2.8.1 全量补齐增量（scene-era contract / WNER 证据 / feedback 校准 / trope 导入 / 稳定性）

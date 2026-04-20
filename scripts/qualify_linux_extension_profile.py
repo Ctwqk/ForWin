@@ -151,6 +151,7 @@ def qualify_profile(profile_dir: Path, extension_dir: Path, backend_url: str, ke
     profile_dir.mkdir(parents=True, exist_ok=True)
     browser = find_browser(os.environ.get("FORWIN_EXTENSION_TEST_BROWSER", "").strip())
     args = [
+        "--enable-unsafe-extension-debugging",
         f"--disable-extensions-except={extension_dir}",
         f"--load-extension={extension_dir}",
         "--no-first-run",

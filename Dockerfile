@@ -7,7 +7,7 @@ COPY forwin/ forwin/
 
 RUN pip install --no-cache-dir .
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends xvfb xauth ca-certificates \
+    && apt-get install -y --no-install-recommends chromium xvfb xauth ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN python -m playwright install --with-deps chromium
 COPY browser_extension/ browser_extension/

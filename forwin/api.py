@@ -45,6 +45,10 @@ from forwin.api_schemas import (
     BandExperienceOverrideRequest,
     BandExperienceOverrideResponse,
     ActiveGenerationTaskCheckResponse,
+    BookGenesisDetail,
+    BookGenesisPatchRequest,
+    BookGenesisRefineRequest,
+    BookGenesisStageRunRequest,
     CausalReplayResponse,
     DecisionEventsResponse,
     BulkDeleteResponse,
@@ -117,7 +121,9 @@ from forwin.api_schemas import (
     TropeTemplateValidationResponse,
     UploadJobResultRequest,
     LintSignalInfo,
+    StartWritingResponse,
 )
+from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
 from forwin.config import Config
 from forwin.governance import (
     BandCheckpointIssueInfo,
@@ -135,6 +141,7 @@ from forwin.governance import (
     plan_task_contract_to_json,
 )
 from forwin.models.base import Base, get_engine, get_session_factory, init_db
+from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import Project, ChapterPlan, ArcPlanVersion
 from forwin.models.entity import Entity
 from forwin.models.event import CanonEvent, EventEntityLink
@@ -163,6 +170,8 @@ from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
 from forwin.publishers import PublisherManager
 from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
+from forwin.state.updater import StateUpdater
+from forwin.writer.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +272,117 @@ def _json_load_object(raw: str | None) -> dict[str, Any]:
 def _json_dump(value: Any, fallback: Any) -> str:
     normalized = value if isinstance(value, type(fallback)) else fallback
     return json.dumps(normalized, ensure_ascii=False)
+
+
+def _resolve_runtime_profile(requested_profile_id: str = "") -> dict[str, str]:
+    stored = _runtime_settings.get() if _runtime_settings else {}
+    profiles = [
+        item for item in stored.get("profiles", [])
+        if isinstance(item, dict)
+    ]
+    target_id = str(requested_profile_id or "").strip() or str(stored.get("default_profile_id", "")).strip()
+    selected = next(
+        (
+            item for item in profiles
+            if str(item.get("id", "")).strip() == target_id
+        ),
+        None,
+    )
+    if selected is None and profiles:
+        selected = profiles[0]
+    if selected is None:
+        selected = {
+            "id": "",
+            "name": "",
+            "api_key": str(stored.get("api_key", "")).strip(),
+            "base_url": str(stored.get("base_url", "")).strip(),
+            "model": str(stored.get("model", "")).strip(),
+        }
+    return {
+        "id": str(selected.get("id", "")).strip(),
+        "name": str(selected.get("name", "")).strip(),
+        "api_key": str(selected.get("api_key", "")).strip(),
+        "base_url": str(selected.get("base_url", "")).strip(),
+        "model": str(selected.get("model", "")).strip(),
+    }
+
+
+def _saved_runtime_config_or_default(model_profile_id: str = "") -> Config:
+    if not _config:
+        return Config(db_path=":memory:", minimax_api_key="")
+    if model_profile_id:
+        return build_runtime_config(
+            GenerateRequest(
+                premise="Genesis model selection",
+                model_profile_id=model_profile_id,
+            ),
+            base_config=_config,
+            runtime_settings=_runtime_settings,
+        )
+    return build_saved_runtime_config(
+        base_config=_config,
+        runtime_settings=_runtime_settings,
+    )
+
+
+def _build_genesis_service(
+    runtime_config: Config | None = None,
+    *,
+    model_profile_id: str = "",
+) -> BookGenesisService:
+    resolved_profile = _resolve_runtime_profile(model_profile_id)
+    resolved = runtime_config or _saved_runtime_config_or_default(model_profile_id)
+    llm_client = LLMClient(
+        api_key=str(resolved.minimax_api_key or ""),
+        base_url=str(resolved.minimax_base_url or ""),
+        model=str(resolved.minimax_model or ""),
+        fallback_profiles=getattr(resolved, "fallback_profiles", None),
+    )
+    setattr(llm_client, "profile_id", resolved_profile.get("id", ""))
+    setattr(llm_client, "profile_name", resolved_profile.get("name", ""))
+    return BookGenesisService(llm_client=llm_client)
+
+
+def _close_genesis_service(service: BookGenesisService | None) -> None:
+    client = getattr(service, "llm_client", None)
+    close = getattr(client, "client", None)
+    if close is None:
+        return
+    try:
+        close.close()
+    except Exception:  # noqa: BLE001
+        logger.debug("BookGenesisService client close failed", exc_info=True)
+
+
+def _active_genesis_revision(session: Session, project: Project) -> BookGenesisRevision | None:
+    revision_id = str(getattr(project, "active_genesis_revision_id", "") or "").strip()
+    if not revision_id:
+        return None
+    return session.get(BookGenesisRevision, revision_id)
+
+
+def _require_genesis_project(project: Project) -> None:
+    if str(getattr(project, "creation_status", "") or "").strip() == "legacy":
+        raise HTTPException(400, "旧项目未启用 Genesis 工作流。")
+
+
+def _genesis_patch_payload(req: BookGenesisPatchRequest) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key in (
+        "book_brief",
+        "world_bible",
+        "map_atlas",
+        "story_engine",
+        "book_arc_blueprint",
+        "subworld_policy",
+        "execution_bootstrap",
+        "stage_states",
+    ):
+        value = getattr(req, key)
+        if value is None:
+            continue
+        payload[key] = value
+    return payload
 
 
 def _coerce_int_list(value: Any) -> list[int]:
@@ -2821,6 +2941,8 @@ def generate(req: GenerateRequest):
             project = session.get(Project, normalized_project_id)
             if project is None:
                 raise HTTPException(404, "项目不存在")
+            if str(project.creation_status or "") in {"creating", "genesis_ready"}:
+                raise HTTPException(409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。")
             if _project_has_active_generation_task(normalized_project_id, session=session):
                 raise HTTPException(409, _generation_task_conflict_message(normalized_project_id))
             governance = _resolve_project_governance(
@@ -3474,6 +3596,7 @@ def list_projects():
 @app.post("/api/projects", response_model=ProjectCreateResponse)
 def create_project(req: ProjectCreateRequest):
     session = _get_session()
+    genesis_service: BookGenesisService | None = None
     try:
         title = str(req.title or "").strip()
         premise = str(req.premise or "").strip()
@@ -3515,34 +3638,46 @@ def create_project(req: ProjectCreateRequest):
             }
         )
         governance = new_project_governance(
-            default_operation_mode=_config.operation_mode if _config is not None else "blackbox",
+            default_operation_mode="blackbox",
             review_interval_chapters=_config.review_interval_chapters if _config is not None else 0,
         )
-
-        project = Project(
+        updater = StateUpdater(session)
+        project = updater.create_project(
             title=title,
             premise=premise,
             genre=str(req.genre or "").strip() or "玄幻",
             setting_summary=str(req.setting_summary or "").strip(),
             target_total_chapters=max(1, int(req.target_total_chapters or 1)),
+            governance=governance,
+            creation_status="creating",
             automation_json=json.dumps(
                 automation.model_dump(mode="json"),
                 ensure_ascii=False,
             ),
-            governance_json=json.dumps(
-                governance.model_dump(mode="json"),
-                ensure_ascii=False,
-            ),
         )
-        session.add(project)
-        session.flush()
+        genesis_service = _build_genesis_service()
+        genesis_revision = genesis_service.create_initial_revision(
+            session=session,
+            updater=updater,
+            project=project,
+            brief_seed={
+                "audience_hint": req.audience_hint,
+                "core_emotion": req.core_emotion,
+                "core_delight": req.core_delight,
+                "inspiration_notes": req.inspiration_notes,
+                "content_guardrails": req.content_guardrails,
+            },
+        )
         _log_decision_event(
             session,
             project_id=project.id,
             event_family="business_event",
             event_type=DecisionEventType.PROJECT_CREATED,
             summary="项目已创建并启用默认治理策略。",
-            payload={"governance": governance.model_dump(mode="json")},
+            payload={
+                "governance": governance.model_dump(mode="json"),
+                "creation_status": "creating",
+            },
         )
         session.commit()
         session.refresh(project)
@@ -3551,9 +3686,13 @@ def create_project(req: ProjectCreateRequest):
             project_id=project.id,
             title=project.title,
             target_total_chapters=int(project.target_total_chapters or 3),
-            message=f"书本《{project.title}》已创建。",
+            creation_status=str(project.creation_status or "creating"),
+            active_genesis_revision_id=str(genesis_revision.id or ""),
+            workspace_url=f"/?workspace=genesis&project_id={project.id}",
+            message=f"书本《{project.title}》已创建，已进入 Genesis 工作台。",
         )
     finally:
+        _close_genesis_service(genesis_service)
         session.close()
 
 
@@ -3632,6 +3771,315 @@ def get_project(project_id: str):
         session.close()
 
 
+@app.get("/api/projects/{project_id}/genesis", response_model=BookGenesisDetail)
+def get_project_genesis(project_id: str):
+    session = _get_session()
+    genesis_service: BookGenesisService | None = None
+    try:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        _require_genesis_project(project)
+        genesis_service = _build_genesis_service()
+        return BookGenesisDetail.model_validate(
+            genesis_service.build_detail(session=session, project=project)
+        )
+    finally:
+        _close_genesis_service(genesis_service)
+        session.close()
+
+
+@app.patch("/api/projects/{project_id}/genesis", response_model=BookGenesisDetail)
+def patch_project_genesis(project_id: str, req: BookGenesisPatchRequest):
+    session = _get_session()
+    genesis_service: BookGenesisService | None = None
+    try:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        _require_genesis_project(project)
+        revision = _active_genesis_revision(session, project)
+        if revision is None:
+            raise HTTPException(409, "项目 Genesis revision 不存在")
+        patch_payload = _genesis_patch_payload(req)
+        if not patch_payload:
+            raise HTTPException(400, "没有可更新的 Genesis 字段")
+        genesis_service = _build_genesis_service()
+        updater = StateUpdater(session)
+        try:
+            genesis_service.patch_pack(
+                session=session,
+                updater=updater,
+                project=project,
+                revision=revision,
+                patch=patch_payload,
+                reason=req.reason,
+            )
+        except StaleGenesisRevisionError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        session.commit()
+        session.refresh(project)
+        return BookGenesisDetail.model_validate(
+            genesis_service.build_detail(session=session, project=project)
+        )
+    finally:
+        _close_genesis_service(genesis_service)
+        session.close()
+
+
+@app.post("/api/projects/{project_id}/genesis/stages/{stage_key}/generate", response_model=BookGenesisDetail)
+def generate_project_genesis_stage(
+    project_id: str,
+    stage_key: str,
+    req: BookGenesisStageRunRequest | None = None,
+):
+    session = _get_session()
+    genesis_service: BookGenesisService | None = None
+    try:
+        normalized_stage = str(stage_key or "").strip()
+        if normalized_stage not in GENESIS_STAGE_ORDER:
+            raise HTTPException(404, "Genesis stage 不存在")
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        _require_genesis_project(project)
+        revision = _active_genesis_revision(session, project)
+        if revision is None:
+            raise HTTPException(409, "项目 Genesis revision 不存在")
+        genesis_service = _build_genesis_service(
+            model_profile_id=str((req.model_profile_id if req else "") or "").strip()
+        )
+        updater = StateUpdater(session)
+        try:
+            genesis_service.generate_stage(
+                session=session,
+                updater=updater,
+                project=project,
+                revision=revision,
+                stage_key=normalized_stage,
+            )
+        except StaleGenesisRevisionError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        session.commit()
+        session.refresh(project)
+        return BookGenesisDetail.model_validate(
+            genesis_service.build_detail(session=session, project=project)
+        )
+    finally:
+        _close_genesis_service(genesis_service)
+        session.close()
+
+
+@app.post("/api/projects/{project_id}/genesis/stages/{stage_key}/lock", response_model=BookGenesisDetail)
+def lock_project_genesis_stage(project_id: str, stage_key: str):
+    session = _get_session()
+    genesis_service: BookGenesisService | None = None
+    try:
+        normalized_stage = str(stage_key or "").strip()
+        if normalized_stage not in GENESIS_STAGE_ORDER:
+            raise HTTPException(404, "Genesis stage 不存在")
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        _require_genesis_project(project)
+        revision = _active_genesis_revision(session, project)
+        if revision is None:
+            raise HTTPException(409, "项目 Genesis revision 不存在")
+        genesis_service = _build_genesis_service()
+        updater = StateUpdater(session)
+        try:
+            genesis_service.lock_stage(
+                session=session,
+                updater=updater,
+                project=project,
+                revision=revision,
+                stage_key=normalized_stage,
+            )
+        except StaleGenesisRevisionError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        session.commit()
+        session.refresh(project)
+        return BookGenesisDetail.model_validate(
+            genesis_service.build_detail(session=session, project=project)
+        )
+    finally:
+        _close_genesis_service(genesis_service)
+        session.close()
+
+
+@app.post("/api/projects/{project_id}/genesis/stages/{stage_key}/rerun", response_model=BookGenesisDetail)
+def rerun_project_genesis_stage(
+    project_id: str,
+    stage_key: str,
+    req: BookGenesisStageRunRequest | None = None,
+):
+    session = _get_session()
+    genesis_service: BookGenesisService | None = None
+    try:
+        normalized_stage = str(stage_key or "").strip()
+        if normalized_stage not in GENESIS_STAGE_ORDER:
+            raise HTTPException(404, "Genesis stage 不存在")
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        _require_genesis_project(project)
+        revision = _active_genesis_revision(session, project)
+        if revision is None:
+            raise HTTPException(409, "项目 Genesis revision 不存在")
+        genesis_service = _build_genesis_service(
+            model_profile_id=str((req.model_profile_id if req else "") or "").strip()
+        )
+        updater = StateUpdater(session)
+        try:
+            genesis_service.generate_stage(
+                session=session,
+                updater=updater,
+                project=project,
+                revision=revision,
+                stage_key=normalized_stage,
+                event_type=DecisionEventType.GENESIS_STAGE_RERUN,
+            )
+        except StaleGenesisRevisionError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        session.commit()
+        session.refresh(project)
+        return BookGenesisDetail.model_validate(
+            genesis_service.build_detail(session=session, project=project)
+        )
+    finally:
+        _close_genesis_service(genesis_service)
+        session.close()
+
+
+@app.post("/api/projects/{project_id}/genesis/stages/{stage_key}/refine", response_model=BookGenesisDetail)
+def refine_project_genesis_stage(project_id: str, stage_key: str, req: BookGenesisRefineRequest):
+    session = _get_session()
+    genesis_service: BookGenesisService | None = None
+    try:
+        normalized_stage = str(stage_key or "").strip()
+        if normalized_stage not in GENESIS_STAGE_ORDER:
+            raise HTTPException(404, "Genesis stage 不存在")
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        _require_genesis_project(project)
+        revision = _active_genesis_revision(session, project)
+        if revision is None:
+            raise HTTPException(409, "项目 Genesis revision 不存在")
+        genesis_service = _build_genesis_service(
+            model_profile_id=str(req.model_profile_id or "").strip()
+        )
+        updater = StateUpdater(session)
+        try:
+            genesis_service.refine_stage(
+                session=session,
+                updater=updater,
+                project=project,
+                revision=revision,
+                stage_key=normalized_stage,
+                instruction=req.instruction,
+                target_path=req.target_path,
+                reason=req.reason,
+            )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        except StaleGenesisRevisionError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        session.commit()
+        session.refresh(project)
+        return BookGenesisDetail.model_validate(
+            genesis_service.build_detail(session=session, project=project)
+        )
+    finally:
+        _close_genesis_service(genesis_service)
+        session.close()
+
+
+@app.post("/api/projects/{project_id}/start-writing", response_model=StartWritingResponse)
+def start_project_writing(project_id: str):
+    if not _config:
+        raise HTTPException(503, "服务尚未初始化")
+    runtime_config = _saved_runtime_config_or_default()
+    if not runtime_config.minimax_api_key:
+        raise HTTPException(400, "MINIMAX_API_KEY 未设置。请先配置模型，再启动写作。")
+    session = _get_session()
+    genesis_service: BookGenesisService | None = None
+    try:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        _require_genesis_project(project)
+        if str(project.creation_status or "") != "genesis_ready":
+            raise HTTPException(409, "Genesis 尚未完成锁定，不能启动写作。")
+        if _project_has_active_generation_task(project_id, session=session):
+            raise HTTPException(409, _generation_task_conflict_message(project_id))
+        revision = _active_genesis_revision(session, project)
+        if revision is None:
+            raise HTTPException(409, "Genesis revision 不存在。")
+        genesis_service = _build_genesis_service(runtime_config)
+        updater = StateUpdater(session)
+        decision = updater.save_decision_event(
+            DecisionEventInfo(
+                project_id=project.id,
+                scope="project",
+                event_family="business_event",
+                event_type=DecisionEventType.START_WRITING_REQUESTED,
+                actor_type="manual_ui",
+                summary="Genesis 已交接到写作流程。",
+                related_object_type="book_genesis_revision",
+                related_object_id=revision.id,
+            )
+        )
+        arcs = genesis_service.materialize_book_arcs(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+        )
+        active_arc = next((row for row in arcs if row.status == "active"), None)
+        if active_arc is None:
+            raise HTTPException(409, "Genesis blueprint 缺少 active arc。")
+        genesis_service.materialize_arc_chapter_plans(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+            arc_number=active_arc.arc_number,
+            decision_event_id=decision.id,
+        )
+        pack = genesis_service.load_pack(revision)
+        world_bible = pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {}
+        if not str(project.setting_summary or "").strip():
+            project.setting_summary = str(world_bible.get("overview", "") or "").strip()
+        project.creation_status = "writing"
+        session.add(project)
+        session.commit()
+        active_chapter_count = int(
+            session.execute(
+                select(func.count(ChapterPlan.id)).where(ChapterPlan.arc_plan_id == active_arc.id)
+            ).scalar_one()
+            or 0
+        )
+        task_id = _create_continue_generation_task(
+            project_id=project.id,
+            runtime_config=runtime_config,
+            requested_chapters=active_chapter_count,
+            title=project.title,
+            subtitle=f"启动写作 · {project.genre}",
+            message="Genesis 完成，准备进入写作主链。",
+        )
+        return StartWritingResponse(
+            ok=True,
+            project_id=project.id,
+            creation_status="writing",
+            task_id=task_id,
+            message="Genesis 已完成交接，开始写作。",
+        )
+    finally:
+        _close_genesis_service(genesis_service)
+        session.close()
+
+
 @app.post("/api/projects/{project_id}/continue-generation", response_model=TaskResponse)
 def continue_project_generation(project_id: str, req: ProjectContinueGenerationRequest | None = None):
     if not _config:
@@ -3645,6 +4093,8 @@ def continue_project_generation(project_id: str, req: ProjectContinueGenerationR
         project = session.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "项目不存在")
+        if str(project.creation_status or "") in {"creating", "genesis_ready"}:
+            raise HTTPException(409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。")
         governance = _resolve_project_governance(
             project,
             overrides=_governance_request_payload(req),
@@ -3671,7 +4121,16 @@ def continue_project_generation(project_id: str, req: ProjectContinueGenerationR
         if waiting_review:
             raise HTTPException(409, f"仍有章节等待 review：{', '.join(str(item) for item in waiting_review)}")
         remaining = [plan.chapter_number for plan in plans if plan.status in {"planned", "failed"}]
-        if not remaining:
+        planned_future_arc = session.execute(
+            select(ArcPlanVersion.id)
+            .where(
+                ArcPlanVersion.project_id == project_id,
+                ArcPlanVersion.status == "planned",
+            )
+            .order_by(ArcPlanVersion.arc_number.asc(), ArcPlanVersion.created_at.asc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if not remaining and planned_future_arc is None:
             raise HTTPException(400, "没有剩余章节需要继续生成")
         project_detail = build_project_detail(
             session=session,
@@ -3700,7 +4159,7 @@ def continue_project_generation(project_id: str, req: ProjectContinueGenerationR
         task_id = _create_continue_generation_task(
             project_id=project_id,
             runtime_config=runtime_config,
-            requested_chapters=len(plans),
+            requested_chapters=max(len(remaining), len(plans), 1),
             max_chapters=max_chapters,
             title=project.title,
             subtitle=f"继续生成 · {project.genre}",

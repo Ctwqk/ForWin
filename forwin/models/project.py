@@ -18,6 +18,8 @@ class Project(Base):
     genre: Mapped[str] = mapped_column(String, default="玄幻")
     setting_summary: Mapped[str] = mapped_column(Text, default="")
     target_total_chapters: Mapped[int] = mapped_column(Integer, default=3)
+    creation_status: Mapped[str] = mapped_column(String, default="legacy")
+    active_genesis_revision_id: Mapped[str] = mapped_column(String, default="")
     automation_json: Mapped[str] = mapped_column(Text, default="{}")
     governance_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
@@ -37,7 +39,13 @@ class ArcPlanVersion(Base):
         String, ForeignKey("projects.id"), nullable=False
     )
     version: Mapped[int] = mapped_column(Integer, default=1)
+    arc_number: Mapped[int] = mapped_column(Integer, default=1)
+    chapter_start: Mapped[int] = mapped_column(Integer, default=1)
+    chapter_end: Mapped[int] = mapped_column(Integer, default=0)
     arc_synopsis: Mapped[str] = mapped_column(Text, nullable=False)
+    planned_target_size: Mapped[int] = mapped_column(Integer, default=0)
+    planned_soft_min: Mapped[int] = mapped_column(Integer, default=0)
+    planned_soft_max: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 

@@ -8,6 +8,7 @@ if TYPE_CHECKING:
 
 from forwin.protocol.writer import WriterOutput
 from forwin.protocol.review import ReviewVerdict, ContinuityIssue
+from forwin.governance import issue_group_for_issue
 
 logger = logging.getLogger(__name__)
 DEAD_STATUS_KEYWORDS = {
@@ -19,6 +20,19 @@ DEAD_STATUS_KEYWORDS = {
     "身亡",
     "阵亡",
     "已阵亡",
+}
+GENERIC_CHARACTER_REFERENCES = {
+    "路人",
+    "守卫",
+    "老板",
+    "店小二",
+    "师兄",
+    "师姐",
+    "弟子",
+    "同学",
+    "众人",
+    "人群",
+    "旁人",
 }
 
 
@@ -41,6 +55,7 @@ class ContinuityChecker:
         issues.extend(self._check_thread_status(project_id, writer_output))
         issues.extend(self._check_state_change_validity(writer_output))
         issues.extend(self._check_event_completeness(writer_output))
+        issues.extend(self._check_subworld_admission(project_id, writer_output))
 
         # Determine verdict
         errors = [i for i in issues if i.severity == "error"]
@@ -203,3 +218,66 @@ class ContinuityChecker:
                 ))
 
         return issues
+
+    def _check_subworld_admission(self, project_id: str, output: WriterOutput) -> list[ContinuityIssue]:
+        allowed_names = self.repo.get_allowed_entity_names(project_id, output.chapter_number)
+        if not allowed_names:
+            return []
+        candidate_names: set[str] = set()
+        maybe_event_names: set[str] = set()
+
+        for mention in getattr(output, "entity_mentions", []):
+            if (
+                getattr(mention, "entity_kind", "") == "character"
+                and bool(getattr(mention, "is_named", False))
+                and self._looks_like_named_character(getattr(mention, "entity_name", ""))
+            ):
+                candidate_names.add(str(getattr(mention, "entity_name", "")).strip())
+
+        for change in output.state_changes:
+            if change.entity_kind == "character" and self._looks_like_named_character(change.entity_name):
+                candidate_names.add(change.entity_name.strip())
+
+        for event in output.new_events:
+            for name in event.involved_entity_names:
+                if self._looks_like_named_character(name):
+                    maybe_event_names.add(str(name).strip())
+
+        for scene in output.scene_outputs:
+            for name in scene.involved_entities:
+                if self._looks_like_named_character(name):
+                    candidate_names.add(str(name).strip())
+
+        if maybe_event_names:
+            resolved = self.repo.get_entities_by_names(project_id, sorted(maybe_event_names))
+            for name in maybe_event_names:
+                entity = resolved.get(name)
+                if entity is None or entity.kind == "character":
+                    candidate_names.add(name)
+
+        issues: list[ContinuityIssue] = []
+        for name in sorted(candidate_names):
+            if name in allowed_names:
+                continue
+            issues.append(
+                ContinuityIssue(
+                    rule_name="sub_world_unknown_named_entity",
+                    severity="error",
+                    description=f"命名角色「{name}」未在当前 chapter 的 subworld 准入名单中。",
+                    entity_names=[name],
+                    reviewer="continuity",
+                    issue_type="subworld_admission",
+                    target_scope="chapter",
+                    issue_group=issue_group_for_issue(issue_type="director_imbalance", rule_name="sub_world_unknown_named_entity"),
+                    evidence_refs=[f"chapter={output.chapter_number}", f"entity={name}"],
+                    suggested_fix="改用允许名单中的角色，或改写为无名泛称角色。",
+                )
+            )
+        return issues
+
+    @staticmethod
+    def _looks_like_named_character(name: str) -> bool:
+        text = str(name or "").strip()
+        if not text or text in GENERIC_CHARACTER_REFERENCES:
+            return False
+        return len(text) <= 12

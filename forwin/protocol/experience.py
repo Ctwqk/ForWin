@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, Field
 
+from .subworld import ChapterEntryTarget
+
 
 RewardTag = Literal["power", "social", "justice", "mystery", "emotion"]
 AmbiguityMode = Literal["stable", "managed", "high"]
@@ -90,6 +92,8 @@ class BandDelightSchedule(BaseModel):
     stall_guard_max_gap: int = 0
     curiosity_beats: list[CuriosityBeat] = Field(default_factory=list)
     ambiguity_payoffs: list[AmbiguityPayoff] = Field(default_factory=list)
+    active_subworld_ids: list[str] = Field(default_factory=list)
+    chapter_entry_targets: list[ChapterEntryTarget] = Field(default_factory=list)
 
 
 class ChapterExperiencePlan(BaseModel):
@@ -103,3 +107,6 @@ class ChapterExperiencePlan(BaseModel):
     rule_anchors: list[str] = Field(default_factory=list)
     relationship_or_status_shift: str = ""
     minimum_progress_channels: list[ProgressChannel] = Field(default_factory=list)
+    active_subworld_ids: list[str] = Field(default_factory=list)
+    chapter_entry_targets: list[ChapterEntryTarget] = Field(default_factory=list)
+    entity_admission_rule: str = ""

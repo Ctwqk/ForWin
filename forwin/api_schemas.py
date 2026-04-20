@@ -13,6 +13,7 @@ from forwin.governance import (
     PlanTaskItem,
     ProjectGovernanceSettings,
 )
+from forwin.protocol.subworld import SubWorldSummary
 
 
 class GenerateRequest(BaseModel):
@@ -285,6 +286,83 @@ class ProjectAutomationSettings(BaseModel):
     last_scheduler_task_id: str = ""
 
 
+class BookGenesisStageState(BaseModel):
+    stage_key: str
+    status: str = "todo"
+    locked: bool = False
+    updated_at: str = ""
+    last_trace_id: str = ""
+
+
+class BookGenesisPack(BaseModel):
+    book_brief: dict[str, Any] = Field(default_factory=dict)
+    world_bible: dict[str, Any] = Field(default_factory=dict)
+    map_atlas: dict[str, Any] = Field(default_factory=dict)
+    story_engine: dict[str, Any] = Field(default_factory=dict)
+    book_arc_blueprint: dict[str, Any] = Field(default_factory=dict)
+    subworld_policy: dict[str, Any] = Field(default_factory=dict)
+    execution_bootstrap: dict[str, Any] = Field(default_factory=dict)
+    stage_states: dict[str, BookGenesisStageState] = Field(default_factory=dict)
+
+
+class PromptTraceInfo(BaseModel):
+    id: str
+    trace_scope: str = "genesis"
+    stage_key: str = ""
+    template_id: str = ""
+    template_version: str = "v1"
+    effective_system_prompt: str = ""
+    prompt_layers: list[dict[str, Any]] = Field(default_factory=list)
+    input_snapshot: dict[str, Any] = Field(default_factory=dict)
+    model_profile: dict[str, Any] = Field(default_factory=dict)
+    attempts: list[dict[str, Any]] = Field(default_factory=list)
+    output_summary: dict[str, Any] = Field(default_factory=dict)
+    decision_event_id: str = ""
+    parent_trace_id: str = ""
+    created_at: str = ""
+
+
+class BookGenesisDetail(BaseModel):
+    project_id: str
+    creation_status: str = "creating"
+    active_genesis_revision_id: str = ""
+    revision: int = 1
+    pack: BookGenesisPack = Field(default_factory=BookGenesisPack)
+    prompt_traces: list[PromptTraceInfo] = Field(default_factory=list)
+    can_start_writing: bool = False
+
+
+class BookGenesisPatchRequest(BaseModel):
+    book_brief: dict[str, Any] | None = None
+    world_bible: dict[str, Any] | None = None
+    map_atlas: dict[str, Any] | None = None
+    story_engine: dict[str, Any] | None = None
+    book_arc_blueprint: dict[str, Any] | None = None
+    subworld_policy: dict[str, Any] | None = None
+    execution_bootstrap: dict[str, Any] | None = None
+    stage_states: dict[str, Any] | None = None
+    reason: str = ""
+
+
+class BookGenesisStageRunRequest(BaseModel):
+    model_profile_id: str = ""
+
+
+class BookGenesisRefineRequest(BaseModel):
+    instruction: str = ""
+    target_path: str = ""
+    reason: str = ""
+    model_profile_id: str = ""
+
+
+class StartWritingResponse(BaseModel):
+    ok: bool
+    project_id: str
+    creation_status: str = "writing"
+    task_id: str = ""
+    message: str = ""
+
+
 class ProjectSummary(ProjectArcSnapshotFields):
     id: str
     title: str
@@ -298,6 +376,10 @@ class ProjectSummary(ProjectArcSnapshotFields):
     needs_review_chapter_count: int = 0
     upload_task_count: int = 0
     uploaded_chapter_count: int = 0
+    creation_status: str = "legacy"
+    active_genesis_revision_id: str = ""
+    genesis_stage_overview: list[BookGenesisStageState] = Field(default_factory=list)
+    can_start_writing: bool = False
     automation: ProjectAutomationSettings = Field(default_factory=ProjectAutomationSettings)
     governance: ProjectGovernanceSettings = Field(default_factory=ProjectGovernanceSettings)
     latest_stage: str = ""
@@ -349,6 +431,10 @@ class ProjectDetail(ProjectArcSnapshotFields):
     genre: str
     setting_summary: str
     target_total_chapters: int = 3
+    creation_status: str = "legacy"
+    active_genesis_revision_id: str = ""
+    genesis_stage_overview: list[BookGenesisStageState] = Field(default_factory=list)
+    can_start_writing: bool = False
     chapter_count: int = 0
     generated_chapter_count: int = 0
     accepted_chapter_count: int = 0
@@ -360,6 +446,7 @@ class ProjectDetail(ProjectArcSnapshotFields):
     characters: list[EntityInfo] = []
     locations: list[EntityInfo] = []
     factions: list[EntityInfo] = []
+    subworlds: list[SubWorldSummary] = []
     threads: list[ThreadInfo] = []
     chapters: list[ChapterInfo] = []
     latest_stage: str = ""
@@ -392,6 +479,11 @@ class ProjectCreateRequest(BaseModel):
     genre: str = "玄幻"
     setting_summary: str = ""
     target_total_chapters: int = Field(default=3, ge=1, le=200)
+    audience_hint: str = ""
+    core_emotion: str = ""
+    core_delight: str = ""
+    inspiration_notes: str = ""
+    content_guardrails: list[str] = Field(default_factory=list)
     publish_bindings: list[ProjectAutomationPublishSettings] = Field(default_factory=list)
     publish_platform: str = ""
     publish_book_name: str = ""
@@ -404,6 +496,9 @@ class ProjectCreateResponse(BaseModel):
     project_id: str
     title: str
     target_total_chapters: int = 3
+    creation_status: str = "creating"
+    active_genesis_revision_id: str = ""
+    workspace_url: str = ""
     message: str
 
 

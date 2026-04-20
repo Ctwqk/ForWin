@@ -918,6 +918,117 @@ def _render_home_page_v2(
       display:grid;
       gap:16px;
     }
+    .modal.genesis-modal {
+      width:min(1320px, 100%);
+      max-height:min(94vh, 100%);
+    }
+    .genesis-layout {
+      display:grid;
+      grid-template-columns:minmax(0, 1.15fr) minmax(320px, .85fr);
+      gap:18px;
+      align-items:start;
+    }
+    .genesis-stage-board {
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+    }
+    .genesis-stage-chip {
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      border-radius:999px;
+      border:1px solid rgba(204,177,147,.56);
+      background:rgba(255,255,255,.8);
+      color:var(--muted);
+      padding:10px 14px;
+      font:600 13px/1.2 var(--ui);
+    }
+    .genesis-stage-chip.active {
+      background:linear-gradient(135deg, rgba(178,75,49,.12), rgba(31,91,84,.12));
+      border-color:rgba(178,75,49,.26);
+      color:var(--ink);
+    }
+    .genesis-stage-chip.locked {
+      border-color:rgba(33,104,65,.24);
+      color:var(--ok);
+    }
+    .genesis-editor {
+      min-height:420px;
+      font:500 13px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      white-space:pre;
+    }
+    .genesis-item-card,
+    .genesis-chat-box {
+      margin-top:14px;
+      padding:16px;
+      border-radius:20px;
+      border:1px solid rgba(204,177,147,.44);
+      background:rgba(255,255,255,.62);
+      display:grid;
+      gap:12px;
+    }
+    .genesis-item-card[hidden] {
+      display:none;
+    }
+    .genesis-item-toolbar {
+      display:grid;
+      grid-template-columns:repeat(2, minmax(0, 1fr));
+      gap:12px;
+    }
+    .genesis-item-toolbar label,
+    .genesis-chat-box label {
+      display:block;
+      margin-bottom:6px;
+      font:600 12px/1.2 var(--ui);
+      letter-spacing:.08em;
+      text-transform:uppercase;
+      color:var(--muted);
+    }
+    .genesis-item-preview {
+      min-height:120px;
+      max-height:260px;
+      overflow:auto;
+    }
+    .genesis-refine-textarea {
+      min-height:120px;
+    }
+    .trace-list {
+      display:grid;
+      gap:10px;
+    }
+    .trace-item {
+      border:1px solid rgba(204,177,147,.44);
+      border-radius:18px;
+      padding:14px;
+      background:rgba(255,255,255,.72);
+      display:grid;
+      gap:10px;
+    }
+    .trace-item pre {
+      margin:0;
+      padding:12px;
+      border-radius:16px;
+      background:#fffdf7;
+      border:1px solid rgba(204,177,147,.44);
+      font:500 12px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      white-space:pre-wrap;
+      word-break:break-word;
+      overflow:auto;
+      max-height:220px;
+    }
+    .trace-summary {
+      display:grid;
+      gap:8px;
+    }
+    .genesis-summary-grid, .genesis-overview {
+      display:grid;
+      gap:12px;
+    }
+    .genesis-overview .code {
+      max-height:260px;
+      overflow:auto;
+    }
     .code {
       padding:14px;
       border-radius:18px;
@@ -954,6 +1065,7 @@ def _render_home_page_v2(
     }
     @media (max-width: 1080px) {
       .config-grid { grid-template-columns:minmax(0, 1fr); }
+      .genesis-layout { grid-template-columns:minmax(0, 1fr); }
       .progress-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
       .field-grid { grid-template-columns:minmax(0, 1fr); }
       .binding-grid { grid-template-columns:minmax(0, 1fr); }
@@ -987,7 +1099,7 @@ def _render_home_page_v2(
       <div>
         <div class="brand-mark">ForWin Workspace</div>
         <h1>配置归配置，任务归任务。</h1>
-        <p>首页现在拆成书本、任务、配置三个视角。书本负责作品管理与章节进度，任务中心继续承接生成与上传执行流，配置页只保留模型与平台登录。</p>
+        <p>首页现在拆成书本、任务、配置三个视角。书本先进入 Genesis 创世，再启动写作；任务中心继续承接生成与上传执行流，配置页只保留模型与平台登录。</p>
       </div>
       <div class="head-actions">
         <a class="button secondary" href="/publishers">高级发布页</a>
@@ -1313,7 +1425,7 @@ def _render_home_page_v2(
       <div class="section-head" style="margin-bottom:0;">
         <div>
           <h3>新建书本</h3>
-          <p>先建立作品，再决定何时对这本书发起生成任务。</p>
+          <p>创建后会立即进入 Genesis 工作台，先敲定整本书的根蓝图，再决定何时启动写作。</p>
         </div>
         <button class="ghost" type="button" onclick="closeBookModal()">关闭</button>
       </div>
@@ -1330,6 +1442,18 @@ def _render_home_page_v2(
           <label for="book_form_target_total_chapters">总章节数</label>
           <input id="book_form_target_total_chapters" type="number" min="1" max="200" value="@@DEFAULT_CHAPTERS@@">
         </div>
+        <div>
+          <label for="book_form_audience_hint">目标读者</label>
+          <input id="book_form_audience_hint" placeholder="例如：男频 / 女频 / 泛读者">
+        </div>
+        <div>
+          <label for="book_form_core_emotion">核心情绪</label>
+          <input id="book_form_core_emotion" placeholder="例如：压迫感、热血、悬疑、不安">
+        </div>
+        <div>
+          <label for="book_form_core_delight">核心爽点</label>
+          <input id="book_form_core_delight" placeholder="例如：成长反杀、谜题揭示、权谋翻盘">
+        </div>
         <div style="grid-column:1 / -1;">
           <label for="book_form_premise">Premise / Prompt</label>
           <textarea id="book_form_premise" placeholder="写清作品 premise、主角处境、冲突方向和你要的整体质感。"></textarea>
@@ -1337,6 +1461,14 @@ def _render_home_page_v2(
         <div style="grid-column:1 / -1;">
           <label for="book_form_setting_summary">Setting Summary</label>
           <textarea id="book_form_setting_summary" placeholder="可选。先填基础世界观和规则约束。"></textarea>
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label for="book_form_inspiration_notes">气质参考 / Inspiration Notes</label>
+          <textarea id="book_form_inspiration_notes" placeholder="可选。写你想模仿的气质、节奏和表达方向，但不要直接照搬作品。"></textarea>
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label for="book_form_content_guardrails">禁区 / Guardrails</label>
+          <textarea id="book_form_content_guardrails" placeholder="可选。写清不能碰的桥段、风格和设定边界。"></textarea>
         </div>
         <div style="grid-column:1 / -1;">
           <label>绑定平台</label>
@@ -1396,8 +1528,111 @@ def _render_home_page_v2(
       </div>
       <div class="action-row" style="justify-content:flex-end;">
         <button class="ghost" type="button" onclick="closeBookModal()">取消</button>
-        <button class="primary" type="button" onclick="submitBookModal()">创建书本</button>
+        <button class="primary" type="button" onclick="submitBookModal()">创建并进入创世</button>
       </div>
+    </div>
+  </div>
+
+  <div id="genesis_modal_shell" class="modal-shell" onclick="dismissModal(event, 'genesis_modal_shell')">
+    <div class="modal genesis-modal" onclick="event.stopPropagation()">
+      <div class="section-head" style="margin-bottom:0;">
+        <div>
+          <h3 id="genesis_modal_title">Book Genesis Workspace</h3>
+          <p id="genesis_modal_subtitle">创建书本后，先在这里锁定世界观、地图、故事引擎和整本书 Arc 蓝图。</p>
+        </div>
+        <div class="action-row">
+          <button id="genesis_start_writing_btn" class="primary" type="button" onclick="startWritingFromGenesis()" disabled>启动写作</button>
+          <button class="ghost" type="button" onclick="closeGenesisWorkspace()">关闭</button>
+        </div>
+      </div>
+      <div id="genesis_stage_board" class="genesis-stage-board"></div>
+      <div class="genesis-layout">
+        <section class="card">
+          <div class="section-head" style="margin-bottom:0;">
+            <div>
+              <h3 id="genesis_stage_title">Genesis Stage</h3>
+              <p id="genesis_stage_meta">选择一个阶段，编辑或重生该阶段的根层数据。</p>
+            </div>
+          </div>
+          <div class="genesis-item-card">
+            <div class="section-head" style="margin-bottom:0;">
+              <div>
+                <h3>结构化属性</h3>
+                <p>你可以直接编辑字段，不需要只改 JSON。下方原始 JSON 仍然保留，作为最终真值和高级编辑入口。</p>
+              </div>
+            </div>
+            <div id="genesis_stage_form" class="field-grid"></div>
+          </div>
+          <div id="genesis_item_card" class="genesis-item-card" hidden>
+            <div class="section-head" style="margin-bottom:0;">
+              <div>
+                <h3>子项工作台</h3>
+                <p>世界观、地图与空间、角色与势力、Arc 蓝图阶段都支持选中单个目标，再只针对这个目标和 AI 对话改写。</p>
+              </div>
+            </div>
+            <div class="genesis-item-toolbar">
+              <div>
+                <label for="genesis_item_collection_select">子项类型</label>
+                <select id="genesis_item_collection_select" onchange="selectGenesisItemCollection(this.value)"></select>
+              </div>
+              <div>
+                <label for="genesis_item_entry_select">当前子项</label>
+                <select id="genesis_item_entry_select" onchange="selectGenesisItemIndex(this.value)"></select>
+              </div>
+            </div>
+            <div class="action-row">
+              <button id="genesis_create_item_btn" class="secondary" type="button" onclick="createGenesisItem()">新增子项</button>
+              <button id="genesis_delete_item_btn" class="ghost" type="button" onclick="deleteGenesisItem()">删除选中子项</button>
+            </div>
+            <div id="genesis_item_meta" class="meta-line">当前阶段没有子项目标。</div>
+            <div id="genesis_item_form" class="field-grid"></div>
+            <div id="genesis_item_preview" class="code genesis-item-preview"></div>
+          </div>
+          <div class="genesis-item-card">
+            <div class="section-head" style="margin-bottom:0;">
+              <div>
+                <h3>最终 JSON / 高级编辑</h3>
+                <p>结构化字段改动会同步回这里；你仍然可以直接编辑 JSON。</p>
+              </div>
+            </div>
+            <textarea id="genesis_stage_editor" class="genesis-editor" spellcheck="false" oninput="handleGenesisEditorInput()"></textarea>
+          </div>
+          <div class="genesis-chat-box">
+            <label for="genesis_refine_instruction">AI 对话改写</label>
+            <div>
+              <label for="genesis_model_profile_id">Model Profile</label>
+              <select id="genesis_model_profile_id" onchange="changeGenesisModelProfile(this.value)"></select>
+            </div>
+            <textarea id="genesis_refine_instruction" class="genesis-refine-textarea" placeholder="像聊天一样告诉 AI 你想怎么改。可以改写整个阶段，也可以在选择子项后只改一个规则 / 历史 / 命名 / 禁区 / 小地图 / 角色 / 势力。"></textarea>
+            <div id="genesis_refine_meta" class="meta-line">默认会改写整个阶段；如果选中了子项，也可以只改写那个对象。</div>
+            <div class="action-row">
+              <button class="secondary" type="button" onclick="refineGenesisCurrentStage()">改写当前阶段</button>
+              <button id="genesis_refine_item_btn" class="ghost" type="button" onclick="refineGenesisSelectedItem()" disabled>改写选中子项</button>
+            </div>
+          </div>
+          <div class="action-row">
+            <button class="secondary" type="button" onclick="saveGenesisStage()">保存编辑</button>
+            <button class="ghost" type="button" onclick="generateGenesisStage('generate')">生成</button>
+            <button class="ghost" type="button" onclick="generateGenesisStage('rerun')">重生</button>
+            <button class="primary" type="button" onclick="lockGenesisStage()">锁定阶段</button>
+          </div>
+        </section>
+        <section class="genesis-summary-grid">
+          <article class="card genesis-overview">
+            <div class="task-id">阶段概览</div>
+            <div id="genesis_stage_summary" class="meta-line">尚未载入。</div>
+            <div id="genesis_stage_preview" class="code"></div>
+          </article>
+          <article class="card">
+            <div class="task-id">Prompt Trace</div>
+            <div id="genesis_trace_list" class="trace-list"></div>
+          </article>
+        </section>
+      </div>
+      <section class="card genesis-overview">
+        <div class="task-id">根蓝图总览</div>
+        <div id="genesis_blueprint_summary" class="meta-line">尚未载入。</div>
+      </section>
     </div>
   </div>
 
@@ -1460,6 +1695,442 @@ def _render_home_page_v2(
       'terminating',
       'cancelled',
     ];
+    const GENESIS_STAGE_ORDER = ['brief', 'world', 'map', 'story_engine', 'book_blueprint', 'bootstrap'];
+    const GENESIS_STAGE_FIELD_MAP = {
+      brief: 'book_brief',
+      world: 'world_bible',
+      map: 'map_atlas',
+      story_engine: 'story_engine',
+      book_blueprint: 'book_arc_blueprint',
+      bootstrap: 'execution_bootstrap',
+    };
+    const GENESIS_STAGE_FORM_FIELDS = {
+      brief: [
+        { path: 'title', label: '标题' },
+        { path: 'one_line', label: '一句话概述', kind: 'textarea' },
+        { path: 'audience', label: '目标读者' },
+        { path: 'core_emotion', label: '核心情绪' },
+        { path: 'core_delight', label: '核心爽点' },
+        { path: 'promise', label: '读者承诺', kind: 'textarea' },
+        { path: 'guardrails', label: '禁区', kind: 'list', help: '每行一条禁区或避雷要求。' },
+      ],
+      world: [
+        { path: 'overview', label: '世界概览', kind: 'textarea' },
+        { path: 'axioms', label: '世界规则', kind: 'list', help: '每行一条世界规则或世界公理。' },
+        { path: 'history_slice', label: '历史切片', kind: 'textarea' },
+        { path: 'naming_style', label: '命名风格' },
+        { path: 'forbidden_zones', label: '禁区', kind: 'list', help: '每行一条世界禁区、禁忌或不允许出现的设定。' },
+      ],
+      map: [
+        { path: 'overview', label: '地图概览', kind: 'textarea' },
+        { path: 'topology_rules', label: '空间拓扑规则', kind: 'list', help: '每行一条移动、边界或空间成本规则。' },
+      ],
+      story_engine: [
+        { path: 'relationship_axes', label: '关系轴', kind: 'list', help: '每行一条长期关系轴。' },
+        { path: 'reader_promises', label: '读者承诺', kind: 'list', help: '每行一条要持续兑现的读者承诺。' },
+        { path: 'long_arcs', label: '长期叙事引擎', kind: 'list', help: '每行一条长期推动线。' },
+      ],
+      book_blueprint: [
+        { path: 'summary', label: '蓝图总览', kind: 'textarea' },
+      ],
+      bootstrap: [
+        {
+          path: 'operation_mode',
+          label: '运行模式',
+          kind: 'select',
+          options: [{ value: 'blackbox', label: 'blackbox' }],
+        },
+        {
+          path: 'start_policy',
+          label: '启动策略',
+          kind: 'select',
+          options: [
+            { value: 'explicit_start_writing_only', label: '显式点击“启动写作”后才开始' },
+            { value: 'manual_handoff', label: '人工交接后再启动' },
+          ],
+        },
+        { path: 'root_ready', label: '根层已准备就绪', kind: 'checkbox' },
+      ],
+    };
+    const GENESIS_STAGE_ITEM_TARGETS = {
+      world: [
+        {
+          path: 'axioms',
+          label: '规则',
+          singletonLabel: '规则集',
+          template: ['新规则'],
+          fields: [
+            { path: '', label: '规则集', kind: 'list', help: '每行一条规则。' },
+          ],
+        },
+        {
+          path: 'history_slice',
+          label: '历史',
+          singletonLabel: '历史切片',
+          template: '',
+          fields: [
+            { path: '', label: '历史切片', kind: 'textarea' },
+          ],
+        },
+        {
+          path: 'naming_style',
+          label: '命名',
+          singletonLabel: '命名风格',
+          template: '',
+          fields: [
+            { path: '', label: '命名风格' },
+          ],
+        },
+        {
+          path: 'forbidden_zones',
+          label: '禁区',
+          singletonLabel: '禁区列表',
+          template: [],
+          fields: [
+            { path: '', label: '禁区列表', kind: 'list', help: '每行一条禁区。' },
+          ],
+        },
+        {
+          collection: 'culture_profiles',
+          label: '文化背景',
+          template: {
+            id: 'culture-new',
+            name: '新文化背景',
+            summary: '',
+            inspiration: '',
+            social_markers: [],
+            aesthetic_keywords: [],
+            character_name_style: '',
+            region_name_style: '',
+            location_name_style: '',
+            character_name_examples: [],
+            region_name_examples: [],
+            location_name_examples: [],
+            usage_notes: '',
+          },
+          fields: [
+            { path: 'id', label: '文化 ID' },
+            { path: 'name', label: '文化背景名' },
+            { path: 'summary', label: '文化摘要', kind: 'textarea' },
+            { path: 'inspiration', label: '文化母本 / 灵感来源' },
+            { path: 'social_markers', label: '社会特征', kind: 'list', help: '每行一条社会结构、价值观或礼制特征。' },
+            { path: 'aesthetic_keywords', label: '审美关键词', kind: 'list', help: '每行一个视觉、气质或意象关键词。' },
+            { path: 'character_name_style', label: '人物命名风格', kind: 'textarea' },
+            { path: 'region_name_style', label: '地区命名风格', kind: 'textarea' },
+            { path: 'location_name_style', label: '地点命名风格', kind: 'textarea' },
+            { path: 'character_name_examples', label: '人物名字样例', kind: 'list', help: '每行一个人名样例。' },
+            { path: 'region_name_examples', label: '地区名字样例', kind: 'list', help: '每行一个地区名样例。' },
+            { path: 'location_name_examples', label: '地点名字样例', kind: 'list', help: '每行一个地点名样例。' },
+            { path: 'usage_notes', label: '使用说明', kind: 'textarea' },
+          ],
+        },
+      ],
+      map: [
+        {
+          collection: 'submaps',
+          label: '小世界',
+          template: {
+            name: '新小地图',
+            scope: 'local_region',
+            parent_scope: '',
+            culture_profile_id: '',
+            summary: '',
+            culture_traits: [],
+            climate: '',
+            terrain: [],
+            governing_power: '',
+            resident_factions: [],
+            key_locations: [],
+            travel_rules: [],
+            resource_themes: [],
+          },
+          fields: [
+            { path: 'name', label: '子世界名' },
+            {
+              path: 'scope',
+              label: '作用域',
+              kind: 'select',
+              options: [
+                { value: 'macro_region', label: '宏观区域' },
+                { value: 'nation', label: '国度 / 王朝' },
+                { value: 'city_state', label: '城市 / 都城' },
+                { value: 'sect_domain', label: '宗派 / 家族领地' },
+                { value: 'local_region', label: '局部区域' },
+                { value: 'frontier', label: '边境 / 前线' },
+                { value: 'other', label: '其他' },
+              ],
+            },
+            { path: 'parent_scope', label: '父作用域' },
+            { path: 'culture_profile_id', label: '文化背景', kind: 'reference', source: 'culture_profiles' },
+            { path: 'summary', label: '摘要', kind: 'textarea' },
+            { path: 'culture_traits', label: '文化属性', kind: 'list', help: '每行一条文化特征。' },
+            { path: 'climate', label: '气候特点' },
+            { path: 'terrain', label: '地形特征', kind: 'list', help: '每行一条地形描述。' },
+            { path: 'governing_power', label: '统治力量' },
+            { path: 'resident_factions', label: '常驻势力', kind: 'list', help: '每行一个势力名。' },
+            { path: 'key_locations', label: '关键地点', kind: 'list', help: '每行一个关键地点。' },
+            { path: 'travel_rules', label: '通行规则', kind: 'list', help: '每行一条移动/交通规则。' },
+            { path: 'resource_themes', label: '资源主题', kind: 'list', help: '每行一条资源或经济特征。' },
+          ],
+        },
+        {
+          collection: 'regions',
+          label: '地区',
+          template: {
+            id: 'region-new',
+            name: '新地区',
+            subworld_name: '',
+            parent_region_id: '',
+            level: 1,
+            culture_profile_id: '',
+            kind: 'local_region',
+            summary: '',
+            culture_traits: [],
+            climate: '',
+            terrain: [],
+            controller_factions: [],
+            resource_themes: [],
+          },
+          fields: [
+            { path: 'id', label: '地区 ID' },
+            { path: 'name', label: '地区名' },
+            { path: 'subworld_name', label: '所属小世界', kind: 'reference', source: 'submaps' },
+            {
+              path: 'level',
+              label: '层级',
+              kind: 'select',
+              options: [
+                { value: '1', label: '一级地区' },
+                { value: '2', label: '二级地区' },
+              ],
+            },
+            { path: 'parent_region_id', label: '父地区', kind: 'reference', source: 'regions' },
+            { path: 'culture_profile_id', label: '文化背景', kind: 'reference', source: 'culture_profiles' },
+            {
+              path: 'kind',
+              label: '地区类型',
+              kind: 'select',
+              options: [
+                { value: 'local_region', label: '普通地区' },
+                { value: 'nation_core', label: '国度核心区' },
+                { value: 'district', label: '行政区 / 城区' },
+                { value: 'sect_domain', label: '宗派领地' },
+                { value: 'family_domain', label: '家族领地' },
+                { value: 'frontier_zone', label: '边境区' },
+                { value: 'other', label: '其他' },
+              ],
+            },
+            { path: 'summary', label: '摘要', kind: 'textarea' },
+            { path: 'culture_traits', label: '文化属性', kind: 'list', help: '每行一条文化特征。' },
+            { path: 'climate', label: '气候特点' },
+            { path: 'terrain', label: '地形特征', kind: 'list', help: '每行一条地形描述。' },
+            { path: 'controller_factions', label: '控制势力', kind: 'list', help: '每行一个势力名。' },
+            { path: 'resource_themes', label: '资源主题', kind: 'list', help: '每行一条资源或经济特征。' },
+          ],
+        },
+        {
+          collection: 'nodes',
+          label: '地点节点',
+          template: {
+            name: '新地点',
+            kind: 'region',
+            parent_subworld: '',
+            parent_region_id: '',
+            culture_profile_id: '',
+            description: '',
+            control: '',
+            danger: '',
+            climate_note: '',
+            terrain_note: '',
+            culture_note: '',
+            resources: [],
+          },
+          fields: [
+            { path: 'name', label: '地点名' },
+            {
+              path: 'kind',
+              label: '地点类型',
+              kind: 'select',
+              options: [
+                { value: 'region', label: '区域' },
+                { value: 'city', label: '城市' },
+                { value: 'sect', label: '宗派驻地' },
+                { value: 'fortress', label: '要塞' },
+                { value: 'frontier', label: '边境' },
+                { value: 'ruin', label: '遗迹' },
+                { value: 'other', label: '其他' },
+              ],
+            },
+            { path: 'parent_subworld', label: '所属子世界', kind: 'reference', source: 'submaps' },
+            { path: 'parent_region_id', label: '所属地区', kind: 'reference', source: 'regions' },
+            { path: 'culture_profile_id', label: '文化背景', kind: 'reference', source: 'culture_profiles' },
+            { path: 'description', label: '地点描述', kind: 'textarea' },
+            { path: 'control', label: '控制方' },
+            { path: 'danger', label: '危险度 / 风险' },
+            { path: 'climate_note', label: '气候备注' },
+            { path: 'terrain_note', label: '地形备注' },
+            { path: 'culture_note', label: '文化备注' },
+            { path: 'resources', label: '资源', kind: 'list', help: '每行一条资源或地点价值。' },
+          ],
+        },
+      ],
+      story_engine: [
+        {
+          collection: 'core_cast',
+          label: '角色',
+          template: {
+            name: '新角色',
+            role: '',
+            desire: '',
+            fear: '',
+            secret: '',
+            culture_profile_id: '',
+            home_subworld: '',
+            home_region: '',
+            home_location: '',
+            current_region: '',
+            current_base: '',
+            affiliated_faction: '',
+            affiliated_family: '',
+            faction_memberships: [],
+          },
+          fields: [
+            { path: 'name', label: '角色名' },
+            { path: 'role', label: '角色定位' },
+            { path: 'desire', label: '欲望 / 目标', kind: 'textarea' },
+            { path: 'fear', label: '恐惧 / 风险', kind: 'textarea' },
+            { path: 'secret', label: '秘密', kind: 'textarea' },
+            { path: 'culture_profile_id', label: '文化背景', kind: 'reference', source: 'culture_profiles' },
+            { path: 'home_subworld', label: '家乡所在子世界', kind: 'reference', source: 'submaps' },
+            { path: 'home_region', label: '家乡所在地区', kind: 'reference', source: 'regions' },
+            { path: 'home_location', label: '家乡地点', kind: 'reference', source: 'nodes' },
+            { path: 'current_region', label: '当前活动地区', kind: 'reference', source: 'regions' },
+            { path: 'current_base', label: '当前据点', kind: 'reference', source: 'nodes' },
+            { path: 'affiliated_faction', label: '隶属势力', kind: 'reference', source: 'factions' },
+            { path: 'affiliated_family', label: '隶属家族 / 宗派' },
+            {
+              path: 'faction_memberships',
+              label: '势力归属',
+              kind: 'object_list',
+              row_label: '每行：势力名 | 关系 | 身份/阶位 | primary(true/false)',
+              schema: [
+                { key: 'faction_name', default: '' },
+                { key: 'relation', default: 'member' },
+                { key: 'rank', default: '' },
+                { key: 'is_primary', default: false, type: 'boolean' },
+              ],
+            },
+          ],
+        },
+        {
+          collection: 'factions',
+          label: '势力',
+          template: {
+            name: '新势力',
+            role: '',
+            goal: '',
+            leverage: '',
+            relationship_to_protagonist: '',
+            culture_profile_id: '',
+            base_subworld: '',
+            headquarters_region: '',
+            base_location: '',
+            territory_scope: [],
+            culture_keywords: [],
+            footprint: [],
+          },
+          fields: [
+            { path: 'name', label: '势力名' },
+            { path: 'role', label: '势力定位' },
+            { path: 'goal', label: '目标', kind: 'textarea' },
+            { path: 'leverage', label: '筹码 / 杠杆', kind: 'textarea' },
+            { path: 'relationship_to_protagonist', label: '与主角关系', kind: 'textarea' },
+            { path: 'culture_profile_id', label: '文化背景', kind: 'reference', source: 'culture_profiles' },
+            { path: 'base_subworld', label: '根据地子世界', kind: 'reference', source: 'submaps' },
+            { path: 'headquarters_region', label: '总部地区', kind: 'reference', source: 'regions' },
+            { path: 'base_location', label: '核心地点', kind: 'reference', source: 'nodes' },
+            { path: 'territory_scope', label: '势力范围', kind: 'list', help: '每行一个范围或所属区域。' },
+            { path: 'culture_keywords', label: '势力文化关键词', kind: 'list', help: '每行一个文化/作风关键词。' },
+            {
+              path: 'footprint',
+              label: '分布足迹',
+              kind: 'object_list',
+              row_label: '每行：小世界 | 地区ID | 覆盖强度 | 模式',
+              schema: [
+                { key: 'subworld_name', default: '' },
+                { key: 'region_id', default: '' },
+                { key: 'presence', default: 'medium' },
+                { key: 'mode', default: 'rule' },
+              ],
+            },
+          ],
+        },
+        {
+          collection: 'opposition',
+          label: '对手盘',
+          template: {
+            name: '新对手',
+            role: '',
+            desire: '',
+            pressure: '',
+            relationship_to_protagonist: '',
+            culture_profile_id: '',
+            base_subworld: '',
+            base_region: '',
+            base_location: '',
+            backing_faction: '',
+            backing_factions: [],
+          },
+          fields: [
+            { path: 'name', label: '对手名' },
+            { path: 'role', label: '对手定位' },
+            { path: 'desire', label: '欲望 / 主张', kind: 'textarea' },
+            { path: 'pressure', label: '施压方式', kind: 'textarea' },
+            { path: 'relationship_to_protagonist', label: '与主角关系', kind: 'textarea' },
+            { path: 'culture_profile_id', label: '文化背景', kind: 'reference', source: 'culture_profiles' },
+            { path: 'base_subworld', label: '主要活动子世界', kind: 'reference', source: 'submaps' },
+            { path: 'base_region', label: '主要活动地区', kind: 'reference', source: 'regions' },
+            { path: 'base_location', label: '主要地点', kind: 'reference', source: 'nodes' },
+            { path: 'backing_faction', label: '背后势力', kind: 'reference', source: 'factions' },
+            { path: 'backing_factions', label: '背后势力列表', kind: 'list', help: '每行一个势力名。' },
+          ],
+        },
+      ],
+      book_blueprint: [
+        {
+          collection: 'arcs',
+          label: 'Arc 蓝图',
+          template: {
+            arc_number: 1,
+            title: '新 Arc',
+            arc_synopsis: '',
+            goal: '',
+            stakes: '',
+            payoff_direction: '',
+            chapter_start: 1,
+            chapter_end: 3,
+            chapter_count: 3,
+            target_size: 3,
+            soft_min: 2,
+            soft_max: 4,
+          },
+          fields: [
+            { path: 'arc_number', label: 'Arc 编号', kind: 'number' },
+            { path: 'title', label: 'Arc 标题' },
+            { path: 'arc_synopsis', label: 'Arc 摘要', kind: 'textarea' },
+            { path: 'goal', label: '阶段目标', kind: 'textarea' },
+            { path: 'stakes', label: '风险 / 代价', kind: 'textarea' },
+            { path: 'payoff_direction', label: '兑现方向' },
+            { path: 'chapter_start', label: '起始章节', kind: 'number' },
+            { path: 'chapter_end', label: '结束章节', kind: 'number' },
+            { path: 'chapter_count', label: '章节数', kind: 'number' },
+            { path: 'target_size', label: '目标 size', kind: 'number' },
+            { path: 'soft_min', label: 'soft_min', kind: 'number' },
+            { path: 'soft_max', label: 'soft_max', kind: 'number' },
+          ],
+        },
+      ],
+    };
     const TERMINAL_TASK_STATUSES = new Set(['completed', 'partial_failed', 'failed', 'needs_review', 'cancelled', 'paused', 'succeeded']);
     const ACTIVE_TASK_STATUSES = new Set(['starting', 'running', 'pending', 'terminating']);
     const pendingBridgeRequests = new Map();
@@ -1479,6 +2150,14 @@ def _render_home_page_v2(
     let taskPollHasActive = false;
     let booksStateSignature = '';
     let taskCenterStateSignature = '';
+    let currentGenesisProjectId = '';
+    let currentGenesisDetail = null;
+    let currentGenesisStage = 'brief';
+    let currentGenesisItemCollection = '';
+    let currentGenesisItemIndex = -1;
+    let currentGenesisModelProfileId = '';
+    let currentGenesisDrafts = {};
+    let genesisActionBusy = false;
 
 @@PAGE_DOM_HELPERS_JS@@
 
@@ -1505,6 +2184,43 @@ def _render_home_page_v2(
 
     function dataSignature(value) {
       return JSON.stringify(normalizeForSignature(value));
+    }
+
+    async function runGenesisAction(fn, busyMessage = 'Genesis 正在执行上一条操作，请稍候。') {
+      if (genesisActionBusy) {
+        setGlobalStatus(busyMessage, 'Genesis 工作台');
+        return null;
+      }
+      genesisActionBusy = true;
+      try {
+        return await fn();
+      } finally {
+        genesisActionBusy = false;
+      }
+    }
+
+    function populateModelProfileSelect(selectEl, preferredId = '') {
+      if (!selectEl) return '';
+      clearNode(selectEl);
+      const profiles = Array.isArray(settingsState?.profiles) ? settingsState.profiles : [];
+      if (!profiles.length) {
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = '暂无模型配置';
+        selectEl.appendChild(option);
+        selectEl.disabled = true;
+        return '';
+      }
+      const selectedId = preferredId || settingsState?.default_profile_id || profiles[0]?.id || '';
+      profiles.forEach((profile, index) => {
+        const option = document.createElement('option');
+        option.value = profile.id;
+        option.textContent = `${profile.name}${profile.id === settingsState.default_profile_id ? ' · 默认' : ''}`;
+        option.selected = profile.id === selectedId || (!selectedId && index === 0);
+        selectEl.appendChild(option);
+      });
+      selectEl.disabled = false;
+      return selectEl.value || selectedId || '';
     }
 
     function syncBookBulkActions() {
@@ -1588,9 +2304,39 @@ def _render_home_page_v2(
       const response = await fetch(url, options);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(payload.detail || payload.message || `HTTP ${response.status}`);
+        const detail = payload.detail ?? payload.message ?? `HTTP ${response.status}`;
+        let message = '';
+        if (typeof detail === 'string') {
+          message = detail;
+        } else if (Array.isArray(detail)) {
+          message = detail.map((item) => {
+            if (typeof item === 'string') return item;
+            if (item && typeof item === 'object') {
+              const loc = Array.isArray(item.loc) ? item.loc.join('.') : '';
+              const msg = typeof item.msg === 'string' ? item.msg : JSON.stringify(item);
+              return loc ? `${loc}: ${msg}` : msg;
+            }
+            return String(item);
+          }).join('；');
+        } else if (detail && typeof detail === 'object') {
+          message = JSON.stringify(detail, null, 2);
+        } else {
+          message = String(detail);
+        }
+        throw new Error(message);
       }
       return payload;
+    }
+
+    function parseTextareaLines(value) {
+      return String(value || '')
+        .split(/\\r?\\n/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+
+    function deepCloneJson(value) {
+      return JSON.parse(JSON.stringify(value ?? {}));
     }
 
     function serializeTaskType(kind) {
@@ -1634,32 +2380,1023 @@ def _render_home_page_v2(
       return map[status] || status || '未知状态';
     }
 
-    function updateTaskModalSelects() {
-      const modelSelect = document.getElementById('task_generation_model_profile_id');
-      const platformSelect = document.getElementById('task_upload_platform');
-      clearNode(modelSelect);
-      clearNode(platformSelect);
-      const profiles = Array.isArray(settingsState?.profiles) ? settingsState.profiles : [];
-      if (!profiles.length) {
+    function genesisStageLabel(stageKey) {
+      const map = {
+        brief: '创意简报',
+        world: '世界观与背景',
+        map: '地图与空间拓扑',
+        story_engine: '角色势力与叙事引擎',
+        book_blueprint: '整本书多 Arc 路线图',
+        bootstrap: '执行契约与启动交接',
+      };
+      return map[stageKey] || stageKey || 'Genesis Stage';
+    }
+
+    function genesisFieldForStage(stageKey) {
+      return GENESIS_STAGE_FIELD_MAP[stageKey] || 'book_brief';
+    }
+
+    function genesisStageState(detail, stageKey) {
+      return detail?.pack?.stage_states?.[stageKey] || {
+        stage_key: stageKey,
+        status: 'todo',
+        locked: false,
+        updated_at: '',
+        last_trace_id: '',
+      };
+    }
+
+    function genesisProgressSummary(book) {
+      const stages = Array.isArray(book?.genesis_stage_overview) ? book.genesis_stage_overview : [];
+      if (!stages.length) return '';
+      const lockedCount = stages.filter((stage) => stage.locked).length;
+      const activeStage = stages.find((stage) => !stage.locked) || stages[stages.length - 1];
+      return `Genesis：${lockedCount}/${stages.length} 已锁定${activeStage ? ` · 当前 ${genesisStageLabel(activeStage.stage_key)}` : ''}`;
+    }
+
+    function chooseGenesisStage(detail) {
+      const stages = Array.isArray(detail?.pack?.stage_states)
+        ? detail.pack.stage_states
+        : Object.values(detail?.pack?.stage_states || {});
+      const firstUnlocked = stages.find((stage) => !stage.locked);
+      return firstUnlocked?.stage_key || GENESIS_STAGE_ORDER[0];
+    }
+
+    function closeGenesisWorkspace() {
+      document.getElementById('genesis_modal_shell').classList.remove('open');
+      currentGenesisProjectId = '';
+      currentGenesisDetail = null;
+      currentGenesisStage = GENESIS_STAGE_ORDER[0];
+      currentGenesisItemCollection = '';
+      currentGenesisItemIndex = -1;
+      clearAllGenesisDrafts();
+      currentGenesisModelProfileId = currentGenesisModelProfileId || settingsState?.default_profile_id || '';
+    }
+
+    async function openGenesisWorkspace(projectId, stageKey = '') {
+      currentGenesisProjectId = projectId;
+      currentGenesisStage = stageKey && GENESIS_STAGE_ORDER.includes(stageKey)
+        ? stageKey
+        : GENESIS_STAGE_ORDER[0];
+      document.getElementById('genesis_modal_shell').classList.add('open');
+      await refreshGenesisWorkspace(projectId);
+    }
+
+    async function refreshGenesisWorkspace(projectId = currentGenesisProjectId) {
+      if (!projectId) return;
+      try {
+        const detail = await requestJson(`/api/projects/${projectId}/genesis`);
+        currentGenesisDetail = detail;
+        clearAllGenesisDrafts();
+        if (!GENESIS_STAGE_ORDER.includes(currentGenesisStage)) {
+          currentGenesisStage = chooseGenesisStage(detail);
+        }
+        renderGenesisWorkspace();
+      } catch (error) {
+        setGlobalStatus(error.message || String(error), 'Genesis 工作台读取失败');
+      }
+    }
+
+    function currentGenesisServerPayload(detail = currentGenesisDetail, stageKey = currentGenesisStage) {
+      const fieldKey = genesisFieldForStage(stageKey);
+      return detail?.pack?.[fieldKey] || {};
+    }
+
+    function currentGenesisPayload(detail = currentGenesisDetail, stageKey = currentGenesisStage) {
+      if (Object.prototype.hasOwnProperty.call(currentGenesisDrafts, stageKey)) {
+        return currentGenesisDrafts[stageKey];
+      }
+      return currentGenesisServerPayload(detail, stageKey);
+    }
+
+    function rememberGenesisDraft(stageKey, payload) {
+      currentGenesisDrafts[stageKey] = deepCloneJson(payload || {});
+    }
+
+    function clearGenesisDraft(stageKey = currentGenesisStage) {
+      delete currentGenesisDrafts[stageKey];
+    }
+
+    function clearAllGenesisDrafts() {
+      currentGenesisDrafts = {};
+    }
+
+    function genesisStageItemTargets(stageKey = currentGenesisStage) {
+      return GENESIS_STAGE_ITEM_TARGETS[stageKey] || [];
+    }
+
+    function genesisItemKey(target) {
+      return target?.collection || target?.path || '';
+    }
+
+    function defaultGenesisItemCollection(stageKey = currentGenesisStage) {
+      return genesisItemKey(genesisStageItemTargets(stageKey)[0]) || '';
+    }
+
+    function genesisItemDefinition(stageKey = currentGenesisStage, collection = currentGenesisItemCollection) {
+      return genesisStageItemTargets(stageKey).find((item) => genesisItemKey(item) === collection) || null;
+    }
+
+    function currentGenesisItemList(detail = currentGenesisDetail, collection = currentGenesisItemCollection) {
+      const definition = genesisItemDefinition(currentGenesisStage, collection);
+      const payload = currentGenesisPayload(detail);
+      if (!definition) return [];
+      if (definition.collection) {
+        return Array.isArray(payload?.[definition.collection]) ? payload[definition.collection] : [];
+      }
+      if (!definition.path) return [];
+      if (payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, definition.path)) {
+        return [payload[definition.path]];
+      }
+      return [deepCloneJson(definition.template ?? null)];
+    }
+
+    function currentGenesisItemPath() {
+      const definition = genesisItemDefinition();
+      if (!definition) return '';
+      if (definition.path && !definition.collection) return definition.path;
+      if (!currentGenesisItemCollection || currentGenesisItemIndex < 0) return '';
+      return `${definition.collection}[${currentGenesisItemIndex}]`;
+    }
+
+    function currentGenesisItemPayload(detail = currentGenesisDetail) {
+      const items = currentGenesisItemList(detail);
+      const definition = genesisItemDefinition();
+      if (definition?.path && !definition.collection) {
+        return items.length ? items[0] : deepCloneJson(definition.template ?? null);
+      }
+      return currentGenesisItemIndex >= 0 && currentGenesisItemIndex < items.length ? items[currentGenesisItemIndex] : null;
+    }
+
+    function genesisPathSegments(path = '') {
+      return String(path || '')
+        .split('.')
+        .map((part) => part.trim())
+        .filter(Boolean);
+    }
+
+    function genesisGetValueAtPath(source, path = '') {
+      if (!path) return source;
+      let cursor = source;
+      for (const segment of genesisPathSegments(path)) {
+        if (cursor == null || typeof cursor !== 'object') return undefined;
+        cursor = cursor[segment];
+      }
+      return cursor;
+    }
+
+    function genesisSetValueAtPath(source, path, value) {
+      if (!path) return value;
+      const segments = genesisPathSegments(path);
+      if (!segments.length) return value;
+      let cursor = source;
+      for (let index = 0; index < segments.length - 1; index += 1) {
+        const segment = segments[index];
+        if (!cursor[segment] || typeof cursor[segment] !== 'object' || Array.isArray(cursor[segment])) {
+          cursor[segment] = {};
+        }
+        cursor = cursor[segment];
+      }
+      cursor[segments[segments.length - 1]] = value;
+      return source;
+    }
+
+    function genesisStringList(value) {
+      if (Array.isArray(value)) return value.filter((item) => String(item || '').trim()).map((item) => String(item).trim());
+      if (value == null || value === '') return [];
+      return String(value)
+        .split('\\n')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+
+    function genesisObjectList(value, schema = []) {
+      if (Array.isArray(value)) {
+        return value
+          .filter((item) => item && typeof item === 'object')
+          .map((item) => {
+            const normalized = {};
+            schema.forEach((field) => {
+              const raw = item[field.path];
+              if (field.kind === 'checkbox') {
+                normalized[field.path] = Boolean(raw);
+              } else if (field.kind === 'list') {
+                normalized[field.path] = genesisStringList(raw);
+              } else {
+                normalized[field.path] = raw == null ? '' : raw;
+              }
+            });
+            return normalized;
+          });
+      }
+      return [];
+    }
+
+    function genesisParseObjectList(value, schema = []) {
+      const text = String(value ?? '').trim();
+      if (!text) return [];
+      try {
+        const parsed = JSON.parse(text);
+        return genesisObjectList(parsed, schema);
+      } catch (error) {
+        return [];
+      }
+    }
+
+    function genesisDisplayObjectList(value, schema = []) {
+      return JSON.stringify(genesisObjectList(value, schema), null, 2);
+    }
+
+    function genesisReadFieldValue(field, control) {
+      const kind = field?.kind || 'text';
+      if (kind === 'checkbox') return Boolean(control?.checked);
+      if (kind === 'number') {
+        const parsed = Number.parseInt(String(control?.value ?? '').trim(), 10);
+        return Number.isFinite(parsed) ? parsed : 0;
+      }
+      if (kind === 'list') return genesisStringList(control?.value);
+      if (kind === 'object_list') return genesisParseObjectList(control?.value, field.schema || []);
+      return String(control?.value ?? '');
+    }
+
+    function genesisFieldDisplayValue(field, value) {
+      const kind = field?.kind || 'text';
+      if (kind === 'checkbox') return Boolean(value);
+      if (kind === 'list') return Array.isArray(value) ? value.join('\\n') : '';
+      if (kind === 'object_list') return genesisDisplayObjectList(value, field.schema || []);
+      if (kind === 'number') return value == null || value === '' ? '' : String(value);
+      return value == null ? '' : String(value);
+    }
+
+    function genesisReferenceOptions(source) {
+      if (!source) return [];
+      let payload = {};
+      if (source === 'culture_profiles') {
+        payload = currentGenesisStage === 'world'
+          ? currentGenesisPayload(currentGenesisDetail, 'world')
+          : currentGenesisServerPayload(currentGenesisDetail, 'world');
+      } else if (source === 'submaps' || source === 'regions' || source === 'nodes') {
+        payload = currentGenesisStage === 'map'
+          ? currentGenesisPayload(currentGenesisDetail, 'map')
+          : currentGenesisServerPayload(currentGenesisDetail, 'map');
+      } else if (source === 'factions' || source === 'core_cast' || source === 'opposition') {
+        payload = currentGenesisStage === 'story_engine'
+          ? currentGenesisPayload(currentGenesisDetail, 'story_engine')
+          : currentGenesisServerPayload(currentGenesisDetail, 'story_engine');
+      }
+      const items = Array.isArray(payload?.[source]) ? payload[source] : [];
+      return items
+        .map((item) => {
+          if (item && typeof item === 'object') {
+            const fallbackValue = String(item.name || item.title || item.id || '').trim();
+            if (!fallbackValue) return null;
+            if (source === 'culture_profiles') {
+              return {
+                value: String(item.id || fallbackValue).trim(),
+                label: `${String(item.name || fallbackValue).trim()}${item.inspiration ? ` · ${item.inspiration}` : ''}`,
+              };
+            }
+            if (source === 'regions') {
+              return {
+                value: String(item.id || fallbackValue).trim(),
+                label: `${String(item.name || fallbackValue).trim()}${item.subworld_name ? ` · ${item.subworld_name}` : ''}`,
+              };
+            }
+            return { value: fallbackValue, label: fallbackValue };
+          }
+          const value = String(item || '').trim();
+          return value ? { value, label: value } : null;
+        })
+        .filter(Boolean);
+    }
+
+    function updateGenesisLivePreview(payload) {
+      document.getElementById('genesis_stage_preview').textContent = JSON.stringify(payload || {}, null, 2);
+      const definition = genesisItemDefinition();
+      const preview = document.getElementById('genesis_item_preview');
+      if (!preview || !definition) return;
+      if (definition.path && !definition.collection) {
+        preview.textContent = JSON.stringify(genesisGetValueAtPath(payload, definition.path), null, 2);
+        return;
+      }
+      if (!definition.collection) return;
+      const items = Array.isArray(payload?.[definition.collection]) ? payload[definition.collection] : [];
+      const currentItem = currentGenesisItemIndex >= 0 && currentGenesisItemIndex < items.length ? items[currentGenesisItemIndex] : null;
+      preview.textContent = JSON.stringify(currentItem || definition.template || {}, null, 2);
+    }
+
+    function renderGenesisStructuredFields(container, fields, source, applyFn) {
+      clearNode(container);
+      if (!fields.length) {
+        container.appendChild(createNode('div', '当前阶段暂未拆出结构化字段，仍可直接编辑下方 JSON。', 'meta-line'));
+        return;
+      }
+      fields.forEach((field) => {
+        const wrapper = createNode('div', '', 'form-field');
+        const label = document.createElement('label');
+        label.textContent = field.label;
+        wrapper.appendChild(label);
+        const currentValue = genesisGetValueAtPath(source, field.path);
+        const kind = field.kind || 'text';
+        let control;
+        if (kind === 'textarea' || kind === 'list' || kind === 'object_list') {
+          control = document.createElement('textarea');
+          control.value = genesisFieldDisplayValue(field, currentValue);
+          if (field.placeholder) control.placeholder = field.placeholder;
+        } else if (kind === 'select' || kind === 'reference') {
+          control = document.createElement('select');
+          const options = kind === 'reference' ? genesisReferenceOptions(field.source) : (field.options || []);
+          const blank = document.createElement('option');
+          blank.value = '';
+          blank.textContent = field.empty_label || '未设置';
+          control.appendChild(blank);
+          options.forEach((optionDef) => {
+            const option = document.createElement('option');
+            option.value = String(optionDef.value ?? '');
+            option.textContent = String(optionDef.label ?? optionDef.value ?? '');
+            control.appendChild(option);
+          });
+          const normalizedValue = genesisFieldDisplayValue(field, currentValue);
+          if (normalizedValue && !Array.from(control.options).some((option) => option.value === normalizedValue)) {
+            const option = document.createElement('option');
+            option.value = normalizedValue;
+            option.textContent = `${normalizedValue} · 当前值`;
+            control.appendChild(option);
+          }
+          control.value = normalizedValue;
+        } else {
+          control = document.createElement('input');
+          control.type = kind === 'number' ? 'number' : 'text';
+          control.value = genesisFieldDisplayValue(field, currentValue);
+          if (field.placeholder) control.placeholder = field.placeholder;
+        }
+        if (kind === 'checkbox') {
+          control = document.createElement('input');
+          control.type = 'checkbox';
+          control.checked = Boolean(currentValue);
+        }
+        const commitField = (refresh = false) => applyFn(field, genesisReadFieldValue(field, control), refresh);
+        control.addEventListener(kind === 'checkbox' ? 'change' : 'input', () => commitField(false));
+        control.addEventListener('change', () => commitField(true));
+        wrapper.appendChild(control);
+        if (field.help) {
+          wrapper.appendChild(createNode('div', field.help, 'meta-line'));
+        }
+        if (field.row_label) {
+          wrapper.appendChild(createNode('div', `行内标签：${field.row_label}`, 'meta-line'));
+        }
+        container.appendChild(wrapper);
+      });
+    }
+
+    function handleGenesisEditorInput() {
+      const editor = document.getElementById('genesis_stage_editor');
+      if (!editor) return;
+      try {
+        const parsed = JSON.parse(editor.value || '{}');
+        rememberGenesisDraft(currentGenesisStage, parsed);
+        updateGenesisLivePreview(parsed);
+      } catch (error) {
+        document.getElementById('genesis_stage_preview').textContent = '当前 JSON 不是有效对象，保存或 AI 改写前需要先修正。';
+      }
+    }
+
+    function applyGenesisStageField(field, value, refresh = false) {
+      const payload = deepCloneJson(currentGenesisPayload(currentGenesisDetail, currentGenesisStage));
+      genesisSetValueAtPath(payload, field.path, value);
+      rememberGenesisDraft(currentGenesisStage, payload);
+      document.getElementById('genesis_stage_editor').value = JSON.stringify(payload || {}, null, 2);
+      updateGenesisLivePreview(payload);
+      if (refresh) {
+        renderGenesisItemWorkbench(currentGenesisDetail);
+      }
+    }
+
+    function applyGenesisItemField(field, value, refresh = false) {
+      const definition = genesisItemDefinition();
+      if (!definition) return;
+      const payload = deepCloneJson(currentGenesisPayload(currentGenesisDetail, currentGenesisStage));
+      if (definition.path && !definition.collection) {
+        const rootValue = genesisGetValueAtPath(payload, definition.path);
+        const nextValue = deepCloneJson(rootValue);
+        const updatedValue = field.path ? genesisSetValueAtPath(nextValue, field.path, value) : value;
+        genesisSetValueAtPath(payload, definition.path, updatedValue);
+      } else if (definition.collection) {
+        if (!Array.isArray(payload[definition.collection])) payload[definition.collection] = [];
+        while (payload[definition.collection].length <= currentGenesisItemIndex) {
+          payload[definition.collection].push(deepCloneJson(definition.template || {}));
+        }
+        const nextItem = deepCloneJson(payload[definition.collection][currentGenesisItemIndex] || {});
+        genesisSetValueAtPath(nextItem, field.path, value);
+        if (currentGenesisStage === 'map' && definition.collection === 'regions') {
+          const regions = payload[definition.collection];
+          const currentId = String(nextItem.id || '').trim();
+          const currentSubworld = String(nextItem.subworld_name || '').trim();
+          let nextLevel = Number.parseInt(String(nextItem.level ?? 1), 10);
+          if (nextLevel !== 2) nextLevel = 1;
+          nextItem.level = nextLevel;
+          if (nextLevel === 1) {
+            nextItem.parent_region_id = '';
+          } else {
+            const candidates = Array.isArray(regions)
+              ? regions.filter((region, index) => {
+                if (index === currentGenesisItemIndex) return false;
+                if (!region || typeof region !== 'object') return false;
+                if (String(region.subworld_name || '').trim() !== currentSubworld) return false;
+                if (Number.parseInt(String(region.level ?? 1), 10) !== 1) return false;
+                const regionId = String(region.id || '').trim();
+                return regionId && regionId !== currentId;
+              })
+              : [];
+            const parentId = String(nextItem.parent_region_id || '').trim();
+            if (!candidates.some((region) => String(region.id || '').trim() === parentId)) {
+              if (candidates.length) {
+                nextItem.parent_region_id = String(candidates[0].id || '').trim();
+              } else {
+                nextItem.level = 1;
+                nextItem.parent_region_id = '';
+              }
+            }
+          }
+        }
+        payload[definition.collection][currentGenesisItemIndex] = nextItem;
+      }
+      rememberGenesisDraft(currentGenesisStage, payload);
+      document.getElementById('genesis_stage_editor').value = JSON.stringify(payload || {}, null, 2);
+      updateGenesisLivePreview(payload);
+      if (refresh) {
+        renderGenesisItemWorkbench(currentGenesisDetail);
+      }
+    }
+
+    function renderGenesisStageForm(detail = currentGenesisDetail) {
+      const container = document.getElementById('genesis_stage_form');
+      renderGenesisStructuredFields(
+        container,
+        GENESIS_STAGE_FORM_FIELDS[currentGenesisStage] || [],
+        currentGenesisPayload(detail, currentGenesisStage),
+        applyGenesisStageField,
+      );
+    }
+
+    function ensureGenesisItemSelection(detail = currentGenesisDetail) {
+      const targets = genesisStageItemTargets();
+      if (!targets.length) {
+        currentGenesisItemCollection = '';
+        currentGenesisItemIndex = -1;
+        return;
+      }
+      if (!targets.some((item) => genesisItemKey(item) === currentGenesisItemCollection)) {
+        currentGenesisItemCollection = defaultGenesisItemCollection();
+      }
+      const definition = genesisItemDefinition(currentGenesisStage, currentGenesisItemCollection);
+      if (!definition) {
+        currentGenesisItemIndex = -1;
+        return;
+      }
+      if (definition.path && !definition.collection) {
+        currentGenesisItemIndex = 0;
+        return;
+      }
+      const items = currentGenesisItemList(detail, currentGenesisItemCollection);
+      if (!items.length) {
+        currentGenesisItemIndex = -1;
+        return;
+      }
+      if (currentGenesisItemIndex < 0 || currentGenesisItemIndex >= items.length) {
+        currentGenesisItemIndex = 0;
+      }
+    }
+
+    function genesisItemLabel(item, definition, index) {
+      if (definition?.path && !definition?.collection) {
+        return definition.singletonLabel || definition.label || '子项';
+      }
+      if (item && typeof item === 'object') {
+        return item.name || item.title || item.id || `${definition?.label || '子项'} ${index + 1}`;
+      }
+      return `${definition?.label || '子项'} ${index + 1}`;
+    }
+
+    function parseGenesisStageEditor() {
+      return JSON.parse(document.getElementById('genesis_stage_editor').value || '{}');
+    }
+
+    async function patchGenesisStagePayload(nextPayload, reason = '') {
+      return runGenesisAction(async () => {
+        const fieldKey = genesisFieldForStage(currentGenesisStage);
+        currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [fieldKey]: nextPayload, reason }),
+        });
+        clearAllGenesisDrafts();
+        renderGenesisWorkspace();
+        await loadBooks();
+        return true;
+      });
+    }
+
+    async function persistGenesisEditorIfDirty(reasonPrefix = 'ui_sync') {
+      const parsed = parseGenesisStageEditor();
+      if (dataSignature(parsed) === dataSignature(currentGenesisServerPayload(currentGenesisDetail))) return;
+      const saved = await patchGenesisStagePayload(parsed, `${reasonPrefix}_${currentGenesisStage}`);
+      if (saved === null) return;
+    }
+
+    function currentGenesisStageSummary(detail = currentGenesisDetail) {
+      const stageState = genesisStageState(detail, currentGenesisStage);
+      const payload = currentGenesisPayload(detail);
+      const lines = [
+        `阶段：${genesisStageLabel(currentGenesisStage)}`,
+        `状态：${stageState.status || 'todo'}`,
+        `锁定：${stageState.locked ? '是' : '否'}`,
+        stageState.updated_at ? `更新时间：${stageState.updated_at}` : '',
+      ];
+      if (payload && typeof payload === 'object') {
+        if (payload.summary) lines.push(`Summary：${payload.summary}`);
+        if (payload.overview) lines.push(`Overview：${payload.overview}`);
+        if (Array.isArray(payload.arcs)) {
+          lines.push(`Arc 数量：${payload.arcs.length}`);
+          lines.push(...payload.arcs.slice(0, 6).map((arc) => `Arc ${arc.arc_number || '?'} · ${arc.title || '未命名'} · ${arc.chapter_count || 0} 章`));
+        }
+        if (Array.isArray(payload.axioms)) lines.push(`规则数量：${payload.axioms.length}`);
+        if (payload.history_slice) lines.push(`历史切片：${String(payload.history_slice).slice(0, 40)}`);
+        if (payload.naming_style) lines.push(`命名风格：${String(payload.naming_style)}`);
+        if (Array.isArray(payload.forbidden_zones)) lines.push(`禁区数量：${payload.forbidden_zones.length}`);
+        if (Array.isArray(payload.culture_profiles)) lines.push(`文化背景：${payload.culture_profiles.length}`);
+        if (Array.isArray(payload.submaps)) lines.push(`小地图数量：${payload.submaps.length}`);
+        if (Array.isArray(payload.regions)) lines.push(`地区数量：${payload.regions.length}`);
+        if (Array.isArray(payload.nodes)) lines.push(`地点节点：${payload.nodes.length}`);
+        if (Array.isArray(payload.core_cast)) lines.push(`角色数量：${payload.core_cast.length}`);
+        if (Array.isArray(payload.factions)) lines.push(`势力数量：${payload.factions.length}`);
+        if (Array.isArray(payload.long_arcs)) lines.push(`长期引擎：${payload.long_arcs.length}`);
+      }
+      return lines.filter(Boolean).join('\\n');
+    }
+
+    function renderGenesisTraceList(detail = currentGenesisDetail) {
+      const traceList = document.getElementById('genesis_trace_list');
+      clearNode(traceList);
+      const traces = (Array.isArray(detail?.prompt_traces) ? detail.prompt_traces : [])
+        .filter((trace) => trace.stage_key === currentGenesisStage)
+        .slice(0, 6);
+      if (!traces.length) {
+        traceList.appendChild(createNode('div', '当前阶段还没有 Prompt Trace。可以先点“生成”或“重生”。', 'meta-line'));
+        return;
+      }
+      traces.forEach((trace) => {
+        const item = createNode('article', '', 'trace-item');
+        item.appendChild(createNode('strong', `${trace.template_id || currentGenesisStage} · ${trace.created_at || '未记录时间'}`));
+        item.appendChild(createNode('div', [
+          trace.template_version ? `template=${trace.template_version}` : '',
+          trace.model_profile?.profile_name ? `profile=${trace.model_profile.profile_name}` : '',
+          trace.model_profile?.profile_id ? `profile_id=${trace.model_profile.profile_id}` : '',
+          trace.model_profile?.model ? `model=${trace.model_profile.model}` : '',
+          trace.decision_event_id ? `decision=${trace.decision_event_id}` : '',
+        ].filter(Boolean).join(' | '), 'meta-line'));
+        if (trace.input_snapshot?.instruction) {
+          item.appendChild(createNode('div', `指令：${trace.input_snapshot.instruction}`, 'meta-line'));
+        }
+        if (trace.input_snapshot?.target_path) {
+          item.appendChild(createNode('div', `目标：${trace.input_snapshot.target_path}`, 'meta-line'));
+        }
+        const summary = createNode('div', '', 'trace-summary');
+        if (trace.output_summary && Object.keys(trace.output_summary).length) {
+          summary.appendChild(createNode('div', JSON.stringify(trace.output_summary, null, 2), 'code'));
+        }
+        item.appendChild(summary);
+        const promptPre = document.createElement('pre');
+        promptPre.textContent = trace.effective_system_prompt || '无 system prompt 快照。';
+        item.appendChild(promptPre);
+        traceList.appendChild(item);
+      });
+    }
+
+    function renderGenesisItemWorkbench(detail = currentGenesisDetail) {
+      const card = document.getElementById('genesis_item_card');
+      const collectionSelect = document.getElementById('genesis_item_collection_select');
+      const entrySelect = document.getElementById('genesis_item_entry_select');
+      const meta = document.getElementById('genesis_item_meta');
+      const form = document.getElementById('genesis_item_form');
+      const preview = document.getElementById('genesis_item_preview');
+      const refineItemBtn = document.getElementById('genesis_refine_item_btn');
+      const refineMeta = document.getElementById('genesis_refine_meta');
+      const createBtn = document.getElementById('genesis_create_item_btn');
+      const deleteBtn = document.getElementById('genesis_delete_item_btn');
+      const targets = genesisStageItemTargets();
+      clearNode(collectionSelect);
+      clearNode(entrySelect);
+      if (!targets.length) {
+        card.hidden = true;
+        preview.textContent = '';
+        clearNode(form);
+        meta.textContent = '当前阶段没有子项目标。';
+        refineItemBtn.disabled = true;
+        if (createBtn) createBtn.disabled = true;
+        if (deleteBtn) deleteBtn.disabled = true;
+        refineMeta.textContent = '默认会改写整个阶段；世界观、地图与空间、角色与势力、Arc 蓝图阶段支持子项级对话改写。';
+        return;
+      }
+      card.hidden = false;
+      ensureGenesisItemSelection(detail);
+      targets.forEach((target) => {
         const option = document.createElement('option');
-        option.value = '';
-        option.textContent = '暂无模型配置';
-        modelSelect.appendChild(option);
-      } else {
-        profiles.forEach((profile) => {
-          const option = document.createElement('option');
-          option.value = profile.id;
-          option.textContent = `${profile.name}${profile.id === settingsState.default_profile_id ? ' · 默认' : ''}`;
-          if (profile.id === settingsState.default_profile_id) option.selected = true;
-          modelSelect.appendChild(option);
+        option.value = genesisItemKey(target);
+        option.textContent = target.label;
+        option.selected = genesisItemKey(target) === currentGenesisItemCollection;
+        collectionSelect.appendChild(option);
+      });
+      const definition = genesisItemDefinition();
+      const items = currentGenesisItemList(detail);
+      const supportsListItems = Boolean(definition?.collection);
+      if (createBtn) createBtn.disabled = !supportsListItems;
+      if (deleteBtn) deleteBtn.disabled = !supportsListItems || !currentGenesisItemPath();
+      if (definition?.path && !definition.collection) {
+        const option = document.createElement('option');
+        option.value = '0';
+        option.textContent = definition.singletonLabel || `当前${definition.label || '目标'}`;
+        option.selected = true;
+        entrySelect.appendChild(option);
+        entrySelect.disabled = true;
+        const currentItem = currentGenesisItemPayload(detail);
+        meta.textContent = `当前目标：${definition.label || '子项'} · ${definition.path}`;
+        renderGenesisStructuredFields(form, definition.fields || [], currentItem, applyGenesisItemField);
+        preview.textContent = JSON.stringify(currentItem ?? definition.template ?? null, null, 2);
+        refineItemBtn.disabled = !currentGenesisItemPath();
+        refineMeta.textContent = currentGenesisItemPath()
+          ? `当前可定向改写：${currentGenesisItemPath()}`
+          : '默认会改写整个阶段；如果先选择子项，就可以只改那个字段。';
+        return;
+      }
+      if (!items.length) {
+        const option = document.createElement('option');
+        option.value = '-1';
+        option.textContent = `还没有${definition?.label || '子项'}`;
+        option.selected = true;
+        entrySelect.appendChild(option);
+        entrySelect.disabled = true;
+        meta.textContent = `当前还没有${definition?.label || '子项'}。可以先新增一个，再用 AI 只改这个对象。`;
+        clearNode(form);
+        preview.textContent = JSON.stringify(definition?.template || {}, null, 2);
+        refineItemBtn.disabled = true;
+        if (deleteBtn) deleteBtn.disabled = true;
+        refineMeta.textContent = '默认会改写整个阶段；如果先创建并选择子项，就可以只改那个对象。';
+        return;
+      }
+      entrySelect.disabled = false;
+      items.forEach((item, index) => {
+        const option = document.createElement('option');
+        option.value = String(index);
+        option.textContent = genesisItemLabel(item, definition, index);
+        option.selected = index === currentGenesisItemIndex;
+        entrySelect.appendChild(option);
+      });
+      const currentItem = currentGenesisItemPayload(detail);
+      meta.textContent = `当前目标：${definition?.label || '子项'} · ${genesisItemLabel(currentItem, definition, currentGenesisItemIndex)}`;
+      renderGenesisStructuredFields(form, definition.fields || [], currentItem || definition.template || {}, applyGenesisItemField);
+      preview.textContent = JSON.stringify(currentItem || {}, null, 2);
+      refineItemBtn.disabled = !currentGenesisItemPath();
+      refineMeta.textContent = currentGenesisStage === 'book_blueprint'
+        ? 'Arc 蓝图默认仍沿用自动生成；你也可以选中某个 Arc 做局部编辑或 AI 微调。'
+        : (
+          currentGenesisItemPath()
+            ? `当前可定向改写：${currentGenesisItemPath()}`
+            : '默认会改写整个阶段；如果先创建并选择子项，就可以只改那个对象。'
+        );
+    }
+
+    function renderGenesisWorkspace() {
+      const detail = currentGenesisDetail;
+      if (!detail) return;
+      const projectTitle = booksState.find((book) => book.id === detail.project_id)?.title || detail.project_id;
+      document.getElementById('genesis_modal_title').textContent = `Book Genesis · ${projectTitle}`;
+      document.getElementById('genesis_modal_subtitle').textContent = [
+        `项目 ${detail.project_id}`,
+        `状态：${detail.creation_status || 'creating'}`,
+        `Revision：${detail.revision || 1}`,
+      ].join(' | ');
+      const board = document.getElementById('genesis_stage_board');
+      clearNode(board);
+      GENESIS_STAGE_ORDER.forEach((stageKey) => {
+        const stageState = genesisStageState(detail, stageKey);
+        const button = createButton(
+          `${genesisStageLabel(stageKey)} · ${stageState.locked ? '已锁定' : stageState.status || 'todo'}`,
+          () => {
+            currentGenesisStage = stageKey;
+            currentGenesisItemCollection = '';
+            currentGenesisItemIndex = -1;
+            renderGenesisWorkspace();
+          },
+          `genesis-stage-chip${currentGenesisStage === stageKey ? ' active' : ''}${stageState.locked ? ' locked' : ''}`,
+        );
+        board.appendChild(button);
+      });
+
+      const stageState = genesisStageState(detail, currentGenesisStage);
+      const payload = currentGenesisPayload(detail);
+      document.getElementById('genesis_stage_title').textContent = genesisStageLabel(currentGenesisStage);
+      document.getElementById('genesis_stage_meta').textContent = [
+        `状态：${stageState.status || 'todo'}`,
+        `锁定：${stageState.locked ? '是' : '否'}`,
+        stageState.updated_at ? `更新：${stageState.updated_at}` : '',
+      ].filter(Boolean).join(' | ');
+      document.getElementById('genesis_stage_editor').value = JSON.stringify(payload || {}, null, 2);
+      document.getElementById('genesis_stage_summary').textContent = currentGenesisStageSummary(detail);
+      document.getElementById('genesis_stage_preview').textContent = JSON.stringify(payload || {}, null, 2);
+      renderGenesisStageForm(detail);
+      currentGenesisModelProfileId = populateModelProfileSelect(
+        document.getElementById('genesis_model_profile_id'),
+        currentGenesisModelProfileId || settingsState?.default_profile_id || '',
+      );
+
+      const blueprint = currentGenesisPayload(detail, 'book_blueprint') || {};
+      const blueprintLines = [
+        blueprint.summary ? `Summary：${blueprint.summary}` : '',
+        Array.isArray(blueprint.arcs) ? `Arc 数量：${blueprint.arcs.length}` : '',
+      ];
+      if (Array.isArray(blueprint.arcs)) {
+        blueprint.arcs.slice(0, 8).forEach((arc) => {
+          blueprintLines.push(`Arc ${arc.arc_number || '?'} · ${arc.title || '未命名'} · ${arc.chapter_start || '?'}-${arc.chapter_end || '?'} · target=${arc.target_size || arc.chapter_count || 0}`);
         });
       }
+      document.getElementById('genesis_blueprint_summary').textContent = blueprintLines.filter(Boolean).join('\\n') || '还没有生成整本书蓝图。';
+      document.getElementById('genesis_start_writing_btn').disabled = !detail.can_start_writing;
+      renderGenesisItemWorkbench(detail);
+      renderGenesisTraceList(detail);
+    }
+
+    async function saveGenesisStage() {
+      if (!currentGenesisProjectId || !currentGenesisDetail) return;
+      try {
+        const parsed = parseGenesisStageEditor();
+        const saved = await patchGenesisStagePayload(parsed, `ui_edit_${currentGenesisStage}`);
+        if (saved === null) return;
+        setGlobalStatus(`${genesisStageLabel(currentGenesisStage)} 已保存。`, 'Genesis 工作台');
+      } catch (error) {
+        setGlobalStatus(error.message || String(error), 'Genesis 保存失败');
+      }
+    }
+
+    async function generateGenesisStage(action = 'generate') {
+      if (!currentGenesisProjectId) return;
+      const normalized = action === 'rerun' ? 'rerun' : 'generate';
+      try {
+        const generated = await runGenesisAction(async () => {
+          currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis/stages/${currentGenesisStage}/${normalized}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model_profile_id: currentGenesisModelProfileId || null,
+            }),
+          });
+          clearAllGenesisDrafts();
+          renderGenesisWorkspace();
+          await loadBooks();
+          return true;
+        });
+        if (generated === null) return;
+        setGlobalStatus(`${genesisStageLabel(currentGenesisStage)} 已${normalized === 'rerun' ? '重生' : '生成'}。`, 'Genesis 工作台');
+      } catch (error) {
+        setGlobalStatus(error.message || String(error), 'Genesis 阶段执行失败');
+      }
+    }
+
+    async function lockGenesisStage() {
+      if (!currentGenesisProjectId) return;
+      try {
+        const locked = await runGenesisAction(async () => {
+          currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis/stages/${currentGenesisStage}/lock`, {
+            method: 'POST',
+          });
+          clearAllGenesisDrafts();
+          renderGenesisWorkspace();
+          await loadBooks();
+          return true;
+        });
+        if (locked === null) return;
+        setGlobalStatus(`${genesisStageLabel(currentGenesisStage)} 已锁定。`, 'Genesis 工作台');
+      } catch (error) {
+        setGlobalStatus(error.message || String(error), 'Genesis 锁定失败');
+      }
+    }
+
+    function selectGenesisItemCollection(value) {
+      currentGenesisItemCollection = value;
+      currentGenesisItemIndex = 0;
+      renderGenesisWorkspace();
+    }
+
+    function selectGenesisItemIndex(value) {
+      const parsed = Number.parseInt(value, 10);
+      currentGenesisItemIndex = Number.isFinite(parsed) ? parsed : -1;
+      renderGenesisWorkspace();
+    }
+
+    async function createGenesisItem() {
+      if (!currentGenesisProjectId) return;
+      const definition = genesisItemDefinition(currentGenesisStage, currentGenesisItemCollection || defaultGenesisItemCollection());
+      if (!definition || !definition.collection) {
+        setGlobalStatus('当前阶段不支持子项创建。', 'Genesis 工作台');
+        return;
+      }
+      try {
+        const created = await runGenesisAction(async () => {
+          const workingPayload = deepCloneJson(currentGenesisPayload(currentGenesisDetail, currentGenesisStage));
+          const nextPayload = deepCloneJson(workingPayload);
+          if (!Array.isArray(nextPayload[definition.collection])) {
+            nextPayload[definition.collection] = [];
+          }
+          const nextItem = deepCloneJson(definition.template);
+          if (nextItem && typeof nextItem === 'object' && typeof nextItem.name === 'string') {
+            nextItem.name = `${nextItem.name}${nextPayload[definition.collection].length + 1}`;
+          }
+          if (nextItem && typeof nextItem === 'object' && typeof nextItem.arc_number === 'number') {
+            const nextArcNumber = nextPayload[definition.collection].length + 1;
+            nextItem.arc_number = nextArcNumber;
+            if (typeof nextItem.title === 'string' && nextItem.title.startsWith('新 Arc')) {
+              nextItem.title = `Arc ${nextArcNumber}`;
+            }
+          }
+          if (nextItem && typeof nextItem === 'object' && definition.collection === 'regions') {
+            const nextRegionNumber = nextPayload[definition.collection].length + 1;
+            nextItem.id = `region-${nextRegionNumber}`;
+            nextItem.level = 1;
+            nextItem.parent_region_id = '';
+          }
+          if (nextItem && typeof nextItem === 'object' && definition.collection === 'culture_profiles') {
+            const nextCultureNumber = nextPayload[definition.collection].length + 1;
+            nextItem.id = `culture-${nextCultureNumber}`;
+          }
+          nextPayload[definition.collection].push(nextItem);
+          currentGenesisItemCollection = definition.collection;
+          currentGenesisItemIndex = nextPayload[definition.collection].length - 1;
+          const fieldKey = genesisFieldForStage(currentGenesisStage);
+          currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ [fieldKey]: nextPayload, reason: `ui_create_${currentGenesisItemCollection}` }),
+          });
+          clearAllGenesisDrafts();
+          renderGenesisWorkspace();
+          await loadBooks();
+          return true;
+        });
+        if (created === null) return;
+        setGlobalStatus(`${definition.label} 已创建。`, 'Genesis 工作台');
+      } catch (error) {
+        setGlobalStatus(error.message || String(error), 'Genesis 子项创建失败');
+      }
+    }
+
+    async function deleteGenesisItem() {
+      if (!currentGenesisProjectId) return;
+      const definition = genesisItemDefinition();
+      const path = currentGenesisItemPath();
+      if (!definition || !definition.collection || !path) {
+        setGlobalStatus('先选择一个可删除的子项。', 'Genesis 工作台');
+        return;
+      }
+      if (!window.confirm(`确认删除当前${definition.label}吗？`)) return;
+      try {
+        const deleted = await runGenesisAction(async () => {
+          const nextPayload = deepCloneJson(currentGenesisPayload(currentGenesisDetail, currentGenesisStage));
+          const items = Array.isArray(nextPayload[definition.collection]) ? nextPayload[definition.collection] : [];
+          items.splice(currentGenesisItemIndex, 1);
+          nextPayload[definition.collection] = items;
+          currentGenesisItemIndex = items.length ? Math.min(currentGenesisItemIndex, items.length - 1) : -1;
+          const fieldKey = genesisFieldForStage(currentGenesisStage);
+          currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ [fieldKey]: nextPayload, reason: `ui_delete_${definition.collection}` }),
+          });
+          clearAllGenesisDrafts();
+          renderGenesisWorkspace();
+          await loadBooks();
+          return true;
+        });
+        if (deleted === null) return;
+        setGlobalStatus(`${definition.label} 已删除。`, 'Genesis 工作台');
+      } catch (error) {
+        setGlobalStatus(error.message || String(error), 'Genesis 子项删除失败');
+      }
+    }
+
+    async function refineGenesisStage(targetPath = '') {
+      if (!currentGenesisProjectId) return;
+      const instruction = document.getElementById('genesis_refine_instruction').value.trim();
+      if (!instruction) {
+        setGlobalStatus('先输入你想让 AI 修改什么。', 'Genesis 工作台');
+        return;
+      }
+      try {
+        const refined = await runGenesisAction(async () => {
+          const parsed = parseGenesisStageEditor();
+          const definition = genesisItemDefinition();
+          if (
+            targetPath
+            && definition?.path
+            && !definition?.collection
+            && targetPath === definition.path
+            && (!parsed || typeof parsed !== 'object' || !Object.prototype.hasOwnProperty.call(parsed, definition.path))
+          ) {
+            parsed[definition.path] = deepCloneJson(definition.template ?? null);
+            document.getElementById('genesis_stage_editor').value = JSON.stringify(parsed, null, 2);
+          }
+          if (dataSignature(parsed) !== dataSignature(currentGenesisServerPayload(currentGenesisDetail))) {
+            const fieldKey = genesisFieldForStage(currentGenesisStage);
+            currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ [fieldKey]: parsed, reason: `ui_refine_sync_${currentGenesisStage}` }),
+            });
+            clearAllGenesisDrafts();
+            renderGenesisWorkspace();
+          }
+          currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis/stages/${currentGenesisStage}/refine`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              instruction,
+              target_path: targetPath,
+              reason: targetPath ? `ui_refine_item_${currentGenesisStage}` : `ui_refine_stage_${currentGenesisStage}`,
+              model_profile_id: currentGenesisModelProfileId || null,
+            }),
+          });
+          clearAllGenesisDrafts();
+          renderGenesisWorkspace();
+          await loadBooks();
+          return true;
+        });
+        if (refined === null) return;
+        setGlobalStatus(targetPath ? `${genesisStageLabel(currentGenesisStage)} 的选中子项已按指令改写。` : `${genesisStageLabel(currentGenesisStage)} 已按指令改写。`, 'Genesis 工作台');
+      } catch (error) {
+        setGlobalStatus(error.message || String(error), 'Genesis AI 改写失败');
+      }
+    }
+
+    async function refineGenesisCurrentStage() {
+      await refineGenesisStage('');
+    }
+
+    async function refineGenesisSelectedItem() {
+      const path = currentGenesisItemPath();
+      if (!path) {
+        setGlobalStatus('先创建或选择一个子项，再让 AI 只改这个对象。', 'Genesis 工作台');
+        return;
+      }
+      await refineGenesisStage(path);
+    }
+
+    async function startWriting(projectId, sourceLabel = 'Genesis 工作台') {
+      if (!projectId) return;
+      if (!window.confirm('启动写作后，系统会从 Genesis 根蓝图物化 Arc 骨架与当前 Arc 的章节计划，并立即创建写作任务。继续吗？')) return;
+      try {
+        const result = await requestJson(`/api/projects/${projectId}/start-writing`, {
+          method: 'POST',
+        });
+        await loadBooks();
+        await loadTaskCenter();
+        setGlobalStatus(result.message || '已启动写作。', sourceLabel);
+        if (result.task_id) {
+          closeGenesisWorkspace();
+          switchTab('task');
+          await openTaskDrawer('generation', result.task_id);
+        }
+      } catch (error) {
+        setGlobalStatus(error.message || String(error), '启动写作失败');
+      }
+    }
+
+    async function startWritingFromGenesis() {
+      await startWriting(currentGenesisProjectId, 'Genesis 工作台');
+    }
+
+    async function startWritingFromList(projectId) {
+      await startWriting(projectId, '书本管理');
+    }
+
+    function updateTaskModalSelects() {
+      const modelSelect = document.getElementById('task_generation_model_profile_id');
+      const genesisModelSelect = document.getElementById('genesis_model_profile_id');
+      const platformSelect = document.getElementById('task_upload_platform');
+      clearNode(platformSelect);
+      populateModelProfileSelect(modelSelect, currentTaskPrefill?.model_profile_id || modelSelect?.value || '');
+      currentGenesisModelProfileId = populateModelProfileSelect(
+        genesisModelSelect,
+        currentGenesisModelProfileId || genesisModelSelect?.value || '',
+      );
       platformsState.forEach((platform) => {
         const option = document.createElement('option');
         option.value = platform.platform_id;
         option.textContent = platform.display_name;
         platformSelect.appendChild(option);
       });
+    }
+
+    function changeGenesisModelProfile(value) {
+      currentGenesisModelProfileId = String(value || '').trim();
     }
 
     function renderProfiles() {
@@ -2121,8 +3858,15 @@ def _render_home_page_v2(
       document.getElementById('book_form_title').value = prefill.title || '';
       document.getElementById('book_form_genre').value = prefill.genre || @@DEFAULT_GENRE_JSON@@;
       document.getElementById('book_form_target_total_chapters').value = prefill.target_total_chapters || @@DEFAULT_CHAPTERS_JSON@@;
+      document.getElementById('book_form_audience_hint').value = prefill.audience_hint || '';
+      document.getElementById('book_form_core_emotion').value = prefill.core_emotion || '';
+      document.getElementById('book_form_core_delight').value = prefill.core_delight || '';
       document.getElementById('book_form_premise').value = prefill.premise || '';
       document.getElementById('book_form_setting_summary').value = prefill.setting_summary || '';
+      document.getElementById('book_form_inspiration_notes').value = prefill.inspiration_notes || '';
+      document.getElementById('book_form_content_guardrails').value = Array.isArray(prefill.content_guardrails)
+        ? prefill.content_guardrails.join('\\n')
+        : (prefill.content_guardrails || '');
       document.getElementById('book_form_publish_mode_1').value = primaryBinding.create_if_missing ? 'create_book' : 'chapter_only';
       document.getElementById('book_form_publish_mode_2').value = secondaryBinding.create_if_missing ? 'create_book' : 'chapter_only';
       document.getElementById('book_form_publish_book_name_1').value = primaryBinding.book_name || prefill.title || '';
@@ -2156,7 +3900,12 @@ def _render_home_page_v2(
           premise: document.getElementById('book_form_premise').value.trim(),
           genre: document.getElementById('book_form_genre').value.trim() || @@DEFAULT_GENRE_JSON@@,
           target_total_chapters: Number(document.getElementById('book_form_target_total_chapters').value || @@DEFAULT_CHAPTERS_JSON@@),
+          audience_hint: document.getElementById('book_form_audience_hint').value.trim(),
+          core_emotion: document.getElementById('book_form_core_emotion').value.trim(),
+          core_delight: document.getElementById('book_form_core_delight').value.trim(),
           setting_summary: document.getElementById('book_form_setting_summary').value.trim(),
+          inspiration_notes: document.getElementById('book_form_inspiration_notes').value.trim(),
+          content_guardrails: parseTextareaLines(document.getElementById('book_form_content_guardrails').value),
           publish_bindings: publishBindings,
           publish_platform: primaryBinding?.platform || '',
           publish_book_name: primaryBinding?.book_name || '',
@@ -2184,6 +3933,9 @@ def _render_home_page_v2(
         switchTab('book');
         await loadBooks();
         setGlobalStatus(created.message || `书本《${payload.title}》已创建。`, '书本管理');
+        if (created.project_id) {
+          await openGenesisWorkspace(created.project_id, 'brief');
+        }
       } catch (error) {
         setGlobalStatus(error.message || String(error), '新建书本失败');
       }
@@ -2243,7 +3995,7 @@ def _render_home_page_v2(
       const list = document.getElementById('book_list');
       clearNode(list);
       if (!booksState.length) {
-        list.appendChild(createNode('div', '还没有书本。先新建一本，再决定什么时候开始生成。', 'empty'));
+        list.appendChild(createNode('div', '还没有书本。先新建一本，进入 Genesis 创世，再决定什么时候启动写作。', 'empty'));
         syncBookBulkActions();
         return;
       }
@@ -2271,6 +4023,9 @@ def _render_home_page_v2(
         titleWrap.appendChild(createNode('div', `${book.genre || ''}${book.created_at ? ` | 创建于 ${book.created_at}` : ''}`, 'meta-line'));
         top.appendChild(titleWrap);
         const badges = createNode('div', '', 'badge-row');
+        if (book.creation_status && book.creation_status !== 'legacy') {
+          badges.appendChild(createNode('span', `Genesis · ${book.creation_status}`, `badge ${book.creation_status === 'genesis_ready' ? 'ok' : 'warn'}`));
+        }
         badges.appendChild(createNode('span', `目标 ${book.target_total_chapters || @@DEFAULT_CHAPTERS_JSON@@} 章`, 'badge'));
         badges.appendChild(createNode('span', `已规划 ${book.chapter_count || 0}`, 'badge'));
         badges.appendChild(createNode('span', `已生成 ${book.generated_chapter_count || 0}`, 'badge ok'));
@@ -2293,6 +4048,7 @@ def _render_home_page_v2(
           publishBindingsSummary
             ? `已绑定平台：${publishBindingsSummary}`
             : '',
+          genesisProgressSummary(book),
           book.automation?.enabled
             ? `自动化：${book.automation.daily_start_time || '09:00'} 开始，每日 ${book.automation.daily_chapter_quota || 1} 章${book.automation.auto_publish ? '，完成后自动发布' : ''}`
             : '自动化：关闭',
@@ -2308,7 +4064,14 @@ def _render_home_page_v2(
           node.appendChild(createNode('div', preview, 'meta-line'));
         }
         const actions = createNode('div', '', 'action-row');
-        actions.appendChild(createButton('查看书本', () => openTaskDrawer('generation', `project-${book.id}`), 'secondary'));
+        const viewButtonLabel = ['creating', 'genesis_ready'].includes(book.creation_status) ? '创世工作台' : '查看书本';
+        actions.appendChild(createButton(
+          viewButtonLabel,
+          () => ['creating', 'genesis_ready'].includes(book.creation_status)
+            ? openGenesisWorkspace(book.id)
+            : openTaskDrawer('generation', `project-${book.id}`),
+          'secondary',
+        ));
         const publishButton = createButton('发布到平台', () => openBookPublishModal(book), 'secondary');
         if (!pickLatestPublishableChapter(book)) {
           publishButton.disabled = true;
@@ -2330,7 +4093,15 @@ def _render_home_page_v2(
           manual_checkpoints_enabled: Boolean(book.governance?.manual_checkpoints_enabled),
           future_constraints_enabled: Boolean(book.governance?.future_constraints_enabled),
         });
-        if (hasReviewBlocker) {
+        if (book.creation_status === 'creating') {
+          generateLabel = '继续创世';
+          generateClass = 'primary';
+          generateAction = () => openGenesisWorkspace(book.id);
+        } else if (book.creation_status === 'genesis_ready') {
+          generateLabel = '启动写作';
+          generateClass = 'primary';
+          generateAction = () => startWritingFromList(book.id);
+        } else if (hasReviewBlocker) {
           generateLabel = '处理 Review';
           generateClass = 'primary';
           generateAction = () => openTaskDrawer('generation', `project-${book.id}`);
@@ -2511,6 +4282,10 @@ def _render_home_page_v2(
 
     function dismissModal(event, id) {
       if (event.target === event.currentTarget) {
+        if (id === 'genesis_modal_shell') {
+          closeGenesisWorkspace();
+          return;
+        }
         document.getElementById(id).classList.remove('open');
       }
     }

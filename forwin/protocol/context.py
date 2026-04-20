@@ -10,6 +10,7 @@ from .experience import (
     ReaderPromise,
 )
 from forwin.governance import NarrativeConstraintInfo, NextBandSummary, PlanTaskItem
+from .subworld import ChapterEntryTarget, SubWorldSummary
 
 
 class EntitySnapshot(BaseModel):
@@ -170,6 +171,10 @@ class ChapterContextPack(BaseModel):
     premise: str
     genre: str
     setting_summary: str
+    genesis_context_refs: dict[str, str] = Field(default_factory=dict)
+    genesis_world_overview: str = ""
+    genesis_map_overview: str = ""
+    genesis_story_engine_summary: str = ""
 
     # Current chapter info
     chapter_number: int
@@ -196,6 +201,10 @@ class ChapterContextPack(BaseModel):
     band_delight_schedule: BandDelightSchedule | None = None
     band_task_contract: list[PlanTaskItem] = Field(default_factory=list)
     chapter_experience_plan: ChapterExperiencePlan | None = None
+    active_subworlds: list[SubWorldSummary] = Field(default_factory=list)
+    allowed_entities: list[str] = Field(default_factory=list)
+    chapter_entry_targets: list[ChapterEntryTarget] = Field(default_factory=list)
+    entity_admission_rule: str = ""
     chapter_task_contract: list[PlanTaskItem] = Field(default_factory=list)
     active_future_constraints: list[NarrativeConstraintInfo] = Field(default_factory=list)
     next_band_summary: NextBandSummary | None = None
@@ -209,6 +218,10 @@ class ReviewContextPack(BaseModel):
     chapter_plan_one_line: str
     chapter_goals: list[str] = Field(default_factory=list)
     previous_chapter_summaries: list[str] = Field(default_factory=list)
+    genesis_context_refs: dict[str, str] = Field(default_factory=dict)
+    genesis_world_overview: str = ""
+    genesis_map_overview: str = ""
+    genesis_story_engine_summary: str = ""
     active_entities: list[EntitySnapshot] = Field(default_factory=list)
     active_rules: list[EntitySnapshot] = Field(default_factory=list)
     active_threads: list[PlotThreadSnapshot] = Field(default_factory=list)

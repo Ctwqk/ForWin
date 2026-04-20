@@ -224,6 +224,7 @@ def main() -> int:
             ignore_default_args=["--disable-extensions"],
             executable_path=executable,
             args=[
+                "--enable-unsafe-extension-debugging",
                 f"--disable-extensions-except={EXTENSION_DIR}",
                 f"--load-extension={EXTENSION_DIR}",
                 "--no-first-run",

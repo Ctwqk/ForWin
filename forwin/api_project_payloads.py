@@ -10,9 +10,12 @@ from sqlalchemy.orm import Session
 
 from forwin.api_schemas import (
     BandCheckpointDetail,
+    BookGenesisPack,
+    BookGenesisStageState,
     ChapterInfo,
     EntityInfo,
     GenerationControlInfo,
+    PromptTraceInfo,
     ProjectAutomationSettings,
     ProjectDetail,
     ProjectSummary,
@@ -43,8 +46,10 @@ from forwin.models.phase import (
     ProvisionalChapterLedger,
 )
 from forwin.models.phase4 import NPCIntentSnapshot, WorldSimulationTurn
-from forwin.models.project import ChapterPlan, Project
+from forwin.models.genesis import BookGenesisRevision, PromptTrace
+from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
+from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.models.thread import PlotThread
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
@@ -58,6 +63,7 @@ from forwin.state.query_helpers import (
 
 
 DisplayDatetime = Callable[[datetime | None], str]
+_GENESIS_STAGE_ORDER = ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap")
 
 
 def _normalized_project_ids(project_ids: list[str]) -> list[str]:
@@ -782,6 +788,112 @@ def normalize_project_automation(raw: str | dict[str, Any] | None) -> ProjectAut
     )
 
 
+def _normalize_genesis_pack(raw: str | None) -> BookGenesisPack:
+    try:
+        payload = json.loads(raw or "{}") or {}
+    except (json.JSONDecodeError, TypeError):
+        payload = {}
+    raw_stage_states = payload.get("stage_states") if isinstance(payload, dict) else {}
+    if not isinstance(raw_stage_states, dict):
+        raw_stage_states = {}
+    stage_states: dict[str, BookGenesisStageState] = {}
+    for stage_key in _GENESIS_STAGE_ORDER:
+        stage_raw = raw_stage_states.get(stage_key)
+        if not isinstance(stage_raw, dict):
+            stage_raw = {}
+        stage_states[stage_key] = BookGenesisStageState(
+            stage_key=stage_key,
+            status=str(stage_raw.get("status", "todo") or "todo"),
+            locked=bool(stage_raw.get("locked", False)),
+            updated_at=str(stage_raw.get("updated_at", "") or ""),
+            last_trace_id=str(stage_raw.get("last_trace_id", "") or ""),
+        )
+    return BookGenesisPack(
+        book_brief=payload.get("book_brief") if isinstance(payload.get("book_brief"), dict) else {},
+        world_bible=payload.get("world_bible") if isinstance(payload.get("world_bible"), dict) else {},
+        map_atlas=payload.get("map_atlas") if isinstance(payload.get("map_atlas"), dict) else {},
+        story_engine=payload.get("story_engine") if isinstance(payload.get("story_engine"), dict) else {},
+        book_arc_blueprint=(
+            payload.get("book_arc_blueprint") if isinstance(payload.get("book_arc_blueprint"), dict) else {}
+        ),
+        subworld_policy=(
+            payload.get("subworld_policy") if isinstance(payload.get("subworld_policy"), dict) else {}
+        ),
+        execution_bootstrap=(
+            payload.get("execution_bootstrap") if isinstance(payload.get("execution_bootstrap"), dict) else {}
+        ),
+        stage_states=stage_states,
+    )
+
+
+def _load_latest_genesis_revision_by_project(
+    session: Session,
+    project_ids: list[str],
+) -> dict[str, BookGenesisRevision]:
+    return _latest_rows_by_project(
+        session,
+        BookGenesisRevision,
+        BookGenesisRevision.project_id,
+        project_ids,
+        order_by=(
+            BookGenesisRevision.revision.desc(),
+            BookGenesisRevision.created_at.desc(),
+            BookGenesisRevision.id.desc(),
+        ),
+    )
+
+
+def _stage_overview_from_revision(revision: BookGenesisRevision | None) -> list[BookGenesisStageState]:
+    if revision is None:
+        return []
+    pack = _normalize_genesis_pack(revision.pack_json)
+    return [pack.stage_states[stage_key] for stage_key in _GENESIS_STAGE_ORDER]
+
+
+def _can_start_writing(project: Project, revision: BookGenesisRevision | None) -> bool:
+    if str(getattr(project, "creation_status", "") or "").strip() != "genesis_ready":
+        return False
+    if revision is None:
+        return False
+    pack = _normalize_genesis_pack(revision.pack_json)
+    return all(pack.stage_states[stage_key].locked for stage_key in _GENESIS_STAGE_ORDER)
+
+
+def _prompt_trace_infos(
+    session: Session,
+    *,
+    project_id: str,
+    limit: int = 40,
+) -> list[PromptTraceInfo]:
+    rows = session.execute(
+        select(PromptTrace)
+        .where(PromptTrace.project_id == project_id)
+        .order_by(PromptTrace.created_at.desc(), PromptTrace.id.desc())
+        .limit(max(1, int(limit or 40)))
+    ).scalars().all()
+    payload: list[PromptTraceInfo] = []
+    for row in rows:
+        payload.append(
+            PromptTraceInfo(
+                id=row.id,
+                trace_scope=str(row.trace_scope or "genesis"),
+                stage_key=str(row.stage_key or ""),
+                template_id=str(row.template_id or ""),
+                template_version=str(row.template_version or "v1"),
+                effective_system_prompt=str(row.effective_system_prompt or ""),
+                prompt_layers=_load_json_list(row.prompt_layers_json),
+                input_snapshot=_json_object(row.input_snapshot_json),
+                model_profile=_json_object(row.model_profile_json),
+                attempts=_load_json_list(row.attempts_json),
+                output_summary=_json_object(row.output_summary_json),
+                decision_event_id=str(row.decision_event_id or ""),
+                parent_trace_id=str(row.parent_trace_id or ""),
+                created_at=row.created_at.isoformat() if row.created_at else "",
+            )
+        )
+    return payload
+
+
 def load_project_upload_stats(
     session: Session,
     project_ids: list[str],
@@ -870,6 +982,19 @@ def build_project_summaries(
     draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
     runtime_maps = load_project_runtime_maps(session, project_ids)
     upload_stats = load_project_upload_stats(session, project_ids)
+    genesis_revision_map = _load_latest_genesis_revision_by_project(session, project_ids)
+    planned_future_projects = {
+        str(project_id or "").strip()
+        for project_id in session.execute(
+            select(ArcPlanVersion.project_id)
+            .where(
+                ArcPlanVersion.project_id.in_(project_ids),
+                ArcPlanVersion.status == "planned",
+            )
+            .distinct()
+        ).scalars().all()
+        if str(project_id or "").strip()
+    } if project_ids else set()
     latest_checkpoint_map = _latest_band_checkpoint_by_project(session, project_ids)
     decision_timeline_map = _decision_timeline_by_project(session, project_ids, limit=20)
     chapters_by_project: dict[str, list[dict[str, object]]] = {}
@@ -926,6 +1051,7 @@ def build_project_summaries(
         chapter_stats = chapter_stats_by_project.get(project.id, {})
         project_upload_stats = upload_stats.get(project.id, {})
         governance = normalize_project_governance(project.governance_json)
+        genesis_revision = genesis_revision_map.get(project.id)
         generation_control = build_generation_control(
             plans=plans_by_project.get(project.id, []),
             latest_replan=last_replan,
@@ -934,6 +1060,16 @@ def build_project_summaries(
             decision_events=decision_timeline_map.get(project.id, []),
             future_constraints_enabled=governance.future_constraints_enabled,
         )
+        if (
+            str(getattr(project, "creation_status", "") or "").strip() == "writing"
+            and project.id in planned_future_projects
+            and not generation_control.pending_review_chapters
+        ):
+            generation_control.can_resume = True
+            if generation_control.plan_state == "completed":
+                generation_control.plan_state = "in_progress"
+            if not generation_control.next_gate:
+                generation_control.next_gate = "next_arc_ready"
         payload.append(
             ProjectSummary(
                 id=project.id,
@@ -945,6 +1081,10 @@ def build_project_summaries(
                     project,
                     int(chapter_stats.get("chapter_count", 0) or 0),
                 ),
+                creation_status=str(getattr(project, "creation_status", "") or "legacy"),
+                active_genesis_revision_id=str(getattr(project, "active_genesis_revision_id", "") or ""),
+                genesis_stage_overview=_stage_overview_from_revision(genesis_revision),
+                can_start_writing=_can_start_writing(project, genesis_revision),
                 chapter_count=int(chapter_stats.get("chapter_count", 0) or 0),
                 generated_chapter_count=int(chapter_stats.get("generated_chapter_count", 0) or 0),
                 accepted_chapter_count=int(chapter_stats.get("accepted_chapter_count", 0) or 0),
@@ -987,6 +1127,7 @@ def build_project_detail(
     review_interval_chapters: int = 0,
 ) -> ProjectDetail:
     project_id = project.id
+    genesis_revision = _load_latest_genesis_revision_by_project(session, [project_id]).get(project_id)
     entities = session.execute(
         select(Entity).where(Entity.project_id == project_id, Entity.is_active == True)
     ).scalars().all()
@@ -1005,6 +1146,15 @@ def build_project_detail(
         for e in entities
         if e.kind == "faction"
     ]
+    subworld_rows = session.execute(
+        select(SubWorld).where(SubWorld.project_id == project_id).order_by(SubWorld.scope.asc(), SubWorld.created_at.asc())
+    ).scalars().all()
+    roster_rows = session.execute(
+        select(SubWorldRosterItem).where(SubWorldRosterItem.project_id == project_id)
+    ).scalars().all()
+    roster_by_subworld: dict[str, list[SubWorldRosterItem]] = defaultdict(list)
+    for row in roster_rows:
+        roster_by_subworld[row.subworld_id].append(row)
 
     threads = session.execute(
         select(PlotThread).where(PlotThread.project_id == project_id)
@@ -1047,6 +1197,36 @@ def build_project_detail(
     latest_band_experience = runtime_maps["latest_band_experience_map"].get(project_id)
     npc_intents = runtime_maps["recent_npc_map"].get(project_id, [])
     replan_events = runtime_maps["recent_replans_map"].get(project_id, [])
+    active_subworld_ids: set[str] = set()
+    if latest_band_experience is not None:
+        try:
+            payload = json.loads(latest_band_experience.schedule_json or "{}") or {}
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        active_subworld_ids = {
+            str(item).strip()
+            for item in (payload.get("active_subworld_ids") or [])
+            if str(item).strip()
+        }
+    subworlds = [
+        {
+            "id": row.id,
+            "name": row.name,
+            "purpose": row.purpose,
+            "scope": row.scope,
+            "status": row.status,
+            "active_in_current_band": row.id in active_subworld_ids,
+            "core_cast": [
+                item.display_name
+                for item in roster_by_subworld.get(row.id, [])
+                if item.is_core and str(item.display_name or "").strip()
+            ],
+            "planned_slot_count": sum(
+                1 for item in roster_by_subworld.get(row.id, []) if item.status == "planned_slot"
+            ),
+        }
+        for row in subworld_rows
+    ]
     generation_control = build_generation_control(
         plans=plans,
         latest_replan=replan_events[0] if replan_events else None,
@@ -1055,6 +1235,24 @@ def build_project_detail(
         decision_events=decision_timeline,
         future_constraints_enabled=governance.future_constraints_enabled,
     )
+    has_planned_future_arc = session.execute(
+        select(ArcPlanVersion.id)
+        .where(
+            ArcPlanVersion.project_id == project_id,
+            ArcPlanVersion.status == "planned",
+        )
+        .limit(1)
+    ).scalar_one_or_none() is not None
+    if (
+        str(getattr(project, "creation_status", "") or "").strip() == "writing"
+        and has_planned_future_arc
+        and not generation_control.pending_review_chapters
+    ):
+        generation_control.can_resume = True
+        if generation_control.plan_state == "completed":
+            generation_control.plan_state = "in_progress"
+        if not generation_control.next_gate:
+            generation_control.next_gate = "next_arc_ready"
 
     return ProjectDetail(
         id=project.id,
@@ -1063,6 +1261,10 @@ def build_project_detail(
         genre=project.genre,
         setting_summary=project.setting_summary,
         target_total_chapters=effective_target_total_chapters(project, len(plans)),
+        creation_status=str(getattr(project, "creation_status", "") or "legacy"),
+        active_genesis_revision_id=str(getattr(project, "active_genesis_revision_id", "") or ""),
+        genesis_stage_overview=_stage_overview_from_revision(genesis_revision),
+        can_start_writing=_can_start_writing(project, genesis_revision),
         chapter_count=len(plans),
         generated_chapter_count=generated_chapter_count,
         accepted_chapter_count=accepted_chapter_count,
@@ -1074,6 +1276,7 @@ def build_project_detail(
         characters=characters,
         locations=locations,
         factions=factions,
+        subworlds=subworlds,
         threads=thread_infos,
         chapters=chapter_infos,
         latest_stage=latest_stage.stage_label if latest_stage else "",

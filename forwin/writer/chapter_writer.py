@@ -13,7 +13,7 @@ from forwin.protocol.state_change import (
     ThreadBeatCandidate,
     TimeAdvance,
 )
-from forwin.protocol.writer import LoreCandidate, TimelineHint, WriterNote, WriterOutput
+from forwin.protocol.writer import EntityMention, LoreCandidate, TimelineHint, WriterNote, WriterOutput
 from .llm_client import LLMClient
 from .prompts import (
     build_preview_chapter_prompt,
@@ -272,6 +272,7 @@ class ChapterWriter:
         lore_candidates = self._build_list(data, "lore_candidates", LoreCandidate)
         timeline_hints = self._build_list(data, "timeline_hints", TimelineHint)
         writer_notes = self._build_list(data, "writer_notes", WriterNote)
+        entity_mentions = self._build_list(data, "entity_mentions", EntityMention)
         time_advance: TimeAdvance | None = None
         if data.get("time_advance"):
             try:
@@ -305,6 +306,7 @@ class ChapterWriter:
             lore_candidates=lore_candidates,
             timeline_hints=timeline_hints,
             writer_notes=writer_notes,
+            entity_mentions=entity_mentions,
             generation_meta=dict(data.get("_generation_meta") or {}),
         )
         self._attach_llm_fallback_events(output)
@@ -481,6 +483,7 @@ class ChapterWriter:
             "lore_candidates": [],
             "timeline_hints": [],
             "writer_notes": [],
+            "entity_mentions": [],
         }
         meta_notes: dict[str, object] = {
             "structured_extraction_calls": 3,

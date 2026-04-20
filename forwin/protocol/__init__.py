@@ -37,6 +37,15 @@ from .experience import (
     ReaderPromise,
     RewardTag,
 )
+from .subworld import (
+    ChapterEntryTarget,
+    EntityMention,
+    SubWorldCharacterSeed,
+    SubWorldPlanDelta,
+    SubWorldPlanItem,
+    SubWorldSlotPlan,
+    SubWorldSummary,
+)
 from .scene import SceneContinuation, ScenePlan, SceneOutput
 from .writer import LoreCandidate, TimelineHint, WriterNote, WriterOutput
 from .review import ContinuityIssue, RepairInstruction, ReviewVerdict
@@ -77,6 +86,13 @@ __all__ = [
     "ChapterExperiencePlan",
     "ProgressChannel",
     "RewardTag",
+    "SubWorldSummary",
+    "SubWorldCharacterSeed",
+    "SubWorldSlotPlan",
+    "SubWorldPlanItem",
+    "SubWorldPlanDelta",
+    "ChapterEntryTarget",
+    "EntityMention",
     # scene
     "SceneContinuation",
     "ScenePlan",

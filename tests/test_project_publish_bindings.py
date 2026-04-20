@@ -106,7 +106,9 @@ class ProjectPublishBindingTests(unittest.TestCase):
 
             self.assertEqual(response.project_id, project.id)
             self.assertEqual(response.title, "双平台测试书")
-            self.assertEqual(response.message, "书本《双平台测试书》已创建。")
+            self.assertEqual(response.creation_status, "creating")
+            self.assertTrue(response.active_genesis_revision_id)
+            self.assertIn("Genesis 工作台", response.message)
             self.assertEqual(automation.publish.platform, "fanqie")
             self.assertEqual(automation.publish.book_name, "番茄版作品名")
             self.assertTrue(automation.publish.create_if_missing)

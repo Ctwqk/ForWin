@@ -17,7 +17,10 @@ XVFB_SERVER_NUM="${FORWIN_EXTENSION_XVFB_SERVER_NUM:-}"
 XVFB_SCREEN="${FORWIN_EXTENSION_XVFB_SCREEN:-1280x1024x24}"
 PROFILE_QUALIFIER="$REPO_ROOT/scripts/qualify_linux_extension_profile.py"
 SESSION_RESTORE_SCRIPT="$REPO_ROOT/scripts/restore_linux_extension_browser_sessions.py"
+HEARTBEAT_CHECK_SCRIPT="$REPO_ROOT/scripts/check_publisher_browser_heartbeat.py"
 PYTHON_BIN="${FORWIN_EXTENSION_PYTHON:-}"
+HEARTBEAT_WAIT_SECONDS="${FORWIN_EXTENSION_STARTUP_HEARTBEAT_TIMEOUT_SECONDS:-75}"
+AUTO_RESET_PROFILE_ON_HEARTBEAT_FAILURE="${FORWIN_EXTENSION_AUTO_RESET_PROFILE_ON_HEARTBEAT_FAILURE:-true}"
 RUN_DISPLAY=""
 USE_XVFB_RUN=false
 
@@ -140,6 +143,11 @@ clear_stale_profile_locks() {
   fi
 }
 
+reset_profile_dir() {
+  rm -rf "$PROFILE_DIR"
+  mkdir -p "$PROFILE_DIR"
+}
+
 select_display_mode() {
   case "${DISPLAY_MODE,,}" in
     external)
@@ -228,6 +236,11 @@ if ! PYTHON_BIN="$(find_python)"; then
   exit 1
 fi
 
+if [[ ! -f "$HEARTBEAT_CHECK_SCRIPT" ]]; then
+  echo "heartbeat check script not found: $HEARTBEAT_CHECK_SCRIPT" >&2
+  exit 1
+fi
+
 XVFB_SERVER_NUM="$(infer_xvfb_server_num)"
 select_display_mode
 if [[ "$USE_XVFB_RUN" == "true" ]] && ! command -v Xvfb >/dev/null 2>&1; then
@@ -238,25 +251,30 @@ fi
 mkdir -p "$PROFILE_DIR"
 clear_stale_profile_locks
 
-if is_truthy "$REQUIRE_QUALIFIED_PROFILE"; then
-  if ! "$PYTHON_BIN" "$PROFILE_QUALIFIER" --check >/dev/null; then
-    if is_truthy "$AUTO_QUALIFY_PROFILE"; then
-      echo "Extension profile is not qualified yet; bootstrapping it with the configured backend URL."
-      run_with_display "$PYTHON_BIN" "$PROFILE_QUALIFIER" --qualify
-    else
-      "$PYTHON_BIN" "$PROFILE_QUALIFIER" --check
-      echo "Refusing to start because FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE is enabled." >&2
-      exit 1
+qualify_profile_if_needed() {
+  if is_truthy "$REQUIRE_QUALIFIED_PROFILE"; then
+    if ! "$PYTHON_BIN" "$PROFILE_QUALIFIER" --check >/dev/null; then
+      if is_truthy "$AUTO_QUALIFY_PROFILE"; then
+        echo "Extension profile is not qualified yet; bootstrapping it with the configured backend URL."
+        run_with_display "$PYTHON_BIN" "$PROFILE_QUALIFIER" --qualify
+      else
+        "$PYTHON_BIN" "$PROFILE_QUALIFIER" --check
+        echo "Refusing to start because FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE is enabled." >&2
+        exit 1
+      fi
     fi
   fi
-fi
-clear_stale_profile_locks
+  clear_stale_profile_locks
+}
+
+qualify_profile_if_needed
 
 CHROME_ARGS=(
   --user-data-dir="$PROFILE_DIR"
   --no-first-run
   --no-default-browser-check
   --disable-features=DialMediaRouteProvider
+  --enable-unsafe-extension-debugging
   --disable-extensions-except="$EXTENSION_DIR"
   --load-extension="$EXTENSION_DIR"
   --new-window
@@ -296,13 +314,40 @@ fi
 
 trap cleanup_display EXIT
 
-"$CHROME_BIN" "${CHROME_ARGS[@]}" &
-CHROME_PID=$!
-
-if [[ -n "$REMOTE_DEBUGGING_PORT" ]] && [[ -f "$SESSION_RESTORE_SCRIPT" ]]; then
-  if ! "$PYTHON_BIN" "$SESSION_RESTORE_SCRIPT" --cdp-url "http://127.0.0.1:$REMOTE_DEBUGGING_PORT"; then
-    echo "Warning: failed to restore backend browser sessions into the Linux extension browser." >&2
-  fi
+launch_attempt=1
+max_launch_attempts=1
+if is_truthy "$AUTO_RESET_PROFILE_ON_HEARTBEAT_FAILURE"; then
+  max_launch_attempts=2
 fi
+
+while (( launch_attempt <= max_launch_attempts )); do
+  "$CHROME_BIN" "${CHROME_ARGS[@]}" &
+  CHROME_PID=$!
+
+  if [[ -n "$REMOTE_DEBUGGING_PORT" ]] && [[ -f "$SESSION_RESTORE_SCRIPT" ]]; then
+    if ! "$PYTHON_BIN" "$SESSION_RESTORE_SCRIPT" --cdp-url "http://127.0.0.1:$REMOTE_DEBUGGING_PORT"; then
+      echo "Warning: failed to restore backend browser sessions into the Linux extension browser." >&2
+    fi
+  fi
+
+  if [[ "$HEARTBEAT_WAIT_SECONDS" =~ ^[0-9]+$ ]] && [[ "$HEARTBEAT_WAIT_SECONDS" -gt 0 ]]; then
+    echo "Waiting up to ${HEARTBEAT_WAIT_SECONDS}s for preferred publisher client heartbeat..."
+    if ! "$PYTHON_BIN" "$HEARTBEAT_CHECK_SCRIPT" --wait-seconds "$HEARTBEAT_WAIT_SECONDS"; then
+      echo "Linux extension browser did not register a recent preferred-client heartbeat." >&2
+      kill "$CHROME_PID" >/dev/null 2>&1 || true
+      wait "$CHROME_PID" >/dev/null 2>&1 || true
+      if (( launch_attempt < max_launch_attempts )); then
+        echo "Resetting the Linux extension profile and retrying with a fresh qualified profile..."
+        reset_profile_dir
+        qualify_profile_if_needed
+        launch_attempt=$((launch_attempt + 1))
+        continue
+      fi
+      exit 1
+    fi
+  fi
+
+  break
+done
 
 wait "$CHROME_PID"

@@ -205,29 +205,32 @@ class PublisherManager:
                 session_client and self._is_recent(session_client.last_heartbeat_at)
             )
             state_recent = bool(state and self._is_recent(state.last_heartbeat_at))
-            last_heartbeat_at = None
+            extension_heartbeat_at = None
             if preferred_client_recent and preferred_client.last_heartbeat_at:
-                last_heartbeat_at = preferred_client.last_heartbeat_at
-            elif preferred_state_recent and preferred_state.last_heartbeat_at:
-                last_heartbeat_at = preferred_state.last_heartbeat_at
+                extension_heartbeat_at = preferred_client.last_heartbeat_at
             elif client_recent and client.last_heartbeat_at:
-                last_heartbeat_at = client.last_heartbeat_at
+                extension_heartbeat_at = client.last_heartbeat_at
             elif session_client_recent and session_client.last_heartbeat_at:
-                last_heartbeat_at = session_client.last_heartbeat_at
-            elif state_recent and state.last_heartbeat_at:
-                last_heartbeat_at = state.last_heartbeat_at
+                extension_heartbeat_at = session_client.last_heartbeat_at
             elif preferred_client and preferred_client.last_heartbeat_at:
-                last_heartbeat_at = preferred_client.last_heartbeat_at
-            elif preferred_state and preferred_state.last_heartbeat_at:
-                last_heartbeat_at = preferred_state.last_heartbeat_at
+                extension_heartbeat_at = preferred_client.last_heartbeat_at
             elif client and client.last_heartbeat_at:
-                last_heartbeat_at = client.last_heartbeat_at
+                extension_heartbeat_at = client.last_heartbeat_at
             elif session_client and session_client.last_heartbeat_at:
-                last_heartbeat_at = session_client.last_heartbeat_at
-            elif state and state.last_heartbeat_at:
-                last_heartbeat_at = state.last_heartbeat_at
+                extension_heartbeat_at = session_client.last_heartbeat_at
 
-            extension_online = self._is_recent(last_heartbeat_at)
+            last_heartbeat_at = extension_heartbeat_at
+            if last_heartbeat_at is None:
+                if preferred_state_recent and preferred_state.last_heartbeat_at:
+                    last_heartbeat_at = preferred_state.last_heartbeat_at
+                elif state_recent and state.last_heartbeat_at:
+                    last_heartbeat_at = state.last_heartbeat_at
+                elif preferred_state and preferred_state.last_heartbeat_at:
+                    last_heartbeat_at = preferred_state.last_heartbeat_at
+                elif state and state.last_heartbeat_at:
+                    last_heartbeat_at = state.last_heartbeat_at
+
+            extension_online = self._is_recent(extension_heartbeat_at or last_heartbeat_at)
             connected = False
             if preferred_state and preferred_state.connected and self._is_recent(preferred_state.last_heartbeat_at):
                 connected = True

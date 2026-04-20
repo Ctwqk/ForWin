@@ -68,6 +68,14 @@ class DecisionEventType:
     RUN_COMPLETED = "run_completed"
     RUN_COMPLETED_WITH_FAILURES = "run_completed_with_failures"
     PROJECT_CREATED = "project_created"
+    GENESIS_CREATED = "genesis_created"
+    GENESIS_UPDATED = "genesis_updated"
+    GENESIS_STAGE_GENERATED = "genesis_stage_generated"
+    GENESIS_STAGE_LOCKED = "genesis_stage_locked"
+    GENESIS_STAGE_RERUN = "genesis_stage_rerun"
+    GENESIS_STAGE_REFINED = "genesis_stage_refined"
+    START_WRITING_REQUESTED = "start_writing_requested"
+    PROMPT_TRACE_RECORDED = "prompt_trace_recorded"
 
     GOVERNANCE_UPDATED = "governance_updated"
     MANUAL_CHECKPOINT_CREATED = "manual_checkpoint_created"
@@ -120,6 +128,14 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.RUN_COMPLETED,
     DecisionEventType.RUN_COMPLETED_WITH_FAILURES,
     DecisionEventType.PROJECT_CREATED,
+    DecisionEventType.GENESIS_CREATED,
+    DecisionEventType.GENESIS_UPDATED,
+    DecisionEventType.GENESIS_STAGE_GENERATED,
+    DecisionEventType.GENESIS_STAGE_LOCKED,
+    DecisionEventType.GENESIS_STAGE_RERUN,
+    DecisionEventType.GENESIS_STAGE_REFINED,
+    DecisionEventType.START_WRITING_REQUESTED,
+    DecisionEventType.PROMPT_TRACE_RECORDED,
     DecisionEventType.GOVERNANCE_UPDATED,
     DecisionEventType.MANUAL_CHECKPOINT_CREATED,
     DecisionEventType.MANUAL_CHECKPOINT_HIT,

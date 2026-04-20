@@ -4,6 +4,7 @@ import json
 import logging
 from typing import Any
 
+from forwin.arc_sizing import allocate_arc_chapter_sizes
 from forwin.writer.llm_client import LLMClient
 from forwin.utils import LLMJSONParseError, parse_llm_json
 
@@ -39,7 +40,24 @@ class ArcDirector:
         )
         core = self._plan_core(premise, genre)
         chapters = self._plan_chapters(premise, genre, num_chapters, core)
-        world = self._build_world_scaffold(premise, genre, core, chapters)
+        normalized_chapters = self._normalize_chapters(chapters, num_chapters, premise)
+        world = self._build_world_scaffold(premise, genre, core, normalized_chapters)
+        subworld_delta = self.plan_subworld_delta(
+            premise=premise,
+            genre=genre,
+            arc_synopsis=str(core.get("arc_synopsis", "")).strip(),
+            chapter_seed=normalized_chapters,
+            existing_subworlds=[],
+            focus_threads=[],
+        )
+        characters = self._merge_seed_characters(
+            self._as_list(world.get("characters")),
+            subworld_delta.get("new_subworlds"),
+        )
+        arc_outlines = self._derive_arc_outlines(
+            overall_synopsis=str(core.get("arc_synopsis", "")).strip(),
+            chapters=normalized_chapters,
+        )
 
         result = {
             "arc_synopsis": str(core.get("arc_synopsis", "")).strip(),
@@ -48,15 +66,87 @@ class ArcDirector:
                 "label": "现代雨季",
                 "description": "故事开始于一场持续不断的雨夜。",
             },
-            "chapters": self._normalize_chapters(chapters, num_chapters, premise),
-            "characters": self._as_list(world.get("characters")),
+            "chapters": normalized_chapters,
+            "arc_outlines": arc_outlines,
+            "characters": characters,
             "locations": self._as_list(world.get("locations")),
             "factions": self._as_list(world.get("factions")),
             "relations": self._as_list(world.get("relations")),
             "plot_threads": self._as_list(world.get("plot_threads")),
+            "subworld_delta": subworld_delta,
         }
         logger.info("ArcDirector.plan_arc: parsed ok – keys=%s", list(result.keys()))
         return result
+
+    def plan_subworld_delta(
+        self,
+        *,
+        premise: str,
+        genre: str,
+        arc_synopsis: str,
+        chapter_seed: list[dict[str, Any]],
+        existing_subworlds: list[dict[str, Any] | Any],
+        focus_threads: list[str] | None = None,
+    ) -> dict:
+        normalized_existing = [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+            for item in (existing_subworlds or [])
+            if isinstance(item, dict) or hasattr(item, "model_dump")
+        ]
+        normalized_focus_threads = [
+            str(item).strip()
+            for item in (focus_threads or [])
+            if str(item).strip()
+        ]
+        fallback = self._fallback_subworld_delta(
+            premise=premise,
+            genre=genre,
+            arc_synopsis=arc_synopsis,
+            chapter_seed=chapter_seed,
+            existing_subworlds=normalized_existing,
+            focus_threads=normalized_focus_threads,
+        )
+        prompt = [
+            {
+                "role": "system",
+                "content": "你是中文网文世界导演，只输出 JSON 对象，不要 markdown，不要解释。",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "请为当前 arc 规划 subworld delta，只返回 JSON。\n"
+                    "顶层字段必须包含：reuse_subworld_ids、retire_subworld_ids、new_subworlds、initial_active_subworld_ids。\n"
+                    "new_subworlds 每项必须包含：name、purpose、scope、chapter_window_hint、"
+                    "core_named_characters、planned_slots、region_seeds。\n"
+                    "scope 只能是 global_core 或 arc_local。\n"
+                    "core_named_characters 每项必须包含：name、description、role_hint、importance。\n"
+                    "planned_slots 每项必须包含：slot_key、role_hint、description。\n"
+                    "region_seeds 每项必须包含：name、level、kind、parent_region_name、summary、"
+                    "culture_traits、climate、terrain、controller_factions。\n"
+                    "要求：\n"
+                    "1. global_core 负责主角和长期常驻核心人物。\n"
+                    "2. arc_local 负责当前 arc 会启用的局部圈层。\n"
+                    "3. 每个 arc_local 最多 2 个 core_named_characters，最多 2 个 planned_slots。\n"
+                    "4. 每个新 subworld 至少生成 1 个 level=1 的 region_seeds，可选 0-2 个 level=2，禁止 level=3。\n"
+                    "5. level=2 必须通过 parent_region_name 指向同一 subworld 内的 level=1 地区。\n"
+                    "6. 不要 retire global_core。\n"
+                    "7. 如已有 subworld 可复用，则尽量复用。\n\n"
+                    f"类型：{genre}\n"
+                    f"故事前提：{premise}\n"
+                    f"当前 arc 简述：{arc_synopsis}\n"
+                    f"章节种子：{json.dumps(chapter_seed, ensure_ascii=False)}\n"
+                    f"已有 subworld 摘要：{json.dumps(normalized_existing, ensure_ascii=False)}\n"
+                    f"当前需要重点回收的线索：{json.dumps(normalized_focus_threads, ensure_ascii=False)}"
+                ),
+            },
+        ]
+        payload = self._call_json(
+            prompt,
+            temperature=0.35,
+            max_tokens=min(self.max_tokens, 1300),
+            fallback=fallback,
+        )
+        return self._normalize_subworld_delta(payload, fallback=fallback)
 
     def _build_world_scaffold(
         self,
@@ -170,6 +260,323 @@ class ArcDirector:
             fallback=fallback,
         )
         return self._as_list(payload.get("chapters"))
+
+    def _fallback_subworld_delta(
+        self,
+        *,
+        premise: str,
+        genre: str,
+        arc_synopsis: str,
+        chapter_seed: list[dict[str, Any]],
+        existing_subworlds: list[dict[str, Any]],
+        focus_threads: list[str],
+    ) -> dict:
+        global_core_id = next(
+            (
+                str(item.get("id", "")).strip()
+                for item in existing_subworlds
+                if str(item.get("scope", "")).strip() == "global_core"
+            ),
+            "",
+        )
+        first_line = str((chapter_seed[0] or {}).get("one_line", "")).strip() if chapter_seed else ""
+        focus_note = "、".join(focus_threads) if focus_threads else (first_line or premise[:16])
+        protagonist_name = "顾临川"
+        return {
+            "reuse_subworld_ids": [global_core_id] if global_core_id else [],
+            "retire_subworld_ids": [],
+            "new_subworlds": [
+                {
+                    "name": "global_core",
+                    "purpose": arc_synopsis[:80] or f"{genre}主角与长期常驻核心人物",
+                    "scope": "global_core",
+                    "chapter_window_hint": "opening",
+                    "core_named_characters": [
+                        {
+                            "name": protagonist_name,
+                            "description": "故事当前视角核心人物，负责承接主线推进与关键决断。",
+                            "role_hint": "主角",
+                            "importance": 10,
+                            "aliases": [],
+                            "initial_state": {},
+                        }
+                    ],
+                    "planned_slots": [],
+                    "region_seeds": [],
+                },
+                {
+                    "name": "arc_local_1",
+                    "purpose": focus_note or "当前 arc 的局部冲突舞台",
+                    "scope": "arc_local",
+                    "chapter_window_hint": "1-3",
+                    "core_named_characters": [],
+                    "planned_slots": [
+                        {
+                            "slot_key": "arc-local-contact",
+                            "role_hint": "与当前 arc 冲突直接相关的本地联系人或关键人物",
+                            "description": "进入当前阶段后最早与主角发生稳定互动的局部角色。",
+                        }
+                    ],
+                    "region_seeds": [
+                        {
+                            "name": "局部核心区",
+                            "level": 1,
+                            "kind": "local_region",
+                            "parent_region_name": "",
+                            "summary": "当前 arc 的主要活动地区。",
+                            "culture_traits": ["局部圈层自成规则"],
+                            "climate": "气候特征与当前冲突相匹配。",
+                            "terrain": ["复合地形"],
+                            "controller_factions": ["局部主导势力"],
+                        }
+                    ],
+                },
+            ],
+            "initial_active_subworld_ids": [global_core_id] if global_core_id else [],
+        }
+
+    def _normalize_subworld_delta(self, payload: dict, *, fallback: dict) -> dict:
+        if not isinstance(payload, dict):
+            return fallback
+        normalized = {
+            "reuse_subworld_ids": [
+                str(item).strip()
+                for item in (payload.get("reuse_subworld_ids") or [])
+                if str(item).strip()
+            ],
+            "retire_subworld_ids": [
+                str(item).strip()
+                for item in (payload.get("retire_subworld_ids") or [])
+                if str(item).strip()
+                and str(item).strip() not in {"global_core", "global-core"}
+            ],
+            "new_subworlds": [],
+            "initial_active_subworld_ids": [
+                str(item).strip()
+                for item in (payload.get("initial_active_subworld_ids") or [])
+                if str(item).strip()
+            ],
+        }
+        for raw in payload.get("new_subworlds") or []:
+            if not isinstance(raw, dict):
+                continue
+            scope = str(raw.get("scope", "arc_local")).strip() or "arc_local"
+            if scope not in {"global_core", "arc_local"}:
+                scope = "arc_local"
+            core_named_characters = []
+            for seed in raw.get("core_named_characters") or []:
+                if not isinstance(seed, dict):
+                    continue
+                name = str(seed.get("name", "")).strip()
+                if not name:
+                    continue
+                core_named_characters.append(
+                    {
+                        "name": name,
+                        "description": str(seed.get("description", "")).strip(),
+                        "role_hint": str(seed.get("role_hint", "")).strip(),
+                        "importance": max(1, int(seed.get("importance", 5) or 5)),
+                        "aliases": [
+                            str(alias).strip()
+                            for alias in (seed.get("aliases") or [])
+                            if str(alias).strip()
+                        ],
+                        "initial_state": seed.get("initial_state") if isinstance(seed.get("initial_state"), dict) else {},
+                    }
+                )
+            planned_slots = []
+            for slot in raw.get("planned_slots") or []:
+                if not isinstance(slot, dict):
+                    continue
+                slot_key = str(slot.get("slot_key", "")).strip() or f"slot-{len(planned_slots) + 1}"
+                planned_slots.append(
+                    {
+                        "slot_key": slot_key,
+                        "role_hint": str(slot.get("role_hint", "")).strip(),
+                        "description": str(slot.get("description", "")).strip(),
+                    }
+                )
+            region_seeds = []
+            level_one_names: list[str] = []
+            for seed in raw.get("region_seeds") or []:
+                if not isinstance(seed, dict):
+                    continue
+                name = str(seed.get("name", "")).strip()
+                if not name:
+                    continue
+                level = int(seed.get("level", 1) or 1)
+                if level not in {1, 2}:
+                    level = 1
+                parent_region_name = str(seed.get("parent_region_name", "")).strip()
+                if level == 1:
+                    parent_region_name = ""
+                    level_one_names.append(name)
+                elif parent_region_name not in level_one_names:
+                    if level_one_names:
+                        parent_region_name = level_one_names[0]
+                    else:
+                        level = 1
+                        parent_region_name = ""
+                        level_one_names.append(name)
+                region_seeds.append(
+                    {
+                        "name": name,
+                        "level": level,
+                        "kind": str(seed.get("kind", "")).strip() or "local_region",
+                        "parent_region_name": parent_region_name,
+                        "summary": str(seed.get("summary", "")).strip(),
+                        "culture_traits": [
+                            str(item).strip()
+                            for item in (seed.get("culture_traits") or [])
+                            if str(item).strip()
+                        ],
+                        "climate": str(seed.get("climate", "")).strip(),
+                        "terrain": [
+                            str(item).strip()
+                            for item in (seed.get("terrain") or [])
+                            if str(item).strip()
+                        ],
+                        "controller_factions": [
+                            str(item).strip()
+                            for item in (seed.get("controller_factions") or [])
+                            if str(item).strip()
+                        ],
+                    }
+                )
+            if scope == "arc_local" and not region_seeds:
+                region_seeds = [
+                    {
+                        "name": "局部核心区",
+                        "level": 1,
+                        "kind": "local_region",
+                        "parent_region_name": "",
+                        "summary": "当前 arc 的主要活动地区。",
+                        "culture_traits": ["局部圈层自成规则"],
+                        "climate": "气候特征与当前冲突相匹配。",
+                        "terrain": ["复合地形"],
+                        "controller_factions": ["局部主导势力"],
+                    }
+                ]
+            normalized["new_subworlds"].append(
+                {
+                    "subworld_id": str(raw.get("subworld_id", "")).strip(),
+                    "parent_subworld_id": str(raw.get("parent_subworld_id", "")).strip(),
+                    "name": str(raw.get("name", "")).strip() or f"subworld-{len(normalized['new_subworlds']) + 1}",
+                    "purpose": str(raw.get("purpose", "")).strip(),
+                    "scope": scope,
+                    "chapter_window_hint": str(raw.get("chapter_window_hint", "")).strip(),
+                    "core_named_characters": core_named_characters,
+                    "planned_slots": planned_slots,
+                    "region_seeds": region_seeds,
+                }
+            )
+        if not normalized["new_subworlds"]:
+            return fallback
+        return normalized
+
+    def _merge_seed_characters(
+        self,
+        world_characters: list[dict],
+        new_subworlds: Any,
+    ) -> list[dict]:
+        merged: list[dict] = []
+        seen_names: set[str] = set()
+        for item in world_characters:
+            name = str(item.get("name", "")).strip()
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
+            merged.append(item)
+        for subworld in self._as_list(new_subworlds):
+            for seed in subworld.get("core_named_characters") or []:
+                if not isinstance(seed, dict):
+                    continue
+                name = str(seed.get("name", "")).strip()
+                if not name or name in seen_names:
+                    continue
+                seen_names.add(name)
+                merged.append(
+                    {
+                        "name": name,
+                        "description": str(seed.get("description", "")).strip(),
+                        "aliases": [
+                            str(alias).strip()
+                            for alias in (seed.get("aliases") or [])
+                            if str(alias).strip()
+                        ],
+                        "importance": max(1, int(seed.get("importance", 5) or 5)),
+                        "initial_state": seed.get("initial_state") if isinstance(seed.get("initial_state"), dict) else {},
+                    }
+                )
+        return merged
+
+    def _derive_arc_outlines(
+        self,
+        *,
+        overall_synopsis: str,
+        chapters: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        if not chapters:
+            return []
+        sizes = allocate_arc_chapter_sizes(len(chapters))
+        outlines: list[dict[str, Any]] = []
+        cursor = 0
+        for index, size in enumerate(sizes, start=1):
+            chapter_slice = chapters[cursor : cursor + size]
+            if not chapter_slice:
+                break
+            chapter_start = int(chapter_slice[0].get("chapter_number", cursor + 1) or (cursor + 1))
+            chapter_end = int(chapter_slice[-1].get("chapter_number", chapter_start + len(chapter_slice) - 1) or (chapter_start + len(chapter_slice) - 1))
+            synopsis = self._summarize_arc_slice(
+                overall_synopsis=overall_synopsis,
+                chapter_slice=chapter_slice,
+                arc_index=index,
+                total_arcs=len(sizes),
+            )
+            outlines.append(
+                {
+                    "arc_number": index,
+                    "chapter_start": chapter_start,
+                    "chapter_end": chapter_end,
+                    "chapter_count": len(chapter_slice),
+                    "arc_synopsis": synopsis,
+                }
+            )
+            cursor += size
+        return outlines or [
+            {
+                "arc_number": 1,
+                "chapter_start": 1,
+                "chapter_end": len(chapters),
+                "chapter_count": len(chapters),
+                "arc_synopsis": overall_synopsis,
+            }
+        ]
+
+    @staticmethod
+    def _summarize_arc_slice(
+        *,
+        overall_synopsis: str,
+        chapter_slice: list[dict[str, Any]],
+        arc_index: int,
+        total_arcs: int,
+    ) -> str:
+        if total_arcs <= 1:
+            return overall_synopsis
+        one_lines = [
+            str(item.get("one_line", "")).strip()
+            for item in chapter_slice[:3]
+            if str(item.get("one_line", "")).strip()
+        ]
+        title = "；".join(one_lines[:2]) if one_lines else ""
+        prefix = f"第{arc_index}弧"
+        if arc_index == 1:
+            prefix = "开篇弧"
+        elif arc_index == total_arcs:
+            prefix = "收束弧"
+        if title:
+            return f"{prefix}：{title}"
+        return f"{prefix}：{overall_synopsis}"
 
     def draft_arc_structure(
         self,

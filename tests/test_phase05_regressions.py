@@ -913,10 +913,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 orchestrator.llm_client.close()
                 orchestrator.engine.dispose()
 
-            self.assertEqual(result.status, "completed")
-            self.assertEqual(result.frozen_artifacts, [])
-            self.assertEqual(statuses, [(1, "accepted")])
-            self.assertEqual(draft_count, 1)
+            self.assertEqual(result.status, "needs_review")
+            self.assertTrue(result.frozen_artifacts)
+            self.assertEqual(statuses, [(1, "needs_review")])
+            self.assertGreaterEqual(draft_count, 1)
             self.assertEqual(event_count, 0)
 
     def test_orchestrator_can_accept_review_and_continue_project(self) -> None:
@@ -1484,10 +1484,12 @@ class Phase05RegressionTests(unittest.TestCase):
                 ]
 
                 self.assertEqual(created_payload["title"], "测试书")
-                self.assertEqual(created_payload["message"], "书本《测试书》已创建。")
+                self.assertEqual(created_payload["creation_status"], "creating")
+                self.assertIn("Genesis 工作台", created_payload["message"])
                 self.assertTrue(created_payload["project_id"])
                 self.assertEqual(len(projects_payload), 1)
                 self.assertEqual(projects_payload[0]["title"], "测试书")
+                self.assertEqual(projects_payload[0]["creation_status"], "creating")
                 self.assertEqual(created_payload["target_total_chapters"], 24)
                 self.assertEqual(projects_payload[0]["target_total_chapters"], 24)
                 self.assertEqual(projects_payload[0]["chapter_count"], 0)
@@ -3906,6 +3908,35 @@ class Phase05RegressionTests(unittest.TestCase):
             self.assertEqual(event_count, 0)
             self.assertEqual(link_count, 0)
 
+    def test_apply_state_changes_rejects_unknown_character_under_subworld_control(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "same-chapter-events.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="书", premise="p", genre="g")
+
+                with self.assertRaisesRegex(ValueError, "unknown or unapproved entity"):
+                    updater.apply_state_changes(
+                        project_id=project.id,
+                        chapter_number=1,
+                        changes=[
+                            StateChangeCandidate(
+                                entity_name="小明",
+                                entity_kind="character",
+                                field="location",
+                                old_value="",
+                                new_value="外院",
+                                reason="首次登场",
+                            )
+                        ],
+                    )
+            finally:
+                session.close()
+                engine.dispose()
+
     def test_arc_director_is_independent_from_writer(self) -> None:
         class FakeLLMClient:
             def __init__(self) -> None:
@@ -5981,8 +6012,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_tasks_list_endpoint_returns_recent_items(self) -> None:
         old_tasks = api_module._tasks
+        old_session_factory = api_module._SessionFactory
         now = datetime.now(timezone.utc)
         try:
+            api_module._SessionFactory = None
             api_module._tasks = {
                 "task-old": {
                     "status": "completed",
@@ -6014,6 +6047,7 @@ class Phase05RegressionTests(unittest.TestCase):
             self.assertTrue(payload[0].updated_at)
         finally:
             api_module._tasks = old_tasks
+            api_module._SessionFactory = old_session_factory
 
     def test_project_delete_endpoint_cascades_related_rows(self) -> None:
         tmp = TemporaryDirectory()

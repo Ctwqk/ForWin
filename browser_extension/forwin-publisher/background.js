@@ -6,13 +6,15 @@ import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/set
 import { READY_CHANNELS, TabReadyRegistry } from './lib/tab-ready-registry.js';
 import {
   extensionApi,
-  reportBackgroundError,
+  reportBackgroundError as logBackgroundError,
   wrapCall,
 } from './lib/extension-runtime.js';
 
 const SETTINGS_KEY = 'forwinPublisherSettings';
 const CLIENT_ID_KEY = 'forwinPublisherClientId';
 const PLATFORM_STATE_KEY = 'forwinPublisherPlatformStates';
+const BACKGROUND_STATUS_KEY = 'forwinPublisherBackgroundStatus';
+const BACKGROUND_ERRORS_KEY = 'forwinPublisherBackgroundErrors';
 const HEARTBEAT_ALARM = 'forwinPublisherHeartbeat';
 const tabReadyRegistry = new TabReadyRegistry();
 
@@ -30,6 +32,44 @@ async function getStorageValue(key, fallbackValue) {
 
 async function setStorageValue(key, value) {
   await wrapCall(extensionApi.storage.local, 'set', { [key]: value });
+}
+
+async function getBackgroundStatus() {
+  return await getStorageValue(BACKGROUND_STATUS_KEY, {});
+}
+
+async function updateBackgroundStatus(patch) {
+  const current = await getBackgroundStatus();
+  await setStorageValue(BACKGROUND_STATUS_KEY, {
+    ...(current || {}),
+    ...(patch || {}),
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+async function appendBackgroundError(context, error) {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (!message) {
+    return;
+  }
+  const entry = {
+    at: new Date().toISOString(),
+    context,
+    message,
+  };
+  const existing = await getStorageValue(BACKGROUND_ERRORS_KEY, []);
+  const errors = Array.isArray(existing) ? existing : [];
+  await setStorageValue(BACKGROUND_ERRORS_KEY, [entry, ...errors].slice(0, 20));
+  await updateBackgroundStatus({
+    lastErrorAt: entry.at,
+    lastErrorContext: context,
+    lastErrorMessage: message,
+  });
+}
+
+function reportBackgroundError(context, error) {
+  logBackgroundError(context, error);
+  appendBackgroundError(context, error).catch(() => {});
 }
 
 async function ensureClientId() {
@@ -1129,9 +1169,17 @@ async function verifyFanqieDraftOnPage(tabId, chapterTitle) {
 async function ensureHeartbeatAlarm() {
   const existing = await wrapCall(extensionApi.alarms, 'get', HEARTBEAT_ALARM);
   if (existing?.periodInMinutes === 1) {
+    await updateBackgroundStatus({
+      heartbeatAlarmReady: true,
+      heartbeatAlarmPeriodMinutes: 1,
+    });
     return;
   }
   await wrapCall(extensionApi.alarms, 'create', HEARTBEAT_ALARM, { periodInMinutes: 1 });
+  await updateBackgroundStatus({
+    heartbeatAlarmReady: true,
+    heartbeatAlarmPeriodMinutes: 1,
+  });
 }
 
 const controller = new PublisherExtensionController({
@@ -1253,10 +1301,21 @@ extensionApi.cookies.onChanged.addListener(() => {
 
 extensionApi.alarms.onAlarm.addListener((alarm) => {
   if (alarm?.name === HEARTBEAT_ALARM) {
+    updateBackgroundStatus({
+      lastHeartbeatAttemptAt: new Date().toISOString(),
+      lastHeartbeatAttemptSource: 'alarm',
+    }).catch(() => {});
     controller.sendHeartbeat()
       .then(() => controller.dispatchPendingUploadJobs())
       .then(() => controller.dispatchPendingCommentSyncJobs())
+      .then(() => updateBackgroundStatus({
+        lastHeartbeatSuccessAt: new Date().toISOString(),
+        lastHeartbeatError: '',
+      }))
       .catch((error) => {
+        updateBackgroundStatus({
+          lastHeartbeatError: error instanceof Error ? error.message : String(error || ''),
+        }).catch(() => {});
         reportBackgroundError('heartbeat alarm', error);
       });
   }
@@ -1264,7 +1323,14 @@ extensionApi.alarms.onAlarm.addListener((alarm) => {
 
 if (extensionApi.runtime.onInstalled) {
   extensionApi.runtime.onInstalled.addListener(() => {
+    updateBackgroundStatus({
+      lastBootstrapAttemptAt: new Date().toISOString(),
+      lastBootstrapSource: 'onInstalled',
+    }).catch(() => {});
     controller.bootstrap().catch((error) => {
+      updateBackgroundStatus({
+        lastBootstrapError: error instanceof Error ? error.message : String(error || ''),
+      }).catch(() => {});
       reportBackgroundError('onInstalled bootstrap', error);
     });
   });
@@ -1272,12 +1338,30 @@ if (extensionApi.runtime.onInstalled) {
 
 if (extensionApi.runtime.onStartup) {
   extensionApi.runtime.onStartup.addListener(() => {
+    updateBackgroundStatus({
+      lastBootstrapAttemptAt: new Date().toISOString(),
+      lastBootstrapSource: 'onStartup',
+    }).catch(() => {});
     controller.bootstrap().catch((error) => {
+      updateBackgroundStatus({
+        lastBootstrapError: error instanceof Error ? error.message : String(error || ''),
+      }).catch(() => {});
       reportBackgroundError('onStartup bootstrap', error);
     });
   });
 }
 
-controller.bootstrap().catch((error) => {
-  reportBackgroundError('initial bootstrap', error);
-});
+updateBackgroundStatus({
+  workerLoadedAt: new Date().toISOString(),
+}).catch(() => {});
+controller.bootstrap()
+  .then(() => updateBackgroundStatus({
+    lastBootstrapSuccessAt: new Date().toISOString(),
+    lastBootstrapError: '',
+  }))
+  .catch((error) => {
+    updateBackgroundStatus({
+      lastBootstrapError: error instanceof Error ? error.message : String(error || ''),
+    }).catch(() => {});
+    reportBackgroundError('initial bootstrap', error);
+  });

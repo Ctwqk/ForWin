@@ -32,6 +32,7 @@ def main() -> int:
             executable_path="/usr/bin/chromium",
             ignore_default_args=["--disable-extensions"],
             args=[
+                "--enable-unsafe-extension-debugging",
                 f"--disable-extensions-except={EXTENSION_DIR}",
                 f"--load-extension={EXTENSION_DIR}",
                 "--no-first-run",

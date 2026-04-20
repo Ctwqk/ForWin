@@ -22,6 +22,7 @@ from forwin.models import (
     ArcStructureDraft,
     BandCheckpoint,
     BandExperiencePlan,
+    BookGenesisRevision,
     CanonEvent,
     ChapterDraft,
     ChapterPlan,
@@ -36,11 +37,14 @@ from forwin.models import (
     NPCIntentSnapshot,
     PlotThread,
     Project,
+    PromptTrace,
     PublisherRawComment,
     ReaderScaleSnapshot,
     RelationEdge,
     SignalWindowAggregate,
     StoryTimePoint,
+    SubWorld,
+    SubWorldRosterItem,
     WorldSimulationTurn,
 )
 from forwin.protocol import (
@@ -58,6 +62,7 @@ from forwin.protocol import (
     RelationSnapshot,
     ReviewNote,
     SignalSummaryView,
+    SubWorldSummary,
     TimelineSnapshot,
     WorldPressureView,
 )
@@ -180,6 +185,40 @@ class StateRepository:
         """Return the Project row, or None if not found."""
         stmt = select(Project).where(Project.id == project_id)
         return self.session.execute(stmt).scalar_one_or_none()
+
+    def get_active_genesis_revision(self, project_id: str) -> BookGenesisRevision | None:
+        project = self.get_project(project_id)
+        if project is None:
+            return None
+        revision_id = str(getattr(project, "active_genesis_revision_id", "") or "").strip()
+        if revision_id:
+            row = self.session.get(BookGenesisRevision, revision_id)
+            if row is not None:
+                return row
+        stmt = (
+            select(BookGenesisRevision)
+            .where(BookGenesisRevision.project_id == project_id)
+            .order_by(BookGenesisRevision.revision.desc(), BookGenesisRevision.created_at.desc())
+            .limit(1)
+        )
+        return self.session.execute(stmt).scalar_one_or_none()
+
+    def list_prompt_traces(
+        self,
+        project_id: str,
+        *,
+        stage_key: str = "",
+        limit: int = 40,
+    ) -> list[PromptTrace]:
+        stmt = (
+            select(PromptTrace)
+            .where(PromptTrace.project_id == project_id)
+            .order_by(PromptTrace.created_at.desc(), PromptTrace.id.desc())
+            .limit(max(1, int(limit or 40)))
+        )
+        if str(stage_key or "").strip():
+            stmt = stmt.where(PromptTrace.stage_key == str(stage_key or "").strip())
+        return list(self.session.execute(stmt).scalars().all())
 
     def get_active_arc_plan(self, project_id: str) -> Optional[ArcPlanVersion]:
         """Get the currently active arc plan version."""
@@ -593,6 +632,178 @@ class StateRepository:
 
         return snapshots
 
+    def list_subworlds(self, project_id: str) -> list[SubWorld]:
+        return list(
+            self.session.execute(
+                select(SubWorld)
+                .where(SubWorld.project_id == project_id)
+                .order_by(SubWorld.scope.asc(), SubWorld.created_at.asc(), SubWorld.id.asc())
+            ).scalars().all()
+        )
+
+    def list_roster_items(
+        self,
+        project_id: str,
+        subworld_ids: list[str] | None = None,
+    ) -> list[SubWorldRosterItem]:
+        stmt = select(SubWorldRosterItem).where(SubWorldRosterItem.project_id == project_id)
+        normalized_ids = [str(item or "").strip() for item in (subworld_ids or []) if str(item or "").strip()]
+        if normalized_ids:
+            stmt = stmt.where(SubWorldRosterItem.subworld_id.in_(normalized_ids))
+        return list(
+            self.session.execute(
+                stmt.order_by(
+                    SubWorldRosterItem.subworld_id.asc(),
+                    SubWorldRosterItem.is_core.desc(),
+                    SubWorldRosterItem.created_at.asc(),
+                    SubWorldRosterItem.id.asc(),
+                )
+            ).scalars().all()
+        )
+
+    def get_allowed_entity_names(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> set[str]:
+        active_ids = self._active_subworld_ids_for_chapter(project_id, chapter_number)
+        if not active_ids:
+            active_ids = self._fallback_global_core_ids(project_id)
+        roster_items = self.list_roster_items(project_id, active_ids)
+        entity_ids = [
+            str(item.entity_id or "").strip()
+            for item in roster_items
+            if item.entity_kind == "character" and str(item.entity_id or "").strip()
+        ]
+        names: set[str] = set()
+        if entity_ids:
+            entities = self.session.execute(
+                select(Entity)
+                .where(
+                    Entity.project_id == project_id,
+                    Entity.id.in_(entity_ids),
+                )
+            ).scalars().all()
+            names.update(
+                str(entity.name or "").strip()
+                for entity in entities
+                if str(entity.name or "").strip()
+            )
+            alias_rows = self.session.execute(
+                select(EntityAlias.alias)
+                .where(
+                    EntityAlias.project_id == project_id,
+                    EntityAlias.entity_id.in_(entity_ids),
+                )
+            ).all()
+            names.update(
+                str(alias or "").strip()
+                for alias, in alias_rows
+                if str(alias or "").strip()
+            )
+        chapter_experience = self.get_chapter_experience_plan(project_id, chapter_number)
+        if chapter_experience is not None:
+            names.update(
+                str(item.entity_name or "").strip()
+                for item in chapter_experience.chapter_entry_targets
+                if str(item.entity_name or "").strip()
+            )
+        return names
+
+    def get_allowed_entity_snapshots(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> list[EntitySnapshot]:
+        active_subworld_ids = self._active_subworld_ids_for_chapter(project_id, chapter_number)
+        if not active_subworld_ids:
+            active_subworld_ids = self._fallback_global_core_ids(project_id)
+        roster_items = self.list_roster_items(project_id, active_subworld_ids)
+        allowed_character_ids = {
+            str(item.entity_id or "").strip()
+            for item in roster_items
+            if item.entity_kind == "character" and str(item.entity_id or "").strip()
+        }
+        active_entities = self.get_active_entities(project_id)
+        snapshots: list[EntitySnapshot] = []
+        for entity in active_entities:
+            if entity.kind != "character":
+                snapshots.append(entity)
+                continue
+            if entity.entity_id in allowed_character_ids:
+                snapshots.append(entity)
+        return snapshots
+
+    def get_active_subworld_summary(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> list[SubWorldSummary]:
+        active_ids = self._active_subworld_ids_for_chapter(project_id, chapter_number)
+        if not active_ids:
+            active_ids = self._fallback_global_core_ids(project_id)
+        active_set = set(active_ids)
+        rows = self.list_subworlds(project_id)
+        roster_by_subworld: dict[str, list[SubWorldRosterItem]] = {}
+        for item in self.list_roster_items(project_id, [row.id for row in rows]):
+            roster_by_subworld.setdefault(item.subworld_id, []).append(item)
+        summaries: list[SubWorldSummary] = []
+        for row in rows:
+            if row.id not in active_set:
+                continue
+            roster = roster_by_subworld.get(row.id, [])
+            summaries.append(
+                SubWorldSummary(
+                    id=row.id,
+                    name=row.name,
+                    purpose=row.purpose,
+                    scope=row.scope,
+                    status=row.status,
+                    active_in_current_band=True,
+                    core_cast=[
+                        item.display_name
+                        for item in roster
+                        if item.is_core and str(item.display_name or "").strip()
+                    ],
+                    planned_slot_count=sum(1 for item in roster if item.status == "planned_slot"),
+                )
+            )
+        return summaries
+
+    def get_active_subworld_region_drafts(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> list[dict]:
+        active_ids = self._active_subworld_ids_for_chapter(project_id, chapter_number)
+        if not active_ids:
+            active_ids = self._fallback_global_core_ids(project_id)
+        active_set = set(active_ids)
+        drafts: list[dict] = []
+        for row in self.list_subworlds(project_id):
+            if row.id not in active_set:
+                continue
+            metadata = _load_json_object(getattr(row, "metadata_json", "") or "{}", {})
+            region_drafts = metadata.get("region_drafts") if isinstance(metadata, dict) else []
+            if not isinstance(region_drafts, list):
+                continue
+            for draft in region_drafts:
+                if not isinstance(draft, dict):
+                    continue
+                draft_payload = dict(draft)
+                draft_payload.setdefault("subworld_id", row.id)
+                draft_payload.setdefault("subworld_name", row.name)
+                draft_payload.setdefault(
+                    "region_source",
+                    str(metadata.get("region_source", "") or "").strip(),
+                )
+                draft_payload.setdefault(
+                    "region_promotion_state",
+                    str(metadata.get("region_promotion_state", "") or "").strip(),
+                )
+                drafts.append(draft_payload)
+        return drafts
+
     def get_active_rule_entities(self, project_id: str) -> list[EntitySnapshot]:
         return [
             entity
@@ -604,7 +815,11 @@ class StateRepository:
     # Relations
     # ------------------------------------------------------------------
 
-    def get_active_relations(self, project_id: str) -> list[RelationSnapshot]:
+    def get_active_relations(
+        self,
+        project_id: str,
+        entity_names: list[str] | None = None,
+    ) -> list[RelationSnapshot]:
         """Get all active relation edges, resolved to entity names."""
         stmt = select(RelationEdge).where(
             RelationEdge.project_id == project_id,
@@ -628,6 +843,10 @@ class StateRepository:
         for edge in edges:
             source_name = name_map.get(edge.source_entity_id, edge.source_entity_id)
             target_name = name_map.get(edge.target_entity_id, edge.target_entity_id)
+            if entity_names is not None:
+                allowed = {str(name or "").strip() for name in entity_names if str(name or "").strip()}
+                if allowed and source_name not in allowed and target_name not in allowed:
+                    continue
             snapshots.append(
                 RelationSnapshot(
                     source_name=source_name,
@@ -1220,6 +1439,39 @@ class StateRepository:
             mapping[str(alias)] = entity
 
         return mapping
+
+    def _active_subworld_ids_for_chapter(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> list[str]:
+        chapter_experience = self.get_chapter_experience_plan(project_id, chapter_number)
+        if chapter_experience is not None and chapter_experience.active_subworld_ids:
+            return [
+                str(item).strip()
+                for item in chapter_experience.active_subworld_ids
+                if str(item).strip()
+            ]
+        band_schedule = self.get_band_experience_plan_for_chapter(project_id, chapter_number)
+        if band_schedule is not None and band_schedule.active_subworld_ids:
+            return [
+                str(item).strip()
+                for item in band_schedule.active_subworld_ids
+                if str(item).strip()
+            ]
+        return []
+
+    def _fallback_global_core_ids(self, project_id: str) -> list[str]:
+        rows = self.session.execute(
+            select(SubWorld.id)
+            .where(
+                SubWorld.project_id == project_id,
+                SubWorld.scope == "global_core",
+                SubWorld.status == "active",
+            )
+            .order_by(SubWorld.created_at.asc(), SubWorld.id.asc())
+        ).all()
+        return [str(subworld_id) for subworld_id, in rows if str(subworld_id or "").strip()]
 
     def get_thread_by_name(
         self, project_id: str, name: str

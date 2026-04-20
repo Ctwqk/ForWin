@@ -6,12 +6,14 @@ import json
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from forwin.director.arc_director import ArcDirector
 from forwin.models import (
     ArcPlanVersion,
     ChapterDraft,
     ChapterPlan,
     ChapterTimeline,
     PlotThread,
+    Project,
     ProjectReplanEvent,
     ProjectStageAnalysis,
     SignalWindowAggregate,
@@ -20,6 +22,9 @@ from forwin.models import (
 )
 from forwin.orchestrator.goals import load_goals_json
 from forwin.orchestrator.thread_sampling import sample_active_threads
+from forwin.protocol import SubWorldPlanDelta
+from forwin.state.updater import StateUpdater
+from forwin.subworld_manager import SubWorldManager
 
 
 @dataclass(slots=True)
@@ -208,8 +213,16 @@ class PacingStrategist:
 
 
 class ReplanGovernor:
-    def __init__(self, *, cooldown_chapters: int = 3) -> None:
+    def __init__(
+        self,
+        *,
+        cooldown_chapters: int = 3,
+        director: ArcDirector | None = None,
+        subworld_manager: SubWorldManager | None = None,
+    ) -> None:
         self.cooldown_chapters = max(cooldown_chapters, 1)
+        self.director = director
+        self.subworld_manager = subworld_manager or SubWorldManager(director=director)
 
     def apply_if_needed(
         self,
@@ -428,6 +441,7 @@ class ReplanGovernor:
         stage: StageAssessment,
         focus_threads: list[str],
     ) -> None:
+        project = session.get(Project, project_id)
         active_arc = session.execute(
             select(ArcPlanVersion)
             .where(
@@ -465,6 +479,32 @@ class ReplanGovernor:
             )
             .order_by(ChapterPlan.chapter_number.asc())
         ).scalars().all()
+        if self.director is not None and project is not None:
+            delta_payload = self.director.plan_subworld_delta(
+                premise=project.premise,
+                genre=project.genre,
+                arc_synopsis=new_arc.arc_synopsis,
+                chapter_seed=[
+                    {
+                        "chapter_number": plan.chapter_number,
+                        "title": plan.title,
+                        "one_line": plan.one_line,
+                        "goals": load_goals_json(plan.goals_json),
+                    }
+                    for plan in future_plans[:4]
+                ],
+                existing_subworlds=self.subworld_manager.summarize_registry(session, project_id),
+                focus_threads=focus_threads,
+            )
+            self.subworld_manager.apply_arc_delta(
+                session=session,
+                updater=StateUpdater(session),
+                project_id=project_id,
+                arc_id=new_arc.id,
+                delta=SubWorldPlanDelta.model_validate(delta_payload),
+                chapter_number=chapter_number + 1,
+                entity_map={},
+            )
         for plan in future_plans:
             plan.arc_plan_id = new_arc.id
             goals = load_goals_json(plan.goals_json)

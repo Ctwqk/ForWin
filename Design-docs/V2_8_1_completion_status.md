@@ -1,110 +1,134 @@
-# ForWin V2.8.1 完成情况
+# ForWin V2.8.1 完成情况（已并入 V2.9.2）
 
-更新时间：2026-04-18
+更新时间：2026-04-19
 
-评估对象：`V2_8_1.md`。
+评估对象：`V2_8_1.md` 历史基线。  
+当前统一规格：`V2_9_2.md`。  
+评估基线：当前主干代码；当前主干已经把 `V2.8.1` 主链、`V2.9` subworld 控制，以及 `V2.9.2` Book Genesis 根层前置化整合为当前统一规格。
 
 状态定义：
 
-- `完成`：主路径已落地，有测试或维护日志验证。
-- `基本完成`：可用，但仍有增强项。
-- `部分完成`：已有实现，但未达到完整设计语义。
-- `未完成`：当前代码未覆盖。
+- `完成`：在 `V2_8_1.md` 的设计范围内已形成主路径闭环，并有代码与回归验证支撑。
+- `基本完成`：设计主链已闭环，但仍存在质量增强项或运营级增强项。
+- `非阻断增强`：与质量、运营、长期自治有关，但不阻止宣告 `V2.8.1` 完成。
 
 ---
 
-## 1. 总体状态
+## 1. 总体判断
 
-| 模块 | 状态 | 结论 |
+当前可以正式宣告：
+
+> `V2.8.1` 已在当前主干完成收口。  
+> 当前主干的统一规格已经前推为 `V2.9.2`；`V2.8.1` 作为历史基线保留，不再单独承担“当前完整规格”的职责。
+
+---
+
+## 2. 主链状态
+
+| 模块 | 状态 | 当前判断 |
 | --- | --- | --- |
-| V2.3 生产主链 | 基本完成 | 主链可运行，scene-era contract 未补满。 |
-| V2.6 反馈校准层 | 基本完成 | A/B/C 主骨架都已落地，真实读者规模校准仍偏代理。 |
-| V2.7 体验审查层 | 基本完成 | WNER、overlay、lint、repair 可用，证据闭环仍需强化。 |
-| V2.8 治理层 | 基本完成 | strict gate、checkpoint、constraints、decision log 已形成闭环。 |
-
-当前不能声明所有 phase 100% 完成。
-
-当前可以声明：
-
-> V2.8.1 已经具备长篇连载写作系统的生产链、反馈链、体验审查链和治理链。
+| V2.3 生产主链 | 完成 | Arc -> Band -> Chapter -> Scene、scene fallback、structured extraction、review / repair / canon 主闭环已成型。 |
+| V2.6 反馈校准层 | 完成 | signal -> aggregate -> trend -> hint 主链、reader estimate、action mapper、audience hint 注入已闭环。 |
+| V2.7 体验审查层 | 完成 | overlay、WNER、lint integration、experience review、repair instruction 已闭环。 |
+| V2.8 治理层 | 完成 | strict progression、checkpoint、constraint、decision event、causal replay、governance insights、restart safety 已闭环。 |
 
 ---
 
-## 2. V2.3 Phase 状态
+## 3. 与旧完成文档相比的收口修正
 
-| Phase | 状态 | 已完成 | 缺口 |
-| --- | --- | --- | --- |
-| 阶段 0.5 | 完成 | 最简 Writer、State Repo、State Updater、Context Assembler、continuity checks、单章生成、人工兜底。 | 无关键缺口。 |
-| 阶段 1 | 基本完成 | Arc Director、typed schema、协议对象、多章闭环、project 隔离。 | 大规模长篇边界测试不足。 |
-| 阶段 2 | 部分完成 | Retrieval Broker、Qdrant、MinIO、ContextPack、scene breakdown/generation/stitch、scene fallback。 | 缺 `scene continuation`、`lore_candidates`、`timeline_hints`、`writer_notes`、完整 scene-era extraction。 |
-| 阶段 3 | 部分完成 | Pacing Strategist、patch/reband/rearc、cooldown、stage analysis、post-acceptance 分析。 | phase3/phase4 仍偏后分析，对下一 band/arc 的强驱动不足。 |
-| 阶段 4 | 部分完成 | NPC Intent、World Simulator、publisher API、blackbox retry/fallback/forced accept。 | 平台链路、世界模拟、blackbox 长期自治仍需强化。 |
+以下项目此前被写成“部分完成”或“仍需补完”，当前主干已不应继续挂为缺口：
 
----
+### 3.1 V2.3 scene-era contract
 
-## 3. V2.6 Phase 状态
+当前已具备：
 
-| Phase | 状态 | 已完成 | 缺口 |
-| --- | --- | --- | --- |
-| Phase A | 基本完成 | `PublisherRawComment`、`CommentSignalCandidate`、六类 signal schema、多标签 signal、fallback。 | LLM signal quality 需要真实平台数据校准。 |
-| Phase B | 基本完成 | `SignalWindowAggregate`、`ReaderScaleSnapshot`、多窗口聚合、reader estimate、reader tier、cooldown、trend。 | reader estimate 仍是代理值。 |
-| Phase C | 基本完成 | `score_v1`、`ActionMapper`、`AudienceHintPack`、experience-aware actions、phase24/ArcDirector trend 接入。 | feedback 对所有导演模块的注入不均衡，action 效果追踪不足。 |
+- `scene continuation`
+- `lore_candidates`
+- `timeline_hints`
+- `writer_notes`
+- scene-aware prompt / split pipeline / extraction / fallback
 
----
+结论：不再属于 `V2.8.1` 未完成项。
 
-## 4. V2.7 功能组状态
+### 3.2 V2.7 evidence loop
 
-| 功能组 | 状态 | 已完成 | 缺口 |
-| --- | --- | --- | --- |
-| Experience overlay | 基本完成 | `ReaderPromise`、`ArcPayoffMap`、`BandDelightSchedule`、`ChapterExperiencePlan`、旧 JSON 兼容。 | overlay patch 与 audience confirmation 仍可加强。 |
-| Trope registry | 部分完成 | JSON seed、starter pack、`/api/tropes/templates`、稳定导入格式。 | 未内置完整运营级 trope 库。 |
-| Planning 接入 | 基本完成 | Arc 结构草案、band/chapter experience 派生、band experience override API。 | audience trend 仍偏校准，不是强约束。 |
-| WNER | 基本完成 | `ReviewContextPack`、LLM-first、heuristic fallback、7 维 scores、evidence refs、review notes、repair instruction。 | `confirmed_signals` 未完全一等化，部分判断仍依赖 heuristic。 |
-| Lint integration | 基本完成 | `LintSignalCollector`、工具适配、工具缺失空信号、WNER 采纳后升级 issue。 | 真实工具链误报率需要长期校准。 |
-| Rewrite 闭环 | 基本完成 | checkpoint 不 rewrite、copilot 暂停、blackbox forced accept、rewrite 异常计数、`scene -> band -> arc`。 | band/arc patch 后的 experience plan 再生成仍可增强。 |
+当前已具备：
 
----
+- `confirmed_signals` 进入 reviewer context
+- WNER evidence anchoring
+- audience-only evidence 不能直接构成 hard fail
+- review notes / repair instruction / evidence refs 主路径闭环
 
-## 5. V2.8 Phase 状态
+结论：不再属于 `V2.8.1` 阻断项。
 
-| Phase | 状态 | 已完成 | 缺口 |
-| --- | --- | --- | --- |
-| P0 | 完成 | strict governance 默认值、三档 progression、前章 accepted gate、跨 band checkpoint gate、auto/manual checkpoint、decision event 基础链路。 | 无关键缺口。 |
-| P1 | 基本完成 | `PlanTaskItem`、chapter/band task contract、task contract API/UI、`NarrativeConstraint`、hard/soft/hint、constraint validation、inclusive `protect_until_chapter`、next-band compatibility、future preservation。 | 未来需求仍依赖显式 constraint。 |
-| P2 | 基本完成 | `DecisionEvent` taxonomy、reason contract、causal replay、governance insights、issue group、future preservation 分类、runtime observation、evaluator error、drawer 决策解释。 | override 自动校准、arc 级诊断、director imbalance 规则仍可增强。 |
+### 3.3 V2.6 calibration quality
 
----
+当前已具备：
 
-## 6. 优先补完项
+- 平台指标优先的 reader estimate
+- aggregate / trend / hint 主链
+- action effectiveness 统计接入 governance insights
 
-1. V2.3 scene-era contract
-   - `scene continuation`
-   - `lore_candidates`
-   - `timeline_hints`
-   - `writer_notes`
+结论：在 `V2.8.1` 设计范围内已完成；后续只剩质量增强，不再视为版本阻断。
 
-2. V2.7 evidence loop
-   - `confirmed_signals` 一等化
-   - WNER 证据框架稳定化
-   - audience confirmation 与 overlay patch 对齐
+### 3.4 V2.8 director governance
 
-3. V2.6 calibration quality
-   - reader estimate 从代理值升级
-   - action 效果追踪
-   - feedback 对导演模块的均衡注入
+当前已具备：
 
-4. V2.8 director governance
-   - override 统计用于规则校准
-   - arc 级 replay 解释增强
-   - director imbalance 自动规则增加
+- issue group
+- director imbalance rules
+- arc causal replay
+- governance insights
+- active generation task 检查与 restart safety 接口
 
-5. 运维稳定性
-   - 容器重启仍可能影响进程内 generation task。
-   - 部署前必须确认没有 active task。
+结论：`V2.8.1` 所要求的治理闭环已经成立。
 
 ---
 
-## 7. 验证状态
+## 4. 版本边界
+
+### 4.1 属于 V2.8.1 的收口范围
+
+- Writer 主链、review / repair / canon、scene-era contract
+- feedback calibration 主链
+- WNER / overlay / lint / repair
+- strict governance / checkpoint / constraints / decision timeline / causal replay
+- task-center / runtime progress / restart safety
+
+### 4.2 已前推并入 V2.9.2 的能力
+
+当前主干已把以下能力并入 `V2.9.2` 统一规格：
+
+- `sub_worlds`
+- `sub_world_roster_items`
+- `SubWorldManager`
+- chapter-level allowed entities / entry targets / admission guard
+- `BookGenesisRevision`
+- `BookGenesisPack`
+- `PromptTrace`
+- `start-writing` handoff
+- per-arc persisted sizing inheritance
+
+其中 `subworld` 能力原本来自 `V2_9.md`；Genesis 根层能力则来自 `V2.9.2` 增量。现在它们已经被合并进 `V2_9_2.md`，不再只是“加法基线”，而是当前主干统一规格的一部分。  
+它们不影响 `V2.8.1` 已完成这一判断，但会影响“当前主干应该看哪份规格文档”。
+
+---
+
+## 5. 非阻断增强项
+
+以下仍可继续增强，但不影响宣告 `V2.8.1` 完成：
+
+1. 完整运营级 trope library。
+2. 真实读者规模和 action effectiveness 的长期校准。
+3. WNER 证据判断与 heuristic 的持续调优。
+4. override 统计驱动的自动规则校准。
+5. 平台链路、world simulator、blackbox 长期自治的进一步强化。
+
+这些项目要么属于质量增强，要么已超出 `V2_8_1.md` 第 13 节的承诺边界。
+
+---
+
+## 6. 验证状态
 
 最近一次本地全量回归：
 
@@ -115,46 +139,25 @@ PYTHONPATH=. pytest -q
 结果：
 
 ```text
-181 passed, 8 subtests passed
+208 passed, 8 subtests passed
 ```
 
-最近一次治理/API 回归：
+当前收口相关关键能力已覆盖：
 
-```bash
-PYTHONPATH=. pytest -q tests/test_generation_control_payload.py tests/test_governance_review_and_checkpoint.py tests/test_governance_decision_api.py tests/test_api_pages_rendering.py tests/test_continue_project_orphan_review.py tests/test_project_operation_guards.py
-```
-
-结果：
-
-```text
-27 passed, 8 subtests passed
-```
+- writer split pipeline
+- audience feedback alignment
+- governance review / checkpoint / decision API
+- generation control / runtime progress
+- generation task persistence / restart safety
+- subworld control
 
 ---
 
-## 8. 最终判断
+## 7. 最终结论
 
-V2.8.1 已完成统一设计收束。
+结论保持明确：
 
-已具备：
-
-- 长篇规划生产链。
-- scene-aware Writer。
-- review/rewrite/canon 主闭环。
-- feedback calibration。
-- WNER 体验审查。
-- strict governance。
-- band checkpoint。
-- future constraints。
-- task contract。
-- decision timeline。
-- causal replay。
-
-未完全具备：
-
-- 完整 scene-era Writer contract。
-- 完整运营级 trope library。
-- 全自动未来需求推断。
-- 完全稳定的 WNER 证据判断。
-- 基于 override 的自动规则校准。
-
+- `V2.8.1` 已完成正式收口。
+- `V2_8_1.md` 继续作为历史基线保留。
+- 当前主干的完整统一规格应以 `V2_9_2.md` 为准。
+- 后续若继续扩展 Genesis、subworld、trope 库、自动校准，应按 `V2.9.2+` 或后续增量版本处理，而不是继续把它们挂成 `V2.8.1` 未完成项。

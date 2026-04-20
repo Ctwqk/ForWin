@@ -4,6 +4,7 @@ from .base import Base, get_engine, get_session_factory, init_db, new_id
 from .draft import ChapterDraft, ChapterReview
 from .entity import Entity, EntityAlias, EntityState, RelationEdge
 from .event import CanonEvent, EventEntityLink
+from .genesis import BookGenesisRevision, PromptTrace
 from .governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
 from .phase import (
     ArcEnvelope,
@@ -33,6 +34,7 @@ from .publisher import (
     SignalWindowAggregate,
 )
 from .project import ArcPlanVersion, ChapterPlan, Project
+from .subworld import SubWorld, SubWorldRosterItem
 from .task import GenerationTask
 from .thread import PlotThread, PlotThreadBeat
 from .timeline import ChapterTimeline, StoryTimePoint
@@ -48,6 +50,8 @@ __all__ = [
     "ArcPlanVersion",
     "ChapterPlan",
     "GenerationTask",
+    "SubWorld",
+    "SubWorldRosterItem",
     # entity
     "Entity",
     "EntityAlias",
@@ -56,6 +60,8 @@ __all__ = [
     # event
     "CanonEvent",
     "EventEntityLink",
+    "BookGenesisRevision",
+    "PromptTrace",
     "BandCheckpoint",
     "NarrativeConstraint",
     "DecisionEvent",

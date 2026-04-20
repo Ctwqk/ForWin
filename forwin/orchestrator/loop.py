@@ -20,8 +20,10 @@ from pathlib import Path
 import time
 from typing import Any, Callable
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_genesis import BookGenesisService
 from forwin.checker.rules import ContinuityChecker
 from forwin.config import Config
 from forwin.director import ArcDirector
@@ -50,7 +52,7 @@ from forwin.models import ProvisionalBandExecution, ProvisionalChapterLedger, ne
 from forwin.models.governance import BandCheckpoint
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.project import ChapterPlan, Project
+from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.phase import ArcStructureDraft, BandExperiencePlan
 from forwin.protocol.experience import ArcPayoffMap, BandDelightSchedule, ChapterExperiencePlan
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
@@ -74,6 +76,7 @@ from forwin.state.repo import StateRepository
 from forwin.state.schema import KNOWN_STATE_FIELDS
 from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
+from forwin.subworld_manager import SubWorldManager
 from forwin.protocol.writer import WriterOutput
 from forwin.writer.chapter_writer import ChapterWriter
 from forwin.writer.llm_client import LLMClient
@@ -175,6 +178,11 @@ class WritingOrchestrator:
             llm_client=self.llm_client,
             max_tokens=self.config.max_tokens,
         )
+        self.book_genesis = BookGenesisService(
+            llm_client=self.llm_client,
+            max_tokens=min(self.config.max_tokens, 1600),
+        )
+        self.subworld_manager = SubWorldManager(director=self.arc_director)
         self.retrieval_broker = RetrievalBroker(
             context_budget_chars=self.config.context_budget_chars,
             max_entities=self.config.retrieval_max_entities,
@@ -254,7 +262,9 @@ class WritingOrchestrator:
             active_thread_limit=self.config.phase_active_thread_limit,
         )
         self.replan_governor = ReplanGovernor(
-            cooldown_chapters=self.config.replan_cooldown_chapters
+            cooldown_chapters=self.config.replan_cooldown_chapters,
+            director=self.arc_director,
+            subworld_manager=self.subworld_manager,
         )
         phase4_llm = (
             self.llm_client
@@ -272,6 +282,7 @@ class WritingOrchestrator:
         self.arc_envelope_manager = ArcEnvelopeManager(
             director=self.arc_director,
             provisional_executor=self._run_provisional_band_preview,
+            subworld_manager=self.subworld_manager,
         )
         self.review_hub = HistoricalReviewHub(
             experience_review_enabled=self.config.experience_review_enabled,
@@ -424,6 +435,16 @@ class WritingOrchestrator:
                     gate=failed_provisional,
                 )
 
+            chapter_numbers = self._pending_chapter_numbers_for_active_arc(
+                session=session,
+                project_id=project_id,
+            )
+            if not chapter_numbers:
+                return RunResult(
+                    project_id=project_id,
+                    requested_chapters=0,
+                )
+
             print(f"项目创建完成: {project.title}")
             print(f"项目ID: {project_id}")
 
@@ -433,8 +454,8 @@ class WritingOrchestrator:
                 updater=updater,
                 checker=checker,
                 project_id=project_id,
-                chapter_numbers=list(range(1, num_chapters + 1)),
-                requested_chapters=num_chapters,
+                chapter_numbers=chapter_numbers,
+                requested_chapters=len(chapter_numbers),
             )
             print(f"\n{'='*60}")
             if result.status == "needs_review":
@@ -443,7 +464,7 @@ class WritingOrchestrator:
                     f"第 {result.paused_chapters[0]} 章已进入人工检查点。"
                 )
             elif result.status == "completed":
-                print(f"生成完毕！共 {num_chapters} 章")
+                print(f"生成完毕！本轮完成 {len(result.completed_chapters)} 章")
             else:
                 print(
                     "生成结束："
@@ -589,14 +610,24 @@ class WritingOrchestrator:
                     gate=failed_provisional,
                 )
 
+            chapter_numbers = self._pending_chapter_numbers_for_active_arc(
+                session=session,
+                project_id=project_id,
+            )
+            if not chapter_numbers:
+                return RunResult(
+                    project_id=project_id,
+                    requested_chapters=0,
+                )
+
             result = self._run_project_chapters(
                 session=session,
                 repo=repo,
                 updater=updater,
                 checker=checker,
                 project_id=project_id,
-                chapter_numbers=list(range(1, num_chapters + 1)),
-                requested_chapters=num_chapters,
+                chapter_numbers=chapter_numbers,
+                requested_chapters=len(chapter_numbers),
             )
             self._emit_progress(
                 "stage_changed",
@@ -788,6 +819,73 @@ class WritingOrchestrator:
             failed_chapters=failed_chapters,
         )
 
+    @staticmethod
+    def _pending_chapter_numbers_for_active_arc(
+        *,
+        session: Session,
+        project_id: str,
+        max_chapters: int | None = None,
+    ) -> list[int]:
+        active_arc = session.execute(
+            select(ArcPlanVersion)
+            .where(
+                ArcPlanVersion.project_id == project_id,
+                ArcPlanVersion.status == "active",
+            )
+            .order_by(ArcPlanVersion.created_at.desc(), ArcPlanVersion.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if active_arc is None:
+            return []
+        chapter_numbers = list(
+            session.execute(
+                select(ChapterPlan.chapter_number)
+                .where(
+                    ChapterPlan.project_id == project_id,
+                    ChapterPlan.arc_plan_id == active_arc.id,
+                    ChapterPlan.status.in_(("planned", "failed")),
+                )
+                .order_by(ChapterPlan.chapter_number.asc())
+            ).scalars().all()
+        )
+        if max_chapters is not None:
+            chapter_numbers = chapter_numbers[: max(1, int(max_chapters or 1))]
+        return chapter_numbers
+
+    def _materialize_next_genesis_arc_if_needed(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project: Project,
+    ) -> bool:
+        if str(getattr(project, "creation_status", "") or "").strip() != "writing":
+            return False
+        if not str(getattr(project, "active_genesis_revision_id", "") or "").strip():
+            return False
+        revision = self.book_genesis.active_revision(session, project)
+        if revision is None:
+            return False
+        remaining_pending = session.execute(
+            select(ChapterPlan.chapter_number)
+            .where(
+                ChapterPlan.project_id == project.id,
+                ChapterPlan.status.in_(("planned", "failed")),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        if remaining_pending is not None:
+            return False
+        promoted = self.book_genesis.promote_next_arc_if_needed(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+        )
+        if promoted:
+            session.commit()
+        return promoted
+
     def continue_project(self, project_id: str, max_chapters: int | None = None) -> RunResult:
         session: Session = self._SessionFactory()
         try:
@@ -838,28 +936,41 @@ class WritingOrchestrator:
             )
             session.commit()
 
-            chapter_numbers = [
+            pending_chapter_numbers = [
                 plan.chapter_number
                 for plan in chapter_plans
                 if plan.status in {"planned", "failed"}
             ]
-            if max_chapters is not None:
-                chapter_numbers = chapter_numbers[: max(1, int(max_chapters or 1))]
-            if not chapter_numbers:
-                return RunResult(
-                    project_id=project_id,
-                    requested_chapters=len(chapter_plans),
-                )
+            if not pending_chapter_numbers:
+                if self._materialize_next_genesis_arc_if_needed(
+                    session=session,
+                    updater=updater,
+                    project=project,
+                ):
+                    repo, updater, checker = self._make_state_helpers(session)
+                    chapter_plans = session.query(ChapterPlan).filter(
+                        ChapterPlan.project_id == project_id
+                    ).order_by(ChapterPlan.chapter_number).all()
+                    pending_chapter_numbers = [
+                        plan.chapter_number
+                        for plan in chapter_plans
+                        if plan.status in {"planned", "failed"}
+                    ]
+                if not pending_chapter_numbers:
+                    return RunResult(
+                        project_id=project_id,
+                        requested_chapters=0,
+                    )
 
             self._emit_progress(
                 "stage_changed",
                 stage="resolving_arc_envelope",
                 project_id=project_id,
-                requested_chapters=len(chapter_plans),
-                current_chapter=min(chapter_numbers) - 1,
+                requested_chapters=len(pending_chapter_numbers),
+                current_chapter=min(pending_chapter_numbers) - 1,
             )
             if self._abort_requested():
-                return self._cancelled_result(project_id, len(chapter_plans))
+                return self._cancelled_result(project_id, len(pending_chapter_numbers))
             previous_provisional = self._latest_provisional_gate_snapshot(
                 session,
                 project_id,
@@ -867,7 +978,7 @@ class WritingOrchestrator:
             self.arc_envelope_manager.ensure_active_arc_resolution(
                 session=session,
                 project_id=project_id,
-                activation_chapter=min(chapter_numbers),
+                activation_chapter=min(pending_chapter_numbers),
             )
             session.commit()
             failed_provisional = self._new_failed_provisional_gate(
@@ -893,8 +1004,19 @@ class WritingOrchestrator:
                     session=session,
                     updater=updater,
                     project_id=project_id,
-                    requested_chapters=len(chapter_plans),
+                    requested_chapters=len(pending_chapter_numbers),
                     gate=failed_provisional,
+                )
+
+            chapter_numbers = self._pending_chapter_numbers_for_active_arc(
+                session=session,
+                project_id=project_id,
+                max_chapters=max_chapters,
+            )
+            if not chapter_numbers:
+                return RunResult(
+                    project_id=project_id,
+                    requested_chapters=0,
                 )
 
             return self._run_project_chapters(
@@ -904,7 +1026,7 @@ class WritingOrchestrator:
                 checker=checker,
                 project_id=project_id,
                 chapter_numbers=chapter_numbers,
-                requested_chapters=len(chapter_plans),
+                requested_chapters=len(chapter_numbers),
             )
         finally:
             self._clear_governance_runtime()
@@ -3042,17 +3164,23 @@ class WritingOrchestrator:
         verdict: ReviewVerdict,
     ) -> str | None:
         try:
+            self._validate_subworld_admission(
+                repo=repo,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                writer_output=writer_output,
+            )
             filtered_state_changes = self._filter_supported_state_changes(
                 writer_output.state_changes
+            )
+            updater.apply_state_changes(
+                project_id, chapter_number, filtered_state_changes
             )
             filtered_events = self._filter_resolvable_events(
                 repo,
                 project_id,
                 chapter_number,
                 writer_output.new_events,
-            )
-            updater.apply_state_changes(
-                project_id, chapter_number, filtered_state_changes
             )
             updater.apply_events(
                 project_id, chapter_number, filtered_events
@@ -3136,6 +3264,70 @@ class WritingOrchestrator:
                 continue
             filtered.append(event)
         return filtered
+
+    @staticmethod
+    def _collect_subworld_candidate_names(
+        repo: StateRepository,
+        project_id: str,
+        writer_output: WriterOutput,
+    ) -> set[str]:
+        generic_names = {
+            "路人", "守卫", "老板", "店小二", "师兄", "师姐", "弟子", "同学", "众人", "人群", "旁人",
+        }
+        names: set[str] = set()
+        maybe_event_names: set[str] = set()
+        for mention in getattr(writer_output, "entity_mentions", []):
+            entity_name = str(getattr(mention, "entity_name", "")).strip()
+            if (
+                entity_name
+                and getattr(mention, "entity_kind", "") == "character"
+                and bool(getattr(mention, "is_named", False))
+                and entity_name not in generic_names
+            ):
+                names.add(entity_name)
+        for change in writer_output.state_changes:
+            entity_name = str(change.entity_name or "").strip()
+            if change.entity_kind == "character" and entity_name and entity_name not in generic_names:
+                names.add(entity_name)
+        for event in writer_output.new_events:
+            for entity_name in event.involved_entity_names:
+                normalized = str(entity_name or "").strip()
+                if normalized and normalized not in generic_names:
+                    maybe_event_names.add(normalized)
+        for scene in writer_output.scene_outputs:
+            for entity_name in scene.involved_entities:
+                normalized = str(entity_name or "").strip()
+                if normalized and normalized not in generic_names:
+                    names.add(normalized)
+        if maybe_event_names:
+            resolved = repo.get_entities_by_names(project_id, sorted(maybe_event_names))
+            for entity_name in maybe_event_names:
+                entity = resolved.get(entity_name)
+                if entity is None or entity.kind == "character":
+                    names.add(entity_name)
+        return {name for name in names if len(name) <= 12}
+
+    def _validate_subworld_admission(
+        self,
+        *,
+        repo: StateRepository,
+        project_id: str,
+        chapter_number: int,
+        writer_output: WriterOutput,
+    ) -> None:
+        allowed_names = repo.get_allowed_entity_names(project_id, chapter_number)
+        if not allowed_names:
+            return
+        unknown = sorted(
+            name
+            for name in self._collect_subworld_candidate_names(repo, project_id, writer_output)
+            if name not in allowed_names
+        )
+        if unknown:
+            raise ValueError(
+                "Subworld admission rejected chapter "
+                f"{chapter_number}: {', '.join(unknown)}"
+            )
 
     def _run_phase3_pass(
         self,
@@ -3692,24 +3884,82 @@ class WritingOrchestrator:
         num_chapters: int,
     ) -> None:
         """Seed the database with initial state from the arc plan."""
-        # Arc plan version
-        arc = updater.create_arc_plan(
-            project_id=project_id,
-            arc_synopsis=arc_plan.get("arc_synopsis", ""),
-        )
-
-        # Chapter plans
         chapters = arc_plan.get("chapters", [])
-        for i in range(num_chapters):
-            ch = chapters[i] if i < len(chapters) else {}
-            updater.create_chapter_plan(
-                project_id=project_id,
-                arc_plan_id=arc.id,
-                chapter_number=ch.get("chapter_number", i + 1),
-                title=ch.get("title", f"第{i+1}章"),
-                one_line=ch.get("one_line", ""),
-                goals=ch.get("goals", []),
+        raw_outlines = arc_plan.get("arc_outlines") or []
+        normalized_outlines: list[dict[str, int | str]] = []
+        cursor = 1
+        for index, raw in enumerate(raw_outlines, start=1):
+            if cursor > num_chapters or not isinstance(raw, dict):
+                break
+            raw_count = int(raw.get("chapter_count", 0) or 0)
+            if raw_count <= 0:
+                continue
+            remaining = num_chapters - cursor + 1
+            chapter_count = min(raw_count, remaining)
+            if chapter_count <= 0:
+                break
+            chapter_start = cursor
+            chapter_end = cursor + chapter_count - 1
+            normalized_outlines.append(
+                {
+                    "arc_number": index,
+                    "chapter_start": chapter_start,
+                    "chapter_end": chapter_end,
+                    "chapter_count": chapter_count,
+                    "arc_synopsis": str(raw.get("arc_synopsis", "")).strip() or str(arc_plan.get("arc_synopsis", "")).strip(),
+                }
             )
+            cursor = chapter_end + 1
+        if not normalized_outlines:
+            normalized_outlines = [
+                {
+                    "arc_number": 1,
+                    "chapter_start": 1,
+                    "chapter_end": num_chapters,
+                    "chapter_count": num_chapters,
+                    "arc_synopsis": str(arc_plan.get("arc_synopsis", "")).strip(),
+                }
+            ]
+        elif cursor <= num_chapters:
+            normalized_outlines.append(
+                {
+                    "arc_number": len(normalized_outlines) + 1,
+                    "chapter_start": cursor,
+                    "chapter_end": num_chapters,
+                    "chapter_count": num_chapters - cursor + 1,
+                    "arc_synopsis": f"后续弧线：第{cursor}章至第{num_chapters}章",
+                }
+            )
+
+        first_arc = None
+        for outline in normalized_outlines:
+            chapter_start = int(outline.get("chapter_start", 1) or 1)
+            chapter_end = int(outline.get("chapter_end", chapter_start) or chapter_start)
+            chapter_count = max(1, int(outline.get("chapter_count", chapter_end - chapter_start + 1) or 1))
+            arc = updater.create_arc_plan(
+                project_id=project_id,
+                arc_synopsis=str(outline.get("arc_synopsis", "") or ""),
+                version=1,
+                status="active" if first_arc is None else "planned",
+                arc_number=int(outline.get("arc_number", 1) or 1),
+                chapter_start=chapter_start,
+                chapter_end=chapter_end,
+                planned_target_size=chapter_count,
+                planned_soft_min=max(1, int(round(chapter_count * 0.85))),
+                planned_soft_max=max(chapter_count, int(round(chapter_count * 1.20))),
+            )
+            if first_arc is None:
+                first_arc = arc
+            for chapter_number in range(chapter_start, chapter_end + 1):
+                ch = chapters[chapter_number - 1] if chapter_number - 1 < len(chapters) else {}
+                updater.create_chapter_plan(
+                    project_id=project_id,
+                    arc_plan_id=arc.id,
+                    chapter_number=ch.get("chapter_number", chapter_number),
+                    title=ch.get("title", f"第{chapter_number}章"),
+                    one_line=ch.get("one_line", ""),
+                    goals=ch.get("goals", []),
+                )
 
         # Entities: characters
         entity_map: dict[str, str] = {}  # name -> entity_id
@@ -3791,6 +4041,15 @@ class WritingOrchestrator:
                 priority=thread_data.get("priority", 2),
                 chapter=0,
             )
+
+        self.subworld_manager.apply_initial_arc_plan(
+            session=updater.session,
+            updater=updater,
+            project_id=project_id,
+            arc_id=first_arc.id if first_arc is not None else "",
+            arc_plan=arc_plan,
+            entity_map=entity_map,
+        )
 
         # Initial timeline
         initial_time = arc_plan.get("initial_time", {})

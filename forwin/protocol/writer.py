@@ -2,6 +2,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 from .scene import SceneContinuation, SceneOutput
 from .state_change import StateChangeCandidate, EventCandidate, ThreadBeatCandidate, TimeAdvance
+from .subworld import EntityMention
 
 
 class LoreCandidate(BaseModel):
@@ -45,4 +46,5 @@ class WriterOutput(BaseModel):
     lore_candidates: list[LoreCandidate] = Field(default_factory=list)
     timeline_hints: list[TimelineHint] = Field(default_factory=list)
     writer_notes: list[WriterNote] = Field(default_factory=list)
+    entity_mentions: list[EntityMention] = Field(default_factory=list)
     generation_meta: dict[str, object] = Field(default_factory=dict)

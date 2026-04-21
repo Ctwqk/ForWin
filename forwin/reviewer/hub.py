@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from forwin.governance_checks import (
     chapter_combined_text,
     evaluate_constraint_issues,
@@ -47,7 +49,8 @@ class HistoricalReviewHub:
             context=context,
             lint_signals=lint_signals,
         )
-        webnovel = self.experience_reviewer.review(
+        webnovel = self._call_with_compatible_kwargs(
+            self.experience_reviewer.review,
             review_context,
             writer_output,
             reviewer_skill_layers=reviewer_skill_layers,
@@ -179,6 +182,22 @@ class HistoricalReviewHub:
                 "prompt_trace": prompt_trace,
             }
         )
+
+    @staticmethod
+    def _call_with_compatible_kwargs(callable_obj, /, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        try:
+            signature = inspect.signature(callable_obj)
+        except (TypeError, ValueError):
+            return callable_obj(*args, **kwargs)
+        parameters = signature.parameters
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+            return callable_obj(*args, **kwargs)
+        filtered_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key in parameters
+        }
+        return callable_obj(*args, **filtered_kwargs)
 
     @staticmethod
     def _selected_skills_from_layers(skill_layers: list[object] | None) -> list[dict[str, str]]:

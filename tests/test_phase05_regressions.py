@@ -7402,5 +7402,209 @@ class Phase05RegressionTests(unittest.TestCase):
                 engine.dispose()
 
 
+class SkillRuntimeTraceRegressionTests(unittest.TestCase):
+    def test_review_and_rewrite_persists_prompt_trace_chain(self) -> None:
+        from forwin.models.genesis import PromptTrace
+        from forwin.state.repo import StateRepository
+
+        with TemporaryDirectory() as tmpdir:
+            db_path = str(Path(tmpdir) / "skill-trace.db")
+            config = Config(
+                db_path=db_path,
+                minimax_api_key="test-key",
+                minimax_base_url="http://example.invalid",
+                minimax_model="fake-model",
+                skill_runtime_enabled=True,
+                skill_registry_path="forwin_skills",
+            )
+            orchestrator = WritingOrchestrator(config)
+            try:
+                with orchestrator._SessionFactory() as session:
+                    repo = StateRepository(session)
+                    updater = StateUpdater(session)
+                    project = updater.create_project(
+                        title="Trace 书",
+                        premise="测试 rewrite 链路的 prompt trace。",
+                        genre="玄幻",
+                        target_total_chapters=3,
+                    )
+                    arc = updater.create_arc_plan(
+                        project_id=project.id,
+                        arc_synopsis="第一段冲突",
+                        version=1,
+                        status="active",
+                        arc_number=1,
+                        chapter_start=1,
+                        chapter_end=3,
+                    )
+                    chapter_plan = updater.create_chapter_plan(
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=1,
+                        title="第一章",
+                        one_line="建立危机",
+                        goals=["建立危机"],
+                    )
+                    context = ChapterContextPack(
+                        project_id=project.id,
+                        project_title=project.title,
+                        premise=project.premise,
+                        genre=project.genre,
+                        setting_summary=project.setting_summary,
+                        chapter_number=1,
+                        chapter_plan_title="第一章",
+                        chapter_plan_one_line="建立危机",
+                        chapter_goals=["建立危机"],
+                    )
+                    initial_output = WriterOutput(
+                        project_id=project.id,
+                        chapter_number=1,
+                        title="第一章",
+                        body="初稿正文",
+                        char_count=4,
+                        end_of_chapter_summary="初稿摘要",
+                        generation_meta={
+                            "prompt_trace": {
+                                "trace_scope": "writer",
+                                "stage_key": "chapter_draft",
+                                "template_id": "writer:single",
+                                "template_version": "v1",
+                                "effective_system_prompt": "writer draft",
+                                "prompt_layers": [{"role": "system", "content": "writer draft"}],
+                                "input_snapshot": {"selected_skills": [{"id": "writer.chapter-outline"}]},
+                                "model_profile": {"model": "fake-model"},
+                                "attempts": [],
+                                "output_summary": {"skill_summary": [{"id": "writer.chapter-outline"}]},
+                            }
+                        },
+                    )
+                    rewritten_output = WriterOutput(
+                        project_id=project.id,
+                        chapter_number=1,
+                        title="第一章 重写",
+                        body="重写正文",
+                        char_count=4,
+                        end_of_chapter_summary="重写摘要",
+                        generation_meta={
+                            "prompt_trace": {
+                                "trace_scope": "writer",
+                                "stage_key": "chapter_rewrite",
+                                "template_id": "writer:single",
+                                "template_version": "v1",
+                                "effective_system_prompt": "writer rewrite",
+                                "prompt_layers": [{"role": "system", "content": "writer rewrite"}],
+                                "input_snapshot": {"selected_skills": [{"id": "writer.style-control"}]},
+                                "model_profile": {"model": "fake-model"},
+                                "attempts": [],
+                                "output_summary": {"skill_summary": [{"id": "writer.style-control"}]},
+                            }
+                        },
+                    )
+                    first_review = ReviewVerdict(
+                        verdict="fail",
+                        issues=[
+                            ContinuityIssue(
+                                rule_name="need_rewrite",
+                                severity="error",
+                                description="需要重写",
+                            )
+                        ],
+                        repair_instruction=RepairInstruction(
+                            repair_scope="scene",
+                            failure_type="continuity",
+                            must_fix=["修复连续性"],
+                            must_preserve=["建立危机"],
+                        ),
+                        prompt_trace={
+                            "trace_scope": "reviewer",
+                            "stage_key": "chapter_review",
+                            "template_id": "reviewer:chapter_review",
+                            "template_version": "v1",
+                            "effective_system_prompt": "reviewer fail",
+                            "prompt_layers": [{"role": "system", "content": "reviewer fail"}],
+                            "input_snapshot": {"selected_skills": [{"id": "reviewer.chapter-continuity"}]},
+                            "model_profile": {},
+                            "attempts": [],
+                            "output_summary": {"skill_summary": [{"id": "reviewer.chapter-continuity"}]},
+                        },
+                    )
+                    second_review = ReviewVerdict(
+                        verdict="pass",
+                        issues=[],
+                        prompt_trace={
+                            "trace_scope": "reviewer",
+                            "stage_key": "chapter_review",
+                            "template_id": "reviewer:chapter_review",
+                            "template_version": "v1",
+                            "effective_system_prompt": "reviewer pass",
+                            "prompt_layers": [{"role": "system", "content": "reviewer pass"}],
+                            "input_snapshot": {"selected_skills": [{"id": "reviewer.repair-plan"}]},
+                            "model_profile": {},
+                            "attempts": [],
+                            "output_summary": {"skill_summary": [{"id": "reviewer.repair-plan"}]},
+                        },
+                    )
+
+                    with patch.object(
+                        orchestrator,
+                        "_review_current_output",
+                        side_effect=[first_review, second_review],
+                    ), patch.object(
+                        orchestrator,
+                        "_write_chapter_with_attention_fallback",
+                        return_value=rewritten_output,
+                    ), patch.object(
+                        orchestrator,
+                        "_apply_repair_patch",
+                        return_value={},
+                    ):
+                        orchestrator.retrieval_broker = SimpleNamespace(
+                            build_chapter_context=lambda repo, project_id, chapter_plan: context
+                        )
+                        output, review, forced = orchestrator._review_and_maybe_rewrite(
+                            session=session,
+                            repo=repo,
+                            updater=updater,
+                            checker=SimpleNamespace(),
+                            project_id=project.id,
+                            chapter_plan=chapter_plan,
+                            context=context,
+                            writer_output=initial_output,
+                        )
+                    session.flush()
+                    traces = session.execute(
+                        select(PromptTrace)
+                        .where(PromptTrace.project_id == project.id)
+                    ).scalars().all()
+
+                self.assertFalse(forced)
+                self.assertEqual(output.title, "第一章 重写")
+                self.assertEqual(review.verdict, "pass")
+                trace_by_id = {trace.id: trace for trace in traces}
+                roots = [trace for trace in traces if not str(trace.parent_trace_id or "").strip()]
+                self.assertEqual(len(roots), 1)
+                ordered_traces = [roots[0]]
+                while True:
+                    current = ordered_traces[-1]
+                    children = [
+                        trace
+                        for trace in traces
+                        if str(trace.parent_trace_id or "").strip() == current.id
+                    ]
+                    if not children:
+                        break
+                    self.assertEqual(len(children), 1)
+                    ordered_traces.append(children[0])
+
+                self.assertEqual([trace.trace_scope for trace in ordered_traces], ["writer", "reviewer", "writer", "reviewer"])
+                self.assertEqual(ordered_traces[1].parent_trace_id, ordered_traces[0].id)
+                self.assertEqual(ordered_traces[2].parent_trace_id, ordered_traces[1].id)
+                self.assertEqual(ordered_traces[3].parent_trace_id, ordered_traces[2].id)
+                self.assertEqual(set(trace_by_id), {trace.id for trace in ordered_traces})
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+
 if __name__ == "__main__":
     unittest.main()

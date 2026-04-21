@@ -82,6 +82,11 @@ def build_home_page_settings(
         "band_warn_action": base_config.band_warn_action if base_config else "pause",
         "manual_checkpoints_enabled": base_config.manual_checkpoints_enabled if base_config else True,
         "future_constraints_enabled": base_config.future_constraints_enabled if base_config else True,
+        "skill_runtime_enabled": base_config.skill_runtime_enabled if base_config else True,
+        "skill_registry_path": base_config.skill_registry_path if base_config else "forwin_skills",
+        "skill_strictness": base_config.skill_strictness if base_config else "normal",
+        "enabled_skill_groups": list(base_config.enabled_skill_groups) if base_config else [],
+        "disabled_skill_ids": list(base_config.disabled_skill_ids) if base_config else [],
     }
 
 
@@ -220,6 +225,25 @@ def build_runtime_config(
         band_warn_action=band_warn_action or "pause",
         manual_checkpoints_enabled=bool(manual_checkpoints_enabled),
         future_constraints_enabled=bool(future_constraints_enabled),
+        skill_runtime_enabled=bool(
+            stored.get("skill_runtime_enabled", base_config.skill_runtime_enabled)
+        ),
+        skill_registry_path=str(
+            stored.get("skill_registry_path", base_config.skill_registry_path)
+        ),
+        skill_strictness=str(
+            stored.get("skill_strictness", base_config.skill_strictness)
+        ),
+        enabled_skill_groups=[
+            str(item).strip()
+            for item in (stored.get("enabled_skill_groups") or base_config.enabled_skill_groups or [])
+            if str(item).strip()
+        ],
+        disabled_skill_ids=[
+            str(item).strip()
+            for item in (stored.get("disabled_skill_ids") or base_config.disabled_skill_ids or [])
+            if str(item).strip()
+        ],
         llm_fallback_profiles=_runtime_fallback_profiles(
             stored,
             primary={
@@ -269,6 +293,25 @@ def build_saved_runtime_config(
         future_constraints_enabled=bool(
             stored.get("future_constraints_enabled", base_config.future_constraints_enabled)
         ),
+        skill_runtime_enabled=bool(
+            stored.get("skill_runtime_enabled", base_config.skill_runtime_enabled)
+        ),
+        skill_registry_path=str(
+            stored.get("skill_registry_path", base_config.skill_registry_path)
+        ),
+        skill_strictness=str(
+            stored.get("skill_strictness", base_config.skill_strictness)
+        ),
+        enabled_skill_groups=[
+            str(item).strip()
+            for item in (stored.get("enabled_skill_groups") or base_config.enabled_skill_groups or [])
+            if str(item).strip()
+        ],
+        disabled_skill_ids=[
+            str(item).strip()
+            for item in (stored.get("disabled_skill_ids") or base_config.disabled_skill_ids or [])
+            if str(item).strip()
+        ],
         llm_fallback_profiles=_runtime_fallback_profiles(
             stored,
             primary={

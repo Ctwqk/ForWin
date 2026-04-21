@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
+from forwin.skills.policy import normalize_skill_strictness
 
 
 class RuntimeSettingsStore:
@@ -27,6 +28,11 @@ class RuntimeSettingsStore:
         default_band_warn_action: str = "pause",
         default_manual_checkpoints_enabled: bool = True,
         default_future_constraints_enabled: bool = True,
+        default_skill_runtime_enabled: bool = True,
+        default_skill_registry_path: str = "forwin_skills",
+        default_skill_strictness: str = "normal",
+        default_enabled_skill_groups: list[str] | None = None,
+        default_disabled_skill_ids: list[str] | None = None,
     ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -53,6 +59,11 @@ class RuntimeSettingsStore:
             "band_warn_action": self._normalize_band_warn_action(default_band_warn_action),
             "manual_checkpoints_enabled": bool(default_manual_checkpoints_enabled),
             "future_constraints_enabled": bool(default_future_constraints_enabled),
+            "skill_runtime_enabled": bool(default_skill_runtime_enabled),
+            "skill_registry_path": str(default_skill_registry_path or "forwin_skills").strip() or "forwin_skills",
+            "skill_strictness": normalize_skill_strictness(default_skill_strictness),
+            "enabled_skill_groups": self._normalize_string_list(default_enabled_skill_groups),
+            "disabled_skill_ids": self._normalize_string_list(default_disabled_skill_ids),
         }
         self._cache: dict[str, object] | None = None
 
@@ -87,6 +98,23 @@ class RuntimeSettingsStore:
     def _normalize_band_warn_action(value: object) -> str:
         normalized = str(value or "").strip()
         return "pause" if normalized != "pause" else normalized
+
+    @staticmethod
+    def _normalize_string_list(value: object) -> list[str]:
+        if isinstance(value, list):
+            return [
+                str(item).strip()
+                for item in value
+                if str(item).strip()
+            ]
+        text = str(value or "").strip()
+        if not text:
+            return []
+        return [
+            item.strip()
+            for item in text.split(",")
+            if item.strip()
+        ]
 
     def _normalize_profile(self, raw: object, fallback_name: str) -> dict[str, str]:
         data = raw if isinstance(raw, dict) else {}
@@ -200,6 +228,22 @@ class RuntimeSettingsStore:
             payload["future_constraints_enabled"] = bool(
                 raw.get("future_constraints_enabled", payload["future_constraints_enabled"])
             )
+            payload["skill_runtime_enabled"] = bool(
+                raw.get("skill_runtime_enabled", payload["skill_runtime_enabled"])
+            )
+            payload["skill_registry_path"] = (
+                str(raw.get("skill_registry_path", payload["skill_registry_path"])).strip()
+                or str(payload["skill_registry_path"])
+            )
+            payload["skill_strictness"] = normalize_skill_strictness(
+                raw.get("skill_strictness", payload["skill_strictness"])
+            )
+            payload["enabled_skill_groups"] = self._normalize_string_list(
+                raw.get("enabled_skill_groups", payload["enabled_skill_groups"])
+            )
+            payload["disabled_skill_ids"] = self._normalize_string_list(
+                raw.get("disabled_skill_ids", payload["disabled_skill_ids"])
+            )
         payload = self._with_selected_profile(payload)
         self._cache = self._clone(payload)
         return self._clone(payload)
@@ -224,6 +268,11 @@ class RuntimeSettingsStore:
         band_warn_action: str | None = None,
         manual_checkpoints_enabled: bool | None = None,
         future_constraints_enabled: bool | None = None,
+        skill_runtime_enabled: bool | None = None,
+        skill_registry_path: str | None = None,
+        skill_strictness: str | None = None,
+        enabled_skill_groups: list[str] | None = None,
+        disabled_skill_ids: list[str] | None = None,
     ) -> dict[str, object]:
         with self._lock:
             payload = self._load_unlocked()
@@ -271,6 +320,18 @@ class RuntimeSettingsStore:
                 payload["manual_checkpoints_enabled"] = bool(manual_checkpoints_enabled)
             if future_constraints_enabled is not None:
                 payload["future_constraints_enabled"] = bool(future_constraints_enabled)
+            if skill_runtime_enabled is not None:
+                payload["skill_runtime_enabled"] = bool(skill_runtime_enabled)
+            if skill_registry_path is not None:
+                payload["skill_registry_path"] = skill_registry_path.strip() or str(
+                    self._defaults["skill_registry_path"]
+                )
+            if skill_strictness is not None:
+                payload["skill_strictness"] = normalize_skill_strictness(skill_strictness)
+            if enabled_skill_groups is not None:
+                payload["enabled_skill_groups"] = self._normalize_string_list(enabled_skill_groups)
+            if disabled_skill_ids is not None:
+                payload["disabled_skill_ids"] = self._normalize_string_list(disabled_skill_ids)
             return self._persist_unlocked(payload)
 
     def save_profile(

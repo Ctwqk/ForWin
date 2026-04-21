@@ -53,3 +53,4 @@ class ReviewVerdict(BaseModel):
     reviewer_mode: str = ""
     repair_instruction: RepairInstruction | None = None
     forced_accept_applied: bool = False
+    prompt_trace: dict[str, object] = Field(default_factory=dict)

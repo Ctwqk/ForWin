@@ -5,6 +5,7 @@ import inspect
 import logging
 import re
 
+from forwin.model_adapter import ModelAdapter
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import SceneContinuation, SceneOutput, ScenePlan
 from forwin.protocol.state_change import (
@@ -14,7 +15,7 @@ from forwin.protocol.state_change import (
     TimeAdvance,
 )
 from forwin.protocol.writer import EntityMention, LoreCandidate, TimelineHint, WriterNote, WriterOutput
-from .llm_client import LLMClient
+from forwin.skills import serialize_prompt_layers
 from .prompts import (
     build_preview_chapter_prompt,
     build_lore_timeline_notes_extraction_prompt,
@@ -44,7 +45,7 @@ class ChapterWriter:
 
     def __init__(
         self,
-        llm_client: LLMClient,
+        llm_client: ModelAdapter,
         temperature: float = 0.85,
         max_tokens: int = 16384,
         writer_mode: str = "scene",
@@ -76,20 +77,36 @@ class ChapterWriter:
     # Public API
     # ------------------------------------------------------------------
 
-    def write_chapter(self, context: ChapterContextPack) -> WriterOutput:
+    def write_chapter(
+        self,
+        context: ChapterContextPack,
+        *,
+        skill_layers: list[object] | None = None,
+        trace_stage_key: str = "chapter_draft",
+    ) -> WriterOutput:
         """Write a single chapter.
 
         Returns a fully-populated WriterOutput.  The char_count field is
         computed from the body after parsing.
         """
         if self.writer_mode == "single":
-            return self._write_single_chapter(context)
-        return self._write_scene_chapter(context)
+            return self._write_single_chapter(
+                context,
+                skill_layers=skill_layers,
+                trace_stage_key=trace_stage_key,
+            )
+        return self._write_scene_chapter(
+            context,
+            skill_layers=skill_layers,
+            trace_stage_key=trace_stage_key,
+        )
 
     def write_preview_chapter(
         self,
         context: ChapterContextPack,
         *,
+        skill_layers: list[object] | None = None,
+        trace_stage_key: str = "chapter_draft",
         timeout_seconds: float | None = None,
         max_attempts: int = 2,
         retry_on_timeout: bool = True,
@@ -114,12 +131,19 @@ class ChapterWriter:
             self.max_tokens,
             max(1800, int(target_chars * 1.8)),
         )
+        base_messages = build_preview_chapter_prompt(
+            context,
+            target_chars=target_chars,
+            min_chars=self.min_chapter_chars,
+            max_chars=self.max_chapter_chars,
+        )
         preview_text = self._chat_preview_text(
             build_preview_chapter_prompt(
                 context,
                 target_chars=target_chars,
                 min_chars=self.min_chapter_chars,
                 max_chars=self.max_chapter_chars,
+                skill_layers=skill_layers,
             ),
             temperature=min(self.temperature, 0.7),
             max_tokens=max_output_tokens,
@@ -151,6 +175,21 @@ class ChapterWriter:
                 "mode": "provisional_preview",
                 "call_count": 1,
                 "structured_extraction": "skipped",
+                "prompt_trace": self._build_prompt_trace(
+                    base_messages=base_messages,
+                    skill_layers=skill_layers,
+                    template_id="writer:preview",
+                    stage_key=trace_stage_key,
+                    input_snapshot={
+                        "writer_mode": "preview",
+                        "chapter_number": context.chapter_number,
+                    },
+                    output_summary={
+                        "mode": "provisional_preview",
+                        "title": title,
+                        "char_count": len(body),
+                    },
+                ),
             },
         )
         self._attach_llm_fallback_events(output)
@@ -165,6 +204,8 @@ class ChapterWriter:
         self,
         context: ChapterContextPack,
         *,
+        skill_layers: list[object] | None = None,
+        trace_stage_key: str = "chapter_draft",
         timeout_seconds: float | None = None,
         max_attempts: int = 2,
         retry_on_timeout: bool = True,
@@ -182,12 +223,19 @@ class ChapterWriter:
             self.max_tokens,
             max(2600, int(target_chars * 1.8)),
         )
+        base_messages = build_single_chapter_draft_prompt(
+            context,
+            target_chars=target_chars,
+            min_chars=self.min_chapter_chars,
+            max_chars=self.max_chapter_chars,
+        )
         raw_draft = self._chat_preview_text(
             build_single_chapter_draft_prompt(
                 context,
                 target_chars=target_chars,
                 min_chars=self.min_chapter_chars,
                 max_chars=self.max_chapter_chars,
+                skill_layers=skill_layers,
             ),
             temperature=self.temperature,
             max_tokens=max_output_tokens,
@@ -208,22 +256,53 @@ class ChapterWriter:
         merged.update(extracted)
         output = self._writer_output_from_dict(context, merged)
         output.generation_meta.update(
-            {"mode": "single", "call_count": 4, "scene_count": len(output.scene_outputs)}
+            {
+                "mode": "single",
+                "call_count": 4,
+                "scene_count": len(output.scene_outputs),
+                "prompt_trace": self._build_prompt_trace(
+                    base_messages=base_messages,
+                    skill_layers=skill_layers,
+                    template_id="writer:single",
+                    stage_key=trace_stage_key,
+                    input_snapshot={
+                        "writer_mode": "single",
+                        "chapter_number": context.chapter_number,
+                    },
+                    output_summary={
+                        "mode": "single",
+                        "title": output.title,
+                        "char_count": output.char_count,
+                    },
+                ),
+            }
         )
         return output
 
-    def _write_scene_chapter(self, context: ChapterContextPack) -> WriterOutput:
+    def _write_scene_chapter(
+        self,
+        context: ChapterContextPack,
+        *,
+        skill_layers: list[object] | None = None,
+        trace_stage_key: str = "chapter_draft",
+    ) -> WriterOutput:
         logger.info(
             "write_chapter(scene): chapter=%d title_plan=%r",
             context.chapter_number,
             context.chapter_plan_title,
         )
         try:
-            scene_plans = self._plan_scenes(context)
+            base_messages = build_scene_breakdown_prompt(
+                context,
+                default_scene_count=self.default_scene_count,
+                max_scene_count=self.max_scene_count,
+            )
+            scene_plans = self._plan_scenes(context, skill_layers=skill_layers)
             scene_outputs = [
-                self._generate_scene(context, scene_plan) for scene_plan in scene_plans
+                self._generate_scene(context, scene_plan, skill_layers=skill_layers)
+                for scene_plan in scene_plans
             ]
-            stitched = self._stitch_scenes(context, scene_outputs)
+            stitched = self._stitch_scenes(context, scene_outputs, skill_layers=skill_layers)
             extracted = self._extract_structured(
                 context,
                 stitched.get("title", context.chapter_plan_title or f"第{context.chapter_number}章"),
@@ -238,6 +317,23 @@ class ChapterWriter:
                     "mode": "scene",
                     "scene_count": len(scene_outputs),
                     "call_count": len(scene_outputs) + 5,
+                    "prompt_trace": self._build_prompt_trace(
+                        base_messages=base_messages,
+                        skill_layers=skill_layers,
+                        template_id="writer:scene_pipeline",
+                        stage_key=trace_stage_key,
+                        input_snapshot={
+                            "writer_mode": "scene",
+                            "chapter_number": context.chapter_number,
+                            "target_scene_count": self.default_scene_count,
+                        },
+                        output_summary={
+                            "mode": "scene",
+                            "title": output.title,
+                            "char_count": output.char_count,
+                            "scene_count": len(scene_outputs),
+                        },
+                    ),
                 }
             )
             return output
@@ -248,6 +344,8 @@ class ChapterWriter:
             )
             output = self._write_single_chapter(
                 context,
+                skill_layers=skill_layers,
+                trace_stage_key=trace_stage_key,
                 timeout_seconds=self.scene_call_timeout_seconds,
                 max_attempts=1,
                 retry_on_timeout=False,
@@ -321,13 +419,19 @@ class ChapterWriter:
         )
         return output
 
-    def _plan_scenes(self, context: ChapterContextPack) -> list[ScenePlan]:
+    def _plan_scenes(
+        self,
+        context: ChapterContextPack,
+        *,
+        skill_layers: list[object] | None = None,
+    ) -> list[ScenePlan]:
         try:
             data = self._chat_json(
                 build_scene_breakdown_prompt(
                     context,
                     default_scene_count=self.default_scene_count,
                     max_scene_count=self.max_scene_count,
+                    skill_layers=skill_layers,
                 ),
                 temperature=0.6,
                 max_tokens=min(
@@ -366,13 +470,19 @@ class ChapterWriter:
             for index in range(fallback_count)
         ]
 
-    def _generate_scene(self, context: ChapterContextPack, scene_plan: ScenePlan) -> SceneOutput:
+    def _generate_scene(
+        self,
+        context: ChapterContextPack,
+        scene_plan: ScenePlan,
+        *,
+        skill_layers: list[object] | None = None,
+    ) -> SceneOutput:
         max_output_tokens = min(
             self.max_tokens,
             max(1400, int(max(scene_plan.target_chars, 600) * 1.8)),
         )
         raw_scene = self._chat_preview_text(
-            build_scene_generation_prompt(context, scene_plan),
+            build_scene_generation_prompt(context, scene_plan, skill_layers=skill_layers),
             temperature=self.temperature,
             max_tokens=max_output_tokens,
             timeout_seconds=self.scene_call_timeout_seconds,
@@ -455,9 +565,11 @@ class ChapterWriter:
         self,
         context: ChapterContextPack,
         scene_outputs: list[SceneOutput],
+        *,
+        skill_layers: list[object] | None = None,
     ) -> dict:
         raw_stitched = self._chat_preview_text(
-            build_scene_stitch_prompt(context, scene_outputs),
+            build_scene_stitch_prompt(context, scene_outputs, skill_layers=skill_layers),
             temperature=0.5,
             max_tokens=min(self.max_tokens, 2400),
             timeout_seconds=self.scene_call_timeout_seconds,
@@ -799,6 +911,64 @@ class ChapterWriter:
         events = drain()
         if events:
             output.generation_meta["model_fallbacks"] = events
+
+    def _build_prompt_trace(
+        self,
+        *,
+        base_messages: list[dict[str, str]],
+        skill_layers: list[object] | None,
+        template_id: str,
+        stage_key: str,
+        input_snapshot: dict[str, object],
+        output_summary: dict[str, object],
+    ) -> dict[str, object]:
+        selected_skills = self._selected_skills_from_layers(skill_layers)
+        prompt_layers = serialize_prompt_layers(base_messages, skill_layers or [])
+        effective_system_prompt = "\n\n".join(
+            str(item.get("content", "")).strip()
+            for item in prompt_layers
+            if str(item.get("role", "")).strip() == "system"
+        )
+        return {
+            "trace_scope": "writer",
+            "stage_key": stage_key,
+            "template_id": template_id,
+            "template_version": "v1",
+            "effective_system_prompt": effective_system_prompt,
+            "prompt_layers": prompt_layers,
+            "input_snapshot": {
+                **input_snapshot,
+                "stage_key": stage_key,
+                "selected_skills": selected_skills,
+            },
+            "model_profile": {
+                "profile_id": getattr(self.llm_client, "profile_id", ""),
+                "profile_name": getattr(self.llm_client, "profile_name", ""),
+                "model": getattr(self.llm_client, "model", ""),
+                "base_url": getattr(self.llm_client, "base_url", ""),
+            },
+            "attempts": [],
+            "output_summary": {
+                **output_summary,
+                "skill_summary": selected_skills,
+            },
+        }
+
+    @staticmethod
+    def _selected_skills_from_layers(skill_layers: list[object] | None) -> list[dict[str, str]]:
+        payload: list[dict[str, str]] = []
+        for item in skill_layers or []:
+            payload.append(
+                {
+                    "id": str(getattr(item, "skill_id", getattr(item, "name", "")) or ""),
+                    "version": str(getattr(item, "skill_version", getattr(item, "version", "")) or ""),
+                    "hash": str(getattr(item, "skill_hash", "") or ""),
+                    "path": str(getattr(item, "path", "") or ""),
+                    "activation_reason": str(getattr(item, "activation_reason", "") or ""),
+                    "mode": str(getattr(item, "mode", "") or ""),
+                }
+            )
+        return [item for item in payload if item["id"]]
 
     @staticmethod
     def _parse_jsonish_text_payload(raw: str) -> dict[str, object]:

@@ -12,12 +12,19 @@ from sqlalchemy.orm import Session
 
 from forwin.arc_sizing import allocate_arc_chapter_sizes
 from forwin.governance import DecisionEventInfo, DecisionEventType, normalize_project_governance
+from forwin.model_adapter import ModelAdapter
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.naming import CULTURE_ALIAS_TO_KEY, CULTURES, CultureNameGenerator
+from forwin.skills import (
+    SkillPromptLayerBuilder,
+    SkillRouter,
+    inject_skill_layers,
+    serialize_prompt_layers,
+    summarize_selected_skills,
+)
 from forwin.state.updater import StateUpdater
 from forwin.utils import LLMJSONParseError, parse_llm_json
-from forwin.writer.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -705,9 +712,18 @@ def _ensure_revision_is_current(session: Session, project: Project, revision: Bo
 
 
 class BookGenesisService:
-    def __init__(self, *, llm_client: LLMClient, max_tokens: int = 1600) -> None:
+    def __init__(
+        self,
+        *,
+        llm_client: ModelAdapter,
+        max_tokens: int = 1600,
+        skill_router: SkillRouter | None = None,
+        skill_prompt_layer_builder: SkillPromptLayerBuilder | None = None,
+    ) -> None:
         self.llm_client = llm_client
         self.max_tokens = max_tokens
+        self.skill_router = skill_router
+        self.skill_prompt_layer_builder = skill_prompt_layer_builder
 
     def create_initial_revision(
         self,
@@ -1608,9 +1624,13 @@ class BookGenesisService:
         temperature: float = 0.45,
         max_tokens: int | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        skill_selections, skill_layers = self._resolve_skill_layers(stage_key=stage_key)
+        effective_messages = inject_skill_layers(messages, skill_layers)
+        prompt_layers = serialize_prompt_layers(messages, skill_layers)
+        selected_skills = summarize_selected_skills(skill_selections)
         effective_prompt = "\n\n".join(
             str(item.get("content", "")).strip()
-            for item in messages
+            for item in effective_messages
             if str(item.get("role", "")).strip() == "system"
         )
         attempts_payload: list[dict[str, Any]] = []
@@ -1621,6 +1641,8 @@ class BookGenesisService:
                 stage_key=stage_key,
                 effective_system_prompt=effective_prompt,
                 messages=messages,
+                prompt_layers=prompt_layers,
+                selected_skills=selected_skills,
                 attempts=attempts_payload,
                 output_summary={"mode": "fallback", "payload": fallback},
             )
@@ -1631,7 +1653,7 @@ class BookGenesisService:
         for attempt_no, attempt in enumerate(retry_plan, start=1):
             try:
                 raw = self.llm_client.chat(
-                    messages,
+                    effective_messages,
                     temperature=attempt["temperature"],
                     max_tokens=attempt["max_tokens"],
                     response_format={"type": "json_object"},
@@ -1649,6 +1671,8 @@ class BookGenesisService:
                     stage_key=stage_key,
                     effective_system_prompt=effective_prompt,
                     messages=messages,
+                    prompt_layers=prompt_layers,
+                    selected_skills=selected_skills,
                     attempts=attempts_payload,
                     output_summary={"mode": "success", "payload": payload},
                 )
@@ -1670,9 +1694,30 @@ class BookGenesisService:
             stage_key=stage_key,
             effective_system_prompt=effective_prompt,
             messages=messages,
+            prompt_layers=prompt_layers,
+            selected_skills=selected_skills,
             attempts=attempts_payload,
             output_summary={"mode": "fallback", "payload": fallback},
         )
+
+    def _resolve_skill_layers(self, *, stage_key: str):
+        if self.skill_router is None or self.skill_prompt_layer_builder is None:
+            return [], []
+        normalized_stage_key = str(stage_key or "").strip()
+        selection_stage_key = normalized_stage_key
+        task_family = "generate_stage_payload"
+        if normalized_stage_key.startswith("launch_arc_"):
+            selection_stage_key = "book_blueprint"
+            task_family = "launch_arc_plan"
+        elif ":refine" in normalized_stage_key:
+            selection_stage_key = normalized_stage_key.split(":", 1)[0]
+            task_family = "refine_stage_payload"
+        selections = self.skill_router.select(
+            scope="genesis",
+            stage_key=selection_stage_key,
+            task_family=task_family,
+        )
+        return selections, self.skill_prompt_layer_builder.build(selections)
 
     def _trace_payload(
         self,
@@ -1680,18 +1725,24 @@ class BookGenesisService:
         stage_key: str,
         effective_system_prompt: str,
         messages: list[dict[str, str]],
+        prompt_layers: list[dict[str, Any]] | None = None,
+        selected_skills: list[dict[str, str]] | None = None,
         attempts: list[dict[str, Any]],
         output_summary: dict[str, Any],
     ) -> dict[str, Any]:
+        selected = list(selected_skills or [])
         return {
             "effective_system_prompt": effective_system_prompt,
-            "prompt_layers": [
+            "prompt_layers": prompt_layers
+            if prompt_layers is not None
+            else [
                 {"role": str(item.get("role", "")).strip(), "content": str(item.get("content", ""))}
                 for item in messages
             ],
             "input_snapshot": {
                 "stage_key": stage_key,
                 "messages": messages,
+                "selected_skills": selected,
             },
             "model_profile": {
                 "profile_id": getattr(self.llm_client, "profile_id", ""),
@@ -1700,7 +1751,10 @@ class BookGenesisService:
                 "base_url": getattr(self.llm_client, "base_url", ""),
             },
             "attempts": attempts,
-            "output_summary": output_summary,
+            "output_summary": {
+                **output_summary,
+                "skill_summary": selected,
+            },
         }
 
     def _normalize_world_payload(self, *, payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:

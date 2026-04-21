@@ -63,7 +63,7 @@
     }
 
     function normalizedBaseUrl(value) {
-      return String(value || '').trim().replace(/\\/+$/, '').toLowerCase();
+      return String(value || '').trim().replace(/\/+$/, '').toLowerCase();
     }
 
     function detectModelPresetId(baseUrl, model) {

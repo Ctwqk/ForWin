@@ -81,6 +81,69 @@ def load_marker(profile_dir: Path) -> dict[str, object]:
         return {}
 
 
+def profile_preferences_path(profile_dir: Path) -> Path:
+    return profile_dir / "Default" / "Preferences"
+
+
+def load_profile_preferences(profile_dir: Path) -> tuple[dict[str, object], str]:
+    preferences_path = profile_preferences_path(profile_dir)
+    if not preferences_path.exists():
+        return {}, f"profile Preferences file is missing: {preferences_path}"
+    try:
+        return json.loads(preferences_path.read_text(encoding="utf-8")), ""
+    except (OSError, json.JSONDecodeError):
+        return {}, f"profile Preferences file could not be read: {preferences_path}"
+
+
+def profile_extension_is_active(profile_dir: Path) -> tuple[bool, str]:
+    marker = load_marker(profile_dir)
+    if not marker:
+        return False, f"profile marker is missing: {profile_marker_path(profile_dir)}"
+
+    extension_id = str(marker.get("extensionId") or "").strip()
+    extension_dir = str(marker.get("extensionDir") or "").strip()
+    if not extension_id and not extension_dir:
+        return False, "profile marker is missing both extensionId and extensionDir"
+
+    preferences, error_message = load_profile_preferences(profile_dir)
+    if error_message:
+        return False, error_message
+
+    settings = preferences.get("extensions", {}).get("settings", {})
+    if not isinstance(settings, dict):
+        return False, "profile Preferences extensions.settings is missing"
+
+    entry: dict[str, object] | None = None
+    if extension_id:
+        candidate = settings.get(extension_id)
+        if isinstance(candidate, dict):
+            entry = candidate
+
+    if entry is None and extension_dir:
+        for candidate in settings.values():
+            if isinstance(candidate, dict) and str(candidate.get("path") or "").strip() == extension_dir:
+                entry = candidate
+                break
+
+    if entry is None:
+        return False, "qualified extension is not registered in Chromium preferences"
+
+    if extension_dir and str(entry.get("path") or "").strip() != extension_dir:
+        return False, "qualified extension path does not match profile marker"
+
+    disable_reasons_raw = entry.get("disable_reasons") or []
+    if isinstance(disable_reasons_raw, int):
+        disable_reasons = (disable_reasons_raw,) if disable_reasons_raw else ()
+    elif isinstance(disable_reasons_raw, list):
+        disable_reasons = tuple(disable_reasons_raw)
+    else:
+        disable_reasons = (disable_reasons_raw,)
+    if disable_reasons:
+        return False, f"qualified extension is disabled in Chromium preferences: {list(disable_reasons)}"
+
+    return True, "profile extension is active"
+
+
 def profile_is_qualified(profile_dir: Path, extension_dir: Path, backend_url: str, key: str) -> tuple[bool, str]:
     if not key:
         return False, "FORWIN_PUBLISHER_EXTENSION_API_KEY is required for a qualified profile"
@@ -229,6 +292,11 @@ def qualify_profile(profile_dir: Path, extension_dir: Path, backend_url: str, ke
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Check or qualify the ForWin Linux extension browser profile.")
     parser.add_argument("--check", action="store_true", help="only check whether the profile marker matches the env")
+    parser.add_argument(
+        "--check-active",
+        action="store_true",
+        help="check whether the qualified extension is still active in Chromium Preferences",
+    )
     parser.add_argument("--qualify", action="store_true", help="write extension settings into the profile")
     parser.add_argument("--profile-dir", default=config_value("FORWIN_EXTENSION_TEST_PROFILE", str(default_profile_dir())))
     parser.add_argument("--extension-dir", default=config_value("FORWIN_EXTENSION_DIR", str(default_extension_dir())))
@@ -243,14 +311,25 @@ def main() -> int:
     backend_url = normalized_backend_url(args.backend_url)
     key = api_key()
 
-    if args.check:
-        ok, message = profile_is_qualified(profile_dir, extension_dir, backend_url, key)
+    if args.check or args.check_active:
+        results: list[tuple[bool, str]] = []
+        if args.check:
+            results.append(profile_is_qualified(profile_dir, extension_dir, backend_url, key))
+        if args.check_active:
+            results.append(profile_extension_is_active(profile_dir))
+        ok = all(result for result, _ in results)
+        message = next((detail for result, detail in results if not result), results[-1][1])
         print(message)
         return 0 if ok else 1
 
-    if args.qualify or not args.check:
+    if args.qualify or not (args.check or args.check_active):
         qualify_profile(profile_dir, extension_dir, backend_url, key)
-        ok, message = profile_is_qualified(profile_dir, extension_dir, backend_url, key)
+        results = [
+            profile_is_qualified(profile_dir, extension_dir, backend_url, key),
+            profile_extension_is_active(profile_dir),
+        ]
+        ok = all(result for result, _ in results)
+        message = next((detail for result, detail in results if not result), results[-1][1])
         print(message)
         return 0 if ok else 1
 

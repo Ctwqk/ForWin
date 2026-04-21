@@ -21,6 +21,8 @@ HEARTBEAT_CHECK_SCRIPT="$REPO_ROOT/scripts/check_publisher_browser_heartbeat.py"
 PYTHON_BIN="${FORWIN_EXTENSION_PYTHON:-}"
 HEARTBEAT_WAIT_SECONDS="${FORWIN_EXTENSION_STARTUP_HEARTBEAT_TIMEOUT_SECONDS:-75}"
 AUTO_RESET_PROFILE_ON_HEARTBEAT_FAILURE="${FORWIN_EXTENSION_AUTO_RESET_PROFILE_ON_HEARTBEAT_FAILURE:-true}"
+RUNTIME_MONITOR_INTERVAL_SECONDS="${FORWIN_PUBLISHER_HEARTBEAT_MONITOR_INTERVAL_SECONDS:-30}"
+RUNTIME_MONITOR_FAILURES="${FORWIN_PUBLISHER_HEARTBEAT_MONITOR_FAILURES:-2}"
 RUN_DISPLAY=""
 USE_XVFB_RUN=false
 
@@ -253,12 +255,28 @@ clear_stale_profile_locks
 
 qualify_profile_if_needed() {
   if is_truthy "$REQUIRE_QUALIFIED_PROFILE"; then
+    local qualified_ok=true
+    local active_ok=true
     if ! "$PYTHON_BIN" "$PROFILE_QUALIFIER" --check >/dev/null; then
+      qualified_ok=false
+    elif ! "$PYTHON_BIN" "$PROFILE_QUALIFIER" --check-active >/dev/null; then
+      active_ok=false
+    fi
+    if [[ "$qualified_ok" != "true" ]] || [[ "$active_ok" != "true" ]]; then
       if is_truthy "$AUTO_QUALIFY_PROFILE"; then
-        echo "Extension profile is not qualified yet; bootstrapping it with the configured backend URL."
+        if [[ "$active_ok" != "true" ]]; then
+          echo "Extension profile is qualified but inactive; resetting it before requalification."
+          reset_profile_dir
+        else
+          echo "Extension profile is not qualified yet; bootstrapping it with the configured backend URL."
+        fi
         run_with_display "$PYTHON_BIN" "$PROFILE_QUALIFIER" --qualify
       else
-        "$PYTHON_BIN" "$PROFILE_QUALIFIER" --check
+        if [[ "$qualified_ok" != "true" ]]; then
+          "$PYTHON_BIN" "$PROFILE_QUALIFIER" --check
+        else
+          "$PYTHON_BIN" "$PROFILE_QUALIFIER" --check-active
+        fi
         echo "Refusing to start because FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE is enabled." >&2
         exit 1
       fi
@@ -268,6 +286,54 @@ qualify_profile_if_needed() {
 }
 
 qualify_profile_if_needed
+
+monitor_runtime_health() {
+  local failure_count=0
+  local failure_threshold="$RUNTIME_MONITOR_FAILURES"
+  local interval_seconds="$RUNTIME_MONITOR_INTERVAL_SECONDS"
+  local profile_message=""
+  local heartbeat_message=""
+  local combined_message=""
+
+  if [[ ! "$failure_threshold" =~ ^[0-9]+$ ]] || [[ "$failure_threshold" -lt 1 ]]; then
+    failure_threshold=1
+  fi
+  if [[ ! "$interval_seconds" =~ ^[0-9]+$ ]] || [[ "$interval_seconds" -lt 1 ]]; then
+    interval_seconds=30
+  fi
+
+  while kill -0 "$CHROME_PID" >/dev/null 2>&1; do
+    sleep "$interval_seconds"
+    if ! kill -0 "$CHROME_PID" >/dev/null 2>&1; then
+      break
+    fi
+
+    profile_message=""
+    heartbeat_message=""
+    if ! profile_message="$("$PYTHON_BIN" "$PROFILE_QUALIFIER" --check-active 2>&1 >/dev/null)"; then
+      :
+    elif ! heartbeat_message="$("$PYTHON_BIN" "$HEARTBEAT_CHECK_SCRIPT" --wait-seconds 0 2>&1 >/dev/null)"; then
+      :
+    fi
+
+    if [[ -n "$profile_message" ]] || [[ -n "$heartbeat_message" ]]; then
+      failure_count=$((failure_count + 1))
+      combined_message="${profile_message:-$heartbeat_message}"
+      echo "Worker runtime health check failed (${failure_count}/${failure_threshold}): ${combined_message}" >&2
+      if (( failure_count >= failure_threshold )); then
+        echo "Stopping Linux extension browser so Docker can restart it with a fresh worker session." >&2
+        kill "$CHROME_PID" >/dev/null 2>&1 || true
+        wait "$CHROME_PID" >/dev/null 2>&1 || true
+        return 1
+      fi
+      continue
+    fi
+
+    failure_count=0
+  done
+
+  wait "$CHROME_PID"
+}
 
 CHROME_ARGS=(
   --user-data-dir="$PROFILE_DIR"
@@ -350,4 +416,4 @@ while (( launch_attempt <= max_launch_attempts )); do
   break
 done
 
-wait "$CHROME_PID"
+monitor_runtime_health

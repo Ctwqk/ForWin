@@ -12,6 +12,7 @@ import forwin.api as api_module
 from forwin.api_schemas import (
     BookGenesisPatchRequest,
     BookGenesisRefineRequest,
+    BookGenesisNameGenerateRequest,
     BookGenesisStageRunRequest,
     ProjectCreateRequest,
 )
@@ -765,6 +766,64 @@ class BookGenesisFlowTests(unittest.TestCase):
                     )
             finally:
                 api_module._close_genesis_service(service)
+
+    def test_generate_project_genesis_name_uses_culture_profile_generator(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {
+                    "title": "命名引擎测试书",
+                    "premise": "不同文明风格需要可复用的命名生成。",
+                    "genre": "玄幻",
+                    "target_total_chapters": 12,
+                }
+            )
+        )
+
+        api_module.patch_project_genesis(
+            created.project_id,
+            BookGenesisPatchRequest.model_validate(
+                {
+                    "world_bible": {
+                        "overview": "多文明并存的长篇舞台。",
+                        "culture_profiles": [
+                            {
+                                "id": "culture-sinic",
+                                "name": "中华风",
+                                "summary": "偏礼制、旧城、宗门气息。",
+                                "inspiration": "中华",
+                                "generator_civilization": "中华",
+                                "generator_overlays": ["基督教"],
+                                "character_name_examples": [],
+                                "region_name_examples": [],
+                                "location_name_examples": [],
+                            }
+                        ],
+                    }
+                }
+            ),
+        )
+
+        response = api_module.generate_project_genesis_name(
+            created.project_id,
+            BookGenesisNameGenerateRequest.model_validate(
+                {
+                    "stage_key": "world",
+                    "target_path": "culture_profiles[0]",
+                    "field_path": "character_name_examples",
+                    "kind": "person",
+                    "count": 4,
+                    "nonce": "test-001",
+                }
+            ),
+        )
+
+        self.assertEqual(response.stage_key, "world")
+        self.assertEqual(response.kind, "person")
+        self.assertEqual(response.culture_profile_id, "culture-sinic")
+        self.assertEqual(response.generator_civilization, "中华+基督教")
+        self.assertEqual(len(response.suggestions), 4)
+        self.assertEqual(response.applied_value, response.suggestions)
+        self.assertTrue(all(isinstance(item, str) and item.strip() for item in response.suggestions))
 
 
 if __name__ == "__main__":

@@ -1,5 +1,0 @@
-[      62ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://127.0.0.1:8899/favicon.ico:0
-[  844967ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:8899/api/publishers/qidian/status:0
-[  844969ms] TypeError: Failed to fetch
-    at pollStatus (http://127.0.0.1:8899/publishers/qidian/auth:131:25)
-    at http://127.0.0.1:8899/publishers/qidian/auth:83:11

@@ -1,5 +1,18 @@
+import {
+  assertDebuggerCapability,
+  createUnsupportedCapabilityError,
+  detectBrowserTarget,
+  getBrowserCapabilities,
+} from './browser-capabilities.js';
+
 export const extensionApi = globalThis.browser ?? globalThis.chrome;
 export const usePromiseApi = Boolean(globalThis.browser);
+export const browserTarget = detectBrowserTarget(globalThis.navigator?.userAgent || '');
+export const extensionCapabilities = getBrowserCapabilities({
+  browserTarget,
+  extensionApi,
+});
+export { assertDebuggerCapability, createUnsupportedCapabilityError };
 
 export function getRuntimeLastError() {
   return globalThis.chrome?.runtime?.lastError

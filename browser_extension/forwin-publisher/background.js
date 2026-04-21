@@ -5,6 +5,8 @@ import { getPlatformAdapter } from './lib/platforms.js';
 import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
 import { READY_CHANNELS, TabReadyRegistry } from './lib/tab-ready-registry.js';
 import {
+  assertDebuggerCapability,
+  extensionCapabilities,
   extensionApi,
   reportBackgroundError as logBackgroundError,
   wrapCall,
@@ -185,6 +187,10 @@ function cookieDebuggerDetails(cookie) {
 }
 
 async function setCookiesViaDebugger(platformId, cookies = []) {
+  assertDebuggerCapability(
+    extensionCapabilities,
+    '请在 Chromium 版扩展中执行调试协议 cookie 恢复，或退回普通 cookies API 恢复。',
+  );
   const adapter = getPlatformAdapter(platformId);
   const cookieDetails = cookies
     .map((item) => cookieDebuggerDetails(item))
@@ -503,9 +509,10 @@ async function sendPlatformAgentMessage(tabId, action, payload, timeoutMs = 1200
 }
 
 async function attachDebugger(tabId) {
-  if (!extensionApi.debugger?.attach) {
-    throw new Error('当前浏览器不支持扩展调试协议。');
-  }
+  assertDebuggerCapability(
+    extensionCapabilities,
+    '请在 Chromium 版扩展中执行可信输入、可信点击和调试协议注入相关动作。',
+  );
   try {
     await wrapCall(extensionApi.debugger, 'attach', { tabId }, '1.3');
   } catch (error) {

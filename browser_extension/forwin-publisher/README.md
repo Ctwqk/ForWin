@@ -1,17 +1,45 @@
 # ForWin Publisher Bridge
 
-开发者模式加载目录：
+源码目录：
 
 `browser_extension/forwin-publisher`
 
+构建双目标产物：
+
+- `npm run build`
+- `npm run build:chromium`
+- `npm run build:firefox`
+
+构建输出目录：
+
+- `browser_extension/dist/forwin-publisher-chromium`
+- `browser_extension/dist/forwin-publisher-firefox`
+
 首次使用：
 
-1. 在 Chrome / Chromium 的扩展管理页打开开发者模式。
-2. 选择“加载已解压的扩展程序”，指向本目录。
-3. 打开扩展设置页，填写：
+1. 先在扩展目录执行目标构建，例如 `npm run build:chromium` 或 `npm run build:firefox`。
+2. 打开对应浏览器的扩展调试页。
+3. 选择要加载的构建产物目录：
+   - Chromium：`browser_extension/dist/forwin-publisher-chromium`
+   - Firefox：`browser_extension/dist/forwin-publisher-firefox/manifest.json`
+4. 打开扩展设置页，填写：
    - `ForWin Backend URL`
    - `Extension API Key`
-4. 回到 ForWin 的 `/publishers` 页面，确认扩展已被检测到。
+5. 回到 ForWin 的 `/publishers` 页面，确认扩展已被检测到。
+
+浏览器说明：
+
+- Chromium 目标保留当前 `debugger` 路径，适合上传、可信输入、可信点击和服务端自动化。
+- Firefox 目标共享登录、cookie 同步、心跳、内容桥接和普通 cookie 恢复能力。
+- Firefox 不支持 Chromium 的 `debugger` API；触发这类动作时，扩展会返回显式能力错误，而不是静默降级。
+
+Firefox 临时加载：
+
+1. 运行 `npm run build:firefox`
+2. 打开 `about:debugging`
+3. 进入 `This Firefox`
+4. 选择 `Load Temporary Add-on`
+5. 指向 `browser_extension/dist/forwin-publisher-firefox/manifest.json`
 
 当前第一版能力：
 

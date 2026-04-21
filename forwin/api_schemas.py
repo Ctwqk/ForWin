@@ -355,6 +355,30 @@ class BookGenesisRefineRequest(BaseModel):
     model_profile_id: str = ""
 
 
+class BookGenesisNameGenerateRequest(BaseModel):
+    stage_key: str = ""
+    target_path: str = ""
+    field_path: str = ""
+    kind: str = ""
+    count: int = 1
+    nonce: str = ""
+    stage_payload_override: dict[str, Any] | None = None
+
+
+class BookGenesisNameGenerateResponse(BaseModel):
+    ok: bool = True
+    stage_key: str = ""
+    target_path: str = ""
+    field_path: str = ""
+    kind: str = ""
+    suggestions: list[str] = Field(default_factory=list)
+    applied_value: Any = None
+    culture_profile_id: str = ""
+    culture_profile_name: str = ""
+    generator_civilization: str = ""
+    message: str = ""
+
+
 class StartWritingResponse(BaseModel):
     ok: bool
     project_id: str

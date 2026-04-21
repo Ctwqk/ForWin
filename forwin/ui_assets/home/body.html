@@ -1,0 +1,578 @@
+  <div class="wrap">
+    <section class="masthead">
+      <div>
+        <div class="brand-mark">ForWin Workspace</div>
+        <h1>配置归配置，任务归任务。</h1>
+        <p>首页现在拆成书本、任务、配置三个视角。书本先进入 Genesis 创世，再启动写作；任务中心继续承接生成与上传执行流，配置页只保留模型与平台登录。</p>
+      </div>
+      <div class="head-actions">
+        <a class="button secondary" href="/publishers">高级发布页</a>
+        <button class="ghost" type="button" onclick="openExtensionOptions()">扩展设置</button>
+      </div>
+    </section>
+
+    <section class="surface shell">
+      <div class="status-bar">
+        <div>
+          <strong id="global_status_title">系统状态</strong>
+          <div id="global_status" class="meta">等待加载首页数据。</div>
+        </div>
+        <div class="badge-row">
+          <span id="saved_key_badge" class="badge">API Key：@@HAS_API_KEY_TEXT@@</span>
+          <span id="extension_ready_badge" class="badge @@EXTENSION_BADGE_CLASS@@">扩展回写：@@EXTENSION_READY_TEXT@@</span>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <button id="tab_book" class="tab-chip active" type="button" onclick="switchTab('book')">书本</button>
+        <button id="tab_task" class="tab-chip" type="button" onclick="switchTab('task')">任务</button>
+        <button id="tab_config" class="tab-chip" type="button" onclick="switchTab('config')">配置</button>
+      </div>
+
+      <section id="panel_book" class="tab-panel active">
+        <div class="task-toolbar">
+          <div>
+            <div class="section-head" style="margin:0;">
+              <div>
+                <h2>书本管理</h2>
+                <p>这里看每本书的章节规划、已生成章节和已上传章节。建书和后续生成从这里发起。</p>
+              </div>
+            </div>
+          </div>
+          <div class="action-row">
+            <button class="secondary" type="button" onclick="loadBooks(true)">刷新</button>
+            <button id="book_select_all_btn" class="ghost" type="button" onclick="toggleSelectAllBooks()">全选</button>
+            <button id="book_bulk_delete_btn" class="danger" type="button" onclick="bulkDeleteBooks()" disabled>批量删除</button>
+            <button class="primary" type="button" onclick="openBookModal()">新建书本</button>
+          </div>
+        </div>
+        <div id="book_list" class="task-list"></div>
+      </section>
+
+      <section id="panel_task" class="tab-panel">
+        <div class="task-toolbar">
+          <div>
+            <div class="section-head" style="margin:0;">
+              <div>
+                <h2>统一任务中心</h2>
+                <p>生成任务与上传任务按更新时间混排；右侧抽屉承接任务详情、章节查看和从章节直接派生上传任务。</p>
+              </div>
+            </div>
+          </div>
+          <div class="action-row">
+            <button class="secondary" type="button" onclick="loadTaskCenter(true)">刷新</button>
+            <button id="task_select_all_btn" class="ghost" type="button" onclick="toggleSelectAllTasks()">全选可删</button>
+            <button id="task_bulk_delete_btn" class="danger" type="button" onclick="bulkDeleteTasks()" disabled>批量删除</button>
+            <button class="primary" type="button" onclick="openTaskModal('generation')">新建任务</button>
+          </div>
+        </div>
+        <div id="task_list" class="task-list"></div>
+      </section>
+
+      <section id="panel_config" class="tab-panel">
+        <div class="config-grid">
+          <div class="stack">
+            <section class="card">
+              <div class="section-head">
+                <div>
+                  <h2>模型列表</h2>
+                  <p>每条模型只展示必要元信息；新增和编辑都走同一个设置弹窗。</p>
+                </div>
+                <div class="action-row">
+                  <button class="secondary" type="button" onclick="loadSettings()">刷新</button>
+                  <button class="primary" type="button" onclick="openModelModal('')">添加模型</button>
+                </div>
+              </div>
+              <div id="profile_list" class="list"></div>
+            </section>
+            <section class="card">
+              <div class="section-head">
+                <div>
+                  <h2>生成设置</h2>
+                  <p>这些是新建生成任务的默认值；任务弹窗里仍可按单次任务覆盖。</p>
+                </div>
+                <button class="primary" type="button" onclick="saveGenerationPreferences()">保存</button>
+              </div>
+              <div class="field-grid">
+                <div>
+                  <label for="config_generation_min_chapter_chars">每章最少字数</label>
+                  <input id="config_generation_min_chapter_chars" type="number" min="500" max="50000" step="100" value="@@MIN_CHAPTER_CHARS@@">
+                </div>
+                <div>
+                  <label for="config_generation_review_interval_chapters">每 N 章人工检查</label>
+                  <input id="config_generation_review_interval_chapters" type="number" min="0" max="200" step="1" value="@@REVIEW_INTERVAL_CHAPTERS@@">
+                </div>
+                <div>
+                  <label for="config_generation_operation_mode">Operation Mode</label>
+                  <select id="config_generation_operation_mode">
+                    <option value="blackbox">blackbox</option>
+                    <option value="copilot">copilot</option>
+                    <option value="checkpoint">checkpoint</option>
+                  </select>
+                </div>
+              </div>
+              <label class="checkbox" style="margin-top:12px;">
+                <input id="config_generation_freeze_failed_candidates" type="checkbox">
+                <span>freeze_failed_candidates。黑箱写作出错时，保留冻结产物，方便后续人工接管。</span>
+              </label>
+            </section>
+          </div>
+          <div class="stack">
+            <section class="card">
+              <div class="section-head">
+                <div>
+                  <h2>平台列表</h2>
+                  <p>这里直接看平台登录状态、扩展在线状态和当前执行端 Client ID。</p>
+                </div>
+                <button class="secondary" type="button" onclick="loadPlatforms()">刷新</button>
+              </div>
+              <div id="platform_list" class="list"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </section>
+  </div>
+
+  <div id="task_modal_shell" class="modal-shell" onclick="dismissModal(event, 'task_modal_shell')">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="section-head" style="margin-bottom:0;">
+        <div>
+          <h3 id="task_modal_title">新建任务</h3>
+          <p id="task_modal_description">统一入口。先选任务类型，再填写最少必要字段。</p>
+        </div>
+        <button class="ghost" type="button" onclick="closeTaskModal()">关闭</button>
+      </div>
+      <div class="pill-switch">
+        <button id="new_task_kind_generation" type="button" class="active" onclick="setTaskModalKind('generation')">生成任务</button>
+        <button id="new_task_kind_upload" type="button" onclick="setTaskModalKind('upload')">上传任务</button>
+      </div>
+      <section id="task_form_generation" class="drawer-grid">
+        <div id="task_generation_project_hint" class="meta-line" style="display:none;"></div>
+        <div class="field-grid">
+          <div style="grid-column:1 / -1;">
+            <label for="task_generation_premise">Premise / Prompt</label>
+            <textarea id="task_generation_premise" placeholder="写清世界观、主角处境、关键冲突和你想要的开篇质感。"></textarea>
+          </div>
+          <div>
+            <label for="task_generation_genre">Genre</label>
+            <input id="task_generation_genre" value="@@DEFAULT_GENRE@@" spellcheck="false">
+          </div>
+          <div>
+            <label for="task_generation_num_chapters">Num Chapters</label>
+            <input id="task_generation_num_chapters" type="number" min="1" max="200" value="@@DEFAULT_CHAPTERS@@">
+          </div>
+          <div>
+            <label for="task_generation_min_chapter_chars">每章最少字数</label>
+            <input id="task_generation_min_chapter_chars" type="number" min="500" max="50000" step="100" value="@@MIN_CHAPTER_CHARS@@">
+          </div>
+          <div>
+            <label for="task_generation_model_profile_id">Model Profile</label>
+            <select id="task_generation_model_profile_id"></select>
+          </div>
+          <div>
+            <label for="task_generation_operation_mode">Operation Mode</label>
+            <select id="task_generation_operation_mode">
+              <option value="blackbox">blackbox</option>
+              <option value="copilot">copilot</option>
+              <option value="checkpoint">checkpoint</option>
+            </select>
+          </div>
+          <div>
+            <label for="task_generation_progression_mode">推进策略覆盖</label>
+            <select id="task_generation_progression_mode">
+              <option value="">沿用项目默认</option>
+              <option value="legacy_relaxed">legacy_relaxed</option>
+              <option value="serial_canon">serial_canon</option>
+              <option value="serial_canon_band_guard">serial_canon_band_guard</option>
+            </select>
+          </div>
+        </div>
+        <label class="checkbox">
+          <input id="task_generation_freeze_failed_candidates" type="checkbox">
+          <span>freeze_failed_candidates。黑箱写作出错时，保留冻结产物，方便后续人工接管。</span>
+        </label>
+        <div class="inline-fields">
+          <label class="checkbox" style="flex:1 1 220px;">
+            <input id="task_generation_auto_band_checkpoint" type="checkbox">
+            <span>本次运行启用 auto band checkpoint。</span>
+          </label>
+          <label class="checkbox" style="flex:1 1 220px;">
+            <input id="task_generation_manual_checkpoints_enabled" type="checkbox">
+            <span>本次运行允许 manual checkpoint。</span>
+          </label>
+          <label class="checkbox" style="flex:1 1 220px;">
+            <input id="task_generation_future_constraints_enabled" type="checkbox">
+            <span>本次运行启用 future constraints。</span>
+          </label>
+        </div>
+      </section>
+      <section id="task_form_upload" class="drawer-grid" style="display:none;">
+        <div class="field-grid">
+          <div>
+            <label for="task_upload_platform">Platform</label>
+            <select id="task_upload_platform"></select>
+          </div>
+          <div>
+            <label for="task_upload_book_name">Book Name</label>
+            <input id="task_upload_book_name" spellcheck="false">
+          </div>
+          <div>
+            <label for="task_upload_chapter_title">Chapter Title</label>
+            <input id="task_upload_chapter_title">
+          </div>
+          <div>
+            <label for="task_upload_upload_url">Upload URL</label>
+            <input id="task_upload_upload_url" placeholder="可选，留空则走平台默认入口">
+          </div>
+          <div style="grid-column:1 / -1;">
+            <label for="task_upload_body">Body</label>
+            <textarea id="task_upload_body" placeholder="粘贴章节正文。若从生成任务章节发起，这里会自动预填。"></textarea>
+          </div>
+          <div>
+            <label for="task_upload_audience">Audience</label>
+            <select id="task_upload_audience">
+              <option value="">未指定</option>
+              <option value="male">male</option>
+              <option value="female">female</option>
+            </select>
+          </div>
+          <div>
+            <label for="task_upload_primary_category">Primary Category</label>
+            <input id="task_upload_primary_category" placeholder="例如：都市日常 / 玄幻脑洞">
+          </div>
+          <div>
+            <label for="task_upload_protagonist_names">Protagonists</label>
+            <input id="task_upload_protagonist_names" placeholder="逗号分隔">
+          </div>
+          <div>
+            <label for="task_upload_intro">Intro</label>
+            <input id="task_upload_intro" placeholder="作品简介摘要">
+          </div>
+        </div>
+        <div class="inline-fields">
+          <label class="checkbox" style="flex:1 1 220px;">
+            <input id="task_upload_publish" type="checkbox" checked>
+            <span>publish。勾选后直接走发布动作。</span>
+          </label>
+          <label class="checkbox" style="flex:1 1 220px;">
+            <input id="task_upload_create_if_missing" type="checkbox">
+            <span>create_if_missing。平台作品不存在时尝试先建书。</span>
+          </label>
+        </div>
+      </section>
+      <div class="action-row" style="justify-content:flex-end;">
+        <button class="ghost" type="button" onclick="closeTaskModal()">取消</button>
+        <button class="primary" type="button" onclick="submitTaskModal()">创建任务</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="model_modal_shell" class="modal-shell" onclick="dismissModal(event, 'model_modal_shell')">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="section-head" style="margin-bottom:0;">
+        <div>
+          <h3 id="model_modal_title">模型设置</h3>
+          <p>新增和编辑共用这个弹窗。API Key 留空时会保留已保存值。</p>
+        </div>
+        <button class="ghost" type="button" onclick="closeModelModal()">关闭</button>
+      </div>
+      <div class="field-grid">
+        <div>
+          <label for="model_form_name">名称</label>
+          <input id="model_form_name" placeholder="例如：MiniMax 主账号">
+        </div>
+        <div>
+          <label for="model_form_provider_preset">供应商预设</label>
+          <select id="model_form_provider_preset"></select>
+        </div>
+        <div>
+          <label for="model_form_model">当前 Model / 自定义</label>
+          <input id="model_form_model" spellcheck="false">
+        </div>
+        <div>
+          <label for="model_form_recommended_model">模型下拉</label>
+          <select id="model_form_recommended_model"></select>
+        </div>
+        <div style="grid-column:1 / -1;">
+          <div class="action-row">
+            <button class="secondary" type="button" onclick="applySelectedModelPreset()">套用供应商预设</button>
+            <span id="model_form_provider_hint" class="meta-line"></span>
+          </div>
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label for="model_form_base_url_select">API 站点 / Base URL 下拉</label>
+          <select id="model_form_base_url_select"></select>
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label for="model_form_base_url">当前 Base URL / 自定义</label>
+          <input id="model_form_base_url" spellcheck="false" placeholder="选择自定义时在这里手填">
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label for="model_form_api_key">API Key</label>
+          <input id="model_form_api_key" type="password" placeholder="留空表示不修改已保存的 Key" autocomplete="off">
+        </div>
+      </div>
+      <label class="checkbox">
+        <input id="model_form_set_default" type="checkbox">
+        <span>保存后同时设为默认模型。</span>
+      </label>
+      <div class="action-row" style="justify-content:flex-end;">
+        <button class="ghost" type="button" onclick="closeModelModal()">取消</button>
+        <button class="primary" type="button" onclick="saveModelProfile()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="book_modal_shell" class="modal-shell" onclick="dismissModal(event, 'book_modal_shell')">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="section-head" style="margin-bottom:0;">
+        <div>
+          <h3>新建书本</h3>
+          <p>创建后会立即进入 Genesis 工作台，先敲定整本书的根蓝图，再决定何时启动写作。</p>
+        </div>
+        <button class="ghost" type="button" onclick="closeBookModal()">关闭</button>
+      </div>
+      <div class="field-grid">
+        <div>
+          <label for="book_form_title">书名</label>
+          <input id="book_form_title" placeholder="例如：灰烬城的最后见习医师">
+        </div>
+        <div>
+          <label for="book_form_genre">Genre</label>
+          <input id="book_form_genre" value="@@DEFAULT_GENRE@@" spellcheck="false">
+        </div>
+        <div>
+          <label for="book_form_target_total_chapters">总章节数</label>
+          <input id="book_form_target_total_chapters" type="number" min="1" max="200" value="@@DEFAULT_CHAPTERS@@">
+        </div>
+        <div>
+          <label for="book_form_audience_hint">目标读者</label>
+          <input id="book_form_audience_hint" placeholder="例如：男频 / 女频 / 泛读者">
+        </div>
+        <div>
+          <label for="book_form_core_emotion">核心情绪</label>
+          <input id="book_form_core_emotion" placeholder="例如：压迫感、热血、悬疑、不安">
+        </div>
+        <div>
+          <label for="book_form_core_delight">核心爽点</label>
+          <input id="book_form_core_delight" placeholder="例如：成长反杀、谜题揭示、权谋翻盘">
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label for="book_form_premise">Premise / Prompt</label>
+          <textarea id="book_form_premise" placeholder="写清作品 premise、主角处境、冲突方向和你要的整体质感。"></textarea>
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label for="book_form_setting_summary">Setting Summary</label>
+          <textarea id="book_form_setting_summary" placeholder="可选。先填基础世界观和规则约束。"></textarea>
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label for="book_form_inspiration_notes">气质参考 / Inspiration Notes</label>
+          <textarea id="book_form_inspiration_notes" placeholder="可选。写你想模仿的气质、节奏和表达方向，但不要直接照搬作品。"></textarea>
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label for="book_form_content_guardrails">禁区 / Guardrails</label>
+          <textarea id="book_form_content_guardrails" placeholder="可选。写清不能碰的桥段、风格和设定边界。"></textarea>
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label>绑定平台</label>
+          <div class="binding-grid">
+            <section class="binding-card">
+              <div>
+                <strong>平台 1 · 默认平台</strong>
+                <p>用于自动发布和章节上传的默认预填值。</p>
+              </div>
+              <div>
+                <label for="book_form_publish_platform_1">平台</label>
+                <select id="book_form_publish_platform_1"></select>
+              </div>
+              <div>
+                <label for="book_form_publish_mode_1">平台书目状态</label>
+                <select id="book_form_publish_mode_1">
+                  <option value="chapter_only">平台已有书目，只创建章节</option>
+                  <option value="create_book">平台还没有书目，需要先建书</option>
+                </select>
+              </div>
+              <div>
+                <label for="book_form_publish_book_name_1">平台作品名</label>
+                <input id="book_form_publish_book_name_1" placeholder="默认与书名一致，可按平台作品名单独填写">
+              </div>
+              <div>
+                <label for="book_form_publish_upload_url_1">默认上传页 URL</label>
+                <input id="book_form_publish_upload_url_1" placeholder="可选。后续创建章节上传任务时会自动带上">
+              </div>
+            </section>
+            <section class="binding-card">
+              <div>
+                <strong>平台 2 · 可选</strong>
+                <p>可额外绑定第二个平台，后续手动上传时可直接切换使用。</p>
+              </div>
+              <div>
+                <label for="book_form_publish_platform_2">平台</label>
+                <select id="book_form_publish_platform_2"></select>
+              </div>
+              <div>
+                <label for="book_form_publish_mode_2">平台书目状态</label>
+                <select id="book_form_publish_mode_2">
+                  <option value="chapter_only">平台已有书目，只创建章节</option>
+                  <option value="create_book">平台还没有书目，需要先建书</option>
+                </select>
+              </div>
+              <div>
+                <label for="book_form_publish_book_name_2">平台作品名</label>
+                <input id="book_form_publish_book_name_2" placeholder="默认与书名一致，可按平台作品名单独填写">
+              </div>
+              <div>
+                <label for="book_form_publish_upload_url_2">默认上传页 URL</label>
+                <input id="book_form_publish_upload_url_2" placeholder="可选。后续创建章节上传任务时会自动带上">
+              </div>
+            </section>
+          </div>
+        </div>
+      </div>
+      <div class="action-row" style="justify-content:flex-end;">
+        <button class="ghost" type="button" onclick="closeBookModal()">取消</button>
+        <button class="primary" type="button" onclick="submitBookModal()">创建并进入创世</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="genesis_modal_shell" class="modal-shell" onclick="dismissModal(event, 'genesis_modal_shell')">
+    <div class="modal genesis-modal" onclick="event.stopPropagation()">
+      <div class="section-head" style="margin-bottom:0;">
+        <div>
+          <h3 id="genesis_modal_title">Book Genesis Workspace</h3>
+          <p id="genesis_modal_subtitle">创建书本后，先在这里锁定世界观、地图、故事引擎和整本书 Arc 蓝图。</p>
+        </div>
+        <div class="action-row">
+          <button id="genesis_start_writing_btn" class="primary" type="button" onclick="startWritingFromGenesis()" disabled>启动写作</button>
+          <button class="ghost" type="button" onclick="closeGenesisWorkspace()">关闭</button>
+        </div>
+      </div>
+      <div id="genesis_stage_board" class="genesis-stage-board"></div>
+      <div class="genesis-layout">
+        <section class="card">
+          <div class="section-head" style="margin-bottom:0;">
+            <div>
+              <h3 id="genesis_stage_title">Genesis Stage</h3>
+              <p id="genesis_stage_meta">选择一个阶段，编辑或重生该阶段的根层数据。</p>
+            </div>
+          </div>
+          <div class="genesis-item-card">
+            <div class="section-head" style="margin-bottom:0;">
+              <div>
+                <h3>结构化属性</h3>
+                <p>你可以直接编辑字段，不需要只改 JSON。下方原始 JSON 仍然保留，作为最终真值和高级编辑入口。</p>
+              </div>
+            </div>
+            <div id="genesis_stage_form" class="field-grid"></div>
+          </div>
+          <div id="genesis_item_card" class="genesis-item-card" hidden>
+            <div class="section-head" style="margin-bottom:0;">
+              <div>
+                <h3>子项工作台</h3>
+                <p>世界观、地图与空间、角色与势力、Arc 蓝图阶段都支持选中单个目标，再只针对这个目标和 AI 对话改写。</p>
+              </div>
+            </div>
+            <div class="genesis-item-toolbar">
+              <div>
+                <label for="genesis_item_collection_select">子项类型</label>
+                <select id="genesis_item_collection_select" onchange="selectGenesisItemCollection(this.value)"></select>
+              </div>
+              <div>
+                <label for="genesis_item_entry_select">当前子项</label>
+                <select id="genesis_item_entry_select" onchange="selectGenesisItemIndex(this.value)"></select>
+              </div>
+            </div>
+            <div class="action-row">
+              <button id="genesis_create_item_btn" class="secondary" type="button" onclick="createGenesisItem()">新增子项</button>
+              <button id="genesis_delete_item_btn" class="ghost" type="button" onclick="deleteGenesisItem()">删除选中子项</button>
+            </div>
+            <div id="genesis_item_meta" class="meta-line">当前阶段没有子项目标。</div>
+            <div id="genesis_item_form" class="field-grid"></div>
+            <div id="genesis_item_preview" class="code genesis-item-preview"></div>
+          </div>
+          <div class="genesis-item-card">
+            <div class="section-head" style="margin-bottom:0;">
+              <div>
+                <h3>最终 JSON / 高级编辑</h3>
+                <p>结构化字段改动会同步回这里；你仍然可以直接编辑 JSON。</p>
+              </div>
+            </div>
+            <textarea id="genesis_stage_editor" class="genesis-editor" spellcheck="false" oninput="handleGenesisEditorInput()"></textarea>
+          </div>
+          <div class="genesis-chat-box">
+            <label for="genesis_refine_instruction">AI 对话改写</label>
+            <div>
+              <label for="genesis_model_profile_id">Model Profile</label>
+              <select id="genesis_model_profile_id" onchange="changeGenesisModelProfile(this.value)"></select>
+            </div>
+            <textarea id="genesis_refine_instruction" class="genesis-refine-textarea" placeholder="像聊天一样告诉 AI 你想怎么改。可以改写整个阶段，也可以在选择子项后只改一个规则 / 历史 / 命名 / 禁区 / 小地图 / 角色 / 势力。"></textarea>
+            <div id="genesis_refine_meta" class="meta-line">默认会改写整个阶段；如果选中了子项，也可以只改写那个对象。</div>
+            <div class="action-row">
+              <button class="secondary" type="button" onclick="refineGenesisCurrentStage()">改写当前阶段</button>
+              <button id="genesis_refine_item_btn" class="ghost" type="button" onclick="refineGenesisSelectedItem()" disabled>改写选中子项</button>
+            </div>
+          </div>
+          <div class="action-row">
+            <button class="secondary" type="button" onclick="saveGenesisStage()">保存编辑</button>
+            <button class="ghost" type="button" onclick="generateGenesisStage('generate')">生成</button>
+            <button class="ghost" type="button" onclick="generateGenesisStage('rerun')">重生</button>
+            <button class="primary" type="button" onclick="lockGenesisStage()">锁定阶段</button>
+          </div>
+        </section>
+        <section class="genesis-summary-grid">
+          <article class="card genesis-overview">
+            <div class="task-id">阶段概览</div>
+            <div id="genesis_stage_summary" class="meta-line">尚未载入。</div>
+            <div id="genesis_stage_preview" class="code"></div>
+          </article>
+          <article class="card">
+            <div class="task-id">Prompt Trace</div>
+            <div id="genesis_trace_list" class="trace-list"></div>
+          </article>
+        </section>
+      </div>
+      <section class="card genesis-overview">
+        <div class="task-id">根蓝图总览</div>
+        <div id="genesis_blueprint_summary" class="meta-line">尚未载入。</div>
+      </section>
+    </div>
+  </div>
+
+  <div id="task_drawer_overlay" class="overlay" onclick="closeTaskDrawer(event)">
+    <aside class="drawer" onclick="event.stopPropagation()">
+      <div class="drawer-head">
+        <div>
+          <div id="drawer_task_id" class="task-id"></div>
+          <h3 id="drawer_title">任务详情</h3>
+          <div id="drawer_meta" class="meta-line"></div>
+        </div>
+        <button class="ghost" type="button" onclick="closeTaskDrawer()">关闭</button>
+      </div>
+      <div id="drawer_body" class="drawer-grid"></div>
+    </aside>
+  </div>
+
+  <div id="governance_action_modal_shell" class="modal-shell" onclick="dismissModal(event, 'governance_action_modal_shell')">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="section-head" style="margin-bottom:0;">
+        <div>
+          <h3 id="governance_action_modal_title">治理动作</h3>
+          <p id="governance_action_modal_description">所有治理动作都要求填写原因，便于进入决策链与审计时间线。</p>
+        </div>
+        <button class="ghost" type="button" onclick="closeGovernanceActionModal()">关闭</button>
+      </div>
+      <div id="governance_action_modal_fields" class="field-grid"></div>
+      <div>
+        <label for="governance_action_modal_reason">Reason</label>
+        <textarea id="governance_action_modal_reason" placeholder="写清为什么要执行这次治理动作。"></textarea>
+      </div>
+      <div class="action-row" style="justify-content:flex-end;">
+        <button class="ghost" type="button" onclick="closeGovernanceActionModal()">取消</button>
+        <button id="governance_action_modal_submit" class="primary" type="button" onclick="submitGovernanceActionModal()">提交</button>
+      </div>
+    </div>
+  </div>
+
+  

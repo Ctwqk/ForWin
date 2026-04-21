@@ -1,8 +1,13 @@
 .env
 .venv/
 __pycache__/
+.pytest_cache/
 *.pyc
 data/
 node_modules/
 dist/
 build/
+forwin.egg-info/
+.playwright-cli/
+output/
+qidian-auth-*-latest.png

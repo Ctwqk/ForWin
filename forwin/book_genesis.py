@@ -12,11 +12,19 @@ from sqlalchemy.orm import Session
 
 from forwin.arc_sizing import allocate_arc_chapter_sizes
 from forwin.governance import DecisionEventInfo, DecisionEventType, normalize_project_governance
+from forwin.model_adapter import ModelAdapter
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.naming import CULTURE_ALIAS_TO_KEY, CULTURES, CultureNameGenerator
+from forwin.skills import (
+    SkillPromptLayerBuilder,
+    SkillRouter,
+    inject_skill_layers,
+    serialize_prompt_layers,
+    summarize_selected_skills,
+)
 from forwin.state.updater import StateUpdater
 from forwin.utils import LLMJSONParseError, parse_llm_json
-from forwin.writer.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +169,8 @@ def _fallback_culture_profiles() -> list[dict[str, Any]]:
             "name": "主舞台文化",
             "summary": "用于承接主舞台命名与文化语感的默认占位文化背景。",
             "inspiration": "待补充具体文化母本。",
+            "generator_civilization": "中华",
+            "generator_overlays": [],
             "social_markers": ["重秩序", "重门第", "旧俗与新制并行"],
             "aesthetic_keywords": ["冷色秩序", "旧城感", "压抑繁荣"],
             "character_name_style": "人物名以两到三字为主，简洁、冷硬、易记。",
@@ -193,8 +203,55 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
     world = pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {}
     overview = str(world.get("overview", "") or "")
     culture_profiles = [item for item in (world.get("culture_profiles") or []) if isinstance(item, dict)]
-    primary_culture_id = str((culture_profiles[0] or {}).get("id", "") or "culture-main-stage") if culture_profiles else "culture-main-stage"
+    primary_profile = (culture_profiles[0] if culture_profiles else {}) or {}
+    primary_culture_id = str(primary_profile.get("id", "") or "culture-main-stage") if culture_profiles else "culture-main-stage"
     primary_subworld_name = "主舞台总图"
+    primary_region_name = "主舞台核心区"
+    power_region_name = "权力中心区"
+    primary_node_name = "主舞台"
+    power_node_name = "权力中心"
+    danger_node_name = "危险边缘"
+    civilization = _culture_profile_generator_civilization(primary_profile)
+    if civilization:
+        try:
+            primary_subworld_name = _generate_culture_names(
+                civilization=civilization,
+                kind="region",
+                count=1,
+                seed=f"{primary_culture_id}:subworld",
+            )[0]
+            primary_region_name = _generate_culture_names(
+                civilization=civilization,
+                kind="region",
+                count=1,
+                seed=f"{primary_culture_id}:region:main",
+            )[0]
+            power_region_name = _generate_culture_names(
+                civilization=civilization,
+                kind="region",
+                count=1,
+                seed=f"{primary_culture_id}:region:power",
+            )[0]
+            primary_node_name = _generate_culture_names(
+                civilization=civilization,
+                kind="place",
+                count=1,
+                seed=f"{primary_culture_id}:node:main",
+            )[0]
+            power_node_name = _generate_culture_names(
+                civilization=civilization,
+                kind="place",
+                count=1,
+                seed=f"{primary_culture_id}:node:power",
+            )[0]
+            danger_node_name = _generate_culture_names(
+                civilization=civilization,
+                kind="place",
+                count=1,
+                seed=f"{primary_culture_id}:node:danger",
+            )[0]
+        except Exception:  # noqa: BLE001
+            logger.debug("Fallback map naming generation failed for profile %s", primary_culture_id, exc_info=True)
     primary_region_id = "region-main-stage"
     power_region_id = "region-power-core"
     return {
@@ -205,7 +262,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
         ],
         "submaps": [
             {
-                "name": "主舞台总图",
+                "name": primary_subworld_name,
                 "scope": "macro_region",
                 "parent_scope": "",
                 "culture_profile_id": primary_culture_id,
@@ -215,7 +272,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
                 "terrain": ["平原", "旧城", "边缘荒野"],
                 "governing_power": "主舞台权力中枢",
                 "resident_factions": ["主舞台权力中枢"],
-                "key_locations": ["主舞台", "权力中心", "危险边缘"],
+                "key_locations": [primary_node_name, power_node_name, danger_node_name],
                 "travel_rules": ["重要地点之间必须有可解释的移动成本。"],
                 "resource_themes": ["关键资源", "旧时代遗留物"],
             }
@@ -223,7 +280,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
         "regions": [
             {
                 "id": primary_region_id,
-                "name": "主舞台核心区",
+                "name": primary_region_name,
                 "subworld_name": primary_subworld_name,
                 "parent_region_id": "",
                 "level": 1,
@@ -238,7 +295,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
             },
             {
                 "id": power_region_id,
-                "name": "权力中心区",
+                "name": power_region_name,
                 "subworld_name": primary_subworld_name,
                 "parent_region_id": primary_region_id,
                 "level": 2,
@@ -254,7 +311,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
         ],
         "nodes": [
             {
-                "name": "主舞台",
+                "name": primary_node_name,
                 "kind": "region",
                 "parent_subworld": primary_subworld_name,
                 "parent_region_id": primary_region_id,
@@ -268,7 +325,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
                 "resources": ["人口", "情报", "基础资源"],
             },
             {
-                "name": "权力中心",
+                "name": power_node_name,
                 "kind": "city",
                 "parent_subworld": primary_subworld_name,
                 "parent_region_id": power_region_id,
@@ -282,7 +339,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
                 "resources": ["制度资源", "金流", "权力网络"],
             },
             {
-                "name": "危险边缘",
+                "name": danger_node_name,
                 "kind": "frontier",
                 "parent_subworld": primary_subworld_name,
                 "parent_region_id": primary_region_id,
@@ -297,8 +354,8 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
             },
         ],
         "edges": [
-            {"from": "主舞台", "to": "权力中心", "relation": "常规往返"},
-            {"from": "主舞台", "to": "危险边缘", "relation": "高风险探索"},
+            {"from": primary_node_name, "to": power_node_name, "relation": "常规往返"},
+            {"from": primary_node_name, "to": danger_node_name, "relation": "高风险探索"},
         ],
     }
 
@@ -317,11 +374,37 @@ def _fallback_story_engine(pack: dict[str, Any]) -> dict[str, Any]:
     power_region_id = str((regions[1] or {}).get("id", "") or primary_region_id or "region-power-core") if len(regions) > 1 else (primary_region_id or "region-power-core")
     primary_location = str((nodes[0] or {}).get("name", "") or "主舞台") if nodes else "主舞台"
     power_location = str((nodes[1] or {}).get("name", "") or primary_location or "权力中心") if len(nodes) > 1 else (primary_location or "权力中心")
+    primary_profile = (culture_profiles[0] if culture_profiles else {}) or {}
+    protagonist_name = "主角"
     primary_faction = "主舞台权力中枢"
+    opposition_name = "对手盘"
+    civilization = _culture_profile_generator_civilization(primary_profile)
+    if civilization:
+        try:
+            protagonist_name = _generate_culture_names(
+                civilization=civilization,
+                kind="person",
+                count=1,
+                seed=f"{primary_culture_id}:core_cast",
+            )[0]
+            primary_faction = _generate_culture_names(
+                civilization=civilization,
+                kind="epithet",
+                count=1,
+                seed=f"{primary_culture_id}:faction",
+            )[0]
+            opposition_name = _generate_culture_names(
+                civilization=civilization,
+                kind="person",
+                count=1,
+                seed=f"{primary_culture_id}:opposition",
+            )[0]
+        except Exception:  # noqa: BLE001
+            logger.debug("Fallback story naming generation failed for profile %s", primary_culture_id, exc_info=True)
     return {
         "core_cast": [
             {
-                "name": "主角",
+                "name": protagonist_name,
                 "role": "主视角",
                 "desire": "摆脱被动处境并掌握真相",
                 "fear": "在升级过程中失去最重要的人或自我",
@@ -369,7 +452,7 @@ def _fallback_story_engine(pack: dict[str, Any]) -> dict[str, Any]:
         ],
         "opposition": [
             {
-                "name": "对手盘",
+                "name": opposition_name,
                 "role": "长期压力源",
                 "desire": "维持或攫取更高层级的控制权",
                 "pressure": "通过规则、资源与秘密不断抬高主角代价。",
@@ -439,6 +522,131 @@ def _fallback_bootstrap(project: Project, pack: dict[str, Any]) -> dict[str, Any
     }
 
 
+def _field_expects_list(field_path: str) -> bool:
+    normalized = str(field_path or "").strip()
+    return normalized.endswith("_examples") or normalized in {
+        "character_name_examples",
+        "region_name_examples",
+        "location_name_examples",
+    }
+
+
+def _infer_name_kind(*, stage_key: str, target_path: str, field_path: str) -> str:
+    normalized_field = str(field_path or "").strip()
+    normalized_target = str(target_path or "").strip()
+    if normalized_field == "character_name_examples":
+        return "person"
+    if normalized_field == "region_name_examples":
+        return "region"
+    if normalized_field == "location_name_examples":
+        return "place"
+    if normalized_field == "name":
+        if stage_key == "map":
+            if normalized_target.startswith("nodes["):
+                return "place"
+            return "region"
+        if stage_key == "story_engine":
+            if normalized_target.startswith("factions["):
+                return "epithet"
+            return "person"
+    return ""
+
+
+def _normalize_generator_civilization(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if text in CULTURE_ALIAS_TO_KEY:
+        return CULTURES[CULTURE_ALIAS_TO_KEY[text]].display
+    for alias, key in CULTURE_ALIAS_TO_KEY.items():
+        if alias and alias in text:
+            return CULTURES[key].display
+    return text
+
+
+def _culture_profile_generator_civilization(profile: dict[str, Any]) -> str:
+    base = _normalize_generator_civilization(profile.get("generator_civilization", ""))
+    overlays = []
+    for item in (profile.get("generator_overlays") or []):
+        normalized = _normalize_generator_civilization(item)
+        if normalized and normalized != base and normalized not in overlays:
+            overlays.append(normalized)
+    if not base:
+        inspiration = str(profile.get("inspiration", "") or profile.get("name", "") or "")
+        base = _normalize_generator_civilization(inspiration)
+    if not base:
+        return ""
+    return "+".join([base, *overlays])
+
+
+def _generate_culture_names(
+    *,
+    civilization: str,
+    kind: str,
+    count: int,
+    seed: str,
+) -> list[str]:
+    generator = CultureNameGenerator(seed=seed)
+    result = generator.generate(civilization, kind, count=max(1, int(count or 1)))
+    if isinstance(result, str):
+        return [result]
+    return [str(item).strip() for item in result if str(item).strip()]
+
+
+def _culture_profile_name_hints(
+    profile: dict[str, Any],
+    *,
+    seed_prefix: str,
+) -> dict[str, Any]:
+    civilization = _culture_profile_generator_civilization(profile)
+    if not civilization:
+        return {}
+    try:
+        return {
+            "culture_profile_id": str(profile.get("id", "")).strip(),
+            "culture_profile_name": str(profile.get("name", "")).strip(),
+            "generator_civilization": civilization,
+            "character_name_examples": _generate_culture_names(
+                civilization=civilization,
+                kind="person",
+                count=5,
+                seed=f"{seed_prefix}:person",
+            ),
+            "region_name_examples": _generate_culture_names(
+                civilization=civilization,
+                kind="region",
+                count=5,
+                seed=f"{seed_prefix}:region",
+            ),
+            "location_name_examples": _generate_culture_names(
+                civilization=civilization,
+                kind="place",
+                count=5,
+                seed=f"{seed_prefix}:place",
+            ),
+            "epithet_examples": _generate_culture_names(
+                civilization=civilization,
+                kind="epithet",
+                count=3,
+                seed=f"{seed_prefix}:epithet",
+            ),
+        }
+    except Exception:  # noqa: BLE001
+        logger.debug("Culture naming hint generation failed for profile %s", profile.get("id", ""), exc_info=True)
+        return {}
+
+
+def _name_hint_block(world_bible: dict[str, Any], *, seed_prefix: str) -> list[dict[str, Any]]:
+    hints = []
+    for index, profile in enumerate((world_bible.get("culture_profiles") or []), start=1):
+        if not isinstance(profile, dict):
+            continue
+        hint = _culture_profile_name_hints(profile, seed_prefix=f"{seed_prefix}:{index}")
+        if hint:
+            hints.append(hint)
+    return hints
+
+
 def _parse_path_tokens(path: str) -> list[str | int]:
     tokens: list[str | int] = []
     for chunk in str(path or "").strip().split("."):
@@ -504,9 +712,18 @@ def _ensure_revision_is_current(session: Session, project: Project, revision: Bo
 
 
 class BookGenesisService:
-    def __init__(self, *, llm_client: LLMClient, max_tokens: int = 1600) -> None:
+    def __init__(
+        self,
+        *,
+        llm_client: ModelAdapter,
+        max_tokens: int = 1600,
+        skill_router: SkillRouter | None = None,
+        skill_prompt_layer_builder: SkillPromptLayerBuilder | None = None,
+    ) -> None:
         self.llm_client = llm_client
         self.max_tokens = max_tokens
+        self.skill_router = skill_router
+        self.skill_prompt_layer_builder = skill_prompt_layer_builder
 
     def create_initial_revision(
         self,
@@ -858,6 +1075,122 @@ class BookGenesisService:
             and str(getattr(project, "creation_status", "") or "") == "genesis_ready",
         }
 
+    def generate_name_suggestions(
+        self,
+        *,
+        project: Project,
+        revision: BookGenesisRevision,
+        stage_key: str,
+        target_path: str,
+        field_path: str,
+        kind: str = "",
+        count: int = 1,
+        nonce: str = "",
+        stage_payload_override: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_stage = str(stage_key or "").strip()
+        if normalized_stage not in GENESIS_STAGE_ORDER:
+            raise ValueError("未知 Genesis stage。")
+        pack = self.load_pack(revision)
+        if isinstance(stage_payload_override, dict):
+            pack = dict(pack)
+            pack[_STAGE_TO_SECTION[normalized_stage]] = stage_payload_override
+        stage_payload = pack.get(_STAGE_TO_SECTION[normalized_stage]) if isinstance(pack.get(_STAGE_TO_SECTION[normalized_stage]), dict) else {}
+        normalized_target = str(target_path or "").strip()
+        normalized_field = str(field_path or "").strip()
+        if not normalized_field:
+            raise ValueError("field_path 不能为空。")
+        resolved_kind = str(kind or "").strip() or _infer_name_kind(
+            stage_key=normalized_stage,
+            target_path=normalized_target,
+            field_path=normalized_field,
+        )
+        if resolved_kind not in {"person", "region", "place", "epithet"}:
+            raise ValueError("无法推断命名类型，请显式提供 kind。")
+        culture_profile = self._resolve_name_generation_profile(
+            stage_key=normalized_stage,
+            pack=pack,
+            stage_payload=stage_payload,
+            target_path=normalized_target,
+        )
+        civilization = _culture_profile_generator_civilization(culture_profile)
+        if not civilization:
+            raise ValueError("当前对象没有可用的文化背景命名配置。")
+        normalized_count = max(1, min(int(count or 1), 12))
+        try:
+            suggestions = _generate_culture_names(
+                civilization=civilization,
+                kind=resolved_kind,
+                count=normalized_count,
+                seed=":".join(
+                    [
+                        str(project.id or ""),
+                        str(getattr(revision, "id", "") or ""),
+                        normalized_stage,
+                        normalized_target,
+                        normalized_field,
+                        resolved_kind,
+                        str(culture_profile.get("id", "") or ""),
+                        str(nonce or ""),
+                    ]
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"名称生成失败：{exc}") from exc
+        applied_value: Any = suggestions
+        if not _field_expects_list(normalized_field) and normalized_count == 1:
+            applied_value = suggestions[0]
+        return {
+            "ok": True,
+            "stage_key": normalized_stage,
+            "target_path": normalized_target,
+            "field_path": normalized_field,
+            "kind": resolved_kind,
+            "suggestions": suggestions,
+            "applied_value": applied_value,
+            "culture_profile_id": str(culture_profile.get("id", "")).strip(),
+            "culture_profile_name": str(culture_profile.get("name", "")).strip(),
+            "generator_civilization": civilization,
+            "message": "已根据文化背景生成名称建议。",
+        }
+
+    def _resolve_name_generation_profile(
+        self,
+        *,
+        stage_key: str,
+        pack: dict[str, Any],
+        stage_payload: dict[str, Any],
+        target_path: str,
+    ) -> dict[str, Any]:
+        world_bible = pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {}
+        profiles = [
+            item
+            for item in (world_bible.get("culture_profiles") or [])
+            if isinstance(item, dict)
+        ]
+        profile_by_id = {
+            str(item.get("id", "")).strip(): item
+            for item in profiles
+            if str(item.get("id", "")).strip()
+        }
+        if stage_key == "world" and target_path.startswith("culture_profiles["):
+            target = _get_value_at_path(stage_payload, target_path)
+            if isinstance(target, dict):
+                return target
+        target_value = None
+        if target_path:
+            try:
+                target_value = _get_value_at_path(stage_payload, target_path)
+            except ValueError:
+                target_value = None
+        if isinstance(target_value, dict):
+            culture_profile_id = str(target_value.get("culture_profile_id", "")).strip()
+            if culture_profile_id and culture_profile_id in profile_by_id:
+                return profile_by_id[culture_profile_id]
+        if profiles:
+            return profiles[0]
+        return _fallback_culture_profiles()[0]
+
     def materialize_book_arcs(
         self,
         *,
@@ -1052,7 +1385,7 @@ class BookGenesisService:
                         "请根据 BookBrief 生成 WorldBible，只返回 JSON，字段至少包含：overview、axioms、history_slice、"
                         "naming_style、forbidden_zones、culture_profiles。\n"
                         "culture_profiles 表示一组可复用的文化背景与命名体系，每项至少包含："
-                        "id、name、summary、inspiration、social_markers、aesthetic_keywords、"
+                        "id、name、summary、inspiration、generator_civilization、generator_overlays、social_markers、aesthetic_keywords、"
                         "character_name_style、region_name_style、location_name_style、"
                         "character_name_examples、region_name_examples、location_name_examples、usage_notes。\n\n"
                         f"BookBrief：{_json_dump(pack.get('book_brief') or {})}"
@@ -1061,6 +1394,7 @@ class BookGenesisService:
             ]
         elif stage_key == "map":
             fallback = _fallback_map(pack)
+            world_bible = pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {}
             messages = [
                 {"role": "system", "content": "你是小说地图规划器，只输出 JSON 对象。"},
                 {
@@ -1070,12 +1404,14 @@ class BookGenesisService:
                         "MapAtlas 需要显式包含 regions，结构为 submaps、regions、nodes、edges 四层信息。"
                         "regions 表示小世界下辖地区，最多两级嵌套。"
                         "如果 WorldBible 里已经有 culture_profiles，请尽量为 submaps、regions、nodes 补 culture_profile_id。\n\n"
-                        f"WorldBible：{_json_dump(pack.get('world_bible') or {})}"
+                        f"WorldBible：{_json_dump(world_bible)}\n\n"
+                        f"命名辅助：{_json_dump(_name_hint_block(world_bible, seed_prefix=f'{project.id}:map'))}"
                     ),
                 },
             ]
         elif stage_key == "story_engine":
             fallback = _fallback_story_engine(pack)
+            world_bible = pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {}
             messages = [
                 {"role": "system", "content": "你是长篇网文叙事引擎规划器，只输出 JSON 对象。"},
                 {
@@ -1086,8 +1422,9 @@ class BookGenesisService:
                         "faction_memberships；势力要支持 headquarters_region、footprint；对手盘要支持 base_region、backing_factions。"
                         "如果 WorldBible 里已经有 culture_profiles，请尽量为角色、势力、对手补 culture_profile_id。\n\n"
                         f"BookBrief：{_json_dump(pack.get('book_brief') or {})}\n"
-                        f"WorldBible：{_json_dump(pack.get('world_bible') or {})}\n"
-                        f"MapAtlas：{_json_dump(pack.get('map_atlas') or {})}"
+                        f"WorldBible：{_json_dump(world_bible)}\n"
+                        f"MapAtlas：{_json_dump(pack.get('map_atlas') or {})}\n"
+                        f"命名辅助：{_json_dump(_name_hint_block(world_bible, seed_prefix=f'{project.id}:story_engine'))}"
                     ),
                 },
             ]
@@ -1287,9 +1624,13 @@ class BookGenesisService:
         temperature: float = 0.45,
         max_tokens: int | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
+        skill_selections, skill_layers = self._resolve_skill_layers(stage_key=stage_key)
+        effective_messages = inject_skill_layers(messages, skill_layers)
+        prompt_layers = serialize_prompt_layers(messages, skill_layers)
+        selected_skills = summarize_selected_skills(skill_selections)
         effective_prompt = "\n\n".join(
             str(item.get("content", "")).strip()
-            for item in messages
+            for item in effective_messages
             if str(item.get("role", "")).strip() == "system"
         )
         attempts_payload: list[dict[str, Any]] = []
@@ -1300,6 +1641,8 @@ class BookGenesisService:
                 stage_key=stage_key,
                 effective_system_prompt=effective_prompt,
                 messages=messages,
+                prompt_layers=prompt_layers,
+                selected_skills=selected_skills,
                 attempts=attempts_payload,
                 output_summary={"mode": "fallback", "payload": fallback},
             )
@@ -1310,7 +1653,7 @@ class BookGenesisService:
         for attempt_no, attempt in enumerate(retry_plan, start=1):
             try:
                 raw = self.llm_client.chat(
-                    messages,
+                    effective_messages,
                     temperature=attempt["temperature"],
                     max_tokens=attempt["max_tokens"],
                     response_format={"type": "json_object"},
@@ -1328,6 +1671,8 @@ class BookGenesisService:
                     stage_key=stage_key,
                     effective_system_prompt=effective_prompt,
                     messages=messages,
+                    prompt_layers=prompt_layers,
+                    selected_skills=selected_skills,
                     attempts=attempts_payload,
                     output_summary={"mode": "success", "payload": payload},
                 )
@@ -1349,9 +1694,30 @@ class BookGenesisService:
             stage_key=stage_key,
             effective_system_prompt=effective_prompt,
             messages=messages,
+            prompt_layers=prompt_layers,
+            selected_skills=selected_skills,
             attempts=attempts_payload,
             output_summary={"mode": "fallback", "payload": fallback},
         )
+
+    def _resolve_skill_layers(self, *, stage_key: str):
+        if self.skill_router is None or self.skill_prompt_layer_builder is None:
+            return [], []
+        normalized_stage_key = str(stage_key or "").strip()
+        selection_stage_key = normalized_stage_key
+        task_family = "generate_stage_payload"
+        if normalized_stage_key.startswith("launch_arc_"):
+            selection_stage_key = "book_blueprint"
+            task_family = "launch_arc_plan"
+        elif ":refine" in normalized_stage_key:
+            selection_stage_key = normalized_stage_key.split(":", 1)[0]
+            task_family = "refine_stage_payload"
+        selections = self.skill_router.select(
+            scope="genesis",
+            stage_key=selection_stage_key,
+            task_family=task_family,
+        )
+        return selections, self.skill_prompt_layer_builder.build(selections)
 
     def _trace_payload(
         self,
@@ -1359,18 +1725,24 @@ class BookGenesisService:
         stage_key: str,
         effective_system_prompt: str,
         messages: list[dict[str, str]],
+        prompt_layers: list[dict[str, Any]] | None = None,
+        selected_skills: list[dict[str, str]] | None = None,
         attempts: list[dict[str, Any]],
         output_summary: dict[str, Any],
     ) -> dict[str, Any]:
+        selected = list(selected_skills or [])
         return {
             "effective_system_prompt": effective_system_prompt,
-            "prompt_layers": [
+            "prompt_layers": prompt_layers
+            if prompt_layers is not None
+            else [
                 {"role": str(item.get("role", "")).strip(), "content": str(item.get("content", ""))}
                 for item in messages
             ],
             "input_snapshot": {
                 "stage_key": stage_key,
                 "messages": messages,
+                "selected_skills": selected,
             },
             "model_profile": {
                 "profile_id": getattr(self.llm_client, "profile_id", ""),
@@ -1379,7 +1751,10 @@ class BookGenesisService:
                 "base_url": getattr(self.llm_client, "base_url", ""),
             },
             "attempts": attempts,
-            "output_summary": output_summary,
+            "output_summary": {
+                **output_summary,
+                "skill_summary": selected,
+            },
         }
 
     def _normalize_world_payload(self, *, payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
@@ -1391,23 +1766,59 @@ class BookGenesisService:
             profile_id = str(item.get("id", "")).strip() or f"culture-{index}"
             if profile_id in profile_ids:
                 profile_id = f"{profile_id}-{index}"
-            culture_profiles.append(
-                {
-                    "id": profile_id,
-                    "name": str(item.get("name", "")).strip() or f"文化背景{index}",
-                    "summary": str(item.get("summary", "")).strip(),
-                    "inspiration": str(item.get("inspiration", "")).strip(),
-                    "social_markers": [str(value).strip() for value in (item.get("social_markers") or []) if str(value).strip()],
-                    "aesthetic_keywords": [str(value).strip() for value in (item.get("aesthetic_keywords") or []) if str(value).strip()],
-                    "character_name_style": str(item.get("character_name_style", "")).strip(),
-                    "region_name_style": str(item.get("region_name_style", "")).strip(),
-                    "location_name_style": str(item.get("location_name_style", "")).strip(),
-                    "character_name_examples": [str(value).strip() for value in (item.get("character_name_examples") or []) if str(value).strip()],
-                    "region_name_examples": [str(value).strip() for value in (item.get("region_name_examples") or []) if str(value).strip()],
-                    "location_name_examples": [str(value).strip() for value in (item.get("location_name_examples") or []) if str(value).strip()],
-                    "usage_notes": str(item.get("usage_notes", "")).strip(),
-                }
-            )
+            generator_civilization = _normalize_generator_civilization(item.get("generator_civilization", ""))
+            if not generator_civilization:
+                generator_civilization = _normalize_generator_civilization(
+                    item.get("inspiration", "") or item.get("name", "")
+                )
+            profile_payload = {
+                "id": profile_id,
+                "name": str(item.get("name", "")).strip() or f"文化背景{index}",
+                "summary": str(item.get("summary", "")).strip(),
+                "inspiration": str(item.get("inspiration", "")).strip(),
+                "generator_civilization": generator_civilization,
+                "generator_overlays": [
+                    _normalize_generator_civilization(value)
+                    for value in (item.get("generator_overlays") or [])
+                    if _normalize_generator_civilization(value)
+                ],
+                "social_markers": [str(value).strip() for value in (item.get("social_markers") or []) if str(value).strip()],
+                "aesthetic_keywords": [str(value).strip() for value in (item.get("aesthetic_keywords") or []) if str(value).strip()],
+                "character_name_style": str(item.get("character_name_style", "")).strip(),
+                "region_name_style": str(item.get("region_name_style", "")).strip(),
+                "location_name_style": str(item.get("location_name_style", "")).strip(),
+                "character_name_examples": [str(value).strip() for value in (item.get("character_name_examples") or []) if str(value).strip()],
+                "region_name_examples": [str(value).strip() for value in (item.get("region_name_examples") or []) if str(value).strip()],
+                "location_name_examples": [str(value).strip() for value in (item.get("location_name_examples") or []) if str(value).strip()],
+                "usage_notes": str(item.get("usage_notes", "")).strip(),
+            }
+            civilization = _culture_profile_generator_civilization(profile_payload)
+            if civilization:
+                try:
+                    if not profile_payload["character_name_examples"]:
+                        profile_payload["character_name_examples"] = _generate_culture_names(
+                            civilization=civilization,
+                            kind="person",
+                            count=4,
+                            seed=f"{profile_id}:person",
+                        )
+                    if not profile_payload["region_name_examples"]:
+                        profile_payload["region_name_examples"] = _generate_culture_names(
+                            civilization=civilization,
+                            kind="region",
+                            count=4,
+                            seed=f"{profile_id}:region",
+                        )
+                    if not profile_payload["location_name_examples"]:
+                        profile_payload["location_name_examples"] = _generate_culture_names(
+                            civilization=civilization,
+                            kind="place",
+                            count=4,
+                            seed=f"{profile_id}:place",
+                        )
+                except Exception:  # noqa: BLE001
+                    logger.debug("Culture naming autofill failed for profile %s", profile_id, exc_info=True)
+            culture_profiles.append(profile_payload)
             profile_ids.add(profile_id)
         return {
             "overview": str(normalized.get("overview", "")).strip() or str(fallback.get("overview", "")),
@@ -1739,12 +2150,20 @@ class BookGenesisService:
             return {
                 "book_brief": pack.get("book_brief") or {},
                 "world_bible": pack.get("world_bible") or {},
+                "naming_assist": _name_hint_block(
+                    pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {},
+                    seed_prefix="refine:map",
+                ),
             }
         if stage_key == "story_engine":
             return {
                 "book_brief": pack.get("book_brief") or {},
                 "world_bible": pack.get("world_bible") or {},
                 "map_atlas": pack.get("map_atlas") or {},
+                "naming_assist": _name_hint_block(
+                    pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {},
+                    seed_prefix="refine:story_engine",
+                ),
             }
         if stage_key == "book_blueprint":
             return {

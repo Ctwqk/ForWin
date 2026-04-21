@@ -8,6 +8,7 @@ from typing import Any
 from forwin.protocol.context import ChapterContextPack, LintSignal, ReviewContextPack
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.skills import inject_skill_layers
 from forwin.utils import LLMJSONParseError, parse_llm_json
 from forwin.writer.llm_client import LLMClient
 
@@ -51,6 +52,8 @@ class WebNovelExperienceReviewer:
         self,
         context: ReviewContextPack | ChapterContextPack,
         writer_output: WriterOutput,
+        *,
+        reviewer_skill_layers: list[object] | None = None,
     ) -> ReviewVerdict:
         review_context = self._normalize_context(context)
         if not self.enabled:
@@ -59,7 +62,11 @@ class WebNovelExperienceReviewer:
             return ReviewVerdict(verdict="pass", issues=[])
 
         if self.llm_enabled and self.llm_client is not None:
-            llm_verdict = self._review_with_llm(review_context, writer_output)
+            llm_verdict = self._review_with_llm(
+                review_context,
+                writer_output,
+                reviewer_skill_layers=reviewer_skill_layers,
+            )
             if llm_verdict is not None:
                 return llm_verdict
         return self._review_with_heuristics(review_context, writer_output)
@@ -120,12 +127,18 @@ class WebNovelExperienceReviewer:
         self,
         context: ReviewContextPack,
         writer_output: WriterOutput,
+        *,
+        reviewer_skill_layers: list[object] | None = None,
     ) -> ReviewVerdict | None:
         payload = self._llm_payload(context, writer_output)
         evidence_ids = [item["evidence_id"] for item in payload["evidence_index"]]
         try:
             raw = self.llm_client.chat(
-                self._llm_review_messages(payload=payload, evidence_ids=evidence_ids),
+                self._llm_review_messages(
+                    payload=payload,
+                    evidence_ids=evidence_ids,
+                    reviewer_skill_layers=reviewer_skill_layers,
+                ),
                 temperature=0.1,
                 max_tokens=3000,
                 timeout_seconds=45,
@@ -515,8 +528,9 @@ class WebNovelExperienceReviewer:
         *,
         payload: dict[str, Any],
         evidence_ids: list[str],
+        reviewer_skill_layers: list[object] | None = None,
     ) -> list[dict[str, str]]:
-        return [
+        base_messages = [
             {
                 "role": "system",
                 "content": (
@@ -545,6 +559,7 @@ class WebNovelExperienceReviewer:
                 ),
             },
         ]
+        return inject_skill_layers(base_messages, reviewer_skill_layers or [])
 
     def _repair_llm_json(
         self,

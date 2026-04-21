@@ -14,6 +14,7 @@ Flow per run:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import inspect
 import json
 import logging
 from pathlib import Path
@@ -72,6 +73,7 @@ from forwin.orchestrator.phase4 import (
 from forwin.orchestrator.phase24 import ArcEnvelopeManager, ProvisionalBandPreview
 from forwin.retrieval import RetrievalBroker, create_memory_index
 from forwin.reviewer import HistoricalReviewHub
+from forwin.skills import build_skill_runtime_components
 from forwin.state.repo import StateRepository
 from forwin.state.schema import KNOWN_STATE_FIELDS
 from forwin.state.updater import StateUpdater
@@ -174,6 +176,17 @@ class WritingOrchestrator:
             retry_max_delay_seconds=self.config.llm_retry_max_delay_seconds,
             fallback_profiles=self.config.llm_fallback_profiles,
         )
+        (
+            self.skill_registry,
+            self.skill_router,
+            self.skill_prompt_layer_builder,
+        ) = build_skill_runtime_components(
+            root=self.config.skill_registry_path,
+            enabled=self.config.skill_runtime_enabled,
+            strictness=self.config.skill_strictness,
+            enabled_skill_groups=self.config.enabled_skill_groups,
+            disabled_skill_ids=self.config.disabled_skill_ids,
+        )
         self.arc_director = ArcDirector(
             llm_client=self.llm_client,
             max_tokens=self.config.max_tokens,
@@ -181,6 +194,8 @@ class WritingOrchestrator:
         self.book_genesis = BookGenesisService(
             llm_client=self.llm_client,
             max_tokens=min(self.config.max_tokens, 1600),
+            skill_router=self.skill_router,
+            skill_prompt_layer_builder=self.skill_prompt_layer_builder,
         )
         self.subworld_manager = SubWorldManager(director=self.arc_director)
         self.retrieval_broker = RetrievalBroker(
@@ -1587,6 +1602,79 @@ class WritingOrchestrator:
         )
         return repo, updater, checker
 
+    def _select_skill_layers(
+        self,
+        *,
+        scope: str,
+        stage_key: str,
+        task_family: str,
+    ) -> list[object]:
+        selections = self.skill_router.select(
+            scope=scope,
+            stage_key=stage_key,
+            task_family=task_family,
+        )
+        return self.skill_prompt_layer_builder.build(selections)
+
+    @staticmethod
+    def _filter_supported_kwargs(
+        callable_obj: Callable[..., Any],
+        kwargs: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            signature = inspect.signature(callable_obj)
+        except (TypeError, ValueError):
+            return dict(kwargs)
+        parameters = signature.parameters
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+            return dict(kwargs)
+        return {
+            key: value
+            for key, value in kwargs.items()
+            if key in parameters
+        }
+
+    def _call_with_compatible_kwargs(
+        self,
+        callable_obj: Callable[..., Any],
+        /,
+        *args: Any,
+        **kwargs: Any,
+    ) -> Any:
+        return callable_obj(*args, **self._filter_supported_kwargs(callable_obj, kwargs))
+
+    def _save_prompt_trace_payload(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project_id: str,
+        prompt_trace: dict[str, object] | None,
+        parent_trace_id: str = "",
+        decision_event_id: str = "",
+    ) -> str:
+        payload = prompt_trace if isinstance(prompt_trace, dict) else {}
+        if not payload:
+            return ""
+        project = session.get(Project, project_id)
+        row = updater.save_prompt_trace(
+            project_id=project_id,
+            genesis_revision_id=str(getattr(project, "active_genesis_revision_id", "") or ""),
+            decision_event_id=str(decision_event_id or "").strip(),
+            parent_trace_id=str(parent_trace_id or "").strip(),
+            trace_scope=str(payload.get("trace_scope", "writer") or "writer"),
+            stage_key=str(payload.get("stage_key", "") or ""),
+            template_id=str(payload.get("template_id", "") or ""),
+            template_version=str(payload.get("template_version", "v1") or "v1"),
+            effective_system_prompt=str(payload.get("effective_system_prompt", "") or ""),
+            prompt_layers_json=json.dumps(payload.get("prompt_layers", []), ensure_ascii=False),
+            input_snapshot_json=json.dumps(payload.get("input_snapshot", {}), ensure_ascii=False),
+            model_profile_json=json.dumps(payload.get("model_profile", {}), ensure_ascii=False),
+            attempts_json=json.dumps(payload.get("attempts", []), ensure_ascii=False),
+            output_summary_json=json.dumps(payload.get("output_summary", {}), ensure_ascii=False),
+        )
+        return row.id
+
     def _persist_draft_and_review(
         self,
         *,
@@ -1631,12 +1719,19 @@ class WritingOrchestrator:
         context,
         writer_output: WriterOutput,
     ) -> ReviewVerdict:
-        return self.review_hub.review(
+        reviewer_skill_layers = self._select_skill_layers(
+            scope="reviewer",
+            stage_key="chapter_review",
+            task_family="review_chapter",
+        )
+        return self._call_with_compatible_kwargs(
+            self.review_hub.review,
             project_id=project_id,
             repo=repo,
             context=context,
             writer_output=writer_output,
             continuity_checker=checker,
+            reviewer_skill_layers=reviewer_skill_layers,
         )
 
     def _review_and_maybe_rewrite(
@@ -1653,6 +1748,16 @@ class WritingOrchestrator:
     ) -> tuple[WriterOutput, ReviewVerdict, bool]:
         current_context = context
         current_output = writer_output
+        current_writer_trace_id = self._save_prompt_trace_payload(
+            session=session,
+            updater=updater,
+            project_id=project_id,
+            prompt_trace=(
+                current_output.generation_meta.get("prompt_trace")
+                if isinstance(current_output.generation_meta, dict)
+                else {}
+            ),
+        )
         current_review = self._review_current_output(
             repo=repo,
             checker=checker,
@@ -1694,6 +1799,14 @@ class WritingOrchestrator:
                 ],
                 "forced_accept_applied": bool(current_review.forced_accept_applied),
             },
+        )
+        current_review_trace_id = self._save_prompt_trace_payload(
+            session=session,
+            updater=updater,
+            project_id=project_id,
+            prompt_trace=current_review.prompt_trace,
+            parent_trace_id=current_writer_trace_id,
+            decision_event_id=str(current_review_event.id or ""),
         )
         if current_review.verdict != "fail" or self.config.operation_mode == "checkpoint":
             return current_output, current_review, False
@@ -1745,6 +1858,7 @@ class WritingOrchestrator:
                     updater=updater,
                     paused_chapters=[],
                     frozen_artifacts=[],
+                    trace_stage_key="chapter_rewrite",
                 )
             except Exception as exc:  # noqa: BLE001
                 attempt_row = updater.save_chapter_rewrite_attempt(
@@ -1842,6 +1956,17 @@ class WritingOrchestrator:
                     )
                     return current_output, current_review, True
                 continue
+            rewritten_writer_trace_id = self._save_prompt_trace_payload(
+                session=session,
+                updater=updater,
+                project_id=project_id,
+                prompt_trace=(
+                    rewritten_output.generation_meta.get("prompt_trace")
+                    if isinstance(rewritten_output.generation_meta, dict)
+                    else {}
+                ),
+                parent_trace_id=current_review_trace_id,
+            )
             rewritten_review = self._review_current_output(
                 repo=repo,
                 checker=checker,
@@ -1939,11 +2064,20 @@ class WritingOrchestrator:
                 },
                 parent_event_id=str(repair_result_event.id or ""),
             )
+            current_review_trace_id = self._save_prompt_trace_payload(
+                session=session,
+                updater=updater,
+                project_id=project_id,
+                prompt_trace=rewritten_review.prompt_trace,
+                parent_trace_id=rewritten_writer_trace_id,
+                decision_event_id=str(current_review_event.id or ""),
+            )
             current_context = updated_context
             current_output = rewritten_output
             current_draft = rewritten_draft
             current_review = rewritten_review
             current_review_row = rewritten_review_row
+            current_writer_trace_id = rewritten_writer_trace_id
             if rewritten_review.verdict != "fail":
                 return rewritten_output, rewritten_review, False
         return current_output, current_review, bool(current_review.forced_accept_applied)
@@ -2878,10 +3012,16 @@ class WritingOrchestrator:
         updater: StateUpdater,
         paused_chapters: list[int],
         frozen_artifacts: list[str],
+        trace_stage_key: str = "chapter_draft",
     ) -> WriterOutput | None:
         max_attempts = max(1, int(self.config.blackbox_writer_attention_retries))
         last_error: Exception | None = None
         saw_transient_error = False
+        writer_skill_layers = self._select_skill_layers(
+            scope="writer",
+            stage_key=trace_stage_key,
+            task_family="write_chapter",
+        )
         for attempt in range(1, max_attempts + 1):
             if self._abort_requested():
                 return None
@@ -2904,7 +3044,12 @@ class WritingOrchestrator:
                         "model": model_name,
                     },
                 )
-                output = self.writer.write_chapter(context)
+                output = self._call_with_compatible_kwargs(
+                    self.writer.write_chapter,
+                    context,
+                    skill_layers=writer_skill_layers,
+                    trace_stage_key=trace_stage_key,
+                )
                 duration_ms = max(0, int((time.perf_counter() - started_at) * 1000))
                 self._record_model_fallback_payloads(
                     updater=updater,
@@ -3021,8 +3166,11 @@ class WritingOrchestrator:
                     time.sleep(delay)
         if last_error is not None:
             try:
-                preview_output = self.writer.write_preview_chapter(
+                preview_output = self._call_with_compatible_kwargs(
+                    self.writer.write_preview_chapter,
                     context,
+                    skill_layers=writer_skill_layers,
+                    trace_stage_key=trace_stage_key,
                     timeout_seconds=self.writer.scene_call_timeout_seconds,
                     max_attempts=3 if saw_transient_error else 2,
                     retry_on_timeout=True,

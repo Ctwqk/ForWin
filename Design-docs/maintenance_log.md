@@ -9,7 +9,54 @@
 - 如果改动尚未部署到 `8899`，必须明确写“未部署原因”和“切换条件”。
 - 旧的专项日志可保留，但关键结论需要汇总到这里。
 
+## 2026-04-21
+
+### V2.9.3 Skill Runtime 接入（Genesis / Writer / Reviewer / PromptTrace / ModelAdapter）
+
+把 `SKILL.md` 类工作流正式吸收到 ForWin 运行时里，作为内部 workflow layer，而不是外部插件。首批覆盖 `Genesis + Writer + Reviewer`，并同步引入 `ModelAdapter` 抽象。
+
+关键变化：
+
+- 新增 `forwin/skills/`：支持加载 `forwin_skills/**/SKILL.md`、按 `scope + stage_key + task_family` 路由、把技能编译成 prompt layers。
+- 新增首批内置 skills：Genesis 六阶段、writer `chapter-outline / scene-drafting / style-control`、reviewer `chapter-continuity / repair-plan`。
+- `BookGenesisService` 现在会在阶段生成 / refine / launch arc 规划前选择 skill layers，并把 `selected_skills / skill_summary / kind=skill` 写入 `PromptTrace`。
+- `ChapterWriter` 与 orchestrator 现在支持 writer skill layers；章节初稿、重写链都会落单独 writer trace，并通过 `parent_trace_id` 串起 review / rewrite 链路。
+- `HistoricalReviewHub` 支持 reviewer skill rubric，但技能只增强 review notes 和 repair guidance，不改写最终 `verdict`。
+- 新增 `ModelAdapter / ModelCapabilities`；现有 OpenAI-compatible LLM client 继续沿用原行为，但升级为 adapter 语义。
+- 新增全局 runtime/config 字段：`skill_runtime_enabled / skill_registry_path / skill_strictness / enabled_skill_groups / disabled_skill_ids`。
+- 新增设计文档：[V2_9_3_skill_runtime.md](/home/taiwei/.codex/worktrees/461a/ForWin/Design-docs/V2_9_3_skill_runtime.md)。
+
+验证：
+
+- `python3 -m py_compile forwin/model_adapter.py forwin/skills/__init__.py forwin/skills/models.py forwin/skills/policy.py forwin/skills/loader.py forwin/skills/registry.py forwin/skills/router.py forwin/skills/prompt_layer.py forwin/book_genesis.py forwin/writer/llm_client.py forwin/writer/chapter_writer.py forwin/writer/prompts.py forwin/reviewer/hub.py forwin/orchestrator/loop.py forwin/runtime_settings.py forwin/config.py tests/test_skill_runtime.py tests/test_book_genesis_flow.py tests/test_phase05_regressions.py`
+- `PYTHONPATH=. pytest -q tests/test_skill_runtime.py tests/test_book_genesis_flow.py tests/test_phase05_regressions.py`
+
+部署状态：未部署到 `8899`。原因：本轮先完成运行时接入、trace 持久化和本地回归，还没有执行容器重建。切换条件：先确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`，再执行 `docker compose build forwin` 与 `docker compose up -d forwin`。
+
 ## 2026-04-20
+
+### V2.9.2A 文化命名生成器接入（culture lexicon / Genesis 自动命名 / 前端一键生成）
+
+把文明词库命名生成器正式接进 Genesis：文化背景可以声明命名文明与叠加文明，系统生成 map/story 时会带命名辅助；前端也能在需要名字的字段上一键随机生成。
+
+关键变化：
+
+- 新增 `forwin/naming/culture_name_generator.py`，内置 `中华 / 维京 / 罗马 / 西欧/英国 / 南美/拉丁 / 基督教 / 穆斯林` 词库与混合文明命名逻辑。
+- `world_bible.culture_profiles[]` 新增 `generator_civilization / generator_overlays`；normalize 会自动补人名、地区名、地点名样例。
+- 新增 Genesis 名称生成接口：`POST /api/projects/{project_id}/genesis/generate-name`，可基于当前文化背景为字段返回建议值，不直接覆写 revision。
+- Genesis 前端在 `character_name_examples / region_name_examples / location_name_examples`、角色名、势力名、对手名、小世界名、地区名、地点名旁新增 `自动生成` 按钮。
+- system stage generation 现在会把文化命名辅助注入 `map / story_engine` prompt；fallback map/story 也会优先尝试走文化命名生成器，而不是只用硬编码占位名。
+
+验证：
+
+- `python3 -m py_compile forwin/naming/__init__.py forwin/naming/culture_name_generator.py forwin/book_genesis.py forwin/api_schemas.py forwin/api_project_ops.py forwin/api_project_routes.py forwin/api_route_registry.py tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py`
+- `PYTHONPATH=. pytest -q tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py`
+
+结果：
+
+- `12 passed`
+
+部署状态：未部署到 `8899`。原因：本轮完成代码、规格和本地回归，但还没有重建 `forwin` 容器。切换条件：先确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`，再执行 `docker compose build forwin` 与 `docker compose up -d forwin`。
 
 ### V2.9.2A 文化背景与命名体系骨架（culture profiles / culture refs）
 

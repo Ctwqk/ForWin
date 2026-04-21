@@ -17,6 +17,14 @@ except ImportError:
     _USES_BASE_SETTINGS = False
 
 
+def _csv_list(value: str | None) -> list[str]:
+    return [
+        item.strip()
+        for item in str(value or "").split(",")
+        if item.strip()
+    ]
+
+
 def _env_values() -> dict[str, object]:
     return {
         "db_path": os.environ.get("FORWIN_DB_PATH", "data/novel.db"),
@@ -83,6 +91,11 @@ def _env_values() -> dict[str, object]:
         "band_warn_action": os.environ.get("BAND_WARN_ACTION", "pause"),
         "manual_checkpoints_enabled": os.environ.get("MANUAL_CHECKPOINTS_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
         "future_constraints_enabled": os.environ.get("FUTURE_CONSTRAINTS_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
+        "skill_runtime_enabled": os.environ.get("FORWIN_SKILL_RUNTIME_ENABLED", "true").strip().lower() not in {"0", "false", "no"},
+        "skill_registry_path": os.environ.get("FORWIN_SKILL_REGISTRY_PATH", "forwin_skills"),
+        "skill_strictness": os.environ.get("FORWIN_SKILL_STRICTNESS", "normal"),
+        "enabled_skill_groups": _csv_list(os.environ.get("FORWIN_ENABLED_SKILL_GROUPS", "")),
+        "disabled_skill_ids": _csv_list(os.environ.get("FORWIN_DISABLED_SKILL_IDS", "")),
         "default_scene_count": int(os.environ.get("DEFAULT_SCENE_COUNT", "3")),
         "max_scene_count": int(os.environ.get("MAX_SCENE_COUNT", "4")),
         "context_budget_chars": int(os.environ.get("CONTEXT_BUDGET_CHARS", "6000")),
@@ -167,6 +180,11 @@ class _ConfigFields:
     band_warn_action: str = "pause"
     manual_checkpoints_enabled: bool = True
     future_constraints_enabled: bool = True
+    skill_runtime_enabled: bool = True
+    skill_registry_path: str = "forwin_skills"
+    skill_strictness: str = "normal"
+    enabled_skill_groups: list[str] = []
+    disabled_skill_ids: list[str] = []
     governance_task_id: str = ""
     governance_causal_root_id: str = ""
     llm_fallback_profiles: list[dict[str, str]] = []

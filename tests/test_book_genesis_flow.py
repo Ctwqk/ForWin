@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -12,9 +13,11 @@ import forwin.api as api_module
 from forwin.api_schemas import (
     BookGenesisPatchRequest,
     BookGenesisRefineRequest,
+    BookGenesisNameGenerateRequest,
     BookGenesisStageRunRequest,
     ProjectCreateRequest,
 )
+from forwin.book_genesis import BookGenesisService
 from forwin.book_genesis import StaleGenesisRevisionError
 from forwin.config import Config
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -22,6 +25,7 @@ from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.orchestrator.phase24 import ArcEnvelopeManager
 from forwin.runtime_settings import RuntimeSettingsStore
+from forwin.skills import build_skill_runtime_components
 from forwin.state.updater import StateUpdater
 
 
@@ -765,6 +769,155 @@ class BookGenesisFlowTests(unittest.TestCase):
                     )
             finally:
                 api_module._close_genesis_service(service)
+
+    def test_generate_project_genesis_name_uses_culture_profile_generator(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {
+                    "title": "命名引擎测试书",
+                    "premise": "不同文明风格需要可复用的命名生成。",
+                    "genre": "玄幻",
+                    "target_total_chapters": 12,
+                }
+            )
+        )
+
+        api_module.patch_project_genesis(
+            created.project_id,
+            BookGenesisPatchRequest.model_validate(
+                {
+                    "world_bible": {
+                        "overview": "多文明并存的长篇舞台。",
+                        "culture_profiles": [
+                            {
+                                "id": "culture-sinic",
+                                "name": "中华风",
+                                "summary": "偏礼制、旧城、宗门气息。",
+                                "inspiration": "中华",
+                                "generator_civilization": "中华",
+                                "generator_overlays": ["基督教"],
+                                "character_name_examples": [],
+                                "region_name_examples": [],
+                                "location_name_examples": [],
+                            }
+                        ],
+                    }
+                }
+            ),
+        )
+
+        response = api_module.generate_project_genesis_name(
+            created.project_id,
+            BookGenesisNameGenerateRequest.model_validate(
+                {
+                    "stage_key": "world",
+                    "target_path": "culture_profiles[0]",
+                    "field_path": "character_name_examples",
+                    "kind": "person",
+                    "count": 4,
+                    "nonce": "test-001",
+                }
+            ),
+        )
+
+        self.assertEqual(response.stage_key, "world")
+        self.assertEqual(response.kind, "person")
+        self.assertEqual(response.culture_profile_id, "culture-sinic")
+        self.assertEqual(response.generator_civilization, "中华+基督教")
+        self.assertEqual(len(response.suggestions), 4)
+        self.assertEqual(response.applied_value, response.suggestions)
+        self.assertTrue(all(isinstance(item, str) and item.strip() for item in response.suggestions))
+
+    def test_genesis_trace_records_selected_skills(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {
+                    "title": "Genesis Skill Trace 书",
+                    "premise": "先生成世界观，再检查 Skill Trace。",
+                    "genre": "玄幻",
+                    "target_total_chapters": 8,
+                }
+            )
+        )
+
+        class FakeGenesisLLM:
+            api_key = "test-key"
+            profile_id = "default"
+            profile_name = "Default"
+            model = "fake-model"
+            base_url = "http://example.invalid"
+
+            def chat(self, messages, **kwargs):  # noqa: ANN001, ANN003
+                return json.dumps(
+                    {
+                        "overview": "根世界观已建立。",
+                        "axioms": ["力量必须付出代价。"],
+                        "history_slice": "旧秩序正在松动。",
+                        "naming_style": "中文网文风格。",
+                        "forbidden_zones": [],
+                        "culture_profiles": [
+                            {
+                                "id": "culture-main-stage",
+                                "name": "主舞台文化",
+                                "summary": "用于 Skill Trace 测试。",
+                                "inspiration": "中华",
+                                "generator_civilization": "中华",
+                                "generator_overlays": [],
+                                "character_name_examples": ["林烬"],
+                                "region_name_examples": ["旧城核心区"],
+                                "location_name_examples": ["旧城渡口"],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+
+        _registry, router, prompt_layer_builder = build_skill_runtime_components(
+            root=Path(self.skill_root if hasattr(self, "skill_root") else Path(__file__).resolve().parents[1] / "forwin_skills"),
+            enabled=True,
+            strictness="normal",
+        )
+        with self.session_factory() as session:
+            updater = StateUpdater(session)
+            project = session.get(Project, created.project_id)
+            revision = session.get(BookGenesisRevision, created.active_genesis_revision_id)
+            assert project is not None
+            assert revision is not None
+            service = BookGenesisService(
+                llm_client=FakeGenesisLLM(),
+                skill_router=router,
+                skill_prompt_layer_builder=prompt_layer_builder,
+            )
+            revision, _trace = service.generate_stage(
+                session=session,
+                updater=updater,
+                project=project,
+                revision=revision,
+                stage_key="world",
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            project = session.get(Project, created.project_id)
+            assert project is not None
+            revision = session.get(BookGenesisRevision, project.active_genesis_revision_id)
+            assert revision is not None
+            detail_pack = json.loads(revision.pack_json)
+        self.assertEqual(detail_pack.get("world_bible", {}).get("overview"), "根世界观已建立。")
+        with self.session_factory() as session:
+            trace = session.execute(
+                select(PromptTrace)
+                .where(PromptTrace.project_id == created.project_id, PromptTrace.stage_key == "world")
+                .order_by(PromptTrace.created_at.desc(), PromptTrace.id.desc())
+                .limit(1)
+            ).scalar_one()
+
+        prompt_layers = json.loads(trace.prompt_layers_json)
+        input_snapshot = json.loads(trace.input_snapshot_json)
+        output_summary = json.loads(trace.output_summary_json)
+        self.assertTrue(input_snapshot.get("selected_skills"))
+        self.assertTrue(output_summary.get("skill_summary"))
+        self.assertTrue(any(item.get("kind") == "skill" for item in prompt_layers))
 
 
 if __name__ == "__main__":

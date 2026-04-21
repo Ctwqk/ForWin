@@ -1,11 +1,40 @@
 from __future__ import annotations
 
+import re
+import shutil
+import os
+import subprocess
+import tempfile
 import unittest
 
-from forwin.api_pages import render_home_page
+from forwin.api_pages import render_home_page, render_publishers_page
 
 
 class ApiPagesRenderingTests(unittest.TestCase):
+    def _assert_rendered_inline_scripts_parse(self, html: str) -> None:
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is required for rendered page JavaScript syntax checks")
+
+        scripts = re.findall(r"<script(?:[^>]*)>(.*?)</script>", html, flags=re.DOTALL)
+        self.assertTrue(scripts, "expected rendered page to include inline scripts")
+
+        with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as handle:
+            handle.write("\n\n".join(scripts))
+            script_path = handle.name
+
+        try:
+            result = subprocess.run(
+                [node, "--check", script_path],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            os.unlink(script_path)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_home_page_uses_incremental_drawer_refresh_and_hides_raw_planned_label(self) -> None:
         html = render_home_page(
             has_api_key=False,
@@ -87,12 +116,37 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("character_name_examples", html)
         self.assertIn("region_name_examples", html)
         self.assertIn("location_name_examples", html)
+        self.assertIn("generator_civilization", html)
+        self.assertIn("generator_overlays", html)
         self.assertIn("source: 'culture_profiles'", html)
         self.assertIn("culture_profile_id", html)
+        self.assertIn("name_generation_kind", html)
+        self.assertIn("generateGenesisFieldValue", html)
+        self.assertIn("自动生成", html)
+        self.assertIn("/genesis/generate-name", html)
         self.assertIn("Arc 蓝图默认仍沿用自动生成", html)
         self.assertIn("const loc = Array.isArray(item.loc) ? item.loc.join('.') : '';", html)
         self.assertIn("JSON.stringify(detail, null, 2)", html)
         self.assertNotIn("第${chapter.chapter_number}章 ${chapter.status}", html)
+
+    def test_home_page_renders_javascript_that_passes_node_syntax_check(self) -> None:
+        html = render_home_page(
+            has_api_key=True,
+            base_url="https://api.minimaxi.com/v1",
+            model="MiniMax-M2.7",
+            operation_mode="blackbox",
+            freeze_failed_candidates=True,
+        )
+
+        self._assert_rendered_inline_scripts_parse(html)
+
+    def test_publishers_page_renders_javascript_that_passes_node_syntax_check(self) -> None:
+        html = render_publishers_page(
+            backend_ready={"extension_api_key_configured": True},
+            extension_install_path="browser_extension/forwin-publisher",
+        )
+
+        self._assert_rendered_inline_scripts_parse(html)
 
 
 if __name__ == "__main__":

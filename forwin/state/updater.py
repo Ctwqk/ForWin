@@ -56,6 +56,7 @@ from forwin.protocol import (
     TimeAdvance,
     WriterOutput,
 )
+from forwin.protocol.review import normalize_repair_scope
 
 from .repo import StateRepository
 from .query_helpers import load_latest_entity_states
@@ -1020,6 +1021,13 @@ class StateUpdater:
         source_draft_id: str,
         result_draft_id: str,
         result_verdict: str,
+        result_review_id: str = "",
+        failure_reason: str = "",
+        verification: dict[str, object] | None = None,
+        source_chapter_plan: dict[str, object] | None = None,
+        result_chapter_plan: dict[str, object] | None = None,
+        source_band_plan: dict[str, object] | None = None,
+        result_band_plan: dict[str, object] | None = None,
         forced_accept_applied: bool,
     ) -> ChapterRewriteAttempt:
         row = ChapterRewriteAttempt(
@@ -1028,11 +1036,18 @@ class StateUpdater:
             chapter_number=chapter_number,
             attempt_no=attempt_no,
             trigger_review_id=trigger_review_id,
-            repair_scope=repair_scope,
+            repair_scope=normalize_repair_scope(repair_scope),
             design_patch_json=json.dumps(design_patch, ensure_ascii=False),
             source_draft_id=source_draft_id,
             result_draft_id=result_draft_id,
             result_verdict=result_verdict,
+            result_review_id=result_review_id,
+            failure_reason=str(failure_reason or ""),
+            verification_json=json.dumps(verification or {}, ensure_ascii=False),
+            source_chapter_plan_json=json.dumps(source_chapter_plan or {}, ensure_ascii=False),
+            result_chapter_plan_json=json.dumps(result_chapter_plan or {}, ensure_ascii=False),
+            source_band_plan_json=json.dumps(source_band_plan or {}, ensure_ascii=False),
+            result_band_plan_json=json.dumps(result_band_plan or {}, ensure_ascii=False),
             forced_accept_applied=forced_accept_applied,
         )
         self.session.add(row)
@@ -1048,6 +1063,11 @@ class StateUpdater:
         project_id: str,
         chapter_number: int,
         status: str,
+        *,
+        acceptance_mode: str | None = None,
+        repair_attempt_count: int | None = None,
+        residual_review_issues: list[dict[str, object]] | None = None,
+        canon_risk_level: str | None = None,
     ) -> None:
         """Update the status field on a ChapterPlan row."""
         plan = self._repo.get_chapter_plan(project_id, chapter_number)
@@ -1059,5 +1079,16 @@ class StateUpdater:
             )
             return
         plan.status = status
+        if acceptance_mode is not None:
+            plan.acceptance_mode = str(acceptance_mode or "")
+        if repair_attempt_count is not None:
+            plan.repair_attempt_count = max(0, int(repair_attempt_count or 0))
+        if residual_review_issues is not None:
+            plan.residual_review_issues_json = json.dumps(
+                residual_review_issues,
+                ensure_ascii=False,
+            )
+        if canon_risk_level is not None:
+            plan.canon_risk_level = str(canon_risk_level or "")
         self.session.add(plan)
         self.session.flush()

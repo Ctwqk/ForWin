@@ -40,6 +40,7 @@ from forwin.models.phase import (
     ArcEnvelopeAnalysis,
     ArcStructureDraft,
     BandExperiencePlan,
+    ChapterRewriteAttempt,
     ProjectReplanEvent,
     ProjectStageAnalysis,
     ProvisionalBandExecution,
@@ -51,6 +52,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.models.thread import PlotThread
+from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
     load_latest_arc_envelope_analysis_by_project,
@@ -1168,6 +1170,17 @@ def build_project_detail(
         select(ChapterPlan).where(ChapterPlan.project_id == project_id).order_by(ChapterPlan.chapter_number)
     ).scalars().all()
     draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
+    latest_attempt_map: dict[int, ChapterRewriteAttempt] = {}
+    for attempt in session.execute(
+        select(ChapterRewriteAttempt)
+        .where(ChapterRewriteAttempt.project_id == project_id)
+        .order_by(
+            ChapterRewriteAttempt.chapter_number.asc(),
+            ChapterRewriteAttempt.attempt_no.desc(),
+            ChapterRewriteAttempt.created_at.desc(),
+        )
+    ).scalars().all():
+        latest_attempt_map.setdefault(int(attempt.chapter_number or 0), attempt)
     upload_stats = load_project_upload_stats(session, [project_id]).get(project_id, {})
     chapter_infos = [
         ChapterInfo(
@@ -1176,6 +1189,13 @@ def build_project_detail(
             status=plan.status,
             char_count=draft_map.get(plan.id).char_count if draft_map.get(plan.id) else 0,
             summary=draft_map.get(plan.id).summary if draft_map.get(plan.id) else "",
+            acceptance_mode=str(getattr(plan, "acceptance_mode", "") or ""),
+            repair_attempt_count=int(getattr(plan, "repair_attempt_count", 0) or 0),
+            canon_risk_level=str(getattr(plan, "canon_risk_level", "") or ""),
+            latest_repair_scope=normalize_repair_scope(
+                getattr(latest_attempt_map.get(plan.chapter_number), "repair_scope", "") or "",
+                default="",
+            ),
         )
         for plan in plans
     ]

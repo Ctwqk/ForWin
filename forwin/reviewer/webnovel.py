@@ -536,7 +536,7 @@ class WebNovelExperienceReviewer:
                     "分值 0 到 1。\n"
                     "issues 每项必须包含：rule_name、severity、description、issue_type、target_scope、"
                     "evidence_refs、suggested_fix。warn/fail issue 的 evidence_refs 必须全部来自允许列表。\n"
-                    "repair_instruction 可以为 null，否则必须包含：repair_scope(scene/band/arc)、"
+                    "repair_instruction 可以为 null，否则必须包含：repair_scope(draft/chapter_plan/band_plan)、"
                     "failure_type、must_fix、must_preserve、design_patch、evidence_refs。\n"
                     "若章节拖但仍有问题梯子/微进展/关系变化/规则稳态，只能给 warn 或 pass，不能给 fail。\n"
                     "只有当 no-payoff stall 连续成立，或出现因果/stakes/规则可读性断裂且能指向证据时，才给 fail。\n"
@@ -1138,12 +1138,19 @@ class WebNovelExperienceReviewer:
         delivered_tags: list[str],
         evidence_refs: list[str],
     ) -> RepairInstruction:
-        scope_rank = {"scene": 1, "band": 2, "arc": 3}
-        scope = max(
-            (issue.target_scope for issue in issues if issue.severity == "error"),
-            key=lambda item: scope_rank.get(item, 1),
-            default="scene",
-        )
+        scope_rank = {"draft": 1, "chapter_plan": 2, "band_plan": 3}
+        error_scopes = [
+            (
+                "band_plan"
+                if str(issue.target_scope or "") == "arc"
+                else "chapter_plan"
+                if str(issue.target_scope or "") == "band"
+                else "draft"
+            )
+            for issue in issues
+            if issue.severity == "error"
+        ]
+        scope = max(error_scopes, key=lambda item: scope_rank.get(item, 1), default="draft")
         issue_types = {issue.issue_type for issue in issues if issue.severity == "error"}
         failure_type = "mixed" if len(issue_types) != 1 else next(iter(issue_types))
         plan = context.chapter_experience_plan

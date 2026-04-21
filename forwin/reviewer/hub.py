@@ -173,7 +173,7 @@ class HistoricalReviewHub:
         context: ChapterContextPack,
     ) -> RepairInstruction:
         return RepairInstruction(
-            repair_scope="scene",
+            repair_scope="draft",
             failure_type="continuity",
             must_fix=[issue.description for issue in continuity_issues if issue.severity == "error"],
             must_preserve=[
@@ -194,7 +194,7 @@ class HistoricalReviewHub:
         context: ChapterContextPack,
     ) -> RepairInstruction:
         return RepairInstruction(
-            repair_scope="scene",
+            repair_scope="draft",
             failure_type="mixed",
             must_fix=[issue.description for issue in governance_issues if issue.severity == "error"],
             must_preserve=[
@@ -223,7 +223,7 @@ class HistoricalReviewHub:
         if base_instruction is None:
             return webnovel_instruction
 
-        scope_rank = {"scene": 1, "band": 2, "arc": 3}
+        scope_rank = {"draft": 1, "chapter_plan": 2, "band_plan": 3}
         merged_scope = max(
             [base_instruction.repair_scope, webnovel_instruction.repair_scope],
             key=lambda item: scope_rank.get(item, 1),

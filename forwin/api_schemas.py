@@ -446,6 +446,10 @@ class ChapterInfo(BaseModel):
     summary: str = ""
     has_draft: bool = False
     has_review: bool = False
+    acceptance_mode: str = ""
+    repair_attempt_count: int = 0
+    canon_risk_level: str = ""
+    latest_repair_scope: str = ""
 
 
 class ProjectDetail(ProjectArcSnapshotFields):
@@ -664,6 +668,10 @@ class ChapterDetail(BaseModel):
     summary: str
     status: str
     version: int = 1
+    acceptance_mode: str = ""
+    repair_attempt_count: int = 0
+    canon_risk_level: str = ""
+    residual_review_issues: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChapterReviewIssueInfo(BaseModel):
@@ -686,6 +694,39 @@ class LintSignalInfo(BaseModel):
     line: int = 0
     column: int = 0
     evidence_refs: list[str] = Field(default_factory=list)
+
+
+class RepairVerificationInfo(BaseModel):
+    fixed_all_must_fix: bool = False
+    preserved_all_must_preserve: bool = False
+    unfixed: list[str] = Field(default_factory=list)
+    broken_preserve_constraints: list[str] = Field(default_factory=list)
+    new_risks: list[str] = Field(default_factory=list)
+    verifier_mode: str = ""
+
+
+class FinalGateDecisionInfo(BaseModel):
+    decision: str = "repair_exhausted"
+    forceable: bool = False
+    reason: str = ""
+    canon_risk: str = ""
+    residual_issues: list[str] = Field(default_factory=list)
+    requires_human: bool = True
+
+
+class ChapterRewriteAttemptInfo(BaseModel):
+    attempt_no: int
+    repair_scope: str = ""
+    result_verdict: str = ""
+    result_review_id: str = ""
+    failure_reason: str = ""
+    forced_accept_applied: bool = False
+    design_patch: dict[str, Any] = Field(default_factory=dict)
+    verification: RepairVerificationInfo | None = None
+    source_chapter_plan: dict[str, Any] = Field(default_factory=dict)
+    result_chapter_plan: dict[str, Any] = Field(default_factory=dict)
+    source_band_plan: dict[str, Any] = Field(default_factory=dict)
+    result_band_plan: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChapterReviewDetail(BaseModel):
@@ -714,6 +755,14 @@ class ChapterReviewDetail(BaseModel):
     rewrite_attempt_count: int = 0
     latest_repair_scope: str = ""
     forced_accept_applied: bool = False
+    acceptance_mode: str = ""
+    repair_attempt_count: int = 0
+    canon_risk_level: str = ""
+    residual_review_issues: list[ChapterReviewIssueInfo] = Field(default_factory=list)
+    repair_verification: RepairVerificationInfo | None = None
+    final_gate_decision: FinalGateDecisionInfo | None = None
+    repair_exhausted: bool = False
+    rewrite_attempts: list[ChapterRewriteAttemptInfo] = Field(default_factory=list)
     decision_refs: list[DecisionEventInfo] = Field(default_factory=list)
 
 

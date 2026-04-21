@@ -798,9 +798,9 @@ class Phase05RegressionTests(unittest.TestCase):
                         state_changes=[],
                         new_events=[
                             EventCandidate(
-                                summary="未知角色闯入",
+                                summary="路人闯入",
                                 significance="major",
-                                involved_entity_names=["不存在的人"],
+                                involved_entity_names=["路人"],
                                 roles=["protagonist"],
                             )
                         ],
@@ -810,6 +810,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
                 orchestrator.arc_director.plan_arc = fake_plan_arc
                 orchestrator.writer.write_chapter = fake_write_chapter
+                orchestrator.review_hub.review = lambda **kwargs: ReviewVerdict(
+                    verdict="pass",
+                    issues=[],
+                )
                 with patch.object(
                     StateUpdater,
                     "apply_thread_beats",
@@ -876,9 +880,9 @@ class Phase05RegressionTests(unittest.TestCase):
                         state_changes=[],
                         new_events=[
                             EventCandidate(
-                                summary="未知角色闯入",
+                                summary="路人闯入",
                                 significance="major",
-                                involved_entity_names=["不存在的人"],
+                                involved_entity_names=["路人"],
                                 roles=["protagonist"],
                             )
                         ],
@@ -888,6 +892,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
                 orchestrator.arc_director.plan_arc = fake_plan_arc
                 orchestrator.writer.write_chapter = fake_write_chapter
+                orchestrator.review_hub.review = lambda **kwargs: ReviewVerdict(
+                    verdict="pass",
+                    issues=[],
+                )
 
                 result = orchestrator.run("p", "g", 1)
 
@@ -913,11 +921,319 @@ class Phase05RegressionTests(unittest.TestCase):
                 orchestrator.llm_client.close()
                 orchestrator.engine.dispose()
 
-            self.assertEqual(result.status, "needs_review")
-            self.assertTrue(result.frozen_artifacts)
-            self.assertEqual(statuses, [(1, "needs_review")])
+            self.assertEqual(result.status, "completed")
+            self.assertFalse(result.frozen_artifacts)
+            self.assertEqual(statuses, [(1, "accepted")])
             self.assertGreaterEqual(draft_count, 1)
             self.assertEqual(event_count, 0)
+
+    def test_blackbox_hard_review_fail_reaches_manual_gate_after_three_repairs(self) -> None:
+        class HardFailReviewHub:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def review(self, **kwargs) -> ReviewVerdict:  # noqa: ANN003
+                self.calls += 1
+                return ReviewVerdict(
+                    verdict="fail",
+                    issues=[
+                        ContinuityIssue(
+                            rule_name="sub_world_unknown_named_entity",
+                            severity="error",
+                            description="命名角色「不存在的人」未在当前 chapter 的 subworld 准入名单中。",
+                            reviewer="continuity",
+                            issue_type="subworld_admission",
+                            target_scope="chapter",
+                            evidence_refs=["chapter=1", "entity=不存在的人"],
+                        )
+                    ],
+                    repair_instruction=RepairInstruction(
+                        repair_scope="scene",
+                        failure_type="continuity",
+                        must_fix=["命名角色「不存在的人」未在当前 chapter 的 subworld 准入名单中。"],
+                        must_preserve=["第一章", "开场"],
+                        design_patch={"continuity_focus": ["sub_world_unknown_named_entity"]},
+                        evidence_refs=["chapter=1", "entity=不存在的人"],
+                    ),
+                )
+
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "hard-final-gate.db")
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="blackbox",
+                )
+            )
+            apply_calls = {"count": 0}
+            try:
+                orchestrator.arc_director.plan_arc = lambda premise, genre, num_chapters: {
+                    "arc_synopsis": "hard gate",
+                    "setting_summary": "无",
+                    "chapters": [{"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]}],
+                    "characters": [],
+                    "locations": [],
+                    "factions": [],
+                    "relations": [],
+                    "plot_threads": [],
+                    "initial_time": {"label": "开始", "description": "开始"},
+                }
+                orchestrator.writer.write_chapter = lambda context: WriterOutput(
+                    chapter_number=context.chapter_number,
+                    title=f"第{context.chapter_number}章",
+                    body="正文" * 900,
+                    char_count=1800,
+                    end_of_chapter_summary="ok",
+                    state_changes=[],
+                    new_events=[],
+                    thread_beats=[],
+                    time_advance=None,
+                )
+                orchestrator.review_hub = HardFailReviewHub()
+                orchestrator._apply_canon_candidate = lambda **kwargs: apply_calls.__setitem__("count", apply_calls["count"] + 1) or None
+
+                result = orchestrator.run("p", "g", 1)
+
+                session = get_session_factory(get_engine(db_path))()
+                try:
+                    attempts = session.execute(
+                        select(ChapterRewriteAttempt).order_by(ChapterRewriteAttempt.attempt_no)
+                    ).scalars().all()
+                    latest_draft = session.execute(
+                        select(ChapterDraft).order_by(ChapterDraft.version.desc()).limit(1)
+                    ).scalar_one()
+                    review = session.execute(
+                        select(ChapterReview)
+                        .where(ChapterReview.draft_id == latest_draft.id)
+                        .order_by(ChapterReview.created_at.desc())
+                        .limit(1)
+                    ).scalar_one()
+                    plan = session.execute(select(ChapterPlan)).scalar_one()
+                finally:
+                    session.close()
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+            self.assertEqual(result.status, "needs_review")
+            self.assertEqual(len(attempts), 3)
+            self.assertEqual([item.repair_scope for item in attempts], ["draft", "chapter_plan", "band_plan"])
+            review_meta = json.loads(review.review_meta_json)
+            self.assertEqual((review_meta.get("final_gate_decision") or {}).get("decision"), "manual_review_required")
+            self.assertEqual((review_meta.get("final_gate_decision") or {}).get("canon_risk"), "high")
+            self.assertEqual(plan.status, "needs_review")
+            self.assertEqual(plan.repair_attempt_count, 3)
+            self.assertEqual(plan.canon_risk_level, "high")
+            self.assertEqual(apply_calls["count"], 0)
+
+    def test_blackbox_draft_repair_uses_transient_overlay_without_persisting_plan(self) -> None:
+        class DraftThenPassReviewHub:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def review(self, **kwargs) -> ReviewVerdict:  # noqa: ANN003
+                self.calls += 1
+                if self.calls == 1:
+                    return ReviewVerdict(
+                        verdict="fail",
+                        issues=[
+                            ContinuityIssue(
+                                rule_name="weak_hook",
+                                severity="error",
+                                description="章末钩子偏弱",
+                                reviewer="webnovel_experience",
+                                issue_type="hook_failure",
+                                target_scope="scene",
+                                evidence_refs=["tail:正文"],
+                            )
+                        ],
+                        repair_instruction=RepairInstruction(
+                            repair_scope="scene",
+                            failure_type="hook_failure",
+                            must_fix=["章末钩子偏弱"],
+                            must_preserve=["第一章", "开场"],
+                            design_patch={
+                                "hook_type": "hard_cliffhanger",
+                                "question_hook": "新的悬念问题",
+                                "title": "不应持久化的新标题",
+                                "chapter_goals": ["不应持久化的新目标"],
+                            },
+                            evidence_refs=["tail:正文"],
+                        ),
+                    )
+                return ReviewVerdict(verdict="pass", issues=[])
+
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "draft-overlay.db")
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="blackbox",
+                )
+            )
+            try:
+                orchestrator.arc_director.plan_arc = lambda premise, genre, num_chapters: {
+                    "arc_synopsis": "draft overlay",
+                    "setting_summary": "无",
+                    "chapters": [{"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]}],
+                    "characters": [],
+                    "locations": [],
+                    "factions": [],
+                    "relations": [],
+                    "plot_threads": [],
+                    "initial_time": {"label": "开始", "description": "开始"},
+                }
+                orchestrator.writer.write_chapter = lambda context: WriterOutput(
+                    chapter_number=context.chapter_number,
+                    title=f"第{context.chapter_number}章",
+                    body="正文" * 900,
+                    char_count=1800,
+                    end_of_chapter_summary="ok",
+                    state_changes=[],
+                    new_events=[],
+                    thread_beats=[],
+                    time_advance=None,
+                )
+                orchestrator.review_hub = DraftThenPassReviewHub()
+
+                result = orchestrator.run("p", "g", 1)
+
+                session = get_session_factory(get_engine(db_path))()
+                try:
+                    attempts = session.execute(
+                        select(ChapterRewriteAttempt).order_by(ChapterRewriteAttempt.attempt_no)
+                    ).scalars().all()
+                    plan = session.execute(select(ChapterPlan)).scalar_one()
+                finally:
+                    session.close()
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(len(attempts), 1)
+            self.assertEqual(attempts[0].repair_scope, "draft")
+            self.assertEqual(plan.status, "accepted")
+            self.assertEqual(plan.title, "第一章")
+            self.assertEqual(plan.goals_json, json.dumps(["推进主线"], ensure_ascii=False))
+            persisted_experience_plan = json.loads(plan.experience_plan_json)
+            self.assertNotEqual(persisted_experience_plan.get("question_hook"), "新的悬念问题")
+            result_chapter_plan = json.loads(attempts[0].result_chapter_plan_json)
+            self.assertTrue(result_chapter_plan["transient_overlay"])
+            self.assertEqual(result_chapter_plan["title"], "第一章")
+            self.assertEqual(result_chapter_plan["experience_plan"]["hook_type"], "hard_cliffhanger")
+            self.assertEqual(result_chapter_plan["experience_plan"]["question_hook"], "新的悬念问题")
+
+    def test_band_plan_repair_rolls_back_when_lightweight_provisional_fails(self) -> None:
+        class AlwaysFailReviewHub:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def review(self, **kwargs) -> ReviewVerdict:  # noqa: ANN003
+                self.calls += 1
+                return ReviewVerdict(
+                    verdict="fail",
+                    issues=[
+                        ContinuityIssue(
+                            rule_name="progress_stall",
+                            severity="error",
+                            description="推进停滞",
+                            reviewer="webnovel_experience",
+                            issue_type="stall",
+                            target_scope="band",
+                            evidence_refs=["progress_markers=['推进主线']"],
+                        )
+                    ],
+                    repair_instruction=RepairInstruction(
+                        repair_scope="scene" if self.calls == 1 else "band" if self.calls == 2 else "arc",
+                        failure_type="stall",
+                        must_fix=["推进停滞"],
+                        must_preserve=["第一章", "开场"],
+                        design_patch={
+                            "stall_guard_max_gap": 1,
+                            "curiosity_beats": [
+                                {
+                                    "chapter_hint": 1,
+                                    "question_open": "新的危险是什么",
+                                    "question_resolve": "确认局部真相",
+                                    "escalated_question": "真正的幕后压力是什么",
+                                }
+                            ],
+                        },
+                        evidence_refs=["progress_markers=['推进主线']"],
+                    ),
+                )
+
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "band-plan-rollback.db")
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="blackbox",
+                )
+            )
+            try:
+                orchestrator.arc_director.plan_arc = lambda premise, genre, num_chapters: {
+                    "arc_synopsis": "band rollback",
+                    "setting_summary": "无",
+                    "chapters": [
+                        {"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]},
+                        {"chapter_number": 2, "title": "第二章", "one_line": "升级", "goals": ["放大风险"]},
+                    ],
+                    "characters": [],
+                    "locations": [],
+                    "factions": [],
+                    "relations": [],
+                    "plot_threads": [],
+                    "initial_time": {"label": "开始", "description": "开始"},
+                }
+                orchestrator.writer.write_chapter = lambda context: WriterOutput(
+                    chapter_number=context.chapter_number,
+                    title=f"第{context.chapter_number}章",
+                    body="正文" * 900,
+                    char_count=1800,
+                    end_of_chapter_summary="ok",
+                    state_changes=[],
+                    new_events=[],
+                    thread_beats=[],
+                    time_advance=None,
+                )
+                orchestrator.review_hub = AlwaysFailReviewHub()
+                orchestrator._run_provisional_band_preview = lambda **kwargs: SimpleNamespace(
+                    aggregate_verdict="fail"
+                )
+
+                result = orchestrator.run("p", "g", 2)
+
+                session = get_session_factory(get_engine(db_path))()
+                try:
+                    band_plan = session.execute(
+                        select(BandExperiencePlan).order_by(BandExperiencePlan.created_at.desc()).limit(1)
+                    ).scalar_one()
+                    chapter_plans = session.execute(
+                        select(ChapterPlan).order_by(ChapterPlan.chapter_number.asc())
+                    ).scalars().all()
+                    attempts = session.execute(
+                        select(ChapterRewriteAttempt).order_by(ChapterRewriteAttempt.attempt_no.asc())
+                    ).scalars().all()
+                finally:
+                    session.close()
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+            self.assertEqual(result.status, "needs_review")
+            self.assertEqual([item.repair_scope for item in attempts], ["draft", "chapter_plan", "band_plan"])
+            self.assertNotIn("新的危险是什么", band_plan.schedule_json)
+            self.assertTrue(all("新的危险是什么" not in (plan.experience_plan_json or "") for plan in chapter_plans))
+            self.assertEqual(attempts[-1].failure_reason, "lightweight-provisional:fail")
+            self.assertTrue(json.loads(attempts[-1].result_band_plan_json).get("transient_overlay"))
 
     def test_orchestrator_can_accept_review_and_continue_project(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -6454,33 +6770,44 @@ class Phase05RegressionTests(unittest.TestCase):
 
             self.assertEqual(result.status, "needs_review")
             self.assertEqual(result.paused_chapters, [1])
-            self.assertEqual(len(attempts), 3)
+            self.assertEqual(len(attempts), 0)
             self.assertEqual(plan.status, "needs_review")
             self.assertEqual(apply_calls["count"], 0)
 
     def test_blackbox_exhausted_fail_force_accepts_after_third_rewrite(self) -> None:
-        class AlwaysFailReviewHub:
+        class SoftFailReviewHub:
+            def __init__(self):
+                self.calls = 0
+
             def review(self, **kwargs):
+                self.calls += 1
+                issue_specs = [
+                    ("hook_soft", "章末钩子偏软", "hook_failure", "scene", {"hook_type": "hard_cliffhanger"}),
+                    ("progress_stall", "推进仍偏慢", "stall", "band", {"progress_markers": ["推进主线"]}),
+                    ("immersion_anchor_missing", "沉浸感仍偏弱", "immersion", "band", {"immersion_anchors": ["雨声压着窗框"]}),
+                    ("reward_delivery_thin", "回报仍偏薄", "payoff_miss", "scene", {"planned_reward_tags": ["mystery", "payoff"]}),
+                ]
+                rule_name, description, issue_type, target_scope, design_patch = issue_specs[min(self.calls - 1, len(issue_specs) - 1)]
                 return ReviewVerdict(
                     verdict="fail",
                     issues=[
                         ContinuityIssue(
-                            rule_name="progress_stall",
+                            rule_name=rule_name,
                             severity="error",
-                            description="推进停滞",
+                            description=description,
                             reviewer="webnovel_experience",
-                            issue_type="stall",
-                            target_scope="band",
-                            evidence_refs=["progress_markers=['推进主线']"],
+                            issue_type=issue_type,
+                            target_scope=target_scope,
+                            evidence_refs=[f"repair-call={self.calls}"],
                         )
                     ],
                     repair_instruction=RepairInstruction(
-                        repair_scope="scene",
-                        failure_type="stall",
-                        must_fix=["推进停滞"],
+                        repair_scope="scene" if self.calls == 1 else "band" if self.calls == 2 else "arc",
+                        failure_type=issue_type,  # type: ignore[arg-type]
+                        must_fix=[description],
                         must_preserve=["第一章", "开场"],
-                        design_patch={"progress_markers": ["推进主线"]},
-                        evidence_refs=["progress_markers=['推进主线']"],
+                        design_patch=design_patch,
+                        evidence_refs=[f"repair-call={self.calls}"],
                     ),
                 )
 
@@ -6518,7 +6845,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     thread_beats=[],
                     time_advance=None,
                 )
-                orchestrator.review_hub = AlwaysFailReviewHub()
+                orchestrator.review_hub = SoftFailReviewHub()
 
                 def record_apply(**kwargs):
                     apply_calls["count"] += 1
@@ -6542,12 +6869,6 @@ class Phase05RegressionTests(unittest.TestCase):
                         .limit(1)
                     ).scalar_one()
                     plan = session.execute(select(ChapterPlan)).scalar_one()
-                    checkpoint = session.execute(
-                        select(BandCheckpoint)
-                        .where(BandCheckpoint.project_id == plan.project_id)
-                        .order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
-                        .limit(1)
-                    ).scalar_one()
                 finally:
                     session.close()
             finally:
@@ -6556,11 +6877,15 @@ class Phase05RegressionTests(unittest.TestCase):
 
             self.assertEqual(result.status, "paused")
             self.assertEqual(len(attempts), 3)
+            self.assertEqual([item.repair_scope for item in attempts], ["draft", "chapter_plan", "band_plan"])
             self.assertTrue(attempts[-1].forced_accept_applied)
-            self.assertTrue(json.loads(review.review_meta_json).get("forced_accept_applied"))
+            review_meta = json.loads(review.review_meta_json)
+            self.assertTrue(review_meta.get("forced_accept_applied"))
+            self.assertEqual((review_meta.get("final_gate_decision") or {}).get("decision"), "force_accept")
             self.assertEqual(plan.status, "accepted")
-            self.assertEqual(checkpoint.status, "fail")
-            self.assertIn("intra_band_consistency", checkpoint.issues_json)
+            self.assertEqual(plan.acceptance_mode, "force_accept_after_repair")
+            self.assertEqual(plan.repair_attempt_count, 3)
+            self.assertEqual(plan.canon_risk_level, "low")
             self.assertEqual(apply_calls["count"], 1)
 
     def test_historical_review_hub_merges_continuity_and_experience_repairs(self) -> None:
@@ -6637,7 +6962,7 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(review.verdict, "fail")
         self.assertIsNotNone(review.repair_instruction)
         assert review.repair_instruction is not None
-        self.assertEqual(review.repair_instruction.repair_scope, "band")
+        self.assertEqual(review.repair_instruction.repair_scope, "chapter_plan")
         self.assertEqual(review.repair_instruction.failure_type, "mixed")
         self.assertIn("死人仍在行动", review.repair_instruction.must_fix)
         self.assertIn("推进停滞", review.repair_instruction.must_fix)
@@ -6720,12 +7045,9 @@ class Phase05RegressionTests(unittest.TestCase):
 
             self.assertEqual(result.status, "needs_review")
             self.assertEqual(plan.status, "needs_review")
-            self.assertEqual(len(attempts), 3)
-            ordered_attempts = sorted(attempts, key=lambda item: item.attempt_no)
-            self.assertEqual([item.repair_scope for item in ordered_attempts[:2]], ["band", "arc"])
-            self.assertTrue(all(item.result_verdict == "fail" for item in attempts))
+            self.assertEqual(len(attempts), 0)
 
-    def test_blackbox_rewrite_writer_error_force_accepts_latest_draft(self) -> None:
+    def test_blackbox_rewrite_writer_error_reaches_manual_review_gate(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "blackbox-rewrite-error.db")
             orchestrator = WritingOrchestrator(
@@ -6801,28 +7123,21 @@ class Phase05RegressionTests(unittest.TestCase):
                         select(ChapterReview).where(ChapterReview.draft_id == latest_draft.id).limit(1)
                     ).scalar_one()
                     plan = session.execute(select(ChapterPlan)).scalar_one()
-                    checkpoint = session.execute(
-                        select(BandCheckpoint)
-                        .where(BandCheckpoint.project_id == plan.project_id)
-                        .order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
-                        .limit(1)
-                    ).scalar_one()
                 finally:
                     session.close()
             finally:
                 orchestrator.llm_client.close()
                 orchestrator.engine.dispose()
 
-            self.assertEqual(result.status, "paused")
-            self.assertEqual(plan.status, "accepted")
-            self.assertEqual(checkpoint.status, "fail")
-            self.assertIn("intra_band_consistency", checkpoint.issues_json)
+            self.assertEqual(result.status, "needs_review")
+            self.assertEqual(plan.status, "needs_review")
             self.assertEqual(len(attempts), 3)
             ordered_attempts = sorted(attempts, key=lambda item: item.attempt_no)
-            self.assertEqual([item.repair_scope for item in ordered_attempts[:2]], ["band", "arc"])
-            self.assertTrue(attempts[-1].forced_accept_applied)
-            self.assertTrue(json.loads(latest_review.review_meta_json).get("forced_accept_applied"))
-            self.assertEqual(apply_calls["count"], 1)
+            self.assertEqual([item.repair_scope for item in ordered_attempts], ["draft", "chapter_plan", "band_plan"])
+            review_meta = json.loads(latest_review.review_meta_json)
+            self.assertFalse(review_meta.get("forced_accept_applied"))
+            self.assertEqual((review_meta.get("final_gate_decision") or {}).get("decision"), "manual_review_required")
+            self.assertEqual(apply_calls["count"], 0)
 
     def test_wener_falls_back_to_heuristics_when_llm_json_is_invalid(self) -> None:
         from forwin.protocol.context import ReviewContextPack
@@ -7177,13 +7492,80 @@ class Phase05RegressionTests(unittest.TestCase):
                     raw_response="artifact/meta.json",
                     model_name="fake",
                 )
-                session.add(
-                    ChapterReview(
-                        id=new_id(),
-                        draft_id=draft.id,
-                        verdict="warn",
-                        issues_json=json.dumps(
-                            [
+                review_row = ChapterReview(
+                    id=new_id(),
+                    draft_id=draft.id,
+                    verdict="warn",
+                    issues_json=json.dumps(
+                        [
+                            {
+                                "rule_name": "hook_soft",
+                                "severity": "warning",
+                                "description": "钩子偏弱",
+                                "entity_names": [],
+                                "evidence_refs": ["tail:正文"],
+                                "suggested_fix": "补强章末问题",
+                            }
+                        ],
+                        ensure_ascii=False,
+                    ),
+                    review_meta_json=json.dumps(
+                        {
+                            "recommended_action": "pause_for_review",
+                            "review_summary": "计划奖励 vs 实际奖励",
+                            "planned_reward_tags": ["mystery"],
+                            "delivered_reward_tags": ["mystery"],
+                            "experience_scores": {
+                                "narrative_understanding": 0.8,
+                                "attentional_focus": 0.7,
+                                "emotional_engagement": 0.4,
+                                "narrative_presence": 0.6,
+                                "payoff_delivery": 0.8,
+                                "stall_tolerance": 0.7,
+                                "hook_efficiency": 0.4,
+                            },
+                            "review_notes": ["问题梯子存在，但章末钩子偏软"],
+                            "lint_signals": [
+                                {
+                                    "tool": "vale",
+                                    "code": "HookSoft",
+                                    "severity": "warning",
+                                    "message": "章末力度不足",
+                                    "line": 10,
+                                    "column": 1,
+                                    "evidence_refs": ["line=10"],
+                                }
+                            ],
+                            "evidence_refs": ["tail:正文", "line=10"],
+                            "confirmed_signal_refs": ["audience_signal:pacing:arc:节奏"],
+                            "reviewer_mode": "llm",
+                            "repair_instruction": {
+                                "repair_scope": "scene",
+                                "failure_type": "hook_failure",
+                                "must_fix": ["补强章末钩子"],
+                                "must_preserve": ["第一章"],
+                                "design_patch": {"hook_type": "hard_cliffhanger"},
+                                "evidence_refs": ["tail:正文"],
+                            },
+                            "repair_verification": {
+                                "fixed_all_must_fix": True,
+                                "preserved_all_must_preserve": True,
+                                "unfixed": [],
+                                "broken_preserve_constraints": [],
+                                "new_risks": [],
+                                "verifier_mode": "rule_only",
+                            },
+                            "final_gate_decision": {
+                                "decision": "force_accept",
+                                "forceable": True,
+                                "reason": "soft_quality_failure_only",
+                                "canon_risk": "low",
+                                "residual_issues": ["钩子偏弱"],
+                                "requires_human": False,
+                            },
+                            "repair_exhausted": True,
+                            "forced_accept_applied": True,
+                            "residual_review_issues": [
                                 {
                                     "rule_name": "hook_soft",
                                     "severity": "warning",
@@ -7193,50 +7575,60 @@ class Phase05RegressionTests(unittest.TestCase):
                                     "suggested_fix": "补强章末问题",
                                 }
                             ],
-                            ensure_ascii=False,
-                        ),
-                        review_meta_json=json.dumps(
-                            {
-                                "recommended_action": "pause_for_review",
-                                "review_summary": "计划奖励 vs 实际奖励",
-                                "planned_reward_tags": ["mystery"],
-                                "delivered_reward_tags": ["mystery"],
-                                "experience_scores": {
-                                    "narrative_understanding": 0.8,
-                                    "attentional_focus": 0.7,
-                                    "emotional_engagement": 0.4,
-                                    "narrative_presence": 0.6,
-                                    "payoff_delivery": 0.8,
-                                    "stall_tolerance": 0.7,
-                                    "hook_efficiency": 0.4,
-                                },
-                                "review_notes": ["问题梯子存在，但章末钩子偏软"],
-                                "lint_signals": [
-                                    {
-                                        "tool": "vale",
-                                        "code": "HookSoft",
-                                        "severity": "warning",
-                                        "message": "章末力度不足",
-                                        "line": 10,
-                                        "column": 1,
-                                        "evidence_refs": ["line=10"],
-                                    }
-                                ],
-                                "evidence_refs": ["tail:正文", "line=10"],
-                                "confirmed_signal_refs": ["audience_signal:pacing:arc:节奏"],
-                                "reviewer_mode": "llm",
-                                "repair_instruction": {
-                                    "repair_scope": "scene",
-                                    "failure_type": "hook_failure",
-                                    "must_fix": ["补强章末钩子"],
-                                    "must_preserve": ["第一章"],
-                                    "design_patch": {"hook_type": "hard_cliffhanger"},
-                                    "evidence_refs": ["tail:正文"],
-                                },
-                            },
-                            ensure_ascii=False,
-                        ),
-                    )
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+                session.add(review_row)
+                plan.acceptance_mode = "force_accept_after_repair"
+                plan.repair_attempt_count = 3
+                plan.canon_risk_level = "low"
+                plan.residual_review_issues_json = json.dumps(
+                    [
+                        {
+                            "rule_name": "hook_soft",
+                            "severity": "warning",
+                            "description": "钩子偏弱",
+                            "entity_names": [],
+                            "evidence_refs": ["tail:正文"],
+                            "suggested_fix": "补强章末问题",
+                        }
+                    ],
+                    ensure_ascii=False,
+                )
+                session.flush()
+                updater.save_chapter_rewrite_attempt(
+                    project_id=project.id,
+                    chapter_number=1,
+                    attempt_no=1,
+                    trigger_review_id=review_row.id,
+                    repair_scope="scene",
+                    design_patch={"hook_type": "hard_cliffhanger"},
+                    source_draft_id=draft.id,
+                    result_draft_id=draft.id,
+                    result_verdict="warn",
+                    result_review_id=review_row.id,
+                    verification={
+                        "fixed_all_must_fix": True,
+                        "preserved_all_must_preserve": True,
+                        "unfixed": [],
+                        "broken_preserve_constraints": [],
+                        "new_risks": [],
+                        "verifier_mode": "rule_only",
+                    },
+                    source_chapter_plan={
+                        "chapter_number": 1,
+                        "title": "第一章",
+                        "transient_overlay": False,
+                    },
+                    result_chapter_plan={
+                        "chapter_number": 1,
+                        "title": "第一章",
+                        "transient_overlay": True,
+                    },
+                    source_band_plan={"band_id": "band-1", "transient_overlay": False},
+                    result_band_plan={"band_id": "band-1", "transient_overlay": False},
+                    forced_accept_applied=True,
                 )
                 session.commit()
 
@@ -7246,12 +7638,34 @@ class Phase05RegressionTests(unittest.TestCase):
                 api_module._engine = engine
                 api_module._SessionFactory = session_factory
                 payload = api_module.get_chapter_review(project.id, 1).model_dump(mode="json")
+                chapter_payload = api_module.get_chapter(project.id, 1).model_dump(mode="json")
+                list_payload = [item.model_dump(mode="json") for item in api_module.list_chapters(project.id)]
+                project_payload = api_module.get_project(project.id).model_dump(mode="json")
                 self.assertEqual(payload["review_notes"], ["问题梯子存在，但章末钩子偏软"])
                 self.assertEqual(payload["lint_signals"][0]["tool"], "vale")
                 self.assertEqual(payload["evidence_refs"], ["tail:正文", "line=10"])
                 self.assertEqual(payload["confirmed_signal_refs"], ["audience_signal:pacing:arc:节奏"])
                 self.assertEqual(payload["reviewer_mode"], "llm")
                 self.assertEqual(payload["proposed_design_patch"]["hook_type"], "hard_cliffhanger")
+                self.assertEqual(payload["acceptance_mode"], "force_accept_after_repair")
+                self.assertEqual(payload["repair_attempt_count"], 3)
+                self.assertEqual(payload["canon_risk_level"], "low")
+                self.assertEqual(payload["latest_repair_scope"], "draft")
+                self.assertTrue(payload["repair_exhausted"])
+                self.assertTrue(payload["forced_accept_applied"])
+                self.assertEqual(payload["repair_verification"]["verifier_mode"], "rule_only")
+                self.assertEqual(payload["final_gate_decision"]["decision"], "force_accept")
+                self.assertEqual(payload["rewrite_attempts"][0]["repair_scope"], "draft")
+                self.assertTrue(payload["rewrite_attempts"][0]["forced_accept_applied"])
+                self.assertEqual(chapter_payload["acceptance_mode"], "force_accept_after_repair")
+                self.assertEqual(chapter_payload["repair_attempt_count"], 3)
+                self.assertEqual(chapter_payload["canon_risk_level"], "low")
+                self.assertEqual(chapter_payload["residual_review_issues"][0]["description"], "钩子偏弱")
+                self.assertEqual(list_payload[0]["acceptance_mode"], "force_accept_after_repair")
+                self.assertEqual(list_payload[0]["latest_repair_scope"], "draft")
+                self.assertEqual(list_payload[0]["canon_risk_level"], "low")
+                self.assertEqual(project_payload["chapters"][0]["acceptance_mode"], "force_accept_after_repair")
+                self.assertEqual(project_payload["chapters"][0]["latest_repair_scope"], "draft")
             finally:
                 api_module._engine = old_engine
                 api_module._SessionFactory = old_factory

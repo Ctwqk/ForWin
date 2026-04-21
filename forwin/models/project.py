@@ -71,4 +71,8 @@ class ChapterPlan(Base):
     task_contract_json: Mapped[str] = mapped_column(Text, default="[]")
     experience_plan_json: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String, default="planned")
+    acceptance_mode: Mapped[str] = mapped_column(String, default="")
+    repair_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    residual_review_issues_json: Mapped[str] = mapped_column(Text, default="[]")
+    canon_risk_level: Mapped[str] = mapped_column(String, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())

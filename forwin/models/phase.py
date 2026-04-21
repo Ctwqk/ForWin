@@ -256,5 +256,12 @@ class ChapterRewriteAttempt(Base):
         String, ForeignKey("chapter_drafts.id"), nullable=False
     )
     result_verdict: Mapped[str] = mapped_column(String, default="")
+    result_review_id: Mapped[str] = mapped_column(String, default="")
+    failure_reason: Mapped[str] = mapped_column(Text, default="")
+    verification_json: Mapped[str] = mapped_column(Text, default="{}")
+    source_chapter_plan_json: Mapped[str] = mapped_column(Text, default="{}")
+    result_chapter_plan_json: Mapped[str] = mapped_column(Text, default="{}")
+    source_band_plan_json: Mapped[str] = mapped_column(Text, default="{}")
+    result_band_plan_json: Mapped[str] = mapped_column(Text, default="{}")
     forced_accept_applied: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())

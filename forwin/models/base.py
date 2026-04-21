@@ -1988,5 +1988,103 @@ def upgrade_db(engine: Engine) -> None:
 
         migrations.append(MigrationSpec("book_genesis_v1", apply_book_genesis_v1))
 
+        def apply_review_repair_chain_v1(conn) -> None:
+            chapter_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(chapter_plans)"))
+            }
+            for column_name, ddl in (
+                (
+                    "acceptance_mode",
+                    """
+                    ALTER TABLE chapter_plans
+                    ADD COLUMN acceptance_mode TEXT NOT NULL DEFAULT ''
+                    """,
+                ),
+                (
+                    "repair_attempt_count",
+                    """
+                    ALTER TABLE chapter_plans
+                    ADD COLUMN repair_attempt_count INTEGER NOT NULL DEFAULT 0
+                    """,
+                ),
+                (
+                    "residual_review_issues_json",
+                    """
+                    ALTER TABLE chapter_plans
+                    ADD COLUMN residual_review_issues_json TEXT NOT NULL DEFAULT '[]'
+                    """,
+                ),
+                (
+                    "canon_risk_level",
+                    """
+                    ALTER TABLE chapter_plans
+                    ADD COLUMN canon_risk_level TEXT NOT NULL DEFAULT ''
+                    """,
+                ),
+            ):
+                if column_name not in chapter_columns:
+                    conn.execute(text(ddl))
+
+            rewrite_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(chapter_rewrite_attempts)"))
+            }
+            for column_name, ddl in (
+                (
+                    "result_review_id",
+                    """
+                    ALTER TABLE chapter_rewrite_attempts
+                    ADD COLUMN result_review_id TEXT NOT NULL DEFAULT ''
+                    """,
+                ),
+                (
+                    "failure_reason",
+                    """
+                    ALTER TABLE chapter_rewrite_attempts
+                    ADD COLUMN failure_reason TEXT NOT NULL DEFAULT ''
+                    """,
+                ),
+                (
+                    "verification_json",
+                    """
+                    ALTER TABLE chapter_rewrite_attempts
+                    ADD COLUMN verification_json TEXT NOT NULL DEFAULT '{}'
+                    """,
+                ),
+                (
+                    "source_chapter_plan_json",
+                    """
+                    ALTER TABLE chapter_rewrite_attempts
+                    ADD COLUMN source_chapter_plan_json TEXT NOT NULL DEFAULT '{}'
+                    """,
+                ),
+                (
+                    "result_chapter_plan_json",
+                    """
+                    ALTER TABLE chapter_rewrite_attempts
+                    ADD COLUMN result_chapter_plan_json TEXT NOT NULL DEFAULT '{}'
+                    """,
+                ),
+                (
+                    "source_band_plan_json",
+                    """
+                    ALTER TABLE chapter_rewrite_attempts
+                    ADD COLUMN source_band_plan_json TEXT NOT NULL DEFAULT '{}'
+                    """,
+                ),
+                (
+                    "result_band_plan_json",
+                    """
+                    ALTER TABLE chapter_rewrite_attempts
+                    ADD COLUMN result_band_plan_json TEXT NOT NULL DEFAULT '{}'
+                    """,
+                ),
+            ):
+                if column_name not in rewrite_columns:
+                    conn.execute(text(ddl))
+
+        migrations.append(MigrationSpec("review_repair_chain_v1", apply_review_repair_chain_v1))
+
         for migration in migrations:
             _run_migration(conn, migration.version, migration.apply_fn)

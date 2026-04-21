@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from forwin.governance_checks import (
     chapter_combined_text,
     evaluate_constraint_issues,
@@ -47,7 +49,8 @@ class HistoricalReviewHub:
             context=context,
             lint_signals=lint_signals,
         )
-        webnovel = self.experience_reviewer.review(
+        webnovel = self._call_with_compatible_kwargs(
+            self.experience_reviewer.review,
             review_context,
             writer_output,
             reviewer_skill_layers=reviewer_skill_layers,
@@ -181,6 +184,22 @@ class HistoricalReviewHub:
         )
 
     @staticmethod
+    def _call_with_compatible_kwargs(callable_obj, /, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        try:
+            signature = inspect.signature(callable_obj)
+        except (TypeError, ValueError):
+            return callable_obj(*args, **kwargs)
+        parameters = signature.parameters
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+            return callable_obj(*args, **kwargs)
+        filtered_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key in parameters
+        }
+        return callable_obj(*args, **filtered_kwargs)
+
+    @staticmethod
     def _selected_skills_from_layers(skill_layers: list[object] | None) -> list[dict[str, str]]:
         payload: list[dict[str, str]] = []
         for item in skill_layers or []:
@@ -268,7 +287,7 @@ class HistoricalReviewHub:
         context: ChapterContextPack,
     ) -> RepairInstruction:
         return RepairInstruction(
-            repair_scope="scene",
+            repair_scope="draft",
             failure_type="continuity",
             must_fix=[issue.description for issue in continuity_issues if issue.severity == "error"],
             must_preserve=[
@@ -289,7 +308,7 @@ class HistoricalReviewHub:
         context: ChapterContextPack,
     ) -> RepairInstruction:
         return RepairInstruction(
-            repair_scope="scene",
+            repair_scope="draft",
             failure_type="mixed",
             must_fix=[issue.description for issue in governance_issues if issue.severity == "error"],
             must_preserve=[
@@ -318,7 +337,7 @@ class HistoricalReviewHub:
         if base_instruction is None:
             return webnovel_instruction
 
-        scope_rank = {"scene": 1, "band": 2, "arc": 3}
+        scope_rank = {"draft": 1, "chapter_plan": 2, "band_plan": 3}
         merged_scope = max(
             [base_instruction.repair_scope, webnovel_instruction.repair_scope],
             key=lambda item: scope_rank.get(item, 1),

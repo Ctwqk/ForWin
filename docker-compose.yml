@@ -61,7 +61,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "python scripts/qualify_linux_extension_profile.py --check --check-active && python scripts/check_publisher_browser_heartbeat.py",
+          "python scripts/qualify_linux_extension_profile.py --check --check-active && python scripts/check_publisher_browser_heartbeat.py --wait-seconds 0",
         ]
       interval: 30s
       timeout: 10s

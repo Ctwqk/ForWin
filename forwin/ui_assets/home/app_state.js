@@ -480,6 +480,8 @@
     let taskPollHasActive = false;
     let booksStateSignature = '';
     let taskCenterStateSignature = '';
+    let activeHomeTab = 'book';
+    let platformsLastLoadedAt = 0;
     let currentGenesisProjectId = '';
     let currentGenesisDetail = null;
     let currentGenesisStage = 'brief';
@@ -514,6 +516,23 @@
 
     function dataSignature(value) {
       return JSON.stringify(normalizeForSignature(value));
+    }
+
+    function currentHomeTab() {
+      return activeHomeTab;
+    }
+
+    function shouldAutoRefreshPlatforms() {
+      return activeHomeTab === 'config' && document.visibilityState === 'visible';
+    }
+
+    function notePlatformsLoaded() {
+      platformsLastLoadedAt = Date.now();
+    }
+
+    function platformsSnapshotIsFresh(maxAgeMs = 15000) {
+      const ttlMs = Math.max(Number(maxAgeMs || 0), 0);
+      return platformsLastLoadedAt > 0 && (Date.now() - platformsLastLoadedAt) <= ttlMs;
     }
 
     async function runGenesisAction(fn, busyMessage = 'Genesis 正在执行上一条操作，请稍候。') {
@@ -613,6 +632,7 @@
     }
 
     function switchTab(tab) {
+      activeHomeTab = tab;
       const bookActive = tab === 'book';
       const taskActive = tab === 'task';
       document.getElementById('tab_book').classList.toggle('active', bookActive);
@@ -621,6 +641,9 @@
       document.getElementById('panel_book').classList.toggle('active', bookActive);
       document.getElementById('panel_task').classList.toggle('active', taskActive);
       document.getElementById('panel_config').classList.toggle('active', tab === 'config');
+      if (tab === 'config' && typeof ensureFreshPlatforms === 'function') {
+        void ensureFreshPlatforms({ maxAgeMs: 1500, reason: 'config_tab' });
+      }
     }
 
     function badgeKindByStatus(status) {

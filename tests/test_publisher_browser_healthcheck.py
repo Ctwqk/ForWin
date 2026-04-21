@@ -105,3 +105,37 @@ def test_get_preferred_client_heartbeat_rejects_stale_client(tmp_path):
     assert result.ok is False
     assert result.client_id == "preferred-client"
     assert result.message == "preferred publisher client heartbeat is stale"
+
+
+def test_get_preferred_client_heartbeat_falls_back_to_latest_recent_client(tmp_path):
+    db_path = tmp_path / "novel.db"
+    now = datetime.now(timezone.utc)
+    _seed_db(db_path, client_id="recent-client", heartbeat_at=now)
+
+    result = get_preferred_client_heartbeat(
+        db_path,
+        preferred_client_id="",
+        stale_seconds=90,
+        allow_latest_recent_fallback=True,
+    )
+
+    assert result.ok is True
+    assert result.client_id == "recent-client"
+    assert result.message == "latest publisher client heartbeat is recent"
+
+
+def test_get_preferred_client_heartbeat_rejects_stale_latest_recent_fallback(tmp_path):
+    db_path = tmp_path / "novel.db"
+    stale_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    _seed_db(db_path, client_id="recent-client", heartbeat_at=stale_at)
+
+    result = get_preferred_client_heartbeat(
+        db_path,
+        preferred_client_id="",
+        stale_seconds=90,
+        allow_latest_recent_fallback=True,
+    )
+
+    assert result.ok is False
+    assert result.client_id == "recent-client"
+    assert result.message == "latest publisher client heartbeat is stale"

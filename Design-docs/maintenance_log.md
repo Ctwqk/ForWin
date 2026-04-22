@@ -9,6 +9,62 @@
 - 如果改动尚未部署到 `8899`，必须明确写“未部署原因”和“切换条件”。
 - 旧的专项日志可保留，但关键结论需要汇总到这里。
 
+## 2026-04-22
+
+### Genesis 世界观根模型统一（`BookGenesisPack.world`）
+
+把 Genesis 的世界观权威结构从顶层散列字段收口为单一 `world` 根对象；后续 `world / map / story_engine` 三阶段都改为编辑 `pack.world` 下的不同切片。
+
+关键变化：
+
+- `BookGenesisPack` 顶层现在固定为 `book_brief + world + book_arc_blueprint + subworld_policy + execution_bootstrap + stage_states`，不再在顶层持久化 `world_bible / map_atlas / story_engine`。
+- `world` 根对象新增并统一收纳 `minimum_world_system / minimum_extension_pack / world_bible / map_atlas / story_engine / institution_profiles / resource_economy_profiles / world_extensions / template_libraries`。
+- Genesis 服务端新增 world-root normalize / upgrade 路径；旧 revision 读取时会把顶层旧键自动升级投影到 `world`，但再次保存时只写回新结构。
+- `map_atlas.submaps[] / nodes[]` 与 `story_engine.factions[]` 现在会自动补稳定 `id`；跨制度与资源模板引用统一走 `scope_ref = { type, id }`。
+- `start-writing`、project detail、context assembler、Genesis 前端工作台与阶段保存逻辑已全部改为从 `pack.world.*` 读取或写回。
+
+验证：
+
+- `python3 -m py_compile forwin/book_genesis.py forwin/api_schemas.py forwin/api.py forwin/api_project_payloads.py forwin/api_project_ops.py forwin/context/assembler.py forwin/world_templates.py`
+- `PYTHONPATH=. pytest -q tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py tests/test_subworld_control.py`
+- 全量回归：`PYTHONPATH=. pytest -q`
+
+结果：
+
+- Genesis 新项目默认带完整 `world` 根骨架
+- 旧 revision 自动升级与新结构写回已覆盖回归
+- 全量测试通过：`249 passed, 8 subtests passed`
+
+部署状态：未单独部署到 `8899`。原因：本轮主要是根模型重构、前端路径切换与本地全量回归；未在当前节点单独执行部署切换。
+
+### 首页 favicon 404 修复与页面实测回归
+
+在真实浏览器走 Genesis 页面链路时，发现首页首次加载会请求 `/favicon.ico` 并产生 404 console error；已通过页面内联 favicon 修复。
+
+关键变化：
+
+- `render_page_document()` 现在统一注入内联 favicon，避免浏览器额外请求缺失资源。
+- 页面渲染测试补了 `rel=\"icon\"` 与 `data:image/svg+xml` 断言，防止后续回归。
+- 修复后重新构建容器，并用 `master` worktree 的 `.env` 做页面实测。
+
+验证：
+
+- `PYTHONPATH=. pytest -q tests/test_api_pages_rendering.py`
+- Playwright live 流程：
+  - 首页打开
+  - 新建书本并进入 Genesis 工作台
+  - `world` 阶段编辑保存
+  - `map` 阶段新增 `submap`
+  - `story_engine` 阶段新增 `faction` 并绑定 `base_subworld`
+- 容器使用 `/home/taiwei/ForWin/.env` 启动后，`GET /health` 返回 `{\"status\":\"ok\"}`
+
+结果：
+
+- 缺失 favicon 的 console error 已消失
+- Genesis 关键页面链路实测可走通
+
+部署状态：未单独记录为 `8899` 新部署；该修复已并入 `master` 文档口径。
+
 ## 2026-04-21
 
 ### V2.9.3 Skill Runtime 接入（Genesis / Writer / Reviewer / PromptTrace / ModelAdapter）
@@ -149,7 +205,7 @@
 结果：
 
 - `tests/test_book_genesis_flow.py tests/test_api_pages_rendering.py`: `11 passed`
-- live Genesis 页面已确认结构化编辑可用；当前剩余 console error 为 `favicon.ico 404`，未影响 Genesis 流程
+- live Genesis 页面已确认结构化编辑可用；当时剩余 console error 为 `favicon.ico 404`，未影响 Genesis 流程。该问题已于 `2026-04-22` 修复。
 
 部署状态：已部署到 `8899`。部署前确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`；部署后 `GET /health` 正常，Playwright live 流程确认 Genesis 阶段属性表单、子项工作台与最终 JSON 同时可用。
 

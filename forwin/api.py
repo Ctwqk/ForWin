@@ -383,9 +383,7 @@ def _genesis_patch_payload(req: BookGenesisPatchRequest) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     for key in (
         "book_brief",
-        "world_bible",
-        "map_atlas",
-        "story_engine",
+        "world",
         "book_arc_blueprint",
         "subworld_policy",
         "execution_bootstrap",

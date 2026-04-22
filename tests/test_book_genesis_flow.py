@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -16,6 +17,7 @@ from forwin.api_schemas import (
     BookGenesisStageRunRequest,
     ProjectCreateRequest,
 )
+from forwin.book_genesis import BookGenesisService
 from forwin.book_genesis import StaleGenesisRevisionError
 from forwin.config import Config
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -23,6 +25,7 @@ from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.orchestrator.phase24 import ArcEnvelopeManager
 from forwin.runtime_settings import RuntimeSettingsStore
+from forwin.skills import build_skill_runtime_components
 from forwin.state.updater import StateUpdater
 
 
@@ -106,6 +109,32 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(exc.exception.status_code, 409)
         self.assertIn("Genesis 阶段", str(exc.exception.detail))
 
+    def test_initial_genesis_detail_contains_world_root_scaffold(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {
+                    "title": "Genesis 根模型书",
+                    "premise": "初始包要直接带完整 world 根骨架。",
+                    "genre": "玄幻",
+                }
+            )
+        )
+
+        detail = api_module.get_project_genesis(created.project_id)
+        world = detail.pack.world
+
+        self.assertIn("world_bible", world)
+        self.assertIn("map_atlas", world)
+        self.assertIn("story_engine", world)
+        self.assertIn("minimum_world_system", world)
+        self.assertIn("minimum_extension_pack", world)
+        self.assertIn("institution_profiles", world)
+        self.assertIn("resource_economy_profiles", world)
+        self.assertIn("world_extensions", world)
+        self.assertIn("template_libraries", world)
+        self.assertIn("daily_life_profiles", world["world_extensions"])
+        self.assertIn("title_lexicon_pack", world["template_libraries"])
+
     def test_start_writing_materializes_arc_skeletons_and_active_arc_chapters(self) -> None:
         created = api_module.create_project(
             ProjectCreateRequest.model_validate(
@@ -122,9 +151,11 @@ class BookGenesisFlowTests(unittest.TestCase):
             created.project_id,
             BookGenesisPatchRequest.model_validate(
                 {
-                    "world_bible": {"overview": "旧城与禁术并存的世界。"},
-                    "map_atlas": {"overview": "旧城、城外荒原、地下遗迹。"},
-                    "story_engine": {"long_arcs": ["旧术复苏", "主角代价升级"]},
+                    "world": {
+                        "world_bible": {"overview": "旧城与禁术并存的世界。"},
+                        "map_atlas": {"overview": "旧城、城外荒原、地下遗迹。"},
+                        "story_engine": {"long_arcs": ["旧术复苏", "主角代价升级"]},
+                    },
                     "book_arc_blueprint": {
                         "summary": "两段式蓝图",
                         "arcs": [
@@ -256,9 +287,11 @@ class BookGenesisFlowTests(unittest.TestCase):
             created.project_id,
             BookGenesisPatchRequest.model_validate(
                 {
-                    "world_bible": {"overview": "世界规则已锁定。"},
-                    "map_atlas": {"overview": "一城一野一遗迹。"},
-                    "story_engine": {"long_arcs": ["根冲突", "外部升级"]},
+                    "world": {
+                        "world_bible": {"overview": "世界规则已锁定。"},
+                        "map_atlas": {"overview": "一城一野一遗迹。"},
+                        "story_engine": {"long_arcs": ["根冲突", "外部升级"]},
+                    },
                     "book_arc_blueprint": {
                         "summary": "单 arc 启动蓝图",
                         "arcs": [
@@ -360,15 +393,17 @@ class BookGenesisFlowTests(unittest.TestCase):
             created.project_id,
             BookGenesisPatchRequest.model_validate(
                 {
-                    "story_engine": {
-                        "core_cast": [
-                            {"name": "林昭", "role": "主角", "desire": "活下去", "fear": "拖累家人"}
-                        ],
-                        "factions": [],
-                        "opposition": [],
-                        "relationship_axes": ["林昭与旧秩序"],
-                        "reader_promises": ["持续升级"],
-                        "long_arcs": ["成长"],
+                    "world": {
+                        "story_engine": {
+                            "core_cast": [
+                                {"name": "林昭", "role": "主角", "desire": "活下去", "fear": "拖累家人"}
+                            ],
+                            "factions": [],
+                            "opposition": [],
+                            "relationship_axes": ["林昭与旧秩序"],
+                            "reader_promises": ["持续升级"],
+                            "long_arcs": ["成长"],
+                        }
                     }
                 }
             ),
@@ -414,9 +449,9 @@ class BookGenesisFlowTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(detail.pack.story_engine["core_cast"][0]["fear"], "更阴郁地害怕拖累家人")
-        self.assertEqual(detail.pack.story_engine["core_cast"][0]["secret"], "对旧秩序有复杂阴影")
-        self.assertEqual(detail.pack.story_engine["factions"][0]["name"], "城防司")
+        self.assertEqual(detail.pack.world["story_engine"]["core_cast"][0]["fear"], "更阴郁地害怕拖累家人")
+        self.assertEqual(detail.pack.world["story_engine"]["core_cast"][0]["secret"], "对旧秩序有复杂阴影")
+        self.assertEqual(detail.pack.world["story_engine"]["factions"][0]["name"], "城防司")
 
         with self.session_factory() as session:
             traces = session.execute(
@@ -479,7 +514,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                 BookGenesisStageRunRequest.model_validate({"model_profile_id": "genesis-alt"}),
             )
 
-        self.assertEqual(detail.pack.world_bible["overview"], "被选中模型生成的世界观。")
+        self.assertEqual(detail.pack.world["world_bible"]["overview"], "被选中模型生成的世界观。")
 
         with self.session_factory() as session:
             trace = session.execute(
@@ -534,14 +569,14 @@ class BookGenesisFlowTests(unittest.TestCase):
                 BookGenesisStageRunRequest.model_validate({}),
             )
 
-        culture_profile = detail.pack.world_bible["culture_profiles"][0]
-        submap = detail.pack.map_atlas["submaps"][0]
-        region = detail.pack.map_atlas["regions"][0]
-        child_region = detail.pack.map_atlas["regions"][1]
-        node = detail.pack.map_atlas["nodes"][0]
-        protagonist = detail.pack.story_engine["core_cast"][0]
-        faction = detail.pack.story_engine["factions"][0]
-        opposition = detail.pack.story_engine["opposition"][0]
+        culture_profile = detail.pack.world["world_bible"]["culture_profiles"][0]
+        submap = detail.pack.world["map_atlas"]["submaps"][0]
+        region = detail.pack.world["map_atlas"]["regions"][0]
+        child_region = detail.pack.world["map_atlas"]["regions"][1]
+        node = detail.pack.world["map_atlas"]["nodes"][0]
+        protagonist = detail.pack.world["story_engine"]["core_cast"][0]
+        faction = detail.pack.world["story_engine"]["factions"][0]
+        opposition = detail.pack.world["story_engine"]["opposition"][0]
 
         self.assertEqual(culture_profile["id"], "culture-main-stage")
         self.assertTrue(culture_profile["character_name_examples"])
@@ -558,24 +593,28 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(child_region["level"], 2)
         self.assertEqual(child_region["parent_region_id"], region["id"])
         self.assertEqual(child_region["culture_profile_id"], culture_profile["id"])
-        self.assertEqual(node["parent_subworld"], submap["name"])
+        self.assertEqual(submap["id"], "subworld-main-stage")
+        self.assertEqual(node["id"], "node-main-stage")
+        self.assertEqual(node["parent_subworld"], submap["id"])
         self.assertEqual(node["parent_region_id"], region["id"])
         self.assertEqual(node["culture_profile_id"], culture_profile["id"])
         self.assertEqual(protagonist["culture_profile_id"], culture_profile["id"])
-        self.assertEqual(protagonist["home_subworld"], submap["name"])
+        self.assertEqual(protagonist["home_subworld"], submap["id"])
         self.assertEqual(protagonist["home_region"], region["id"])
-        self.assertEqual(protagonist["home_location"], node["name"])
+        self.assertEqual(protagonist["home_location"], node["id"])
         self.assertEqual(protagonist["current_region"], region["id"])
-        self.assertEqual(protagonist["affiliated_faction"], faction["name"])
+        self.assertEqual(protagonist["current_base"], node["id"])
+        self.assertEqual(faction["id"], "faction-main-stage")
+        self.assertEqual(protagonist["affiliated_faction"], faction["id"])
         self.assertEqual(len([item for item in protagonist["faction_memberships"] if item["is_primary"]]), 1)
         self.assertEqual(faction["culture_profile_id"], culture_profile["id"])
-        self.assertEqual(faction["base_subworld"], submap["name"])
+        self.assertEqual(faction["base_subworld"], submap["id"])
         self.assertEqual(faction["headquarters_region"], child_region["id"])
         self.assertEqual(faction["footprint"][0]["region_id"], region["id"])
         self.assertEqual(opposition["culture_profile_id"], culture_profile["id"])
-        self.assertEqual(opposition["backing_faction"], faction["name"])
+        self.assertEqual(opposition["backing_faction"], faction["id"])
         self.assertEqual(opposition["base_region"], child_region["id"])
-        self.assertEqual(opposition["backing_factions"], [faction["name"]])
+        self.assertEqual(opposition["backing_factions"], [faction["id"]])
 
     def test_refine_stage_target_path_only_updates_selected_item(self) -> None:
         created = api_module.create_project(
@@ -592,29 +631,31 @@ class BookGenesisFlowTests(unittest.TestCase):
             created.project_id,
             BookGenesisPatchRequest.model_validate(
                 {
-                    "map_atlas": {
-                        "overview": "结构化地图",
-                        "topology_rules": ["地点之间有风险与成本"],
-                        "submaps": [
-                            {
-                                "name": "北城区",
-                                "scope": "district",
-                                "parent_scope": "主城",
-                                "summary": "旧工业区",
-                                "key_locations": ["焚化塔"],
-                                "travel_rules": ["夜间封锁"],
-                            },
-                            {
-                                "name": "南城区",
-                                "scope": "district",
-                                "parent_scope": "主城",
-                                "summary": "商业区",
-                                "key_locations": ["码头"],
-                                "travel_rules": ["白天繁忙"],
-                            },
-                        ],
-                        "nodes": [],
-                        "edges": [],
+                    "world": {
+                        "map_atlas": {
+                            "overview": "结构化地图",
+                            "topology_rules": ["地点之间有风险与成本"],
+                            "submaps": [
+                                {
+                                    "name": "北城区",
+                                    "scope": "district",
+                                    "parent_scope": "主城",
+                                    "summary": "旧工业区",
+                                    "key_locations": ["焚化塔"],
+                                    "travel_rules": ["夜间封锁"],
+                                },
+                                {
+                                    "name": "南城区",
+                                    "scope": "district",
+                                    "parent_scope": "主城",
+                                    "summary": "商业区",
+                                    "key_locations": ["码头"],
+                                    "travel_rules": ["白天繁忙"],
+                                },
+                            ],
+                            "nodes": [],
+                            "edges": [],
+                        }
                     }
                 }
             ),
@@ -657,8 +698,8 @@ class BookGenesisFlowTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(detail.pack.map_atlas["submaps"][0]["key_locations"], ["焚化塔", "封存轨道站"])
-        self.assertEqual(detail.pack.map_atlas["submaps"][1]["summary"], "商业区")
+        self.assertEqual(detail.pack.world["map_atlas"]["submaps"][0]["key_locations"], ["焚化塔", "封存轨道站"])
+        self.assertEqual(detail.pack.world["map_atlas"]["submaps"][1]["summary"], "商业区")
 
     def test_refine_stage_target_path_can_update_scalar_world_field(self) -> None:
         created = api_module.create_project(
@@ -675,12 +716,14 @@ class BookGenesisFlowTests(unittest.TestCase):
             created.project_id,
             BookGenesisPatchRequest.model_validate(
                 {
-                    "world_bible": {
-                        "overview": "旧秩序松动中的长篇世界。",
-                        "axioms": ["力量与代价绑定"],
-                        "history_slice": "旧王朝崩塌后的百年乱局尚未结束。",
-                        "naming_style": "中文网文风格，短促有力。",
-                        "forbidden_zones": ["不要用现代网络梗"],
+                    "world": {
+                        "world_bible": {
+                            "overview": "旧秩序松动中的长篇世界。",
+                            "axioms": ["力量与代价绑定"],
+                            "history_slice": "旧王朝崩塌后的百年乱局尚未结束。",
+                            "naming_style": "中文网文风格，短促有力。",
+                            "forbidden_zones": ["不要用现代网络梗"],
+                        }
                     }
                 }
             ),
@@ -716,8 +759,8 @@ class BookGenesisFlowTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(detail.pack.world_bible["history_slice"], "旧王朝崩塌后的百年乱局进入第二次秩序重组前夜。")
-        self.assertEqual(detail.pack.world_bible["naming_style"], "中文网文风格，短促有力。")
+        self.assertEqual(detail.pack.world["world_bible"]["history_slice"], "旧王朝崩塌后的百年乱局进入第二次秩序重组前夜。")
+        self.assertEqual(detail.pack.world["world_bible"]["naming_style"], "中文网文风格，短促有力。")
 
     def test_stale_genesis_revision_cannot_overwrite_newer_revision(self) -> None:
         created = api_module.create_project(
@@ -735,13 +778,15 @@ class BookGenesisFlowTests(unittest.TestCase):
             created.project_id,
             BookGenesisPatchRequest.model_validate(
                 {
-                    "story_engine": {
-                        "core_cast": [{"name": "主角", "role": "主视角"}],
-                        "factions": [],
-                        "opposition": [],
-                        "relationship_axes": [],
-                        "reader_promises": [],
-                        "long_arcs": [],
+                    "world": {
+                        "story_engine": {
+                            "core_cast": [{"name": "主角", "role": "主视角"}],
+                            "factions": [],
+                            "opposition": [],
+                            "relationship_axes": [],
+                            "reader_promises": [],
+                            "long_arcs": [],
+                        }
                     }
                 }
             ),
@@ -761,7 +806,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                         updater=updater,
                         project=project,
                         revision=stale_revision,
-                        patch={"story_engine": {"core_cast": [{"name": "旧角色", "role": "过期写入"}]}},
+                        patch={"world": {"story_engine": {"core_cast": [{"name": "旧角色", "role": "过期写入"}]}}},
                         reason="stale_write",
                     )
             finally:
@@ -783,21 +828,23 @@ class BookGenesisFlowTests(unittest.TestCase):
             created.project_id,
             BookGenesisPatchRequest.model_validate(
                 {
-                    "world_bible": {
-                        "overview": "多文明并存的长篇舞台。",
-                        "culture_profiles": [
-                            {
-                                "id": "culture-sinic",
-                                "name": "中华风",
-                                "summary": "偏礼制、旧城、宗门气息。",
-                                "inspiration": "中华",
-                                "generator_civilization": "中华",
-                                "generator_overlays": ["基督教"],
-                                "character_name_examples": [],
-                                "region_name_examples": [],
-                                "location_name_examples": [],
-                            }
-                        ],
+                    "world": {
+                        "world_bible": {
+                            "overview": "多文明并存的长篇舞台。",
+                            "culture_profiles": [
+                                {
+                                    "id": "culture-sinic",
+                                    "name": "中华风",
+                                    "summary": "偏礼制、旧城、宗门气息。",
+                                    "inspiration": "中华",
+                                    "generator_civilization": "中华",
+                                    "generator_overlays": ["基督教"],
+                                    "character_name_examples": [],
+                                    "region_name_examples": [],
+                                    "location_name_examples": [],
+                                }
+                            ],
+                        }
                     }
                 }
             ),
@@ -808,7 +855,7 @@ class BookGenesisFlowTests(unittest.TestCase):
             BookGenesisNameGenerateRequest.model_validate(
                 {
                     "stage_key": "world",
-                    "target_path": "culture_profiles[0]",
+                    "target_path": "world_bible.culture_profiles[0]",
                     "field_path": "character_name_examples",
                     "kind": "person",
                     "count": 4,
@@ -824,6 +871,201 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(len(response.suggestions), 4)
         self.assertEqual(response.applied_value, response.suggestions)
         self.assertTrue(all(isinstance(item, str) and item.strip() for item in response.suggestions))
+
+    def test_patch_world_auto_fills_missing_submap_node_and_faction_ids(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {
+                    "title": "Genesis ID 自动补齐书",
+                    "premise": "手工 PATCH 也应该补齐稳定 ID。",
+                    "genre": "玄幻",
+                }
+            )
+        )
+
+        detail = api_module.patch_project_genesis(
+            created.project_id,
+            BookGenesisPatchRequest.model_validate(
+                {
+                    "world": {
+                        "map_atlas": {
+                            "overview": "旧城地图",
+                            "topology_rules": ["移动有代价"],
+                            "submaps": [{"name": "主舞台", "scope": "macro_region"}],
+                            "regions": [{"name": "主城", "subworld_name": "主舞台", "level": 1}],
+                            "nodes": [{"name": "旧城", "parent_subworld": "主舞台", "parent_region_id": "region-1"}],
+                            "edges": [],
+                        },
+                        "story_engine": {
+                            "core_cast": [],
+                            "factions": [{"name": "城防司", "goal": "维持秩序"}],
+                            "opposition": [],
+                            "relationship_axes": [],
+                            "reader_promises": [],
+                            "long_arcs": [],
+                        },
+                    }
+                }
+            ),
+        )
+
+        submap = detail.pack.world["map_atlas"]["submaps"][0]
+        node = detail.pack.world["map_atlas"]["nodes"][0]
+        faction = detail.pack.world["story_engine"]["factions"][0]
+
+        self.assertTrue(submap["id"])
+        self.assertTrue(node["id"])
+        self.assertTrue(faction["id"])
+        self.assertEqual(node["parent_subworld"], submap["id"])
+
+    def test_legacy_top_level_genesis_sections_upgrade_on_read_and_write_back_as_world_root(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {
+                    "title": "Genesis 旧版兼容书",
+                    "premise": "旧 revision 要自动升级到统一 world 根。",
+                    "genre": "玄幻",
+                }
+            )
+        )
+
+        with self.session_factory() as session:
+            project = session.get(Project, created.project_id)
+            revision = session.get(BookGenesisRevision, created.active_genesis_revision_id)
+            assert project is not None
+            assert revision is not None
+            revision.pack_json = json.dumps(
+                {
+                    "book_brief": {"title": "旧版包"},
+                    "world_bible": {"overview": "旧格式世界观"},
+                    "map_atlas": {"overview": "旧格式地图"},
+                    "story_engine": {"long_arcs": ["旧格式引擎"]},
+                    "book_arc_blueprint": {},
+                    "subworld_policy": {},
+                    "execution_bootstrap": {},
+                    "stage_states": {},
+                },
+                ensure_ascii=False,
+            )
+            session.add(revision)
+            session.commit()
+
+        detail = api_module.get_project_genesis(created.project_id)
+        self.assertEqual(detail.pack.world["world_bible"]["overview"], "旧格式世界观")
+        self.assertEqual(detail.pack.world["map_atlas"]["overview"], "旧格式地图")
+        self.assertEqual(detail.pack.world["story_engine"]["long_arcs"], ["旧格式引擎"])
+        self.assertIn("minimum_world_system", detail.pack.world)
+
+        detail = api_module.patch_project_genesis(
+            created.project_id,
+            BookGenesisPatchRequest.model_validate(
+                {"world": {"world_bible": {"history_slice": "升级后新写回"}}}
+            ),
+        )
+        self.assertEqual(detail.pack.world["world_bible"]["history_slice"], "升级后新写回")
+
+        with self.session_factory() as session:
+            project = session.get(Project, created.project_id)
+            assert project is not None
+            latest_revision = session.get(BookGenesisRevision, project.active_genesis_revision_id)
+            assert latest_revision is not None
+            saved_payload = json.loads(latest_revision.pack_json or "{}")
+
+        self.assertIn("world", saved_payload)
+        self.assertNotIn("world_bible", saved_payload)
+        self.assertNotIn("map_atlas", saved_payload)
+        self.assertNotIn("story_engine", saved_payload)
+
+    def test_genesis_trace_records_selected_skills(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {
+                    "title": "Genesis Skill Trace 书",
+                    "premise": "先生成世界观，再检查 Skill Trace。",
+                    "genre": "玄幻",
+                    "target_total_chapters": 8,
+                }
+            )
+        )
+
+        class FakeGenesisLLM:
+            api_key = "test-key"
+            profile_id = "default"
+            profile_name = "Default"
+            model = "fake-model"
+            base_url = "http://example.invalid"
+
+            def chat(self, messages, **kwargs):  # noqa: ANN001, ANN003
+                return json.dumps(
+                    {
+                        "overview": "根世界观已建立。",
+                        "axioms": ["力量必须付出代价。"],
+                        "history_slice": "旧秩序正在松动。",
+                        "naming_style": "中文网文风格。",
+                        "forbidden_zones": [],
+                        "culture_profiles": [
+                            {
+                                "id": "culture-main-stage",
+                                "name": "主舞台文化",
+                                "summary": "用于 Skill Trace 测试。",
+                                "inspiration": "中华",
+                                "generator_civilization": "中华",
+                                "generator_overlays": [],
+                                "character_name_examples": ["林烬"],
+                                "region_name_examples": ["旧城核心区"],
+                                "location_name_examples": ["旧城渡口"],
+                            }
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+
+        _registry, router, prompt_layer_builder = build_skill_runtime_components(
+            root=Path(self.skill_root if hasattr(self, "skill_root") else Path(__file__).resolve().parents[1] / "forwin_skills"),
+            enabled=True,
+            strictness="normal",
+        )
+        with self.session_factory() as session:
+            updater = StateUpdater(session)
+            project = session.get(Project, created.project_id)
+            revision = session.get(BookGenesisRevision, created.active_genesis_revision_id)
+            assert project is not None
+            assert revision is not None
+            service = BookGenesisService(
+                llm_client=FakeGenesisLLM(),
+                skill_router=router,
+                skill_prompt_layer_builder=prompt_layer_builder,
+            )
+            revision, _trace = service.generate_stage(
+                session=session,
+                updater=updater,
+                project=project,
+                revision=revision,
+                stage_key="world",
+            )
+            session.commit()
+
+        with self.session_factory() as session:
+            project = session.get(Project, created.project_id)
+            assert project is not None
+            revision = session.get(BookGenesisRevision, project.active_genesis_revision_id)
+            assert revision is not None
+            detail_pack = json.loads(revision.pack_json)
+        self.assertEqual(detail_pack.get("world", {}).get("world_bible", {}).get("overview"), "根世界观已建立。")
+        with self.session_factory() as session:
+            trace = session.execute(
+                select(PromptTrace)
+                .where(PromptTrace.project_id == created.project_id, PromptTrace.stage_key == "world")
+                .order_by(PromptTrace.created_at.desc(), PromptTrace.id.desc())
+                .limit(1)
+            ).scalar_one()
+
+        prompt_layers = json.loads(trace.prompt_layers_json)
+        input_snapshot = json.loads(trace.input_snapshot_json)
+        output_summary = json.loads(trace.output_summary_json)
+        self.assertTrue(input_snapshot.get("selected_skills"))
+        self.assertTrue(output_summary.get("skill_summary"))
+        self.assertTrue(any(item.get("kind") == "skill" for item in prompt_layers))
 
 
 if __name__ == "__main__":

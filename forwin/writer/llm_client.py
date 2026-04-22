@@ -7,12 +7,13 @@ from email.utils import parsedate_to_datetime
 import httpx
 
 from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
+from forwin.model_adapter import ModelCapabilities
 
 logger = logging.getLogger(__name__)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
 
 
-class LLMClient:
+class OpenAICompatibleAdapter:
     """Synchronous wrapper for OpenAI-compatible LLM APIs."""
 
     def __init__(
@@ -26,9 +27,18 @@ class LLMClient:
         retry_max_delay_seconds: float = 15.0,
         fallback_profiles: list[dict[str, str]] | None = None,
     ) -> None:
+        self.provider = "openai_compatible"
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
+        self.profile_id = ""
+        self.profile_name = ""
+        self.capabilities = ModelCapabilities(
+            supports_json_schema=False,
+            supports_response_format=True,
+            supports_tool_calling=False,
+            supports_system_messages=True,
+        )
         self.timeout_seconds = max(10.0, float(timeout_seconds))
         self.retry_attempts = max(1, int(retry_attempts or 1))
         self.retry_initial_delay_seconds = max(0.0, float(retry_initial_delay_seconds))
@@ -106,7 +116,7 @@ class LLMClient:
 
         if last_exc is not None:
             raise last_exc
-        raise RuntimeError("LLMClient.chat: no usable LLM profile")
+        raise RuntimeError("OpenAICompatibleAdapter.chat: no usable LLM profile")
 
     def _chat_with_profile(
         self,
@@ -191,7 +201,7 @@ class LLMClient:
                 raise
 
         # Should never reach here, but make the type-checker happy.
-        raise RuntimeError("LLMClient.chat: unexpected exit from retry loop")
+        raise RuntimeError("OpenAICompatibleAdapter.chat: unexpected exit from retry loop")
 
     def _request_profiles(self) -> list[dict[str, str]]:
         candidates = [
@@ -321,8 +331,12 @@ class LLMClient:
         """Close the underlying httpx client."""
         self.client.close()
 
-    def __enter__(self) -> "LLMClient":
+    def __enter__(self) -> "OpenAICompatibleAdapter":
         return self
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+
+class LLMClient(OpenAICompatibleAdapter):
+    pass

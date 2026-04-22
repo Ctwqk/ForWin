@@ -40,6 +40,7 @@ from forwin.models.phase import (
     ArcEnvelopeAnalysis,
     ArcStructureDraft,
     BandExperiencePlan,
+    ChapterRewriteAttempt,
     ProjectReplanEvent,
     ProjectStageAnalysis,
     ProvisionalBandExecution,
@@ -51,6 +52,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.models.thread import PlotThread
+from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
     load_latest_arc_envelope_analysis_by_project,
@@ -60,10 +62,21 @@ from forwin.state.query_helpers import (
     load_latest_stage_analysis_by_project,
     load_latest_world_turn_by_project,
 )
+from forwin.world_templates import empty_world_root
 
 
 DisplayDatetime = Callable[[datetime | None], str]
 _GENESIS_STAGE_ORDER = ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap")
+
+
+def _deep_merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _normalized_project_ids(project_ids: list[str]) -> list[str]:
@@ -793,6 +806,27 @@ def _normalize_genesis_pack(raw: str | None) -> BookGenesisPack:
         payload = json.loads(raw or "{}") or {}
     except (json.JSONDecodeError, TypeError):
         payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    raw_world = _deep_merge_dict(
+        empty_world_root(),
+        payload.get("world") if isinstance(payload.get("world"), dict) else {},
+    )
+    if isinstance(payload.get("world_bible"), dict):
+        raw_world["world_bible"] = _deep_merge_dict(
+            raw_world.get("world_bible") if isinstance(raw_world.get("world_bible"), dict) else {},
+            payload.get("world_bible") or {},
+        )
+    if isinstance(payload.get("map_atlas"), dict):
+        raw_world["map_atlas"] = _deep_merge_dict(
+            raw_world.get("map_atlas") if isinstance(raw_world.get("map_atlas"), dict) else {},
+            payload.get("map_atlas") or {},
+        )
+    if isinstance(payload.get("story_engine"), dict):
+        raw_world["story_engine"] = _deep_merge_dict(
+            raw_world.get("story_engine") if isinstance(raw_world.get("story_engine"), dict) else {},
+            payload.get("story_engine") or {},
+        )
     raw_stage_states = payload.get("stage_states") if isinstance(payload, dict) else {}
     if not isinstance(raw_stage_states, dict):
         raw_stage_states = {}
@@ -810,9 +844,7 @@ def _normalize_genesis_pack(raw: str | None) -> BookGenesisPack:
         )
     return BookGenesisPack(
         book_brief=payload.get("book_brief") if isinstance(payload.get("book_brief"), dict) else {},
-        world_bible=payload.get("world_bible") if isinstance(payload.get("world_bible"), dict) else {},
-        map_atlas=payload.get("map_atlas") if isinstance(payload.get("map_atlas"), dict) else {},
-        story_engine=payload.get("story_engine") if isinstance(payload.get("story_engine"), dict) else {},
+        world=raw_world,
         book_arc_blueprint=(
             payload.get("book_arc_blueprint") if isinstance(payload.get("book_arc_blueprint"), dict) else {}
         ),
@@ -1168,6 +1200,17 @@ def build_project_detail(
         select(ChapterPlan).where(ChapterPlan.project_id == project_id).order_by(ChapterPlan.chapter_number)
     ).scalars().all()
     draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
+    latest_attempt_map: dict[int, ChapterRewriteAttempt] = {}
+    for attempt in session.execute(
+        select(ChapterRewriteAttempt)
+        .where(ChapterRewriteAttempt.project_id == project_id)
+        .order_by(
+            ChapterRewriteAttempt.chapter_number.asc(),
+            ChapterRewriteAttempt.attempt_no.desc(),
+            ChapterRewriteAttempt.created_at.desc(),
+        )
+    ).scalars().all():
+        latest_attempt_map.setdefault(int(attempt.chapter_number or 0), attempt)
     upload_stats = load_project_upload_stats(session, [project_id]).get(project_id, {})
     chapter_infos = [
         ChapterInfo(
@@ -1176,6 +1219,13 @@ def build_project_detail(
             status=plan.status,
             char_count=draft_map.get(plan.id).char_count if draft_map.get(plan.id) else 0,
             summary=draft_map.get(plan.id).summary if draft_map.get(plan.id) else "",
+            acceptance_mode=str(getattr(plan, "acceptance_mode", "") or ""),
+            repair_attempt_count=int(getattr(plan, "repair_attempt_count", 0) or 0),
+            canon_risk_level=str(getattr(plan, "canon_risk_level", "") or ""),
+            latest_repair_scope=normalize_repair_scope(
+                getattr(latest_attempt_map.get(plan.chapter_number), "repair_scope", "") or "",
+                default="",
+            ),
         )
         for plan in plans
     ]

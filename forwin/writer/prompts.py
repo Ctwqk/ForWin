@@ -11,6 +11,41 @@ from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import SceneOutput, ScenePlan
 
 
+def _apply_skill_layers(
+    messages: list[dict[str, str]],
+    skill_layers: list[object] | None = None,
+) -> list[dict[str, str]]:
+    if not skill_layers:
+        return messages
+    converted: list[dict[str, str]] = []
+    for item in skill_layers:
+        if hasattr(item, "message_payload"):
+            payload = item.message_payload()
+        elif isinstance(item, dict):
+            payload = {
+                "role": str(item.get("role", "system")).strip() or "system",
+                "content": str(item.get("content", "")),
+            }
+        else:
+            continue
+        converted.append(
+            {
+                "role": str(payload.get("role", "system")).strip() or "system",
+                "content": str(payload.get("content", "")),
+            }
+        )
+    if not converted:
+        return messages
+    result: list[dict[str, str]] = []
+    index = 0
+    while index < len(messages) and str(messages[index].get("role", "")).strip() == "system":
+        result.append(messages[index])
+        index += 1
+    result.extend(converted)
+    result.extend(messages[index:])
+    return result
+
+
 def _normalize_char_targets(
     *,
     target_chars: int,
@@ -355,6 +390,7 @@ def build_single_chapter_draft_prompt(
     target_chars: int = 2800,
     min_chars: int = 2500,
     max_chars: int = 3200,
+    skill_layers: list[object] | None = None,
 ) -> list[dict]:
     target_chars, min_chars, max_chars = _normalize_char_targets(
         target_chars=target_chars,
@@ -394,10 +430,10 @@ def build_single_chapter_draft_prompt(
         "这里写一句到两句总结\n"
         "如果你更习惯，也可以使用【标题】【正文】【摘要】这一组标签，但整篇只保留一组最终结果。"
     )
-    return [
+    return _apply_skill_layers([
         {"role": "system", "content": "你是中文网文作者，只输出指定标签格式的纯文本，不要解释。"},
         {"role": "user", "content": user_content},
-    ]
+    ], skill_layers)
 
 
 def build_preview_chapter_prompt(
@@ -406,6 +442,7 @@ def build_preview_chapter_prompt(
     target_chars: int = 900,
     min_chars: int = 600,
     max_chars: int = 1200,
+    skill_layers: list[object] | None = None,
 ) -> list[dict]:
     target_chars, min_chars, max_chars = _normalize_char_targets(
         target_chars=target_chars,
@@ -444,16 +481,17 @@ def build_preview_chapter_prompt(
         "4. 正文必须是自然叙事，不要列提纲。\n"
         "5. 结尾必须保留钩子。"
     )
-    return [
+    return _apply_skill_layers([
         {"role": "system", "content": "你是中文网文作者，只输出指定标签格式的纯文本，不要解释。"},
         {"role": "user", "content": user_content},
-    ]
+    ], skill_layers)
 
 
 def build_scene_breakdown_prompt(
     context: ChapterContextPack,
     default_scene_count: int = 3,
     max_scene_count: int = 4,
+    skill_layers: list[object] | None = None,
 ) -> list[dict]:
     scene_target = min(max(default_scene_count, 2), max_scene_count)
     schema = json.dumps(
@@ -500,15 +538,16 @@ def build_scene_breakdown_prompt(
         "JSON 结构参考：\n"
         f"{schema}"
     )
-    return [
+    return _apply_skill_layers([
         {"role": "system", "content": "你是网文场景导演，只负责拆 scene，不写正文。"},
         {"role": "user", "content": user_content},
-    ]
+    ], skill_layers)
 
 
 def build_scene_generation_prompt(
     context: ChapterContextPack,
     scene_plan: ScenePlan,
+    skill_layers: list[object] | None = None,
 ) -> list[dict]:
     scene_sections = _scene_prompt_sections(
         context,
@@ -558,15 +597,16 @@ def build_scene_generation_prompt(
         "<<FORWIN_CHARACTER_FOCUS>>\n"
         "这里写下一 scene 应优先关注的角色，使用顿号或逗号分隔"
     )
-    return [
+    return _apply_skill_layers([
         {"role": "system", "content": "你是中文网文写手，只负责写单个 scene，并按指定标签输出纯文本。"},
         {"role": "user", "content": user_content},
-    ]
+    ], skill_layers)
 
 
 def build_scene_stitch_prompt(
     context: ChapterContextPack,
     scene_outputs: list[SceneOutput],
+    skill_layers: list[object] | None = None,
 ) -> list[dict]:
     stitched_input = "\n\n".join(
         (
@@ -613,10 +653,10 @@ def build_scene_stitch_prompt(
         "<<FORWIN_SUMMARY>>\n"
         "这里写 1-2 句章节总结"
     )
-    return [
+    return _apply_skill_layers([
         {"role": "system", "content": "你是章节拼接编辑，只做 scenes 的轻量 stitch，并按指定标签输出纯文本。"},
         {"role": "user", "content": user_content},
-    ]
+    ], skill_layers)
 
 
 def build_state_event_extraction_prompt(

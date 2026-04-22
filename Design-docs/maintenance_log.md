@@ -9,6 +9,30 @@
 - 如果改动尚未部署到 `8899`，必须明确写“未部署原因”和“切换条件”。
 - 旧的专项日志可保留，但关键结论需要汇总到这里。
 
+## 2026-04-21
+
+### V2.9.3 Skill Runtime 接入（Genesis / Writer / Reviewer / PromptTrace / ModelAdapter）
+
+把 `SKILL.md` 类工作流正式吸收到 ForWin 运行时里，作为内部 workflow layer，而不是外部插件。首批覆盖 `Genesis + Writer + Reviewer`，并同步引入 `ModelAdapter` 抽象。
+
+关键变化：
+
+- 新增 `forwin/skills/`：支持加载 `forwin_skills/**/SKILL.md`、按 `scope + stage_key + task_family` 路由、把技能编译成 prompt layers。
+- 新增首批内置 skills：Genesis 六阶段、writer `chapter-outline / scene-drafting / style-control`、reviewer `chapter-continuity / repair-plan`。
+- `BookGenesisService` 现在会在阶段生成 / refine / launch arc 规划前选择 skill layers，并把 `selected_skills / skill_summary / kind=skill` 写入 `PromptTrace`。
+- `ChapterWriter` 与 orchestrator 现在支持 writer skill layers；章节初稿、重写链都会落单独 writer trace，并通过 `parent_trace_id` 串起 review / rewrite 链路。
+- `HistoricalReviewHub` 支持 reviewer skill rubric，但技能只增强 review notes 和 repair guidance，不改写最终 `verdict`。
+- 新增 `ModelAdapter / ModelCapabilities`；现有 OpenAI-compatible LLM client 继续沿用原行为，但升级为 adapter 语义。
+- 新增全局 runtime/config 字段：`skill_runtime_enabled / skill_registry_path / skill_strictness / enabled_skill_groups / disabled_skill_ids`。
+- 新增设计文档：[V2_9_3_skill_runtime.md](/home/taiwei/.codex/worktrees/461a/ForWin/Design-docs/V2_9_3_skill_runtime.md)。
+
+验证：
+
+- `python3 -m py_compile forwin/model_adapter.py forwin/skills/__init__.py forwin/skills/models.py forwin/skills/policy.py forwin/skills/loader.py forwin/skills/registry.py forwin/skills/router.py forwin/skills/prompt_layer.py forwin/book_genesis.py forwin/writer/llm_client.py forwin/writer/chapter_writer.py forwin/writer/prompts.py forwin/reviewer/hub.py forwin/orchestrator/loop.py forwin/runtime_settings.py forwin/config.py tests/test_skill_runtime.py tests/test_book_genesis_flow.py tests/test_phase05_regressions.py`
+- `PYTHONPATH=. pytest -q tests/test_skill_runtime.py tests/test_book_genesis_flow.py tests/test_phase05_regressions.py`
+
+部署状态：未部署到 `8899`。原因：本轮先完成运行时接入、trace 持久化和本地回归，还没有执行容器重建。切换条件：先确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`，再执行 `docker compose build forwin` 与 `docker compose up -d forwin`。
+
 ## 2026-04-20
 
 ### V2.9.2A 文化命名生成器接入（culture lexicon / Genesis 自动命名 / 前端一键生成）

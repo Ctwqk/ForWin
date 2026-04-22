@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 from forwin.governance_checks import (
     chapter_combined_text,
     evaluate_constraint_issues,
@@ -8,6 +10,7 @@ from forwin.governance_checks import (
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.skills import serialize_prompt_layers
 from .context_builder import build_review_context_pack
 from .lint import LintSignalCollector
 from .webnovel import WebNovelExperienceReviewer
@@ -37,6 +40,7 @@ class HistoricalReviewHub:
         context: ChapterContextPack,
         writer_output: WriterOutput,
         continuity_checker,
+        reviewer_skill_layers: list[object] | None = None,
     ) -> ReviewVerdict:
         continuity = continuity_checker.check(project_id, writer_output)
         lint_signals = self.lint_collector.collect(writer_output)
@@ -45,7 +49,12 @@ class HistoricalReviewHub:
             context=context,
             lint_signals=lint_signals,
         )
-        webnovel = self.experience_reviewer.review(review_context, writer_output)
+        webnovel = self._call_with_compatible_kwargs(
+            self.experience_reviewer.review,
+            review_context,
+            writer_output,
+            reviewer_skill_layers=reviewer_skill_layers,
+        )
         governance_issues = self._governance_issues(
             context=review_context,
             writer_output=writer_output,
@@ -78,7 +87,7 @@ class HistoricalReviewHub:
                 ),
                 webnovel_instruction=webnovel.repair_instruction,
             )
-        return ReviewVerdict(
+        verdict_payload = ReviewVerdict(
             verdict=verdict,
             issues=issues,
             recommended_action=(
@@ -100,6 +109,111 @@ class HistoricalReviewHub:
             repair_instruction=repair_instruction,
             forced_accept_applied=False,
         )
+        return self._apply_reviewer_skill_layers(
+            verdict=verdict_payload,
+            skill_layers=reviewer_skill_layers,
+            context=context,
+            writer_output=writer_output,
+        )
+
+    @staticmethod
+    def _apply_reviewer_skill_layers(
+        *,
+        verdict: ReviewVerdict,
+        skill_layers: list[object] | None,
+        context: ChapterContextPack,
+        writer_output: WriterOutput,
+    ) -> ReviewVerdict:
+        selected_skills = HistoricalReviewHub._selected_skills_from_layers(skill_layers)
+        if not selected_skills:
+            return verdict
+        review_notes = list(verdict.review_notes)
+        review_notes.append(
+            "启用 reviewer skills: " + "、".join(item["id"] for item in selected_skills)
+        )
+        repair_instruction = verdict.repair_instruction
+        if repair_instruction is not None:
+            repair_instruction = repair_instruction.model_copy(
+                update={
+                    "design_patch": {
+                        **repair_instruction.design_patch,
+                        "reviewer_skill_ids": [item["id"] for item in selected_skills],
+                    }
+                }
+            )
+        prompt_layers = serialize_prompt_layers(
+            [
+                {
+                    "role": "system",
+                    "content": "ForWin reviewer rubric aggregation. Reviewer skills may explain issues and repairs but must not override the final verdict.",
+                }
+            ],
+            skill_layers or [],
+        )
+        prompt_trace = {
+            "trace_scope": "reviewer",
+            "stage_key": "chapter_review",
+            "template_id": "reviewer:chapter_review",
+            "template_version": "v1",
+            "effective_system_prompt": "\n\n".join(
+                str(item.get("content", "")).strip()
+                for item in prompt_layers
+                if str(item.get("role", "")).strip() == "system"
+            ),
+            "prompt_layers": prompt_layers,
+            "input_snapshot": {
+                "project_id": getattr(context, "project_id", ""),
+                "chapter_number": context.chapter_number,
+                "selected_skills": selected_skills,
+                "body_char_count": int(getattr(writer_output, "char_count", 0) or 0),
+            },
+            "model_profile": {},
+            "attempts": [],
+            "output_summary": {
+                "verdict": verdict.verdict,
+                "issue_count": len(verdict.issues),
+                "skill_summary": selected_skills,
+            },
+        }
+        return verdict.model_copy(
+            update={
+                "review_notes": review_notes,
+                "repair_instruction": repair_instruction,
+                "prompt_trace": prompt_trace,
+            }
+        )
+
+    @staticmethod
+    def _call_with_compatible_kwargs(callable_obj, /, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+        try:
+            signature = inspect.signature(callable_obj)
+        except (TypeError, ValueError):
+            return callable_obj(*args, **kwargs)
+        parameters = signature.parameters
+        if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+            return callable_obj(*args, **kwargs)
+        filtered_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key in parameters
+        }
+        return callable_obj(*args, **filtered_kwargs)
+
+    @staticmethod
+    def _selected_skills_from_layers(skill_layers: list[object] | None) -> list[dict[str, str]]:
+        payload: list[dict[str, str]] = []
+        for item in skill_layers or []:
+            payload.append(
+                {
+                    "id": str(getattr(item, "skill_id", getattr(item, "name", "")) or ""),
+                    "version": str(getattr(item, "skill_version", getattr(item, "version", "")) or ""),
+                    "hash": str(getattr(item, "skill_hash", "") or ""),
+                    "path": str(getattr(item, "path", "") or ""),
+                    "activation_reason": str(getattr(item, "activation_reason", "") or ""),
+                    "mode": str(getattr(item, "mode", "") or ""),
+                }
+            )
+        return [item for item in payload if item["id"]]
 
     @staticmethod
     def _issues_verdict(issues: list[ContinuityIssue]) -> str:
@@ -173,7 +287,7 @@ class HistoricalReviewHub:
         context: ChapterContextPack,
     ) -> RepairInstruction:
         return RepairInstruction(
-            repair_scope="scene",
+            repair_scope="draft",
             failure_type="continuity",
             must_fix=[issue.description for issue in continuity_issues if issue.severity == "error"],
             must_preserve=[
@@ -194,7 +308,7 @@ class HistoricalReviewHub:
         context: ChapterContextPack,
     ) -> RepairInstruction:
         return RepairInstruction(
-            repair_scope="scene",
+            repair_scope="draft",
             failure_type="mixed",
             must_fix=[issue.description for issue in governance_issues if issue.severity == "error"],
             must_preserve=[
@@ -223,7 +337,7 @@ class HistoricalReviewHub:
         if base_instruction is None:
             return webnovel_instruction
 
-        scope_rank = {"scene": 1, "band": 2, "arc": 3}
+        scope_rank = {"draft": 1, "chapter_plan": 2, "band_plan": 3}
         merged_scope = max(
             [base_instruction.repair_scope, webnovel_instruction.repair_scope],
             key=lambda item: scope_rank.get(item, 1),

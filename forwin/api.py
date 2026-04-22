@@ -182,6 +182,7 @@ from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
 from forwin.publishers import PublisherManager
 from forwin.runtime_settings import RuntimeSettingsStore
+from forwin.skills import build_skill_runtime_components
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
 from forwin.writer.llm_client import LLMClient
@@ -349,11 +350,22 @@ def _build_genesis_service(
         api_key=str(resolved.minimax_api_key or ""),
         base_url=str(resolved.minimax_base_url or ""),
         model=str(resolved.minimax_model or ""),
-        fallback_profiles=getattr(resolved, "fallback_profiles", None),
+        fallback_profiles=getattr(resolved, "llm_fallback_profiles", None),
     )
     setattr(llm_client, "profile_id", resolved_profile.get("id", ""))
     setattr(llm_client, "profile_name", resolved_profile.get("name", ""))
-    return BookGenesisService(llm_client=llm_client)
+    _registry, router, prompt_layer_builder = build_skill_runtime_components(
+        root=resolved.skill_registry_path,
+        enabled=resolved.skill_runtime_enabled,
+        strictness=resolved.skill_strictness,
+        enabled_skill_groups=resolved.enabled_skill_groups,
+        disabled_skill_ids=resolved.disabled_skill_ids,
+    )
+    return BookGenesisService(
+        llm_client=llm_client,
+        skill_router=router,
+        skill_prompt_layer_builder=prompt_layer_builder,
+    )
 
 
 def _close_genesis_service(service: BookGenesisService | None) -> None:
@@ -383,9 +395,7 @@ def _genesis_patch_payload(req: BookGenesisPatchRequest) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     for key in (
         "book_brief",
-        "world_bible",
-        "map_atlas",
-        "story_engine",
+        "world",
         "book_arc_blueprint",
         "subworld_policy",
         "execution_bootstrap",
@@ -2040,6 +2050,11 @@ async def lifespan(app: FastAPI):
             default_band_warn_action=_config.band_warn_action,
             default_manual_checkpoints_enabled=_config.manual_checkpoints_enabled,
             default_future_constraints_enabled=_config.future_constraints_enabled,
+            default_skill_runtime_enabled=_config.skill_runtime_enabled,
+            default_skill_registry_path=_config.skill_registry_path,
+            default_skill_strictness=_config.skill_strictness,
+            default_enabled_skill_groups=_config.enabled_skill_groups,
+            default_disabled_skill_ids=_config.disabled_skill_ids,
         )
     _start_automation_scheduler()
     logger.info("ForWin API started. DB: %s", _config.db_path)

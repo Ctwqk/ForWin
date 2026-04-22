@@ -101,9 +101,16 @@ def assemble_context(
             except (TypeError, ValueError, json.JSONDecodeError):
                 genesis_pack = {}
             if isinstance(genesis_pack, dict):
-                world_bible = genesis_pack.get("world_bible") if isinstance(genesis_pack.get("world_bible"), dict) else {}
-                genesis_map_atlas = genesis_pack.get("map_atlas") if isinstance(genesis_pack.get("map_atlas"), dict) else {}
-                story_engine = genesis_pack.get("story_engine") if isinstance(genesis_pack.get("story_engine"), dict) else {}
+                world_root = genesis_pack.get("world") if isinstance(genesis_pack.get("world"), dict) else {}
+                if not world_root:
+                    world_root = {
+                        "world_bible": genesis_pack.get("world_bible") if isinstance(genesis_pack.get("world_bible"), dict) else {},
+                        "map_atlas": genesis_pack.get("map_atlas") if isinstance(genesis_pack.get("map_atlas"), dict) else {},
+                        "story_engine": genesis_pack.get("story_engine") if isinstance(genesis_pack.get("story_engine"), dict) else {},
+                    }
+                world_bible = world_root.get("world_bible") if isinstance(world_root.get("world_bible"), dict) else {}
+                genesis_map_atlas = world_root.get("map_atlas") if isinstance(world_root.get("map_atlas"), dict) else {}
+                story_engine = world_root.get("story_engine") if isinstance(world_root.get("story_engine"), dict) else {}
                 genesis_world_overview = str(world_bible.get("overview", "") or "")
                 long_arcs = story_engine.get("long_arcs") if isinstance(story_engine.get("long_arcs"), list) else []
                 genesis_story_engine_summary = "；".join(str(item).strip() for item in long_arcs if str(item).strip())

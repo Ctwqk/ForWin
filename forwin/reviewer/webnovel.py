@@ -8,6 +8,7 @@ from typing import Any
 from forwin.protocol.context import ChapterContextPack, LintSignal, ReviewContextPack
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.skills import inject_skill_layers
 from forwin.utils import LLMJSONParseError, parse_llm_json
 from forwin.writer.llm_client import LLMClient
 
@@ -51,6 +52,8 @@ class WebNovelExperienceReviewer:
         self,
         context: ReviewContextPack | ChapterContextPack,
         writer_output: WriterOutput,
+        *,
+        reviewer_skill_layers: list[object] | None = None,
     ) -> ReviewVerdict:
         review_context = self._normalize_context(context)
         if not self.enabled:
@@ -59,7 +62,11 @@ class WebNovelExperienceReviewer:
             return ReviewVerdict(verdict="pass", issues=[])
 
         if self.llm_enabled and self.llm_client is not None:
-            llm_verdict = self._review_with_llm(review_context, writer_output)
+            llm_verdict = self._review_with_llm(
+                review_context,
+                writer_output,
+                reviewer_skill_layers=reviewer_skill_layers,
+            )
             if llm_verdict is not None:
                 return llm_verdict
         return self._review_with_heuristics(review_context, writer_output)
@@ -120,12 +127,18 @@ class WebNovelExperienceReviewer:
         self,
         context: ReviewContextPack,
         writer_output: WriterOutput,
+        *,
+        reviewer_skill_layers: list[object] | None = None,
     ) -> ReviewVerdict | None:
         payload = self._llm_payload(context, writer_output)
         evidence_ids = [item["evidence_id"] for item in payload["evidence_index"]]
         try:
             raw = self.llm_client.chat(
-                self._llm_review_messages(payload=payload, evidence_ids=evidence_ids),
+                self._llm_review_messages(
+                    payload=payload,
+                    evidence_ids=evidence_ids,
+                    reviewer_skill_layers=reviewer_skill_layers,
+                ),
                 temperature=0.1,
                 max_tokens=3000,
                 timeout_seconds=45,
@@ -515,8 +528,9 @@ class WebNovelExperienceReviewer:
         *,
         payload: dict[str, Any],
         evidence_ids: list[str],
+        reviewer_skill_layers: list[object] | None = None,
     ) -> list[dict[str, str]]:
-        return [
+        base_messages = [
             {
                 "role": "system",
                 "content": (
@@ -536,7 +550,7 @@ class WebNovelExperienceReviewer:
                     "分值 0 到 1。\n"
                     "issues 每项必须包含：rule_name、severity、description、issue_type、target_scope、"
                     "evidence_refs、suggested_fix。warn/fail issue 的 evidence_refs 必须全部来自允许列表。\n"
-                    "repair_instruction 可以为 null，否则必须包含：repair_scope(scene/band/arc)、"
+                    "repair_instruction 可以为 null，否则必须包含：repair_scope(draft/chapter_plan/band_plan)、"
                     "failure_type、must_fix、must_preserve、design_patch、evidence_refs。\n"
                     "若章节拖但仍有问题梯子/微进展/关系变化/规则稳态，只能给 warn 或 pass，不能给 fail。\n"
                     "只有当 no-payoff stall 连续成立，或出现因果/stakes/规则可读性断裂且能指向证据时，才给 fail。\n"
@@ -545,6 +559,7 @@ class WebNovelExperienceReviewer:
                 ),
             },
         ]
+        return inject_skill_layers(base_messages, reviewer_skill_layers or [])
 
     def _repair_llm_json(
         self,
@@ -1138,12 +1153,19 @@ class WebNovelExperienceReviewer:
         delivered_tags: list[str],
         evidence_refs: list[str],
     ) -> RepairInstruction:
-        scope_rank = {"scene": 1, "band": 2, "arc": 3}
-        scope = max(
-            (issue.target_scope for issue in issues if issue.severity == "error"),
-            key=lambda item: scope_rank.get(item, 1),
-            default="scene",
-        )
+        scope_rank = {"draft": 1, "chapter_plan": 2, "band_plan": 3}
+        error_scopes = [
+            (
+                "band_plan"
+                if str(issue.target_scope or "") == "arc"
+                else "chapter_plan"
+                if str(issue.target_scope or "") == "band"
+                else "draft"
+            )
+            for issue in issues
+            if issue.severity == "error"
+        ]
+        scope = max(error_scopes, key=lambda item: scope_rank.get(item, 1), default="draft")
         issue_types = {issue.issue_type for issue in issues if issue.severity == "error"}
         failure_type = "mixed" if len(issue_types) != 1 else next(iter(issue_types))
         plan = context.chapter_experience_plan

@@ -28,6 +28,71 @@
       };
     }
 
+    function isGenesisStageLocked(detail = currentGenesisDetail, stageKey = currentGenesisStage) {
+      return Boolean(genesisStageState(detail, stageKey).locked);
+    }
+
+    function setGenesisContainerDisabled(containerId, disabled) {
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      container.querySelectorAll('input, textarea, select, button').forEach((element) => {
+        element.disabled = Boolean(disabled);
+      });
+    }
+
+    function applyGenesisLockedState(detail = currentGenesisDetail, stageKey = currentGenesisStage) {
+      const locked = isGenesisStageLocked(detail, stageKey);
+      const lockBtn = document.getElementById('genesis_lock_stage_btn');
+      const lockStatus = document.getElementById('genesis_lock_stage_status');
+      const saveBtn = document.getElementById('genesis_save_stage_btn');
+      const generateBtn = document.getElementById('genesis_generate_stage_btn');
+      const rerunBtn = document.getElementById('genesis_rerun_stage_btn');
+      const refineStageBtn = document.getElementById('genesis_refine_stage_btn');
+      const refineItemBtn = document.getElementById('genesis_refine_item_btn');
+      const createItemBtn = document.getElementById('genesis_create_item_btn');
+      const deleteItemBtn = document.getElementById('genesis_delete_item_btn');
+      const editor = document.getElementById('genesis_stage_editor');
+      const instruction = document.getElementById('genesis_refine_instruction');
+      const refineMeta = document.getElementById('genesis_refine_meta');
+
+      if (lockBtn) {
+        lockBtn.hidden = locked;
+        lockBtn.disabled = locked;
+      }
+      if (lockStatus) {
+        lockStatus.hidden = !locked;
+      }
+      if (saveBtn) saveBtn.disabled = locked;
+      if (generateBtn) generateBtn.disabled = locked;
+      if (rerunBtn) rerunBtn.disabled = locked;
+      if (refineStageBtn) refineStageBtn.disabled = locked;
+      if (refineItemBtn) refineItemBtn.disabled = locked || !currentGenesisItemPath();
+      if (createItemBtn) createItemBtn.disabled = locked || createItemBtn.disabled;
+      if (deleteItemBtn) deleteItemBtn.disabled = locked || deleteItemBtn.disabled;
+      if (editor) editor.readOnly = locked;
+      if (instruction) {
+        instruction.readOnly = locked;
+        if (!instruction.dataset.defaultPlaceholder) {
+          instruction.dataset.defaultPlaceholder = instruction.placeholder || '';
+        }
+        instruction.placeholder = locked
+          ? '当前阶段已锁定，AI 对话改写已切换为只读。'
+          : instruction.dataset.defaultPlaceholder;
+      }
+      if (refineMeta) {
+        const lockedSuffix = ' 当前阶段已锁定，当前仅支持查看。';
+        const currentText = refineMeta.textContent || '';
+        const baseText = currentText.endsWith(lockedSuffix)
+          ? currentText.slice(0, -lockedSuffix.length)
+          : currentText;
+        refineMeta.textContent = locked
+          ? `${baseText}${lockedSuffix}`
+          : baseText;
+      }
+      setGenesisContainerDisabled('genesis_stage_form', locked);
+      setGenesisContainerDisabled('genesis_item_form', locked);
+    }
+
     function genesisProgressSummary(book) {
       const stages = Array.isArray(book?.genesis_stage_overview) ? book.genesis_stage_overview : [];
       if (!stages.length) return '';
@@ -352,6 +417,10 @@
 
     async function generateGenesisFieldValue(field, applyFn, context = {}) {
       if (!currentGenesisProjectId) return;
+      if (isGenesisStageLocked()) {
+        setGlobalStatus(`${genesisStageLabel(currentGenesisStage)} 已锁定，不能再自动生成字段。`, 'Genesis 工作台');
+        return;
+      }
       try {
         const response = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis/generate-name`, {
           method: 'POST',
@@ -852,10 +921,15 @@
       document.getElementById('genesis_start_writing_btn').disabled = !detail.can_start_writing;
       renderGenesisItemWorkbench(detail);
       renderGenesisTraceList(detail);
+      applyGenesisLockedState(detail, currentGenesisStage);
     }
 
     async function saveGenesisStage() {
       if (!currentGenesisProjectId || !currentGenesisDetail) return;
+      if (isGenesisStageLocked()) {
+        setGlobalStatus(`${genesisStageLabel(currentGenesisStage)} 已锁定，当前仅支持查看。`, 'Genesis 工作台');
+        return;
+      }
       try {
         const parsed = parseGenesisStageEditor();
         const saved = await patchGenesisStagePayload(parsed, `ui_edit_${currentGenesisStage}`);
@@ -868,6 +942,10 @@
 
     async function generateGenesisStage(action = 'generate') {
       if (!currentGenesisProjectId) return;
+      if (isGenesisStageLocked()) {
+        setGlobalStatus(`${genesisStageLabel(currentGenesisStage)} 已锁定，不能再执行生成或重生。`, 'Genesis 工作台');
+        return;
+      }
       const normalized = action === 'rerun' ? 'rerun' : 'generate';
       try {
         const generated = await runGenesisAction(async () => {
@@ -892,6 +970,10 @@
 
     async function lockGenesisStage() {
       if (!currentGenesisProjectId) return;
+      if (isGenesisStageLocked()) {
+        setGlobalStatus(`${genesisStageLabel(currentGenesisStage)} 已锁定。`, 'Genesis 工作台');
+        return;
+      }
       try {
         const locked = await runGenesisAction(async () => {
           currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis/stages/${currentGenesisStage}/lock`, {
@@ -923,6 +1005,10 @@
 
     async function createGenesisItem() {
       if (!currentGenesisProjectId) return;
+      if (isGenesisStageLocked()) {
+        setGlobalStatus(`${genesisStageLabel(currentGenesisStage)} 已锁定，不能再新增子项。`, 'Genesis 工作台');
+        return;
+      }
       const definition = genesisItemDefinition(currentGenesisStage, currentGenesisItemCollection || defaultGenesisItemCollection());
       if (!definition || !definition.collection) {
         setGlobalStatus('当前阶段不支持子项创建。', 'Genesis 工作台');
@@ -999,6 +1085,10 @@
 
     async function deleteGenesisItem() {
       if (!currentGenesisProjectId) return;
+      if (isGenesisStageLocked()) {
+        setGlobalStatus(`${genesisStageLabel(currentGenesisStage)} 已锁定，不能再删除子项。`, 'Genesis 工作台');
+        return;
+      }
       const definition = genesisItemDefinition();
       const path = currentGenesisItemPath();
       if (!definition || !definition.collection || !path) {
@@ -1034,6 +1124,10 @@
 
     async function refineGenesisStage(targetPath = '') {
       if (!currentGenesisProjectId) return;
+      if (isGenesisStageLocked()) {
+        setGlobalStatus(`${genesisStageLabel(currentGenesisStage)} 已锁定，不能再执行 AI 改写。`, 'Genesis 工作台');
+        return;
+      }
       const instruction = document.getElementById('genesis_refine_instruction').value.trim();
       if (!instruction) {
         setGlobalStatus('先输入你想让 AI 修改什么。', 'Genesis 工作台');

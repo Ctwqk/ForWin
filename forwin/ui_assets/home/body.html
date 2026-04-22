@@ -510,15 +510,16 @@
             <textarea id="genesis_refine_instruction" class="genesis-refine-textarea" placeholder="像聊天一样告诉 AI 你想怎么改。可以改写整个阶段，也可以在选择子项后只改一个规则 / 历史 / 命名 / 禁区 / 小地图 / 角色 / 势力。"></textarea>
             <div id="genesis_refine_meta" class="meta-line">默认会改写整个阶段；如果选中了子项，也可以只改写那个对象。</div>
             <div class="action-row">
-              <button class="secondary" type="button" onclick="refineGenesisCurrentStage()">改写当前阶段</button>
+              <button id="genesis_refine_stage_btn" class="secondary" type="button" onclick="refineGenesisCurrentStage()">改写当前阶段</button>
               <button id="genesis_refine_item_btn" class="ghost" type="button" onclick="refineGenesisSelectedItem()" disabled>改写选中子项</button>
             </div>
           </div>
           <div class="action-row">
-            <button class="secondary" type="button" onclick="saveGenesisStage()">保存编辑</button>
-            <button class="ghost" type="button" onclick="generateGenesisStage('generate')">生成</button>
-            <button class="ghost" type="button" onclick="generateGenesisStage('rerun')">重生</button>
-            <button class="primary" type="button" onclick="lockGenesisStage()">锁定阶段</button>
+            <button id="genesis_save_stage_btn" class="secondary" type="button" onclick="saveGenesisStage()">保存编辑</button>
+            <button id="genesis_generate_stage_btn" class="ghost" type="button" onclick="generateGenesisStage('generate')">生成</button>
+            <button id="genesis_rerun_stage_btn" class="ghost" type="button" onclick="generateGenesisStage('rerun')">重生</button>
+            <span id="genesis_lock_stage_status" class="badge ok" hidden>当前阶段已锁定</span>
+            <button id="genesis_lock_stage_btn" class="primary" type="button" onclick="lockGenesisStage()">锁定阶段</button>
           </div>
         </section>
         <section class="genesis-summary-grid">

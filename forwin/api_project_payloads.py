@@ -62,10 +62,21 @@ from forwin.state.query_helpers import (
     load_latest_stage_analysis_by_project,
     load_latest_world_turn_by_project,
 )
+from forwin.world_templates import empty_world_root
 
 
 DisplayDatetime = Callable[[datetime | None], str]
 _GENESIS_STAGE_ORDER = ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap")
+
+
+def _deep_merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge_dict(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _normalized_project_ids(project_ids: list[str]) -> list[str]:
@@ -795,6 +806,27 @@ def _normalize_genesis_pack(raw: str | None) -> BookGenesisPack:
         payload = json.loads(raw or "{}") or {}
     except (json.JSONDecodeError, TypeError):
         payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    raw_world = _deep_merge_dict(
+        empty_world_root(),
+        payload.get("world") if isinstance(payload.get("world"), dict) else {},
+    )
+    if isinstance(payload.get("world_bible"), dict):
+        raw_world["world_bible"] = _deep_merge_dict(
+            raw_world.get("world_bible") if isinstance(raw_world.get("world_bible"), dict) else {},
+            payload.get("world_bible") or {},
+        )
+    if isinstance(payload.get("map_atlas"), dict):
+        raw_world["map_atlas"] = _deep_merge_dict(
+            raw_world.get("map_atlas") if isinstance(raw_world.get("map_atlas"), dict) else {},
+            payload.get("map_atlas") or {},
+        )
+    if isinstance(payload.get("story_engine"), dict):
+        raw_world["story_engine"] = _deep_merge_dict(
+            raw_world.get("story_engine") if isinstance(raw_world.get("story_engine"), dict) else {},
+            payload.get("story_engine") or {},
+        )
     raw_stage_states = payload.get("stage_states") if isinstance(payload, dict) else {}
     if not isinstance(raw_stage_states, dict):
         raw_stage_states = {}
@@ -812,9 +844,7 @@ def _normalize_genesis_pack(raw: str | None) -> BookGenesisPack:
         )
     return BookGenesisPack(
         book_brief=payload.get("book_brief") if isinstance(payload.get("book_brief"), dict) else {},
-        world_bible=payload.get("world_bible") if isinstance(payload.get("world_bible"), dict) else {},
-        map_atlas=payload.get("map_atlas") if isinstance(payload.get("map_atlas"), dict) else {},
-        story_engine=payload.get("story_engine") if isinstance(payload.get("story_engine"), dict) else {},
+        world=raw_world,
         book_arc_blueprint=(
             payload.get("book_arc_blueprint") if isinstance(payload.get("book_arc_blueprint"), dict) else {}
         ),

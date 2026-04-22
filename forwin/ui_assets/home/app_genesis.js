@@ -14,6 +14,10 @@
       return GENESIS_STAGE_FIELD_MAP[stageKey] || 'book_brief';
     }
 
+    function isGenesisWorldRootStage(stageKey = currentGenesisStage) {
+      return stageKey === 'world' || stageKey === 'map' || stageKey === 'story_engine';
+    }
+
     function genesisStageState(detail, stageKey) {
       return detail?.pack?.stage_states?.[stageKey] || {
         stage_key: stageKey,
@@ -77,7 +81,7 @@
 
     function currentGenesisServerPayload(detail = currentGenesisDetail, stageKey = currentGenesisStage) {
       const fieldKey = genesisFieldForStage(stageKey);
-      return detail?.pack?.[fieldKey] || {};
+      return genesisGetValueAtPath(detail?.pack || {}, fieldKey) || {};
     }
 
     function currentGenesisPayload(detail = currentGenesisDetail, stageKey = currentGenesisStage) {
@@ -120,13 +124,12 @@
       const payload = currentGenesisPayload(detail);
       if (!definition) return [];
       if (definition.collection) {
-        return Array.isArray(payload?.[definition.collection]) ? payload[definition.collection] : [];
+        const items = genesisGetValueAtPath(payload, definition.collection);
+        return Array.isArray(items) ? items : [];
       }
       if (!definition.path) return [];
-      if (payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, definition.path)) {
-        return [payload[definition.path]];
-      }
-      return [deepCloneJson(definition.template ?? null)];
+      const value = genesisGetValueAtPath(payload, definition.path);
+      return [typeof value === 'undefined' ? deepCloneJson(definition.template ?? null) : value];
     }
 
     function currentGenesisItemPath() {
@@ -147,18 +150,37 @@
     }
 
     function genesisPathSegments(path = '') {
-      return String(path || '')
+      const segments = [];
+      String(path || '')
         .split('.')
         .map((part) => part.trim())
-        .filter(Boolean);
+        .filter(Boolean)
+        .forEach((part) => {
+          const matcher = /([^\[\]]+)|\[(\d+)\]/g;
+          let match = matcher.exec(part);
+          while (match) {
+            if (match[1]) {
+              segments.push(match[1]);
+            } else if (match[2]) {
+              segments.push(Number.parseInt(match[2], 10));
+            }
+            match = matcher.exec(part);
+          }
+        });
+      return segments;
     }
 
     function genesisGetValueAtPath(source, path = '') {
       if (!path) return source;
       let cursor = source;
       for (const segment of genesisPathSegments(path)) {
-        if (cursor == null || typeof cursor !== 'object') return undefined;
-        cursor = cursor[segment];
+        if (typeof segment === 'number') {
+          if (!Array.isArray(cursor) || segment < 0 || segment >= cursor.length) return undefined;
+          cursor = cursor[segment];
+        } else {
+          if (cursor == null || typeof cursor !== 'object') return undefined;
+          cursor = cursor[segment];
+        }
       }
       return cursor;
     }
@@ -170,12 +192,27 @@
       let cursor = source;
       for (let index = 0; index < segments.length - 1; index += 1) {
         const segment = segments[index];
-        if (!cursor[segment] || typeof cursor[segment] !== 'object' || Array.isArray(cursor[segment])) {
-          cursor[segment] = {};
+        const nextSegment = segments[index + 1];
+        if (typeof segment === 'number') {
+          if (!Array.isArray(cursor)) return source;
+          if (cursor[segment] == null || typeof cursor[segment] !== 'object') {
+            cursor[segment] = typeof nextSegment === 'number' ? [] : {};
+          }
+          cursor = cursor[segment];
+          continue;
+        }
+        if (!cursor[segment] || typeof cursor[segment] !== 'object') {
+          cursor[segment] = typeof nextSegment === 'number' ? [] : {};
         }
         cursor = cursor[segment];
       }
-      cursor[segments[segments.length - 1]] = value;
+      const lastSegment = segments[segments.length - 1];
+      if (typeof lastSegment === 'number') {
+        if (!Array.isArray(cursor)) return source;
+        cursor[lastSegment] = value;
+      } else {
+        cursor[lastSegment] = value;
+      }
       return source;
     }
 
@@ -195,13 +232,14 @@
           .map((item) => {
             const normalized = {};
             schema.forEach((field) => {
-              const raw = item[field.path];
+              const fieldKey = field.path || field.key;
+              const raw = item[fieldKey];
               if (field.kind === 'checkbox') {
-                normalized[field.path] = Boolean(raw);
+                normalized[fieldKey] = Boolean(raw);
               } else if (field.kind === 'list') {
-                normalized[field.path] = genesisStringList(raw);
+                normalized[fieldKey] = genesisStringList(raw);
               } else {
-                normalized[field.path] = raw == null ? '' : raw;
+                normalized[fieldKey] = raw == null ? (field.default ?? '') : raw;
               }
             });
             return normalized;
@@ -246,41 +284,49 @@
       return value == null ? '' : String(value);
     }
 
-    function genesisReferenceOptions(source) {
+    function genesisReferenceOptions(field) {
+      const source = typeof field === 'string' ? field : field?.source;
       if (!source) return [];
-      let payload = {};
-      if (source === 'culture_profiles') {
-        payload = currentGenesisStage === 'world'
-          ? currentGenesisPayload(currentGenesisDetail, 'world')
-          : currentGenesisServerPayload(currentGenesisDetail, 'world');
-      } else if (source === 'submaps' || source === 'regions' || source === 'nodes') {
-        payload = currentGenesisStage === 'map'
-          ? currentGenesisPayload(currentGenesisDetail, 'map')
-          : currentGenesisServerPayload(currentGenesisDetail, 'map');
-      } else if (source === 'factions' || source === 'core_cast' || source === 'opposition') {
-        payload = currentGenesisStage === 'story_engine'
-          ? currentGenesisPayload(currentGenesisDetail, 'story_engine')
-          : currentGenesisServerPayload(currentGenesisDetail, 'story_engine');
-      }
-      const items = Array.isArray(payload?.[source]) ? payload[source] : [];
-      return items
+      const sourceMap = {
+        culture_profiles: { stage: 'world', path: 'world_bible.culture_profiles' },
+        submaps: { stage: 'map', path: 'submaps' },
+        regions: { stage: 'map', path: 'regions' },
+        nodes: { stage: 'map', path: 'nodes' },
+        factions: { stage: 'story_engine', path: 'factions' },
+        core_cast: { stage: 'story_engine', path: 'core_cast' },
+        opposition: { stage: 'story_engine', path: 'opposition' },
+      };
+      const sourceMeta = sourceMap[source];
+      if (!sourceMeta) return [];
+      const payload = currentGenesisStage === sourceMeta.stage
+        ? currentGenesisPayload(currentGenesisDetail, sourceMeta.stage)
+        : currentGenesisServerPayload(currentGenesisDetail, sourceMeta.stage);
+      const items = genesisGetValueAtPath(payload, sourceMeta.path);
+      const referenceValue = typeof field === 'object' ? String(field.reference_value || '').trim() : '';
+      return (Array.isArray(items) ? items : [])
         .map((item) => {
           if (item && typeof item === 'object') {
-            const fallbackValue = String(item.name || item.title || item.id || '').trim();
+            const itemId = String(item.id || '').trim();
+            const itemName = String(item.name || item.title || itemId || '').trim();
+            const fallbackValue = itemId || itemName;
             if (!fallbackValue) return null;
+            const optionValue = referenceValue === 'name' ? (itemName || fallbackValue) : fallbackValue;
             if (source === 'culture_profiles') {
               return {
-                value: String(item.id || fallbackValue).trim(),
-                label: `${String(item.name || fallbackValue).trim()}${item.inspiration ? ` · ${item.inspiration}` : ''}`,
+                value: optionValue,
+                label: `${itemName || fallbackValue}${item.inspiration ? ` · ${item.inspiration}` : ''}`,
               };
             }
             if (source === 'regions') {
               return {
-                value: String(item.id || fallbackValue).trim(),
-                label: `${String(item.name || fallbackValue).trim()}${item.subworld_name ? ` · ${item.subworld_name}` : ''}`,
+                value: optionValue,
+                label: `${itemName || fallbackValue}${item.subworld_name ? ` · ${item.subworld_name}` : ''}`,
               };
             }
-            return { value: fallbackValue, label: fallbackValue };
+            const label = itemId && itemName && itemId !== itemName
+              ? `${itemName} · ${itemId}`
+              : (itemName || fallbackValue);
+            return { value: optionValue, label };
           }
           const value = String(item || '').trim();
           return value ? { value, label: value } : null;
@@ -298,8 +344,9 @@
         return;
       }
       if (!definition.collection) return;
-      const items = Array.isArray(payload?.[definition.collection]) ? payload[definition.collection] : [];
-      const currentItem = currentGenesisItemIndex >= 0 && currentGenesisItemIndex < items.length ? items[currentGenesisItemIndex] : null;
+      const items = genesisGetValueAtPath(payload, definition.collection);
+      const normalizedItems = Array.isArray(items) ? items : [];
+      const currentItem = currentGenesisItemIndex >= 0 && currentGenesisItemIndex < normalizedItems.length ? normalizedItems[currentGenesisItemIndex] : null;
       preview.textContent = JSON.stringify(currentItem || definition.template || {}, null, 2);
     }
 
@@ -351,7 +398,7 @@
           if (field.placeholder) control.placeholder = field.placeholder;
         } else if (kind === 'select' || kind === 'reference') {
           control = document.createElement('select');
-          const options = kind === 'reference' ? genesisReferenceOptions(field.source) : (field.options || []);
+          const options = kind === 'reference' ? genesisReferenceOptions(field) : (field.options || []);
           const blank = document.createElement('option');
           blank.value = '';
           blank.textContent = field.empty_label || '未设置';
@@ -424,18 +471,20 @@
       const payload = deepCloneJson(currentGenesisPayload(currentGenesisDetail, currentGenesisStage));
       if (definition.path && !definition.collection) {
         const rootValue = genesisGetValueAtPath(payload, definition.path);
-        const nextValue = deepCloneJson(rootValue);
+        const nextValue = deepCloneJson(rootValue == null ? (definition.template ?? {}) : rootValue);
         const updatedValue = field.path ? genesisSetValueAtPath(nextValue, field.path, value) : value;
         genesisSetValueAtPath(payload, definition.path, updatedValue);
       } else if (definition.collection) {
-        if (!Array.isArray(payload[definition.collection])) payload[definition.collection] = [];
-        while (payload[definition.collection].length <= currentGenesisItemIndex) {
-          payload[definition.collection].push(deepCloneJson(definition.template || {}));
+        const collectionPath = definition.collection;
+        let items = genesisGetValueAtPath(payload, collectionPath);
+        if (!Array.isArray(items)) items = [];
+        while (items.length <= currentGenesisItemIndex) {
+          items.push(deepCloneJson(definition.template || {}));
         }
-        const nextItem = deepCloneJson(payload[definition.collection][currentGenesisItemIndex] || {});
+        const nextItem = deepCloneJson(items[currentGenesisItemIndex] || {});
         genesisSetValueAtPath(nextItem, field.path, value);
         if (currentGenesisStage === 'map' && definition.collection === 'regions') {
-          const regions = payload[definition.collection];
+          const regions = items;
           const currentId = String(nextItem.id || '').trim();
           const currentSubworld = String(nextItem.subworld_name || '').trim();
           let nextLevel = Number.parseInt(String(nextItem.level ?? 1), 10);
@@ -465,7 +514,8 @@
             }
           }
         }
-        payload[definition.collection][currentGenesisItemIndex] = nextItem;
+        items[currentGenesisItemIndex] = nextItem;
+        genesisSetValueAtPath(payload, collectionPath, items);
       }
       rememberGenesisDraft(currentGenesisStage, payload);
       document.getElementById('genesis_stage_editor').value = JSON.stringify(payload || {}, null, 2);
@@ -529,13 +579,25 @@
       return JSON.parse(document.getElementById('genesis_stage_editor').value || '{}');
     }
 
+    function buildGenesisPatchPayload(nextPayload, stageKey = currentGenesisStage) {
+      const fieldKey = genesisFieldForStage(stageKey);
+      if (!isGenesisWorldRootStage(stageKey)) {
+        return { [fieldKey]: nextPayload };
+      }
+      if (fieldKey === 'world') {
+        return { world: nextPayload };
+      }
+      const worldRoot = deepCloneJson(currentGenesisServerPayload(currentGenesisDetail, 'world'));
+      genesisSetValueAtPath(worldRoot, fieldKey.replace(/^world\./, ''), nextPayload);
+      return { world: worldRoot };
+    }
+
     async function patchGenesisStagePayload(nextPayload, reason = '') {
       return runGenesisAction(async () => {
-        const fieldKey = genesisFieldForStage(currentGenesisStage);
         currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ [fieldKey]: nextPayload, reason }),
+          body: JSON.stringify({ ...buildGenesisPatchPayload(nextPayload), reason }),
         });
         clearAllGenesisDrafts();
         renderGenesisWorkspace();
@@ -561,17 +623,30 @@
         stageState.updated_at ? `更新时间：${stageState.updated_at}` : '',
       ];
       if (payload && typeof payload === 'object') {
+        const worldBible = currentGenesisStage === 'world'
+          ? (genesisGetValueAtPath(payload, 'world_bible') || {})
+          : {};
         if (payload.summary) lines.push(`Summary：${payload.summary}`);
         if (payload.overview) lines.push(`Overview：${payload.overview}`);
+        if (worldBible.overview) lines.push(`Overview：${worldBible.overview}`);
         if (Array.isArray(payload.arcs)) {
           lines.push(`Arc 数量：${payload.arcs.length}`);
           lines.push(...payload.arcs.slice(0, 6).map((arc) => `Arc ${arc.arc_number || '?'} · ${arc.title || '未命名'} · ${arc.chapter_count || 0} 章`));
         }
         if (Array.isArray(payload.axioms)) lines.push(`规则数量：${payload.axioms.length}`);
+        if (Array.isArray(worldBible.axioms)) lines.push(`规则数量：${worldBible.axioms.length}`);
         if (payload.history_slice) lines.push(`历史切片：${String(payload.history_slice).slice(0, 40)}`);
+        if (worldBible.history_slice) lines.push(`历史切片：${String(worldBible.history_slice).slice(0, 40)}`);
         if (payload.naming_style) lines.push(`命名风格：${String(payload.naming_style)}`);
+        if (worldBible.naming_style) lines.push(`命名风格：${String(worldBible.naming_style)}`);
         if (Array.isArray(payload.forbidden_zones)) lines.push(`禁区数量：${payload.forbidden_zones.length}`);
+        if (Array.isArray(worldBible.forbidden_zones)) lines.push(`禁区数量：${worldBible.forbidden_zones.length}`);
         if (Array.isArray(payload.culture_profiles)) lines.push(`文化背景：${payload.culture_profiles.length}`);
+        if (Array.isArray(worldBible.culture_profiles)) lines.push(`文化背景：${worldBible.culture_profiles.length}`);
+        if (payload.minimum_world_system) lines.push('最小世界骨架：已配置');
+        if (payload.minimum_extension_pack) lines.push('最小扩展包：已配置');
+        if (Array.isArray(payload.institution_profiles)) lines.push(`制度模板：${payload.institution_profiles.length}`);
+        if (Array.isArray(payload.resource_economy_profiles)) lines.push(`资源经济模板：${payload.resource_economy_profiles.length}`);
         if (Array.isArray(payload.submaps)) lines.push(`小地图数量：${payload.submaps.length}`);
         if (Array.isArray(payload.regions)) lines.push(`地区数量：${payload.regions.length}`);
         if (Array.isArray(payload.nodes)) lines.push(`地点节点：${payload.nodes.length}`);
@@ -857,38 +932,58 @@
         const created = await runGenesisAction(async () => {
           const workingPayload = deepCloneJson(currentGenesisPayload(currentGenesisDetail, currentGenesisStage));
           const nextPayload = deepCloneJson(workingPayload);
-          if (!Array.isArray(nextPayload[definition.collection])) {
-            nextPayload[definition.collection] = [];
-          }
+          const collectionPath = definition.collection;
+          let items = genesisGetValueAtPath(nextPayload, collectionPath);
+          if (!Array.isArray(items)) items = [];
           const nextItem = deepCloneJson(definition.template);
           if (nextItem && typeof nextItem === 'object' && typeof nextItem.name === 'string') {
-            nextItem.name = `${nextItem.name}${nextPayload[definition.collection].length + 1}`;
+            nextItem.name = `${nextItem.name}${items.length + 1}`;
           }
           if (nextItem && typeof nextItem === 'object' && typeof nextItem.arc_number === 'number') {
-            const nextArcNumber = nextPayload[definition.collection].length + 1;
+            const nextArcNumber = items.length + 1;
             nextItem.arc_number = nextArcNumber;
             if (typeof nextItem.title === 'string' && nextItem.title.startsWith('新 Arc')) {
               nextItem.title = `Arc ${nextArcNumber}`;
             }
           }
           if (nextItem && typeof nextItem === 'object' && definition.collection === 'regions') {
-            const nextRegionNumber = nextPayload[definition.collection].length + 1;
+            const nextRegionNumber = items.length + 1;
             nextItem.id = `region-${nextRegionNumber}`;
             nextItem.level = 1;
             nextItem.parent_region_id = '';
           }
-          if (nextItem && typeof nextItem === 'object' && definition.collection === 'culture_profiles') {
-            const nextCultureNumber = nextPayload[definition.collection].length + 1;
+          if (nextItem && typeof nextItem === 'object' && definition.collection === 'world_bible.culture_profiles') {
+            const nextCultureNumber = items.length + 1;
             nextItem.id = `culture-${nextCultureNumber}`;
           }
-          nextPayload[definition.collection].push(nextItem);
+          if (nextItem && typeof nextItem === 'object' && definition.collection === 'submaps') {
+            nextItem.id = nextItem.id || `subworld-${items.length + 1}`;
+          }
+          if (nextItem && typeof nextItem === 'object' && definition.collection === 'nodes') {
+            nextItem.id = nextItem.id || `node-${items.length + 1}`;
+          }
+          if (nextItem && typeof nextItem === 'object' && definition.collection === 'factions') {
+            nextItem.id = nextItem.id || `faction-${items.length + 1}`;
+          }
+          if (nextItem && typeof nextItem === 'object' && definition.collection === 'institution_profiles') {
+            nextItem.id = nextItem.id || `institution-${items.length + 1}`;
+          }
+          if (nextItem && typeof nextItem === 'object' && definition.collection === 'resource_economy_profiles') {
+            nextItem.id = nextItem.id || `economy-${items.length + 1}`;
+          }
+          if (nextItem && typeof nextItem === 'object' && typeof nextItem.id === 'string' && /(^|-)new$/.test(nextItem.id)) {
+            const collectionTail = String(definition.collection || '').split('.').pop() || 'item';
+            const normalizedPrefix = collectionTail.replace(/_profiles$|_codex$|_interfaces$|_conflicts$|s$/g, '') || 'item';
+            nextItem.id = `${normalizedPrefix}-${items.length + 1}`;
+          }
+          items.push(nextItem);
+          genesisSetValueAtPath(nextPayload, collectionPath, items);
           currentGenesisItemCollection = definition.collection;
-          currentGenesisItemIndex = nextPayload[definition.collection].length - 1;
-          const fieldKey = genesisFieldForStage(currentGenesisStage);
+          currentGenesisItemIndex = items.length - 1;
           currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ [fieldKey]: nextPayload, reason: `ui_create_${currentGenesisItemCollection}` }),
+            body: JSON.stringify({ ...buildGenesisPatchPayload(nextPayload), reason: `ui_create_${currentGenesisItemCollection}` }),
           });
           clearAllGenesisDrafts();
           renderGenesisWorkspace();
@@ -914,15 +1009,16 @@
       try {
         const deleted = await runGenesisAction(async () => {
           const nextPayload = deepCloneJson(currentGenesisPayload(currentGenesisDetail, currentGenesisStage));
-          const items = Array.isArray(nextPayload[definition.collection]) ? nextPayload[definition.collection] : [];
+          const collectionPath = definition.collection;
+          const existingItems = genesisGetValueAtPath(nextPayload, collectionPath);
+          const items = Array.isArray(existingItems) ? existingItems : [];
           items.splice(currentGenesisItemIndex, 1);
-          nextPayload[definition.collection] = items;
+          genesisSetValueAtPath(nextPayload, collectionPath, items);
           currentGenesisItemIndex = items.length ? Math.min(currentGenesisItemIndex, items.length - 1) : -1;
-          const fieldKey = genesisFieldForStage(currentGenesisStage);
           currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ [fieldKey]: nextPayload, reason: `ui_delete_${definition.collection}` }),
+            body: JSON.stringify({ ...buildGenesisPatchPayload(nextPayload), reason: `ui_delete_${definition.collection}` }),
           });
           clearAllGenesisDrafts();
           renderGenesisWorkspace();
@@ -952,17 +1048,16 @@
             && definition?.path
             && !definition?.collection
             && targetPath === definition.path
-            && (!parsed || typeof parsed !== 'object' || !Object.prototype.hasOwnProperty.call(parsed, definition.path))
+            && (typeof genesisGetValueAtPath(parsed, definition.path) === 'undefined')
           ) {
-            parsed[definition.path] = deepCloneJson(definition.template ?? null);
+            genesisSetValueAtPath(parsed, definition.path, deepCloneJson(definition.template ?? null));
             document.getElementById('genesis_stage_editor').value = JSON.stringify(parsed, null, 2);
           }
           if (dataSignature(parsed) !== dataSignature(currentGenesisServerPayload(currentGenesisDetail))) {
-            const fieldKey = genesisFieldForStage(currentGenesisStage);
             currentGenesisDetail = await requestJson(`/api/projects/${currentGenesisProjectId}/genesis`, {
               method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ [fieldKey]: parsed, reason: `ui_refine_sync_${currentGenesisStage}` }),
+              body: JSON.stringify({ ...buildGenesisPatchPayload(parsed), reason: `ui_refine_sync_${currentGenesisStage}` }),
             });
             clearAllGenesisDrafts();
             renderGenesisWorkspace();

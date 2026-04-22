@@ -54,6 +54,7 @@ def main() -> int:
             preferred_client_id=args.client_id,
             profile_dir=args.profile_dir,
             stale_seconds=args.stale_seconds,
+            allow_latest_recent_fallback=not str(args.client_id or "").strip(),
         )
         if last.ok:
             print(json.dumps(last.to_dict(), ensure_ascii=False))

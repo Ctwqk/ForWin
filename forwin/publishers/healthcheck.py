@@ -80,17 +80,13 @@ def get_preferred_client_heartbeat(
     preferred_client_id: str = "",
     profile_dir: str | Path = "",
     stale_seconds: int = 90,
+    allow_latest_recent_fallback: bool = False,
 ) -> PreferredClientHeartbeat:
-    client_id = resolve_target_client_id(
+    resolved_client_id = resolve_target_client_id(
         preferred_client_id,
         profile_dir=profile_dir,
     )
-    if not client_id:
-        return PreferredClientHeartbeat(
-            ok=False,
-            message="preferred publisher client id is empty",
-        )
-
+    client_id = resolved_client_id
     db_file = Path(db_path).expanduser()
     if not db_file.exists():
         return PreferredClientHeartbeat(
@@ -102,14 +98,6 @@ def get_preferred_client_heartbeat(
     cutoff = _utc_now() - timedelta(seconds=max(int(stale_seconds or 90), 1))
     with sqlite3.connect(str(db_file)) as conn:
         conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            """
-            SELECT client_id, backend_base_url, last_heartbeat_at
-            FROM publisher_extension_clients
-            WHERE client_id = ?
-            """,
-            (client_id,),
-        ).fetchone()
         latest_recent = conn.execute(
             """
             SELECT client_id, backend_base_url, last_heartbeat_at
@@ -118,6 +106,21 @@ def get_preferred_client_heartbeat(
             LIMIT 1
             """
         ).fetchone()
+        latest_recent_client_id = str(latest_recent["client_id"] or "").strip() if latest_recent else ""
+        if not client_id and allow_latest_recent_fallback:
+            client_id = latest_recent_client_id
+        row = (
+            conn.execute(
+                """
+                SELECT client_id, backend_base_url, last_heartbeat_at
+                FROM publisher_extension_clients
+                WHERE client_id = ?
+                """,
+                (client_id,),
+            ).fetchone()
+            if client_id
+            else None
+        )
         recent_platform_rows = conn.execute(
             """
             SELECT platform_id
@@ -129,10 +132,25 @@ def get_preferred_client_heartbeat(
             (client_id, cutoff.replace(tzinfo=None).isoformat(sep=" ")),
         ).fetchall()
 
-    latest_recent_client_id = str(latest_recent["client_id"] or "").strip() if latest_recent else ""
     latest_recent_backend_base_url = str(latest_recent["backend_base_url"] or "").strip() if latest_recent else ""
     latest_recent_heartbeat_at = str(latest_recent["last_heartbeat_at"] or "").strip() if latest_recent else ""
     recent_platforms = tuple(str(item["platform_id"] or "").strip() for item in recent_platform_rows)
+    using_latest_recent = bool(
+        allow_latest_recent_fallback
+        and client_id
+        and latest_recent_client_id
+        and client_id == latest_recent_client_id
+        and not resolved_client_id
+    )
+
+    if not client_id:
+        return PreferredClientHeartbeat(
+            ok=False,
+            message="preferred publisher client id is empty and no recent publisher client heartbeat was found",
+            latest_recent_client_id=latest_recent_client_id,
+            latest_recent_backend_base_url=latest_recent_backend_base_url,
+            latest_recent_heartbeat_at=latest_recent_heartbeat_at,
+        )
 
     if row is None:
         return PreferredClientHeartbeat(
@@ -166,7 +184,7 @@ def get_preferred_client_heartbeat(
             backend_base_url=str(row["backend_base_url"] or "").strip(),
             last_heartbeat_at=last_heartbeat_at,
             recent_platforms=recent_platforms,
-            message="preferred publisher client heartbeat is stale",
+            message="latest publisher client heartbeat is stale" if using_latest_recent else "preferred publisher client heartbeat is stale",
             latest_recent_client_id=latest_recent_client_id,
             latest_recent_backend_base_url=latest_recent_backend_base_url,
             latest_recent_heartbeat_at=latest_recent_heartbeat_at,
@@ -178,7 +196,7 @@ def get_preferred_client_heartbeat(
         backend_base_url=str(row["backend_base_url"] or "").strip(),
         last_heartbeat_at=last_heartbeat_at,
         recent_platforms=recent_platforms,
-        message="preferred publisher client heartbeat is recent",
+        message="latest publisher client heartbeat is recent" if using_latest_recent else "preferred publisher client heartbeat is recent",
         latest_recent_client_id=latest_recent_client_id,
         latest_recent_backend_base_url=latest_recent_backend_base_url,
         latest_recent_heartbeat_at=latest_recent_heartbeat_at,

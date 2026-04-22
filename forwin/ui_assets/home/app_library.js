@@ -376,12 +376,42 @@
       updateTaskModalSelects();
     }
 
-    async function loadPlatforms() {
+    const PLATFORM_REFRESH_TTL_MS = 15000;
+    let platformLoadPromise = null;
+
+    async function loadPlatforms(options = {}) {
+      const { silent = false } = options;
+      if (platformLoadPromise) return platformLoadPromise;
+      platformLoadPromise = (async () => {
+        try {
+          platformsState = await requestJson('/api/publishers/platforms');
+          notePlatformsLoaded();
+          renderPlatforms();
+          return platformsState;
+        } catch (error) {
+          if (!silent) {
+            setGlobalStatus(error.message || String(error), '平台状态读取失败');
+          }
+          throw error;
+        } finally {
+          platformLoadPromise = null;
+        }
+      })();
+      return platformLoadPromise;
+    }
+
+    async function ensureFreshPlatforms(options = {}) {
+      const { force = false, maxAgeMs = PLATFORM_REFRESH_TTL_MS, reason = '' } = options;
+      if (!force && platformsSnapshotIsFresh(maxAgeMs)) {
+        return platformsState;
+      }
       try {
-        platformsState = await requestJson('/api/publishers/platforms');
-        renderPlatforms();
+        return await loadPlatforms({ silent: reason === 'background_poll' });
       } catch (error) {
-        setGlobalStatus(error.message || String(error), '平台状态读取失败');
+        if (reason === 'background_poll') {
+          return platformsState;
+        }
+        throw error;
       }
     }
 
@@ -470,7 +500,12 @@
       };
     }
 
-    function openBookModal(prefill = {}) {
+    async function openBookModal(prefill = {}) {
+      try {
+        await ensureFreshPlatforms({ maxAgeMs: 15000, reason: 'book_modal' });
+      } catch (error) {
+        // Keep the modal usable with the last known platform snapshot.
+      }
       const bindings = resolveBookPrefillBindings(prefill);
       const primaryBinding = bindings[0] || {};
       const secondaryBinding = bindings[1] || {};
@@ -1050,8 +1085,15 @@
       document.getElementById('task_upload_intro').value = currentTaskPrefill.intro || '';
     }
 
-    function openTaskModal(kind = 'generation', prefill = {}) {
+    async function openTaskModal(kind = 'generation', prefill = {}) {
       currentTaskPrefill = prefill || {};
+      if (kind === 'upload') {
+        try {
+          await ensureFreshPlatforms({ maxAgeMs: 15000, reason: 'task_upload_modal' });
+        } catch (error) {
+          // Keep the modal usable with the last known platform snapshot.
+        }
+      }
       setTaskModalKind(kind);
       updateTaskModalHeader();
       applyTaskPrefill();

@@ -6,7 +6,7 @@ services:
       - qdrant
       - minio
     env_file:
-      - .env
+      - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
     ports:
       - "8899:8899"
     volumes:
@@ -38,6 +38,8 @@ services:
       forwin:
         condition: service_healthy
     command: ["bash", "-lc", "exec scripts/launch_linux_extension_browser.sh"]
+    env_file:
+      - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
     environment:
       - FORWIN_BACKEND_URL=${FORWIN_PUBLISHER_BROWSER_BACKEND_URL:-http://forwin:8899}
       - FORWIN_PUBLISHER_EXTENSION_API_KEY=${FORWIN_PUBLISHER_EXTENSION_API_KEY:-}
@@ -61,7 +63,7 @@ services:
       test:
         [
           "CMD-SHELL",
-          "python scripts/qualify_linux_extension_profile.py --check --check-active && python scripts/check_publisher_browser_heartbeat.py",
+          "python scripts/qualify_linux_extension_profile.py --check --check-active && python scripts/check_publisher_browser_heartbeat.py --wait-seconds 0",
         ]
       interval: 30s
       timeout: 10s

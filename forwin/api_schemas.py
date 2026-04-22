@@ -296,9 +296,7 @@ class BookGenesisStageState(BaseModel):
 
 class BookGenesisPack(BaseModel):
     book_brief: dict[str, Any] = Field(default_factory=dict)
-    world_bible: dict[str, Any] = Field(default_factory=dict)
-    map_atlas: dict[str, Any] = Field(default_factory=dict)
-    story_engine: dict[str, Any] = Field(default_factory=dict)
+    world: dict[str, Any] = Field(default_factory=dict)
     book_arc_blueprint: dict[str, Any] = Field(default_factory=dict)
     subworld_policy: dict[str, Any] = Field(default_factory=dict)
     execution_bootstrap: dict[str, Any] = Field(default_factory=dict)
@@ -334,9 +332,7 @@ class BookGenesisDetail(BaseModel):
 
 class BookGenesisPatchRequest(BaseModel):
     book_brief: dict[str, Any] | None = None
-    world_bible: dict[str, Any] | None = None
-    map_atlas: dict[str, Any] | None = None
-    story_engine: dict[str, Any] | None = None
+    world: dict[str, Any] | None = None
     book_arc_blueprint: dict[str, Any] | None = None
     subworld_policy: dict[str, Any] | None = None
     execution_bootstrap: dict[str, Any] | None = None

@@ -25,6 +25,14 @@ from forwin.skills import (
 )
 from forwin.state.updater import StateUpdater
 from forwin.utils import LLMJSONParseError, parse_llm_json
+from forwin.world_templates import (
+    default_minimum_extension_pack,
+    default_minimum_world_system,
+    default_template_libraries,
+    default_world_extensions,
+    empty_world_root,
+)
+from forwin.writer.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +46,51 @@ GENESIS_STAGE_ORDER = (
 )
 _STAGE_TO_SECTION = {
     "brief": "book_brief",
-    "world": "world_bible",
-    "map": "map_atlas",
-    "story_engine": "story_engine",
+    "world": "world",
+    "map": "world.map_atlas",
+    "story_engine": "world.story_engine",
     "book_blueprint": "book_arc_blueprint",
     "bootstrap": "execution_bootstrap",
 }
 _PATH_TOKEN_RE = re.compile(r"([^\.\[\]]+)|\[(\d+)\]")
+_WORLD_ROOT_KEYS = {
+    "minimum_world_system",
+    "minimum_extension_pack",
+    "world_bible",
+    "map_atlas",
+    "story_engine",
+    "institution_profiles",
+    "resource_economy_profiles",
+    "world_extensions",
+    "template_libraries",
+}
+_WORLD_BIBLE_KEYS = {
+    "overview",
+    "axioms",
+    "history_slice",
+    "naming_style",
+    "forbidden_zones",
+    "culture_profiles",
+}
+_WORLD_STAGE_RELATIVE_PREFIXES = {
+    "minimum_world_system",
+    "minimum_extension_pack",
+    "world_bible",
+    "map_atlas",
+    "story_engine",
+    "institution_profiles",
+    "resource_economy_profiles",
+    "world_extensions",
+    "template_libraries",
+}
+_WORLD_STAGE_WORLD_BIBLE_ALIASES = {
+    "overview",
+    "axioms",
+    "history_slice",
+    "naming_style",
+    "forbidden_zones",
+    "culture_profiles",
+}
 
 
 class StaleGenesisRevisionError(RuntimeError):
@@ -81,6 +127,10 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return merged
 
 
+def _deep_equal(left: Any, right: Any) -> bool:
+    return _json_dump(left) == _json_dump(right)
+
+
 def _empty_stage_states() -> dict[str, dict[str, Any]]:
     return {
         stage_key: {
@@ -111,6 +161,77 @@ def _default_subworld_policy() -> dict[str, Any]:
     }
 
 
+def _empty_stage_world() -> dict[str, Any]:
+    return {
+        **empty_world_root(),
+        "minimum_world_system": default_minimum_world_system(),
+        "minimum_extension_pack": default_minimum_extension_pack(),
+        "world_extensions": default_world_extensions(),
+        "template_libraries": default_template_libraries(),
+    }
+
+
+def _legacy_world_root_from_pack(payload: dict[str, Any]) -> dict[str, Any]:
+    world = payload.get("world") if isinstance(payload.get("world"), dict) else {}
+    base = _empty_stage_world()
+    if world:
+        base = _deep_merge(base, world)
+    if isinstance(payload.get("world_bible"), dict):
+        base["world_bible"] = _deep_merge(base.get("world_bible", {}), payload.get("world_bible") or {})
+    if isinstance(payload.get("map_atlas"), dict):
+        base["map_atlas"] = _deep_merge(base.get("map_atlas", {}), payload.get("map_atlas") or {})
+    if isinstance(payload.get("story_engine"), dict):
+        base["story_engine"] = _deep_merge(base.get("story_engine", {}), payload.get("story_engine") or {})
+    return base
+
+
+def _pack_stage_payload(pack: dict[str, Any], stage_key: str) -> dict[str, Any]:
+    section_path = _STAGE_TO_SECTION[stage_key]
+    if "." not in section_path:
+        return pack.get(section_path) if isinstance(pack.get(section_path), dict) else {}
+    current: Any = pack
+    for token in section_path.split("."):
+        if not isinstance(current, dict):
+            return {}
+        current = current.get(token)
+    return current if isinstance(current, dict) else {}
+
+
+def _set_pack_stage_payload(pack: dict[str, Any], stage_key: str, value: dict[str, Any]) -> None:
+    section_path = _STAGE_TO_SECTION[stage_key]
+    if "." not in section_path:
+        pack[section_path] = value
+        return
+    current: Any = pack
+    tokens = section_path.split(".")
+    for token in tokens[:-1]:
+        next_value = current.get(token)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[token] = next_value
+        current = next_value
+    current[tokens[-1]] = value
+
+
+def _world_stage_target_path(path: str) -> str:
+    normalized = str(path or "").strip()
+    if not normalized:
+        return normalized
+    first_token_match = _PATH_TOKEN_RE.match(normalized)
+    first_token = first_token_match.group(1) if first_token_match else ""
+    if first_token in _WORLD_STAGE_RELATIVE_PREFIXES:
+        return normalized
+    if first_token in _WORLD_STAGE_WORLD_BIBLE_ALIASES:
+        return f"world_bible.{normalized}"
+    return normalized
+
+
+def _normalize_stage_target_path(stage_key: str, target_path: str) -> str:
+    if stage_key == "world":
+        return _world_stage_target_path(target_path)
+    return str(target_path or "").strip()
+
+
 def _book_brief_from_project(project: Project, brief_seed: dict[str, Any] | None = None) -> dict[str, Any]:
     seed = brief_seed or {}
     return {
@@ -136,9 +257,7 @@ def _initial_pack(project: Project, brief_seed: dict[str, Any] | None = None) ->
     governance = normalize_project_governance(project.governance_json)
     return {
         "book_brief": _book_brief_from_project(project, brief_seed),
-        "world_bible": {},
-        "map_atlas": {},
-        "story_engine": {},
+        "world": _empty_stage_world(),
         "book_arc_blueprint": {},
         "subworld_policy": _default_subworld_policy(),
         "execution_bootstrap": {
@@ -184,7 +303,7 @@ def _fallback_culture_profiles() -> list[dict[str, Any]]:
     ]
 
 
-def _fallback_world(project: Project, pack: dict[str, Any]) -> dict[str, Any]:
+def _fallback_world_bible(project: Project, pack: dict[str, Any]) -> dict[str, Any]:
     book_brief = pack.get("book_brief") if isinstance(pack.get("book_brief"), dict) else {}
     return {
         "overview": project.setting_summary or f"{project.genre}世界，主角将在高压规则中逼近真相。",
@@ -199,8 +318,17 @@ def _fallback_world(project: Project, pack: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _fallback_world(project: Project, pack: dict[str, Any]) -> dict[str, Any]:
+    existing_world = _pack_stage_payload(pack, "world")
+    fallback = _empty_stage_world()
+    if existing_world:
+        fallback = _deep_merge(fallback, existing_world)
+    fallback["world_bible"] = _fallback_world_bible(project, pack)
+    return fallback
+
+
 def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
-    world = pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {}
+    world = _pack_stage_payload(pack, "world").get("world_bible") if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict) else {}
     overview = str(world.get("overview", "") or "")
     culture_profiles = [item for item in (world.get("culture_profiles") or []) if isinstance(item, dict)]
     primary_profile = (culture_profiles[0] if culture_profiles else {}) or {}
@@ -254,6 +382,10 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
             logger.debug("Fallback map naming generation failed for profile %s", primary_culture_id, exc_info=True)
     primary_region_id = "region-main-stage"
     power_region_id = "region-power-core"
+    primary_subworld_id = "subworld-main-stage"
+    primary_node_id = "node-main-stage"
+    power_node_id = "node-power-core"
+    danger_node_id = "node-danger-edge"
     return {
         "overview": "结构化地图 V1",
         "topology_rules": [
@@ -262,6 +394,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
         ],
         "submaps": [
             {
+                "id": primary_subworld_id,
                 "name": primary_subworld_name,
                 "scope": "macro_region",
                 "parent_scope": "",
@@ -311,9 +444,10 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
         ],
         "nodes": [
             {
+                "id": primary_node_id,
                 "name": primary_node_name,
                 "kind": "region",
-                "parent_subworld": primary_subworld_name,
+                "parent_subworld": primary_subworld_id,
                 "parent_region_id": primary_region_id,
                 "culture_profile_id": primary_culture_id,
                 "description": overview[:80] or "故事主要发生的区域。",
@@ -325,9 +459,10 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
                 "resources": ["人口", "情报", "基础资源"],
             },
             {
+                "id": power_node_id,
                 "name": power_node_name,
                 "kind": "city",
-                "parent_subworld": primary_subworld_name,
+                "parent_subworld": primary_subworld_id,
                 "parent_region_id": power_region_id,
                 "culture_profile_id": primary_culture_id,
                 "description": "冲突与秩序交汇的核心地点。",
@@ -339,9 +474,10 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
                 "resources": ["制度资源", "金流", "权力网络"],
             },
             {
+                "id": danger_node_id,
                 "name": danger_node_name,
                 "kind": "frontier",
-                "parent_subworld": primary_subworld_name,
+                "parent_subworld": primary_subworld_id,
                 "parent_region_id": primary_region_id,
                 "culture_profile_id": primary_culture_id,
                 "description": "推动升级和揭示秘密的高风险区域。",
@@ -362,21 +498,23 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
 
 def _fallback_story_engine(pack: dict[str, Any]) -> dict[str, Any]:
     book_brief = pack.get("book_brief") if isinstance(pack.get("book_brief"), dict) else {}
-    map_atlas = pack.get("map_atlas") if isinstance(pack.get("map_atlas"), dict) else {}
-    world_bible = pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {}
+    world_root = _pack_stage_payload(pack, "world")
+    map_atlas = world_root.get("map_atlas") if isinstance(world_root.get("map_atlas"), dict) else {}
+    world_bible = world_root.get("world_bible") if isinstance(world_root.get("world_bible"), dict) else {}
     submaps = [item for item in (map_atlas.get("submaps") or []) if isinstance(item, dict)]
     regions = [item for item in (map_atlas.get("regions") or []) if isinstance(item, dict)]
     nodes = [item for item in (map_atlas.get("nodes") or []) if isinstance(item, dict)]
     culture_profiles = [item for item in (world_bible.get("culture_profiles") or []) if isinstance(item, dict)]
     primary_culture_id = str((culture_profiles[0] or {}).get("id", "") or "culture-main-stage") if culture_profiles else "culture-main-stage"
-    primary_subworld = str((submaps[0] or {}).get("name", "") or "主舞台总图") if submaps else "主舞台总图"
+    primary_subworld = str((submaps[0] or {}).get("id", "") or (submaps[0] or {}).get("name", "") or "subworld-main-stage") if submaps else "subworld-main-stage"
     primary_region_id = str((regions[0] or {}).get("id", "") or "region-main-stage") if regions else "region-main-stage"
     power_region_id = str((regions[1] or {}).get("id", "") or primary_region_id or "region-power-core") if len(regions) > 1 else (primary_region_id or "region-power-core")
-    primary_location = str((nodes[0] or {}).get("name", "") or "主舞台") if nodes else "主舞台"
-    power_location = str((nodes[1] or {}).get("name", "") or primary_location or "权力中心") if len(nodes) > 1 else (primary_location or "权力中心")
+    primary_location = str((nodes[0] or {}).get("id", "") or (nodes[0] or {}).get("name", "") or "node-main-stage") if nodes else "node-main-stage"
+    power_location = str((nodes[1] or {}).get("id", "") or (nodes[1] or {}).get("name", "") or primary_location or "node-power-core") if len(nodes) > 1 else (primary_location or "node-power-core")
     primary_profile = (culture_profiles[0] if culture_profiles else {}) or {}
     protagonist_name = "主角"
     primary_faction = "主舞台权力中枢"
+    primary_faction_id = "faction-main-stage"
     opposition_name = "对手盘"
     civilization = _culture_profile_generator_civilization(primary_profile)
     if civilization:
@@ -415,7 +553,7 @@ def _fallback_story_engine(pack: dict[str, Any]) -> dict[str, Any]:
                 "home_location": primary_location,
                 "current_region": primary_region_id,
                 "current_base": primary_location,
-                "affiliated_faction": primary_faction,
+                "affiliated_faction": primary_faction_id,
                 "affiliated_family": "主角原生家庭",
                 "faction_memberships": [
                     {
@@ -429,6 +567,7 @@ def _fallback_story_engine(pack: dict[str, Any]) -> dict[str, Any]:
         ],
         "factions": [
             {
+                "id": primary_faction_id,
                 "name": primary_faction,
                 "role": "长期势力盘",
                 "goal": "维护既有秩序并控制关键资源",
@@ -461,8 +600,8 @@ def _fallback_story_engine(pack: dict[str, Any]) -> dict[str, Any]:
                 "base_subworld": primary_subworld,
                 "base_region": power_region_id,
                 "base_location": power_location,
-                "backing_faction": primary_faction,
-                "backing_factions": [primary_faction],
+                "backing_faction": primary_faction_id,
+                "backing_factions": [primary_faction_id],
             }
         ],
         "relationship_axes": ["主角与对手盘的控制权争夺", "主角与盟友之间的信任成本"],
@@ -780,11 +919,30 @@ class BookGenesisService:
     ):
         _ensure_revision_is_current(session, project, revision)
         current = self.load_pack(revision)
+        previous_stage_payloads = {
+            stage_key: _json_clone(_pack_stage_payload(current, stage_key))
+            for stage_key in GENESIS_STAGE_ORDER
+        }
         next_pack = _deep_merge(current, patch)
+        if "world" in patch and isinstance(next_pack.get("world"), dict):
+            next_pack["world"] = self._normalize_world_root_payload(
+                project=project,
+                payload=next_pack.get("world") or {},
+                fallback=_fallback_world(project, current),
+            )
+        if "book_arc_blueprint" in patch and isinstance(next_pack.get("book_arc_blueprint"), dict):
+            next_pack["book_arc_blueprint"] = self._normalize_blueprint_payload(
+                project=project,
+                payload=next_pack.get("book_arc_blueprint") or {},
+                fallback=_fallback_blueprint(project, current),
+            )
         now = _utc_iso()
         stage_states = next_pack.get("stage_states") if isinstance(next_pack.get("stage_states"), dict) else {}
         for stage_key, section_key in _STAGE_TO_SECTION.items():
-            if section_key not in patch:
+            patched = section_key in patch
+            if not patched and "world" in patch and stage_key in {"world", "map", "story_engine"}:
+                patched = not _deep_equal(previous_stage_payloads.get(stage_key), _pack_stage_payload(next_pack, stage_key))
+            if not patched:
                 continue
             state = stage_states.get(stage_key) if isinstance(stage_states.get(stage_key), dict) else {}
             state.update(
@@ -840,7 +998,7 @@ class BookGenesisService:
         generated, trace_payload = self._generate_stage_payload(project=project, pack=pack, stage_key=stage_key)
         _ensure_revision_is_current(session, project, revision)
         next_pack = dict(pack)
-        next_pack[_STAGE_TO_SECTION[stage_key]] = generated
+        _set_pack_stage_payload(next_pack, stage_key, generated)
         stage_states = next_pack.get("stage_states") if isinstance(next_pack.get("stage_states"), dict) else _empty_stage_states()
         stage_state = stage_states.get(stage_key) if isinstance(stage_states.get(stage_key), dict) else {}
         parent_trace_id = str(stage_state.get("last_trace_id", "") or "")
@@ -925,7 +1083,7 @@ class BookGenesisService:
         )
         _ensure_revision_is_current(session, project, revision)
         next_pack = dict(pack)
-        next_pack[_STAGE_TO_SECTION[stage_key]] = refined_payload
+        _set_pack_stage_payload(next_pack, stage_key, refined_payload)
         stage_states = next_pack.get("stage_states") if isinstance(next_pack.get("stage_states"), dict) else _empty_stage_states()
         stage_state = stage_states.get(stage_key) if isinstance(stage_states.get(stage_key), dict) else {}
         parent_trace_id = str(stage_state.get("last_trace_id", "") or "")
@@ -1094,8 +1252,8 @@ class BookGenesisService:
         pack = self.load_pack(revision)
         if isinstance(stage_payload_override, dict):
             pack = dict(pack)
-            pack[_STAGE_TO_SECTION[normalized_stage]] = stage_payload_override
-        stage_payload = pack.get(_STAGE_TO_SECTION[normalized_stage]) if isinstance(pack.get(_STAGE_TO_SECTION[normalized_stage]), dict) else {}
+            _set_pack_stage_payload(pack, normalized_stage, stage_payload_override)
+        stage_payload = _pack_stage_payload(pack, normalized_stage)
         normalized_target = str(target_path or "").strip()
         normalized_field = str(field_path or "").strip()
         if not normalized_field:
@@ -1162,7 +1320,9 @@ class BookGenesisService:
         stage_payload: dict[str, Any],
         target_path: str,
     ) -> dict[str, Any]:
-        world_bible = pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {}
+        normalized_target_path = _normalize_stage_target_path(stage_key, target_path)
+        world_root = _pack_stage_payload(pack, "world")
+        world_bible = world_root.get("world_bible") if isinstance(world_root.get("world_bible"), dict) else {}
         profiles = [
             item
             for item in (world_bible.get("culture_profiles") or [])
@@ -1173,14 +1333,14 @@ class BookGenesisService:
             for item in profiles
             if str(item.get("id", "")).strip()
         }
-        if stage_key == "world" and target_path.startswith("culture_profiles["):
-            target = _get_value_at_path(stage_payload, target_path)
+        if stage_key == "world" and normalized_target_path.startswith("world_bible.culture_profiles["):
+            target = _get_value_at_path(stage_payload, normalized_target_path)
             if isinstance(target, dict):
                 return target
         target_value = None
-        if target_path:
+        if normalized_target_path:
             try:
-                target_value = _get_value_at_path(stage_payload, target_path)
+                target_value = _get_value_at_path(stage_payload, normalized_target_path)
             except ValueError:
                 target_value = None
         if isinstance(target_value, dict):
@@ -1382,19 +1542,26 @@ class BookGenesisService:
                 {
                     "role": "user",
                     "content": (
-                        "请根据 BookBrief 生成 WorldBible，只返回 JSON，字段至少包含：overview、axioms、history_slice、"
-                        "naming_style、forbidden_zones、culture_profiles。\n"
+                        "请根据 BookBrief 生成统一世界观根对象 WorldRoot，只返回 JSON。\n"
+                        "WorldRoot 至少包含：minimum_world_system、minimum_extension_pack、world_bible、map_atlas、story_engine、"
+                        "institution_profiles、resource_economy_profiles、world_extensions、template_libraries。\n"
+                        "其中 world_bible 至少包含：overview、axioms、history_slice、naming_style、forbidden_zones、culture_profiles。\n"
                         "culture_profiles 表示一组可复用的文化背景与命名体系，每项至少包含："
                         "id、name、summary、inspiration、generator_civilization、generator_overlays、social_markers、aesthetic_keywords、"
                         "character_name_style、region_name_style、location_name_style、"
-                        "character_name_examples、region_name_examples、location_name_examples、usage_notes。\n\n"
-                        f"BookBrief：{_json_dump(pack.get('book_brief') or {})}"
+                        "character_name_examples、region_name_examples、location_name_examples、usage_notes。\n"
+                        "minimum_world_system 与 minimum_extension_pack 需要保留为最小实例骨架；"
+                        "institution_profiles、resource_economy_profiles 与 world_extensions 默认可以为空；"
+                        "template_libraries 作为模板库保留结构即可。\n\n"
+                        f"BookBrief：{_json_dump(pack.get('book_brief') or {})}\n"
+                        f"当前 WorldRoot：{_json_dump(_pack_stage_payload(pack, 'world'))}"
                     ),
                 },
             ]
         elif stage_key == "map":
             fallback = _fallback_map(pack)
-            world_bible = pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {}
+            world_root = _pack_stage_payload(pack, "world")
+            world_bible = world_root.get("world_bible") if isinstance(world_root.get("world_bible"), dict) else {}
             messages = [
                 {"role": "system", "content": "你是小说地图规划器，只输出 JSON 对象。"},
                 {
@@ -1403,7 +1570,7 @@ class BookGenesisService:
                         "请基于 WorldBible 生成结构化 MapAtlas，只返回 JSON，字段至少包含：overview、topology_rules、submaps、nodes、edges。\n\n"
                         "MapAtlas 需要显式包含 regions，结构为 submaps、regions、nodes、edges 四层信息。"
                         "regions 表示小世界下辖地区，最多两级嵌套。"
-                        "如果 WorldBible 里已经有 culture_profiles，请尽量为 submaps、regions、nodes 补 culture_profile_id。\n\n"
+                        "submaps 与 nodes 需要带稳定 id 字段；如果 WorldBible 里已经有 culture_profiles，请尽量为 submaps、regions、nodes 补 culture_profile_id。\n\n"
                         f"WorldBible：{_json_dump(world_bible)}\n\n"
                         f"命名辅助：{_json_dump(_name_hint_block(world_bible, seed_prefix=f'{project.id}:map'))}"
                     ),
@@ -1411,7 +1578,8 @@ class BookGenesisService:
             ]
         elif stage_key == "story_engine":
             fallback = _fallback_story_engine(pack)
-            world_bible = pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {}
+            world_root = _pack_stage_payload(pack, "world")
+            world_bible = world_root.get("world_bible") if isinstance(world_root.get("world_bible"), dict) else {}
             messages = [
                 {"role": "system", "content": "你是长篇网文叙事引擎规划器，只输出 JSON 对象。"},
                 {
@@ -1419,11 +1587,11 @@ class BookGenesisService:
                     "content": (
                         "请基于 BookBrief 和 WorldBible 生成 StoryEngine，只返回 JSON，字段至少包含：core_cast、factions、opposition、relationship_axes、reader_promises、long_arcs。\n\n"
                         "角色要支持 home_subworld、home_region、home_location、current_region、current_base、"
-                        "faction_memberships；势力要支持 headquarters_region、footprint；对手盘要支持 base_region、backing_factions。"
+                        "faction_memberships；势力要支持 id、headquarters_region、footprint；对手盘要支持 base_region、backing_factions。"
                         "如果 WorldBible 里已经有 culture_profiles，请尽量为角色、势力、对手补 culture_profile_id。\n\n"
                         f"BookBrief：{_json_dump(pack.get('book_brief') or {})}\n"
                         f"WorldBible：{_json_dump(world_bible)}\n"
-                        f"MapAtlas：{_json_dump(pack.get('map_atlas') or {})}\n"
+                        f"MapAtlas：{_json_dump(world_root.get('map_atlas') or {})}\n"
                         f"命名辅助：{_json_dump(_name_hint_block(world_bible, seed_prefix=f'{project.id}:story_engine'))}"
                     ),
                 },
@@ -1439,8 +1607,8 @@ class BookGenesisService:
                         "arcs 每项必须包含 arc_number、title、arc_synopsis、goal、stakes、payoff_direction、"
                         "chapter_start、chapter_end、chapter_count、target_size、soft_min、soft_max。\n\n"
                         f"BookBrief：{_json_dump(pack.get('book_brief') or {})}\n"
-                        f"WorldBible：{_json_dump(pack.get('world_bible') or {})}\n"
-                        f"StoryEngine：{_json_dump(pack.get('story_engine') or {})}\n"
+                        f"WorldBible：{_json_dump(_pack_stage_payload(pack, 'world').get('world_bible') or {})}\n"
+                        f"StoryEngine：{_json_dump(_pack_stage_payload(pack, 'story_engine') or {})}\n"
                         f"建议 arc 尺寸：{_json_dump(_fallback_blueprint(project, pack).get('arcs') or [])}"
                     ),
                 },
@@ -1464,14 +1632,19 @@ class BookGenesisService:
         if stage_key == "book_blueprint":
             payload = self._normalize_blueprint_payload(project=project, payload=payload, fallback=fallback)
         elif stage_key == "world":
-            payload = self._normalize_world_payload(payload=payload, fallback=fallback)
+            payload = self._normalize_world_root_payload(project=project, payload=payload, fallback=fallback)
         elif stage_key == "map":
-            payload = self._normalize_map_payload(payload=payload, fallback=fallback, world_bible=pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {})
+            payload = self._normalize_map_payload(
+                payload=payload,
+                fallback=fallback,
+                world_bible=_pack_stage_payload(pack, "world").get("world_bible") if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict) else {},
+            )
         elif stage_key == "story_engine":
             payload = self._normalize_story_engine_payload(
                 payload=payload,
                 fallback=fallback,
-                world_bible=pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {},
+                world_bible=_pack_stage_payload(pack, "world").get("world_bible") if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict) else {},
+                map_atlas=_pack_stage_payload(pack, "world").get("map_atlas") if isinstance(_pack_stage_payload(pack, "world").get("map_atlas"), dict) else {},
             )
         return payload, trace
 
@@ -1484,8 +1657,8 @@ class BookGenesisService:
         instruction: str,
         target_path: str,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        section_key = _STAGE_TO_SECTION[stage_key]
-        current_payload = pack.get(section_key) if isinstance(pack.get(section_key), dict) else {}
+        normalized_target_path = _normalize_stage_target_path(stage_key, target_path)
+        current_payload = _pack_stage_payload(pack, stage_key)
         fallback_stage_payload = current_payload or (
             _fallback_map(pack) if stage_key == "map"
             else _fallback_story_engine(pack) if stage_key == "story_engine"
@@ -1495,8 +1668,9 @@ class BookGenesisService:
             else _fallback_blueprint(project, pack) if stage_key == "book_blueprint"
             else _fallback_bootstrap(project, pack)
         )
-        if target_path:
-            current_target = _get_value_at_path(current_payload, target_path)
+        if normalized_target_path:
+            source_payload = current_payload if current_payload else fallback_stage_payload
+            current_target = _get_value_at_path(source_payload, normalized_target_path)
             if isinstance(current_target, dict):
                 fallback = _json_clone(current_target)
                 messages = [
@@ -1550,7 +1724,7 @@ class BookGenesisService:
                 )
                 payload = payload.get("value", wrapped_fallback["value"]) if isinstance(payload, dict) else wrapped_fallback["value"]
             next_payload = _json_clone(current_payload)
-            _set_value_at_path(next_payload, target_path, payload)
+            _set_value_at_path(next_payload, normalized_target_path, payload)
         else:
             messages = [
                 {
@@ -1583,7 +1757,8 @@ class BookGenesisService:
                 fallback=_fallback_blueprint(project, pack),
             )
         elif stage_key == "world":
-            next_payload = self._normalize_world_payload(
+            next_payload = self._normalize_world_root_payload(
+                project=project,
                 payload=next_payload if isinstance(next_payload, dict) else {},
                 fallback=_fallback_world(project, pack),
             )
@@ -1591,13 +1766,14 @@ class BookGenesisService:
             next_payload = self._normalize_map_payload(
                 payload=next_payload if isinstance(next_payload, dict) else {},
                 fallback=_fallback_map(pack),
-                world_bible=pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {},
+                world_bible=_pack_stage_payload(pack, "world").get("world_bible") if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict) else {},
             )
         elif stage_key == "story_engine":
             next_payload = self._normalize_story_engine_payload(
                 payload=next_payload if isinstance(next_payload, dict) else {},
                 fallback=_fallback_story_engine(pack),
-                world_bible=pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {},
+                world_bible=_pack_stage_payload(pack, "world").get("world_bible") if isinstance(_pack_stage_payload(pack, "world").get("world_bible"), dict) else {},
+                map_atlas=_pack_stage_payload(pack, "world").get("map_atlas") if isinstance(_pack_stage_payload(pack, "world").get("map_atlas"), dict) else {},
             )
         elif not isinstance(next_payload, dict):
             next_payload = fallback_stage_payload
@@ -1612,6 +1788,7 @@ class BookGenesisService:
             **(trace.get("output_summary") if isinstance(trace.get("output_summary"), dict) else {}),
             "instruction": instruction,
             "target_path": target_path,
+            "normalized_target_path": normalized_target_path,
         }
         return next_payload, trace
 
@@ -1829,6 +2006,88 @@ class BookGenesisService:
             "culture_profiles": culture_profiles,
         }
 
+    def _normalize_world_root_payload(
+        self,
+        *,
+        project: Project,
+        payload: dict[str, Any],
+        fallback: dict[str, Any],
+    ) -> dict[str, Any]:
+        normalized = payload if isinstance(payload, dict) else {}
+        if not any(key in normalized for key in _WORLD_ROOT_KEYS) and any(
+            key in normalized for key in _WORLD_BIBLE_KEYS
+        ):
+            normalized = {"world_bible": normalized}
+        if isinstance(normalized.get("world"), dict):
+            normalized = normalized.get("world") or {}
+        result = _deep_merge(_empty_stage_world(), fallback if isinstance(fallback, dict) else {})
+        result["minimum_world_system"] = _deep_merge(
+            default_minimum_world_system(),
+            normalized.get("minimum_world_system") if isinstance(normalized.get("minimum_world_system"), dict) else result.get("minimum_world_system", {}),
+        )
+        result["minimum_extension_pack"] = _deep_merge(
+            default_minimum_extension_pack(),
+            normalized.get("minimum_extension_pack") if isinstance(normalized.get("minimum_extension_pack"), dict) else result.get("minimum_extension_pack", {}),
+        )
+        result["world_bible"] = self._normalize_world_payload(
+            payload=normalized.get("world_bible") if isinstance(normalized.get("world_bible"), dict) else {},
+            fallback=result.get("world_bible") if isinstance(result.get("world_bible"), dict) else _fallback_world_bible(project, {"book_brief": result.get("book_brief")}),
+        )
+        result["map_atlas"] = self._normalize_map_payload(
+            payload=normalized.get("map_atlas") if isinstance(normalized.get("map_atlas"), dict) else {},
+            fallback=result.get("map_atlas") if isinstance(result.get("map_atlas"), dict) else {},
+            world_bible=result["world_bible"],
+        )
+        result["story_engine"] = self._normalize_story_engine_payload(
+            payload=normalized.get("story_engine") if isinstance(normalized.get("story_engine"), dict) else {},
+            fallback=result.get("story_engine") if isinstance(result.get("story_engine"), dict) else {},
+            world_bible=result["world_bible"],
+            map_atlas=result["map_atlas"],
+        )
+        result["institution_profiles"] = [
+            self._normalize_scope_profile(item, index=index, prefix="institution")
+            for index, item in enumerate((normalized.get("institution_profiles") or result.get("institution_profiles") or []), start=1)
+            if isinstance(item, dict)
+        ]
+        result["resource_economy_profiles"] = [
+            self._normalize_scope_profile(item, index=index, prefix="economy")
+            for index, item in enumerate((normalized.get("resource_economy_profiles") or result.get("resource_economy_profiles") or []), start=1)
+            if isinstance(item, dict)
+        ]
+        world_extensions = normalized.get("world_extensions") if isinstance(normalized.get("world_extensions"), dict) else {}
+        fallback_extensions = result.get("world_extensions") if isinstance(result.get("world_extensions"), dict) else default_world_extensions()
+        merged_extensions = default_world_extensions()
+        for key in merged_extensions:
+            source_items = world_extensions.get(key) if isinstance(world_extensions.get(key), list) else fallback_extensions.get(key)
+            merged_extensions[key] = [
+                self._normalize_scope_profile(item, index=index, prefix=key[:-1] or "extension")
+                for index, item in enumerate(source_items or [], start=1)
+                if isinstance(item, dict)
+            ]
+        result["world_extensions"] = merged_extensions
+        result["template_libraries"] = _deep_merge(
+            default_template_libraries(),
+            normalized.get("template_libraries") if isinstance(normalized.get("template_libraries"), dict) else result.get("template_libraries", {}),
+        )
+        return result
+
+    def _normalize_scope_profile(self, item: dict[str, Any], *, index: int, prefix: str) -> dict[str, Any]:
+        payload = _json_clone(item)
+        payload["id"] = str(payload.get("id", "")).strip() or f"{prefix}-{index}"
+        payload["name"] = str(payload.get("name", "")).strip() or f"{prefix}-{index}"
+        scope_ref = payload.get("scope_ref") if isinstance(payload.get("scope_ref"), dict) else {}
+        applies_to = payload.get("applies_to") if isinstance(payload.get("applies_to"), dict) else {}
+        payload["scope_ref"] = {
+            "type": str(scope_ref.get("type", "") or applies_to.get("type", "")).strip(),
+            "id": str(scope_ref.get("id", "") or applies_to.get("id", "")).strip(),
+        }
+        if applies_to:
+            payload["applies_to"] = {
+                "type": str(applies_to.get("type", "")).strip(),
+                "id": str(applies_to.get("id", "")).strip(),
+            }
+        return payload
+
     def _normalize_blueprint_payload(
         self,
         *,
@@ -1881,19 +2140,22 @@ class BookGenesisService:
             if isinstance(item, dict) and str(item.get("id", "")).strip()
         }
         submaps = [item for item in (normalized.get("submaps") or fallback.get("submaps") or []) if isinstance(item, dict)]
-        known_subworlds = {
-            str(item.get("name", "")).strip()
-            for item in submaps
-            if str(item.get("name", "")).strip()
-        }
         normalized_submaps = []
-        for item in submaps:
+        subworld_ids: set[str] = set()
+        subworld_names: set[str] = set()
+        subworld_name_to_id: dict[str, str] = {}
+        for index, item in enumerate(submaps, start=1):
+            subworld_id = str(item.get("id", "")).strip() or f"subworld-{index}"
+            if subworld_id in subworld_ids:
+                subworld_id = f"{subworld_id}-{index}"
             culture_profile_id = str(item.get("culture_profile_id", "")).strip()
             if culture_profile_id and culture_profile_id not in culture_profile_ids:
                 culture_profile_id = ""
+            name = str(item.get("name", "")).strip() or "未命名小世界"
             normalized_submaps.append(
                 {
-                    "name": str(item.get("name", "")).strip() or "未命名小世界",
+                    "id": subworld_id,
+                    "name": name,
                     "scope": str(item.get("scope", "")).strip() or "other",
                     "parent_scope": str(item.get("parent_scope", "")).strip(),
                     "culture_profile_id": culture_profile_id,
@@ -1908,6 +2170,9 @@ class BookGenesisService:
                     "resource_themes": [str(value).strip() for value in (item.get("resource_themes") or []) if str(value).strip()],
                 }
             )
+            subworld_ids.add(subworld_id)
+            subworld_names.add(name)
+            subworld_name_to_id[name] = subworld_id
         regions_raw = [item for item in (normalized.get("regions") or fallback.get("regions") or []) if isinstance(item, dict)]
         normalized_regions: list[dict[str, Any]] = []
         region_ids: set[str] = set()
@@ -1915,8 +2180,8 @@ class BookGenesisService:
         for index, item in enumerate(regions_raw, start=1):
             name = str(item.get("name", "")).strip() or f"地区{index}"
             subworld_name = str(item.get("subworld_name", "")).strip()
-            if not subworld_name or subworld_name not in known_subworlds:
-                subworld_name = next(iter(known_subworlds), "")
+            if not subworld_name or subworld_name not in subworld_names:
+                subworld_name = next(iter(subworld_names), "")
             level = int(item.get("level", 1) or 1)
             if level not in {1, 2}:
                 level = 1
@@ -1958,12 +2223,18 @@ class BookGenesisService:
             )
             region_ids.add(region_id)
         normalized_nodes = []
-        for item in (normalized.get("nodes") or fallback.get("nodes") or []):
+        node_ids: set[str] = set()
+        for index, item in enumerate((normalized.get("nodes") or fallback.get("nodes") or []), start=1):
             if not isinstance(item, dict):
                 continue
+            node_id = str(item.get("id", "")).strip() or f"node-{index}"
+            if node_id in node_ids:
+                node_id = f"{node_id}-{index}"
             parent_subworld = str(item.get("parent_subworld", "")).strip()
-            if not parent_subworld or parent_subworld not in known_subworlds:
-                parent_subworld = next(iter(known_subworlds), "")
+            if parent_subworld in subworld_name_to_id:
+                parent_subworld = subworld_name_to_id[parent_subworld]
+            elif parent_subworld not in subworld_ids:
+                parent_subworld = next(iter(subworld_ids), "")
             parent_region_id = str(item.get("parent_region_id", "")).strip()
             if parent_region_id and parent_region_id not in region_ids:
                 parent_region_id = ""
@@ -1972,6 +2243,7 @@ class BookGenesisService:
                 culture_profile_id = ""
             normalized_nodes.append(
                 {
+                    "id": node_id,
                     "name": str(item.get("name", "")).strip() or "未命名地点",
                     "kind": str(item.get("kind", "")).strip() or "other",
                     "parent_subworld": parent_subworld,
@@ -1986,6 +2258,7 @@ class BookGenesisService:
                     "resources": [str(value).strip() for value in (item.get("resources") or []) if str(value).strip()],
                 }
             )
+            node_ids.add(node_id)
         result = {
             "overview": str(normalized.get("overview", "")).strip() or str(fallback.get("overview", "")),
             "topology_rules": [str(item).strip() for item in (normalized.get("topology_rules") or fallback.get("topology_rules") or []) if str(item).strip()],
@@ -1996,13 +2269,51 @@ class BookGenesisService:
         }
         return result
 
-    def _normalize_story_engine_payload(self, *, payload: dict[str, Any], fallback: dict[str, Any], world_bible: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _normalize_story_engine_payload(
+        self,
+        *,
+        payload: dict[str, Any],
+        fallback: dict[str, Any],
+        world_bible: dict[str, Any] | None = None,
+        map_atlas: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         normalized = payload if isinstance(payload, dict) else {}
         culture_profile_ids = {
             str(item.get("id", "")).strip()
             for item in ((world_bible or {}).get("culture_profiles") or [])
             if isinstance(item, dict) and str(item.get("id", "")).strip()
         }
+        submap_rows = [item for item in ((map_atlas or {}).get("submaps") or []) if isinstance(item, dict)]
+        node_rows = [item for item in ((map_atlas or {}).get("nodes") or []) if isinstance(item, dict)]
+        submap_id_set = {str(item.get("id", "")).strip() for item in submap_rows if str(item.get("id", "")).strip()}
+        submap_name_to_id = {
+            str(item.get("name", "")).strip(): str(item.get("id", "")).strip()
+            for item in submap_rows
+            if str(item.get("name", "")).strip() and str(item.get("id", "")).strip()
+        }
+        node_id_set = {str(item.get("id", "")).strip() for item in node_rows if str(item.get("id", "")).strip()}
+        node_name_to_id = {
+            str(item.get("name", "")).strip(): str(item.get("id", "")).strip()
+            for item in node_rows
+            if str(item.get("name", "")).strip() and str(item.get("id", "")).strip()
+        }
+
+        def _normalize_subworld_ref(value: Any) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            if text in submap_id_set:
+                return text
+            return submap_name_to_id.get(text, text)
+
+        def _normalize_node_ref(value: Any) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            if text in node_id_set:
+                return text
+            return node_name_to_id.get(text, text)
+
         def _normalize_memberships(items: Any, fallback_faction: str = "") -> list[dict[str, Any]]:
             memberships = []
             for index, item in enumerate(items or [], start=1):
@@ -2035,7 +2346,7 @@ class BookGenesisService:
             for item in items or []:
                 if not isinstance(item, dict):
                     continue
-                subworld_name = str(item.get("subworld_name", "")).strip() or fallback_subworld
+                subworld_name = _normalize_subworld_ref(item.get("subworld_name", "")) or fallback_subworld
                 region_id = str(item.get("region_id", "")).strip() or fallback_region
                 if not subworld_name and not region_id:
                     continue
@@ -2065,23 +2376,27 @@ class BookGenesisService:
                     "fear": str(item.get("fear", "")).strip(),
                     "secret": str(item.get("secret", "")).strip(),
                     "culture_profile_id": culture_profile_id,
-                    "home_subworld": str(item.get("home_subworld", "")).strip(),
+                    "home_subworld": _normalize_subworld_ref(item.get("home_subworld", "")),
                     "home_region": str(item.get("home_region", "")).strip(),
-                    "home_location": str(item.get("home_location", "")).strip(),
+                    "home_location": _normalize_node_ref(item.get("home_location", "")),
                     "current_region": str(item.get("current_region", "")).strip(),
-                    "current_base": str(item.get("current_base", "")).strip(),
+                    "current_base": _normalize_node_ref(item.get("current_base", "")),
                     "affiliated_faction": str(item.get("affiliated_faction", "")).strip() or (memberships[0]["faction_name"] if memberships else ""),
                     "affiliated_family": str(item.get("affiliated_family", "")).strip(),
                     "faction_memberships": memberships,
                 }
             )
         factions = []
+        faction_ids: set[str] = set()
         for item in (normalized.get("factions") or fallback.get("factions") or []):
             if not isinstance(item, dict):
                 continue
+            faction_id = str(item.get("id", "")).strip() or f"faction-{len(factions) + 1}"
+            if faction_id in faction_ids:
+                faction_id = f"{faction_id}-{len(factions) + 1}"
             footprints = _normalize_footprints(
                 item.get("footprint"),
-                fallback_subworld=str(item.get("base_subworld", "")).strip(),
+                fallback_subworld=_normalize_subworld_ref(item.get("base_subworld", "")),
                 fallback_region=str(item.get("headquarters_region", "")).strip(),
             )
             culture_profile_id = str(item.get("culture_profile_id", "")).strip()
@@ -2089,31 +2404,52 @@ class BookGenesisService:
                 culture_profile_id = ""
             factions.append(
                 {
+                    "id": faction_id,
                     "name": str(item.get("name", "")).strip() or "未命名势力",
                     "role": str(item.get("role", "")).strip(),
                     "goal": str(item.get("goal", "")).strip(),
                     "leverage": str(item.get("leverage", "")).strip(),
                     "relationship_to_protagonist": str(item.get("relationship_to_protagonist", "")).strip(),
                     "culture_profile_id": culture_profile_id,
-                    "base_subworld": str(item.get("base_subworld", "")).strip(),
+                    "base_subworld": _normalize_subworld_ref(item.get("base_subworld", "")),
                     "headquarters_region": str(item.get("headquarters_region", "")).strip(),
-                    "base_location": str(item.get("base_location", "")).strip(),
-                    "territory_scope": [str(value).strip() for value in (item.get("territory_scope") or []) if str(value).strip()],
+                    "base_location": _normalize_node_ref(item.get("base_location", "")),
+                    "territory_scope": [_normalize_subworld_ref(value) for value in (item.get("territory_scope") or []) if str(value).strip()],
                     "culture_keywords": [str(value).strip() for value in (item.get("culture_keywords") or []) if str(value).strip()],
                     "footprint": footprints,
                 }
+            )
+            faction_ids.add(faction_id)
+        faction_name_to_id = {
+            str(item.get("name", "")).strip(): str(item.get("id", "")).strip()
+            for item in factions
+            if str(item.get("name", "")).strip() and str(item.get("id", "")).strip()
+        }
+        faction_id_set = {str(item.get("id", "")).strip() for item in factions if str(item.get("id", "")).strip()}
+
+        def _normalize_faction_ref(value: Any) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            if text in faction_id_set:
+                return text
+            return faction_name_to_id.get(text, text)
+
+        for item in core_cast:
+            item["affiliated_faction"] = _normalize_faction_ref(item.get("affiliated_faction", "")) or (
+                _normalize_faction_ref(item["faction_memberships"][0]["faction_name"]) if item.get("faction_memberships") else ""
             )
         opposition = []
         for item in (normalized.get("opposition") or fallback.get("opposition") or []):
             if not isinstance(item, dict):
                 continue
             backing_factions = [
-                str(value).strip()
+                _normalize_faction_ref(value)
                 for value in (item.get("backing_factions") or [])
                 if str(value).strip()
             ]
             if not backing_factions and str(item.get("backing_faction", "")).strip():
-                backing_factions = [str(item.get("backing_faction", "")).strip()]
+                backing_factions = [_normalize_faction_ref(item.get("backing_faction", ""))]
             culture_profile_id = str(item.get("culture_profile_id", "")).strip()
             if culture_profile_id and culture_profile_id not in culture_profile_ids:
                 culture_profile_id = ""
@@ -2125,10 +2461,10 @@ class BookGenesisService:
                     "pressure": str(item.get("pressure", "")).strip(),
                     "relationship_to_protagonist": str(item.get("relationship_to_protagonist", "")).strip(),
                     "culture_profile_id": culture_profile_id,
-                    "base_subworld": str(item.get("base_subworld", "")).strip(),
+                    "base_subworld": _normalize_subworld_ref(item.get("base_subworld", "")),
                     "base_region": str(item.get("base_region", "")).strip(),
-                    "base_location": str(item.get("base_location", "")).strip(),
-                    "backing_faction": str(item.get("backing_faction", "")).strip() or (backing_factions[0] if backing_factions else ""),
+                    "base_location": _normalize_node_ref(item.get("base_location", "")),
+                    "backing_faction": _normalize_faction_ref(item.get("backing_faction", "")) or (backing_factions[0] if backing_factions else ""),
                     "backing_factions": backing_factions,
                 }
             )
@@ -2145,32 +2481,35 @@ class BookGenesisService:
         if stage_key == "brief":
             return {}
         if stage_key == "world":
-            return {"book_brief": pack.get("book_brief") or {}}
+            return {"book_brief": pack.get("book_brief") or {}, "world": _pack_stage_payload(pack, "world")}
         if stage_key == "map":
+            world_root = _pack_stage_payload(pack, "world")
             return {
                 "book_brief": pack.get("book_brief") or {},
-                "world_bible": pack.get("world_bible") or {},
+                "world_bible": world_root.get("world_bible") or {},
                 "naming_assist": _name_hint_block(
-                    pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {},
+                    world_root.get("world_bible") if isinstance(world_root.get("world_bible"), dict) else {},
                     seed_prefix="refine:map",
                 ),
             }
         if stage_key == "story_engine":
+            world_root = _pack_stage_payload(pack, "world")
             return {
                 "book_brief": pack.get("book_brief") or {},
-                "world_bible": pack.get("world_bible") or {},
-                "map_atlas": pack.get("map_atlas") or {},
+                "world_bible": world_root.get("world_bible") or {},
+                "map_atlas": world_root.get("map_atlas") or {},
                 "naming_assist": _name_hint_block(
-                    pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {},
+                    world_root.get("world_bible") if isinstance(world_root.get("world_bible"), dict) else {},
                     seed_prefix="refine:story_engine",
                 ),
             }
         if stage_key == "book_blueprint":
+            world_root = _pack_stage_payload(pack, "world")
             return {
                 "book_brief": pack.get("book_brief") or {},
-                "world_bible": pack.get("world_bible") or {},
-                "map_atlas": pack.get("map_atlas") or {},
-                "story_engine": pack.get("story_engine") or {},
+                "world_bible": world_root.get("world_bible") or {},
+                "map_atlas": world_root.get("map_atlas") or {},
+                "story_engine": world_root.get("story_engine") or {},
             }
         return pack
 
@@ -2198,8 +2537,8 @@ class BookGenesisService:
                     f"请为当前 arc 规划恰好 {chapter_count} 章，只返回 JSON，顶层格式为 "
                     "{\"chapters\": [...]}，每项包含 title、one_line、goals。\n\n"
                     f"BookBrief：{_json_dump(pack.get('book_brief') or {})}\n"
-                    f"WorldBible：{_json_dump(pack.get('world_bible') or {})}\n"
-                    f"StoryEngine：{_json_dump(pack.get('story_engine') or {})}\n"
+                    f"WorldBible：{_json_dump(_pack_stage_payload(pack, 'world').get('world_bible') or {})}\n"
+                    f"StoryEngine：{_json_dump(_pack_stage_payload(pack, 'story_engine') or {})}\n"
                     f"当前 Arc：{_json_dump(arc_payload)}"
                 ),
             },
@@ -2232,15 +2571,18 @@ class BookGenesisService:
 def _initial_pack_dummy_merge(payload: dict[str, Any]) -> dict[str, Any]:
     base = {
         "book_brief": {},
-        "world_bible": {},
-        "map_atlas": {},
-        "story_engine": {},
+        "world": _empty_stage_world(),
         "book_arc_blueprint": {},
         "subworld_policy": _default_subworld_policy(),
         "execution_bootstrap": {},
         "stage_states": _empty_stage_states(),
     }
-    merged = _deep_merge(base, payload)
+    upgraded_payload = dict(payload or {})
+    upgraded_payload["world"] = _legacy_world_root_from_pack(upgraded_payload)
+    upgraded_payload.pop("world_bible", None)
+    upgraded_payload.pop("map_atlas", None)
+    upgraded_payload.pop("story_engine", None)
+    merged = _deep_merge(base, upgraded_payload)
     if not isinstance(merged.get("stage_states"), dict):
         merged["stage_states"] = _empty_stage_states()
     for stage_key in GENESIS_STAGE_ORDER:

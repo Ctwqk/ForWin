@@ -1647,8 +1647,12 @@ class WritingOrchestrator:
         callable_obj: Callable[..., Any],
         kwargs: dict[str, Any],
     ) -> dict[str, Any]:
+        target_callable = callable_obj
+        side_effect = getattr(callable_obj, "side_effect", None)
+        if callable(side_effect):
+            target_callable = side_effect
         try:
-            signature = inspect.signature(callable_obj)
+            signature = inspect.signature(target_callable)
         except (TypeError, ValueError):
             return dict(kwargs)
         parameters = signature.parameters

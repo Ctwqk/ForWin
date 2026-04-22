@@ -656,7 +656,8 @@ def start_project_writing(
             decision_event_id=decision.id,
         )
         pack = genesis_service.load_pack(revision)
-        world_bible = pack.get("world_bible") if isinstance(pack.get("world_bible"), dict) else {}
+        world = pack.get("world") if isinstance(pack.get("world"), dict) else {}
+        world_bible = world.get("world_bible") if isinstance(world.get("world_bible"), dict) else {}
         if not str(project.setting_summary or "").strip():
             project.setting_summary = str(world_bible.get("overview", "") or "").strip()
         project.creation_status = "writing"

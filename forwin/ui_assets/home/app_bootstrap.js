@@ -7,13 +7,18 @@
       document.getElementById('config_generation_min_chapter_chars').value = @@MIN_CHAPTER_CHARS_JSON@@;
       document.getElementById('config_generation_review_interval_chapters').value = @@REVIEW_INTERVAL_CHAPTERS_JSON@@;
       await loadSettings();
-      await loadPlatforms();
+      await ensureFreshPlatforms({ force: true, reason: 'bootstrap' });
       await loadBooks();
       await loadTaskCenter();
       setGlobalStatus('首页已加载。先看书本，再按需要进入任务中心。');
       window.setInterval(async () => {
-        await loadPlatforms();
+        if (!shouldAutoRefreshPlatforms()) return;
+        await ensureFreshPlatforms({ force: true, reason: 'background_poll' });
       }, 5000);
+      document.addEventListener('visibilitychange', () => {
+        if (!shouldAutoRefreshPlatforms()) return;
+        void ensureFreshPlatforms({ maxAgeMs: 1000, reason: 'visibility_resume' });
+      });
       window.setInterval(async () => {
         if (!taskPollHasActive && !currentDrawerTask) return;
         await loadTaskCenter();

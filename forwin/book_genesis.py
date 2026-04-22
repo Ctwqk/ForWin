@@ -91,6 +91,94 @@ _WORLD_STAGE_WORLD_BIBLE_ALIASES = {
     "forbidden_zones",
     "culture_profiles",
 }
+_GENESIS_STAGE_LABELS = {
+    "brief": "创意简报",
+    "world": "世界观与背景",
+    "map": "地图与空间拓扑",
+    "story_engine": "角色势力与叙事引擎",
+    "book_blueprint": "整本书多 Arc 路线图",
+    "bootstrap": "执行契约与启动交接",
+}
+_WORLD_STAGE_STATE_KEYS = (
+    "minimum_world_system",
+    "minimum_extension_pack",
+    "world_bible",
+    "institution_profiles",
+    "resource_economy_profiles",
+    "world_extensions",
+    "template_libraries",
+)
+_GENESIS_SYSTEM_FOUNDATION = (
+    "你是中文长篇网文的 Genesis 总设计师。你的目标是产出可直接进入下一阶段和后续写作流程的结构化蓝图，而不是写解释性文案。\n"
+    "必须只输出一个 JSON 对象，不要 markdown、代码块、注释、额外说明。\n"
+    "优先保证：长期可连载、冲突可持续升级、设定与人物/势力/空间相互咬合、字段能被后续步骤直接复用。\n"
+    "若消息里提供“已锁定阶段上下文”，将其视为当前真值和硬约束，后续输出必须与之兼容，不能推翻已锁定结论。\n"
+    "若上游已有稳定 id、命名体系、文化背景、地区/势力关系，除非用户明确要求或存在明显冲突，不要随意改名、换 id、重排结构。\n"
+    "信息不足时补最小可运行骨架，避免 null、空洞套话、只有标题没有可执行内容。"
+)
+_GENESIS_STAGE_SYSTEM_PROMPTS = {
+    "brief": (
+        "当前阶段负责把新书 premise 压缩成整本书承诺。重点是卖点、目标读者、核心情绪、核心爽点、长期 promise 和内容 guardrails，"
+        "让后续世界观、叙事引擎和 Arc 蓝图都能直接复用。"
+    ),
+    "world": (
+        "当前阶段负责搭建 WorldRoot。重点是能支撑长篇升级的规则、历史切片、文化模板与命名体系；"
+        "world_bible 要具体，minimum_world_system / minimum_extension_pack 要能落地，其他根层结构要保持可扩展。"
+    ),
+    "map": (
+        "当前阶段负责搭建 MapAtlas。重点是空间层级、移动成本、权力覆盖、危险区与资源分布，让地图天然服务剧情推进，"
+        "而不是只列一串地名。"
+    ),
+    "story_engine": (
+        "当前阶段负责搭建 StoryEngine。重点是角色欲望与恐惧、势力抓手、长期压力源、关系轴线和读者承诺，"
+        "让人物与地图、文化、势力网络互相咬合。"
+    ),
+    "book_blueprint": (
+        "当前阶段负责搭建整本书多 Arc 蓝图。重点是每段 arc 都有清晰目标、风险、兑现方向，并且全书章节区间连续、逐级升级。"
+    ),
+    "bootstrap": (
+        "当前阶段负责把 Genesis 根蓝图转成写作执行契约。不要扩写新设定，只把已有 Genesis 成果整理成明确的启动条件与运行规则。"
+    ),
+}
+_GENESIS_STAGE_HARD_RULES = {
+    "brief": [
+        "title 与项目标题保持一致；one_line 要在一句话里说清主角处境、核心冲突或最大卖点。",
+        "audience、core_emotion、core_delight、promise 不能是空泛口号，要让后续阶段可直接引用。",
+        "guardrails 优先承接已有内容边界，缺失时也只补和题材、调性、平台表达直接相关的约束。",
+    ],
+    "world": [
+        "world_bible.overview 要说清主舞台、力量/秩序来源和长期冲突方向，不要写百科全书摘要。",
+        "axioms 必须体现代价、限制或秩序张力，能支撑长期升级，不能全是万能设定。",
+        "culture_profiles 要可复用到命名与人物/地图生成，至少给出清晰语感说明和一组可用示例。",
+        "map_atlas 与 story_engine 可以保持骨架，但方向必须和 world_bible 一致，不能出现脱节设定。",
+    ],
+    "map": [
+        "submaps、regions、nodes、edges 必须互相对应，空间层级清晰；regions 最多两级，level=2 必须挂到有效 parent_region_id。",
+        "id 要稳定、可复用、易于程序读取，不要只返回名字没有 id。",
+        "每个关键舞台都要体现移动成本、控制权、危险或资源主题，避免纯装饰性地点。",
+        "如果已有 culture_profiles，优先把文化 id 绑定到 submaps、regions、nodes。",
+    ],
+    "story_engine": [
+        "core_cast 不是人名清单；每个核心角色都要有欲望、恐惧、秘密或长期矛盾来源。",
+        "factions 与 opposition 要和地图/地区/据点形成对应关系，不能悬空。",
+        "reader_promises 与 long_arcs 要能解释全书为什么值得追更，而不是重复世界观说明。",
+        "优先保留并复用已有 culture_profile_id、home_subworld、home_region、base_region 等锚点。",
+    ],
+    "book_blueprint": [
+        "arcs 必须覆盖全书目标章节数，chapter_start/chapter_end 连续无重叠，chapter_count 与区间一致。",
+        "每个 arc 都要有新的目标、风险升级和 payoff_direction，不能只是把 premise 重写一遍。",
+        "target_size、soft_min、soft_max 要贴近建议尺寸，不要极端失衡。",
+    ],
+    "bootstrap": [
+        "只整理已有 Genesis 结果，不发明新的 operation_mode 或治理字段。",
+        "root_ready 必须反映当前 Genesis 根层是否足以启动写作；start_policy 要简洁、可执行。",
+    ],
+}
+_GENESIS_REFINE_SYSTEM_PROMPT = (
+    "你是中文长篇网文的 Genesis 协作编辑。你要把用户的口语化修改意图翻译成结构化 JSON 变更，并尽量保持原有蓝图稳定。\n"
+    "必须只输出 JSON，不要 markdown、解释或对话腔。\n"
+    "优先局部改动：保留未被点名的字段、id、命名体系、隶属关系和上游约束；新增内容必须与已有地图、文化、势力、章节规划兼容。"
+)
 
 
 class StaleGenesisRevisionError(RuntimeError):
@@ -117,6 +205,34 @@ def _json_clone(payload: Any) -> Any:
     return copy.deepcopy(payload)
 
 
+def _prompt_render(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        return _json_dump(value)
+    if isinstance(value, tuple):
+        return _json_dump(list(value))
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _prompt_bullets(lines: list[str] | tuple[str, ...]) -> str:
+    return "\n".join(
+        f"- {str(line).strip()}"
+        for line in lines
+        if str(line).strip()
+    )
+
+
+def _prompt_sections(*sections: tuple[str, Any]) -> str:
+    blocks: list[str] = []
+    for title, content in sections:
+        rendered = _prompt_render(content)
+        if not rendered:
+            continue
+        blocks.append(f"【{title}】\n{rendered}")
+    return "\n\n".join(blocks)
+
+
 def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     merged = dict(base)
     for key, value in patch.items():
@@ -129,6 +245,35 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
 
 def _deep_equal(left: Any, right: Any) -> bool:
     return _json_dump(left) == _json_dump(right)
+
+
+def _world_stage_state_view(world_root: dict[str, Any] | None) -> dict[str, Any]:
+    payload = world_root if isinstance(world_root, dict) else {}
+    return {
+        key: _json_clone(payload.get(key))
+        for key in _WORLD_STAGE_STATE_KEYS
+    }
+
+
+def _locked_stage_context(pack: dict[str, Any], current_stage_key: str) -> list[dict[str, Any]]:
+    if current_stage_key not in GENESIS_STAGE_ORDER:
+        return []
+    stage_states = pack.get("stage_states") if isinstance(pack.get("stage_states"), dict) else {}
+    current_index = GENESIS_STAGE_ORDER.index(current_stage_key)
+    context: list[dict[str, Any]] = []
+    for stage_key in GENESIS_STAGE_ORDER[:current_index]:
+        state = stage_states.get(stage_key) if isinstance(stage_states.get(stage_key), dict) else {}
+        if not bool(state.get("locked")):
+            continue
+        context.append(
+            {
+                "stage_key": stage_key,
+                "stage_label": _GENESIS_STAGE_LABELS.get(stage_key, stage_key),
+                "updated_at": str(state.get("updated_at", "") or ""),
+                "payload": _pack_stage_payload(pack, stage_key),
+            }
+        )
+    return context
 
 
 def _empty_stage_states() -> dict[str, dict[str, Any]]:
@@ -864,6 +1009,168 @@ class BookGenesisService:
         self.skill_router = skill_router
         self.skill_prompt_layer_builder = skill_prompt_layer_builder
 
+    def _build_stage_generation_messages(
+        self,
+        *,
+        project: Project,
+        pack: dict[str, Any],
+        stage_key: str,
+        fallback: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        label = _GENESIS_STAGE_LABELS.get(stage_key, stage_key)
+        current_payload = _pack_stage_payload(pack, stage_key)
+        locked_context = _locked_stage_context(pack, stage_key)
+        book_brief = pack.get("book_brief") if isinstance(pack.get("book_brief"), dict) else {}
+        world_root = _pack_stage_payload(pack, "world")
+        world_bible = world_root.get("world_bible") if isinstance(world_root.get("world_bible"), dict) else {}
+        map_atlas = world_root.get("map_atlas") if isinstance(world_root.get("map_atlas"), dict) else {}
+        story_engine = world_root.get("story_engine") if isinstance(world_root.get("story_engine"), dict) else {}
+
+        if stage_key == "brief":
+            user_content = _prompt_sections(
+                ("阶段", f"{label} ({stage_key})"),
+                ("输出要求", "返回 BookBrief JSON，至少包含 title、one_line、audience、core_emotion、core_delight、promise、guardrails。"),
+                ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES[stage_key])),
+                ("已锁定阶段上下文（视为当前真值）", locked_context),
+                ("新书输入", pack.get("book_brief") or {}),
+                ("参考骨架", fallback),
+            )
+        elif stage_key == "world":
+            user_content = _prompt_sections(
+                ("阶段", f"{label} ({stage_key})"),
+                (
+                    "输出要求",
+                    "返回统一 WorldRoot JSON，至少包含 minimum_world_system、minimum_extension_pack、world_bible、map_atlas、story_engine、"
+                    "institution_profiles、resource_economy_profiles、world_extensions、template_libraries。"
+                    "其中 world_bible 至少包含 overview、axioms、history_slice、naming_style、forbidden_zones、culture_profiles。"
+                ),
+                ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES[stage_key])),
+                ("已锁定阶段上下文（视为当前真值）", locked_context),
+                ("BookBrief", book_brief),
+                ("当前 WorldRoot", current_payload),
+                ("参考骨架", fallback),
+            )
+        elif stage_key == "map":
+            user_content = _prompt_sections(
+                ("阶段", f"{label} ({stage_key})"),
+                ("输出要求", "返回 MapAtlas JSON，至少包含 overview、topology_rules、submaps、regions、nodes、edges。"),
+                ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES[stage_key])),
+                ("已锁定阶段上下文（视为当前真值）", locked_context),
+                ("BookBrief", book_brief),
+                ("WorldBible", world_bible),
+                ("当前 MapAtlas", current_payload),
+                ("命名辅助", _name_hint_block(world_bible, seed_prefix=f"{project.id}:map")),
+                ("参考骨架", fallback),
+            )
+        elif stage_key == "story_engine":
+            user_content = _prompt_sections(
+                ("阶段", f"{label} ({stage_key})"),
+                (
+                    "输出要求",
+                    "返回 StoryEngine JSON，至少包含 core_cast、factions、opposition、relationship_axes、reader_promises、long_arcs。"
+                    "角色、势力、对手要尽量复用已有 map/world 锚点。"
+                ),
+                ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES[stage_key])),
+                ("已锁定阶段上下文（视为当前真值）", locked_context),
+                ("BookBrief", book_brief),
+                ("WorldBible", world_bible),
+                ("MapAtlas", map_atlas),
+                ("当前 StoryEngine", current_payload),
+                ("命名辅助", _name_hint_block(world_bible, seed_prefix=f"{project.id}:story_engine")),
+                ("参考骨架", fallback),
+            )
+        elif stage_key == "book_blueprint":
+            user_content = _prompt_sections(
+                ("阶段", f"{label} ({stage_key})"),
+                ("输出要求", "返回 BookArcBlueprint JSON，顶层至少包含 summary 和 arcs；每个 arc 都要给出完整章节区间与目标。"),
+                ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES[stage_key])),
+                ("已锁定阶段上下文（视为当前真值）", locked_context),
+                ("BookBrief", book_brief),
+                ("WorldBible", world_bible),
+                ("StoryEngine", story_engine),
+                ("当前 BookArcBlueprint", current_payload),
+                ("建议 Arc 尺寸骨架", fallback.get("arcs") or []),
+                ("参考骨架", fallback),
+            )
+        elif stage_key == "bootstrap":
+            user_content = _prompt_sections(
+                ("阶段", f"{label} ({stage_key})"),
+                (
+                    "输出要求",
+                    "返回 ExecutionBootstrap JSON，至少包含 operation_mode、governance_defaults、root_ready、start_policy。"
+                    "这是执行契约，不是新一轮世界观创作。"
+                ),
+                ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES[stage_key])),
+                ("已锁定阶段上下文（视为当前真值）", locked_context),
+                ("BookBrief", book_brief),
+                ("WorldBible", world_bible),
+                ("BookArcBlueprint", pack.get("book_arc_blueprint") or {}),
+                ("当前 ExecutionBootstrap", current_payload),
+                ("参考骨架", fallback),
+            )
+        else:
+            raise ValueError(f"未知 Genesis stage: {stage_key}")
+
+        return [
+            {"role": "system", "content": _GENESIS_SYSTEM_FOUNDATION},
+            {"role": "system", "content": _GENESIS_STAGE_SYSTEM_PROMPTS.get(stage_key, "")},
+            {"role": "user", "content": user_content},
+        ]
+
+    def _build_stage_refine_messages(
+        self,
+        *,
+        pack: dict[str, Any],
+        stage_key: str,
+        instruction: str,
+        target_path: str,
+        current_payload: dict[str, Any],
+        support_context: dict[str, Any],
+        fallback_stage_payload: dict[str, Any],
+        current_target: Any | None = None,
+        wrap_scalar_value: bool = False,
+    ) -> list[dict[str, str]]:
+        label = _GENESIS_STAGE_LABELS.get(stage_key, stage_key)
+        scope_prompt = (
+            "当前是定向改写模式。只返回目标值对应的 JSON 对象，格式必须是 {\"value\": <更新后的 JSON 值>}。"
+            if wrap_scalar_value
+            else "当前是定向改写模式。只返回目标子对象的新 JSON，不要把整个阶段或兄弟字段一起返回。"
+            if target_path
+            else "当前是阶段全量改写模式。请返回更新后的完整阶段 JSON。"
+        )
+
+        sections: list[tuple[str, Any]] = [
+            ("阶段", f"{label} ({stage_key})"),
+            ("用户指令", instruction),
+            ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES.get(stage_key, []))),
+            (
+                "改写原则",
+                _prompt_bullets(
+                    [
+                        "只处理用户明确要求的变化，避免无关重写。",
+                        "尽量保留已有 id、命名体系、culture_profile_id、parent_region_id、势力归属、章节区间等稳定锚点。",
+                        "新增内容必须与上游 Genesis 上下文兼容，不要制造自相矛盾的新设定。",
+                    ]
+                ),
+            ),
+        ]
+        if target_path:
+            sections.append(("目标路径", target_path))
+            sections.append(("当前目标值", current_target))
+        sections.extend(
+            [
+                ("当前阶段 JSON", current_payload),
+                ("上游 Genesis 上下文", support_context),
+                ("参考骨架", fallback_stage_payload),
+            ]
+        )
+        return [
+            {"role": "system", "content": _GENESIS_REFINE_SYSTEM_PROMPT},
+            {"role": "system", "content": _GENESIS_STAGE_SYSTEM_PROMPTS.get(stage_key, "")},
+            {"role": "system", "content": scope_prompt},
+            {"role": "user", "content": _prompt_sections(*sections)},
+        ]
+
     def create_initial_revision(
         self,
         *,
@@ -939,9 +1246,23 @@ class BookGenesisService:
         now = _utc_iso()
         stage_states = next_pack.get("stage_states") if isinstance(next_pack.get("stage_states"), dict) else {}
         for stage_key, section_key in _STAGE_TO_SECTION.items():
-            patched = section_key in patch
-            if not patched and "world" in patch and stage_key in {"world", "map", "story_engine"}:
-                patched = not _deep_equal(previous_stage_payloads.get(stage_key), _pack_stage_payload(next_pack, stage_key))
+            patched = False
+            if section_key in patch:
+                if stage_key == "world":
+                    patched = not _deep_equal(
+                        _world_stage_state_view(previous_stage_payloads.get(stage_key)),
+                        _world_stage_state_view(_pack_stage_payload(next_pack, stage_key)),
+                    )
+                else:
+                    patched = True
+            elif "world" in patch and stage_key in {"world", "map", "story_engine"}:
+                if stage_key == "world":
+                    patched = not _deep_equal(
+                        _world_stage_state_view(previous_stage_payloads.get(stage_key)),
+                        _world_stage_state_view(_pack_stage_payload(next_pack, stage_key)),
+                    )
+                else:
+                    patched = not _deep_equal(previous_stage_payloads.get(stage_key), _pack_stage_payload(next_pack, stage_key))
             if not patched:
                 continue
             state = stage_states.get(stage_key) if isinstance(stage_states.get(stage_key), dict) else {}
@@ -1521,113 +1842,24 @@ class BookGenesisService:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         if stage_key == "brief":
             fallback = _fallback_brief(project, pack.get("book_brief") if isinstance(pack.get("book_brief"), dict) else {})
-            messages = [
-                {
-                    "role": "system",
-                    "content": "你是网文项目总策划，只输出 JSON 对象，不要 markdown。",
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        "请根据新书 brief 生成整本书级别的 BookBrief，只返回 JSON，字段至少包含："
-                        "title、one_line、audience、core_emotion、core_delight、promise、guardrails。\n\n"
-                        f"输入：{_json_dump(pack.get('book_brief') or {})}"
-                    ),
-                },
-            ]
         elif stage_key == "world":
             fallback = _fallback_world(project, pack)
-            messages = [
-                {"role": "system", "content": "你是中文长篇世界观编辑，只输出 JSON 对象。"},
-                {
-                    "role": "user",
-                    "content": (
-                        "请根据 BookBrief 生成统一世界观根对象 WorldRoot，只返回 JSON。\n"
-                        "WorldRoot 至少包含：minimum_world_system、minimum_extension_pack、world_bible、map_atlas、story_engine、"
-                        "institution_profiles、resource_economy_profiles、world_extensions、template_libraries。\n"
-                        "其中 world_bible 至少包含：overview、axioms、history_slice、naming_style、forbidden_zones、culture_profiles。\n"
-                        "culture_profiles 表示一组可复用的文化背景与命名体系，每项至少包含："
-                        "id、name、summary、inspiration、generator_civilization、generator_overlays、social_markers、aesthetic_keywords、"
-                        "character_name_style、region_name_style、location_name_style、"
-                        "character_name_examples、region_name_examples、location_name_examples、usage_notes。\n"
-                        "minimum_world_system 与 minimum_extension_pack 需要保留为最小实例骨架；"
-                        "institution_profiles、resource_economy_profiles 与 world_extensions 默认可以为空；"
-                        "template_libraries 作为模板库保留结构即可。\n\n"
-                        f"BookBrief：{_json_dump(pack.get('book_brief') or {})}\n"
-                        f"当前 WorldRoot：{_json_dump(_pack_stage_payload(pack, 'world'))}"
-                    ),
-                },
-            ]
         elif stage_key == "map":
             fallback = _fallback_map(pack)
-            world_root = _pack_stage_payload(pack, "world")
-            world_bible = world_root.get("world_bible") if isinstance(world_root.get("world_bible"), dict) else {}
-            messages = [
-                {"role": "system", "content": "你是小说地图规划器，只输出 JSON 对象。"},
-                {
-                    "role": "user",
-                    "content": (
-                        "请基于 WorldBible 生成结构化 MapAtlas，只返回 JSON，字段至少包含：overview、topology_rules、submaps、nodes、edges。\n\n"
-                        "MapAtlas 需要显式包含 regions，结构为 submaps、regions、nodes、edges 四层信息。"
-                        "regions 表示小世界下辖地区，最多两级嵌套。"
-                        "submaps 与 nodes 需要带稳定 id 字段；如果 WorldBible 里已经有 culture_profiles，请尽量为 submaps、regions、nodes 补 culture_profile_id。\n\n"
-                        f"WorldBible：{_json_dump(world_bible)}\n\n"
-                        f"命名辅助：{_json_dump(_name_hint_block(world_bible, seed_prefix=f'{project.id}:map'))}"
-                    ),
-                },
-            ]
         elif stage_key == "story_engine":
             fallback = _fallback_story_engine(pack)
-            world_root = _pack_stage_payload(pack, "world")
-            world_bible = world_root.get("world_bible") if isinstance(world_root.get("world_bible"), dict) else {}
-            messages = [
-                {"role": "system", "content": "你是长篇网文叙事引擎规划器，只输出 JSON 对象。"},
-                {
-                    "role": "user",
-                    "content": (
-                        "请基于 BookBrief 和 WorldBible 生成 StoryEngine，只返回 JSON，字段至少包含：core_cast、factions、opposition、relationship_axes、reader_promises、long_arcs。\n\n"
-                        "角色要支持 home_subworld、home_region、home_location、current_region、current_base、"
-                        "faction_memberships；势力要支持 id、headquarters_region、footprint；对手盘要支持 base_region、backing_factions。"
-                        "如果 WorldBible 里已经有 culture_profiles，请尽量为角色、势力、对手补 culture_profile_id。\n\n"
-                        f"BookBrief：{_json_dump(pack.get('book_brief') or {})}\n"
-                        f"WorldBible：{_json_dump(world_bible)}\n"
-                        f"MapAtlas：{_json_dump(world_root.get('map_atlas') or {})}\n"
-                        f"命名辅助：{_json_dump(_name_hint_block(world_bible, seed_prefix=f'{project.id}:story_engine'))}"
-                    ),
-                },
-            ]
         elif stage_key == "book_blueprint":
             fallback = _fallback_blueprint(project, pack)
-            messages = [
-                {"role": "system", "content": "你是整本书多 Arc 蓝图策划，只输出 JSON 对象。"},
-                {
-                    "role": "user",
-                    "content": (
-                        "请生成整本书级别的 BookArcBlueprint，只返回 JSON。顶层至少包含 summary 和 arcs。"
-                        "arcs 每项必须包含 arc_number、title、arc_synopsis、goal、stakes、payoff_direction、"
-                        "chapter_start、chapter_end、chapter_count、target_size、soft_min、soft_max。\n\n"
-                        f"BookBrief：{_json_dump(pack.get('book_brief') or {})}\n"
-                        f"WorldBible：{_json_dump(_pack_stage_payload(pack, 'world').get('world_bible') or {})}\n"
-                        f"StoryEngine：{_json_dump(_pack_stage_payload(pack, 'story_engine') or {})}\n"
-                        f"建议 arc 尺寸：{_json_dump(_fallback_blueprint(project, pack).get('arcs') or [])}"
-                    ),
-                },
-            ]
         elif stage_key == "bootstrap":
             fallback = _fallback_bootstrap(project, pack)
-            messages = [
-                {"role": "system", "content": "你是写作执行启动器，只输出 JSON 对象。"},
-                {
-                    "role": "user",
-                    "content": (
-                        "请根据当前 Genesis 根层生成 ExecutionBootstrap，只返回 JSON，字段至少包含："
-                        "operation_mode、governance_defaults、root_ready、start_policy。\n\n"
-                        f"BookGenesis：{_json_dump(pack)}"
-                    ),
-                },
-            ]
         else:
             raise ValueError(f"未知 Genesis stage: {stage_key}")
+        messages = self._build_stage_generation_messages(
+            project=project,
+            pack=pack,
+            stage_key=stage_key,
+            fallback=fallback,
+        )
         payload, trace = self._call_json_with_trace(messages=messages, fallback=fallback, stage_key=stage_key)
         if stage_key == "book_blueprint":
             payload = self._normalize_blueprint_payload(project=project, payload=payload, fallback=fallback)
@@ -1659,6 +1891,7 @@ class BookGenesisService:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         normalized_target_path = _normalize_stage_target_path(stage_key, target_path)
         current_payload = _pack_stage_payload(pack, stage_key)
+        support_context = self._refine_support_context(pack=pack, stage_key=stage_key)
         fallback_stage_payload = current_payload or (
             _fallback_map(pack) if stage_key == "map"
             else _fallback_story_engine(pack) if stage_key == "story_engine"
@@ -1673,23 +1906,16 @@ class BookGenesisService:
             current_target = _get_value_at_path(source_payload, normalized_target_path)
             if isinstance(current_target, dict):
                 fallback = _json_clone(current_target)
-                messages = [
-                    {
-                        "role": "system",
-                        "content": "你是小说 Genesis 协作编辑。你会根据用户指令只改写指定 JSON 子对象，并返回更新后的 JSON 对象。不要输出 markdown。",
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"当前阶段：{stage_key}\n"
-                            f"目标路径：{target_path}\n"
-                            f"用户指令：{instruction}\n\n"
-                            f"当前子对象：{_json_dump(current_target)}\n\n"
-                            f"当前整段 JSON：{_json_dump(current_payload)}\n\n"
-                            "请只返回这个目标子对象的新 JSON，并尽量保留未被要求修改的信息。"
-                        ),
-                    },
-                ]
+                messages = self._build_stage_refine_messages(
+                    pack=pack,
+                    stage_key=stage_key,
+                    instruction=instruction,
+                    target_path=target_path,
+                    current_payload=current_payload,
+                    support_context=support_context,
+                    fallback_stage_payload=fallback_stage_payload,
+                    current_target=current_target,
+                )
                 payload, trace = self._call_json_with_trace(
                     messages=messages,
                     fallback=fallback,
@@ -1698,24 +1924,17 @@ class BookGenesisService:
                 )
             else:
                 wrapped_fallback = {"value": _json_clone(current_target)}
-                messages = [
-                    {
-                        "role": "system",
-                        "content": "你是小说 Genesis 协作编辑。你会根据用户指令只改写指定 JSON 值，并返回包含 value 字段的 JSON 对象。不要输出 markdown。",
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"当前阶段：{stage_key}\n"
-                            f"目标路径：{target_path}\n"
-                            f"用户指令：{instruction}\n\n"
-                            f"当前目标值：{_json_dump(current_target)}\n\n"
-                            f"当前整段 JSON：{_json_dump(current_payload)}\n\n"
-                            "请只返回一个 JSON 对象，格式必须是 {\"value\": <更新后的 JSON 值>}。"
-                            "只改这个目标值，尽量保留未被要求修改的信息。"
-                        ),
-                    },
-                ]
+                messages = self._build_stage_refine_messages(
+                    pack=pack,
+                    stage_key=stage_key,
+                    instruction=instruction,
+                    target_path=target_path,
+                    current_payload=current_payload,
+                    support_context=support_context,
+                    fallback_stage_payload=fallback_stage_payload,
+                    current_target=current_target,
+                    wrap_scalar_value=True,
+                )
                 payload, trace = self._call_json_with_trace(
                     messages=messages,
                     fallback=wrapped_fallback,
@@ -1726,22 +1945,15 @@ class BookGenesisService:
             next_payload = _json_clone(current_payload)
             _set_value_at_path(next_payload, normalized_target_path, payload)
         else:
-            messages = [
-                {
-                    "role": "system",
-                    "content": "你是小说 Genesis 协作编辑。你会根据用户指令改写当前阶段的 JSON，并返回完整的新 JSON 对象。不要输出 markdown。",
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"当前阶段：{stage_key}\n"
-                        f"用户指令：{instruction}\n\n"
-                        f"当前 JSON：{_json_dump(current_payload)}\n\n"
-                        f"上游 Genesis 上下文：{_json_dump(self._refine_support_context(pack=pack, stage_key=stage_key))}\n\n"
-                        "请返回这个阶段更新后的完整 JSON，并尽量保留未被要求修改的信息。"
-                    ),
-                },
-            ]
+            messages = self._build_stage_refine_messages(
+                pack=pack,
+                stage_key=stage_key,
+                instruction=instruction,
+                target_path="",
+                current_payload=current_payload,
+                support_context=support_context,
+                fallback_stage_payload=fallback_stage_payload,
+            )
             payload, trace = self._call_json_with_trace(
                 messages=messages,
                 fallback=fallback_stage_payload,

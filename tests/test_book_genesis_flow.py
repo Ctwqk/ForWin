@@ -135,6 +135,68 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertIn("daily_life_profiles", world["world_extensions"])
         self.assertIn("title_lexicon_pack", world["template_libraries"])
 
+    def test_patching_map_after_world_lock_keeps_world_stage_locked(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {
+                    "title": "Genesis 锁定保持书",
+                    "premise": "世界观锁定后，地图阶段继续细化不应把世界观重新解锁。",
+                    "genre": "玄幻",
+                }
+            )
+        )
+
+        api_module.patch_project_genesis(
+            created.project_id,
+            BookGenesisPatchRequest.model_validate(
+                {
+                    "world": {
+                        "world_bible": {
+                            "overview": "旧城、荒原与遗迹并存。",
+                            "axioms": ["力量必须付出代价"],
+                            "history_slice": "旧王朝崩塌后的乱局时代。",
+                            "naming_style": "中文短促命名。",
+                            "forbidden_zones": ["避免现代网络梗"],
+                        },
+                        "map_atlas": {
+                            "overview": "初始地图",
+                            "topology_rules": ["行动必须有路程与风险成本"],
+                            "submaps": [],
+                            "regions": [],
+                            "nodes": [],
+                            "edges": [],
+                        },
+                    }
+                }
+            ),
+        )
+        api_module.lock_project_genesis_stage(created.project_id, "world")
+
+        detail = api_module.patch_project_genesis(
+            created.project_id,
+            BookGenesisPatchRequest.model_validate(
+                {
+                    "world": {
+                        "map_atlas": {
+                            "overview": "细化后的地图",
+                            "topology_rules": ["行动必须有路程与风险成本", "跨区移动要付出公开代价"],
+                            "submaps": [],
+                            "regions": [],
+                            "nodes": [],
+                            "edges": [],
+                        }
+                    },
+                    "reason": "test_patch_map_keeps_world_locked",
+                }
+            ),
+        )
+
+        self.assertTrue(detail.pack.stage_states["world"].locked)
+        self.assertEqual(detail.pack.stage_states["world"].status, "locked")
+        self.assertFalse(detail.pack.stage_states["map"].locked)
+        self.assertEqual(detail.pack.stage_states["map"].status, "edited")
+        self.assertEqual(detail.pack.world["map_atlas"]["overview"], "细化后的地图")
+
     def test_start_writing_materializes_arc_skeletons_and_active_arc_chapters(self) -> None:
         created = api_module.create_project(
             ProjectCreateRequest.model_validate(
@@ -412,8 +474,13 @@ class BookGenesisFlowTests(unittest.TestCase):
         test_case = self
 
         def fake_refine_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+            system_prompt = "\n".join(item["content"] for item in messages if item["role"] == "system")
+            user_prompt = next(item["content"] for item in reversed(messages) if item["role"] == "user")
             test_case.assertEqual(stage_key, "story_engine:refine")
-            test_case.assertIn("更阴郁一点", messages[1]["content"])
+            test_case.assertIn("优先局部改动", system_prompt)
+            test_case.assertIn("【用户指令】", user_prompt)
+            test_case.assertIn("更阴郁一点", user_prompt)
+            test_case.assertIn("【阶段硬约束】", user_prompt)
             return (
                 {
                     "core_cast": [
@@ -479,11 +546,17 @@ class BookGenesisFlowTests(unittest.TestCase):
         test_case = self
 
         def fake_generate_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+            system_prompt = "\n".join(item["content"] for item in messages if item["role"] == "system")
+            user_prompt = next(item["content"] for item in reversed(messages) if item["role"] == "user")
             test_case.assertEqual(stage_key, "world")
             test_case.assertEqual(getattr(_service.llm_client, "profile_id", ""), "genesis-alt")
             test_case.assertEqual(getattr(_service.llm_client, "profile_name", ""), "Genesis Alt")
             test_case.assertEqual(getattr(_service.llm_client, "model", ""), "alt-model")
             test_case.assertEqual(getattr(_service.llm_client, "base_url", ""), "http://alt.invalid")
+            test_case.assertIn("Genesis 总设计师", system_prompt)
+            test_case.assertIn("【阶段】", user_prompt)
+            test_case.assertIn("【阶段硬约束】", user_prompt)
+            test_case.assertIn("【参考骨架】", user_prompt)
             return (
                 {
                     "overview": "被选中模型生成的世界观。",
@@ -526,6 +599,67 @@ class BookGenesisFlowTests(unittest.TestCase):
         assert trace is not None
         self.assertIn('"profile_id": "genesis-alt"', trace.model_profile_json)
         self.assertIn('"profile_name": "Genesis Alt"', trace.model_profile_json)
+
+    def test_generate_stage_prompt_includes_locked_prior_stage_context(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {
+                    "title": "Genesis 锁定上下文书",
+                    "premise": "地图生成时要显式参考已锁定的前序阶段。",
+                    "genre": "玄幻",
+                }
+            )
+        )
+
+        api_module.patch_project_genesis(
+            created.project_id,
+            BookGenesisPatchRequest.model_validate(
+                {
+                    "world": {
+                        "world_bible": {
+                            "overview": "旧城、荒原与遗迹并存。",
+                            "axioms": ["力量必须付出代价"],
+                            "history_slice": "旧王朝崩塌后的乱局时代。",
+                            "naming_style": "中文短促命名。",
+                            "forbidden_zones": ["避免现代网络梗"],
+                        }
+                    }
+                }
+            ),
+        )
+        api_module.lock_project_genesis_stage(created.project_id, "brief")
+        api_module.lock_project_genesis_stage(created.project_id, "world")
+
+        test_case = self
+
+        def fake_generate_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+            user_prompt = next(item["content"] for item in reversed(messages) if item["role"] == "user")
+            test_case.assertEqual(stage_key, "map")
+            test_case.assertIn("【已锁定阶段上下文（视为当前真值）】", user_prompt)
+            test_case.assertIn('"stage_key": "brief"', user_prompt)
+            test_case.assertIn('"stage_key": "world"', user_prompt)
+            test_case.assertNotIn('"stage_key": "map"', user_prompt)
+            test_case.assertIn("旧城、荒原与遗迹并存。", user_prompt)
+            return (
+                fallback,
+                {
+                    "effective_system_prompt": "genesis map",
+                    "prompt_layers": [{"role": "system", "content": "genesis map"}],
+                    "input_snapshot": {"stage_key": stage_key},
+                    "model_profile": {"model": "fake-model"},
+                    "attempts": [{"attempt": 1, "status": "success"}],
+                    "output_summary": {"mode": "success"},
+                },
+            )
+
+        with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_generate_call):
+            detail = api_module.generate_project_genesis_stage(
+                created.project_id,
+                "map",
+                BookGenesisStageRunRequest.model_validate({}),
+            )
+
+        self.assertIn("overview", detail.pack.world["map_atlas"])
 
     def test_map_and_story_fallbacks_include_subworld_metadata_and_links(self) -> None:
         created = api_module.create_project(
@@ -664,8 +798,12 @@ class BookGenesisFlowTests(unittest.TestCase):
         test_case = self
 
         def fake_refine_item_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+            system_prompt = "\n".join(item["content"] for item in messages if item["role"] == "system")
+            user_prompt = next(item["content"] for item in reversed(messages) if item["role"] == "user")
             test_case.assertEqual(stage_key, "map:refine_item")
-            test_case.assertIn("submaps[0]", messages[1]["content"])
+            test_case.assertIn("定向改写模式", system_prompt)
+            test_case.assertIn("submaps[0]", user_prompt)
+            test_case.assertIn("【目标路径】", user_prompt)
             return (
                 {
                     "name": "北城区",
@@ -732,8 +870,12 @@ class BookGenesisFlowTests(unittest.TestCase):
         test_case = self
 
         def fake_refine_scalar_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+            system_prompt = "\n".join(item["content"] for item in messages if item["role"] == "system")
+            user_prompt = next(item["content"] for item in reversed(messages) if item["role"] == "user")
             test_case.assertEqual(stage_key, "world:refine_item")
-            test_case.assertIn("history_slice", messages[1]["content"])
+            test_case.assertIn("{\"value\": <更新后的 JSON 值>}", system_prompt)
+            test_case.assertIn("history_slice", user_prompt)
+            test_case.assertIn("【当前目标值】", user_prompt)
             return (
                 {"value": "旧王朝崩塌后的百年乱局进入第二次秩序重组前夜。"},
                 {

@@ -107,6 +107,8 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("footprint", html)
         self.assertIn("base_region", html)
         self.assertIn("backing_factions", html)
+        self.assertIn('rel="icon"', html)
+        self.assertIn("data:image/svg+xml", html)
         self.assertIn("object_list", html)
         self.assertIn("renderGenesisStageForm", html)
         self.assertIn("renderGenesisStructuredFields", html)

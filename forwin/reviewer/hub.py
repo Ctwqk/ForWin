@@ -220,6 +220,27 @@ class HistoricalReviewHub:
             )
         return [item for item in payload if item["id"]]
 
+    def choose_repair_escalation(
+        self,
+        *,
+        repo=None,
+        context: ChapterContextPack,
+        writer_output: WriterOutput,
+        review: ReviewVerdict,
+        repair_attempts: list[dict[str, object]] | None = None,
+    ) -> RepairInstruction:
+        review_context = build_review_context_pack(
+            repo=repo,
+            context=context,
+            lint_signals=review.lint_signals,
+        )
+        return self.experience_reviewer.choose_repair_escalation(
+            context=review_context,
+            writer_output=writer_output,
+            review=review,
+            repair_attempts=repair_attempts or [],
+        )
+
     @staticmethod
     def _issues_verdict(issues: list[ContinuityIssue]) -> str:
         if any(issue.severity == "error" for issue in issues):
@@ -300,6 +321,7 @@ class HistoricalReviewHub:
                 context.chapter_plan_one_line,
                 *(context.chapter_goals[:2]),
             ],
+            scope_reason="continuity rule break needs local repair first",
             design_patch={
                 "continuity_focus": [issue.rule_name for issue in continuity_issues if issue.severity == "error"],
             },
@@ -321,6 +343,7 @@ class HistoricalReviewHub:
                 context.chapter_plan_one_line,
                 *(context.chapter_goals[:2]),
             ],
+            scope_reason="governance issues should start with local repair",
             design_patch={
                 "governance_focus": [issue.rule_name for issue in governance_issues],
             },
@@ -365,6 +388,7 @@ class HistoricalReviewHub:
             if base_instruction.failure_type == webnovel_instruction.failure_type
             else "mixed"
         )
+        merged_scope = "band" if merged_scope == "arc" else merged_scope
         merged_design_patch = dict(base_instruction.design_patch)
         for key, value in webnovel_instruction.design_patch.items():
             if key in merged_design_patch and isinstance(merged_design_patch[key], list) and isinstance(value, list):
@@ -378,6 +402,10 @@ class HistoricalReviewHub:
             failure_type=merged_failure_type,
             must_fix=list(dict.fromkeys([*base_instruction.must_fix, *webnovel_instruction.must_fix])),
             must_preserve=list(dict.fromkeys([*base_instruction.must_preserve, *webnovel_instruction.must_preserve])),
+            scope_reason=(
+                webnovel_instruction.scope_reason
+                or base_instruction.scope_reason
+            ),
             design_patch=merged_design_patch,
             evidence_refs=list(dict.fromkeys([*base_instruction.evidence_refs, *webnovel_instruction.evidence_refs])),
         )

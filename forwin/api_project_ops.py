@@ -1103,6 +1103,7 @@ def get_chapter_review(
                 if latest_attempt
                 else ""
             ),
+            latest_repair_scope_reason=str(review_meta.get("scope_reason") or ""),
             forced_accept_applied=bool(review_meta.get("forced_accept_applied")),
             acceptance_mode=str(getattr(plan, "acceptance_mode", "") or ""),
             repair_attempt_count=int(getattr(plan, "repair_attempt_count", 0) or 0),

@@ -85,6 +85,7 @@ class RepairInstruction(BaseModel):
     required_belief_patch: dict[str, object] = Field(default_factory=dict)
     required_hint_patch: dict[str, object] = Field(default_factory=dict)
     required_payoff_patch: dict[str, object] = Field(default_factory=dict)
+    scope_reason: str = ""
     design_patch: dict[str, object] = Field(default_factory=dict)
     evidence_refs: list[str] = Field(default_factory=list)
 

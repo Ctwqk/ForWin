@@ -28,16 +28,49 @@
       return null;
     }
 
-    function taskIntSet(values) {
-      return new Set((Array.isArray(values) ? values : []).map((value) => Number(value || 0)).filter(Boolean));
+    function taskIntValues(...groups) {
+      return groups.flatMap((values) => (Array.isArray(values) ? values : []))
+        .map((value) => Number(value || 0))
+        .filter(Boolean);
+    }
+
+    function taskIntSet(...groups) {
+      return new Set(taskIntValues(...groups));
+    }
+
+    function acceptedChapterSet(item) {
+      const control = item?.generation_control || {};
+      return taskIntSet(control.accepted_chapters, item?.completed_chapters);
+    }
+
+    function pendingReviewChapterSet(item) {
+      const control = item?.generation_control || {};
+      return taskIntSet(control.pending_review_chapters, item?.paused_chapters);
+    }
+
+    function failedChapterSet(item) {
+      const control = item?.generation_control || {};
+      return taskIntSet(control.failed_chapters, item?.failed_chapters);
+    }
+
+    function generatedChapterSet(item) {
+      const control = item?.generation_control || {};
+      return taskIntSet(
+        control.generated_chapters,
+        control.accepted_chapters,
+        control.drafted_chapters,
+        control.pending_review_chapters,
+        item?.completed_chapters,
+        item?.paused_chapters,
+      );
     }
 
     function chapterStatusFromTask(item, chapter) {
       const number = Number(chapter?.chapter_number || 0);
       if (chapter?.status) return chapter.status;
-      if (taskIntSet(item.paused_chapters).has(number)) return 'needs_review';
-      if (taskIntSet(item.failed_chapters).has(number)) return 'failed';
-      if (taskIntSet(item.completed_chapters).has(number)) return 'accepted';
+      if (pendingReviewChapterSet(item).has(number)) return 'needs_review';
+      if (failedChapterSet(item).has(number)) return 'failed';
+      if (acceptedChapterSet(item).has(number)) return 'accepted';
       if (Number(item.current_chapter || 0) === number && CHAPTER_RUNTIME_STAGES.has(item.current_stage)) return 'running';
       return number ? 'planned' : '';
     }
@@ -98,9 +131,10 @@
 
     function renderMacroProgress(item) {
       const history = taskHistory(item);
-      const completed = Array.isArray(item.completed_chapters) ? item.completed_chapters.length : 0;
-      const failed = Array.isArray(item.failed_chapters) ? item.failed_chapters.length : 0;
-      const paused = Array.isArray(item.paused_chapters) ? item.paused_chapters.length : 0;
+      const accepted = acceptedChapterSet(item).size;
+      const generated = generatedChapterSet(item).size;
+      const failed = failedChapterSet(item).size;
+      const paused = pendingReviewChapterSet(item).size;
       const requested = Number(item.requested_chapters || 0);
       const hasChapterWork = history.some((entry) => CHAPTER_RUNTIME_STAGES.has(entry.stage));
       const hasTerminal = ['completed', 'failed', 'partial_failed', 'needs_review', 'cancelled', 'paused'].includes(item.status);
@@ -138,7 +172,7 @@
           key: 'chapter_loop',
           label: '逐章生成',
           state: currentIsChapterWork ? 'current' : (hasChapterWork ? 'completed' : 'upcoming'),
-          note: `${completed}/${requested || '-'} 完成 · ${failed} 失败 · ${paused} 暂停`,
+          note: `${generated}/${requested || '-'} 已生成 · ${accepted} accepted · ${failed} 失败 · ${paused} 待 review`,
         },
         {
           key: 'terminal',
@@ -513,7 +547,8 @@
       const control = item.generation_control || {};
       const reviewChapters = actionableReviewChapters(item, control, chapters);
       const failedChapters = actionableFailedChapters(item, control, chapters);
-      const completed = Array.isArray(item.completed_chapters) ? item.completed_chapters.length : 0;
+      const accepted = acceptedChapterSet(item).size;
+      const generated = generatedChapterSet(item).size;
       const requested = Number(item.requested_chapters || project?.target_total_chapters || 0);
       const nextChapter = firstPlannedOrFailedChapter(control, chapters);
       const currentStage = stageLabel(item.current_stage || item.status);
@@ -530,7 +565,9 @@
           safety: '不要重启容器；等待任务自己进入 paused。',
           reviewChapters,
           failedChapters,
-          completed,
+          completed: accepted,
+          accepted,
+          generated,
           requested,
           nextChapter,
           currentStage,
@@ -551,7 +588,9 @@
           safety: '接受并继续会新建 continue task，不会重写已 accepted 章节。',
           reviewChapters,
           failedChapters,
-          completed,
+          completed: accepted,
+          accepted,
+          generated,
           requested,
           nextChapter,
           currentStage,
@@ -570,7 +609,9 @@
           safety: '如果还有 needs_review，系统会先要求处理 review。',
           reviewChapters,
           failedChapters,
-          completed,
+          completed: accepted,
+          accepted,
+          generated,
           requested,
           nextChapter,
           currentStage,
@@ -591,7 +632,9 @@
           safety: '继续生成只会选择 failed / planned 章节。',
           reviewChapters,
           failedChapters,
-          completed,
+          completed: accepted,
+          accepted,
+          generated,
           requested,
           nextChapter,
           currentStage,
@@ -610,7 +653,9 @@
           safety: '运行中不要重启容器，除非接受当前任务中断。',
           reviewChapters,
           failedChapters,
-          completed,
+          completed: accepted,
+          accepted,
+          generated,
           requested,
           nextChapter,
           currentStage,
@@ -629,7 +674,9 @@
           safety: '后续继续生成会从下一批 planned 章节开始。',
           reviewChapters,
           failedChapters,
-          completed,
+          completed: accepted,
+          accepted,
+          generated,
           requested,
           nextChapter,
           currentStage,
@@ -649,7 +696,9 @@
         safety: '书本入口不会自动重写已 accepted 章节。',
         reviewChapters,
         failedChapters,
-        completed,
+        completed: accepted,
+        accepted,
+        generated,
         requested,
         nextChapter,
         currentStage,

@@ -193,8 +193,9 @@ export default function App() {
     }
   }
 
-  async function refreshWorldModel(nextProjectId = projectId) {
+  async function refreshWorldModel(nextProjectId = projectId, options: { updateMessage?: boolean } = {}) {
     if (!nextProjectId) return;
+    const updateMessage = options.updateMessage ?? true;
     setBusy(true);
     setError("");
     try {
@@ -212,7 +213,9 @@ export default function App() {
       if (!selectedPageKey && pageRows.length > 0) {
         setSelectedPageKey(pageRows[0].page_key);
       }
-      setMessage("WorldModel 已刷新。");
+      if (updateMessage) {
+        setMessage("WorldModel 已刷新。");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "WorldModel 加载失败");
     } finally {
@@ -232,7 +235,7 @@ export default function App() {
       });
       setVaultRoot(result.vault_root);
       setMessage(result.message || `已导出 ${result.exported_count} 个页面。`);
-      await refreshWorldModel(projectId);
+      await refreshWorldModel(projectId, { updateMessage: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Obsidian 导出失败");
     } finally {
@@ -251,7 +254,7 @@ export default function App() {
       });
       setVaultRoot(result.vault_root);
       setMessage(result.message || `已生成 ${result.proposal_count} 个 proposal。`);
-      await refreshWorldModel(projectId);
+      await refreshWorldModel(projectId, { updateMessage: false });
       setTab("proposals");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Obsidian 导入失败");
@@ -273,7 +276,7 @@ export default function App() {
         }
       );
       setMessage(status === "accepted" ? "Proposal 已接受。" : "Proposal 已拒绝。");
-      await refreshWorldModel(projectId);
+      await refreshWorldModel(projectId, { updateMessage: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Proposal 审核失败");
     } finally {

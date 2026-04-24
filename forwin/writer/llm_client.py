@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 import json
@@ -79,6 +80,7 @@ class OpenAICompatibleAdapter:
             ),
         )
 
+        attempt_group_id = uuid.uuid4().hex
         profiles = self._request_profiles()
         last_exc: Exception | None = None
         for profile_index, profile in enumerate(profiles):
@@ -91,6 +93,8 @@ class OpenAICompatibleAdapter:
                     response_format=response_format,
                     request_timeout=request_timeout,
                     retry_on_timeout=retry_on_timeout,
+                    attempt_group_id=attempt_group_id,
+                    fallback_eligible_on_profile_failure=profile_index < len(profiles) - 1,
                 )
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
@@ -105,6 +109,7 @@ class OpenAICompatibleAdapter:
                     "to_model": next_profile["model"],
                     "to_base_url": next_profile["base_url"],
                     "reason": str(exc),
+                    "attempt_group_id": attempt_group_id,
                 }
                 self.model_fallback_events.append(event)
                 logger.warning(
@@ -131,6 +136,8 @@ class OpenAICompatibleAdapter:
         response_format: dict | None,
         request_timeout: httpx.Timeout,
         retry_on_timeout: bool,
+        attempt_group_id: str,
+        fallback_eligible_on_profile_failure: bool,
     ) -> str:
         payload = {
             "model": profile["model"],
@@ -168,6 +175,7 @@ class OpenAICompatibleAdapter:
                 if response.status_code in _RETRYABLE_HTTP_STATUS_CODES:
                     retry_delay = self._retry_delay(attempt, response)
                     self._record_llm_attempt(
+                        attempt_group_id=attempt_group_id,
                         profile=profile,
                         messages=messages,
                         temperature=temperature,
@@ -179,12 +187,21 @@ class OpenAICompatibleAdapter:
                         provider_request_id=self._provider_request_id(response),
                         duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
                         retry_after=retry_delay,
+                        sleep_ms=int(retry_delay * 1000) if attempt < self.retry_attempts - 1 else 0,
                         error_class="HTTPStatusError" if attempt >= self.retry_attempts - 1 else "",
                         error_message=(
                             f"HTTP {response.status_code}"
                             if attempt >= self.retry_attempts - 1
                             else ""
                         ),
+                        error_category=self._error_category_for_status(response.status_code),
+                        retryable=True,
+                        fallback_eligible=(
+                            fallback_eligible_on_profile_failure
+                            if attempt >= self.retry_attempts - 1
+                            else False
+                        ),
+                        final_failure=attempt >= self.retry_attempts - 1,
                     )
                     if attempt < self.retry_attempts - 1:
                         logger.warning(
@@ -203,6 +220,7 @@ class OpenAICompatibleAdapter:
                 data = response.json()
                 content: str = data["choices"][0]["message"]["content"]
                 self._record_llm_attempt(
+                    attempt_group_id=attempt_group_id,
                     profile=profile,
                     messages=messages,
                     temperature=temperature,
@@ -223,7 +241,9 @@ class OpenAICompatibleAdapter:
                 return content
 
             except (httpx.ReadTimeout, httpx.TimeoutException) as exc:
+                final_failure = not (retry_on_timeout and attempt < self.retry_attempts - 1)
                 self._record_llm_attempt(
+                    attempt_group_id=attempt_group_id,
                     profile=profile,
                     messages=messages,
                     temperature=temperature,
@@ -234,9 +254,16 @@ class OpenAICompatibleAdapter:
                     duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
                     error_class=exc.__class__.__name__,
                     error_message=str(exc),
+                    error_category="timeout",
+                    timeout_kind=self._timeout_kind(exc),
+                    retryable=bool(retry_on_timeout),
+                    fallback_eligible=fallback_eligible_on_profile_failure if final_failure else False,
+                    final_failure=final_failure,
                 )
                 if retry_on_timeout and attempt < self.retry_attempts - 1:
                     delay = self._retry_delay(attempt)
+                    if self.llm_attempt_events:
+                        self.llm_attempt_events[-1]["sleep_ms"] = int(delay * 1000)
                     logger.warning(
                         "Request timed out (%s). Waiting %.1f s before retry %d/%d.",
                         exc,
@@ -249,7 +276,11 @@ class OpenAICompatibleAdapter:
                 raise
             except Exception as exc:  # noqa: BLE001
                 response = getattr(exc, "response", None)
+                status_code = int(getattr(response, "status_code", 0) or 0)
+                if status_code in _RETRYABLE_HTTP_STATUS_CODES:
+                    raise
                 self._record_llm_attempt(
+                    attempt_group_id=attempt_group_id,
                     profile=profile,
                     messages=messages,
                     temperature=temperature,
@@ -257,7 +288,7 @@ class OpenAICompatibleAdapter:
                     response_format=response_format,
                     request_timeout=request_timeout,
                     attempt_no=attempt_no,
-                    http_status=int(getattr(response, "status_code", 0) or 0),
+                    http_status=status_code,
                     provider_request_id=(
                         self._provider_request_id(response)
                         if isinstance(response, httpx.Response)
@@ -266,6 +297,17 @@ class OpenAICompatibleAdapter:
                     duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
                     error_class=exc.__class__.__name__,
                     error_message=str(exc),
+                    error_category=(
+                        self._error_category_for_status(status_code)
+                        if status_code
+                        else "network"
+                    ),
+                    retryable=self._is_fallback_retryable(exc),
+                    fallback_eligible=(
+                        fallback_eligible_on_profile_failure
+                        and self._is_fallback_retryable(exc)
+                    ),
+                    final_failure=True,
                 )
                 raise
 
@@ -315,6 +357,7 @@ class OpenAICompatibleAdapter:
     def _record_llm_attempt(
         self,
         *,
+        attempt_group_id: str,
         profile: dict[str, str],
         messages: list[dict],
         temperature: float,
@@ -328,12 +371,21 @@ class OpenAICompatibleAdapter:
         input_chars: int | None = None,
         output_chars: int = 0,
         retry_after: float | None = None,
+        sleep_ms: int = 0,
         error_class: str = "",
         error_message: str = "",
+        error_category: str = "",
+        timeout_kind: str = "",
+        retryable: bool = False,
+        fallback_eligible: bool = False,
+        final_failure: bool = False,
     ) -> None:
         base_url = str(profile.get("base_url") or "")
         self.llm_attempt_events.append(
             {
+                "attempt_group_id": attempt_group_id,
+                "profile_id": str(profile.get("id") or ""),
+                "profile_name": str(profile.get("name") or ""),
                 "model": str(profile.get("model") or ""),
                 "base_url_host": urlparse(base_url).netloc or base_url,
                 "temperature": temperature,
@@ -351,8 +403,14 @@ class OpenAICompatibleAdapter:
                 "output_chars": int(output_chars or 0),
                 "response_format": response_format or {},
                 "retry_after": retry_after,
+                "sleep_ms": int(sleep_ms or 0),
                 "error_class": error_class,
                 "error_message": error_message,
+                "error_category": error_category,
+                "timeout_kind": timeout_kind,
+                "retryable": bool(retryable),
+                "fallback_eligible": bool(fallback_eligible),
+                "final_failure": bool(final_failure),
             }
         )
 
@@ -372,6 +430,30 @@ class OpenAICompatibleAdapter:
             return float(value)
         except (TypeError, ValueError):
             return 0.0
+
+    @staticmethod
+    def _error_category_for_status(status_code: int) -> str:
+        if status_code in {429}:
+            return "rate_limit"
+        if status_code in {529, 500, 502, 503, 504}:
+            return "provider_overload"
+        if status_code in {401, 403}:
+            return "auth"
+        if 400 <= status_code < 500:
+            return "bad_request"
+        if status_code:
+            return "unknown"
+        return ""
+
+    @staticmethod
+    def _timeout_kind(exc: BaseException) -> str:
+        if isinstance(exc, httpx.ConnectTimeout):
+            return "connect_timeout"
+        if isinstance(exc, httpx.ReadTimeout):
+            return "read_timeout"
+        if isinstance(exc, httpx.TimeoutException):
+            return "overall_timeout"
+        return ""
 
     @classmethod
     def _is_fallback_retryable(cls, exc: Exception) -> bool:

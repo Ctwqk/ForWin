@@ -317,50 +317,52 @@
         </div>
         <button class="ghost" type="button" onclick="closeModelModal()">关闭</button>
       </div>
-      <div class="field-grid">
-        <div>
-          <label for="model_form_name">名称</label>
-          <input id="model_form_name" placeholder="例如：MiniMax 主账号">
-        </div>
-        <div>
-          <label for="model_form_provider_preset">供应商预设</label>
-          <select id="model_form_provider_preset"></select>
-        </div>
-        <div>
-          <label for="model_form_model">当前 Model / 自定义</label>
-          <input id="model_form_model" spellcheck="false">
-        </div>
-        <div>
-          <label for="model_form_recommended_model">模型下拉</label>
-          <select id="model_form_recommended_model"></select>
-        </div>
-        <div style="grid-column:1 / -1;">
-          <div class="action-row">
-            <button class="secondary" type="button" onclick="applySelectedModelPreset()">套用供应商预设</button>
-            <span id="model_form_provider_hint" class="meta-line"></span>
+      <form id="model_profile_form" onsubmit="event.preventDefault();">
+        <div class="field-grid">
+          <div>
+            <label for="model_form_name">名称</label>
+            <input id="model_form_name" placeholder="例如：MiniMax 主账号">
+          </div>
+          <div>
+            <label for="model_form_provider_preset">供应商预设</label>
+            <select id="model_form_provider_preset"></select>
+          </div>
+          <div>
+            <label for="model_form_model">当前 Model / 自定义</label>
+            <input id="model_form_model" spellcheck="false">
+          </div>
+          <div>
+            <label for="model_form_recommended_model">模型下拉</label>
+            <select id="model_form_recommended_model"></select>
+          </div>
+          <div style="grid-column:1 / -1;">
+            <div class="action-row">
+              <button class="secondary" type="button" onclick="applySelectedModelPreset()">套用供应商预设</button>
+              <span id="model_form_provider_hint" class="meta-line"></span>
+            </div>
+          </div>
+          <div style="grid-column:1 / -1;">
+            <label for="model_form_base_url_select">API 站点 / Base URL 下拉</label>
+            <select id="model_form_base_url_select"></select>
+          </div>
+          <div style="grid-column:1 / -1;">
+            <label for="model_form_base_url">当前 Base URL / 自定义</label>
+            <input id="model_form_base_url" spellcheck="false" placeholder="选择自定义时在这里手填">
+          </div>
+          <div style="grid-column:1 / -1;">
+            <label for="model_form_api_key">API Key</label>
+            <input id="model_form_api_key" type="password" placeholder="留空表示不修改已保存的 Key" autocomplete="off">
           </div>
         </div>
-        <div style="grid-column:1 / -1;">
-          <label for="model_form_base_url_select">API 站点 / Base URL 下拉</label>
-          <select id="model_form_base_url_select"></select>
+        <label class="checkbox">
+          <input id="model_form_set_default" type="checkbox">
+          <span>保存后同时设为默认模型。</span>
+        </label>
+        <div class="action-row" style="justify-content:flex-end;">
+          <button class="ghost" type="button" onclick="closeModelModal()">取消</button>
+          <button class="primary" type="button" onclick="saveModelProfile()">保存</button>
         </div>
-        <div style="grid-column:1 / -1;">
-          <label for="model_form_base_url">当前 Base URL / 自定义</label>
-          <input id="model_form_base_url" spellcheck="false" placeholder="选择自定义时在这里手填">
-        </div>
-        <div style="grid-column:1 / -1;">
-          <label for="model_form_api_key">API Key</label>
-          <input id="model_form_api_key" type="password" placeholder="留空表示不修改已保存的 Key" autocomplete="off">
-        </div>
-      </div>
-      <label class="checkbox">
-        <input id="model_form_set_default" type="checkbox">
-        <span>保存后同时设为默认模型。</span>
-      </label>
-      <div class="action-row" style="justify-content:flex-end;">
-        <button class="ghost" type="button" onclick="closeModelModal()">取消</button>
-        <button class="primary" type="button" onclick="saveModelProfile()">保存</button>
-      </div>
+      </form>
     </div>
   </div>
 

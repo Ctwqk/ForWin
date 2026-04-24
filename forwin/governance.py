@@ -135,11 +135,34 @@ class DecisionEventType:
     CHAPTER_WRITE_STARTED = "chapter_write_started"
     WRITER_OUTPUT_BUILT = "writer_output_built"
     WRITER_SCENE_FALLBACK_USED = "writer_scene_fallback_used"
+    WRITER_PREVIEW_FALLBACK_STARTED = "writer_preview_fallback_started"
+    WRITER_PREVIEW_FALLBACK_ATTEMPT_FAILED = "writer_preview_fallback_attempt_failed"
+    WRITER_PREVIEW_FALLBACK_SUCCEEDED = "writer_preview_fallback_succeeded"
+    WRITER_PREVIEW_FALLBACK_FAILED = "writer_preview_fallback_failed"
     WRITER_OUTPUT_ARTIFACT_SAVED = "writer_output_artifact_saved"
     REVIEW_STARTED = "review_started"
     CANON_COMMIT_STARTED = "canon_commit_started"
     LLM_RESPONSE_PARSE_FAILED = "llm_response_parse_failed"
     ARTIFACT_SAVED = "artifact_saved"
+    PROJECT_DELETE_REQUESTED = "project_delete_requested"
+    PROJECT_DELETE_STARTED = "project_delete_started"
+    PROJECT_DELETE_SUCCEEDED = "project_delete_succeeded"
+    PROJECT_DELETE_FAILED = "project_delete_failed"
+    AUDIT_BUNDLE_EXPORTED = "audit_bundle_exported"
+    PERFORMANCE_WARNING = "performance_warning"
+    EXTENSION_HEARTBEAT_RECEIVED = "extension_heartbeat_received"
+    BROWSER_SESSION_SYNCED = "browser_session_synced"
+    UPLOAD_JOB_CREATED = "upload_job_created"
+    UPLOAD_JOB_CLAIMED = "upload_job_claimed"
+    UPLOAD_JOB_PROGRESS = "upload_job_progress"
+    UPLOAD_JOB_SUCCEEDED = "upload_job_succeeded"
+    UPLOAD_JOB_FAILED = "upload_job_failed"
+    UPLOAD_JOB_CANCELLED = "upload_job_cancelled"
+    COMMENT_SYNC_JOB_CREATED = "comment_sync_job_created"
+    COMMENT_SYNC_JOB_CLAIMED = "comment_sync_job_claimed"
+    COMMENT_SYNC_SUCCEEDED = "comment_sync_succeeded"
+    COMMENT_SYNC_FAILED = "comment_sync_failed"
+    RAW_COMMENTS_INGESTED = "raw_comments_ingested"
 
 
 KNOWN_DECISION_EVENT_TYPES = {
@@ -210,11 +233,34 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.CHAPTER_WRITE_STARTED,
     DecisionEventType.WRITER_OUTPUT_BUILT,
     DecisionEventType.WRITER_SCENE_FALLBACK_USED,
+    DecisionEventType.WRITER_PREVIEW_FALLBACK_STARTED,
+    DecisionEventType.WRITER_PREVIEW_FALLBACK_ATTEMPT_FAILED,
+    DecisionEventType.WRITER_PREVIEW_FALLBACK_SUCCEEDED,
+    DecisionEventType.WRITER_PREVIEW_FALLBACK_FAILED,
     DecisionEventType.WRITER_OUTPUT_ARTIFACT_SAVED,
     DecisionEventType.REVIEW_STARTED,
     DecisionEventType.CANON_COMMIT_STARTED,
     DecisionEventType.LLM_RESPONSE_PARSE_FAILED,
     DecisionEventType.ARTIFACT_SAVED,
+    DecisionEventType.PROJECT_DELETE_REQUESTED,
+    DecisionEventType.PROJECT_DELETE_STARTED,
+    DecisionEventType.PROJECT_DELETE_SUCCEEDED,
+    DecisionEventType.PROJECT_DELETE_FAILED,
+    DecisionEventType.AUDIT_BUNDLE_EXPORTED,
+    DecisionEventType.PERFORMANCE_WARNING,
+    DecisionEventType.EXTENSION_HEARTBEAT_RECEIVED,
+    DecisionEventType.BROWSER_SESSION_SYNCED,
+    DecisionEventType.UPLOAD_JOB_CREATED,
+    DecisionEventType.UPLOAD_JOB_CLAIMED,
+    DecisionEventType.UPLOAD_JOB_PROGRESS,
+    DecisionEventType.UPLOAD_JOB_SUCCEEDED,
+    DecisionEventType.UPLOAD_JOB_FAILED,
+    DecisionEventType.UPLOAD_JOB_CANCELLED,
+    DecisionEventType.COMMENT_SYNC_JOB_CREATED,
+    DecisionEventType.COMMENT_SYNC_JOB_CLAIMED,
+    DecisionEventType.COMMENT_SYNC_SUCCEEDED,
+    DecisionEventType.COMMENT_SYNC_FAILED,
+    DecisionEventType.RAW_COMMENTS_INGESTED,
 }
 
 PLAN_TASK_TYPES = {

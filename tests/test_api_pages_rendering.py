@@ -182,6 +182,9 @@ class ApiPagesRenderingTests(unittest.TestCase):
             extension_install_path="browser_extension/forwin-publisher",
         )
 
+        self.assertIn("browser_extension/forwin-publisher", html)
+        self.assertNotIn("{extension_install_path}", html)
+        self.assertNotIn("@@EXTENSION_INSTALL_PATH@@", html)
         self._assert_rendered_inline_scripts_parse(html)
 
 

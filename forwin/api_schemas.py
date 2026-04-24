@@ -230,6 +230,7 @@ class BulkDeleteResponse(BaseModel):
     deleted_ids: list[str] = Field(default_factory=list)
     skipped_ids: list[str] = Field(default_factory=list)
     message: str = ""
+    operation_id: str = ""
 
 
 class TaskBulkDeleteItem(BaseModel):
@@ -651,6 +652,7 @@ class ProjectDeleteResponse(BaseModel):
     ok: bool
     project_id: str
     message: str
+    operation_id: str = ""
 
 
 class ProjectCreateRequest(BaseModel):

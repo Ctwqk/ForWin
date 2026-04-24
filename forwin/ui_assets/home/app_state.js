@@ -1019,7 +1019,7 @@
 
     function parseTextareaLines(value) {
       return String(value || '')
-        .split(/\\r?\\n/)
+        .split(/\r?\n/)
         .map((item) => item.trim())
         .filter(Boolean);
     }

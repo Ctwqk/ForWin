@@ -3468,6 +3468,8 @@ class WritingOrchestrator:
     ) -> WriterOutput | None:
         max_attempts = max(1, int(self.config.blackbox_writer_attention_retries))
         last_error: Exception | None = None
+        last_failure_event_id = ""
+        last_failed_attempt = 0
         saw_transient_error = False
         writer_skill_layers = self._select_skill_layers(
             scope="writer",
@@ -3582,7 +3584,7 @@ class WritingOrchestrator:
                     max_attempts,
                     exc,
                 )
-                self._record_decision_event(
+                failure_event = self._record_decision_event(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -3602,6 +3604,8 @@ class WritingOrchestrator:
                         "stage": "writing_chapter",
                     },
                 )
+                last_failure_event_id = str(getattr(failure_event, "id", "") or "")
+                last_failed_attempt = attempt
                 if self._is_timeout_like(exc):
                     logger.warning(
                         "Writer timeout detected for chapter %d; skipping extra retries.",
@@ -3636,6 +3640,26 @@ class WritingOrchestrator:
                     )
                     time.sleep(delay)
         if last_error is not None:
+            preview_started_at = time.perf_counter()
+            preview_max_attempts = 3 if saw_transient_error else 2
+            preview_started_event = self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.WRITER_PREVIEW_FALLBACK_STARTED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 writer preview fallback 已开始。",
+                parent_event_id=last_failure_event_id,
+                payload={
+                    "stage": "chapter_preview_fallback",
+                    "source_error_class": last_error.__class__.__name__,
+                    "source_error_message": str(last_error),
+                    "source_attempt_no": last_failed_attempt,
+                    "max_attempts": preview_max_attempts,
+                    "timeout_seconds": self.writer.scene_call_timeout_seconds,
+                },
+            )
             try:
                 preview_output = self._call_with_compatible_kwargs(
                     self.writer.write_preview_chapter,
@@ -3643,7 +3667,7 @@ class WritingOrchestrator:
                     skill_layers=writer_skill_layers,
                     trace_stage_key=trace_stage_key,
                     timeout_seconds=self.writer.scene_call_timeout_seconds,
-                    max_attempts=3 if saw_transient_error else 2,
+                    max_attempts=preview_max_attempts,
                     retry_on_timeout=True,
                 )
                 preview_output.generation_meta.update(
@@ -3652,6 +3676,29 @@ class WritingOrchestrator:
                         "writer_fallback_error": str(last_error),
                     }
                 )
+                fallback_summary = self._prompt_trace_success_summary(preview_output)
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.WRITER_PREVIEW_FALLBACK_SUCCEEDED,
+                    scope="chapter",
+                    summary=f"第{chapter_number}章 writer preview fallback 成功。",
+                    parent_event_id=last_failure_event_id,
+                    payload={
+                        "stage": "chapter_preview_fallback",
+                        "source_error_class": last_error.__class__.__name__,
+                        "source_error_message": str(last_error),
+                        "source_attempt_no": last_failed_attempt,
+                        "fallback_attempt_no": fallback_summary.get("successful_attempt_no", 0),
+                        "max_attempts": preview_max_attempts,
+                        "timeout_seconds": self.writer.scene_call_timeout_seconds,
+                        "duration_ms": max(0, int((time.perf_counter() - preview_started_at) * 1000)),
+                        "char_count": int(getattr(preview_output, "char_count", 0) or 0),
+                        **fallback_summary,
+                    },
+                )
                 logger.warning(
                     "Writer preview fallback succeeded for chapter %d after writer failure: %s",
                     chapter_number,
@@ -3659,6 +3706,27 @@ class WritingOrchestrator:
                 )
                 return preview_output
             except Exception as preview_exc:  # noqa: BLE001
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.WRITER_PREVIEW_FALLBACK_FAILED,
+                    scope="chapter",
+                    summary=f"第{chapter_number}章 writer preview fallback 失败。",
+                    parent_event_id=str(getattr(preview_started_event, "id", "") or last_failure_event_id),
+                    payload={
+                        "stage": "chapter_preview_fallback",
+                        "source_error_class": last_error.__class__.__name__,
+                        "source_error_message": str(last_error),
+                        "source_attempt_no": last_failed_attempt,
+                        "max_attempts": preview_max_attempts,
+                        "timeout_seconds": self.writer.scene_call_timeout_seconds,
+                        "duration_ms": max(0, int((time.perf_counter() - preview_started_at) * 1000)),
+                        "error_class": preview_exc.__class__.__name__,
+                        "error_message": str(preview_exc),
+                    },
+                )
                 logger.warning(
                     "Writer preview fallback failed for chapter %d: %s",
                     chapter_number,
@@ -3875,6 +3943,42 @@ class WritingOrchestrator:
             )
             session.rollback()
             return frozen_path or None
+
+    @staticmethod
+    def _prompt_trace_success_summary(writer_output: WriterOutput) -> dict[str, object]:
+        generation_meta = getattr(writer_output, "generation_meta", {}) or {}
+        prompt_trace = generation_meta.get("prompt_trace") if isinstance(generation_meta, dict) else {}
+        attempts = prompt_trace.get("attempts", []) if isinstance(prompt_trace, dict) else []
+        if not isinstance(attempts, list):
+            attempts = []
+        successful = None
+        for item in attempts:
+            if not isinstance(item, dict):
+                continue
+            if int(item.get("output_chars") or 0) > 0 and not str(item.get("error_class") or ""):
+                successful = item
+        if successful is None and attempts:
+            successful = next((item for item in reversed(attempts) if isinstance(item, dict)), None)
+        if not isinstance(successful, dict):
+            return {
+                "prompt_trace_id": str(generation_meta.get("prompt_trace_id", "") or ""),
+                "effective_model": "",
+                "effective_profile_id": "",
+                "successful_attempt_no": 0,
+                "attempt_group_id": "",
+                "output_chars": int(getattr(writer_output, "char_count", 0) or 0),
+                "fallback_chain": generation_meta.get("model_fallbacks", []),
+            }
+        return {
+            "prompt_trace_id": str(generation_meta.get("prompt_trace_id", "") or ""),
+            "effective_model": str(successful.get("model") or ""),
+            "effective_profile_id": str(successful.get("profile_id") or ""),
+            "effective_profile_name": str(successful.get("profile_name") or ""),
+            "successful_attempt_no": int(successful.get("attempt_no") or 0),
+            "attempt_group_id": str(successful.get("attempt_group_id") or ""),
+            "output_chars": int(successful.get("output_chars") or getattr(writer_output, "char_count", 0) or 0),
+            "fallback_chain": generation_meta.get("model_fallbacks", []),
+        }
 
     def _apply_world_v4_gate(
         self,
@@ -4615,6 +4719,8 @@ class WritingOrchestrator:
                 "read operation timed out",
                 "json generation failed",
                 "llmjsonparseerror",
+                "preview generation failed",
+                "preview response body is empty",
                 "connection reset",
             )
         ):

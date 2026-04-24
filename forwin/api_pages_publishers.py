@@ -33,6 +33,7 @@ def render_publishers_page(
                 extension_install_path,
                 ensure_ascii=False,
             ),
+            "@@EXTENSION_INSTALL_PATH@@": extension_install_path,
             "{PAGE_DOM_HELPERS_JS}": PAGE_DOM_HELPERS_JS,
         },
     )

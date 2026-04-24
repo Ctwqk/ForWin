@@ -11,6 +11,13 @@ from forwin.utils import LLMJSONParseError, parse_llm_json
 logger = logging.getLogger(__name__)
 
 
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class ArcDirector:
     """Plans the initial arc independently from chapter writing.
 
@@ -375,7 +382,7 @@ class ArcDirector:
                         "name": name,
                         "description": str(seed.get("description", "")).strip(),
                         "role_hint": str(seed.get("role_hint", "")).strip(),
-                        "importance": max(1, int(seed.get("importance", 5) or 5)),
+                        "importance": max(1, _safe_int(seed.get("importance", 5) or 5, 5)),
                         "aliases": [
                             str(alias).strip()
                             for alias in (seed.get("aliases") or [])
@@ -404,7 +411,7 @@ class ArcDirector:
                 name = str(seed.get("name", "")).strip()
                 if not name:
                     continue
-                level = int(seed.get("level", 1) or 1)
+                level = _safe_int(seed.get("level", 1) or 1, 1)
                 if level not in {1, 2}:
                     level = 1
                 parent_region_name = str(seed.get("parent_region_name", "")).strip()
@@ -504,7 +511,7 @@ class ArcDirector:
                             for alias in (seed.get("aliases") or [])
                             if str(alias).strip()
                         ],
-                        "importance": max(1, int(seed.get("importance", 5) or 5)),
+                        "importance": max(1, _safe_int(seed.get("importance", 5) or 5, 5)),
                         "initial_state": seed.get("initial_state") if isinstance(seed.get("initial_state"), dict) else {},
                     }
                 )

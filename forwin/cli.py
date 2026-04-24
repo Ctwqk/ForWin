@@ -199,6 +199,20 @@ def cmd_status(args: argparse.Namespace) -> None:
         engine.dispose()
 
 
+def cmd_llm_eval(args: argparse.Namespace) -> None:
+    """Run or report ForWin LLM reliability evaluations."""
+    from forwin.llm_eval.cli import report_eval_from_args, run_eval_from_args
+
+    if args.llm_eval_command == "run":
+        code = run_eval_from_args(args)
+    elif args.llm_eval_command == "report":
+        code = report_eval_from_args(args)
+    else:
+        code = 2
+    if code:
+        sys.exit(code)
+
+
 # ------------------------------------------------------------------
 # Argument parser
 # ------------------------------------------------------------------
@@ -234,6 +248,26 @@ def build_parser() -> argparse.ArgumentParser:
     stat = sub.add_parser("status", help="查看项目状态")
     stat.add_argument("--project-id", required=True, help="项目ID")
 
+    eval_parser = sub.add_parser("llm-eval", help="评估 OpenAI-compatible LLM 在 ForWin 场景下的可靠性")
+    eval_sub = eval_parser.add_subparsers(dest="llm_eval_command", help="LLM eval 子命令")
+
+    eval_run = eval_sub.add_parser("run", help="运行 LLM 可靠性测试")
+    eval_run.add_argument("--suite", default="medium", choices=["smoke", "medium"], help="测试套件")
+    eval_run.add_argument("--profiles", default="", help="逗号分隔的 profile id，例如 minimax,kimi")
+    eval_run.add_argument("--manifest", default="", help="独立 eval profile manifest JSON")
+    eval_run.add_argument("--runtime-settings-path", default="", help="runtime settings JSON 路径")
+    eval_run.add_argument("--artifact-root", default="", help="输出 artifact root")
+    eval_run.add_argument("--run-id", default="", help="指定 run id；默认自动生成")
+    eval_run.add_argument("--rounds", type=int, default=0, help="每个 profile 的 direct probe 轮数；medium 默认 20，smoke 默认 1")
+    eval_run.add_argument("--dry-run", action="store_true", help="只列出将运行的 profiles/cases，不调用 LLM")
+    eval_run.add_argument("--skip-mini-real-run", action="store_true", help="只跑 direct stage probes")
+    eval_run.add_argument("--base-url", default="", help="可选：生产 ForWin base URL，用于后续 live 集成")
+    eval_run.add_argument("--allow-production-data", action="store_true", help="允许压测已部署实例或生产数据")
+
+    eval_report = eval_sub.add_parser("report", help="读取并打印 LLM eval 报告")
+    eval_report.add_argument("--run-id", required=True, help="run id")
+    eval_report.add_argument("--artifact-root", default="", help="artifact root")
+
     return parser
 
 
@@ -258,6 +292,8 @@ def main() -> None:
         cmd_read(args)
     elif args.command == "status":
         cmd_status(args)
+    elif args.command == "llm-eval":
+        cmd_llm_eval(args)
     else:
         parser.print_help()
 

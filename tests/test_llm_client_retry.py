@@ -90,6 +90,60 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertNotIn("test-key", serialized)
         self.assertNotIn("Authorization", serialized)
 
+    def test_attempt_telemetry_records_group_profile_category_and_final_success(self) -> None:
+        client = LLMClient(
+            api_key="primary-key",
+            base_url="https://primary.example/v1",
+            model="primary-model",
+            retry_attempts=1,
+            retry_initial_delay_seconds=0,
+            retry_max_delay_seconds=0,
+            fallback_profiles=[
+                {
+                    "id": "backup-profile",
+                    "name": "Backup",
+                    "api_key": "backup-key",
+                    "base_url": "https://backup.example/v1",
+                    "model": "backup-model",
+                }
+            ],
+        )
+
+        def fake_post(url, **kwargs):  # noqa: ANN001
+            request = httpx.Request("POST", url)
+            if kwargs["json"]["model"] == "primary-model":
+                return httpx.Response(529, json={"error": "overloaded"}, request=request)
+            return httpx.Response(
+                200,
+                headers={"x-request-id": "backup-request"},
+                json={"choices": [{"message": {"content": "backup-ok"}}]},
+                request=request,
+            )
+
+        try:
+            with patch.object(client.client, "post", side_effect=fake_post), patch(
+                "forwin.writer.llm_client.time.sleep",
+                return_value=None,
+            ):
+                result = client.chat([{"role": "user", "content": "hello"}])
+            attempts = client.drain_llm_attempt_events()
+        finally:
+            client.close()
+
+        self.assertEqual(result, "backup-ok")
+        self.assertEqual(len({item["attempt_group_id"] for item in attempts}), 1)
+        self.assertEqual(attempts[0]["error_category"], "provider_overload")
+        self.assertTrue(attempts[0]["retryable"])
+        self.assertTrue(attempts[0]["fallback_eligible"])
+        self.assertTrue(attempts[0]["final_failure"])
+        self.assertEqual(attempts[1]["profile_id"], "backup-profile")
+        self.assertEqual(attempts[1]["profile_name"], "Backup")
+        self.assertEqual(attempts[1]["model"], "backup-model")
+        self.assertEqual(attempts[1]["provider_request_id"], "backup-request")
+        self.assertEqual(attempts[1]["output_chars"], len("backup-ok"))
+        self.assertEqual(attempts[1]["error_category"], "")
+        self.assertFalse(attempts[1]["final_failure"])
+
     def test_does_not_retry_timeout_when_disabled(self) -> None:
         client = LLMClient(
             api_key="test-key",

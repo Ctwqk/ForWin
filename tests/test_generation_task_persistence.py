@@ -248,6 +248,39 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertEqual(loaded["current_stage"], "writing_chapter")
         self.assertEqual(loaded["current_chapter"], 1)
 
+    def test_task_read_paths_do_not_trigger_db_prune_writes(self) -> None:
+        task = api_module._create_task_record(title="轮询读路径测试", requested_chapters=1)
+        task["status"] = "running"
+        task["current_stage"] = "resolving_arc_envelope"
+        api_module._persist_generation_task("task-read-no-prune-1", task)
+
+        with patch.object(api_module, "_prune_generation_tasks_db", side_effect=AssertionError("read path pruned db")):
+            loaded = api_module._get_generation_task_or_404("task-read-no-prune-1")
+            listed = api_module._list_generation_tasks(10)
+
+        self.assertEqual(loaded["current_stage"], "resolving_arc_envelope")
+        self.assertIn("task-read-no-prune-1", [task_id for task_id, _ in listed])
+
+    def test_project_active_generation_detection_prefers_terminal_cache_over_stale_db_row(self) -> None:
+        task = api_module._create_task_record(title="缓存终态测试", requested_chapters=1)
+        task["project_id"] = "project-stale-active"
+        task["status"] = "running"
+        task["current_stage"] = "running_provisional_preview"
+        api_module._persist_generation_task("task-stale-active-1", task)
+
+        cached = dict(task)
+        cached["status"] = "failed"
+        cached["current_stage"] = "failed"
+        api_module._sync_task_cache("task-stale-active-1", cached)
+
+        with self.session_factory() as session:
+            self.assertFalse(
+                api_module._project_has_active_generation_task(
+                    "project-stale-active",
+                    session=session,
+                )
+            )
+
     def test_terminal_status_forces_terminal_stage(self) -> None:
         task = api_module._create_task_record(title="终态一致性测试", requested_chapters=1)
         task["status"] = "running"

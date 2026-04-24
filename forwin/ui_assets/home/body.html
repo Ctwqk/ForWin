@@ -26,6 +26,7 @@
       <div class="tabs">
         <button id="tab_book" class="tab-chip active" type="button" onclick="switchTab('book')">书本</button>
         <button id="tab_task" class="tab-chip" type="button" onclick="switchTab('task')">任务</button>
+        <button id="tab_world_v4" class="tab-chip" type="button" onclick="switchTab('world_v4')">V4 世界</button>
         <button id="tab_config" class="tab-chip" type="button" onclick="switchTab('config')">配置</button>
       </div>
 
@@ -67,6 +68,28 @@
           </div>
         </div>
         <div id="task_list" class="task-list"></div>
+      </section>
+
+      <section id="panel_world_v4" class="tab-panel">
+        <div class="task-toolbar">
+          <div>
+            <div class="section-head" style="margin:0;">
+              <div>
+                <h2>V4 世界模型</h2>
+                <p>WorldLine、KnowledgeGap、Reveal Ladder 与 canon commit 调试视图。</p>
+              </div>
+            </div>
+          </div>
+          <div class="action-row">
+            <input id="world_v4_project_id" type="text" placeholder="project_id">
+            <button class="secondary" type="button" onclick="loadWorldModelV4Debug('debug')">Debug</button>
+            <button class="secondary" type="button" onclick="loadWorldModelV4Debug('lines')">Lines</button>
+            <button class="secondary" type="button" onclick="loadWorldModelV4Debug('gaps')">Gaps</button>
+            <button class="secondary" type="button" onclick="loadWorldModelV4Debug('reveals')">Reveals</button>
+            <button class="primary" type="button" onclick="loadWorldModelV4Debug('export')">Export</button>
+          </div>
+        </div>
+        <pre id="world_v4_debug_output" class="code-box">等待选择 project_id。</pre>
       </section>
 
       <section id="panel_config" class="tab-panel">

@@ -2086,5 +2086,45 @@ def upgrade_db(engine: Engine) -> None:
 
         migrations.append(MigrationSpec("review_repair_chain_v1", apply_review_repair_chain_v1))
 
+        def apply_world_v4_schema_v1(conn) -> None:
+            # Importing models ensures the v4 rows are present in metadata before
+            # create_all runs against an existing database.
+            from forwin import models as _models  # noqa: F401
+
+            Base.metadata.create_all(bind=conn)
+
+        migrations.append(MigrationSpec("world_v4_schema_v1", apply_world_v4_schema_v1))
+
+        def apply_world_v4_compile_audit_v1(conn) -> None:
+            from forwin import models as _models  # noqa: F401
+
+            Base.metadata.create_all(bind=conn)
+            compile_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(world_compile_runs_v4)"))
+            }
+            for column_name, ddl in (
+                (
+                    "retrieval_pack_json",
+                    """
+                    ALTER TABLE world_compile_runs_v4
+                    ADD COLUMN retrieval_pack_json TEXT NOT NULL DEFAULT '{}'
+                    """,
+                ),
+                (
+                    "projection_refresh_json",
+                    """
+                    ALTER TABLE world_compile_runs_v4
+                    ADD COLUMN projection_refresh_json TEXT NOT NULL DEFAULT '{}'
+                    """,
+                ),
+            ):
+                if column_name not in compile_columns:
+                    conn.execute(text(ddl))
+
+        migrations.append(
+            MigrationSpec("world_v4_compile_audit_v1", apply_world_v4_compile_audit_v1)
+        )
+
         for migration in migrations:
             _run_migration(conn, migration.version, migration.apply_fn)

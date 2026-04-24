@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +9,7 @@ from .experience import (
     ChapterExperiencePlan,
     ReaderPromise,
 )
+from forwin.planning.world_contracts import ChapterWorldDeltaIntent, RevealLadderStep
 from forwin.governance import NarrativeConstraintInfo, NextBandSummary, PlanTaskItem
 from .subworld import ChapterEntryTarget, SubWorldSummary
 
@@ -208,6 +209,78 @@ class ChapterContextPack(BaseModel):
     chapter_task_contract: list[PlanTaskItem] = Field(default_factory=list)
     active_future_constraints: list[NarrativeConstraintInfo] = Field(default_factory=list)
     next_band_summary: NextBandSummary | None = None
+    active_world_lines: list[str] = Field(default_factory=list)
+    visible_world_lines: list[str] = Field(default_factory=list)
+    hidden_world_lines: list[str] = Field(default_factory=list)
+    recent_world_deltas: list[str] = Field(default_factory=list)
+    recent_offscreen_deltas: list[str] = Field(default_factory=list)
+    active_knowledge_gaps: list[str] = Field(default_factory=list)
+    planned_reveal_ladder: list[RevealLadderStep] = Field(default_factory=list)
+    reader_cognition_state: str = ""
+    character_cognition_states: dict[str, str] = Field(default_factory=dict)
+    observer_visibility_states: dict[str, str] = Field(default_factory=dict)
+    promise_debts: list[str] = Field(default_factory=list)
+    recent_reader_experience_deltas: list[str] = Field(default_factory=list)
+    must_not_reveal: list[str] = Field(default_factory=list)
+    fair_misdirection_requirements: list[str] = Field(default_factory=list)
+    chapter_world_delta_intent: ChapterWorldDeltaIntent | None = None
+
+
+class WorldModelRetrievalPack(BaseModel):
+    """Role-scoped v4 world-model context.
+
+    These packs are read-side views. They must not be treated as canon writes.
+    """
+
+    pack_kind: str
+    project_id: str
+    as_of_chapter: int = 0
+    active_world_lines: list[str] = Field(default_factory=list)
+    visible_world_lines: list[str] = Field(default_factory=list)
+    hidden_world_lines: list[str] = Field(default_factory=list)
+    recent_world_deltas: list[str] = Field(default_factory=list)
+    recent_offscreen_deltas: list[str] = Field(default_factory=list)
+    active_knowledge_gaps: list[str] = Field(default_factory=list)
+    hidden_objective_truths: list[str] = Field(default_factory=list)
+    planned_reveal_ladder: list[RevealLadderStep] = Field(default_factory=list)
+    reader_cognition_state: dict[str, Any] = Field(default_factory=dict)
+    character_cognition_states: dict[str, Any] = Field(default_factory=dict)
+    observer_visibility_states: dict[str, str] = Field(default_factory=dict)
+    promise_debts: list[str] = Field(default_factory=list)
+    recent_reader_experience_deltas: list[str] = Field(default_factory=list)
+    must_not_reveal: list[str] = Field(default_factory=list)
+    fair_misdirection_requirements: list[str] = Field(default_factory=list)
+    accepted_delta_ids: list[str] = Field(default_factory=list)
+    rejected_delta_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PlanningPack(WorldModelRetrievalPack):
+    pack_kind: Literal["planning"] = "planning"
+
+
+class WritingPack(WorldModelRetrievalPack):
+    pack_kind: Literal["writing"] = "writing"
+
+
+class ReviewPack(WorldModelRetrievalPack):
+    pack_kind: Literal["review"] = "review"
+
+
+class CompilerPack(WorldModelRetrievalPack):
+    pack_kind: Literal["compiler"] = "compiler"
+
+
+class ReaderExperiencePack(WorldModelRetrievalPack):
+    pack_kind: Literal["reader_experience"] = "reader_experience"
+
+
+class CognitionPack(WorldModelRetrievalPack):
+    pack_kind: Literal["cognition"] = "cognition"
+
+
+class RevealPack(WorldModelRetrievalPack):
+    pack_kind: Literal["reveal"] = "reveal"
 
 
 class ReviewContextPack(BaseModel):

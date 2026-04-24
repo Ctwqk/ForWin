@@ -2100,6 +2100,10 @@ _observability_handlers = api_observability_routes.build_handlers(
     json_load_object=lambda raw: _json_load_object(raw),
     json_load_list=lambda raw: _json_load_list(raw),
 )
+get_task_timeline = _observability_handlers["get_task_timeline"]
+get_chapter_observability_ledger = _observability_handlers["get_chapter_observability_ledger"]
+get_prompt_trace_detail = _observability_handlers["get_prompt_trace_detail"]
+read_artifact_preview = _observability_handlers["read_artifact_preview"]
 
 globals().update(
     api_route_registry.register_api_routes(
@@ -2160,9 +2164,9 @@ globals().update(
         latest_band_checkpoint_row=lambda session, *, project_id, band_id='': _latest_band_checkpoint_row(session, project_id=project_id, band_id=band_id),
         persist_project_governance=lambda session, project, governance: _persist_project_governance(session, project, governance),
         json_load_object=lambda raw: _json_load_object(raw),
-        get_task_timeline=_observability_handlers["get_task_timeline"],
-        get_chapter_observability_ledger=_observability_handlers["get_chapter_observability_ledger"],
-        get_prompt_trace_detail=_observability_handlers["get_prompt_trace_detail"],
-        read_artifact_preview=_observability_handlers["read_artifact_preview"],
+        get_task_timeline=get_task_timeline,
+        get_chapter_observability_ledger=get_chapter_observability_ledger,
+        get_prompt_trace_detail=get_prompt_trace_detail,
+        read_artifact_preview=read_artifact_preview,
     )
 )

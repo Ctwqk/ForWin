@@ -17,6 +17,7 @@ from .phase import (
     ProvisionalChapterLedger,
     ProvisionalBandExecution,
     ProvisionalPromotionRecord,
+    WorldProjectionDeltaRow,
 )
 from .phase4 import NPCIntentSnapshot, WorldSimulationTurn
 from .publisher import (
@@ -45,6 +46,21 @@ from .world_model import (
     WorldModelLinkRow,
     WorldModelPageRow,
     WorldModelSnapshotRow,
+)
+from .world_v4 import (
+    ArcWorldContractRow,
+    BandWorldContractRow,
+    BeliefRow,
+    ChapterWorldDeltaIntentRow,
+    CognitionSnapshotRow,
+    KnowledgeGapRow,
+    KnowledgeUpdateEventRow,
+    ReaderExperienceDeltaRow,
+    RevealEventRow,
+    WorldCompileRunV4Row,
+    WorldDeltaRow,
+    WorldLineRow,
+    WorldModelSnapshotV4Row,
 )
 
 __all__ = [
@@ -83,6 +99,7 @@ __all__ = [
     "ProvisionalChapterLedger",
     "ProvisionalBandExecution",
     "ProvisionalPromotionRecord",
+    "WorldProjectionDeltaRow",
     "NPCIntentSnapshot",
     "WorldSimulationTurn",
     # thread
@@ -113,4 +130,18 @@ __all__ = [
     "PublisherRawComment",
     "ReaderScaleSnapshot",
     "SignalWindowAggregate",
+    # world v4
+    "WorldLineRow",
+    "WorldDeltaRow",
+    "BeliefRow",
+    "CognitionSnapshotRow",
+    "KnowledgeGapRow",
+    "RevealEventRow",
+    "KnowledgeUpdateEventRow",
+    "ReaderExperienceDeltaRow",
+    "WorldModelSnapshotV4Row",
+    "WorldCompileRunV4Row",
+    "ArcWorldContractRow",
+    "BandWorldContractRow",
+    "ChapterWorldDeltaIntentRow",
 ]

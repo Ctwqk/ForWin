@@ -8,7 +8,12 @@ from forwin.governance_checks import (
     evaluate_task_contract,
 )
 from forwin.protocol.context import ChapterContextPack
-from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
+from forwin.protocol.review import (
+    ContinuityIssue,
+    RepairInstruction,
+    ReviewVerdict,
+    normalize_repair_scope,
+)
 from forwin.protocol.writer import WriterOutput
 from forwin.skills import serialize_prompt_layers
 from .context_builder import build_review_context_pack
@@ -337,10 +342,23 @@ class HistoricalReviewHub:
         if base_instruction is None:
             return webnovel_instruction
 
-        scope_rank = {"draft": 1, "chapter_plan": 2, "band_plan": 3}
+        scope_rank = {
+            "draft": 1,
+            "scene": 1,
+            "chapter_plan": 2,
+            "chapter": 2,
+            "band": 2,
+            "band_plan": 3,
+            "arc": 3,
+            "world_model": 4,
+        }
         merged_scope = max(
             [base_instruction.repair_scope, webnovel_instruction.repair_scope],
             key=lambda item: scope_rank.get(item, 1),
+        )
+        merged_scope = normalize_repair_scope(
+            merged_scope,
+            preserve_v4=(merged_scope == "world_model"),
         )
         merged_failure_type = (
             base_instruction.failure_type

@@ -55,6 +55,8 @@ from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.phase import ArcStructureDraft, BandExperiencePlan
+from forwin.extractor.world_v4 import WorldDeltaExtractor
+from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.experience import ArcPayoffMap, BandDelightSchedule, ChapterExperiencePlan
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.orchestrator.phase3 import (
@@ -74,6 +76,7 @@ from forwin.orchestrator.phase24 import ArcEnvelopeManager, ProvisionalBandPrevi
 from forwin.retrieval import RetrievalBroker, create_memory_index
 from forwin.reviser import FinalAcceptanceGate, RepairPolicy, RepairVerifier
 from forwin.reviewer import HistoricalReviewHub
+from forwin.reviewer_v4 import V4ReviewGate
 from forwin.skills import build_skill_runtime_components
 from forwin.state.repo import StateRepository
 from forwin.state.schema import KNOWN_STATE_FIELDS
@@ -81,10 +84,11 @@ from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
 from forwin.subworld_manager import SubWorldManager
 from forwin.protocol.writer import WriterOutput
+from forwin.world_model_v4.compiler import WorldModelCompiler as WorldModelCompilerV4
 from forwin.writer.chapter_writer import ChapterWriter
 from forwin.writer.llm_client import LLMClient
 from forwin.llm.factory import maybe_wrap_with_codex_router
-from forwin.world_model.compiler import WorldModelCompiler
+from forwin.world_model.compiler import WorldModelCompiler as LegacyWorldModelCompiler
 
 logger = logging.getLogger(__name__)
 
@@ -3793,6 +3797,17 @@ class WritingOrchestrator:
             },
         )
         try:
+            v4_blocked_path = self._apply_world_v4_gate(
+                session=session,
+                repo=repo,
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                writer_output=writer_output,
+                verdict=verdict,
+            )
+            if v4_blocked_path:
+                return v4_blocked_path
             self._validate_subworld_admission(
                 repo=repo,
                 project_id=project_id,
@@ -3860,6 +3875,94 @@ class WritingOrchestrator:
             )
             session.rollback()
             return frozen_path or None
+
+    def _apply_world_v4_gate(
+        self,
+        *,
+        session: Session,
+        repo: StateRepository,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_number: int,
+        writer_output: WriterOutput,
+        verdict: ReviewVerdict,
+    ) -> str | None:
+        chapter_intent = WorldContractRepository(session).get_chapter_intent(
+            project_id,
+            chapter_number,
+        )
+        writer_output_for_v4 = writer_output.model_copy(update={"project_id": project_id})
+        broker = RetrievalBroker()
+        writer_pack = broker.build_world_model_pack(
+            repo,
+            project_id,
+            chapter_number,
+            "writing",
+        )
+        review_pack = broker.build_world_model_pack(
+            repo,
+            project_id,
+            chapter_number,
+            "review",
+        )
+        compiler_pack = broker.build_world_model_pack(
+            repo,
+            project_id,
+            chapter_number,
+            "compiler",
+        )
+        retrieval_pack_payload = {
+            "writing": writer_pack.model_dump(mode="json"),
+            "review": review_pack.model_dump(mode="json"),
+            "compiler": compiler_pack.model_dump(mode="json"),
+        }
+        extracted = WorldDeltaExtractor().extract(
+            writer_output_for_v4,
+            chapter_intent=chapter_intent,
+        )
+        gate_verdict = V4ReviewGate().review(
+            extracted,
+            chapter_intent=chapter_intent,
+            chapter_body=writer_output.body,
+        )
+        compiler_result = WorldModelCompilerV4(session).compile_gate_verdict(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            verdict=gate_verdict,
+            compiler_run_id=f"compile_{project_id}_{chapter_number}",
+            retrieval_pack_payload=retrieval_pack_payload,
+        )
+        if compiler_result.committed:
+            return None
+
+        frozen_path = ""
+        if self.config.freeze_failed_candidates:
+            frozen_path = self.artifact_store.save_frozen_candidate(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                payload={
+                    "reason": "v4-review-gate-blocked",
+                    "chapter_number": chapter_number,
+                    "writer_output": writer_output.model_dump(mode="json"),
+                    "review_verdict": verdict.model_dump(mode="json"),
+                    "v4_review_issues": [
+                        issue.model_dump(mode="json") for issue in gate_verdict.issues
+                    ],
+                    "v4_retrieval_packs": retrieval_pack_payload,
+                    "compiler_result": compiler_result.model_dump(mode="json"),
+                },
+            )
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.CANON_COMMIT_FAILED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 v4 review gate 阻止 canon 写入。",
+            payload={"blocked_reasons": list(compiler_result.blocked_reasons)},
+        )
+        return frozen_path or "v4-review-gate-blocked"
 
     @staticmethod
     def _filter_resolvable_events(
@@ -4049,11 +4152,11 @@ class WritingOrchestrator:
             summary=f"第{chapter_number}章 WorldModel compile 开始。",
         )
         try:
-            snapshot = WorldModelCompiler(session).compile_after_chapter(project_id, chapter_number)
+            snapshot = LegacyWorldModelCompiler(session).compile_after_chapter(project_id, chapter_number)
         except Exception as exc:
             logger.exception("WorldModel compile failed for chapter %d.", chapter_number)
             try:
-                WorldModelCompiler(session).record_failed_compile(
+                LegacyWorldModelCompiler(session).record_failed_compile(
                     project_id=project_id,
                     as_of_chapter=chapter_number,
                     trigger="chapter_accepted",

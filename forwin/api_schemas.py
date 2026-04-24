@@ -237,6 +237,67 @@ class TaskBulkDeleteItem(BaseModel):
     task_id: str
 
 
+class WorldModelV4DebugResponse(BaseModel):
+    project_id: str
+    active_world_lines: list[str] = Field(default_factory=list)
+    visible_world_lines: list[str] = Field(default_factory=list)
+    hidden_world_lines: list[str] = Field(default_factory=list)
+    open_gaps: list[str] = Field(default_factory=list)
+    planned_reveals: list[dict[str, Any]] = Field(default_factory=list)
+    accepted_delta_ids: list[str] = Field(default_factory=list)
+    rejected_delta_ids: list[str] = Field(default_factory=list)
+    reader_cognition: dict[str, Any] = Field(default_factory=dict)
+    protagonist_beliefs: list[str] = Field(default_factory=list)
+    promise_debts: list[str] = Field(default_factory=list)
+
+
+class WorldModelV4LineInfo(BaseModel):
+    world_line_id: str
+    line_type: str = ""
+    title: str = ""
+    objective_state_summary: str = ""
+    is_visible_onstage: bool = False
+    planned_reveal_chapter: int | None = None
+    long_term_promise: str = ""
+    source_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorldModelV4GapInfo(BaseModel):
+    gap_id: str
+    status: str = ""
+    objective_truth: str = ""
+    related_world_line_id: str = ""
+    happened_at_story_time: str = ""
+    observer_states: dict[str, Any] = Field(default_factory=dict)
+    planned_closure: str = ""
+    fairness_requirements: list[str] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorldModelV4RevealInfo(BaseModel):
+    source: str
+    gap_id: str = ""
+    reveal_event_id: str = ""
+    chapter_hint: int | None = None
+    from_state: str = ""
+    to_state: str = ""
+    method: str = ""
+    reveal_to_reader: bool = False
+    reveal_to_characters: list[str] = Field(default_factory=list)
+    fairness_evidence: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorldModelV4ExportResponse(BaseModel):
+    project_id: str
+    lines: list[WorldModelV4LineInfo] = Field(default_factory=list)
+    gaps: list[WorldModelV4GapInfo] = Field(default_factory=list)
+    reveals: list[WorldModelV4RevealInfo] = Field(default_factory=list)
+    debug: WorldModelV4DebugResponse
+
+
 class TaskBulkDeleteRequest(BaseModel):
     items: list[TaskBulkDeleteItem] = Field(default_factory=list)
 

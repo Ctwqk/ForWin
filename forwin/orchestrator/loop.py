@@ -1731,6 +1731,20 @@ class WritingOrchestrator:
             chapter_number=chapter_number,
             writer_output=writer_output,
         )
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.WRITER_OUTPUT_ARTIFACT_SAVED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 writer output artifact 已保存。",
+            payload={
+                "draft_blob_path": artifact_paths.get("draft_blob_path", ""),
+                "artifact_meta_path": artifact_paths.get("meta_path", ""),
+                "char_count": int(getattr(writer_output, "char_count", 0) or 0),
+            },
+        )
         persisted_output = artifact_paths["writer_output"].model_copy(
             update={
                 "generation_meta": {
@@ -2851,6 +2865,34 @@ class WritingOrchestrator:
                 context = self.retrieval_broker.build_chapter_context(
                     repo, project_id, chapter_plan
                 )
+                context_summary = dict(
+                    getattr(self.retrieval_broker, "last_observability_summary", {}) or {}
+                )
+                if context_summary:
+                    self._record_decision_event(
+                        updater=updater,
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                        event_family="runtime_observation",
+                        event_type=DecisionEventType.CONTEXT_ASSEMBLED,
+                        scope="chapter",
+                        summary=f"第{chapter_num}章 context 已组装。",
+                        payload=context_summary,
+                    )
+                    if any(
+                        int(context_summary.get(key) or 0) > 0
+                        for key in ("pruned_entities", "pruned_threads", "pruned_relations")
+                    ):
+                        self._record_decision_event(
+                            updater=updater,
+                            project_id=project_id,
+                            chapter_number=chapter_num,
+                            event_family="runtime_observation",
+                            event_type=DecisionEventType.CONTEXT_PRUNED,
+                            scope="chapter",
+                            summary=f"第{chapter_num}章 context 已按 budget 裁剪。",
+                            payload=context_summary,
+                        )
 
                 if self._abort_requested():
                     return self._cancelled_result(
@@ -3497,6 +3539,25 @@ class WritingOrchestrator:
                         "duration_ms": duration_ms,
                     },
                 )
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.WRITER_OUTPUT_BUILT,
+                    scope="chapter",
+                    summary=f"第{chapter_number}章 writer output 已生成。",
+                    payload={
+                        "stage": "writing_chapter",
+                        "duration_ms": duration_ms,
+                        "char_count": int(getattr(output, "char_count", 0) or 0),
+                        "mode": str((getattr(output, "generation_meta", {}) or {}).get("mode") or ""),
+                        "scene_count": len(getattr(output, "scene_outputs", []) or []),
+                        "state_changes_count": len(getattr(output, "state_changes", []) or []),
+                        "events_count": len(getattr(output, "new_events", []) or []),
+                        "thread_beats_count": len(getattr(output, "thread_beats", []) or []),
+                    },
+                )
                 return output
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
@@ -3717,6 +3778,20 @@ class WritingOrchestrator:
         writer_output: WriterOutput,
         verdict: ReviewVerdict,
     ) -> str | None:
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.CANON_COMMIT_STARTED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 canon 写入开始。",
+            payload={
+                "state_changes_count": len(getattr(writer_output, "state_changes", []) or []),
+                "events_count": len(getattr(writer_output, "new_events", []) or []),
+                "thread_beats_count": len(getattr(writer_output, "thread_beats", []) or []),
+            },
+        )
         try:
             self._validate_subworld_admission(
                 repo=repo,

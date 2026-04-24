@@ -929,6 +929,8 @@ class ChapterWriter:
         output_summary: dict[str, object],
     ) -> dict[str, object]:
         selected_skills = self._selected_skills_from_layers(skill_layers)
+        drain_attempts = getattr(self.llm_client, "drain_llm_attempt_events", None)
+        attempts = drain_attempts() if callable(drain_attempts) else []
         prompt_layers = serialize_prompt_layers(base_messages, skill_layers or [])
         effective_system_prompt = "\n\n".join(
             str(item.get("content", "")).strip()
@@ -959,7 +961,7 @@ class ChapterWriter:
                 "model": getattr(self.llm_client, "model", ""),
                 "base_url": getattr(self.llm_client, "base_url", ""),
             },
-            "attempts": [],
+            "attempts": attempts if isinstance(attempts, list) else [],
             "output_summary": {
                 **output_summary,
                 "skill_summary": selected_skills,

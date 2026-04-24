@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import time
 from email.utils import parsedate_to_datetime
+from urllib.parse import urlparse
+import json
 
 import httpx
 
@@ -48,6 +50,7 @@ class OpenAICompatibleAdapter:
         )
         self.fallback_profiles = list(fallback_profiles or [])
         self.model_fallback_events: list[dict[str, str]] = []
+        self.llm_attempt_events: list[dict[str, object]] = []
         self.client = httpx.Client(
             timeout=httpx.Timeout(self.timeout_seconds, connect=min(10.0, self.timeout_seconds))
         )
@@ -144,11 +147,12 @@ class OpenAICompatibleAdapter:
         url = f"{profile['base_url'].rstrip('/')}/chat/completions"
 
         for attempt in range(self.retry_attempts):
+            attempt_started_at = time.perf_counter()
+            attempt_no = attempt + 1
             try:
-                started_at = time.perf_counter()
                 logger.debug(
                     "LLMClient.chat attempt=%d/%d model=%s messages=%d max_tokens=%d",
-                    attempt + 1,
+                    attempt_no,
                     self.retry_attempts,
                     profile["model"],
                     len(messages),
@@ -162,16 +166,35 @@ class OpenAICompatibleAdapter:
                 )
 
                 if response.status_code in _RETRYABLE_HTTP_STATUS_CODES:
+                    retry_delay = self._retry_delay(attempt, response)
+                    self._record_llm_attempt(
+                        profile=profile,
+                        messages=messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        response_format=response_format,
+                        request_timeout=request_timeout,
+                        attempt_no=attempt_no,
+                        http_status=response.status_code,
+                        provider_request_id=self._provider_request_id(response),
+                        duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
+                        retry_after=retry_delay,
+                        error_class="HTTPStatusError" if attempt >= self.retry_attempts - 1 else "",
+                        error_message=(
+                            f"HTTP {response.status_code}"
+                            if attempt >= self.retry_attempts - 1
+                            else ""
+                        ),
+                    )
                     if attempt < self.retry_attempts - 1:
-                        delay = self._retry_delay(attempt, response)
                         logger.warning(
                             "Transient LLM HTTP status %d. Waiting %.1f s before retry %d/%d.",
                             response.status_code,
-                            delay,
+                            retry_delay,
                             attempt + 2,
                             self.retry_attempts,
                         )
-                        time.sleep(delay)
+                        time.sleep(retry_delay)
                         continue
                     response.raise_for_status()
 
@@ -179,14 +202,39 @@ class OpenAICompatibleAdapter:
 
                 data = response.json()
                 content: str = data["choices"][0]["message"]["content"]
+                self._record_llm_attempt(
+                    profile=profile,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format=response_format,
+                    request_timeout=request_timeout,
+                    attempt_no=attempt_no,
+                    http_status=response.status_code,
+                    provider_request_id=self._provider_request_id(response),
+                    duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
+                    output_chars=len(content),
+                )
                 logger.debug(
                     "LLMClient.chat success: %d chars returned in %.2fs",
                     len(content),
-                    time.perf_counter() - started_at,
+                    time.perf_counter() - attempt_started_at,
                 )
                 return content
 
             except (httpx.ReadTimeout, httpx.TimeoutException) as exc:
+                self._record_llm_attempt(
+                    profile=profile,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format=response_format,
+                    request_timeout=request_timeout,
+                    attempt_no=attempt_no,
+                    duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
+                    error_class=exc.__class__.__name__,
+                    error_message=str(exc),
+                )
                 if retry_on_timeout and attempt < self.retry_attempts - 1:
                     delay = self._retry_delay(attempt)
                     logger.warning(
@@ -198,6 +246,27 @@ class OpenAICompatibleAdapter:
                     )
                     time.sleep(delay)
                     continue
+                raise
+            except Exception as exc:  # noqa: BLE001
+                response = getattr(exc, "response", None)
+                self._record_llm_attempt(
+                    profile=profile,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format=response_format,
+                    request_timeout=request_timeout,
+                    attempt_no=attempt_no,
+                    http_status=int(getattr(response, "status_code", 0) or 0),
+                    provider_request_id=(
+                        self._provider_request_id(response)
+                        if isinstance(response, httpx.Response)
+                        else ""
+                    ),
+                    duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
+                    error_class=exc.__class__.__name__,
+                    error_message=str(exc),
+                )
                 raise
 
         # Should never reach here, but make the type-checker happy.
@@ -237,6 +306,72 @@ class OpenAICompatibleAdapter:
         events = list(self.model_fallback_events)
         self.model_fallback_events.clear()
         return events
+
+    def drain_llm_attempt_events(self) -> list[dict[str, object]]:
+        events = list(self.llm_attempt_events)
+        self.llm_attempt_events.clear()
+        return events
+
+    def _record_llm_attempt(
+        self,
+        *,
+        profile: dict[str, str],
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+        response_format: dict | None,
+        request_timeout: httpx.Timeout,
+        attempt_no: int,
+        http_status: int = 0,
+        provider_request_id: str = "",
+        duration_ms: int = 0,
+        input_chars: int | None = None,
+        output_chars: int = 0,
+        retry_after: float | None = None,
+        error_class: str = "",
+        error_message: str = "",
+    ) -> None:
+        base_url = str(profile.get("base_url") or "")
+        self.llm_attempt_events.append(
+            {
+                "model": str(profile.get("model") or ""),
+                "base_url_host": urlparse(base_url).netloc or base_url,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "timeout_seconds": self._timeout_seconds_value(request_timeout),
+                "attempt_no": attempt_no,
+                "http_status": int(http_status or 0),
+                "provider_request_id": provider_request_id,
+                "duration_ms": int(duration_ms or 0),
+                "input_chars": (
+                    int(input_chars)
+                    if input_chars is not None
+                    else len(json.dumps(messages, ensure_ascii=False))
+                ),
+                "output_chars": int(output_chars or 0),
+                "response_format": response_format or {},
+                "retry_after": retry_after,
+                "error_class": error_class,
+                "error_message": error_message,
+            }
+        )
+
+    @staticmethod
+    def _provider_request_id(response: httpx.Response) -> str:
+        return str(
+            response.headers.get("x-request-id")
+            or response.headers.get("x-minimax-request-id")
+            or response.headers.get("request-id")
+            or ""
+        )
+
+    @staticmethod
+    def _timeout_seconds_value(timeout: httpx.Timeout) -> float:
+        value = getattr(timeout, "read", None) or getattr(timeout, "connect", None) or 0.0
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
 
     @classmethod
     def _is_fallback_retryable(cls, exc: Exception) -> bool:

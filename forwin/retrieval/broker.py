@@ -34,6 +34,7 @@ class RetrievalBroker:
         self.max_memories = max_memories
         self.max_world_pages = max_world_pages
         self.memory_index = memory_index or create_memory_index()
+        self.last_observability_summary: dict[str, object] = {}
 
     def build_chapter_context(self, repo, project_id: str, chapter_plan) -> ChapterContextPack:
         base_pack = assemble_context(repo, project_id, chapter_plan)
@@ -53,6 +54,24 @@ class RetrievalBroker:
                 "active_relations": relations,
                 "retrieved_memories": memories,
                 "world_context": world_context,
+            }
+        )
+        pack = self._trim_pack(pack)
+        self._finalize_context_summary(base_pack=base_pack, pack=pack, memories=memories)
+
+        return pack
+
+    def _trim_pack(self, pack: ChapterContextPack) -> ChapterContextPack:
+        summaries = self._pick_summaries(list(pack.previous_chapter_summaries))
+        entities = self._pick_entities(list(pack.active_entities))
+        threads = self._pick_threads(list(pack.active_threads))
+        relations = self._pick_relations(list(pack.active_relations), entities)
+        pack = pack.model_copy(
+            update={
+                "previous_chapter_summaries": summaries,
+                "active_entities": entities,
+                "active_threads": threads,
+                "active_relations": relations,
             }
         )
         estimate = self._estimate_pack_with_components(pack)
@@ -90,8 +109,34 @@ class RetrievalBroker:
                 estimate = self._estimate_pack_with_components(pack)
                 continue
             break
-
         return pack
+
+    def _finalize_context_summary(
+        self,
+        *,
+        base_pack: ChapterContextPack,
+        pack: ChapterContextPack,
+        memories: list[object],
+    ) -> None:
+        before_chars = self._estimate_pack_with_components(base_pack)
+        after_chars = self._estimate_pack_with_components(pack)
+        self.last_observability_summary = {
+            "chapter_number": int(getattr(pack, "chapter_number", 0) or 0),
+            "active_entities_count_before": len(base_pack.active_entities),
+            "active_entities_count_after": len(pack.active_entities),
+            "relations_count_before": len(base_pack.active_relations),
+            "relations_count_after": len(pack.active_relations),
+            "threads_count_before": len(base_pack.active_threads),
+            "threads_count_after": len(pack.active_threads),
+            "summaries_count_before": len(base_pack.previous_chapter_summaries),
+            "summaries_count_after": len(pack.previous_chapter_summaries),
+            "memories_count": len(getattr(pack, "retrieved_memories", []) or memories or []),
+            "estimated_context_chars_before": before_chars,
+            "estimated_context_chars_after": after_chars,
+            "pruned_entities": max(0, len(base_pack.active_entities) - len(pack.active_entities)),
+            "pruned_threads": max(0, len(base_pack.active_threads) - len(pack.active_threads)),
+            "pruned_relations": max(0, len(base_pack.active_relations) - len(pack.active_relations)),
+        }
 
     def _pick_summaries(self, summaries: list[str]) -> list[str]:
         return summaries[-self.max_summaries :]
@@ -136,22 +181,39 @@ class RetrievalBroker:
             }
         )
         total = cls._estimate_chars(empty_pack)
-        total += sum(cls._estimate_component_chars(item) for item in pack.previous_chapter_summaries)
-        total += sum(cls._estimate_component_chars(item) for item in pack.active_entities)
-        total += sum(cls._estimate_component_chars(item) for item in pack.active_threads)
-        total += sum(cls._estimate_component_chars(item) for item in pack.active_relations)
-        total += sum(cls._estimate_component_chars(item) for item in pack.retrieved_memories)
-        total += cls._estimate_component_chars(pack.world_context.model_copy(update={"relevant_world_pages": []}))
-        total += sum(cls._estimate_component_chars(item) for item in pack.world_context.relevant_world_pages)
+        total += sum(cls._estimate_component_chars(item) for item in getattr(pack, "previous_chapter_summaries", []) or [])
+        total += sum(cls._estimate_component_chars(item) for item in getattr(pack, "active_entities", []) or [])
+        total += sum(cls._estimate_component_chars(item) for item in getattr(pack, "active_threads", []) or [])
+        total += sum(cls._estimate_component_chars(item) for item in getattr(pack, "active_relations", []) or [])
+        total += sum(cls._estimate_component_chars(item) for item in getattr(pack, "retrieved_memories", []) or [])
+        world_context = getattr(pack, "world_context", None)
+        if world_context is not None:
+            if hasattr(world_context, "model_copy"):
+                total += cls._estimate_component_chars(
+                    world_context.model_copy(update={"relevant_world_pages": []})
+                )
+            total += sum(
+                cls._estimate_component_chars(item)
+                for item in getattr(world_context, "relevant_world_pages", []) or []
+            )
         return total
 
     @staticmethod
     def _estimate_component_chars(item: object) -> int:
         if hasattr(item, "model_dump"):
             payload = item.model_dump(mode="json")
+        elif hasattr(item, "__dict__"):
+            payload = {
+                key: value
+                for key, value in vars(item).items()
+                if isinstance(value, (str, int, float, bool, list, dict, type(None)))
+            }
         else:
             payload = item
-        return len(json.dumps(payload, ensure_ascii=False)) + 1
+        try:
+            return len(json.dumps(payload, ensure_ascii=False)) + 1
+        except TypeError:
+            return len(str(payload)) + 1
 
     def _pick_memories(self, base_pack: ChapterContextPack):
         query_parts = [

@@ -29,6 +29,7 @@ from forwin import (
     api_governance_ops,
     api_governance_routes,
     api_governance_support,
+    api_observability_routes,
     api_project_ops,
     api_project_routes,
     api_publisher_ops,
@@ -2090,6 +2091,16 @@ app.add_middleware(
 # Endpoints
 # ---------------------------------------------------------------------------
 
+_observability_handlers = api_observability_routes.build_handlers(
+    get_config=lambda: _config,
+    get_session=_get_session,
+    list_decision_event_rows=lambda session, **kwargs: _list_decision_event_rows(session, **kwargs),
+    serialize_decision_event=lambda row: _serialize_decision_event(row),
+    display_datetime=_display_datetime,
+    json_load_object=lambda raw: _json_load_object(raw),
+    json_load_list=lambda raw: _json_load_list(raw),
+)
+
 globals().update(
     api_route_registry.register_api_routes(
         app,
@@ -2149,5 +2160,9 @@ globals().update(
         latest_band_checkpoint_row=lambda session, *, project_id, band_id='': _latest_band_checkpoint_row(session, project_id=project_id, band_id=band_id),
         persist_project_governance=lambda session, project, governance: _persist_project_governance(session, project, governance),
         json_load_object=lambda raw: _json_load_object(raw),
+        get_task_timeline=_observability_handlers["get_task_timeline"],
+        get_chapter_observability_ledger=_observability_handlers["get_chapter_observability_ledger"],
+        get_prompt_trace_detail=_observability_handlers["get_prompt_trace_detail"],
+        read_artifact_preview=_observability_handlers["read_artifact_preview"],
     )
 )

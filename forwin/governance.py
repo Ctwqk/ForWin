@@ -122,6 +122,24 @@ class DecisionEventType:
     WORLD_MODEL_COMPILE_STARTED = "world_model_compile_started"
     WORLD_MODEL_COMPILE_SUCCEEDED = "world_model_compile_succeeded"
     WORLD_MODEL_COMPILE_FAILED = "world_model_compile_failed"
+    TASK_OPERATION_STARTED = "task_operation_started"
+    TASK_OPERATION_SUCCEEDED = "task_operation_succeeded"
+    TASK_OPERATION_FAILED = "task_operation_failed"
+    TASK_CLEANUP_STARTED = "task_cleanup_started"
+    TASK_CLEANUP_FINISHED = "task_cleanup_finished"
+    CONTEXT_ASSEMBLED = "context_assembled"
+    CONTEXT_PRUNED = "context_pruned"
+    MEMORY_SEARCH_STARTED = "memory_search_started"
+    MEMORY_SEARCH_SUCCEEDED = "memory_search_succeeded"
+    MEMORY_SEARCH_FAILED = "memory_search_failed"
+    CHAPTER_WRITE_STARTED = "chapter_write_started"
+    WRITER_OUTPUT_BUILT = "writer_output_built"
+    WRITER_SCENE_FALLBACK_USED = "writer_scene_fallback_used"
+    WRITER_OUTPUT_ARTIFACT_SAVED = "writer_output_artifact_saved"
+    REVIEW_STARTED = "review_started"
+    CANON_COMMIT_STARTED = "canon_commit_started"
+    LLM_RESPONSE_PARSE_FAILED = "llm_response_parse_failed"
+    ARTIFACT_SAVED = "artifact_saved"
 
 
 KNOWN_DECISION_EVENT_TYPES = {
@@ -179,6 +197,24 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.WORLD_MODEL_COMPILE_STARTED,
     DecisionEventType.WORLD_MODEL_COMPILE_SUCCEEDED,
     DecisionEventType.WORLD_MODEL_COMPILE_FAILED,
+    DecisionEventType.TASK_OPERATION_STARTED,
+    DecisionEventType.TASK_OPERATION_SUCCEEDED,
+    DecisionEventType.TASK_OPERATION_FAILED,
+    DecisionEventType.TASK_CLEANUP_STARTED,
+    DecisionEventType.TASK_CLEANUP_FINISHED,
+    DecisionEventType.CONTEXT_ASSEMBLED,
+    DecisionEventType.CONTEXT_PRUNED,
+    DecisionEventType.MEMORY_SEARCH_STARTED,
+    DecisionEventType.MEMORY_SEARCH_SUCCEEDED,
+    DecisionEventType.MEMORY_SEARCH_FAILED,
+    DecisionEventType.CHAPTER_WRITE_STARTED,
+    DecisionEventType.WRITER_OUTPUT_BUILT,
+    DecisionEventType.WRITER_SCENE_FALLBACK_USED,
+    DecisionEventType.WRITER_OUTPUT_ARTIFACT_SAVED,
+    DecisionEventType.REVIEW_STARTED,
+    DecisionEventType.CANON_COMMIT_STARTED,
+    DecisionEventType.LLM_RESPONSE_PARSE_FAILED,
+    DecisionEventType.ARTIFACT_SAVED,
 }
 
 PLAN_TASK_TYPES = {

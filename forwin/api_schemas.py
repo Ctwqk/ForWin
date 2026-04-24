@@ -665,6 +665,34 @@ class DecisionEventsResponse(BaseModel):
     items: list[DecisionEventInfo] = Field(default_factory=list)
 
 
+class TaskTimelineResponse(BaseModel):
+    task_id: str
+    project_id: str = ""
+    events: list[DecisionEventInfo] = Field(default_factory=list)
+
+
+class ChapterLedgerResponse(BaseModel):
+    project_id: str
+    chapter_number: int
+    plan_status: str = ""
+    events: list[DecisionEventInfo] = Field(default_factory=list)
+    prompt_trace_ids: list[str] = Field(default_factory=list)
+    artifact_uris: list[str] = Field(default_factory=list)
+
+
+class PromptTraceDetailResponse(PromptTraceInfo):
+    pass
+
+
+class ArtifactReadResponse(BaseModel):
+    uri: str
+    content_type: str = "text/plain; charset=utf-8"
+    size: int = 0
+    hash: str = ""
+    preview: str = ""
+    truncated: bool = False
+
+
 class CausalReplayResponse(BaseModel):
     root_event: DecisionEventInfo | None = None
     timeline: list[DecisionEventInfo] = Field(default_factory=list)

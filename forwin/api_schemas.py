@@ -120,6 +120,8 @@ class GenerationControlInfo(BaseModel):
     current_chapter: int = 0
     next_chapter: int = 0
     accepted_chapters: list[int] = Field(default_factory=list)
+    drafted_chapters: list[int] = Field(default_factory=list)
+    generated_chapters: list[int] = Field(default_factory=list)
     planned_chapters: list[int] = Field(default_factory=list)
     failed_chapters: list[int] = Field(default_factory=list)
     pending_review_chapters: list[int] = Field(default_factory=list)
@@ -936,6 +938,7 @@ class ChapterReviewDetail(BaseModel):
     proposed_design_patch: dict[str, Any] = Field(default_factory=dict)
     rewrite_attempt_count: int = 0
     latest_repair_scope: str = ""
+    latest_repair_scope_reason: str = ""
     forced_accept_applied: bool = False
     acceptance_mode: str = ""
     repair_attempt_count: int = 0

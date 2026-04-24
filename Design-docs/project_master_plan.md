@@ -89,7 +89,7 @@ ForWin 当前可以定义为：
 3. 审查与自动翻工
    - 每章自动 review。
    - reviewer 由 `continuity + WNER + lint signals` 聚合。
-   - fail 后可按 `scene -> band -> arc` 升级 repair scope 重写。
+   - fail 后固定走三次 repair：`scene -> band -> reviewer-decided band/arc`；`blackbox` 只在第 3 次真实 review fail 时允许 force accept。
 
 4. canon 与世界状态维护
    - accepted 章节会回写实体状态、事件、threads、timeline。
@@ -195,7 +195,7 @@ ForWin 当前可以定义为：
 - evidence-anchored review detail
 - lint signal collector
 - merged repair instruction
-- `scene -> band -> arc` repair 升级链
+- `scene -> band -> reviewer-decided band/arc` repair 升级链
 - API 支持查看 review、approve、override band experience
 
 #### 当前评价

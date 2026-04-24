@@ -6455,6 +6455,10 @@ class Phase05RegressionTests(unittest.TestCase):
             self.assertEqual(result.status, "needs_review")
             self.assertEqual(result.paused_chapters, [1])
             self.assertEqual(len(attempts), 3)
+            self.assertEqual(
+                [item.repair_scope for item in sorted(attempts, key=lambda item: item.attempt_no)],
+                ["scene", "band", "band"],
+            )
             self.assertEqual(plan.status, "needs_review")
             self.assertEqual(apply_calls["count"], 0)
 
@@ -6722,10 +6726,10 @@ class Phase05RegressionTests(unittest.TestCase):
             self.assertEqual(plan.status, "needs_review")
             self.assertEqual(len(attempts), 3)
             ordered_attempts = sorted(attempts, key=lambda item: item.attempt_no)
-            self.assertEqual([item.repair_scope for item in ordered_attempts[:2]], ["band", "arc"])
+            self.assertEqual([item.repair_scope for item in ordered_attempts], ["scene", "band", "band"])
             self.assertTrue(all(item.result_verdict == "fail" for item in attempts))
 
-    def test_blackbox_rewrite_writer_error_force_accepts_latest_draft(self) -> None:
+    def test_blackbox_rewrite_writer_error_pauses_without_force_accept(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "blackbox-rewrite-error.db")
             orchestrator = WritingOrchestrator(
@@ -6806,23 +6810,102 @@ class Phase05RegressionTests(unittest.TestCase):
                         .where(BandCheckpoint.project_id == plan.project_id)
                         .order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
                         .limit(1)
-                    ).scalar_one()
+                    ).scalar_one_or_none()
                 finally:
                     session.close()
             finally:
                 orchestrator.llm_client.close()
                 orchestrator.engine.dispose()
 
-            self.assertEqual(result.status, "paused")
-            self.assertEqual(plan.status, "accepted")
-            self.assertEqual(checkpoint.status, "fail")
-            self.assertIn("intra_band_consistency", checkpoint.issues_json)
+            self.assertEqual(result.status, "needs_review")
+            self.assertEqual(plan.status, "needs_review")
+            self.assertIsNone(checkpoint)
             self.assertEqual(len(attempts), 3)
             ordered_attempts = sorted(attempts, key=lambda item: item.attempt_no)
-            self.assertEqual([item.repair_scope for item in ordered_attempts[:2]], ["band", "arc"])
-            self.assertTrue(attempts[-1].forced_accept_applied)
-            self.assertTrue(json.loads(latest_review.review_meta_json).get("forced_accept_applied"))
-            self.assertEqual(apply_calls["count"], 1)
+            self.assertEqual([item.repair_scope for item in ordered_attempts], ["scene", "band", "band"])
+            self.assertFalse(any(item.forced_accept_applied for item in attempts))
+            self.assertFalse(json.loads(latest_review.review_meta_json).get("forced_accept_applied"))
+            self.assertEqual(apply_calls["count"], 0)
+
+    def test_blackbox_third_rewrite_can_escalate_to_arc(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "blackbox-arc-escalation.db")
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="blackbox",
+                )
+            )
+            try:
+                orchestrator.arc_director.plan_arc = lambda premise, genre, num_chapters: {
+                    "arc_synopsis": "arc escalation",
+                    "setting_summary": "无",
+                    "chapters": [{"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]}],
+                    "characters": [],
+                    "locations": [],
+                    "factions": [],
+                    "relations": [],
+                    "plot_threads": [],
+                    "initial_time": {"label": "开始", "description": "开始"},
+                }
+                orchestrator.writer.write_chapter = lambda context: WriterOutput(
+                    chapter_number=context.chapter_number,
+                    title="第一章",
+                    body="正文" * 900,
+                    char_count=1800,
+                    end_of_chapter_summary="ok",
+                    state_changes=[],
+                    new_events=[],
+                    thread_beats=[],
+                    time_advance=None,
+                )
+                orchestrator.review_hub.review = lambda **kwargs: ReviewVerdict(
+                    verdict="fail",
+                    issues=[
+                        ContinuityIssue(
+                            rule_name="progress_stall",
+                            severity="error",
+                            description="推进停滞",
+                            reviewer="webnovel_experience",
+                            issue_type="stall",
+                            target_scope="band",
+                            evidence_refs=["thread=主线无推进"],
+                        )
+                    ],
+                    repair_instruction=RepairInstruction(
+                        repair_scope="scene",
+                        failure_type="stall",
+                        must_fix=["推进停滞"],
+                        must_preserve=["第一章"],
+                        design_patch={"progress_markers": ["推进主线"]},
+                        evidence_refs=["thread=主线无推进"],
+                    ),
+                )
+                orchestrator.review_hub.choose_repair_escalation = lambda **kwargs: RepairInstruction(
+                    repair_scope="arc",
+                    failure_type="stall",
+                    must_fix=["推进停滞"],
+                    must_preserve=["第一章"],
+                    scope_reason="需要调整 arc payoff 再重建当前 band",
+                    design_patch={"arc_payoff_map_patch": {"main": "shift"}},
+                    evidence_refs=["thread=主线无推进"],
+                )
+
+                orchestrator.run("p", "g", 1)
+                session = get_session_factory(get_engine(db_path))()
+                try:
+                    attempts = session.execute(
+                        select(ChapterRewriteAttempt).order_by(ChapterRewriteAttempt.attempt_no)
+                    ).scalars().all()
+                finally:
+                    session.close()
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+
+            self.assertEqual([item.repair_scope for item in attempts], ["scene", "band", "arc"])
 
     def test_wener_falls_back_to_heuristics_when_llm_json_is_invalid(self) -> None:
         from forwin.protocol.context import ReviewContextPack

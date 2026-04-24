@@ -9,6 +9,37 @@
 - 如果改动尚未部署到 `8899`，必须明确写“未部署原因”和“切换条件”。
 - 旧的专项日志可保留，但关键结论需要汇总到这里。
 
+## 2026-04-22
+
+### V2.9.2B review/repair、task-center 与 API wiring 收口
+
+把这轮主干修补集中收口到三块：review/repair 语义、task-center 统计与轮询语义、API/task-center wiring。
+
+关键变化：
+
+- `blackbox` 仍保留“三次 review fail 后允许直接放行”的自动化语义，但只对**第 3 次 rewrite 后仍然 review fail 的真实正文**生效；writer 异常、writer 返回空正文、repair 没有产出可 review draft 时，不再 force accept。
+- repair 链改成固定三次：第 1 次 `scene`，第 2 次 `band`，第 3 次由 reviewer escalation 决定走 `band` 还是 `arc`；普通 review 不再自动把 repair scope 往 `arc` 推。
+- `RepairInstruction` 新增 `scope_reason`；review detail API 现在会暴露 `latest_repair_scope_reason`，便于前端和治理面板解释为什么第 3 次升到 `band` 或 `arc`。
+- `GenerationControlInfo.accepted_chapters` 修正为 accepted-only；新增 `drafted_chapters`、`generated_chapters`，task-center 与驾驶舱 UI 改成“已生成 / 已接受 / 待 Review”三套统计口径。
+- task-center 后端把 provisional history 回填从 per-task 查询改成 bulk 匹配；前端首页把平台轮询改成视图感知，books/task-center 列表签名改成轻量 fingerprint，不再对整份 payload 做递归排序 + `JSON.stringify`。
+- `api.py` 的任务中心能力抽到 `TaskCenterService`，路由注册改成 `ApiRouteDeps` / `TaskRouteDeps` 依赖注入；`forwin/publishers/deprecated/` 整个旧发布实现目录已删除，仅保留 `server_uploader.py` 墓碑 stub。
+
+验证：
+
+- `python3 -m pytest -q tests/test_generation_control_payload.py`
+- `python3 -m pytest -q tests/test_api_split_modules.py`
+- `python3 -m pytest -q tests/test_governance_decision_api.py`
+- `python3 -m pytest -q tests/test_phase05_regressions.py -k "rewrite or force_accept or repair or task_center or generation_control"`
+- `python3 -m pytest -q tests/test_generation_task_persistence.py -k provisional_preview_history_is_backfilled_from_execution`
+- `python3 -m pytest -q`
+
+结果：
+
+- targeted regressions 全部通过
+- 全量 Python 回归：`235 passed, 8 subtests passed`
+
+部署状态：未部署到 `8899`。原因：本轮只完成代码和本地全量回归，还没有重建 `forwin` 容器并切到线上端口。切换条件：先确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`，再执行 `docker compose build forwin` 与 `docker compose up -d forwin`，随后 smoke `GET /health`、`GET /api/task-center/items?limit=20`、`GET /api/projects?limit=5`。
+
 ## 2026-04-20
 
 ### V2.9.2A 文化命名生成器接入（culture lexicon / Genesis 自动命名 / 前端一键生成）

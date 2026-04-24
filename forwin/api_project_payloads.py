@@ -442,6 +442,7 @@ def build_generation_control(
     future_constraints_enabled: bool = True,
 ) -> GenerationControlInfo:
     accepted = [plan.chapter_number for plan in plans if plan.status == "accepted"]
+    drafted = [plan.chapter_number for plan in plans if plan.status == "drafted"]
     planned = [plan.chapter_number for plan in plans if plan.status == "planned"]
     failed = [plan.chapter_number for plan in plans if plan.status == "failed"]
     pending_review = [plan.chapter_number for plan in plans if plan.status == "needs_review"]
@@ -483,9 +484,11 @@ def build_generation_control(
         writing_state=writing_state,
         review_state=review_state,
         current_stage=active_stage,
-        current_chapter=int(active_chapter or max(accepted + failed + pending_review, default=0)),
+        current_chapter=int(active_chapter or max(generated + failed, default=0)),
         next_chapter=next_chapter,
         accepted_chapters=accepted,
+        drafted_chapters=drafted,
+        generated_chapters=generated,
         planned_chapters=planned,
         failed_chapters=failed,
         pending_review_chapters=pending_review,

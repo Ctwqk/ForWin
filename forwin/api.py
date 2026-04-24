@@ -37,6 +37,7 @@ from forwin import (
     api_system_routes,
     api_task_routes,
 )
+from forwin.api_task_center_service import TaskCenterService
 from forwin.api_project_payloads import (
     build_project_detail,
     build_project_summaries,
@@ -204,6 +205,7 @@ _SessionFactory = None
 _orchestrator: WritingOrchestrator | None = None
 _publisher_manager: PublisherManager | None = None
 _runtime_settings: RuntimeSettingsStore | None = None
+_task_center_service: TaskCenterService | None = None
 _automation_scheduler_thread: threading.Thread | None = None
 _automation_scheduler_stop = threading.Event()
 
@@ -515,6 +517,34 @@ def _coerce_task_datetime(value: Any) -> datetime:
     return timestamp.astimezone(timezone.utc)
 
 
+def _get_task_center_service() -> TaskCenterService:
+    global _task_center_service
+    if _task_center_service is not None:
+        return _task_center_service
+
+    def _iter_cached_generation_tasks() -> list[tuple[str, dict[str, Any]]]:
+        with _tasks_lock:
+            return [(task_id, dict(task)) for task_id, task in _tasks.items()]
+
+    _task_center_service = TaskCenterService(
+        get_session=_get_session,
+        has_db_session=lambda: _SessionFactory is not None,
+        prune_tasks=_prune_tasks,
+        utcnow=_utcnow,
+        display_datetime=_display_datetime,
+        coerce_task_datetime=_coerce_task_datetime,
+        new_stage_history_entry=_new_stage_history_entry,
+        cached_generation_task=_cached_generation_task,
+        iter_cached_generation_tasks=_iter_cached_generation_tasks,
+        prefer_cached_generation_task=_prefer_cached_generation_task,
+        generation_task_from_row=_generation_task_from_row,
+        config_provider=lambda: _config,
+        terminal_statuses=_GENERATION_TERMINAL_STATUSES,
+        terminal_stage_by_status=_GENERATION_TERMINAL_STAGE_BY_STATUS,
+    )
+    return _task_center_service
+
+
 def _task_history_len(task: dict[str, Any] | None) -> int:
     if task is None:
         return 0
@@ -540,34 +570,11 @@ def _prefer_cached_generation_task(
 
 
 def _task_has_stage(task: dict[str, Any], stage: str) -> bool:
-    history = task.get("stage_history", [])
-    if not isinstance(history, list):
-        return False
-    return any(str(entry.get("stage", "")).strip() == stage for entry in history if isinstance(entry, dict))
+    return _get_task_center_service().task_has_stage(task, stage)
 
 
 def _normalize_loaded_generation_task(task: dict[str, Any]) -> dict[str, Any]:
-    status = str(task.get("status", "")).strip()
-    expected_stage = _GENERATION_TERMINAL_STAGE_BY_STATUS.get(status)
-    if not expected_stage:
-        return task
-    current_stage = str(task.get("current_stage", "")).strip()
-    if current_stage == expected_stage:
-        return task
-    normalized = dict(task)
-    normalized["current_stage"] = expected_stage
-    history = list(normalized.get("stage_history", []))
-    if not history or str(history[-1].get("stage", "")).strip() != expected_stage:
-        history.append(
-            _new_stage_history_entry(
-                expected_stage,
-                now=normalized.get("updated_at") if isinstance(normalized.get("updated_at"), datetime) else None,
-                current_chapter=int(normalized.get("current_chapter", 0) or 0),
-                message=str(normalized.get("message", "")).strip(),
-            )
-        )
-        normalized["stage_history"] = history
-    return normalized
+    return _get_task_center_service().normalize_loaded_generation_task(task)
 
 
 def _apply_task_visibility_rules(
@@ -575,70 +582,21 @@ def _apply_task_visibility_rules(
     *,
     include_deleted: bool,
 ) -> dict[str, Any] | None:
-    if task is None:
-        return None
-    normalized = _normalize_loaded_generation_task(task)
-    if normalized.get("deleted") and not include_deleted:
-        return None
-    return normalized
+    return _get_task_center_service().apply_task_visibility_rules(
+        task,
+        include_deleted=include_deleted,
+    )
 
 
 def _augment_task_with_provisional_history(session, task: dict[str, Any]) -> dict[str, Any]:
-    project_id = str(task.get("project_id", "") or "").strip()
-    if not project_id or _task_has_stage(task, "running_provisional_preview"):
-        return task
-
-    created_at = _coerce_task_datetime(task.get("created_at"))
-    finished_at = _coerce_task_datetime(task.get("finished_at"))
-    updated_at = _coerce_task_datetime(task.get("updated_at"))
-    window_end = max(finished_at, updated_at)
-    if created_at == datetime.min.replace(tzinfo=timezone.utc):
-        return task
-    if window_end == datetime.min.replace(tzinfo=timezone.utc):
-        window_end = _utcnow()
-
-    execution = session.execute(
-        select(ProvisionalBandExecution)
-        .where(
-            ProvisionalBandExecution.project_id == project_id,
-            ProvisionalBandExecution.created_at >= created_at - timedelta(seconds=5),
-            ProvisionalBandExecution.created_at <= window_end + timedelta(seconds=5),
-        )
-        .order_by(ProvisionalBandExecution.created_at.asc())
-        .limit(1)
-    ).scalar_one_or_none()
-    if execution is None:
-        return task
-
-    try:
-        chapter_numbers = json.loads(execution.chapter_numbers_json or "[]")
-    except json.JSONDecodeError:
-        chapter_numbers = []
-    chapter = int(chapter_numbers[0]) if chapter_numbers else 0
-    augmented = dict(task)
-    history = list(augmented.get("stage_history", []))
-    history.append(
-        _new_stage_history_entry(
-            "running_provisional_preview",
-            now=execution.created_at,
-            current_chapter=chapter,
-            message=str(augmented.get("message", "")).strip(),
-        )
+    task_id = str(task.get("id", "") or "")
+    if not task_id:
+        task_id = str(task.get("project_id", "") or "") or "task"
+    return _get_task_center_service()._augment_task_with_provisional_history(
+        session,
+        task_id,
+        task,
     )
-    if (
-        str(execution.aggregate_verdict or "").strip().lower() == "fail"
-        or int(execution.failure_count or 0) > 0
-    ) and not _task_has_stage(augmented, "provisional_failed"):
-        history.append(
-            _new_stage_history_entry(
-                "provisional_failed",
-                now=execution.created_at,
-                current_chapter=chapter,
-                message="Provisional 预演失败，已阻断正式写作。",
-            )
-        )
-    augmented["stage_history"] = history
-    return augmented
 
 
 def _is_sqlite_locked_error(exc: Exception) -> bool:
@@ -733,21 +691,11 @@ def _prune_tasks() -> None:
 
 
 def _load_generation_task(task_id: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
-    if _SessionFactory is None:
-        return _apply_task_visibility_rules(
-            _cached_generation_task(task_id),
+    try:
+        return _get_task_center_service().load_generation_task(
+            task_id,
             include_deleted=include_deleted,
         )
-
-    try:
-        with _get_session() as session:
-            cached = _cached_generation_task(task_id)
-            row = session.get(GenerationTask, task_id)
-            persisted = _generation_task_from_row(row) if row is not None else None
-            task = _prefer_cached_generation_task(persisted, cached)
-            if task is not None:
-                task = _augment_task_with_provisional_history(session, task)
-            return _apply_task_visibility_rules(task, include_deleted=include_deleted)
     except OperationalError as exc:
         if not _is_sqlite_locked_error(exc):
             raise
@@ -928,6 +876,9 @@ def _create_task_record(
 
 
 def _serialize_task(task_id: str, task: dict[str, Any]) -> TaskSummaryResponse:
+    accepted = list(task.get("completed_chapters", []))
+    pending_review = list(task.get("paused_chapters", []))
+    generated = list(dict.fromkeys([*accepted, *pending_review]))
     return TaskSummaryResponse(
         task_kind=str(task.get("task_kind", "generation")),
         task_id=task_id,
@@ -952,9 +903,11 @@ def _serialize_task(task_id: str, task: dict[str, Any]) -> TaskSummaryResponse:
         generation_control=GenerationControlInfo(
             current_stage=str(task.get("current_stage", "queued")).strip(),
             current_chapter=int(task.get("current_chapter", 0) or 0),
-            accepted_chapters=list(task.get("completed_chapters", [])),
+            accepted_chapters=accepted,
+            drafted_chapters=pending_review,
+            generated_chapters=generated,
             failed_chapters=list(task.get("failed_chapters", [])),
-            pending_review_chapters=list(task.get("paused_chapters", [])),
+            pending_review_chapters=pending_review,
             can_pause=_task_is_pausable(task),
             can_resume=_task_is_resumable(task),
             pause_requested=bool(task.get("pause_requested")),
@@ -1002,171 +955,35 @@ def _serialize_upload_task_center_item(payload: dict[str, Any]) -> TaskCenterIte
 
 
 def _project_task_id(project_id: str) -> str:
-    return f"project-{project_id}"
+    return _get_task_center_service().project_task_id(project_id)
 
 
 def _parse_project_task_id(task_id: str) -> str | None:
-    normalized = str(task_id or "").strip()
-    if not normalized.startswith("project-"):
-        return None
-    project_id = normalized[len("project-"):].strip()
-    return project_id or None
+    return _get_task_center_service().parse_project_task_id(task_id)
 
 
-def _load_project_task_center_plans(session, project_ids: list[str]) -> dict[str, list[tuple[int, str]]]:
-    ids = [str(project_id or "").strip() for project_id in project_ids if str(project_id or "").strip()]
-    if not ids:
-        return {}
-
-    rows = session.execute(
-        select(
-            ChapterPlan.project_id,
-            ChapterPlan.chapter_number,
-            ChapterPlan.status,
-        )
-        .where(ChapterPlan.project_id.in_(ids))
-        .order_by(ChapterPlan.project_id.asc(), ChapterPlan.chapter_number.asc())
-    ).all()
-
-    grouped: dict[str, list[tuple[int, str]]] = {project_id: [] for project_id in ids}
-    for project_id, chapter_number, status in rows:
-        grouped.setdefault(str(project_id), []).append(
-            (int(chapter_number or 0), str(status or ""))
-        )
-    return grouped
+def _load_project_task_center_plans(session, project_ids: list[str]) -> dict[str, list[ChapterPlan]]:
+    return _get_task_center_service()._load_project_task_center_plans(session, project_ids)
 
 
 def _build_project_task_center_item(
     project: Project,
-    plans: list[tuple[int, str]],
+    plans: list[ChapterPlan],
 ) -> TaskCenterItemResponse:
-    requested = len(plans)
-    completed = [
-        chapter_number
-        for chapter_number, status in plans
-        if status in {"accepted", "drafted"}
-    ]
-    failed = [chapter_number for chapter_number, status in plans if status == "failed"]
-    paused = [chapter_number for chapter_number, status in plans if status == "needs_review"]
-    if requested == 0:
-        status = "created"
-        current_stage = "queued"
-    elif paused:
-        status = "needs_review"
-        current_stage = "paused_for_review"
-    elif failed and not completed:
-        status = "failed"
-        current_stage = "failed"
-    elif failed:
-        status = "partial_failed"
-        current_stage = "failed"
-    else:
-        status = "completed"
-        current_stage = "completed"
-    current_chapter = max(completed + failed + paused, default=0)
-    message = "书本已创建，当前没有活跃生成任务。" if requested == 0 else "项目入口（当前没有活跃生成任务）"
-    planned = [chapter_number for chapter_number, status in plans if status == "planned"]
-    can_resume = bool((planned or failed) and not paused)
-    stage_history = [
-        _new_stage_history_entry(
-            current_stage,
-            now=project.updated_at,
-            current_chapter=current_chapter,
-            message=message,
-        )
-    ]
-    return TaskCenterItemResponse(
-        task_kind="generation",
-        task_id=_project_task_id(project.id),
-        status=status,
-        title=project.title,
-        subtitle=f"书本入口 · {project.genre}",
-        project_id=project.id,
-        message=message,
-        current_stage=current_stage,
-        stage_history=stage_history,
-        requested_chapters=requested,
-        current_chapter=current_chapter,
-        completed_chapters=completed,
-        failed_chapters=failed,
-        paused_chapters=paused,
-        generation_control=GenerationControlInfo(
-            plan_state="none" if requested == 0 else status,
-            writing_state="not_started" if not completed else "completed" if len(completed) == requested else "started",
-            review_state="pending" if paused else "none",
-            current_stage=current_stage,
-            current_chapter=current_chapter,
-            next_chapter=min(planned + failed, default=0),
-            accepted_chapters=completed,
-            planned_chapters=planned,
-            failed_chapters=failed,
-            pending_review_chapters=paused,
-            can_resume=can_resume,
-            review_interval_chapters=max(0, int(_config.review_interval_chapters if _config else 0)),
-        ),
-        resumable=can_resume,
-        created_at=_display_datetime(project.created_at),
-        updated_at=_display_datetime(project.updated_at),
-        terminable=False,
-        deletable=False,
+    return _get_task_center_service()._build_project_task_center_item(
+        project,
+        plans,
+        latest_band_checkpoint=None,
+        decision_events=[],
     )
 
 
 def _list_project_backed_task_items(limit: int) -> list[TaskCenterItemResponse]:
-    live_project_ids: set[str] = set()
-    if _SessionFactory is not None:
-        with _get_session() as session:
-            live_project_ids = {
-                str(project_id).strip()
-                for project_id in session.execute(
-                    select(GenerationTask.project_id).where(
-                        GenerationTask.deleted_at.is_(None),
-                        GenerationTask.project_id != "",
-                        GenerationTask.status.notin_(tuple(_GENERATION_TERMINAL_STATUSES)),
-                    )
-                ).scalars().all()
-                if str(project_id).strip()
-            }
-    session = _get_session()
-    try:
-        projects = session.execute(
-            select(Project).order_by(Project.updated_at.desc()).limit(max(1, min(int(limit or 50), 200)))
-        ).scalars().all()
-        plans_by_project = _load_project_task_center_plans(
-            session,
-            [project.id for project in projects],
-        )
-        items: list[TaskCenterItemResponse] = []
-        for project in projects:
-            if project.id in live_project_ids:
-                continue
-            items.append(
-                _build_project_task_center_item(
-                    project,
-                    plans_by_project.get(project.id, []),
-                )
-            )
-        return items
-    finally:
-        session.close()
+    return _get_task_center_service().list_project_backed_task_items(limit)
 
 
 def _get_project_backed_task_item_or_404(task_id: str) -> TaskCenterItemResponse:
-    project_id = _parse_project_task_id(task_id)
-    if not project_id:
-        raise HTTPException(404, "任务不存在")
-    session = _get_session()
-    try:
-        project = session.get(Project, project_id)
-        if project is None:
-            raise HTTPException(404, "项目不存在")
-        plans_by_project = _load_project_task_center_plans(session, [project.id])
-        return _build_project_task_center_item(
-            project,
-            plans_by_project.get(project.id, []),
-        )
-    finally:
-        session.close()
+    return _get_task_center_service().get_project_backed_task_item_or_404(task_id)
 
 
 def _serialize_model_profiles(payload: dict[str, object]) -> list[ModelProfile]:
@@ -1910,54 +1727,11 @@ def _stop_automation_scheduler() -> None:
 
 
 def _list_generation_tasks(limit: int) -> list[tuple[str, dict[str, Any]]]:
-    _prune_tasks()
-    normalized_limit = max(1, min(int(limit or 30), 100))
-    if _SessionFactory is None:
-        with _tasks_lock:
-            return [
-                (task_id, dict(task))
-                for task_id, task in sorted(
-                    _tasks.items(),
-                    key=lambda item: item[1].get("updated_at", _utcnow()),
-                    reverse=True,
-                )
-                if not task.get("deleted")
-            ][:normalized_limit]
-
-    with _get_session() as session:
-        rows = session.execute(
-            select(GenerationTask)
-            .where(GenerationTask.deleted_at.is_(None))
-            .order_by(GenerationTask.updated_at.desc())
-            .limit(normalized_limit)
-        ).scalars().all()
-        merged: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            persisted = _generation_task_from_row(row)
-            cached = _cached_generation_task(row.id)
-            task = _prefer_cached_generation_task(persisted, cached)
-            if task is not None:
-                task = _augment_task_with_provisional_history(session, task)
-                visible = _apply_task_visibility_rules(task, include_deleted=False)
-                if visible is not None:
-                    merged[row.id] = visible
-        with _tasks_lock:
-            cached_items = [(task_id, dict(task)) for task_id, task in _tasks.items()]
-        for task_id, cached in cached_items:
-            visible = _apply_task_visibility_rules(cached, include_deleted=False)
-            if visible is None:
-                continue
-            current = merged.get(task_id)
-            merged[task_id] = _prefer_cached_generation_task(current, visible) or visible
-        return sorted(
-            merged.items(),
-            key=lambda item: _coerce_task_datetime(item[1].get("updated_at")),
-            reverse=True,
-        )[:normalized_limit]
+    return _get_task_center_service().list_generation_tasks(limit)
 
 
 def _shutdown_runtime_state() -> None:
-    global _engine, _SessionFactory, _orchestrator, _publisher_manager, _runtime_settings
+    global _engine, _SessionFactory, _orchestrator, _publisher_manager, _runtime_settings, _task_center_service
 
     _stop_automation_scheduler()
     if _orchestrator is not None:
@@ -1979,6 +1753,7 @@ def _shutdown_runtime_state() -> None:
     _orchestrator = None
     _publisher_manager = None
     _runtime_settings = None
+    _task_center_service = None
     _SessionFactory = None
     _engine = None
 
@@ -2076,61 +1851,63 @@ app.add_middleware(
 globals().update(
     api_route_registry.register_api_routes(
         app,
-        get_config=lambda: _config,
-        get_runtime_settings=lambda: _runtime_settings,
-        get_publisher_manager=lambda: _publisher_manager,
-        get_orchestrator=lambda: _orchestrator,
-        get_session=_get_session,
-        render_home_page=render_home_page,
-        render_publishers_page=render_publishers_page,
-        build_home_page_settings=build_home_page_settings,
-        build_runtime_config=build_runtime_config,
-        copy_config=copy_config,
-        create_generation_task=lambda **kwargs: _create_generation_task(**kwargs),
-        serialize_task=lambda task_id, task: _serialize_task(task_id, task),
-        get_generation_task_or_404=lambda task_id: _get_generation_task_or_404(task_id),
-        project_has_active_generation_task=lambda project_id, *, session=None: _project_has_active_generation_task(project_id, session=session),
-        generation_task_conflict_message=lambda project_id: _generation_task_conflict_message(project_id),
-        resolve_project_governance=lambda project, *, overrides=None, base_config=None: _resolve_project_governance(project, overrides=overrides, base_config=base_config),
-        governance_request_payload=lambda req: _governance_request_payload(req),
-        serialize_llm_settings=lambda payload, *, message: _serialize_llm_settings(payload, message=message),
-        active_generation_task_error_cls=ActiveGenerationTaskError,
-        list_generation_tasks=lambda limit: _list_generation_tasks(limit),
-        serialize_generation_task_center_item=lambda task_id, task: _serialize_generation_task_center_item(task_id, task),
-        serialize_upload_task_center_item=lambda payload: _serialize_upload_task_center_item(payload),
-        list_project_backed_task_items=lambda limit: _list_project_backed_task_items(limit),
-        parse_project_task_id=lambda task_id: _parse_project_task_id(task_id),
-        get_project_backed_task_item_or_404=lambda task_id: _get_project_backed_task_item_or_404(task_id),
-        task_is_terminal=lambda status: _task_is_terminal(status),
-        task_is_terminable=lambda task: _task_is_terminable(task),
-        task_is_pausable=lambda task: _task_is_pausable(task),
-        task_is_deletable=lambda task: _task_is_deletable(task),
-        latest_related_decision_event=lambda session, **kwargs: _latest_related_decision_event(session, **kwargs),
-        log_decision_event=lambda session, **kwargs: _log_decision_event(session, **kwargs),
-        update_task=lambda task_id, **changes: _update_task(task_id, **changes),
-        display_datetime=_display_datetime,
-        build_genesis_service=lambda *args, **kwargs: _build_genesis_service(*args, **kwargs),
-        close_genesis_service=lambda service=None: _close_genesis_service(service),
-        require_genesis_project=lambda project: _require_genesis_project(project),
-        active_genesis_revision=lambda session, project: _active_genesis_revision(session, project),
-        genesis_patch_payload=lambda req: _genesis_patch_payload(req),
-        delete_project_impl=lambda session, project_id: _delete_project(session, project_id),
-        project_delete_blockers=lambda project_id, *, session: _project_delete_blockers(project_id, session=session),
-        project_delete_conflict_message=lambda blockers: _project_delete_conflict_message(blockers),
-        saved_runtime_config_or_default=lambda model_profile_id='': _saved_runtime_config_or_default(model_profile_id),
-        create_continue_generation_task=lambda **kwargs: _create_continue_generation_task(**kwargs),
-        persist_project_automation=lambda session, project, automation: _persist_project_automation(session, project, automation),
-        require_reason=lambda reason, *, action: _require_reason(reason, action=action),
-        decision_refs_for_chapter_review=lambda session, *, project_id, chapter_number, review_id: _decision_refs_for_chapter_review(session, project_id=project_id, chapter_number=chapter_number, review_id=review_id),
-        validate_constraint_payload=lambda **kwargs: _validate_constraint_payload(**kwargs),
-        serialize_band_checkpoint=lambda row, *, session=None: _serialize_band_checkpoint(row, session=session),
-        serialize_constraint=lambda row: _serialize_constraint(row),
-        list_decision_event_rows=lambda session, **kwargs: _list_decision_event_rows(session, **kwargs),
-        serialize_decision_event=lambda row: _serialize_decision_event(row),
-        build_causal_replay=lambda session, **kwargs: _build_causal_replay(session, **kwargs),
-        build_governance_insights=lambda session, *, project_id: _build_governance_insights(session, project_id=project_id),
-        latest_band_checkpoint_row=lambda session, *, project_id, band_id='': _latest_band_checkpoint_row(session, project_id=project_id, band_id=band_id),
-        persist_project_governance=lambda session, project, governance: _persist_project_governance(session, project, governance),
-        json_load_object=lambda raw: _json_load_object(raw),
+        deps=api_route_registry.ApiRouteDeps(
+            get_config=lambda: _config,
+            get_runtime_settings=lambda: _runtime_settings,
+            get_publisher_manager=lambda: _publisher_manager,
+            get_orchestrator=lambda: _orchestrator,
+            get_session=_get_session,
+            render_home_page=render_home_page,
+            render_publishers_page=render_publishers_page,
+            build_home_page_settings=build_home_page_settings,
+            build_runtime_config=build_runtime_config,
+            copy_config=copy_config,
+            create_generation_task=lambda **kwargs: _create_generation_task(**kwargs),
+            serialize_task=lambda task_id, task: _serialize_task(task_id, task),
+            get_generation_task_or_404=lambda task_id: _get_generation_task_or_404(task_id),
+            project_has_active_generation_task=lambda project_id, *, session=None: _project_has_active_generation_task(project_id, session=session),
+            generation_task_conflict_message=lambda project_id: _generation_task_conflict_message(project_id),
+            resolve_project_governance=lambda project, *, overrides=None, base_config=None: _resolve_project_governance(project, overrides=overrides, base_config=base_config),
+            governance_request_payload=lambda req: _governance_request_payload(req),
+            serialize_llm_settings=lambda payload, *, message: _serialize_llm_settings(payload, message=message),
+            active_generation_task_error_cls=ActiveGenerationTaskError,
+            list_generation_tasks=lambda limit: _list_generation_tasks(limit),
+            serialize_generation_task_center_item=lambda task_id, task: _serialize_generation_task_center_item(task_id, task),
+            serialize_upload_task_center_item=lambda payload: _serialize_upload_task_center_item(payload),
+            list_project_backed_task_items=lambda limit: _list_project_backed_task_items(limit),
+            parse_project_task_id=lambda task_id: _parse_project_task_id(task_id),
+            get_project_backed_task_item_or_404=lambda task_id: _get_project_backed_task_item_or_404(task_id),
+            task_is_terminal=lambda status: _task_is_terminal(status),
+            task_is_terminable=lambda task: _task_is_terminable(task),
+            task_is_pausable=lambda task: _task_is_pausable(task),
+            task_is_deletable=lambda task: _task_is_deletable(task),
+            latest_related_decision_event=lambda session, **kwargs: _latest_related_decision_event(session, **kwargs),
+            log_decision_event=lambda session, **kwargs: _log_decision_event(session, **kwargs),
+            update_task=lambda task_id, **changes: _update_task(task_id, **changes),
+            display_datetime=_display_datetime,
+            build_genesis_service=lambda *args, **kwargs: _build_genesis_service(*args, **kwargs),
+            close_genesis_service=lambda service=None: _close_genesis_service(service),
+            require_genesis_project=lambda project: _require_genesis_project(project),
+            active_genesis_revision=lambda session, project: _active_genesis_revision(session, project),
+            genesis_patch_payload=lambda req: _genesis_patch_payload(req),
+            delete_project_impl=lambda session, project_id: _delete_project(session, project_id),
+            project_delete_blockers=lambda project_id, *, session: _project_delete_blockers(project_id, session=session),
+            project_delete_conflict_message=lambda blockers: _project_delete_conflict_message(blockers),
+            saved_runtime_config_or_default=lambda model_profile_id='': _saved_runtime_config_or_default(model_profile_id),
+            create_continue_generation_task=lambda **kwargs: _create_continue_generation_task(**kwargs),
+            persist_project_automation=lambda session, project, automation: _persist_project_automation(session, project, automation),
+            require_reason=lambda reason, *, action: _require_reason(reason, action=action),
+            decision_refs_for_chapter_review=lambda session, *, project_id, chapter_number, review_id: _decision_refs_for_chapter_review(session, project_id=project_id, chapter_number=chapter_number, review_id=review_id),
+            validate_constraint_payload=lambda **kwargs: _validate_constraint_payload(**kwargs),
+            serialize_band_checkpoint=lambda row, *, session=None: _serialize_band_checkpoint(row, session=session),
+            serialize_constraint=lambda row: _serialize_constraint(row),
+            list_decision_event_rows=lambda session, **kwargs: _list_decision_event_rows(session, **kwargs),
+            serialize_decision_event=lambda row: _serialize_decision_event(row),
+            build_causal_replay=lambda session, **kwargs: _build_causal_replay(session, **kwargs),
+            build_governance_insights=lambda session, *, project_id: _build_governance_insights(session, project_id=project_id),
+            latest_band_checkpoint_row=lambda session, *, project_id, band_id='': _latest_band_checkpoint_row(session, project_id=project_id, band_id=band_id),
+            persist_project_governance=lambda session, project, governance: _persist_project_governance(session, project, governance),
+            json_load_object=lambda raw: _json_load_object(raw),
+        ),
     )
 )

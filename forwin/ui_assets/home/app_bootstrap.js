@@ -12,12 +12,15 @@
       await loadTaskCenter();
       setGlobalStatus('首页已加载。先看书本，再按需要进入任务中心。');
       window.setInterval(async () => {
+        if (currentHomeTab !== 'config' && !taskModalOpen()) return;
         await loadPlatforms();
       }, 5000);
       window.setInterval(async () => {
         if (!taskPollHasActive && !currentDrawerTask) return;
-        await loadTaskCenter();
-        await loadBooks();
+        const refreshResult = await loadTaskCenter();
+        if (refreshResult?.booksImpactChanged && currentHomeTab === 'book') {
+          await loadBooks();
+        }
         if (currentDrawerTask) {
           await refreshCurrentDrawerIfChanged();
         }

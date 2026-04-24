@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -58,66 +59,128 @@ from forwin.api_schemas import (
 )
 
 
+@dataclass(frozen=True)
+class ApiRouteDeps:
+    get_config: Callable[[], Any]
+    get_runtime_settings: Callable[[], Any]
+    get_publisher_manager: Callable[[], Any]
+    get_orchestrator: Callable[[], Any]
+    get_session: Callable[[], Any]
+    render_home_page: Callable[..., str]
+    render_publishers_page: Callable[..., str]
+    build_home_page_settings: Callable[..., dict[str, object]]
+    build_runtime_config: Callable[..., Any]
+    copy_config: Callable[..., Any]
+    create_generation_task: Callable[..., str]
+    serialize_task: Callable[[str, dict[str, Any]], Any]
+    get_generation_task_or_404: Callable[[str], dict[str, Any]]
+    project_has_active_generation_task: Callable[..., bool]
+    generation_task_conflict_message: Callable[[str], str]
+    resolve_project_governance: Callable[..., Any]
+    governance_request_payload: Callable[[object], dict[str, object]]
+    serialize_llm_settings: Callable[..., Any]
+    active_generation_task_error_cls: type[Exception]
+    list_generation_tasks: Callable[[int], list[tuple[str, dict[str, Any]]]]
+    serialize_generation_task_center_item: Callable[[str, dict[str, Any]], Any]
+    serialize_upload_task_center_item: Callable[[dict[str, Any]], Any]
+    list_project_backed_task_items: Callable[[int], list[Any]]
+    parse_project_task_id: Callable[[str], str | None]
+    get_project_backed_task_item_or_404: Callable[[str], Any]
+    task_is_terminal: Callable[[str], bool]
+    task_is_terminable: Callable[[dict[str, Any]], bool]
+    task_is_pausable: Callable[[dict[str, Any]], bool]
+    task_is_deletable: Callable[[dict[str, Any]], bool]
+    latest_related_decision_event: Callable[..., Any]
+    log_decision_event: Callable[..., Any]
+    update_task: Callable[..., None]
+    display_datetime: Callable[[Any], str]
+    build_genesis_service: Callable[..., Any]
+    close_genesis_service: Callable[..., None]
+    require_genesis_project: Callable[[Any], None]
+    active_genesis_revision: Callable[..., Any]
+    genesis_patch_payload: Callable[[Any], dict[str, Any]]
+    delete_project_impl: Callable[..., None]
+    project_delete_blockers: Callable[..., list[str]]
+    project_delete_conflict_message: Callable[[list[str]], str]
+    saved_runtime_config_or_default: Callable[..., Any]
+    create_continue_generation_task: Callable[..., str]
+    persist_project_automation: Callable[..., Any]
+    require_reason: Callable[[str], str]
+    decision_refs_for_chapter_review: Callable[..., list[Any]]
+    validate_constraint_payload: Callable[..., tuple[str, str, str]]
+    serialize_band_checkpoint: Callable[..., Any]
+    serialize_constraint: Callable[[Any], Any]
+    list_decision_event_rows: Callable[..., list[Any]]
+    serialize_decision_event: Callable[[Any], Any]
+    build_causal_replay: Callable[..., Any]
+    build_governance_insights: Callable[..., Any]
+    latest_band_checkpoint_row: Callable[..., Any]
+    persist_project_governance: Callable[..., Any]
+    json_load_object: Callable[[str | None], dict[str, Any]]
+
+
 def register_api_routes(
     app: FastAPI,
     *,
-    get_config: Callable[[], Any],
-    get_runtime_settings: Callable[[], Any],
-    get_publisher_manager: Callable[[], Any],
-    get_orchestrator: Callable[[], Any],
-    get_session: Callable[[], Any],
-    render_home_page: Callable[..., str],
-    render_publishers_page: Callable[..., str],
-    build_home_page_settings: Callable[..., dict[str, object]],
-    build_runtime_config: Callable[..., Any],
-    copy_config: Callable[..., Any],
-    create_generation_task: Callable[..., str],
-    serialize_task: Callable[[str, dict[str, Any]], Any],
-    get_generation_task_or_404: Callable[[str], dict[str, Any]],
-    project_has_active_generation_task: Callable[..., bool],
-    generation_task_conflict_message: Callable[[str], str],
-    resolve_project_governance: Callable[..., Any],
-    governance_request_payload: Callable[[object], dict[str, object]],
-    serialize_llm_settings: Callable[..., Any],
-    active_generation_task_error_cls: type[Exception],
-    list_generation_tasks: Callable[[int], list[tuple[str, dict[str, Any]]]],
-    serialize_generation_task_center_item: Callable[[str, dict[str, Any]], Any],
-    serialize_upload_task_center_item: Callable[[dict[str, Any]], Any],
-    list_project_backed_task_items: Callable[[int], list[Any]],
-    parse_project_task_id: Callable[[str], str | None],
-    get_project_backed_task_item_or_404: Callable[[str], Any],
-    task_is_terminal: Callable[[str], bool],
-    task_is_terminable: Callable[[dict[str, Any]], bool],
-    task_is_pausable: Callable[[dict[str, Any]], bool],
-    task_is_deletable: Callable[[dict[str, Any]], bool],
-    latest_related_decision_event: Callable[..., Any],
-    log_decision_event: Callable[..., Any],
-    update_task: Callable[..., None],
-    display_datetime: Callable[[Any], str],
-    build_genesis_service: Callable[..., Any],
-    close_genesis_service: Callable[..., None],
-    require_genesis_project: Callable[[Any], None],
-    active_genesis_revision: Callable[..., Any],
-    genesis_patch_payload: Callable[[Any], dict[str, Any]],
-    delete_project_impl: Callable[..., None],
-    project_delete_blockers: Callable[..., list[str]],
-    project_delete_conflict_message: Callable[[list[str]], str],
-    saved_runtime_config_or_default: Callable[..., Any],
-    create_continue_generation_task: Callable[..., str],
-    persist_project_automation: Callable[..., Any],
-    require_reason: Callable[[str], str],
-    decision_refs_for_chapter_review: Callable[..., list[Any]],
-    validate_constraint_payload: Callable[..., tuple[str, str, str]],
-    serialize_band_checkpoint: Callable[..., Any],
-    serialize_constraint: Callable[[Any], Any],
-    list_decision_event_rows: Callable[..., list[Any]],
-    serialize_decision_event: Callable[[Any], Any],
-    build_causal_replay: Callable[..., Any],
-    build_governance_insights: Callable[..., Any],
-    latest_band_checkpoint_row: Callable[..., Any],
-    persist_project_governance: Callable[..., Any],
-    json_load_object: Callable[[str | None], dict[str, Any]],
+    deps: ApiRouteDeps,
 ) -> dict[str, Callable[..., Any]]:
+    get_config = deps.get_config
+    get_runtime_settings = deps.get_runtime_settings
+    get_publisher_manager = deps.get_publisher_manager
+    get_orchestrator = deps.get_orchestrator
+    get_session = deps.get_session
+    render_home_page = deps.render_home_page
+    render_publishers_page = deps.render_publishers_page
+    build_home_page_settings = deps.build_home_page_settings
+    build_runtime_config = deps.build_runtime_config
+    copy_config = deps.copy_config
+    create_generation_task = deps.create_generation_task
+    serialize_task = deps.serialize_task
+    get_generation_task_or_404 = deps.get_generation_task_or_404
+    project_has_active_generation_task = deps.project_has_active_generation_task
+    generation_task_conflict_message = deps.generation_task_conflict_message
+    resolve_project_governance = deps.resolve_project_governance
+    governance_request_payload = deps.governance_request_payload
+    serialize_llm_settings = deps.serialize_llm_settings
+    active_generation_task_error_cls = deps.active_generation_task_error_cls
+    list_generation_tasks = deps.list_generation_tasks
+    serialize_generation_task_center_item = deps.serialize_generation_task_center_item
+    serialize_upload_task_center_item = deps.serialize_upload_task_center_item
+    list_project_backed_task_items = deps.list_project_backed_task_items
+    parse_project_task_id = deps.parse_project_task_id
+    get_project_backed_task_item_or_404 = deps.get_project_backed_task_item_or_404
+    task_is_terminal = deps.task_is_terminal
+    task_is_terminable = deps.task_is_terminable
+    task_is_pausable = deps.task_is_pausable
+    task_is_deletable = deps.task_is_deletable
+    latest_related_decision_event = deps.latest_related_decision_event
+    log_decision_event = deps.log_decision_event
+    update_task = deps.update_task
+    display_datetime = deps.display_datetime
+    build_genesis_service = deps.build_genesis_service
+    close_genesis_service = deps.close_genesis_service
+    require_genesis_project = deps.require_genesis_project
+    active_genesis_revision = deps.active_genesis_revision
+    genesis_patch_payload = deps.genesis_patch_payload
+    delete_project_impl = deps.delete_project_impl
+    project_delete_blockers = deps.project_delete_blockers
+    project_delete_conflict_message = deps.project_delete_conflict_message
+    saved_runtime_config_or_default = deps.saved_runtime_config_or_default
+    create_continue_generation_task = deps.create_continue_generation_task
+    persist_project_automation = deps.persist_project_automation
+    require_reason = deps.require_reason
+    decision_refs_for_chapter_review = deps.decision_refs_for_chapter_review
+    validate_constraint_payload = deps.validate_constraint_payload
+    serialize_band_checkpoint = deps.serialize_band_checkpoint
+    serialize_constraint = deps.serialize_constraint
+    list_decision_event_rows = deps.list_decision_event_rows
+    serialize_decision_event = deps.serialize_decision_event
+    build_causal_replay = deps.build_causal_replay
+    build_governance_insights = deps.build_governance_insights
+    latest_band_checkpoint_row = deps.latest_band_checkpoint_row
+    persist_project_governance = deps.persist_project_governance
+    json_load_object = deps.json_load_object
+
     system_handlers = api_system_routes.build_handlers(
         get_config=get_config,
         get_runtime_settings=get_runtime_settings,
@@ -139,23 +202,25 @@ def register_api_routes(
         active_generation_task_error_cls=active_generation_task_error_cls,
     )
     task_handlers = api_task_routes.build_handlers(
-        get_session=get_session,
-        get_publisher_manager=get_publisher_manager,
-        list_generation_tasks=list_generation_tasks,
-        serialize_task=serialize_task,
-        get_generation_task_or_404=get_generation_task_or_404,
-        serialize_generation_task_center_item=serialize_generation_task_center_item,
-        serialize_upload_task_center_item=serialize_upload_task_center_item,
-        list_project_backed_task_items=list_project_backed_task_items,
-        parse_project_task_id=parse_project_task_id,
-        get_project_backed_task_item_or_404=get_project_backed_task_item_or_404,
-        task_is_terminal=task_is_terminal,
-        task_is_terminable=task_is_terminable,
-        task_is_pausable=task_is_pausable,
-        task_is_deletable=task_is_deletable,
-        latest_related_decision_event=latest_related_decision_event,
-        log_decision_event=log_decision_event,
-        update_task=update_task,
+        deps=api_task_routes.TaskRouteDeps(
+            get_session=get_session,
+            get_publisher_manager=get_publisher_manager,
+            list_generation_tasks=list_generation_tasks,
+            serialize_task=serialize_task,
+            get_generation_task_or_404=get_generation_task_or_404,
+            serialize_generation_task_center_item=serialize_generation_task_center_item,
+            serialize_upload_task_center_item=serialize_upload_task_center_item,
+            list_project_backed_task_items=list_project_backed_task_items,
+            parse_project_task_id=parse_project_task_id,
+            get_project_backed_task_item_or_404=get_project_backed_task_item_or_404,
+            task_is_terminal=task_is_terminal,
+            task_is_terminable=task_is_terminable,
+            task_is_pausable=task_is_pausable,
+            task_is_deletable=task_is_deletable,
+            latest_related_decision_event=latest_related_decision_event,
+            log_decision_event=log_decision_event,
+            update_task=update_task,
+        ),
     )
     publisher_handlers = api_publisher_routes.build_handlers(
         get_publisher_manager=get_publisher_manager,

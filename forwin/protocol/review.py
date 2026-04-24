@@ -33,6 +33,7 @@ class RepairInstruction(BaseModel):
     ]
     must_fix: list[str] = Field(default_factory=list)
     must_preserve: list[str] = Field(default_factory=list)
+    scope_reason: str = ""
     design_patch: dict[str, object] = Field(default_factory=dict)
     evidence_refs: list[str] = Field(default_factory=list)
 

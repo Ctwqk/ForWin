@@ -480,6 +480,9 @@
     let taskPollHasActive = false;
     let booksStateSignature = '';
     let taskCenterStateSignature = '';
+    let taskCenterBookImpactSignature = '';
+    let booksRefreshPending = false;
+    let currentHomeTab = 'book';
     let currentGenesisProjectId = '';
     let currentGenesisDetail = null;
     let currentGenesisStage = 'brief';
@@ -514,6 +517,85 @@
 
     function dataSignature(value) {
       return JSON.stringify(normalizeForSignature(value));
+    }
+
+    function taskModalOpen() {
+      return Boolean(document.getElementById('task_modal_shell')?.classList.contains('open'));
+    }
+
+    function numberListFingerprint(values) {
+      return (Array.isArray(values) ? values : [])
+        .map((value) => Number(value || 0))
+        .filter(Boolean)
+        .sort((left, right) => left - right)
+        .join(',');
+    }
+
+    function generationControlFingerprint(control = {}) {
+      return [
+        String(control.plan_state || ''),
+        String(control.writing_state || ''),
+        String(control.review_state || ''),
+        String(control.blocking_reason?.code || ''),
+        String(control.next_gate || ''),
+        Number(control.current_chapter || 0),
+        Number(control.next_chapter || 0),
+        Number(control.chapters_until_review || 0),
+        Number(control.chapters_until_replan_eligible || 0),
+        control.can_resume ? '1' : '0',
+        numberListFingerprint(control.accepted_chapters),
+        numberListFingerprint(control.drafted_chapters),
+        numberListFingerprint(control.generated_chapters),
+        numberListFingerprint(control.pending_review_chapters),
+        numberListFingerprint(control.failed_chapters),
+      ].join('|');
+    }
+
+    function bookListFingerprint(books = []) {
+      return (Array.isArray(books) ? books : []).map((book) => [
+        String(book.id || ''),
+        String(book.updated_at || ''),
+        String(book.creation_status || ''),
+        String(book.title || ''),
+        Number(book.chapter_count || 0),
+        Number(book.needs_review_chapter_count || 0),
+        Number(book.target_total_chapters || 0),
+        generationControlFingerprint(book.generation_control || {}),
+      ].join('|')).join('\n');
+    }
+
+    function taskCenterFingerprint(items = []) {
+      return (Array.isArray(items) ? items : []).map((item) => [
+        String(item.task_kind || ''),
+        String(item.task_id || ''),
+        String(item.project_id || ''),
+        String(item.status || ''),
+        String(item.updated_at || ''),
+        String(item.current_stage || ''),
+        Number(item.current_chapter || 0),
+        String(item.message || ''),
+        String(item.error || ''),
+        numberListFingerprint(item.completed_chapters),
+        numberListFingerprint(item.paused_chapters),
+        numberListFingerprint(item.failed_chapters),
+        generationControlFingerprint(item.generation_control || {}),
+      ].join('|')).join('\n');
+    }
+
+    function taskCenterBookImpactFingerprint(items = []) {
+      return (Array.isArray(items) ? items : [])
+        .filter((item) => item?.task_kind === 'generation' && item?.project_id)
+        .map((item) => [
+          String(item.project_id || ''),
+          String(item.status || ''),
+          String(item.current_stage || ''),
+          Number(item.current_chapter || 0),
+          numberListFingerprint(item.completed_chapters),
+          numberListFingerprint(item.paused_chapters),
+          numberListFingerprint(item.failed_chapters),
+          generationControlFingerprint(item.generation_control || {}),
+        ].join('|'))
+        .join('\n');
     }
 
     async function runGenesisAction(fn, busyMessage = 'Genesis 正在执行上一条操作，请稍候。') {
@@ -613,14 +695,25 @@
     }
 
     function switchTab(tab) {
-      const bookActive = tab === 'book';
-      const taskActive = tab === 'task';
+      currentHomeTab = ['book', 'task', 'config'].includes(tab) ? tab : 'book';
+      const bookActive = currentHomeTab === 'book';
+      const taskActive = currentHomeTab === 'task';
       document.getElementById('tab_book').classList.toggle('active', bookActive);
       document.getElementById('tab_task').classList.toggle('active', taskActive);
-      document.getElementById('tab_config').classList.toggle('active', tab === 'config');
+      document.getElementById('tab_config').classList.toggle('active', currentHomeTab === 'config');
       document.getElementById('panel_book').classList.toggle('active', bookActive);
       document.getElementById('panel_task').classList.toggle('active', taskActive);
-      document.getElementById('panel_config').classList.toggle('active', tab === 'config');
+      document.getElementById('panel_config').classList.toggle('active', currentHomeTab === 'config');
+      if (bookActive && booksRefreshPending) {
+        booksRefreshPending = false;
+        void loadBooks();
+      }
+      if (taskActive && !document.getElementById('task_list')?.childNodes.length) {
+        void loadTaskCenter();
+      }
+      if (currentHomeTab === 'config') {
+        void loadPlatforms();
+      }
     }
 
     function badgeKindByStatus(status) {

@@ -1063,6 +1063,7 @@ def get_chapter_review(
             latest_repair_scope=(
                 str(rewrite_attempts[0].repair_scope or "") if rewrite_attempts else ""
             ),
+            latest_repair_scope_reason=str(review_meta.get("scope_reason") or ""),
             forced_accept_applied=bool(review_meta.get("forced_accept_applied")),
             decision_refs=decision_refs,
         )

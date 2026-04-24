@@ -47,6 +47,29 @@
       margin:0 auto;
       padding:24px 22px 72px;
     }
+    .global-nav {
+      display:flex;
+      align-items:center;
+      gap:8px;
+      margin-bottom:16px;
+      font:700 13px/1 var(--ui);
+    }
+    .global-nav a {
+      display:inline-flex;
+      align-items:center;
+      min-height:36px;
+      padding:0 14px;
+      border:1px solid rgba(109,98,85,.14);
+      border-radius:999px;
+      background:rgba(255,255,255,.62);
+      color:var(--muted);
+      text-decoration:none;
+    }
+    .global-nav a[aria-current="page"] {
+      border-color:rgba(178,75,49,.28);
+      background:linear-gradient(135deg, rgba(178,75,49,.14), rgba(31,91,84,.1));
+      color:var(--ink);
+    }
     .masthead {
       display:flex;
       justify-content:space-between;
@@ -207,6 +230,19 @@
     .list {
       display:grid;
       gap:12px;
+    }
+    .code-box {
+      width:100%;
+      min-height:360px;
+      margin:16px 0 0;
+      padding:14px;
+      overflow:auto;
+      border:1px solid rgba(31,91,84,.18);
+      border-radius:12px;
+      background:rgba(255,255,255,.72);
+      color:var(--ink);
+      font:500 13px/1.55 "SFMono-Regular","Consolas","Liberation Mono",monospace;
+      white-space:pre-wrap;
     }
     .list-item {
       border:1px solid rgba(204,177,147,.44);

@@ -29,6 +29,7 @@ from forwin import (
     api_governance_ops,
     api_governance_routes,
     api_governance_support,
+    api_observability_routes,
     api_project_ops,
     api_project_routes,
     api_publisher_ops,
@@ -186,6 +187,7 @@ from forwin.skills import build_skill_runtime_components
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
 from forwin.writer.llm_client import LLMClient
+from forwin.llm.factory import maybe_wrap_with_codex_router
 
 logger = logging.getLogger(__name__)
 
@@ -354,6 +356,7 @@ def _build_genesis_service(
     )
     setattr(llm_client, "profile_id", resolved_profile.get("id", ""))
     setattr(llm_client, "profile_name", resolved_profile.get("name", ""))
+    llm_client = maybe_wrap_with_codex_router(llm_client, resolved)
     _registry, router, prompt_layer_builder = build_skill_runtime_components(
         root=resolved.skill_registry_path,
         enabled=resolved.skill_runtime_enabled,
@@ -724,7 +727,7 @@ def _prune_generation_tasks_db(now: datetime | None = None) -> None:
     _run_generation_task_db_write(_operation, context="generation_task_prune", attempts=2, delay=0.15)
 
 
-def _prune_tasks() -> None:
+def _prune_tasks(*, include_db: bool = True) -> None:
     now = _utcnow()
     with _tasks_lock:
         stale_ids = [
@@ -739,7 +742,8 @@ def _prune_tasks() -> None:
         for task_id in stale_ids:
             _tasks.pop(task_id, None)
 
-    _prune_generation_tasks_db(now)
+    if include_db:
+        _prune_generation_tasks_db(now)
 
 
 def _load_generation_task(task_id: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
@@ -1358,7 +1362,7 @@ def _task_should_pause(task_id: str) -> bool:
 
 
 def _get_generation_task_or_404(task_id: str) -> dict[str, Any]:
-    _prune_tasks()
+    _prune_tasks(include_db=False)
     task = _load_generation_task(task_id)
     if task is None or task.get("deleted"):
         raise HTTPException(404, "任务不存在")
@@ -1530,14 +1534,34 @@ def _project_has_active_generation_task(project_id: str, *, session=None) -> boo
         return False
 
     if session is not None:
-        active_task_id = session.execute(
+        active_task_ids = session.execute(
             select(GenerationTask.id).where(
                 GenerationTask.deleted_at.is_(None),
                 GenerationTask.project_id == normalized_project_id,
                 GenerationTask.status.notin_(tuple(_GENERATION_TERMINAL_STATUSES)),
-            ).limit(1)
-        ).scalar_one_or_none()
-        return active_task_id is not None
+            )
+        ).scalars().all()
+        for task_id in active_task_ids:
+            cached = _cached_generation_task(str(task_id))
+            if cached is not None:
+                if cached.get("deleted"):
+                    continue
+                if _task_is_terminal(str(cached.get("status", "")).strip()):
+                    continue
+            return True
+        with _tasks_lock:
+            cached_tasks = list(_tasks.values())
+        for task in cached_tasks:
+            if task.get("deleted"):
+                continue
+            if str(task.get("task_kind", "generation")) != "generation":
+                continue
+            if str(task.get("project_id", "") or "").strip() != normalized_project_id:
+                continue
+            if _task_is_terminal(str(task.get("status", "")).strip()):
+                continue
+            return True
+        return False
     with _get_session() as managed_session:
         return _project_has_active_generation_task(
             normalized_project_id,
@@ -1920,7 +1944,7 @@ def _stop_automation_scheduler() -> None:
 
 
 def _list_generation_tasks(limit: int) -> list[tuple[str, dict[str, Any]]]:
-    _prune_tasks()
+    _prune_tasks(include_db=False)
     normalized_limit = max(1, min(int(limit or 30), 100))
     if _SessionFactory is None:
         with _tasks_lock:
@@ -2088,6 +2112,20 @@ app.add_middleware(
 # Endpoints
 # ---------------------------------------------------------------------------
 
+_observability_handlers = api_observability_routes.build_handlers(
+    get_config=lambda: _config,
+    get_session=_get_session,
+    list_decision_event_rows=lambda session, **kwargs: _list_decision_event_rows(session, **kwargs),
+    serialize_decision_event=lambda row: _serialize_decision_event(row),
+    display_datetime=_display_datetime,
+    json_load_object=lambda raw: _json_load_object(raw),
+    json_load_list=lambda raw: _json_load_list(raw),
+)
+get_task_timeline = _observability_handlers["get_task_timeline"]
+get_chapter_observability_ledger = _observability_handlers["get_chapter_observability_ledger"]
+get_prompt_trace_detail = _observability_handlers["get_prompt_trace_detail"]
+read_artifact_preview = _observability_handlers["read_artifact_preview"]
+
 globals().update(
     api_route_registry.register_api_routes(
         app,
@@ -2147,5 +2185,9 @@ globals().update(
         latest_band_checkpoint_row=lambda session, *, project_id, band_id='': _latest_band_checkpoint_row(session, project_id=project_id, band_id=band_id),
         persist_project_governance=lambda session, project, governance: _persist_project_governance(session, project, governance),
         json_load_object=lambda raw: _json_load_object(raw),
+        get_task_timeline=get_task_timeline,
+        get_chapter_observability_ledger=get_chapter_observability_ledger,
+        get_prompt_trace_detail=get_prompt_trace_detail,
+        read_artifact_preview=read_artifact_preview,
     )
 )

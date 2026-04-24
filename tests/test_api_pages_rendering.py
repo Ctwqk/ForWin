@@ -51,6 +51,10 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("task_generation_min_chapter_chars", html)
         self.assertIn("task_generation_progression_mode", html)
         self.assertIn("task_generation_auto_band_checkpoint", html)
+        self.assertIn("tab_world_v4", html)
+        self.assertIn("panel_world_v4", html)
+        self.assertIn("world_v4_debug_output", html)
+        self.assertIn("loadWorldModelV4Debug", html)
         self.assertIn("saveProjectGovernanceFromDrawer", html)
         self.assertIn("renderDecisionTimeline", html)
         self.assertIn("renderCausalReplayCard", html)
@@ -154,6 +158,11 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("Arc 蓝图默认仍沿用自动生成", html)
         self.assertIn("const loc = Array.isArray(item.loc) ? item.loc.join('.') : '';", html)
         self.assertIn("JSON.stringify(detail, null, 2)", html)
+        self.assertIn("/world-studio", html)
+        self.assertIn("World Studio", html)
+        self.assertIn('aria-label="ForWin primary navigation"', html)
+        self.assertIn('aria-current="page">创作台</a>', html)
+        self.assertIn('href="/world-studio">World Studio</a>', html)
         self.assertNotIn("第${chapter.chapter_number}章 ${chapter.status}", html)
 
     def test_home_page_renders_javascript_that_passes_node_syntax_check(self) -> None:
@@ -173,6 +182,9 @@ class ApiPagesRenderingTests(unittest.TestCase):
             extension_install_path="browser_extension/forwin-publisher",
         )
 
+        self.assertIn("browser_extension/forwin-publisher", html)
+        self.assertNotIn("{extension_install_path}", html)
+        self.assertNotIn("@@EXTENSION_INSTALL_PATH@@", html)
         self._assert_rendered_inline_scripts_parse(html)
 
 

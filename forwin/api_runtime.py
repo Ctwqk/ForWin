@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Callable
 
 from forwin.api_schemas import GenerateRequest
 from forwin.config import Config, DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
+from forwin.governance import DecisionEventType
+from forwin.observability import LogRecorder, OperationContext
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.runtime_settings import RuntimeSettingsStore
+from forwin.state.updater import StateUpdater
 
 
 TaskUpdater = Callable[..., None]
@@ -328,6 +332,61 @@ def build_saved_runtime_config(
     )
 
 
+def _record_task_observability_event(
+    orchestrator: WritingOrchestrator,
+    *,
+    task_id: str,
+    project_id: str | None,
+    event_type: str,
+    summary: str,
+    payload: dict[str, Any] | None = None,
+    exc: BaseException | None = None,
+) -> None:
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_project_id:
+        return
+    session_factory = getattr(orchestrator, "_SessionFactory", None)
+    if session_factory is None:
+        return
+    session = session_factory()
+    try:
+        updater = StateUpdater(session)
+        recorder = LogRecorder(updater=updater)
+        context = OperationContext(
+            project_id=normalized_project_id,
+            task_id=task_id,
+            stage=str((payload or {}).get("stage") or ""),
+        )
+        if exc is not None:
+            recorder.record_error(
+                context,
+                event_type=event_type,
+                summary=summary,
+                exc=exc,
+                payload=payload or {},
+                scope="task",
+                related_object_type="generation_task",
+                related_object_id=task_id,
+            )
+        else:
+            recorder.record_event(
+                context,
+                event_family="runtime_observation",
+                event_type=event_type,
+                summary=summary,
+                scope="task",
+                payload=payload or {},
+                related_object_type="generation_task",
+                related_object_id=task_id,
+            )
+        session.commit()
+    except Exception:  # noqa: BLE001
+        session.rollback()
+        logging.getLogger(__name__).debug("Ignoring task observability event failure.", exc_info=True)
+    finally:
+        session.close()
+
+
 def run_orchestrator_task(
     task_id: str,
     orchestrator: WritingOrchestrator,
@@ -342,10 +401,21 @@ def run_orchestrator_task(
     should_abort: Callable[[], bool] | None = None,
     should_pause: Callable[[], bool] | None = None,
 ) -> None:
+    started_at = time.perf_counter()
+    observed_project_id = default_project_id
     try:
         if not (should_abort and should_abort()):
             update_task(task_id, status="running")
+        _record_task_observability_event(
+            orchestrator,
+            task_id=task_id,
+            project_id=observed_project_id,
+            event_type=DecisionEventType.TASK_OPERATION_STARTED,
+            summary="生成任务 operation 已开始。",
+            payload={"status_after": "running"},
+        )
         result = operation()
+        observed_project_id = str(getattr(result, "project_id", "") or observed_project_id or "").strip()
         update_task(
             task_id,
             status=result.status,
@@ -353,6 +423,19 @@ def run_orchestrator_task(
             failed_chapters=result.failed_chapters,
             paused_chapters=result.paused_chapters,
             frozen_artifacts=result.frozen_artifacts,
+        )
+        _record_task_observability_event(
+            orchestrator,
+            task_id=task_id,
+            project_id=observed_project_id,
+            event_type=DecisionEventType.TASK_OPERATION_SUCCEEDED,
+            summary="生成任务 operation 已完成。",
+            payload={
+                "status_after": result.status,
+                "duration_ms": max(0, int((time.perf_counter() - started_at) * 1000)),
+                "failed_chapters": list(getattr(result, "failed_chapters", []) or []),
+                "paused_chapters": list(getattr(result, "paused_chapters", []) or []),
+            },
         )
         if progress_handler is not None:
             progress_handler(result)
@@ -363,6 +446,19 @@ def run_orchestrator_task(
                 logger.exception("Post-completion handler failed for task %s", task_id)
     except Exception as exc:
         logger.exception("%s for task %s", error_message, task_id)
+        observed_project_id = str(getattr(exc, "project_id", observed_project_id) or observed_project_id or "").strip()
+        _record_task_observability_event(
+            orchestrator,
+            task_id=task_id,
+            project_id=observed_project_id,
+            event_type=DecisionEventType.TASK_OPERATION_FAILED,
+            summary=error_message,
+            payload={
+                "status_after": "failed",
+                "duration_ms": max(0, int((time.perf_counter() - started_at) * 1000)),
+            },
+            exc=exc,
+        )
         update_task(
             task_id,
             status="failed",
@@ -371,8 +467,24 @@ def run_orchestrator_task(
             message=error_message,
         )
     finally:
-        orchestrator.llm_client.close()
-        orchestrator.engine.dispose()
+        _record_task_observability_event(
+            orchestrator,
+            task_id=task_id,
+            project_id=observed_project_id,
+            event_type=DecisionEventType.TASK_CLEANUP_STARTED,
+            summary="生成任务 cleanup 已开始。",
+        )
+        try:
+            orchestrator.llm_client.close()
+            orchestrator.engine.dispose()
+        finally:
+            _record_task_observability_event(
+                orchestrator,
+                task_id=task_id,
+                project_id=observed_project_id,
+                event_type=DecisionEventType.TASK_CLEANUP_FINISHED,
+                summary="生成任务 cleanup 已结束。",
+            )
 
 
 def run_generation_with_config(

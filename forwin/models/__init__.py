@@ -17,6 +17,7 @@ from .phase import (
     ProvisionalChapterLedger,
     ProvisionalBandExecution,
     ProvisionalPromotionRecord,
+    WorldProjectionDeltaRow,
 )
 from .phase4 import NPCIntentSnapshot, WorldSimulationTurn
 from .publisher import (
@@ -38,6 +39,29 @@ from .subworld import SubWorld, SubWorldRosterItem
 from .task import GenerationTask
 from .thread import PlotThread, PlotThreadBeat
 from .timeline import ChapterTimeline, StoryTimePoint
+from .world_model import (
+    WorldEditProposalRow,
+    WorldModelCompileRunRow,
+    WorldModelConflictRow,
+    WorldModelLinkRow,
+    WorldModelPageRow,
+    WorldModelSnapshotRow,
+)
+from .world_v4 import (
+    ArcWorldContractRow,
+    BandWorldContractRow,
+    BeliefRow,
+    ChapterWorldDeltaIntentRow,
+    CognitionSnapshotRow,
+    KnowledgeGapRow,
+    KnowledgeUpdateEventRow,
+    ReaderExperienceDeltaRow,
+    RevealEventRow,
+    WorldCompileRunV4Row,
+    WorldDeltaRow,
+    WorldLineRow,
+    WorldModelSnapshotV4Row,
+)
 
 __all__ = [
     "Base",
@@ -75,6 +99,7 @@ __all__ = [
     "ProvisionalChapterLedger",
     "ProvisionalBandExecution",
     "ProvisionalPromotionRecord",
+    "WorldProjectionDeltaRow",
     "NPCIntentSnapshot",
     "WorldSimulationTurn",
     # thread
@@ -86,6 +111,12 @@ __all__ = [
     # draft
     "ChapterDraft",
     "ChapterReview",
+    "WorldModelSnapshotRow",
+    "WorldModelPageRow",
+    "WorldModelLinkRow",
+    "WorldEditProposalRow",
+    "WorldModelConflictRow",
+    "WorldModelCompileRunRow",
     # publisher
     "CommentSignalCandidate",
     "FeedbackActionRecord",
@@ -99,4 +130,18 @@ __all__ = [
     "PublisherRawComment",
     "ReaderScaleSnapshot",
     "SignalWindowAggregate",
+    # world v4
+    "WorldLineRow",
+    "WorldDeltaRow",
+    "BeliefRow",
+    "CognitionSnapshotRow",
+    "KnowledgeGapRow",
+    "RevealEventRow",
+    "KnowledgeUpdateEventRow",
+    "ReaderExperienceDeltaRow",
+    "WorldModelSnapshotV4Row",
+    "WorldCompileRunV4Row",
+    "ArcWorldContractRow",
+    "BandWorldContractRow",
+    "ChapterWorldDeltaIntentRow",
 ]

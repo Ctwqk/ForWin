@@ -8,7 +8,12 @@ from forwin.governance_checks import (
     evaluate_task_contract,
 )
 from forwin.protocol.context import ChapterContextPack
-from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
+from forwin.protocol.review import (
+    ContinuityIssue,
+    RepairInstruction,
+    ReviewVerdict,
+    normalize_repair_scope,
+)
 from forwin.protocol.writer import WriterOutput
 from forwin.skills import serialize_prompt_layers
 from .context_builder import build_review_context_pack
@@ -215,6 +220,27 @@ class HistoricalReviewHub:
             )
         return [item for item in payload if item["id"]]
 
+    def choose_repair_escalation(
+        self,
+        *,
+        repo=None,
+        context: ChapterContextPack,
+        writer_output: WriterOutput,
+        review: ReviewVerdict,
+        repair_attempts: list[dict[str, object]] | None = None,
+    ) -> RepairInstruction:
+        review_context = build_review_context_pack(
+            repo=repo,
+            context=context,
+            lint_signals=review.lint_signals,
+        )
+        return self.experience_reviewer.choose_repair_escalation(
+            context=review_context,
+            writer_output=writer_output,
+            review=review,
+            repair_attempts=repair_attempts or [],
+        )
+
     @staticmethod
     def _issues_verdict(issues: list[ContinuityIssue]) -> str:
         if any(issue.severity == "error" for issue in issues):
@@ -295,6 +321,7 @@ class HistoricalReviewHub:
                 context.chapter_plan_one_line,
                 *(context.chapter_goals[:2]),
             ],
+            scope_reason="continuity rule break needs local repair first",
             design_patch={
                 "continuity_focus": [issue.rule_name for issue in continuity_issues if issue.severity == "error"],
             },
@@ -316,6 +343,7 @@ class HistoricalReviewHub:
                 context.chapter_plan_one_line,
                 *(context.chapter_goals[:2]),
             ],
+            scope_reason="governance issues should start with local repair",
             design_patch={
                 "governance_focus": [issue.rule_name for issue in governance_issues],
             },
@@ -337,16 +365,30 @@ class HistoricalReviewHub:
         if base_instruction is None:
             return webnovel_instruction
 
-        scope_rank = {"draft": 1, "chapter_plan": 2, "band_plan": 3}
+        scope_rank = {
+            "draft": 1,
+            "scene": 1,
+            "chapter_plan": 2,
+            "chapter": 2,
+            "band": 2,
+            "band_plan": 3,
+            "arc": 3,
+            "world_model": 4,
+        }
         merged_scope = max(
             [base_instruction.repair_scope, webnovel_instruction.repair_scope],
             key=lambda item: scope_rank.get(item, 1),
+        )
+        merged_scope = normalize_repair_scope(
+            merged_scope,
+            preserve_v4=(merged_scope == "world_model"),
         )
         merged_failure_type = (
             base_instruction.failure_type
             if base_instruction.failure_type == webnovel_instruction.failure_type
             else "mixed"
         )
+        merged_scope = "band" if merged_scope == "arc" else merged_scope
         merged_design_patch = dict(base_instruction.design_patch)
         for key, value in webnovel_instruction.design_patch.items():
             if key in merged_design_patch and isinstance(merged_design_patch[key], list) and isinstance(value, list):
@@ -360,6 +402,10 @@ class HistoricalReviewHub:
             failure_type=merged_failure_type,
             must_fix=list(dict.fromkeys([*base_instruction.must_fix, *webnovel_instruction.must_fix])),
             must_preserve=list(dict.fromkeys([*base_instruction.must_preserve, *webnovel_instruction.must_preserve])),
+            scope_reason=(
+                webnovel_instruction.scope_reason
+                or base_instruction.scope_reason
+            ),
             design_patch=merged_design_patch,
             evidence_refs=list(dict.fromkeys([*base_instruction.evidence_refs, *webnovel_instruction.evidence_refs])),
         )

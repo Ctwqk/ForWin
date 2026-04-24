@@ -231,6 +231,10 @@ class StateUpdater:
         model_profile_json: str = "{}",
         attempts_json: str = "[]",
         output_summary_json: str = "{}",
+        backend: str = "",
+        codex_job_id: str = "",
+        permission_profile: str = "",
+        fallback_used: bool = False,
     ) -> PromptTrace:
         row = PromptTrace(
             id=new_id(),
@@ -248,6 +252,10 @@ class StateUpdater:
             model_profile_json=str(model_profile_json or "{}"),
             attempts_json=str(attempts_json or "[]"),
             output_summary_json=str(output_summary_json or "{}"),
+            backend=str(backend or ""),
+            codex_job_id=str(codex_job_id or ""),
+            permission_profile=str(permission_profile or ""),
+            fallback_used=bool(fallback_used),
         )
         self.session.add(row)
         self.session.flush()

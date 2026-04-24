@@ -55,6 +55,8 @@ from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.phase import ArcStructureDraft, BandExperiencePlan
+from forwin.extractor.world_v4 import WorldDeltaExtractor
+from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.experience import ArcPayoffMap, BandDelightSchedule, ChapterExperiencePlan
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.orchestrator.phase3 import (
@@ -74,6 +76,7 @@ from forwin.orchestrator.phase24 import ArcEnvelopeManager, ProvisionalBandPrevi
 from forwin.retrieval import RetrievalBroker, create_memory_index
 from forwin.reviser import FinalAcceptanceGate, RepairPolicy, RepairVerifier
 from forwin.reviewer import HistoricalReviewHub
+from forwin.reviewer_v4 import V4ReviewGate
 from forwin.skills import build_skill_runtime_components
 from forwin.state.repo import StateRepository
 from forwin.state.schema import KNOWN_STATE_FIELDS
@@ -81,8 +84,11 @@ from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
 from forwin.subworld_manager import SubWorldManager
 from forwin.protocol.writer import WriterOutput
+from forwin.world_model_v4.compiler import WorldModelCompiler as WorldModelCompilerV4
 from forwin.writer.chapter_writer import ChapterWriter
 from forwin.writer.llm_client import LLMClient
+from forwin.llm.factory import maybe_wrap_with_codex_router
+from forwin.world_model.compiler import WorldModelCompiler as LegacyWorldModelCompiler
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +183,7 @@ class WritingOrchestrator:
             retry_max_delay_seconds=self.config.llm_retry_max_delay_seconds,
             fallback_profiles=self.config.llm_fallback_profiles,
         )
+        self.llm_client = maybe_wrap_with_codex_router(self.llm_client, self.config)
         (
             self.skill_registry,
             self.skill_router,
@@ -282,11 +289,8 @@ class WritingOrchestrator:
             director=self.arc_director,
             subworld_manager=self.subworld_manager,
         )
-        phase4_llm = (
-            self.llm_client
-            if self.config.phase4_use_llm and bool(self.config.minimax_api_key)
-            else None
-        )
+        llm_available = bool(self.config.minimax_api_key) or bool(getattr(self.config, "codex_enabled", False))
+        phase4_llm = self.llm_client if self.config.phase4_use_llm and llm_available else None
         self.npc_intent_generator = NPCIntentGenerator(
             llm_client=phase4_llm,
             active_thread_limit=self.config.phase_active_thread_limit,
@@ -303,15 +307,15 @@ class WritingOrchestrator:
         self.review_hub = HistoricalReviewHub(
             experience_review_enabled=self.config.experience_review_enabled,
             lint_review_enabled=self.config.lint_review_enabled,
-            llm_client=self.llm_client if bool(self.config.minimax_api_key) else None,
-            llm_enabled=bool(self.config.minimax_api_key),
+            llm_client=self.llm_client if llm_available else None,
+            llm_enabled=llm_available,
         )
         self.repair_policy = RepairPolicy(
             max_attempts=max(1, min(3, int(self.config.review_fail_max_rewrites or 3)))
         )
         self.repair_verifier = RepairVerifier(
-            llm_client=self.llm_client if bool(self.config.minimax_api_key) else None,
-            llm_enabled=bool(self.config.minimax_api_key),
+            llm_client=self.llm_client if llm_available else None,
+            llm_enabled=llm_available,
         )
         self.final_acceptance_gate = FinalAcceptanceGate()
 
@@ -1119,6 +1123,12 @@ class WritingOrchestrator:
                 project_id=project_id,
                 chapter_number=chapter_number,
             )
+            self._compile_world_model_after_acceptance(
+                session=session,
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+            )
             self._record_decision_event(
                 updater=updater,
                 project_id=project_id,
@@ -1702,6 +1712,10 @@ class WritingOrchestrator:
             model_profile_json=json.dumps(payload.get("model_profile", {}), ensure_ascii=False),
             attempts_json=json.dumps(payload.get("attempts", []), ensure_ascii=False),
             output_summary_json=json.dumps(payload.get("output_summary", {}), ensure_ascii=False),
+            backend=str(payload.get("backend", "") or ""),
+            codex_job_id=str(payload.get("codex_job_id", "") or ""),
+            permission_profile=str(payload.get("permission_profile", "") or ""),
+            fallback_used=bool(payload.get("fallback_used", False)),
         )
         return row.id
 
@@ -1720,6 +1734,20 @@ class WritingOrchestrator:
             project_id=project_id,
             chapter_number=chapter_number,
             writer_output=writer_output,
+        )
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.WRITER_OUTPUT_ARTIFACT_SAVED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 writer output artifact 已保存。",
+            payload={
+                "draft_blob_path": artifact_paths.get("draft_blob_path", ""),
+                "artifact_meta_path": artifact_paths.get("meta_path", ""),
+                "char_count": int(getattr(writer_output, "char_count", 0) or 0),
+            },
         )
         persisted_output = artifact_paths["writer_output"].model_copy(
             update={
@@ -2841,6 +2869,34 @@ class WritingOrchestrator:
                 context = self.retrieval_broker.build_chapter_context(
                     repo, project_id, chapter_plan
                 )
+                context_summary = dict(
+                    getattr(self.retrieval_broker, "last_observability_summary", {}) or {}
+                )
+                if context_summary:
+                    self._record_decision_event(
+                        updater=updater,
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                        event_family="runtime_observation",
+                        event_type=DecisionEventType.CONTEXT_ASSEMBLED,
+                        scope="chapter",
+                        summary=f"第{chapter_num}章 context 已组装。",
+                        payload=context_summary,
+                    )
+                    if any(
+                        int(context_summary.get(key) or 0) > 0
+                        for key in ("pruned_entities", "pruned_threads", "pruned_relations")
+                    ):
+                        self._record_decision_event(
+                            updater=updater,
+                            project_id=project_id,
+                            chapter_number=chapter_num,
+                            event_family="runtime_observation",
+                            event_type=DecisionEventType.CONTEXT_PRUNED,
+                            scope="chapter",
+                            summary=f"第{chapter_num}章 context 已按 budget 裁剪。",
+                            payload=context_summary,
+                        )
 
                 if self._abort_requested():
                     return self._cancelled_result(
@@ -3188,6 +3244,25 @@ class WritingOrchestrator:
                     project_id=project_id,
                     chapter_number=chapter_num,
                 )
+                world_model_ok = self._compile_world_model_after_acceptance(
+                    session=session,
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                )
+                if not world_model_ok:
+                    session.commit()
+                    completed_with_current = [*completed_chapters, chapter_num]
+                    paused_chapters.append(chapter_num)
+                    return self._paused_result(
+                        project_id,
+                        requested_chapters,
+                        completed_chapters=completed_with_current,
+                        failed_chapters=failed_chapters,
+                        paused_chapters=paused_chapters,
+                        frozen_artifacts=frozen_artifacts,
+                        current_chapter=chapter_num,
+                    )
                 checkpoint_pause = False
                 if bool(governance.auto_band_checkpoint):
                     try:
@@ -3393,6 +3468,8 @@ class WritingOrchestrator:
     ) -> WriterOutput | None:
         max_attempts = max(1, int(self.config.blackbox_writer_attention_retries))
         last_error: Exception | None = None
+        last_failure_event_id = ""
+        last_failed_attempt = 0
         saw_transient_error = False
         writer_skill_layers = self._select_skill_layers(
             scope="writer",
@@ -3468,6 +3545,25 @@ class WritingOrchestrator:
                         "duration_ms": duration_ms,
                     },
                 )
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.WRITER_OUTPUT_BUILT,
+                    scope="chapter",
+                    summary=f"第{chapter_number}章 writer output 已生成。",
+                    payload={
+                        "stage": "writing_chapter",
+                        "duration_ms": duration_ms,
+                        "char_count": int(getattr(output, "char_count", 0) or 0),
+                        "mode": str((getattr(output, "generation_meta", {}) or {}).get("mode") or ""),
+                        "scene_count": len(getattr(output, "scene_outputs", []) or []),
+                        "state_changes_count": len(getattr(output, "state_changes", []) or []),
+                        "events_count": len(getattr(output, "new_events", []) or []),
+                        "thread_beats_count": len(getattr(output, "thread_beats", []) or []),
+                    },
+                )
                 return output
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
@@ -3488,7 +3584,7 @@ class WritingOrchestrator:
                     max_attempts,
                     exc,
                 )
-                self._record_decision_event(
+                failure_event = self._record_decision_event(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -3508,6 +3604,8 @@ class WritingOrchestrator:
                         "stage": "writing_chapter",
                     },
                 )
+                last_failure_event_id = str(getattr(failure_event, "id", "") or "")
+                last_failed_attempt = attempt
                 if self._is_timeout_like(exc):
                     logger.warning(
                         "Writer timeout detected for chapter %d; skipping extra retries.",
@@ -3542,6 +3640,26 @@ class WritingOrchestrator:
                     )
                     time.sleep(delay)
         if last_error is not None:
+            preview_started_at = time.perf_counter()
+            preview_max_attempts = 3 if saw_transient_error else 2
+            preview_started_event = self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.WRITER_PREVIEW_FALLBACK_STARTED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 writer preview fallback 已开始。",
+                parent_event_id=last_failure_event_id,
+                payload={
+                    "stage": "chapter_preview_fallback",
+                    "source_error_class": last_error.__class__.__name__,
+                    "source_error_message": str(last_error),
+                    "source_attempt_no": last_failed_attempt,
+                    "max_attempts": preview_max_attempts,
+                    "timeout_seconds": self.writer.scene_call_timeout_seconds,
+                },
+            )
             try:
                 preview_output = self._call_with_compatible_kwargs(
                     self.writer.write_preview_chapter,
@@ -3549,7 +3667,7 @@ class WritingOrchestrator:
                     skill_layers=writer_skill_layers,
                     trace_stage_key=trace_stage_key,
                     timeout_seconds=self.writer.scene_call_timeout_seconds,
-                    max_attempts=3 if saw_transient_error else 2,
+                    max_attempts=preview_max_attempts,
                     retry_on_timeout=True,
                 )
                 preview_output.generation_meta.update(
@@ -3558,6 +3676,29 @@ class WritingOrchestrator:
                         "writer_fallback_error": str(last_error),
                     }
                 )
+                fallback_summary = self._prompt_trace_success_summary(preview_output)
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.WRITER_PREVIEW_FALLBACK_SUCCEEDED,
+                    scope="chapter",
+                    summary=f"第{chapter_number}章 writer preview fallback 成功。",
+                    parent_event_id=last_failure_event_id,
+                    payload={
+                        "stage": "chapter_preview_fallback",
+                        "source_error_class": last_error.__class__.__name__,
+                        "source_error_message": str(last_error),
+                        "source_attempt_no": last_failed_attempt,
+                        "fallback_attempt_no": fallback_summary.get("successful_attempt_no", 0),
+                        "max_attempts": preview_max_attempts,
+                        "timeout_seconds": self.writer.scene_call_timeout_seconds,
+                        "duration_ms": max(0, int((time.perf_counter() - preview_started_at) * 1000)),
+                        "char_count": int(getattr(preview_output, "char_count", 0) or 0),
+                        **fallback_summary,
+                    },
+                )
                 logger.warning(
                     "Writer preview fallback succeeded for chapter %d after writer failure: %s",
                     chapter_number,
@@ -3565,6 +3706,27 @@ class WritingOrchestrator:
                 )
                 return preview_output
             except Exception as preview_exc:  # noqa: BLE001
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.WRITER_PREVIEW_FALLBACK_FAILED,
+                    scope="chapter",
+                    summary=f"第{chapter_number}章 writer preview fallback 失败。",
+                    parent_event_id=str(getattr(preview_started_event, "id", "") or last_failure_event_id),
+                    payload={
+                        "stage": "chapter_preview_fallback",
+                        "source_error_class": last_error.__class__.__name__,
+                        "source_error_message": str(last_error),
+                        "source_attempt_no": last_failed_attempt,
+                        "max_attempts": preview_max_attempts,
+                        "timeout_seconds": self.writer.scene_call_timeout_seconds,
+                        "duration_ms": max(0, int((time.perf_counter() - preview_started_at) * 1000)),
+                        "error_class": preview_exc.__class__.__name__,
+                        "error_message": str(preview_exc),
+                    },
+                )
                 logger.warning(
                     "Writer preview fallback failed for chapter %d: %s",
                     chapter_number,
@@ -3688,7 +3850,32 @@ class WritingOrchestrator:
         writer_output: WriterOutput,
         verdict: ReviewVerdict,
     ) -> str | None:
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.CANON_COMMIT_STARTED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 canon 写入开始。",
+            payload={
+                "state_changes_count": len(getattr(writer_output, "state_changes", []) or []),
+                "events_count": len(getattr(writer_output, "new_events", []) or []),
+                "thread_beats_count": len(getattr(writer_output, "thread_beats", []) or []),
+            },
+        )
         try:
+            v4_blocked_path = self._apply_world_v4_gate(
+                session=session,
+                repo=repo,
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                writer_output=writer_output,
+                verdict=verdict,
+            )
+            if v4_blocked_path:
+                return v4_blocked_path
             self._validate_subworld_admission(
                 repo=repo,
                 project_id=project_id,
@@ -3756,6 +3943,130 @@ class WritingOrchestrator:
             )
             session.rollback()
             return frozen_path or None
+
+    @staticmethod
+    def _prompt_trace_success_summary(writer_output: WriterOutput) -> dict[str, object]:
+        generation_meta = getattr(writer_output, "generation_meta", {}) or {}
+        prompt_trace = generation_meta.get("prompt_trace") if isinstance(generation_meta, dict) else {}
+        attempts = prompt_trace.get("attempts", []) if isinstance(prompt_trace, dict) else []
+        if not isinstance(attempts, list):
+            attempts = []
+        successful = None
+        for item in attempts:
+            if not isinstance(item, dict):
+                continue
+            if int(item.get("output_chars") or 0) > 0 and not str(item.get("error_class") or ""):
+                successful = item
+        if successful is None and attempts:
+            successful = next((item for item in reversed(attempts) if isinstance(item, dict)), None)
+        if not isinstance(successful, dict):
+            return {
+                "prompt_trace_id": str(generation_meta.get("prompt_trace_id", "") or ""),
+                "effective_model": "",
+                "effective_profile_id": "",
+                "successful_attempt_no": 0,
+                "attempt_group_id": "",
+                "output_chars": int(getattr(writer_output, "char_count", 0) or 0),
+                "fallback_chain": generation_meta.get("model_fallbacks", []),
+            }
+        return {
+            "prompt_trace_id": str(generation_meta.get("prompt_trace_id", "") or ""),
+            "effective_model": str(successful.get("model") or ""),
+            "effective_profile_id": str(successful.get("profile_id") or ""),
+            "effective_profile_name": str(successful.get("profile_name") or ""),
+            "successful_attempt_no": int(successful.get("attempt_no") or 0),
+            "attempt_group_id": str(successful.get("attempt_group_id") or ""),
+            "output_chars": int(successful.get("output_chars") or getattr(writer_output, "char_count", 0) or 0),
+            "fallback_chain": generation_meta.get("model_fallbacks", []),
+        }
+
+    def _apply_world_v4_gate(
+        self,
+        *,
+        session: Session,
+        repo: StateRepository,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_number: int,
+        writer_output: WriterOutput,
+        verdict: ReviewVerdict,
+    ) -> str | None:
+        chapter_intent = WorldContractRepository(session).get_chapter_intent(
+            project_id,
+            chapter_number,
+        )
+        writer_output_for_v4 = writer_output.model_copy(update={"project_id": project_id})
+        broker = RetrievalBroker()
+        writer_pack = broker.build_world_model_pack(
+            repo,
+            project_id,
+            chapter_number,
+            "writing",
+        )
+        review_pack = broker.build_world_model_pack(
+            repo,
+            project_id,
+            chapter_number,
+            "review",
+        )
+        compiler_pack = broker.build_world_model_pack(
+            repo,
+            project_id,
+            chapter_number,
+            "compiler",
+        )
+        retrieval_pack_payload = {
+            "writing": writer_pack.model_dump(mode="json"),
+            "review": review_pack.model_dump(mode="json"),
+            "compiler": compiler_pack.model_dump(mode="json"),
+        }
+        extracted = WorldDeltaExtractor().extract(
+            writer_output_for_v4,
+            chapter_intent=chapter_intent,
+        )
+        gate_verdict = V4ReviewGate().review(
+            extracted,
+            chapter_intent=chapter_intent,
+            chapter_body=writer_output.body,
+        )
+        compiler_result = WorldModelCompilerV4(session).compile_gate_verdict(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            verdict=gate_verdict,
+            compiler_run_id=f"compile_{project_id}_{chapter_number}",
+            retrieval_pack_payload=retrieval_pack_payload,
+        )
+        if compiler_result.committed:
+            return None
+
+        frozen_path = ""
+        if self.config.freeze_failed_candidates:
+            frozen_path = self.artifact_store.save_frozen_candidate(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                payload={
+                    "reason": "v4-review-gate-blocked",
+                    "chapter_number": chapter_number,
+                    "writer_output": writer_output.model_dump(mode="json"),
+                    "review_verdict": verdict.model_dump(mode="json"),
+                    "v4_review_issues": [
+                        issue.model_dump(mode="json") for issue in gate_verdict.issues
+                    ],
+                    "v4_retrieval_packs": retrieval_pack_payload,
+                    "compiler_result": compiler_result.model_dump(mode="json"),
+                },
+            )
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.CANON_COMMIT_FAILED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 v4 review gate 阻止 canon 写入。",
+            payload={"blocked_reasons": list(compiler_result.blocked_reasons)},
+        )
+        return frozen_path or "v4-review-gate-blocked"
 
     @staticmethod
     def _filter_resolvable_events(
@@ -3926,6 +4237,66 @@ class WritingOrchestrator:
             cooldown_chapters=self.config.feedback_cooldown_chapters,
             comment_to_reader_ratio=self.config.comment_to_reader_ratio,
         )
+
+    def _compile_world_model_after_acceptance(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_number: int,
+    ) -> bool:
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.WORLD_MODEL_COMPILE_STARTED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 WorldModel compile 开始。",
+        )
+        try:
+            snapshot = LegacyWorldModelCompiler(session).compile_after_chapter(project_id, chapter_number)
+        except Exception as exc:
+            logger.exception("WorldModel compile failed for chapter %d.", chapter_number)
+            try:
+                LegacyWorldModelCompiler(session).record_failed_compile(
+                    project_id=project_id,
+                    as_of_chapter=chapter_number,
+                    trigger="chapter_accepted",
+                    error=f"{exc.__class__.__name__}: {exc}",
+                )
+            except Exception:
+                logger.warning("Failed to record WorldModel failed compile run.", exc_info=True)
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.WORLD_MODEL_COMPILE_FAILED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 WorldModel compile 失败，运行将暂停。",
+                reason=str(exc),
+                payload={"error_class": exc.__class__.__name__, "error_summary": str(exc)},
+            )
+            return False
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.WORLD_MODEL_COMPILE_SUCCEEDED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 WorldModel compile 完成。",
+            related_object_type="world_model_snapshot",
+            related_object_id=snapshot.id,
+            payload={
+                "snapshot_id": snapshot.id,
+                "as_of_chapter": snapshot.as_of_chapter,
+                "source_digest": snapshot.source_digest,
+            },
+        )
+        return True
 
     def _run_provisional_band_preview(
         self,
@@ -4348,6 +4719,8 @@ class WritingOrchestrator:
                 "read operation timed out",
                 "json generation failed",
                 "llmjsonparseerror",
+                "preview generation failed",
+                "preview response body is empty",
                 "connection reset",
             )
         ):

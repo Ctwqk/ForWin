@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import inspect
 import json
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
@@ -44,11 +47,15 @@ from forwin.api_schemas import (
 from forwin.book_genesis import GENESIS_STAGE_ORDER, StaleGenesisRevisionError
 from forwin.governance import DecisionEventInfo, DecisionEventType, new_project_governance
 from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.models.genesis import PromptTrace
+from forwin.models.governance import DecisionEvent
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.task import GenerationTask
 from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
+from forwin.world_model.compiler import WorldModelCompiler
 
 
 def _load_json_object(raw: str, default):
@@ -57,6 +64,101 @@ def _load_json_object(raw: str, default):
     except (json.JSONDecodeError, TypeError):
         return default
     return value if isinstance(value, type(default)) else default
+
+
+def _new_operation_id(value: str = "") -> str:
+    normalized = str(value or "").strip()
+    return normalized or uuid.uuid4().hex
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat() if value.tzinfo else value.isoformat()
+    return value
+
+
+def _serialize_model_row(row) -> dict[str, Any]:  # noqa: ANN001
+    return {
+        column.name: _jsonable(getattr(row, column.name))
+        for column in row.__table__.columns
+    }
+
+
+def _export_project_audit_bundle(
+    *,
+    session,
+    config,
+    project: Project,
+    operation_id: str,
+    test_run_id: str = "",
+) -> str:
+    artifact_root = Path(str(getattr(config, "artifact_root", "data/artifacts") or "data/artifacts"))
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    bundle_dir = artifact_root / "audit_bundles" / "projects" / project.id
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    path = bundle_dir / f"{timestamp}_{operation_id}.json"
+    decision_events = session.execute(
+        select(DecisionEvent)
+        .where(DecisionEvent.project_id == project.id)
+        .order_by(DecisionEvent.created_at.asc(), DecisionEvent.id.asc())
+    ).scalars().all()
+    prompt_traces = session.execute(
+        select(PromptTrace)
+        .where(PromptTrace.project_id == project.id)
+        .order_by(PromptTrace.created_at.asc(), PromptTrace.id.asc())
+    ).scalars().all()
+    tasks = session.execute(
+        select(GenerationTask)
+        .where(GenerationTask.project_id == project.id)
+        .order_by(GenerationTask.created_at.asc(), GenerationTask.id.asc())
+    ).scalars().all()
+    chapter_plans = session.execute(
+        select(ChapterPlan)
+        .where(ChapterPlan.project_id == project.id)
+        .order_by(ChapterPlan.chapter_number.asc(), ChapterPlan.id.asc())
+    ).scalars().all()
+    payload = {
+        "schema_version": "v3.8",
+        "bundle_type": "project_delete_audit",
+        "project_id": project.id,
+        "project_title": project.title,
+        "operation_id": operation_id,
+        "test_run_id": str(test_run_id or "").strip(),
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "audit_events": [
+            {
+                "event_type": DecisionEventType.PROJECT_DELETE_REQUESTED,
+                "operation_id": operation_id,
+                "test_run_id": str(test_run_id or "").strip(),
+            },
+            {
+                "event_type": DecisionEventType.AUDIT_BUNDLE_EXPORTED,
+                "operation_id": operation_id,
+                "uri": str(path),
+            },
+        ],
+        "project": _serialize_model_row(project),
+        "generation_tasks": [_serialize_model_row(row) for row in tasks],
+        "chapter_plans": [_serialize_model_row(row) for row in chapter_plans],
+        "decision_events": [_serialize_model_row(row) for row in decision_events],
+        "prompt_traces": [
+            {
+                "id": row.id,
+                "trace_scope": row.trace_scope,
+                "stage_key": row.stage_key,
+                "template_id": row.template_id,
+                "decision_event_id": row.decision_event_id,
+                "parent_trace_id": row.parent_trace_id,
+                "model_profile": _load_json_object(row.model_profile_json, {}),
+                "attempts": _load_json_object(row.attempts_json, []),
+                "output_summary": _load_json_object(row.output_summary_json, {}),
+                "created_at": _jsonable(row.created_at),
+            }
+            for row in prompt_traces
+        ],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return str(path)
 
 
 def list_projects(
@@ -194,10 +296,14 @@ def delete_project(
     project_id: str,
     *,
     get_session,
+    config,
     delete_project_impl,
     project_delete_blockers,
     project_delete_conflict_message,
+    operation_id: str = "",
+    test_run_id: str = "",
 ) -> ProjectDeleteResponse:
+    normalized_operation_id = _new_operation_id(operation_id)
     session = get_session()
     try:
         project = session.get(Project, project_id)
@@ -206,12 +312,20 @@ def delete_project(
         blockers = project_delete_blockers(project_id, session=session)
         if blockers:
             raise HTTPException(409, project_delete_conflict_message(blockers))
+        _export_project_audit_bundle(
+            session=session,
+            config=config,
+            project=project,
+            operation_id=normalized_operation_id,
+            test_run_id=test_run_id,
+        )
         delete_project_impl(session, project_id)
         session.commit()
         return ProjectDeleteResponse(
             ok=True,
             project_id=project_id,
             message=f"项目《{project.title}》已删除。",
+            operation_id=normalized_operation_id,
         )
     finally:
         session.close()
@@ -221,9 +335,13 @@ def bulk_delete_projects(
     req: ProjectBulkDeleteRequest,
     *,
     get_session,
+    config,
     delete_project_impl,
     project_delete_blockers,
+    operation_id: str = "",
+    test_run_id: str = "",
 ) -> BulkDeleteResponse:
+    normalized_operation_id = _new_operation_id(operation_id)
     session = get_session()
     deleted_ids: list[str] = []
     skipped_ids: list[str] = []
@@ -241,6 +359,13 @@ def bulk_delete_projects(
             if project_delete_blockers(normalized, session=session):
                 skipped_ids.append(normalized)
                 continue
+            _export_project_audit_bundle(
+                session=session,
+                config=config,
+                project=project,
+                operation_id=normalized_operation_id,
+                test_run_id=test_run_id,
+            )
             delete_project_impl(session, normalized)
             deleted_ids.append(normalized)
         session.commit()
@@ -251,6 +376,7 @@ def bulk_delete_projects(
             deleted_ids=deleted_ids,
             skipped_ids=skipped_ids,
             message=f"已删除 {len(deleted_ids)} 本书，跳过 {len(skipped_ids)} 本。",
+            operation_id=normalized_operation_id,
         )
     except Exception:
         session.rollback()
@@ -608,7 +734,7 @@ def start_project_writing(
     if not config:
         raise HTTPException(503, "服务尚未初始化")
     runtime_config = saved_runtime_config_or_default()
-    if not runtime_config.minimax_api_key:
+    if not runtime_config.minimax_api_key and not bool(getattr(runtime_config, "codex_enabled", False)):
         raise HTTPException(400, "MINIMAX_API_KEY 未设置。请先配置模型，再启动写作。")
     session = get_session()
     genesis_service = None
@@ -660,6 +786,7 @@ def start_project_writing(
         world_bible = world.get("world_bible") if isinstance(world.get("world_bible"), dict) else {}
         if not str(project.setting_summary or "").strip():
             project.setting_summary = str(world_bible.get("overview", "") or "").strip()
+        WorldModelCompiler(session).bootstrap_from_genesis(project.id)
         project.creation_status = "writing"
         session.add(project)
         session.commit()
@@ -1101,6 +1228,7 @@ def get_chapter_review(
                 if latest_attempt
                 else ""
             ),
+            latest_repair_scope_reason=str(review_meta.get("scope_reason") or ""),
             forced_accept_applied=bool(review_meta.get("forced_accept_applied")),
             acceptance_mode=str(getattr(plan, "acceptance_mode", "") or ""),
             repair_attempt_count=int(getattr(plan, "repair_attempt_count", 0) or 0),

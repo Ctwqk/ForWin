@@ -11,6 +11,8 @@ services:
       - "8899:8899"
     volumes:
       - forwin-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
       - MINIMAX_BASE_URL=${MINIMAX_BASE_URL:-https://api.minimaxi.com/v1}
@@ -29,6 +31,39 @@ services:
       - FORWIN_MINIO_BUCKET=${FORWIN_MINIO_BUCKET:-forwin-artifacts}
       - FORWIN_MINIO_PREFIX=${FORWIN_MINIO_PREFIX:-artifacts}
       - FORWIN_MINIO_SECURE=${FORWIN_MINIO_SECURE:-false}
+      - FORWIN_CODEX_ENABLED=${FORWIN_CODEX_ENABLED:-false}
+      - FORWIN_CODEX_BRIDGE_URL=${FORWIN_CODEX_BRIDGE_URL:-http://host.docker.internal:8897}
+      - FORWIN_CODEX_BRIDGE_TOKEN=${FORWIN_CODEX_BRIDGE_TOKEN:-}
+      - FORWIN_CODEX_MAX_CONCURRENT=${FORWIN_CODEX_MAX_CONCURRENT:-1}
+      - FORWIN_CODEX_SYNC_TIMEOUT_SECONDS=${FORWIN_CODEX_SYNC_TIMEOUT_SECONDS:-90}
+      - FORWIN_CODEX_JOB_TIMEOUT_SECONDS=${FORWIN_CODEX_JOB_TIMEOUT_SECONDS:-900}
+    restart: unless-stopped
+
+  forwin-mcp:
+    build: .
+    container_name: forwin-mcp
+    depends_on:
+      forwin:
+        condition: service_healthy
+    command: ["python", "-m", "uvicorn", "forwin.mcp.http:app", "--host", "0.0.0.0", "--port", "8898"]
+    env_file:
+      - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
+    environment:
+      - FORWIN_API_BASE_URL=${FORWIN_API_BASE_URL:-http://forwin:8899}
+      - FORWIN_MCP_HOST=${FORWIN_MCP_HOST:-0.0.0.0}
+      - FORWIN_MCP_PORT=${FORWIN_MCP_PORT:-8898}
+    ports:
+      - "127.0.0.1:8898:8898"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import httpx; r = httpx.get('http://localhost:8898/health'); raise SystemExit(0 if r.status_code == 200 else 1)\"",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   publisher-browser:

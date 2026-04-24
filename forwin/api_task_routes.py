@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 
 from fastapi import HTTPException
+from sqlalchemy.exc import OperationalError
 
 from forwin.api_schemas import (
     ActiveGenerationTaskCheckResponse,
@@ -11,6 +13,13 @@ from forwin.api_schemas import (
     TaskMutationResponse,
 )
 from forwin.governance import DecisionEventType
+
+logger = logging.getLogger(__name__)
+
+
+def _is_sqlite_lock_error(exc: OperationalError) -> bool:
+    message = str(exc).lower()
+    return "database is locked" in message or "database table is locked" in message
 
 
 def build_handlers(
@@ -106,29 +115,6 @@ def build_handlers(
         if not task_is_terminable(task):
             raise HTTPException(400, "当前任务状态不支持终止")
         project_id = str(task.get("project_id", "") or "").strip()
-        if project_id:
-            with get_session() as session:
-                parent = latest_related_decision_event(
-                    session,
-                    project_id=project_id,
-                    related_object_type="generation_task",
-                    related_object_id=task_id,
-                )
-                log_decision_event(
-                    session,
-                    project_id=project_id,
-                    task_id=task_id,
-                    scope="task",
-                    event_family="audit_action",
-                    event_type=DecisionEventType.TERMINATE_REQUESTED,
-                    actor_type="manual_ui",
-                    summary="已请求终止生成任务。",
-                    related_object_type="generation_task",
-                    related_object_id=task_id,
-                    parent_event_id=str(parent.id if parent is not None else ""),
-                    causal_root_id=str(parent.causal_root_id if parent is not None else ""),
-                )
-                session.commit()
         update_task(
             task_id,
             cancel_requested=True,
@@ -136,6 +122,34 @@ def build_handlers(
             current_stage="terminating",
             message="已请求终止生成任务，系统会在下一个安全检查点停止。",
         )
+        if project_id:
+            try:
+                with get_session() as session:
+                    parent = latest_related_decision_event(
+                        session,
+                        project_id=project_id,
+                        related_object_type="generation_task",
+                        related_object_id=task_id,
+                    )
+                    log_decision_event(
+                        session,
+                        project_id=project_id,
+                        task_id=task_id,
+                        scope="task",
+                        event_family="audit_action",
+                        event_type=DecisionEventType.TERMINATE_REQUESTED,
+                        actor_type="manual_ui",
+                        summary="已请求终止生成任务。",
+                        related_object_type="generation_task",
+                        related_object_id=task_id,
+                        parent_event_id=str(parent.id if parent is not None else ""),
+                        causal_root_id=str(parent.causal_root_id if parent is not None else ""),
+                    )
+                    session.commit()
+            except OperationalError as exc:
+                if not _is_sqlite_lock_error(exc):
+                    raise
+                logger.warning("Terminate audit event skipped because database is busy: %s", exc)
         updated = get_generation_task_or_404(task_id)
         return TaskMutationResponse(
             ok=True,
@@ -150,34 +164,39 @@ def build_handlers(
         if not task_is_pausable(task):
             raise HTTPException(400, "当前任务状态不支持安全暂停")
         project_id = str(task.get("project_id", "") or "").strip()
-        if project_id:
-            with get_session() as session:
-                parent = latest_related_decision_event(
-                    session,
-                    project_id=project_id,
-                    related_object_type="generation_task",
-                    related_object_id=task_id,
-                )
-                log_decision_event(
-                    session,
-                    project_id=project_id,
-                    task_id=task_id,
-                    scope="task",
-                    event_family="audit_action",
-                    event_type=DecisionEventType.PAUSE_REQUESTED,
-                    actor_type="manual_ui",
-                    summary="已请求安全暂停生成任务。",
-                    related_object_type="generation_task",
-                    related_object_id=task_id,
-                    parent_event_id=str(parent.id if parent is not None else ""),
-                    causal_root_id=str(parent.causal_root_id if parent is not None else ""),
-                )
-                session.commit()
         update_task(
             task_id,
             pause_requested=True,
             message="已请求安全暂停，系统会在下一个安全检查点保存进度并暂停。",
         )
+        if project_id:
+            try:
+                with get_session() as session:
+                    parent = latest_related_decision_event(
+                        session,
+                        project_id=project_id,
+                        related_object_type="generation_task",
+                        related_object_id=task_id,
+                    )
+                    log_decision_event(
+                        session,
+                        project_id=project_id,
+                        task_id=task_id,
+                        scope="task",
+                        event_family="audit_action",
+                        event_type=DecisionEventType.PAUSE_REQUESTED,
+                        actor_type="manual_ui",
+                        summary="已请求安全暂停生成任务。",
+                        related_object_type="generation_task",
+                        related_object_id=task_id,
+                        parent_event_id=str(parent.id if parent is not None else ""),
+                        causal_root_id=str(parent.causal_root_id if parent is not None else ""),
+                    )
+                    session.commit()
+            except OperationalError as exc:
+                if not _is_sqlite_lock_error(exc):
+                    raise
+                logger.warning("Pause audit event skipped because database is busy: %s", exc)
         updated = get_generation_task_or_404(task_id)
         return TaskMutationResponse(
             ok=True,

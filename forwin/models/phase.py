@@ -205,6 +205,36 @@ class ProvisionalChapterLedger(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
+class WorldProjectionDeltaRow(Base):
+    __tablename__ = "world_projection_deltas"
+    __table_args__ = (
+        Index(
+            "ix_world_projection_deltas_project_projection",
+            "project_id",
+            "projection_id",
+            "projection_layer",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        String, ForeignKey("projects.id"), nullable=False
+    )
+    projection_id: Mapped[str] = mapped_column(String, nullable=False)
+    projection_layer: Mapped[str] = mapped_column(String, default="provisional_projection")
+    delta_id: Mapped[str] = mapped_column(String, default="")
+    chapter_number: Mapped[int] = mapped_column(Integer, default=0)
+    world_delta_json: Mapped[str] = mapped_column(Text, default="{}")
+    promoted_compile_run_id: Mapped[str] = mapped_column(String, default="")
+    promotion_review_verdict_id: Mapped[str] = mapped_column(String, default="")
+    promotion_reason: Mapped[str] = mapped_column(Text, default="")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
 class BandExperiencePlan(Base):
     __tablename__ = "band_experience_plans"
     __table_args__ = (

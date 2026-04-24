@@ -6,12 +6,14 @@ from fastapi import HTTPException
 from fastapi.responses import HTMLResponse
 
 from forwin.api_schemas import (
+    CodexBridgeStatusResponse,
     GenerateRequest,
     LLMDefaultProfileRequest,
     LLMPreferencesRequest,
     LLMProfileUpsertRequest,
     LLMSettingsRequest,
 )
+from forwin.llm.codex_client import CodexBridgeClient
 from forwin.models.project import Project
 
 
@@ -216,6 +218,53 @@ def build_handlers(
             raise HTTPException(400, str(exc)) from exc
         return serialize_llm_settings(payload, message="模型配置已删除")
 
+    def get_codex_bridge_status() -> CodexBridgeStatusResponse:
+        config = get_config()
+        enabled = bool(getattr(config, "codex_enabled", False)) if config is not None else False
+        bridge_url = str(getattr(config, "codex_bridge_url", "") or "").strip() if config is not None else ""
+        if not enabled:
+            return CodexBridgeStatusResponse(
+                enabled=False,
+                bridge_url=bridge_url,
+                healthy=False,
+                status="disabled",
+                message="Codex Bridge 未启用。",
+            )
+        if not bridge_url:
+            return CodexBridgeStatusResponse(
+                enabled=True,
+                bridge_url="",
+                healthy=False,
+                status="misconfigured",
+                message="FORWIN_CODEX_BRIDGE_URL 未配置。",
+            )
+        client = CodexBridgeClient(
+            bridge_url=bridge_url,
+            token=str(getattr(config, "codex_bridge_token", "") or ""),
+            timeout_seconds=min(15.0, float(getattr(config, "codex_sync_timeout_seconds", 90) or 90)),
+        )
+        try:
+            health = client.health()
+            healthy = bool(health.get("available", False) or health.get("status") == "ok")
+            return CodexBridgeStatusResponse(
+                enabled=True,
+                bridge_url=bridge_url,
+                healthy=healthy,
+                status=str(health.get("status", "ok" if healthy else "degraded") or ""),
+                message="Codex Bridge 可用。" if healthy else "Codex Bridge 返回 degraded。",
+                health=health,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return CodexBridgeStatusResponse(
+                enabled=True,
+                bridge_url=bridge_url,
+                healthy=False,
+                status="unreachable",
+                message=f"{exc.__class__.__name__}: {exc}",
+            )
+        finally:
+            client.close()
+
     return {
         "health": health,
         "home_page": home_page,
@@ -227,4 +276,5 @@ def build_handlers(
         "save_llm_profile": save_llm_profile,
         "set_default_llm_profile": set_default_llm_profile,
         "delete_llm_profile": delete_llm_profile,
+        "get_codex_bridge_status": get_codex_bridge_status,
     }

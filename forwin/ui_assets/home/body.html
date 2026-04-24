@@ -1,4 +1,8 @@
   <div class="wrap">
+    <nav class="global-nav" aria-label="ForWin primary navigation">
+      <a href="/" aria-current="page">创作台</a>
+      <a href="/world-studio">World Studio</a>
+    </nav>
     <section class="masthead">
       <div>
         <div class="brand-mark">ForWin Workspace</div>
@@ -19,6 +23,7 @@
         </div>
         <div class="badge-row">
           <span id="saved_key_badge" class="badge">API Key：@@HAS_API_KEY_TEXT@@</span>
+          <span id="codex_bridge_badge" class="badge">Codex：未检查</span>
           <span id="extension_ready_badge" class="badge @@EXTENSION_BADGE_CLASS@@">扩展回写：@@EXTENSION_READY_TEXT@@</span>
         </div>
       </div>
@@ -26,6 +31,7 @@
       <div class="tabs">
         <button id="tab_book" class="tab-chip active" type="button" onclick="switchTab('book')">书本</button>
         <button id="tab_task" class="tab-chip" type="button" onclick="switchTab('task')">任务</button>
+        <button id="tab_world_v4" class="tab-chip" type="button" onclick="switchTab('world_v4')">V4 世界</button>
         <button id="tab_config" class="tab-chip" type="button" onclick="switchTab('config')">配置</button>
       </div>
 
@@ -69,9 +75,43 @@
         <div id="task_list" class="task-list"></div>
       </section>
 
+      <section id="panel_world_v4" class="tab-panel">
+        <div class="task-toolbar">
+          <div>
+            <div class="section-head" style="margin:0;">
+              <div>
+                <h2>V4 世界模型</h2>
+                <p>WorldLine、KnowledgeGap、Reveal Ladder 与 canon commit 调试视图。</p>
+              </div>
+            </div>
+          </div>
+          <div class="action-row">
+            <input id="world_v4_project_id" type="text" placeholder="project_id">
+            <button class="secondary" type="button" onclick="loadWorldModelV4Debug('debug')">Debug</button>
+            <button class="secondary" type="button" onclick="loadWorldModelV4Debug('lines')">Lines</button>
+            <button class="secondary" type="button" onclick="loadWorldModelV4Debug('gaps')">Gaps</button>
+            <button class="secondary" type="button" onclick="loadWorldModelV4Debug('reveals')">Reveals</button>
+            <button class="primary" type="button" onclick="loadWorldModelV4Debug('export')">Export</button>
+          </div>
+        </div>
+        <pre id="world_v4_debug_output" class="code-box">等待选择 project_id。</pre>
+      </section>
+
       <section id="panel_config" class="tab-panel">
         <div class="config-grid">
           <div class="stack">
+            <section class="card">
+              <div class="section-head">
+                <div>
+                  <h2>Codex Bridge</h2>
+                  <p>Pro 订阅通过宿主机 bridge 接入；失败时按路由策略回退普通模型。</p>
+                </div>
+                <button class="secondary" type="button" onclick="loadCodexBridgeStatus()">刷新</button>
+              </div>
+              <div id="codex_bridge_panel" class="list">
+                <div class="empty">等待检查 Codex Bridge 状态。</div>
+              </div>
+            </section>
             <section class="card">
               <div class="section-head">
                 <div>
@@ -277,50 +317,52 @@
         </div>
         <button class="ghost" type="button" onclick="closeModelModal()">关闭</button>
       </div>
-      <div class="field-grid">
-        <div>
-          <label for="model_form_name">名称</label>
-          <input id="model_form_name" placeholder="例如：MiniMax 主账号">
-        </div>
-        <div>
-          <label for="model_form_provider_preset">供应商预设</label>
-          <select id="model_form_provider_preset"></select>
-        </div>
-        <div>
-          <label for="model_form_model">当前 Model / 自定义</label>
-          <input id="model_form_model" spellcheck="false">
-        </div>
-        <div>
-          <label for="model_form_recommended_model">模型下拉</label>
-          <select id="model_form_recommended_model"></select>
-        </div>
-        <div style="grid-column:1 / -1;">
-          <div class="action-row">
-            <button class="secondary" type="button" onclick="applySelectedModelPreset()">套用供应商预设</button>
-            <span id="model_form_provider_hint" class="meta-line"></span>
+      <form id="model_profile_form" onsubmit="event.preventDefault();">
+        <div class="field-grid">
+          <div>
+            <label for="model_form_name">名称</label>
+            <input id="model_form_name" placeholder="例如：MiniMax 主账号">
+          </div>
+          <div>
+            <label for="model_form_provider_preset">供应商预设</label>
+            <select id="model_form_provider_preset"></select>
+          </div>
+          <div>
+            <label for="model_form_model">当前 Model / 自定义</label>
+            <input id="model_form_model" spellcheck="false">
+          </div>
+          <div>
+            <label for="model_form_recommended_model">模型下拉</label>
+            <select id="model_form_recommended_model"></select>
+          </div>
+          <div style="grid-column:1 / -1;">
+            <div class="action-row">
+              <button class="secondary" type="button" onclick="applySelectedModelPreset()">套用供应商预设</button>
+              <span id="model_form_provider_hint" class="meta-line"></span>
+            </div>
+          </div>
+          <div style="grid-column:1 / -1;">
+            <label for="model_form_base_url_select">API 站点 / Base URL 下拉</label>
+            <select id="model_form_base_url_select"></select>
+          </div>
+          <div style="grid-column:1 / -1;">
+            <label for="model_form_base_url">当前 Base URL / 自定义</label>
+            <input id="model_form_base_url" spellcheck="false" placeholder="选择自定义时在这里手填">
+          </div>
+          <div style="grid-column:1 / -1;">
+            <label for="model_form_api_key">API Key</label>
+            <input id="model_form_api_key" type="password" placeholder="留空表示不修改已保存的 Key" autocomplete="off">
           </div>
         </div>
-        <div style="grid-column:1 / -1;">
-          <label for="model_form_base_url_select">API 站点 / Base URL 下拉</label>
-          <select id="model_form_base_url_select"></select>
+        <label class="checkbox">
+          <input id="model_form_set_default" type="checkbox">
+          <span>保存后同时设为默认模型。</span>
+        </label>
+        <div class="action-row" style="justify-content:flex-end;">
+          <button class="ghost" type="button" onclick="closeModelModal()">取消</button>
+          <button class="primary" type="button" onclick="saveModelProfile()">保存</button>
         </div>
-        <div style="grid-column:1 / -1;">
-          <label for="model_form_base_url">当前 Base URL / 自定义</label>
-          <input id="model_form_base_url" spellcheck="false" placeholder="选择自定义时在这里手填">
-        </div>
-        <div style="grid-column:1 / -1;">
-          <label for="model_form_api_key">API Key</label>
-          <input id="model_form_api_key" type="password" placeholder="留空表示不修改已保存的 Key" autocomplete="off">
-        </div>
-      </div>
-      <label class="checkbox">
-        <input id="model_form_set_default" type="checkbox">
-        <span>保存后同时设为默认模型。</span>
-      </label>
-      <div class="action-row" style="justify-content:flex-end;">
-        <button class="ghost" type="button" onclick="closeModelModal()">取消</button>
-        <button class="primary" type="button" onclick="saveModelProfile()">保存</button>
-      </div>
+      </form>
     </div>
   </div>
 

@@ -21,6 +21,7 @@ from forwin.models import (
 from forwin.orchestrator.thread_sampling import sample_active_threads
 from forwin.state.query_helpers import load_latest_entity_states
 from forwin.utils import parse_llm_json
+from forwin.llm.compat import call_chat_compat
 
 logger = logging.getLogger(__name__)
 
@@ -337,19 +338,26 @@ class CommentAnalyzer:
 
         try:
             try:
-                raw = self.llm_client.chat(
+                raw = call_chat_compat(
+                    self.llm_client,
                     prompt,
                     temperature=0.3,
                     max_tokens=min(1200, 200 + len(comment_payload) * 120),
                     response_format={"type": "json_object"},
+                    task_family="phase4",
+                    stage_key="comment_analysis",
+                    output_schema={"type": "object"},
                 )
             except TypeError as exc:
                 if "response_format" not in str(exc):
                     raise
-                raw = self.llm_client.chat(
+                raw = call_chat_compat(
+                    self.llm_client,
                     prompt,
                     temperature=0.3,
                     max_tokens=min(1200, 200 + len(comment_payload) * 120),
+                    task_family="phase4",
+                    stage_key="comment_analysis",
                 )
         except Exception:
             logger.warning("CommentAnalyzer LLM call failed.", exc_info=True)
@@ -788,21 +796,28 @@ class NPCIntentGenerator:
             },
         ]
         try:
-            raw = self.llm_client.chat(
+            raw = call_chat_compat(
+                self.llm_client,
                 prompt,
                 temperature=0.45,
                 max_tokens=900,
                 response_format={"type": "json_object"},
+                task_family="phase4",
+                stage_key="npc_intents",
+                output_schema={"type": "object"},
             )
         except TypeError as exc:
             if "response_format" not in str(exc):
                 logger.warning("Phase4 NPC LLM call failed.", exc_info=True)
                 return None
             try:
-                raw = self.llm_client.chat(
+                raw = call_chat_compat(
+                    self.llm_client,
                     prompt,
                     temperature=0.45,
                     max_tokens=900,
+                    task_family="phase4",
+                    stage_key="npc_intents",
                 )
             except Exception:
                 logger.warning("Phase4 NPC LLM fallback call failed.", exc_info=True)
@@ -972,21 +987,28 @@ class WorldSimulator:
             },
         ]
         try:
-            raw = self.llm_client.chat(
+            raw = call_chat_compat(
+                self.llm_client,
                 prompt,
                 temperature=0.35,
                 max_tokens=700,
                 response_format={"type": "json_object"},
+                task_family="phase4",
+                stage_key="world_pressure",
+                output_schema={"type": "object"},
             )
         except TypeError as exc:
             if "response_format" not in str(exc):
                 logger.warning("Phase4 world LLM call failed.", exc_info=True)
                 return None
             try:
-                raw = self.llm_client.chat(
+                raw = call_chat_compat(
+                    self.llm_client,
                     prompt,
                     temperature=0.35,
                     max_tokens=700,
+                    task_family="phase4",
+                    stage_key="world_pressure",
                 )
             except Exception:
                 logger.warning("Phase4 world LLM fallback call failed.", exc_info=True)

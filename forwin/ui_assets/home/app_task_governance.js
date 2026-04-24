@@ -682,10 +682,25 @@
       body.appendChild(top);
 
       const metrics = createNode('section', '', 'progress-grid');
+      const control = item.generation_control || {};
+      const acceptedCount = Array.isArray(control.accepted_chapters)
+        ? control.accepted_chapters.length
+        : (Array.isArray(item.completed_chapters) ? item.completed_chapters.length : 0);
+      const generatedCount = Array.isArray(control.generated_chapters)
+        ? control.generated_chapters.length
+        : (
+          acceptedCount
+          + (Array.isArray(control.pending_review_chapters) ? control.pending_review_chapters.length : 0)
+          + (Array.isArray(control.drafted_chapters) ? control.drafted_chapters.length : 0)
+        );
+      const reviewBlockedCount = Array.isArray(control.pending_review_chapters)
+        ? control.pending_review_chapters.length
+        : (Array.isArray(item.paused_chapters) ? item.paused_chapters.length : 0);
       [
-        ['已完成', Array.isArray(item.completed_chapters) ? item.completed_chapters.length : 0],
+        ['已生成', generatedCount],
+        ['已接受', acceptedCount],
         ['失败', Array.isArray(item.failed_chapters) ? item.failed_chapters.length : 0],
-        ['暂停', Array.isArray(item.paused_chapters) ? item.paused_chapters.length : 0],
+        ['待 Review', reviewBlockedCount],
         ['当前章', item.current_chapter || 0],
       ].forEach(([label, value]) => {
         const metric = createNode('div', '', 'metric');
@@ -702,7 +717,6 @@
       if (Array.isArray(item.failed_chapters) && item.failed_chapters.length) misc.appendChild(createNode('div', `失败章节：${item.failed_chapters.join(', ')}`, 'meta-line'));
       if (Array.isArray(item.paused_chapters) && item.paused_chapters.length) misc.appendChild(createNode('div', `暂停章节：${item.paused_chapters.join(', ')}`, 'meta-line'));
       if (Array.isArray(item.frozen_artifacts) && item.frozen_artifacts.length) misc.appendChild(createNode('div', `冻结产物：${item.frozen_artifacts.join('\\n')}`, 'meta-line'));
-      const control = item.generation_control || {};
       const controlLines = [
         `计划状态：${control.plan_state || '-'}`,
         `写作状态：${control.writing_state || '-'}`,

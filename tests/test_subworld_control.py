@@ -89,6 +89,44 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertTrue(any(item["region_seeds"] for item in plan["subworld_delta"]["new_subworlds"] if item.get("scope") == "arc_local"))
         self.assertTrue(plan["characters"])
 
+    def test_arc_director_tolerates_non_numeric_subworld_seed_fields(self) -> None:
+        director = ArcDirector(SimpleNamespace(chat=lambda *args, **kwargs: "{}"), max_tokens=2048)
+
+        normalized = director._normalize_subworld_delta(
+            {
+                "reuse_subworld_ids": [],
+                "retire_subworld_ids": [],
+                "initial_active_subworld_ids": [],
+                "new_subworlds": [
+                    {
+                        "name": "雾港",
+                        "scope": "arc_local",
+                        "core_named_characters": [
+                            {
+                                "name": "林夜",
+                                "description": "记录员",
+                                "role_hint": "主角",
+                                "importance": "protagonist",
+                            }
+                        ],
+                        "planned_slots": [],
+                        "region_seeds": [
+                            {
+                                "name": "旧航线档案馆",
+                                "level": "primary",
+                            }
+                        ],
+                    }
+                ],
+            },
+            fallback={"new_subworlds": []},
+        )
+        merged = director._merge_seed_characters([], normalized["new_subworlds"])
+
+        self.assertEqual(normalized["new_subworlds"][0]["core_named_characters"][0]["importance"], 5)
+        self.assertEqual(normalized["new_subworlds"][0]["region_seeds"][0]["level"], 1)
+        self.assertEqual(merged[0]["importance"], 5)
+
     def test_assemble_context_uses_allowed_entities_from_active_subworlds(self) -> None:
         with TemporaryDirectory() as tmp:
             engine = get_engine(str(Path(tmp) / "context.db"))

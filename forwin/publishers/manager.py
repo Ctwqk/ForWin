@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import sessionmaker
 
+from forwin.governance import DecisionEventInfo, DecisionEventType
+from forwin.models.governance import DecisionEvent
 from forwin.models.project import Project
 from forwin.models.publisher import (
     PublisherBrowserSession,
@@ -20,9 +23,11 @@ from forwin.models.publisher import (
     PublisherRawComment,
     PublisherUploadJob,
 )
+from forwin.state.updater import StateUpdater
 
 from .platforms import SUPPORTED_PLATFORMS, PlatformSpec
 
+logger = logging.getLogger(__name__)
 _DISPLAY_TZ = ZoneInfo("America/Los_Angeles")
 
 
@@ -52,6 +57,29 @@ def _as_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _is_sqlite_lock_error(exc: OperationalError) -> bool:
+    message = str(exc).lower()
+    return "database is locked" in message or "database table is locked" in message
+
+
+def _terminal_upload_event_type(status: str) -> str:
+    if status == "succeeded":
+        return DecisionEventType.UPLOAD_JOB_SUCCEEDED
+    if status == "failed":
+        return DecisionEventType.UPLOAD_JOB_FAILED
+    if status == "cancelled":
+        return DecisionEventType.UPLOAD_JOB_CANCELLED
+    return DecisionEventType.UPLOAD_JOB_PROGRESS
+
+
+def _comment_sync_event_type(status: str) -> str:
+    if status == "succeeded":
+        return DecisionEventType.COMMENT_SYNC_SUCCEEDED
+    if status == "failed":
+        return DecisionEventType.COMMENT_SYNC_FAILED
+    return DecisionEventType.COMMENT_SYNC_JOB_CLAIMED
+
+
 class PublisherManager:
     def __init__(
         self,
@@ -64,6 +92,128 @@ class PublisherManager:
         self.extension_api_key = extension_api_key
         self.heartbeat_stale_seconds = heartbeat_stale_seconds
         self.preferred_client_id = str(preferred_client_id or "").strip()
+
+    def _record_project_event(
+        self,
+        session,
+        *,
+        project_id: str,
+        event_type: str,
+        summary: str,
+        payload: dict[str, Any],
+        related_object_type: str,
+        related_object_id: str,
+        actor_type: str = "extension",
+        event_family: str = "business_event",
+    ) -> DecisionEvent | None:
+        normalized_project_id = str(project_id or "").strip()
+        if not normalized_project_id:
+            return None
+        parent = session.execute(
+            select(DecisionEvent)
+            .where(
+                DecisionEvent.project_id == normalized_project_id,
+                DecisionEvent.related_object_type == related_object_type,
+                DecisionEvent.related_object_id == related_object_id,
+            )
+            .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        parent_id = str(parent.id if parent is not None else "")
+        causal_root_id = str(
+            parent.causal_root_id if parent is not None and parent.causal_root_id else parent_id
+        )
+        return StateUpdater(session).save_decision_event(
+            DecisionEventInfo(
+                project_id=normalized_project_id,
+                scope="publisher",
+                event_family=event_family,
+                event_type=event_type,
+                actor_type=actor_type,
+                summary=summary,
+                payload=payload,
+                related_object_type=related_object_type,
+                related_object_id=related_object_id,
+                parent_event_id=parent_id,
+                causal_root_id=causal_root_id,
+            )
+        )
+
+    def _record_upload_job_event(
+        self,
+        session,
+        *,
+        job: PublisherUploadJob,
+        event_type: str,
+        summary: str,
+        actor_type: str = "extension",
+        extra_payload: dict[str, Any] | None = None,
+    ) -> DecisionEvent | None:
+        payload = {
+            "platform_id": job.platform_id,
+            "job_id": job.id,
+            "status": job.status,
+            "publish": bool(job.publish),
+            "create_if_missing": False,
+            "book_name": job.book_name,
+            "chapter_title": job.chapter_title,
+            "body_chars": len(str(job.body_text or "")),
+            "upload_url_present": bool(str(job.upload_url or "").strip()),
+            "extension_client_id": job.extension_client_id,
+            "current_url": job.current_url,
+        }
+        try:
+            result_payload = json.loads(job.result_payload_json or "{}")
+        except json.JSONDecodeError:
+            result_payload = {}
+        if isinstance(result_payload, dict):
+            payload["create_if_missing"] = bool(result_payload.get("create_if_missing", False))
+        if extra_payload:
+            payload.update(extra_payload)
+        return self._record_project_event(
+            session,
+            project_id=job.project_id,
+            event_type=event_type,
+            summary=summary,
+            payload=payload,
+            related_object_type="publisher_upload_job",
+            related_object_id=job.id,
+            actor_type=actor_type,
+        )
+
+    def _record_comment_sync_event(
+        self,
+        session,
+        *,
+        job: PublisherCommentSyncJob,
+        event_type: str,
+        summary: str,
+        actor_type: str = "extension",
+        extra_payload: dict[str, Any] | None = None,
+    ) -> DecisionEvent | None:
+        payload = {
+            "platform_id": job.platform_id,
+            "job_id": job.id,
+            "status": job.status,
+            "work_id": job.work_id,
+            "work_name": job.work_name,
+            "chapter_id": job.chapter_id,
+            "chapter_title": job.chapter_title,
+            "limit": int(job.limit or 0),
+            "extension_client_id": job.extension_client_id,
+        }
+        if extra_payload:
+            payload.update(extra_payload)
+        return self._record_project_event(
+            session,
+            project_id=job.project_id,
+            event_type=event_type,
+            summary=summary,
+            payload=payload,
+            related_object_type="publisher_comment_sync_job",
+            related_object_id=job.id,
+            actor_type=actor_type,
+        )
 
     @staticmethod
     def _browser_session_sort_key(row) -> tuple[datetime, datetime, datetime]:
@@ -375,6 +525,14 @@ class PublisherManager:
                 normalized_book_meta=normalized_book_meta,
             )
             session.add(job)
+            session.flush()
+            self._record_upload_job_event(
+                session,
+                job=job,
+                event_type=DecisionEventType.UPLOAD_JOB_CREATED,
+                summary="发布上传任务已创建。",
+                actor_type="api",
+            )
             session.commit()
             session.refresh(job)
             return self._serialize_upload_job(job)
@@ -444,6 +602,15 @@ class PublisherManager:
             if not rows:
                 return 0
             session.add_all(rows)
+            session.flush()
+            for job in rows:
+                self._record_upload_job_event(
+                    session,
+                    job=job,
+                    event_type=DecisionEventType.UPLOAD_JOB_CREATED,
+                    summary="发布上传任务已批量创建。",
+                    actor_type="api",
+                )
             session.commit()
             return len(rows)
 
@@ -472,6 +639,14 @@ class PublisherManager:
                 job.status = "terminating"
                 job.abort_requested = True
                 job.result_message = "已请求浏览器扩展终止上传任务，等待执行端确认。"
+            self._record_upload_job_event(
+                session,
+                job=job,
+                event_type=DecisionEventType.UPLOAD_JOB_CANCELLED,
+                summary="发布上传任务已请求取消。",
+                actor_type="manual_ui",
+                extra_payload={"abort_requested": bool(job.abort_requested)},
+            )
             session.commit()
             session.refresh(job)
             return self._serialize_upload_job(job)
@@ -503,69 +678,81 @@ class PublisherManager:
             for item in cookies
             if isinstance(item, dict) and str(item.get("name", "")).strip()
         ]
-        with self.session_factory() as session:
-            self._ensure_extension_client(session, client_id)
-            entry = session.get(
-                PublisherBrowserSessionEntry,
-                {"client_id": client_id, "platform_id": platform},
-            )
-            if entry is None:
-                entry = PublisherBrowserSessionEntry(
+        try:
+            with self.session_factory() as session:
+                self._ensure_extension_client(session, client_id)
+                entry = session.get(
+                    PublisherBrowserSessionEntry,
+                    {"client_id": client_id, "platform_id": platform},
+                )
+                if entry is None:
+                    entry = PublisherBrowserSessionEntry(
+                        client_id=client_id,
+                        platform_id=platform,
+                    )
+                    session.add(entry)
+                entry.cookie_count = len(normalized)
+                entry.cookies_json = json.dumps(normalized, ensure_ascii=False)
+                entry.synced_at = now
+                entry.last_error = ""
+
+                stored = session.get(PublisherBrowserSession, platform)
+                if stored is None:
+                    stored = PublisherBrowserSession(platform_id=platform)
+                    session.add(stored)
+                stored.extension_client_id = client_id
+                stored.cookie_count = len(normalized)
+                stored.cookies_json = json.dumps(normalized, ensure_ascii=False)
+                stored.synced_at = now
+                stored.last_error = ""
+                connected = self._is_browser_session_connected(
+                    platform,
+                    stored.cookies_json,
+                    "",
+                )
+
+                state = session.get(PublisherConnectionState, platform)
+                if state is None:
+                    state = PublisherConnectionState(platform_id=platform)
+                    session.add(state)
+                state.extension_client_id = client_id
+                state.connected = connected
+                state.login_method = state.login_method or "scan"
+                if state.connected:
+                    state.last_error = ""
+                state_payload = {
+                    "platform": platform,
+                    "connected": connected,
+                    "login_method": state.login_method,
+                    "last_error": state.last_error,
+                    "cookie_names": self._cookie_names_from_json(stored.cookies_json),
+                    "cookie_signal": connected,
+                    "session_synced": True,
+                }
+                state.status_json = json.dumps(state_payload, ensure_ascii=False)
+                state.last_heartbeat_at = now
+                self._upsert_extension_platform_state(
+                    session,
                     client_id=client_id,
                     platform_id=platform,
+                    connected=connected,
+                    login_method=state.login_method,
+                    last_error="",
+                    status_payload=state_payload,
+                    last_heartbeat_at=now,
                 )
-                session.add(entry)
-            entry.cookie_count = len(normalized)
-            entry.cookies_json = json.dumps(normalized, ensure_ascii=False)
-            entry.synced_at = now
-            entry.last_error = ""
-
-            stored = session.get(PublisherBrowserSession, platform)
-            if stored is None:
-                stored = PublisherBrowserSession(platform_id=platform)
-                session.add(stored)
-            stored.extension_client_id = client_id
-            stored.cookie_count = len(normalized)
-            stored.cookies_json = json.dumps(normalized, ensure_ascii=False)
-            stored.synced_at = now
-            stored.last_error = ""
-            connected = self._is_browser_session_connected(
-                platform,
-                stored.cookies_json,
-                "",
-            )
-
-            state = session.get(PublisherConnectionState, platform)
-            if state is None:
-                state = PublisherConnectionState(platform_id=platform)
-                session.add(state)
-            state.extension_client_id = client_id
-            state.connected = connected
-            state.login_method = state.login_method or "scan"
-            if state.connected:
-                state.last_error = ""
-            state_payload = {
-                "platform": platform,
-                "connected": connected,
-                "login_method": state.login_method,
-                "last_error": state.last_error,
-                "cookie_names": self._cookie_names_from_json(stored.cookies_json),
-                "cookie_signal": connected,
-                "session_synced": True,
+                session.commit()
+        except OperationalError as exc:
+            if not _is_sqlite_lock_error(exc):
+                raise
+            logger.warning("Publisher browser session sync skipped because database is busy: %s", exc)
+            return {
+                "ok": False,
+                "message": f"{spec.display_name} 浏览器会话暂未写入：数据库忙，请稍后重试。",
+                "server_time": _isoformat(now),
+                "cookie_count": len(normalized),
+                "retryable": True,
             }
-            state.status_json = json.dumps(state_payload, ensure_ascii=False)
-            state.last_heartbeat_at = now
-            self._upsert_extension_platform_state(
-                session,
-                client_id=client_id,
-                platform_id=platform,
-                connected=connected,
-                login_method=state.login_method,
-                last_error="",
-                status_payload=state_payload,
-                last_heartbeat_at=now,
-            )
-            session.commit()
         return {
             "ok": True,
             "message": f"{spec.display_name} 浏览器会话已同步到后端。",
@@ -720,6 +907,21 @@ class PublisherManager:
                     session.rollback()
                     continue
 
+                session.flush()
+                job.status = "running"
+                job.extension_client_id = client_id
+                job.claimed_at = claimed_at
+                job.started_at = started_at
+                job.abort_requested = False
+                job.result_message = "上传任务已被浏览器扩展自动领取。"
+                job.error_message = ""
+                self._record_upload_job_event(
+                    session,
+                    job=job,
+                    event_type=DecisionEventType.UPLOAD_JOB_CLAIMED,
+                    summary="发布上传任务已被浏览器扩展领取。",
+                    actor_type="extension",
+                )
                 session.commit()
                 session.refresh(job)
                 return self._serialize_upload_job(job)
@@ -801,6 +1003,22 @@ class PublisherManager:
                     session.rollback()
                     continue
 
+                session.flush()
+                job.status = "running"
+                job.extension_client_id = client_id
+                job.started_at = started_at
+                job.error_message = ""
+                job.result_summary_json = json.dumps(
+                    {"phase": "claimed", "message": "评论同步任务已被浏览器扩展自动领取。"},
+                    ensure_ascii=False,
+                )
+                self._record_comment_sync_event(
+                    session,
+                    job=job,
+                    event_type=DecisionEventType.COMMENT_SYNC_JOB_CLAIMED,
+                    summary="评论同步任务已被浏览器扩展领取。",
+                    actor_type="extension",
+                )
                 session.commit()
                 session.refresh(job)
                 return self._serialize_comment_sync_job(job)
@@ -852,42 +1070,53 @@ class PublisherManager:
         platforms: list[dict[str, Any]],
     ) -> dict[str, Any]:
         now = _utc_now()
-        with self.session_factory() as session:
-            client = self._ensure_extension_client(session, client_id)
+        try:
+            with self.session_factory() as session:
+                client = self._ensure_extension_client(session, client_id)
 
-            client.extension_version = extension_version
-            client.browser_name = browser_name
-            client.browser_version = browser_version
-            client.backend_base_url = backend_base_url
-            client.last_heartbeat_at = now
+                client.extension_version = extension_version
+                client.browser_name = browser_name
+                client.browser_version = browser_version
+                client.backend_base_url = backend_base_url
+                client.last_heartbeat_at = now
 
-            for item in platforms:
-                platform_id = str(item.get("platform", "")).strip()
-                if not platform_id or platform_id not in SUPPORTED_PLATFORMS:
-                    continue
-                state = session.get(PublisherConnectionState, platform_id)
-                if state is None:
-                    state = PublisherConnectionState(platform_id=platform_id)
-                    session.add(state)
-                state.extension_client_id = client_id
-                cookie_signal = bool(item.get("cookie_signal"))
-                state.connected = cookie_signal
-                state.login_method = str(item.get("login_method", "")).strip()
-                state.last_error = str(item.get("last_error", "")).strip()
-                state.status_json = json.dumps(item, ensure_ascii=False)
-                state.last_heartbeat_at = now
-                self._upsert_extension_platform_state(
-                    session,
-                    client_id=client_id,
-                    platform_id=platform_id,
-                    connected=state.connected,
-                    login_method=state.login_method,
-                    last_error=state.last_error,
-                    status_payload=item,
-                    last_heartbeat_at=now,
-                )
+                for item in platforms:
+                    platform_id = str(item.get("platform", "")).strip()
+                    if not platform_id or platform_id not in SUPPORTED_PLATFORMS:
+                        continue
+                    state = session.get(PublisherConnectionState, platform_id)
+                    if state is None:
+                        state = PublisherConnectionState(platform_id=platform_id)
+                        session.add(state)
+                    state.extension_client_id = client_id
+                    cookie_signal = bool(item.get("cookie_signal"))
+                    state.connected = cookie_signal
+                    state.login_method = str(item.get("login_method", "")).strip()
+                    state.last_error = str(item.get("last_error", "")).strip()
+                    state.status_json = json.dumps(item, ensure_ascii=False)
+                    state.last_heartbeat_at = now
+                    self._upsert_extension_platform_state(
+                        session,
+                        client_id=client_id,
+                        platform_id=platform_id,
+                        connected=state.connected,
+                        login_method=state.login_method,
+                        last_error=state.last_error,
+                        status_payload=item,
+                        last_heartbeat_at=now,
+                    )
 
-            session.commit()
+                session.commit()
+        except OperationalError as exc:
+            if not _is_sqlite_lock_error(exc):
+                raise
+            logger.warning("Publisher extension heartbeat skipped because database is busy: %s", exc)
+            return {
+                "ok": False,
+                "message": "扩展心跳暂未写入：数据库忙，请稍后重试。",
+                "server_time": _isoformat(now),
+                "retryable": True,
+            }
 
         return {"ok": True, "message": "扩展心跳已记录。", "server_time": _isoformat(now)}
 
@@ -978,6 +1207,24 @@ class PublisherManager:
                     last_heartbeat_at=now,
                 )
 
+            self._record_upload_job_event(
+                session,
+                job=job,
+                event_type=_terminal_upload_event_type(effective_status),
+                summary=f"发布上传任务状态更新为 {effective_status}。",
+                actor_type="extension",
+                extra_payload={
+                    "requested_status": status,
+                    "effective_status": effective_status,
+                    "error_class": "publisher_upload_error" if job.error_message else "",
+                    "error_message": job.error_message,
+                    "remote_chapter_id": (
+                        str(merged_payload.get("remote_chapter_id") or "")
+                        if isinstance(merged_payload, dict)
+                        else ""
+                    ),
+                },
+            )
             session.commit()
             session.refresh(job)
             return self._serialize_upload_job(job)
@@ -1010,6 +1257,14 @@ class PublisherManager:
                 limit=limit,
             )
             session.add(job)
+            session.flush()
+            self._record_comment_sync_event(
+                session,
+                job=job,
+                event_type=DecisionEventType.COMMENT_SYNC_JOB_CREATED,
+                summary="评论同步任务已创建。",
+                actor_type="api",
+            )
             session.commit()
             session.refresh(job)
             return {
@@ -1072,6 +1327,20 @@ class PublisherManager:
             job.error_message = str(error or "").strip()
             job.result_summary_json = json.dumps(merged_payload, ensure_ascii=False)
 
+            self._record_comment_sync_event(
+                session,
+                job=job,
+                event_type=_comment_sync_event_type(status),
+                summary=f"评论同步任务状态更新为 {status}。",
+                actor_type="extension",
+                extra_payload={
+                    "error_class": "comment_sync_error" if job.error_message else "",
+                    "error_message": job.error_message,
+                    "comment_count": int(merged_payload.get("comment_count") or 0)
+                    if isinstance(merged_payload, dict)
+                    else 0,
+                },
+            )
             session.commit()
             session.refresh(job)
             return self._serialize_comment_sync_job(job)
@@ -1088,13 +1357,16 @@ class PublisherManager:
         now = _utc_now()
         inserted = 0
         updated = 0
+        touched_project_ids: set[str] = set()
 
         with self.session_factory() as session:
             self._ensure_extension_client(session, client_id)
             resolved_job_project_id = ""
+            sync_job = None
             if job_id:
                 job = session.get(PublisherCommentSyncJob, job_id)
                 if job is not None:
+                    sync_job = job
                     job.extension_client_id = client_id
                     job.status = "running"
                     job.started_at = job.started_at or now
@@ -1182,6 +1454,8 @@ class PublisherManager:
                     row.project_id = explicit_project_id
                 else:
                     row.project_id = unique_project_ids_by_work_name.get(work_name, "")
+                if row.project_id:
+                    touched_project_ids.add(str(row.project_id))
                 row.work_id = str(item.get("work_id", "")).strip()
                 row.work_name = work_name
                 row.chapter_id = str(item.get("chapter_id", "")).strip()
@@ -1199,11 +1473,24 @@ class PublisherManager:
             if job_id:
                 job = session.get(PublisherCommentSyncJob, job_id)
                 if job is not None:
+                    sync_job = job
                     job.status = "succeeded"
                     job.finished_at = now
                     job.result_summary_json = json.dumps(
                         {"inserted": inserted, "updated": updated},
                         ensure_ascii=False,
+                    )
+                    self._record_comment_sync_event(
+                        session,
+                        job=job,
+                        event_type=DecisionEventType.COMMENT_SYNC_SUCCEEDED,
+                        summary="评论同步任务已完成并入库。",
+                        actor_type="extension",
+                        extra_payload={
+                            "inserted": inserted,
+                            "updated": updated,
+                            "comment_count": inserted + updated,
+                        },
                     )
 
             if platform in SUPPORTED_PLATFORMS:
@@ -1230,6 +1517,25 @@ class PublisherManager:
                     last_heartbeat_at=now,
                 )
 
+            for project_id in sorted(touched_project_ids):
+                self._record_project_event(
+                    session,
+                    project_id=project_id,
+                    event_type=DecisionEventType.RAW_COMMENTS_INGESTED,
+                    summary="原始评论批次已入库。",
+                    payload={
+                        "platform_id": platform,
+                        "job_id": str(job_id or ""),
+                        "inserted": inserted,
+                        "updated": updated,
+                        "comment_count": inserted + updated,
+                        "duplicate_count": updated,
+                        "sync_job_status": str(getattr(sync_job, "status", "") or ""),
+                    },
+                    related_object_type="publisher_comment_sync_job" if job_id else "publisher_raw_comment_batch",
+                    related_object_id=str(job_id or f"{platform}:{now.timestamp()}"),
+                    actor_type="extension",
+                )
             session.commit()
 
         return {

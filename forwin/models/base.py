@@ -1959,6 +1959,10 @@ def upgrade_db(engine: Engine) -> None:
                         model_profile_json TEXT NOT NULL DEFAULT '{}',
                         attempts_json TEXT NOT NULL DEFAULT '[]',
                         output_summary_json TEXT NOT NULL DEFAULT '{}',
+                        backend TEXT NOT NULL DEFAULT '',
+                        codex_job_id TEXT NOT NULL DEFAULT '',
+                        permission_profile TEXT NOT NULL DEFAULT '',
+                        fallback_used INTEGER NOT NULL DEFAULT 0,
                         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                         FOREIGN KEY(project_id) REFERENCES projects(id)
                     )
@@ -1987,6 +1991,22 @@ def upgrade_db(engine: Engine) -> None:
             )
 
         migrations.append(MigrationSpec("book_genesis_v1", apply_book_genesis_v1))
+
+        def apply_prompt_trace_codex_metadata_v1(conn) -> None:
+            columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(prompt_traces)"))
+            }
+            for column_name, ddl in (
+                ("backend", "ALTER TABLE prompt_traces ADD COLUMN backend TEXT NOT NULL DEFAULT ''"),
+                ("codex_job_id", "ALTER TABLE prompt_traces ADD COLUMN codex_job_id TEXT NOT NULL DEFAULT ''"),
+                ("permission_profile", "ALTER TABLE prompt_traces ADD COLUMN permission_profile TEXT NOT NULL DEFAULT ''"),
+                ("fallback_used", "ALTER TABLE prompt_traces ADD COLUMN fallback_used INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if column_name not in columns:
+                    conn.execute(text(ddl))
+
+        migrations.append(MigrationSpec("prompt_trace_codex_metadata_v1", apply_prompt_trace_codex_metadata_v1))
 
         def apply_review_repair_chain_v1(conn) -> None:
             chapter_columns = {
@@ -2085,6 +2105,288 @@ def upgrade_db(engine: Engine) -> None:
                     conn.execute(text(ddl))
 
         migrations.append(MigrationSpec("review_repair_chain_v1", apply_review_repair_chain_v1))
+
+        def apply_world_model_v1(conn) -> None:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS world_model_snapshots (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        as_of_chapter INTEGER NOT NULL DEFAULT 0,
+                        version INTEGER NOT NULL DEFAULT 1,
+                        status TEXT NOT NULL DEFAULT 'live',
+                        snapshot_json TEXT NOT NULL DEFAULT '{}',
+                        source_digest TEXT NOT NULL DEFAULT '',
+                        compiled_from_event_id TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_snapshots_project_chapter
+                    ON world_model_snapshots(project_id, as_of_chapter)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_snapshots_project_status
+                    ON world_model_snapshots(project_id, status)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_snapshots_project_digest
+                    ON world_model_snapshots(project_id, source_digest)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS world_model_pages (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        page_key TEXT NOT NULL,
+                        page_type TEXT NOT NULL DEFAULT 'overview',
+                        title TEXT NOT NULL DEFAULT '',
+                        vault_path TEXT NOT NULL DEFAULT '',
+                        markdown TEXT NOT NULL DEFAULT '',
+                        frontmatter_json TEXT NOT NULL DEFAULT '{}',
+                        content_hash TEXT NOT NULL DEFAULT '',
+                        revision INTEGER NOT NULL DEFAULT 1,
+                        status TEXT NOT NULL DEFAULT 'canon_live',
+                        as_of_chapter INTEGER NOT NULL DEFAULT 0,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_pages_project_key
+                    ON world_model_pages(project_id, page_key)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_pages_project_type
+                    ON world_model_pages(project_id, page_type)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_pages_project_status
+                    ON world_model_pages(project_id, status)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS world_model_links (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        source_page_id TEXT NOT NULL,
+                        target_page_id TEXT NOT NULL,
+                        relation_type TEXT NOT NULL DEFAULT 'related',
+                        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id),
+                        FOREIGN KEY(source_page_id) REFERENCES world_model_pages(id),
+                        FOREIGN KEY(target_page_id) REFERENCES world_model_pages(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_links_project_source
+                    ON world_model_links(project_id, source_page_id)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_links_project_target
+                    ON world_model_links(project_id, target_page_id)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS world_edit_proposals (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'obsidian',
+                        target_page_key TEXT NOT NULL DEFAULT '',
+                        target_field TEXT NOT NULL DEFAULT '',
+                        proposed_patch_json TEXT NOT NULL DEFAULT '{}',
+                        reason TEXT NOT NULL DEFAULT '',
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        created_by TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        reviewed_at TEXT,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_edit_proposals_project_status
+                    ON world_edit_proposals(project_id, status)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_edit_proposals_project_page
+                    ON world_edit_proposals(project_id, target_page_key)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS world_model_conflicts (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        conflict_type TEXT NOT NULL DEFAULT '',
+                        severity TEXT NOT NULL DEFAULT 'warning',
+                        subject_key TEXT NOT NULL DEFAULT '',
+                        description TEXT NOT NULL DEFAULT '',
+                        evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+                        status TEXT NOT NULL DEFAULT 'open',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        resolved_at TEXT,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_conflicts_project_status
+                    ON world_model_conflicts(project_id, status)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_conflicts_project_type
+                    ON world_model_conflicts(project_id, conflict_type)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS world_model_compile_runs (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        trigger TEXT NOT NULL DEFAULT '',
+                        as_of_chapter INTEGER NOT NULL DEFAULT 0,
+                        status TEXT NOT NULL DEFAULT 'started',
+                        source_refs_json TEXT NOT NULL DEFAULT '[]',
+                        source_digest TEXT NOT NULL DEFAULT '',
+                        snapshot_id TEXT NOT NULL DEFAULT '',
+                        error TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY(project_id) REFERENCES projects(id)
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_compile_runs_project_chapter
+                    ON world_model_compile_runs(project_id, as_of_chapter)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_compile_runs_project_status
+                    ON world_model_compile_runs(project_id, status)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_world_model_compile_runs_project_digest
+                    ON world_model_compile_runs(project_id, source_digest)
+                    """
+                )
+            )
+
+        migrations.append(MigrationSpec("world_model_v1", apply_world_model_v1))
+
+        def apply_world_v4_schema_v1(conn) -> None:
+            # Importing models ensures the v4 rows are present in metadata before
+            # create_all runs against an existing database.
+            from forwin import models as _models  # noqa: F401
+
+            Base.metadata.create_all(bind=conn)
+
+        migrations.append(MigrationSpec("world_v4_schema_v1", apply_world_v4_schema_v1))
+
+        def apply_world_v4_compile_audit_v1(conn) -> None:
+            from forwin import models as _models  # noqa: F401
+
+            Base.metadata.create_all(bind=conn)
+            compile_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(world_compile_runs_v4)"))
+            }
+            for column_name, ddl in (
+                (
+                    "retrieval_pack_json",
+                    """
+                    ALTER TABLE world_compile_runs_v4
+                    ADD COLUMN retrieval_pack_json TEXT NOT NULL DEFAULT '{}'
+                    """,
+                ),
+                (
+                    "projection_refresh_json",
+                    """
+                    ALTER TABLE world_compile_runs_v4
+                    ADD COLUMN projection_refresh_json TEXT NOT NULL DEFAULT '{}'
+                    """,
+                ),
+            ):
+                if column_name not in compile_columns:
+                    conn.execute(text(ddl))
+
+        migrations.append(
+            MigrationSpec("world_v4_compile_audit_v1", apply_world_v4_compile_audit_v1)
+        )
 
         for migration in migrations:
             _run_migration(conn, migration.version, migration.apply_fn)

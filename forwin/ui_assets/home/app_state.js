@@ -951,14 +951,34 @@
       activeHomeTab = tab;
       const bookActive = tab === 'book';
       const taskActive = tab === 'task';
+      const worldV4Active = tab === 'world_v4';
       document.getElementById('tab_book').classList.toggle('active', bookActive);
       document.getElementById('tab_task').classList.toggle('active', taskActive);
+      document.getElementById('tab_world_v4').classList.toggle('active', worldV4Active);
       document.getElementById('tab_config').classList.toggle('active', tab === 'config');
       document.getElementById('panel_book').classList.toggle('active', bookActive);
       document.getElementById('panel_task').classList.toggle('active', taskActive);
+      document.getElementById('panel_world_v4').classList.toggle('active', worldV4Active);
       document.getElementById('panel_config').classList.toggle('active', tab === 'config');
       if (tab === 'config' && typeof ensureFreshPlatforms === 'function') {
         void ensureFreshPlatforms({ maxAgeMs: 1500, reason: 'config_tab' });
+      }
+    }
+
+    async function loadWorldModelV4Debug(view = 'debug') {
+      const projectId = String(document.getElementById('world_v4_project_id')?.value || '').trim();
+      const output = document.getElementById('world_v4_debug_output');
+      if (!projectId) {
+        if (output) output.textContent = '需要 project_id。';
+        return;
+      }
+      const safeView = ['debug', 'lines', 'gaps', 'reveals', 'export'].includes(view) ? view : 'debug';
+      if (output) output.textContent = '加载中...';
+      try {
+        const payload = await requestJson(`/api/projects/${projectId}/world-model/v4/${safeView}`);
+        if (output) output.textContent = JSON.stringify(payload, null, 2);
+      } catch (error) {
+        if (output) output.textContent = error?.message || String(error);
       }
     }
 
@@ -999,7 +1019,7 @@
 
     function parseTextareaLines(value) {
       return String(value || '')
-        .split(/\\r?\\n/)
+        .split(/\r?\n/)
         .map((item) => item.trim())
         .filter(Boolean);
     }

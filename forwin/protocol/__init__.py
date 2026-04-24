@@ -46,6 +46,16 @@ from .subworld import (
     SubWorldSlotPlan,
     SubWorldSummary,
 )
+from .world_model import (
+    EvidenceRef,
+    WorldContextPack,
+    WorldEditProposal,
+    WorldModelConflict,
+    WorldModelDelta,
+    WorldModelLink,
+    WorldModelPage,
+    WorldModelSnapshot,
+)
 from .scene import SceneContinuation, ScenePlan, SceneOutput
 from .writer import LoreCandidate, TimelineHint, WriterNote, WriterOutput
 from .review import ContinuityIssue, RepairInstruction, ReviewVerdict
@@ -93,6 +103,14 @@ __all__ = [
     "SubWorldPlanDelta",
     "ChapterEntryTarget",
     "EntityMention",
+    "EvidenceRef",
+    "WorldContextPack",
+    "WorldModelSnapshot",
+    "WorldModelDelta",
+    "WorldModelPage",
+    "WorldModelLink",
+    "WorldModelConflict",
+    "WorldEditProposal",
     # scene
     "SceneContinuation",
     "ScenePlan",

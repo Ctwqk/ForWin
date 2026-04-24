@@ -155,6 +155,47 @@ def _experience_overlay_section(context: ChapterContextPack) -> str | None:
     return "\n".join(lines)
 
 
+def _world_model_v4_section(context: ChapterContextPack) -> str | None:
+    intent = getattr(context, "chapter_world_delta_intent", None)
+    if not any(
+        (
+            getattr(context, "active_world_lines", None),
+            getattr(context, "active_knowledge_gaps", None),
+            getattr(context, "must_not_reveal", None),
+            intent,
+        )
+    ):
+        return None
+    lines = ["【V4 世界模型意图】"]
+    if getattr(context, "visible_world_lines", None):
+        lines.append("  · 台前 world lines：" + "、".join(context.visible_world_lines))
+    if getattr(context, "hidden_world_lines", None):
+        lines.append("  · 幕后 world lines（只按允许的 hint 写，不要直说真相）：" + "、".join(context.hidden_world_lines))
+    if getattr(context, "active_knowledge_gaps", None):
+        lines.append("  · active gaps：" + "、".join(context.active_knowledge_gaps))
+    if intent is not None:
+        if intent.visible_delta_intents:
+            lines.append("  · 本章台前推进：" + "、".join(intent.visible_delta_intents))
+        if intent.hint_delta_intents:
+            lines.append("  · 本章允许线索：" + "、".join(intent.hint_delta_intents))
+        if intent.knowledge_delta_intents:
+            lines.append("  · 本章认知推进：" + "、".join(intent.knowledge_delta_intents))
+        if intent.reader_experience_intents:
+            lines.append("  · 读者体验目标：" + "、".join(intent.reader_experience_intents))
+        if intent.expected_observer_state_changes:
+            transitions = [
+                f"{observer}:{transition}"
+                for observer, transition in intent.expected_observer_state_changes.items()
+            ]
+            lines.append("  · 预期 observer state：" + "、".join(transitions))
+    if getattr(context, "must_not_reveal", None):
+        lines.append("  · 绝对不得揭示：" + "、".join(context.must_not_reveal))
+    if getattr(context, "fair_misdirection_requirements", None):
+        lines.append("  · 公平误导证据：" + "、".join(context.fair_misdirection_requirements))
+    lines.append("  · 注意：这些是写作意图，最终 canon 只由 extractor/reviewer/compiler 决定。")
+    return "\n".join(lines)
+
+
 def _previous_summaries_section(context: ChapterContextPack, *, limit: int) -> str | None:
     if not context.previous_chapter_summaries:
         return None
@@ -275,6 +316,34 @@ def _world_pressure_section(context: ChapterContextPack) -> str | None:
     )
 
 
+def _world_model_section(context: ChapterContextPack) -> str | None:
+    world_context = getattr(context, "world_context", None)
+    if not world_context or not world_context.snapshot_id:
+        return None
+    lines = [
+        "【WorldModel 当前世界状态】",
+        f"  · snapshot：第 {world_context.as_of_chapter} 章后 / {world_context.snapshot_id}",
+    ]
+    if world_context.active_world_conflicts:
+        lines.append("  · 禁止忽略的世界矛盾：")
+        lines.extend(
+            f"    - {item.severity} {item.conflict_type}：{item.description}"
+            for item in world_context.active_world_conflicts[:4]
+        )
+    if world_context.relevant_world_pages:
+        lines.append("  · 相关世界页：")
+        for page in world_context.relevant_world_pages[:6]:
+            summary = page.markdown.split("## Current State", 1)[0]
+            summary = summary.replace("\n", " ")[:220]
+            lines.append(f"    - {page.title}（{page.page_type}）：{summary}")
+    if world_context.active_promises:
+        lines.append("  · 当前读者承诺：")
+        lines.extend(f"    - {page.title}" for page in world_context.active_promises[:4])
+    if world_context.active_secrets:
+        lines.append("  · 秘密可见性：不得提前揭示 secret 页面中的 hidden truth，除非本章计划明确要求。")
+    return "\n".join(lines)
+
+
 def _audience_hints_section(context: ChapterContextPack) -> str | None:
     hints = getattr(context, "audience_hints", None)
     if not hints:
@@ -368,6 +437,7 @@ def _scene_prompt_sections(
         _subworld_control_section(context),
         _active_threads_section(context, limit=thread_limit),
         _experience_overlay_section(context),
+        _world_model_v4_section(context),
         _arc_envelope_section(context, compact=envelope_compact),
         _npc_intents_section(
             context,
@@ -375,6 +445,7 @@ def _scene_prompt_sections(
             detailed=feedback_detailed,
         ),
         _world_pressure_section(context),
+        _world_model_section(context),
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=memory_limit, excerpt_chars=80),
         _timeline_section(context),
@@ -405,6 +476,7 @@ def build_single_chapter_draft_prompt(
         _subworld_control_section(context),
         _active_threads_section(context, limit=3),
         _experience_overlay_section(context),
+        _world_model_v4_section(context),
         _arc_envelope_section(context, compact=False),
         _npc_intents_section(context, limit=4, detailed=True),
         _world_pressure_section(context),
@@ -456,6 +528,7 @@ def build_preview_chapter_prompt(
         _active_entities_section(context, limit=5),
         _active_threads_section(context, limit=3),
         _experience_overlay_section(context),
+        _world_model_v4_section(context),
         _arc_envelope_section(context, compact=True),
         _npc_intents_section(context, limit=3, detailed=False),
         _world_pressure_section(context),

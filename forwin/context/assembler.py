@@ -11,6 +11,9 @@ from forwin.protocol.context import (
     TimelineSnapshot,
     WorldPressureView,
 )
+from forwin.planning.world_contracts import WorldContractRepository
+from forwin.protocol.world_model import WorldContextPack
+from forwin.world_model.retriever import WorldModelRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -241,12 +244,50 @@ def assemble_context(
         if callable(next_band_summary_getter)
         else None
     )
+    chapter_world_delta_intent = None
+    arc_world_contract = None
+    band_world_contract = None
+    repo_session = getattr(repo, "session", None)
+    if repo_session is not None:
+        world_contract_repo = WorldContractRepository(repo_session)
+        arc_world_contract = world_contract_repo.get_arc_contract(
+            project_id,
+            chapter_plan.arc_plan_id,
+        )
+        band_world_contract = world_contract_repo.get_band_contract_for_chapter(
+            project_id,
+            chapter_plan.chapter_number,
+        )
+        chapter_world_delta_intent = world_contract_repo.get_chapter_intent(
+            project_id,
+            chapter_plan.chapter_number,
+        )
 
     # 7. Parse chapter goals from goals_json
     try:
         goals = json.loads(chapter_plan.goals_json) if chapter_plan.goals_json else []
     except json.JSONDecodeError:
         goals = []
+
+    world_context = WorldContextPack()
+    repo_session = getattr(repo, "session", None)
+    if repo_session is not None:
+        try:
+            query_terms = [
+                chapter_plan.title,
+                chapter_plan.one_line,
+                *goals,
+                *(entity.name for entity in entities[:8]),
+                *(thread.name for thread in threads[:4]),
+            ]
+            world_context = WorldModelRetriever(repo_session).build_context(
+                project_id=project_id,
+                chapter_number=chapter_plan.chapter_number,
+                query_terms=query_terms,
+                max_pages=6,
+            )
+        except Exception:
+            logger.warning("Failed to assemble world model context.", exc_info=True)
 
     # 8. Build and return pack
     return ChapterContextPack(
@@ -318,4 +359,54 @@ def assemble_context(
         band_task_contract=band_task_contract,
         active_future_constraints=active_constraints,
         next_band_summary=next_band_summary,
+        world_context=world_context,
+        active_world_lines=list(
+            dict.fromkeys(
+                [
+                    *(arc_world_contract.primary_world_line_ids if arc_world_contract else []),
+                    *(arc_world_contract.hidden_world_line_ids if arc_world_contract else []),
+                ]
+            )
+        ),
+        visible_world_lines=(
+            list(arc_world_contract.primary_world_line_ids)
+            if arc_world_contract is not None
+            else []
+        ),
+        hidden_world_lines=(
+            list(arc_world_contract.hidden_world_line_ids)
+            if arc_world_contract is not None
+            else []
+        ),
+        active_knowledge_gaps=(
+            list(arc_world_contract.major_gap_ids)
+            if arc_world_contract is not None
+            else []
+        ),
+        planned_reveal_ladder=(
+            list(arc_world_contract.reveal_ladder)
+            if arc_world_contract is not None
+            else []
+        ),
+        reader_cognition_state=(
+            band_world_contract.band_exit_reader_state
+            if band_world_contract is not None
+            else ""
+        ),
+        observer_visibility_states=(
+            dict(chapter_world_delta_intent.expected_observer_state_changes)
+            if chapter_world_delta_intent is not None
+            else {}
+        ),
+        must_not_reveal=(
+            list(chapter_world_delta_intent.must_not_reveal)
+            if chapter_world_delta_intent is not None
+            else []
+        ),
+        fair_misdirection_requirements=(
+            list(band_world_contract.required_hints)
+            if band_world_contract is not None
+            else []
+        ),
+        chapter_world_delta_intent=chapter_world_delta_intent,
     )

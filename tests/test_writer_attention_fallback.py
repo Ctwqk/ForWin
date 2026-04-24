@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from forwin.config import Config
 from sqlalchemy import select
 
+from forwin.governance import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ChapterPlan
 from forwin.orchestrator.loop import WritingOrchestrator
@@ -24,6 +25,14 @@ class WriterAttentionFallbackTests(unittest.TestCase):
         )
 
         self.assertTrue(WritingOrchestrator._is_transient_llm_like(exc))
+        self.assertTrue(WritingOrchestrator._should_degrade_provisional_preview(exc))
+
+    def test_provisional_preview_generation_failure_degrades_to_shadow_plan(self) -> None:
+        exc = ValueError(
+            "ChapterWriter preview generation failed after retries: "
+            "preview response body is empty"
+        )
+
         self.assertTrue(WritingOrchestrator._should_degrade_provisional_preview(exc))
 
     def test_blackbox_writer_failure_uses_preview_fallback_before_needs_review(self) -> None:
@@ -85,6 +94,94 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                 updater.mark_chapter_status.assert_not_called()
                 self.assertEqual(paused_chapters, [])
                 self.assertEqual(frozen_artifacts, [])
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+                engine.dispose()
+
+    def test_preview_fallback_records_auditable_span_with_effective_model(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "writer-preview-span.db")
+            engine = get_engine(db_path)
+            init_db(engine)
+
+            orchestrator = WritingOrchestrator(
+                Config(
+                    db_path=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="blackbox",
+                )
+            )
+            try:
+                preview_output = WriterOutput(
+                    project_id="project-1",
+                    chapter_number=1,
+                    title="第1章",
+                    body="预演正文",
+                    char_count=4,
+                    end_of_chapter_summary="预演摘要",
+                    generation_meta={
+                        "mode": "provisional_preview",
+                        "prompt_trace": {
+                            "attempts": [
+                                {
+                                    "attempt_group_id": "group-1",
+                                    "attempt_no": 1,
+                                    "model": "backup-model",
+                                    "profile_id": "backup-profile",
+                                    "output_chars": 4,
+                                }
+                            ],
+                            "output_summary": {"char_count": 4},
+                        },
+                    },
+                )
+                updater = Mock()
+                updater.save_decision_event.side_effect = lambda info: SimpleNamespace(
+                    id=f"row-{info.event_type}",
+                    causal_root_id=info.causal_root_id,
+                    event_type=info.event_type,
+                    payload=info.payload,
+                    parent_event_id=info.parent_event_id,
+                )
+
+                with (
+                    patch.object(
+                        orchestrator.writer,
+                        "write_chapter",
+                        side_effect=TimeoutError("The read operation timed out"),
+                    ),
+                    patch.object(
+                        orchestrator.writer,
+                        "write_preview_chapter",
+                        return_value=preview_output,
+                    ),
+                ):
+                    result = orchestrator._write_chapter_with_attention_fallback(
+                        context=SimpleNamespace(chapter_number=1),
+                        project_id="project-1",
+                        chapter_number=1,
+                        updater=updater,
+                        paused_chapters=[],
+                        frozen_artifacts=[],
+                    )
+
+                self.assertIs(result, preview_output)
+                infos = [call.args[0] for call in updater.save_decision_event.call_args_list]
+                event_types = [info.event_type for info in infos]
+                self.assertIn(DecisionEventType.WRITER_PREVIEW_FALLBACK_STARTED, event_types)
+                self.assertIn(DecisionEventType.WRITER_PREVIEW_FALLBACK_SUCCEEDED, event_types)
+                failed = next(info for info in infos if info.event_type == DecisionEventType.LLM_REQUEST_FAILED)
+                succeeded = next(
+                    info for info in infos
+                    if info.event_type == DecisionEventType.WRITER_PREVIEW_FALLBACK_SUCCEEDED
+                )
+                self.assertEqual(succeeded.parent_event_id, f"row-{failed.event_type}")
+                self.assertEqual(succeeded.payload["effective_model"], "backup-model")
+                self.assertEqual(succeeded.payload["effective_profile_id"], "backup-profile")
+                self.assertEqual(succeeded.payload["successful_attempt_no"], 1)
+                self.assertEqual(succeeded.payload["output_chars"], 4)
             finally:
                 orchestrator.llm_client.close()
                 orchestrator.engine.dispose()

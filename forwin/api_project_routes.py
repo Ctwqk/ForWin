@@ -69,6 +69,7 @@ def build_handlers(
         return api_project_ops.delete_project(
             project_id,
             get_session=get_session,
+            config=get_config(),
             delete_project_impl=delete_project_impl,
             project_delete_blockers=project_delete_blockers,
             project_delete_conflict_message=project_delete_conflict_message,
@@ -78,6 +79,7 @@ def build_handlers(
         return api_project_ops.bulk_delete_projects(
             req,
             get_session=get_session,
+            config=get_config(),
             delete_project_impl=delete_project_impl,
             project_delete_blockers=project_delete_blockers,
         )

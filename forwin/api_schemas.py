@@ -102,6 +102,16 @@ class LLMSettingsResponse(BaseModel):
     message: str = ""
 
 
+class CodexBridgeStatusResponse(BaseModel):
+    enabled: bool = False
+    bridge_url: str = ""
+    healthy: bool = False
+    status: str = "disabled"
+    backend: str = "codex_bridge"
+    message: str = ""
+    health: dict[str, Any] = Field(default_factory=dict)
+
+
 class GenerationControlInfo(BaseModel):
     plan_state: str = "none"
     writing_state: str = "not_started"
@@ -110,6 +120,8 @@ class GenerationControlInfo(BaseModel):
     current_chapter: int = 0
     next_chapter: int = 0
     accepted_chapters: list[int] = Field(default_factory=list)
+    drafted_chapters: list[int] = Field(default_factory=list)
+    generated_chapters: list[int] = Field(default_factory=list)
     planned_chapters: list[int] = Field(default_factory=list)
     failed_chapters: list[int] = Field(default_factory=list)
     pending_review_chapters: list[int] = Field(default_factory=list)
@@ -220,11 +232,73 @@ class BulkDeleteResponse(BaseModel):
     deleted_ids: list[str] = Field(default_factory=list)
     skipped_ids: list[str] = Field(default_factory=list)
     message: str = ""
+    operation_id: str = ""
 
 
 class TaskBulkDeleteItem(BaseModel):
     task_kind: str
     task_id: str
+
+
+class WorldModelV4DebugResponse(BaseModel):
+    project_id: str
+    active_world_lines: list[str] = Field(default_factory=list)
+    visible_world_lines: list[str] = Field(default_factory=list)
+    hidden_world_lines: list[str] = Field(default_factory=list)
+    open_gaps: list[str] = Field(default_factory=list)
+    planned_reveals: list[dict[str, Any]] = Field(default_factory=list)
+    accepted_delta_ids: list[str] = Field(default_factory=list)
+    rejected_delta_ids: list[str] = Field(default_factory=list)
+    reader_cognition: dict[str, Any] = Field(default_factory=dict)
+    protagonist_beliefs: list[str] = Field(default_factory=list)
+    promise_debts: list[str] = Field(default_factory=list)
+
+
+class WorldModelV4LineInfo(BaseModel):
+    world_line_id: str
+    line_type: str = ""
+    title: str = ""
+    objective_state_summary: str = ""
+    is_visible_onstage: bool = False
+    planned_reveal_chapter: int | None = None
+    long_term_promise: str = ""
+    source_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorldModelV4GapInfo(BaseModel):
+    gap_id: str
+    status: str = ""
+    objective_truth: str = ""
+    related_world_line_id: str = ""
+    happened_at_story_time: str = ""
+    observer_states: dict[str, Any] = Field(default_factory=dict)
+    planned_closure: str = ""
+    fairness_requirements: list[str] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorldModelV4RevealInfo(BaseModel):
+    source: str
+    gap_id: str = ""
+    reveal_event_id: str = ""
+    chapter_hint: int | None = None
+    from_state: str = ""
+    to_state: str = ""
+    method: str = ""
+    reveal_to_reader: bool = False
+    reveal_to_characters: list[str] = Field(default_factory=list)
+    fairness_evidence: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorldModelV4ExportResponse(BaseModel):
+    project_id: str
+    lines: list[WorldModelV4LineInfo] = Field(default_factory=list)
+    gaps: list[WorldModelV4GapInfo] = Field(default_factory=list)
+    reveals: list[WorldModelV4RevealInfo] = Field(default_factory=list)
+    debug: WorldModelV4DebugResponse
 
 
 class TaskBulkDeleteRequest(BaseModel):
@@ -383,6 +457,91 @@ class StartWritingResponse(BaseModel):
     message: str = ""
 
 
+class WorldModelSnapshotInfo(BaseModel):
+    id: str
+    project_id: str
+    as_of_chapter: int = 0
+    version: int = 1
+    status: str = "live"
+    source_digest: str = ""
+    snapshot: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class WorldModelPageInfo(BaseModel):
+    id: str
+    project_id: str
+    page_key: str
+    page_type: str = "overview"
+    title: str
+    vault_path: str = ""
+    markdown: str = ""
+    frontmatter: dict[str, Any] = Field(default_factory=dict)
+    content_hash: str = ""
+    revision: int = 1
+    status: str = "canon_live"
+    as_of_chapter: int = 0
+    updated_at: str = ""
+
+
+class WorldModelConflictInfo(BaseModel):
+    id: str
+    project_id: str
+    conflict_type: str
+    severity: str = "warning"
+    subject_key: str = ""
+    description: str = ""
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    status: str = "open"
+    created_at: str = ""
+    resolved_at: str = ""
+
+
+class WorldEditProposalInfo(BaseModel):
+    id: str
+    project_id: str
+    source: str = "obsidian"
+    target_page_key: str = ""
+    target_field: str = ""
+    proposed_patch: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+    status: str = "pending"
+    created_by: str = ""
+    created_at: str = ""
+    reviewed_at: str = ""
+
+
+class WorldModelExportRequest(BaseModel):
+    vault_root: str = ""
+
+
+class WorldModelExportResponse(BaseModel):
+    ok: bool = True
+    project_id: str = ""
+    vault_root: str = ""
+    exported_count: int = 0
+    message: str = ""
+
+
+class WorldModelImportRequest(BaseModel):
+    vault_root: str = ""
+
+
+class WorldModelImportResponse(BaseModel):
+    ok: bool = True
+    project_id: str = ""
+    vault_root: str = ""
+    proposal_count: int = 0
+    changed_paths: list[str] = Field(default_factory=list)
+    message: str = ""
+
+
+class WorldEditProposalReviewRequest(BaseModel):
+    status: str
+    reason: str = ""
+
+
 class ProjectSummary(ProjectArcSnapshotFields):
     id: str
     title: str
@@ -495,6 +654,7 @@ class ProjectDeleteResponse(BaseModel):
     ok: bool
     project_id: str
     message: str
+    operation_id: str = ""
 
 
 class ProjectCreateRequest(BaseModel):
@@ -568,6 +728,34 @@ class BandCheckpointApproveRequest(BaseModel):
 
 class DecisionEventsResponse(BaseModel):
     items: list[DecisionEventInfo] = Field(default_factory=list)
+
+
+class TaskTimelineResponse(BaseModel):
+    task_id: str
+    project_id: str = ""
+    events: list[DecisionEventInfo] = Field(default_factory=list)
+
+
+class ChapterLedgerResponse(BaseModel):
+    project_id: str
+    chapter_number: int
+    plan_status: str = ""
+    events: list[DecisionEventInfo] = Field(default_factory=list)
+    prompt_trace_ids: list[str] = Field(default_factory=list)
+    artifact_uris: list[str] = Field(default_factory=list)
+
+
+class PromptTraceDetailResponse(PromptTraceInfo):
+    pass
+
+
+class ArtifactReadResponse(BaseModel):
+    uri: str
+    content_type: str = "text/plain; charset=utf-8"
+    size: int = 0
+    hash: str = ""
+    preview: str = ""
+    truncated: bool = False
 
 
 class CausalReplayResponse(BaseModel):
@@ -750,6 +938,7 @@ class ChapterReviewDetail(BaseModel):
     proposed_design_patch: dict[str, Any] = Field(default_factory=dict)
     rewrite_attempt_count: int = 0
     latest_repair_scope: str = ""
+    latest_repair_scope_reason: str = ""
     forced_accept_applied: bool = False
     acceptance_mode: str = ""
     repair_attempt_count: int = 0

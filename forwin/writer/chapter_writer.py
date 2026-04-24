@@ -902,6 +902,12 @@ class ChapterWriter:
             kwargs["timeout_seconds"] = timeout_seconds
         if "retry_on_timeout" in parameters:
             kwargs["retry_on_timeout"] = retry_on_timeout
+        if "task_family" in parameters:
+            kwargs["task_family"] = "writer"
+        if "stage_key" in parameters:
+            kwargs["stage_key"] = "chapter_draft"
+        if "output_schema" in parameters and response_format is not None:
+            kwargs["output_schema"] = {"type": "object"}
         return self.llm_client.chat(messages, **kwargs)
 
     def _attach_llm_fallback_events(self, output: WriterOutput) -> None:
@@ -929,9 +935,15 @@ class ChapterWriter:
             for item in prompt_layers
             if str(item.get("role", "")).strip() == "system"
         )
+        last_call_result = getattr(self.llm_client, "last_call_result", None)
+        trace = getattr(last_call_result, "trace", {}) if last_call_result is not None else {}
         return {
             "trace_scope": "writer",
             "stage_key": stage_key,
+            "backend": str(trace.get("backend", "") or getattr(last_call_result, "backend", "") or ""),
+            "codex_job_id": str(trace.get("codex_job_id", "") or ""),
+            "permission_profile": str(trace.get("permission_profile", "") or ""),
+            "fallback_used": bool(getattr(last_call_result, "fallback_used", False)) if last_call_result is not None else False,
             "template_id": template_id,
             "template_version": "v1",
             "effective_system_prompt": effective_system_prompt,

@@ -5,6 +5,7 @@ import json
 from forwin.protocol.review import RepairInstruction, RepairVerification, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.utils import parse_llm_json
+from forwin.llm.compat import call_chat_compat
 
 
 class RepairVerifier:
@@ -140,7 +141,8 @@ class RepairVerifier:
         repair_instruction: RepairInstruction,
     ) -> RepairVerification | None:
         try:
-            raw = self.llm_client.chat(
+            raw = call_chat_compat(
+                self.llm_client,
                 [
                     {
                         "role": "system",
@@ -167,6 +169,9 @@ class RepairVerifier:
                 max_tokens=1600,
                 timeout_seconds=30,
                 retry_on_timeout=False,
+                task_family="repair",
+                stage_key="repair_verification",
+                output_schema={"type": "object"},
             )
             payload = parse_llm_json(raw, error_prefix="Repair verification")
             verified = RepairVerification.model_validate(payload)

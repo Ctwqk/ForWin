@@ -5,3 +5,6 @@ __pycache__/
 data/novel.db
 *.egg-info/
 .env
+frontend/world-studio/node_modules/
+frontend/world-studio/dist/
+frontend/world-studio/tsconfig.tsbuildinfo

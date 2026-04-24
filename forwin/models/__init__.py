@@ -38,6 +38,14 @@ from .subworld import SubWorld, SubWorldRosterItem
 from .task import GenerationTask
 from .thread import PlotThread, PlotThreadBeat
 from .timeline import ChapterTimeline, StoryTimePoint
+from .world_model import (
+    WorldEditProposalRow,
+    WorldModelCompileRunRow,
+    WorldModelConflictRow,
+    WorldModelLinkRow,
+    WorldModelPageRow,
+    WorldModelSnapshotRow,
+)
 
 __all__ = [
     "Base",
@@ -86,6 +94,12 @@ __all__ = [
     # draft
     "ChapterDraft",
     "ChapterReview",
+    "WorldModelSnapshotRow",
+    "WorldModelPageRow",
+    "WorldModelLinkRow",
+    "WorldEditProposalRow",
+    "WorldModelConflictRow",
+    "WorldModelCompileRunRow",
     # publisher
     "CommentSignalCandidate",
     "FeedbackActionRecord",

@@ -119,6 +119,9 @@ class DecisionEventType:
     MEMORY_INDEX_UPSERT_STARTED = "memory_index_upsert_started"
     MEMORY_INDEX_UPSERT_SUCCEEDED = "memory_index_upsert_succeeded"
     MEMORY_INDEX_UPSERT_FAILED = "memory_index_upsert_failed"
+    WORLD_MODEL_COMPILE_STARTED = "world_model_compile_started"
+    WORLD_MODEL_COMPILE_SUCCEEDED = "world_model_compile_succeeded"
+    WORLD_MODEL_COMPILE_FAILED = "world_model_compile_failed"
 
 
 KNOWN_DECISION_EVENT_TYPES = {
@@ -173,6 +176,9 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.MEMORY_INDEX_UPSERT_STARTED,
     DecisionEventType.MEMORY_INDEX_UPSERT_SUCCEEDED,
     DecisionEventType.MEMORY_INDEX_UPSERT_FAILED,
+    DecisionEventType.WORLD_MODEL_COMPILE_STARTED,
+    DecisionEventType.WORLD_MODEL_COMPILE_SUCCEEDED,
+    DecisionEventType.WORLD_MODEL_COMPILE_FAILED,
 }
 
 PLAN_TASK_TYPES = {

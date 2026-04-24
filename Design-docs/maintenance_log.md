@@ -9,6 +9,26 @@
 - 如果改动尚未部署到 `8899`，必须明确写“未部署原因”和“切换条件”。
 - 旧的专项日志可保留，但关键结论需要汇总到这里。
 
+## 2026-04-24
+
+### V3.0 WorldModel 设计文档与维护口径更新
+
+新增 V3.0 统一设计文档，明确 WorldModel 是 canon 之后的确定性编译层，不替代 DB、Genesis、StateUpdater 或 DecisionEvent。
+
+关键变化：
+
+- 新增设计文档：[V3_0.md](/home/taiwei/ForWin/Design-docs/V3_0.md)。
+- 文档把原 V3.1-V3.6 六轨路线压缩为四个交付阶段：`V3.1` WorldModel 核心基座与只读 Wiki、`V3.2` canon 后自动编译与上下文接入、`V3.3` World Studio 与 Obsidian proposal 闭环、`V3.4` 冲突治理/图谱/LLM Wiki 维护。
+- 明确权威边界：DB / raw events / DecisionEvent 是源，`WorldModelSnapshot` 是可重建投影，Markdown / Obsidian 不是 canon。
+- 记录当前实现边界：proposal review 已有状态流和重新编译框架，但完整 adapter 到 Genesis / EntityState / RelationEdge / Conflict resolution 仍是后续工作。
+
+验证：
+
+- `test -f Design-docs/V3_0.md`
+- `grep -n "V3.0 WorldModel\\|四阶段路线图\\|V3.4" Design-docs/V3_0.md Design-docs/maintenance_log.md`
+
+部署状态：未部署到 `8899`。原因：本轮只更新设计文档与维护日志，不需要重建服务。切换条件：后续若要让线上页面/API 使用 V3.0 代码，需要先确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`，再执行容器重建与服务切换。
+
 ## 2026-04-22
 
 ### Genesis 世界观根模型统一（`BookGenesisPack.world`）
@@ -846,6 +866,25 @@ Genesis 工作台里的 AI 入口补齐模型选择，避免阶段生成/重生/
 - 在宿主机 `.venv` 或 shell 中发请求。
 - 用容器内 Python 标准库/httpx 脚本发请求。
 - 如确实需要容器内 curl，需要修改 Dockerfile 安装，但这会增大镜像并要求重建。
+
+## 2026-04-24
+
+### Codex Pro Runtime 接入
+
+ForWin 新增 Host Codex Bridge 方案：宿主机 bridge 复用本机 `codex exec` / Pro 登录，Docker 内 ForWin 通过 `host.docker.internal:8897` 调用，不把 Pro 订阅伪装成 API key profile。
+
+关键约束：
+
+- `chapter_plan_materialization` 固定走普通 LLM，不走 Codex。
+- Genesis、writer、reviewer、repair、Phase4、WorldModel 相关调用可按路由优先走 Codex，失败回退普通 LLM。
+- Codex 后台写能力只能进入 governed action/proposal/review/conflict 管理层，不能直接写 canon、不能直接调用 `StateUpdater.apply_*`。
+- PromptTrace 增加 `backend`、`codex_job_id`、`permission_profile`、`fallback_used`，用于后续排查 Codex/fallback 行为。
+
+运维备注：
+
+- 宿主机启动 bridge：`FORWIN_CODEX_BRIDGE_TOKEN=... forwin-codex-bridge`。
+- 容器侧启用：`FORWIN_CODEX_ENABLED=true`，并配置同一个 `FORWIN_CODEX_BRIDGE_TOKEN`。
+- 首页配置页新增 Codex Bridge health，只检查 bridge/CLI 可用性，不检查 OpenAI API key。
 
 ## 2026-04-15
 

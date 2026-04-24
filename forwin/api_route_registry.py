@@ -12,6 +12,7 @@ from forwin import (
     api_publisher_routes,
     api_system_routes,
     api_task_routes,
+    api_world_model_routes,
 )
 from forwin.api_schemas import (
     ActiveGenerationTaskCheckResponse,
@@ -25,6 +26,7 @@ from forwin.api_schemas import (
     ChapterInfo,
     ChapterReviewApproveResponse,
     ChapterReviewDetail,
+    CodexBridgeStatusResponse,
     DecisionEventsResponse,
     ExtensionBrowserSessionResponse,
     ExtensionClaimCommentSyncJobResponse,
@@ -55,6 +57,15 @@ from forwin.api_schemas import (
     TropeRegistrySummaryResponse,
     TropeTemplateInfo,
     TropeTemplateValidationResponse,
+    WorldEditProposalInfo,
+    WorldEditProposalReviewRequest,
+    WorldModelConflictInfo,
+    WorldModelExportRequest,
+    WorldModelExportResponse,
+    WorldModelImportRequest,
+    WorldModelImportResponse,
+    WorldModelPageInfo,
+    WorldModelSnapshotInfo,
 )
 
 
@@ -212,6 +223,9 @@ def register_api_routes(
         log_decision_event=log_decision_event,
         json_load_object=json_load_object,
     )
+    world_model_handlers = api_world_model_routes.build_handlers(
+        get_session=get_session,
+    )
 
     handlers = {
         **system_handlers,
@@ -219,12 +233,15 @@ def register_api_routes(
         **publisher_handlers,
         **project_handlers,
         **governance_handlers,
+        **world_model_handlers,
     }
 
     route_definitions = [
         ("/health", ["GET"], handlers["health"], {}),
         ("/", ["GET"], handlers["home_page"], {"response_class": HTMLResponse}),
         ("/publishers", ["GET"], handlers["publishers_page"], {"response_class": HTMLResponse}),
+        ("/world-studio", ["GET"], handlers["world_studio_page"], {"response_class": HTMLResponse}),
+        ("/world-studio/assets/{asset_path:path}", ["GET"], handlers["world_studio_asset"], {}),
         ("/api/generate", ["POST"], handlers["generate"], {"response_model": TaskResponse}),
         ("/api/settings/llm", ["GET"], handlers["get_llm_settings"], {"response_model": LLMSettingsResponse}),
         ("/api/settings/llm", ["POST"], handlers["save_llm_settings"], {"response_model": LLMSettingsResponse}),
@@ -232,6 +249,7 @@ def register_api_routes(
         ("/api/settings/llm/profiles", ["POST"], handlers["save_llm_profile"], {"response_model": LLMSettingsResponse}),
         ("/api/settings/llm/default-profile", ["POST"], handlers["set_default_llm_profile"], {"response_model": LLMSettingsResponse}),
         ("/api/settings/llm/profiles/{profile_id}", ["DELETE"], handlers["delete_llm_profile"], {"response_model": LLMSettingsResponse}),
+        ("/api/settings/codex/health", ["GET"], handlers["get_codex_bridge_status"], {"response_model": CodexBridgeStatusResponse}),
         ("/api/tasks/active-generation-check", ["GET"], handlers["active_generation_task_check"], {"response_model": ActiveGenerationTaskCheckResponse}),
         ("/api/tasks/{task_id}", ["GET"], handlers["get_task"], {"response_model": TaskResponse}),
         ("/api/tasks", ["GET"], handlers["list_tasks"], {"response_model": list[TaskSummaryResponse]}),
@@ -269,6 +287,15 @@ def register_api_routes(
         ("/api/projects/{project_id}/genesis/stages/{stage_key}/rerun", ["POST"], handlers["rerun_project_genesis_stage"], {"response_model": BookGenesisDetail}),
         ("/api/projects/{project_id}/genesis/stages/{stage_key}/refine", ["POST"], handlers["refine_project_genesis_stage"], {"response_model": BookGenesisDetail}),
         ("/api/projects/{project_id}/genesis/generate-name", ["POST"], handlers["generate_project_genesis_name"], {"response_model": BookGenesisNameGenerateResponse}),
+        ("/api/projects/{project_id}/world-model/snapshots", ["GET"], handlers["list_project_world_model_snapshots"], {"response_model": list[WorldModelSnapshotInfo]}),
+        ("/api/projects/{project_id}/world-model/snapshots/latest", ["GET"], handlers["get_latest_project_world_model_snapshot"], {"response_model": WorldModelSnapshotInfo}),
+        ("/api/projects/{project_id}/world-model/pages", ["GET"], handlers["list_project_world_model_pages"], {"response_model": list[WorldModelPageInfo]}),
+        ("/api/projects/{project_id}/world-model/pages/{page_key}", ["GET"], handlers["get_project_world_model_page"], {"response_model": WorldModelPageInfo}),
+        ("/api/projects/{project_id}/world-model/conflicts", ["GET"], handlers["list_project_world_model_conflicts"], {"response_model": list[WorldModelConflictInfo]}),
+        ("/api/projects/{project_id}/world-model/export-obsidian", ["POST"], handlers["export_project_world_model"], {"response_model": WorldModelExportResponse}),
+        ("/api/projects/{project_id}/world-model/import-obsidian", ["POST"], handlers["import_project_world_model"], {"response_model": WorldModelImportResponse}),
+        ("/api/projects/{project_id}/world-model/proposals", ["GET"], handlers["list_project_world_model_proposals"], {"response_model": list[WorldEditProposalInfo]}),
+        ("/api/projects/{project_id}/world-model/proposals/{proposal_id}/review", ["POST"], handlers["review_project_world_model_proposal"], {"response_model": WorldEditProposalInfo}),
         ("/api/projects/{project_id}/start-writing", ["POST"], handlers["start_project_writing"], {"response_model": StartWritingResponse}),
         ("/api/projects/{project_id}/continue-generation", ["POST"], handlers["continue_project_generation"], {"response_model": TaskResponse}),
         ("/api/projects/{project_id}/automation", ["PUT"], handlers["update_project_automation"], {"response_model": ProjectAutomationUpdateResponse}),

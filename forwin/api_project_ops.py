@@ -49,6 +49,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
+from forwin.world_model.compiler import WorldModelCompiler
 
 
 def _load_json_object(raw: str, default):
@@ -608,7 +609,7 @@ def start_project_writing(
     if not config:
         raise HTTPException(503, "服务尚未初始化")
     runtime_config = saved_runtime_config_or_default()
-    if not runtime_config.minimax_api_key:
+    if not runtime_config.minimax_api_key and not bool(getattr(runtime_config, "codex_enabled", False)):
         raise HTTPException(400, "MINIMAX_API_KEY 未设置。请先配置模型，再启动写作。")
     session = get_session()
     genesis_service = None
@@ -660,6 +661,7 @@ def start_project_writing(
         world_bible = world.get("world_bible") if isinstance(world.get("world_bible"), dict) else {}
         if not str(project.setting_summary or "").strip():
             project.setting_summary = str(world_bible.get("overview", "") or "").strip()
+        WorldModelCompiler(session).bootstrap_from_genesis(project.id)
         project.creation_status = "writing"
         session.add(project)
         session.commit()

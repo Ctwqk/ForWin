@@ -275,6 +275,34 @@ def _world_pressure_section(context: ChapterContextPack) -> str | None:
     )
 
 
+def _world_model_section(context: ChapterContextPack) -> str | None:
+    world_context = getattr(context, "world_context", None)
+    if not world_context or not world_context.snapshot_id:
+        return None
+    lines = [
+        "【WorldModel 当前世界状态】",
+        f"  · snapshot：第 {world_context.as_of_chapter} 章后 / {world_context.snapshot_id}",
+    ]
+    if world_context.active_world_conflicts:
+        lines.append("  · 禁止忽略的世界矛盾：")
+        lines.extend(
+            f"    - {item.severity} {item.conflict_type}：{item.description}"
+            for item in world_context.active_world_conflicts[:4]
+        )
+    if world_context.relevant_world_pages:
+        lines.append("  · 相关世界页：")
+        for page in world_context.relevant_world_pages[:6]:
+            summary = page.markdown.split("## Current State", 1)[0]
+            summary = summary.replace("\n", " ")[:220]
+            lines.append(f"    - {page.title}（{page.page_type}）：{summary}")
+    if world_context.active_promises:
+        lines.append("  · 当前读者承诺：")
+        lines.extend(f"    - {page.title}" for page in world_context.active_promises[:4])
+    if world_context.active_secrets:
+        lines.append("  · 秘密可见性：不得提前揭示 secret 页面中的 hidden truth，除非本章计划明确要求。")
+    return "\n".join(lines)
+
+
 def _audience_hints_section(context: ChapterContextPack) -> str | None:
     hints = getattr(context, "audience_hints", None)
     if not hints:
@@ -375,6 +403,7 @@ def _scene_prompt_sections(
             detailed=feedback_detailed,
         ),
         _world_pressure_section(context),
+        _world_model_section(context),
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=memory_limit, excerpt_chars=80),
         _timeline_section(context),

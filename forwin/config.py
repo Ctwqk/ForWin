@@ -91,6 +91,7 @@ def _env_values() -> dict[str, object]:
         "band_warn_action": os.environ.get("BAND_WARN_ACTION", "pause"),
         "manual_checkpoints_enabled": os.environ.get("MANUAL_CHECKPOINTS_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
         "future_constraints_enabled": os.environ.get("FUTURE_CONSTRAINTS_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
+        "legacy_provisional_blocking": os.environ.get("FORWIN_LEGACY_PROVISIONAL_BLOCKING", "false").strip().lower() in {"1", "true", "yes"},
         "skill_runtime_enabled": os.environ.get("FORWIN_SKILL_RUNTIME_ENABLED", "true").strip().lower() not in {"0", "false", "no"},
         "skill_registry_path": os.environ.get("FORWIN_SKILL_REGISTRY_PATH", "forwin_skills"),
         "skill_strictness": os.environ.get("FORWIN_SKILL_STRICTNESS", "normal"),
@@ -186,6 +187,7 @@ class _ConfigFields:
     band_warn_action: str = "pause"
     manual_checkpoints_enabled: bool = True
     future_constraints_enabled: bool = True
+    legacy_provisional_blocking: bool = False
     skill_runtime_enabled: bool = True
     skill_registry_path: str = "forwin_skills"
     skill_strictness: str = "normal"

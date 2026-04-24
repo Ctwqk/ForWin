@@ -2388,5 +2388,24 @@ def upgrade_db(engine: Engine) -> None:
             MigrationSpec("world_v4_compile_audit_v1", apply_world_v4_compile_audit_v1)
         )
 
+        def apply_scenario_rehearsal_v1(conn) -> None:
+            from forwin import models as _models  # noqa: F401
+
+            Base.metadata.create_all(bind=conn)
+
+        migrations.append(MigrationSpec("scenario_rehearsal_v1", apply_scenario_rehearsal_v1))
+
+        def apply_candidate_draft_and_scenario_patches_v1(conn) -> None:
+            from forwin import models as _models  # noqa: F401
+
+            Base.metadata.create_all(bind=conn)
+
+        migrations.append(
+            MigrationSpec(
+                "candidate_draft_and_scenario_patches_v1",
+                apply_candidate_draft_and_scenario_patches_v1,
+            )
+        )
+
         for migration in migrations:
             _run_migration(conn, migration.version, migration.apply_fn)

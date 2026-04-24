@@ -777,6 +777,36 @@ class ArcDirector:
             fallback=fallback,
         )
 
+    def rehearse_scenario(self, *, report: dict[str, Any]) -> dict:
+        fallback = {
+            "recommendation": "pass",
+            "risk_findings": [],
+            "future_conflicts": [],
+            "required_plan_patches": [],
+        }
+        prompt = [
+            {
+                "role": "system",
+                "content": "你是叙事 preflight 导演，只输出 JSON 对象，不要 markdown。",
+            },
+            {
+                "role": "user",
+                "content": (
+                    "请审查 Scenario Rehearsal 报告，重点判断误会/欺骗是否成立、"
+                    "读者认知是否过早或过晚、当前计划是否锁死未来 arc。\n"
+                    "只输出字段：recommendation(pass|patch|replan|block)、risk_findings、"
+                    "future_conflicts、required_plan_patches。\n\n"
+                    f"ScenarioRehearsalReport={json.dumps(report, ensure_ascii=False)}"
+                ),
+            },
+        ]
+        return self._call_json(
+            prompt,
+            temperature=0.2,
+            max_tokens=min(self.max_tokens, 1200),
+            fallback=fallback,
+        )
+
     def _call_json(
         self,
         messages: list[dict],

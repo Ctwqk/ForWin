@@ -49,7 +49,7 @@ ForWin 当前可以定义为：
 
 因此总规划可以表述成：
 
-> `v2.3` 是生产主链，`v2.6` 是反馈校准层，`v2.7` 是体验规划与体验审查层。三者叠加后，形成“计划 -> 预演 -> 写作 -> 审查 -> canon -> 后分析 -> 反馈校准 -> 下一轮计划”的闭环。
+> `v2.3` 是生产主链，`v2.6` 是反馈校准层，`v2.7` 是体验规划与体验审查层。4.1 起，主闭环调整为“计划 -> Scenario Rehearsal -> plan patch/replan/approve -> 写作 -> Candidate Draft Review -> canon -> 后分析 -> 反馈校准 -> 下一轮计划”。旧 provisional preview 只作为 legacy compatibility，不再是核心 gate。完整 4.1 实现中，Scenario Rehearsal 由 trigger matrix + deterministic rule pack + hybrid director simulation 驱动；Candidate Draft 是独立候选正文记录层，而非 provisional rehearsal 的别名。
 
 ### 3.2 统一目标
 
@@ -79,7 +79,9 @@ ForWin 当前可以定义为：
 
 1. 多层规划
    - 已有 `Arc -> Band -> Chapter` 的规划与派生链。
-   - band 级 provisional 预演会在正式 canon 前执行。
+   - band / chapter 边界的 Scenario Rehearsal 会在 Writer 下笔前按风险触发执行；旧 provisional preview 仅在 legacy 开关打开时执行。
+   - Scenario plan patch 可自动应用、人工批准、或 rerun；未解决的 patch/replan/block 会进入 checkpoint/governance。
+   - Candidate Draft 记录 writer body、scene/state/event/thread candidates、review、repair、canon commit/failure 状态。
 
 2. scene-aware Writer
    - 支持 scene breakdown、scene generation、scene stitch。

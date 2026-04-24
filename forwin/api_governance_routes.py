@@ -10,6 +10,7 @@ from forwin.api_schemas import (
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
     ProjectGovernanceUpdateRequest,
+    ScenarioPlanPatchApproveRequest,
     TaskContractUpdateRequest,
     TropeTemplateValidationRequest,
 )
@@ -224,6 +225,34 @@ def build_handlers(
             display_datetime=display_datetime,
         )
 
+    def get_latest_scenario_rehearsal(project_id: str):
+        return api_governance_ops.get_latest_scenario_rehearsal(
+            project_id,
+            get_session=get_session,
+            display_datetime=display_datetime,
+        )
+
+    def rerun_scenario_rehearsal(project_id: str, run_id: str):
+        return api_governance_ops.rerun_scenario_rehearsal(
+            project_id,
+            run_id,
+            get_session=get_session,
+            display_datetime=display_datetime,
+        )
+
+    def approve_scenario_plan_patch(
+        project_id: str,
+        patch_id: str,
+        req: ScenarioPlanPatchApproveRequest,
+    ):
+        return api_governance_ops.approve_scenario_plan_patch(
+            project_id,
+            patch_id,
+            reason=req.reason,
+            get_session=get_session,
+            display_datetime=display_datetime,
+        )
+
     def get_trope_templates(category: str = "", q: str = "", limit: int = 0):
         return api_governance_ops.get_trope_templates(
             category=category,
@@ -267,6 +296,9 @@ def build_handlers(
         "get_project_causal_replay": get_project_causal_replay,
         "get_project_governance_insights": get_project_governance_insights,
         "get_latest_provisional_band": get_latest_provisional_band,
+        "get_latest_scenario_rehearsal": get_latest_scenario_rehearsal,
+        "rerun_scenario_rehearsal": rerun_scenario_rehearsal,
+        "approve_scenario_plan_patch": approve_scenario_plan_patch,
         "get_trope_templates": get_trope_templates,
         "get_trope_template_summary": get_trope_template_summary,
         "validate_trope_templates": validate_trope_templates,

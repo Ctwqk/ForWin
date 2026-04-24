@@ -33,6 +33,7 @@ from forwin.planning.world_contracts import (
     RevealLadderStep,
     WorldContractRepository,
 )
+from forwin.planning.scenario_rehearsal_resolution import ScenarioRehearsalCoordinator
 from forwin.protocol.experience import (
     AmbiguityPayoff,
     ArcPayoffMap,
@@ -42,6 +43,7 @@ from forwin.protocol.experience import (
     CuriosityBeat,
     ReaderPromise,
 )
+from forwin.protocol.scenario_rehearsal import ScenarioRehearsalReport, ScenarioRehearsalRecommendation
 from forwin.protocol.trope_library import TROPE_TEMPLATE_LIBRARY, trope_templates_by_category
 from forwin.state.updater import StateUpdater
 from forwin.subworld_manager import SubWorldManager
@@ -167,10 +169,31 @@ class ArcEnvelopeManager:
         director: ArcDirector | None = None,
         provisional_executor: Any | None = None,
         subworld_manager: SubWorldManager | None = None,
+        legacy_preview_enabled: bool = False,
+        scenario_progress_callback: Any | None = None,
     ) -> None:
         self.director = director
         self.provisional_executor = provisional_executor
         self.subworld_manager = subworld_manager or SubWorldManager(director=director)
+        self.legacy_preview_enabled = legacy_preview_enabled
+        self.scenario_progress_callback = scenario_progress_callback
+
+    def _emit_scenario_progress(
+        self,
+        *,
+        stage: str,
+        project_id: str,
+        chapter_number: int = 0,
+        message: str = "",
+    ) -> None:
+        if self.scenario_progress_callback is None:
+            return
+        self.scenario_progress_callback(
+            stage=stage,
+            project_id=project_id,
+            current_chapter=chapter_number,
+            message=message,
+        )
 
     def ensure_active_arc_resolution(
         self,
@@ -316,12 +339,64 @@ class ArcEnvelopeManager:
         session.add(structure_row)
         session.flush()
 
-        preview = self._execute_provisional_band(
+        self._persist_world_contracts(
             session=session,
             project_id=project_id,
             arc_id=active_arc.id,
+            chapter_plans=chapter_plans,
+            activation_chapter=activation_chapter,
+            detailed_band_size=provisional_target,
+        )
+        self._emit_scenario_progress(
+            stage="running_scenario_rehearsal",
+            project_id=project_id,
+            chapter_number=provisional_band[0].chapter_number if provisional_band else 0,
+        )
+        rehearsal_outcome = ScenarioRehearsalCoordinator(session, director=self.director).run_for_band(
+            project_id=project_id,
+            arc_id=active_arc.id,
             band_id=band_id,
-            chapter_plans=provisional_band,
+            chapter_numbers=[plan.chapter_number for plan in provisional_band],
+        )
+        rehearsal = rehearsal_outcome.report
+        if rehearsal.arc_id and rehearsal.arc_id != active_arc.id:
+            replanned_arc = session.get(ArcPlanVersion, rehearsal.arc_id)
+            if replanned_arc is not None:
+                active_arc = replanned_arc
+                chapter_plans = session.execute(
+                    select(ChapterPlan)
+                    .where(ChapterPlan.arc_plan_id == active_arc.id)
+                    .order_by(ChapterPlan.chapter_number.asc())
+                ).scalars().all()
+                provisional_band = [
+                    plan
+                    for plan in chapter_plans
+                    if int(plan.chapter_number or 0) in set(rehearsal.chapter_numbers)
+                ]
+        if rehearsal_outcome.status in {"manual_patch_required", "replan_required"}:
+            self._emit_scenario_progress(
+                stage="scenario_rehearsal_patch_required",
+                project_id=project_id,
+                chapter_number=provisional_band[0].chapter_number if provisional_band else 0,
+                message="Scenario rehearsal 要求计划补丁或重排。",
+            )
+        elif rehearsal_outcome.status == "blocked":
+            self._emit_scenario_progress(
+                stage="scenario_rehearsal_blocked",
+                project_id=project_id,
+                chapter_number=provisional_band[0].chapter_number if provisional_band else 0,
+                message="Scenario rehearsal 阻断当前计划。",
+            )
+        preview = (
+            self._execute_provisional_band(
+                session=session,
+                project_id=project_id,
+                arc_id=active_arc.id,
+                band_id=band_id,
+                chapter_plans=provisional_band,
+            )
+            if self.legacy_preview_enabled
+            else None
         )
         resolution = self._resolve_envelope(
             chapter_plans=chapter_plans,
@@ -334,6 +409,7 @@ class ArcEnvelopeManager:
             provisional_band=provisional_band,
             band_id=band_id,
             preview=preview,
+            rehearsal=rehearsal,
         )
         envelope = ArcEnvelope(
             id=new_id(),
@@ -1282,11 +1358,12 @@ class ArcEnvelopeManager:
         provisional_band: list[ChapterPlan],
         band_id: str,
         preview: ProvisionalBandPreview | None,
+        rehearsal: ScenarioRehearsalReport | None = None,
     ) -> ArcEnvelopeResolution:
         evidence = [
             f"policy={policy.name}",
             f"base_target={base_target_size}",
-            f"provisional_band={len(provisional_band)}",
+            f"scenario_band={len(provisional_band)}",
         ]
         expansion_signals: list[str] = []
         compression_signals: list[str] = []
@@ -1297,7 +1374,27 @@ class ArcEnvelopeManager:
         if len(structure.compression_candidates) >= 2:
             compression_signals.append("中段存在可压缩片段")
         if len(provisional_band) <= max(4, base_target_size // 3):
-            compression_signals.append("近端预演带较短")
+            compression_signals.append("近端 rehearsal band 较短")
+        if rehearsal is not None:
+            evidence.extend(
+                [
+                    f"scenario_rehearsal={rehearsal.recommendation.value}",
+                    f"scenario_risk_count={len(rehearsal.risk_findings)}",
+                    f"scenario_patch_count={len(rehearsal.required_plan_patches)}",
+                ]
+            )
+            if rehearsal.recommendation == ScenarioRehearsalRecommendation.PASS:
+                expansion_signals.append("scenario rehearsal 通过")
+            elif rehearsal.recommendation == ScenarioRehearsalRecommendation.PATCH:
+                evidence.append("scenario rehearsal 要求 plan patch")
+            elif rehearsal.recommendation in {
+                ScenarioRehearsalRecommendation.REPLAN,
+                ScenarioRehearsalRecommendation.BLOCK,
+            }:
+                compression_signals.append("scenario rehearsal 暴露高风险结构问题")
+            for finding in rehearsal.risk_findings:
+                if finding.severity == "fail":
+                    compression_signals.append(f"scenario blocker: {finding.risk_type}")
         if preview is not None:
             evidence.extend(
                 [

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .base import Base, get_engine, get_session_factory, init_db, new_id
-from .draft import ChapterDraft, ChapterReview
+from .draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from .entity import Entity, EntityAlias, EntityState, RelationEdge
 from .event import CanonEvent, EventEntityLink
 from .genesis import BookGenesisRevision, PromptTrace
@@ -57,6 +57,8 @@ from .world_v4 import (
     KnowledgeUpdateEventRow,
     ReaderExperienceDeltaRow,
     RevealEventRow,
+    ScenarioRehearsalRunRow,
+    ScenarioPlanPatchRow,
     WorldCompileRunV4Row,
     WorldDeltaRow,
     WorldLineRow,
@@ -111,6 +113,7 @@ __all__ = [
     # draft
     "ChapterDraft",
     "ChapterReview",
+    "CandidateDraftRecord",
     "WorldModelSnapshotRow",
     "WorldModelPageRow",
     "WorldModelLinkRow",
@@ -139,6 +142,8 @@ __all__ = [
     "RevealEventRow",
     "KnowledgeUpdateEventRow",
     "ReaderExperienceDeltaRow",
+    "ScenarioRehearsalRunRow",
+    "ScenarioPlanPatchRow",
     "WorldModelSnapshotV4Row",
     "WorldCompileRunV4Row",
     "ArcWorldContractRow",

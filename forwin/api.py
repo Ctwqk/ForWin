@@ -53,6 +53,7 @@ from forwin.api_runtime import (
     run_continue_project_with_config,
     run_generation_with_config,
 )
+from forwin.api_task_history import augment_task_with_rehearsal_history
 from forwin.api_schemas import (
     BandCheckpointApproveRequest,
     BandCheckpointDetail,
@@ -64,6 +65,7 @@ from forwin.api_schemas import (
     BookGenesisRefineRequest,
     BookGenesisStageRunRequest,
     CausalReplayResponse,
+    CandidateDraftDetail,
     DecisionEventsResponse,
     BulkDeleteResponse,
     ChapterDetail,
@@ -167,7 +169,6 @@ from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.phase import (
     BandExperiencePlan,
     ChapterRewriteAttempt,
-    ProvisionalBandExecution,
 )
 from forwin.models.timeline import ChapterTimeline, StoryTimePoint
 from forwin.models.phase4 import NPCIntentSnapshot
@@ -233,6 +234,9 @@ _GENERATION_STAGE_ORDER = [
     "planning_arc",
     "creating_project",
     "resolving_arc_envelope",
+    "running_scenario_rehearsal",
+    "scenario_rehearsal_patch_required",
+    "scenario_rehearsal_blocked",
     "running_provisional_preview",
     "provisional_failed",
     "assembling_context",
@@ -597,61 +601,11 @@ def _apply_task_visibility_rules(
 
 
 def _augment_task_with_provisional_history(session, task: dict[str, Any]) -> dict[str, Any]:
-    project_id = str(task.get("project_id", "") or "").strip()
-    if not project_id or _task_has_stage(task, "running_provisional_preview"):
-        return task
-
-    created_at = _coerce_task_datetime(task.get("created_at"))
-    finished_at = _coerce_task_datetime(task.get("finished_at"))
-    updated_at = _coerce_task_datetime(task.get("updated_at"))
-    window_end = max(finished_at, updated_at)
-    if created_at == datetime.min.replace(tzinfo=timezone.utc):
-        return task
-    if window_end == datetime.min.replace(tzinfo=timezone.utc):
-        window_end = _utcnow()
-
-    execution = session.execute(
-        select(ProvisionalBandExecution)
-        .where(
-            ProvisionalBandExecution.project_id == project_id,
-            ProvisionalBandExecution.created_at >= created_at - timedelta(seconds=5),
-            ProvisionalBandExecution.created_at <= window_end + timedelta(seconds=5),
-        )
-        .order_by(ProvisionalBandExecution.created_at.asc())
-        .limit(1)
-    ).scalar_one_or_none()
-    if execution is None:
-        return task
-
-    try:
-        chapter_numbers = json.loads(execution.chapter_numbers_json or "[]")
-    except json.JSONDecodeError:
-        chapter_numbers = []
-    chapter = int(chapter_numbers[0]) if chapter_numbers else 0
-    augmented = dict(task)
-    history = list(augmented.get("stage_history", []))
-    history.append(
-        _new_stage_history_entry(
-            "running_provisional_preview",
-            now=execution.created_at,
-            current_chapter=chapter,
-            message=str(augmented.get("message", "")).strip(),
-        )
+    return augment_task_with_rehearsal_history(
+        session,
+        task,
+        display_datetime=_display_datetime,
     )
-    if (
-        str(execution.aggregate_verdict or "").strip().lower() == "fail"
-        or int(execution.failure_count or 0) > 0
-    ) and not _task_has_stage(augmented, "provisional_failed"):
-        history.append(
-            _new_stage_history_entry(
-                "provisional_failed",
-                now=execution.created_at,
-                current_chapter=chapter,
-                message="Provisional 预演失败，已阻断正式写作。",
-            )
-        )
-    augmented["stage_history"] = history
-    return augmented
 
 
 def _is_sqlite_locked_error(exc: Exception) -> bool:

@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
 
-from forwin.api_project_payloads import build_provisional_band_detail, latest_provisional_band_execution
+from forwin.api_project_payloads import (
+    build_provisional_band_detail,
+    build_scenario_rehearsal_detail,
+    latest_provisional_band_execution,
+    latest_scenario_rehearsal_run,
+)
 from forwin.api_schemas import (
     BandCheckpointApproveRequest,
     BandCheckpointDetail,
@@ -23,6 +29,8 @@ from forwin.api_schemas import (
     ProjectGovernanceResponse,
     ProjectGovernanceUpdateRequest,
     ProvisionalBandDetail,
+    ScenarioPlanPatchApproveRequest,
+    ScenarioRehearsalDetail,
     TaskContractResponse,
     TaskContractUpdateRequest,
     TropeRegistrySummaryResponse,
@@ -39,6 +47,9 @@ from forwin.models.base import Base
 from forwin.models.governance import BandCheckpoint, NarrativeConstraint
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan, Project
+from forwin.models.world_v4 import ScenarioPlanPatchRow, ScenarioRehearsalRunRow
+from forwin.planning.scenario_rehearsal_resolution import ScenarioRehearsalCoordinator
+from forwin.protocol.scenario_rehearsal import ScenarioPlanPatch, ScenarioRehearsalReport
 from forwin.protocol.experience import BandDelightSchedule
 from forwin.protocol.trope_library import (
     TROPE_TEMPLATE_LIBRARY,
@@ -699,6 +710,133 @@ def get_latest_provisional_band(
             latest=latest,
             display_datetime=display_datetime,
         )
+    finally:
+        session.close()
+
+
+def get_latest_scenario_rehearsal(
+    project_id: str,
+    *,
+    get_session,
+    display_datetime,
+) -> ScenarioRehearsalDetail:
+    session = get_session()
+    try:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+
+        latest = latest_scenario_rehearsal_run(session, project_id)
+        if latest is None:
+            raise HTTPException(404, "项目暂无 scenario rehearsal 记录")
+        return build_scenario_rehearsal_detail(
+            project_id=project_id,
+            latest=latest,
+            display_datetime=display_datetime,
+        )
+    finally:
+        session.close()
+
+
+def rerun_scenario_rehearsal(
+    project_id: str,
+    run_id: str,
+    *,
+    get_session,
+    display_datetime,
+) -> ScenarioRehearsalDetail:
+    session = get_session()
+    try:
+        run = session.get(ScenarioRehearsalRunRow, run_id)
+        if run is None or run.project_id != project_id:
+            raise HTTPException(404, "scenario rehearsal run 不存在")
+        try:
+            chapter_numbers = json.loads(run.chapter_numbers_json or "[]") or []
+        except (json.JSONDecodeError, TypeError):
+            chapter_numbers = []
+        chapter_numbers = [
+            int(item)
+            for item in chapter_numbers
+            if str(item).strip().lstrip("-").isdigit()
+        ]
+        outcome = ScenarioRehearsalCoordinator(session).run_for_band(
+            project_id=project_id,
+            arc_id=str(run.arc_id or ""),
+            band_id=str(run.band_id or ""),
+            chapter_numbers=chapter_numbers,
+        )
+        session.commit()
+        report = outcome.report
+        return ScenarioRehearsalDetail(
+            project_id=project_id,
+            arc_id=report.arc_id,
+            band_id=report.band_id,
+            rehearsal_scope=report.rehearsal_scope,
+            chapter_numbers=list(report.chapter_numbers),
+            trigger_reasons=list(report.trigger_reasons),
+            recommendation=report.recommendation.value,
+            risk_count=len(report.risk_findings),
+            blocker_count=sum(1 for item in report.risk_findings if item.severity == "fail"),
+            required_patch_count=len(report.required_plan_patches),
+            resolution_status=report.resolution_status,
+            patch_attempt_count=report.patch_attempt_count,
+            checkpoint_id=report.checkpoint_id,
+            replan_event_id=report.replan_event_id,
+            report=report.model_dump(mode="json"),
+            created_at=display_datetime(None),
+        )
+    finally:
+        session.close()
+
+
+def approve_scenario_plan_patch(
+    project_id: str,
+    patch_id: str,
+    *,
+    reason: str,
+    get_session,
+    display_datetime,
+) -> ScenarioRehearsalDetail:
+    session = get_session()
+    try:
+        patch_row = session.get(ScenarioPlanPatchRow, patch_id)
+        if patch_row is None or patch_row.project_id != project_id:
+            raise HTTPException(404, "scenario plan patch 不存在")
+        run = session.get(ScenarioRehearsalRunRow, patch_row.run_id)
+        if run is None:
+            raise HTTPException(404, "scenario rehearsal run 不存在")
+        try:
+            report = ScenarioRehearsalReport.model_validate(json.loads(run.report_json or "{}"))
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise HTTPException(409, "scenario rehearsal report 无法解析") from exc
+        try:
+            patch = ScenarioPlanPatch.model_validate(json.loads(patch_row.patch_json or "{}"))
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise HTTPException(409, "scenario plan patch 无法解析") from exc
+        coordinator = ScenarioRehearsalCoordinator(session)
+        applied = coordinator._apply_known_patches(  # noqa: SLF001 - API shares the patch executor.
+            report.model_copy(update={"required_plan_patches": [patch]})
+        )
+        status = applied[0].status if applied else "failed"
+        patch_row.status = "applied" if status == "applied" else status
+        patch_row.approval_reason = str(reason or "")
+        patch_row.applied_at = datetime.now(timezone.utc) if patch_row.status == "applied" else None
+        session.add(patch_row)
+        session.commit()
+        detail = build_scenario_rehearsal_detail(
+            project_id=project_id,
+            latest=run,
+            display_datetime=display_datetime,
+        )
+        updated_report = dict(detail.report)
+        updated_report.update(
+            {
+                "applied_patch_id": patch_id,
+                "patch_status": patch_row.status,
+                "approval_reason": patch_row.approval_reason,
+            }
+        )
+        return detail.model_copy(update={"report": updated_report})
     finally:
         session.close()
 

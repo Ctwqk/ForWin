@@ -1,4 +1,34 @@
-Provisional 逻辑说明（代码核对版）
+Provisional / Scenario Rehearsal 逻辑说明（4.1 代码核对版）
+
+> 4.1 修订：旧 `provisional preview` 已从核心机制降级为 legacy compatibility。新的主流程把“写之前判断计划能不能写”交给 `Scenario Rehearsal`，把“写之后判断正文能不能入 canon”交给 `Candidate Draft Review`。旧 `ProvisionalBandExecution` / `ProvisionalChapterLedger` / `ProvisionalPromotionRecord` 仍保留，用于历史兼容、legacy preview 和审计展示，但不再默认阻断正式写作。
+>
+> 4.1 完整架构补齐：`Candidate Draft` 已成为独立语义记录层，链接 `ChapterDraft` / `ChapterReview` / repair attempts / canon commit 状态；`Scenario Rehearsal` 已拆出 trigger matrix、deterministic rule pack、hybrid director simulation、plan patch approve / rerun API。legacy provisional 不参与新主线判断，除非显式开启 legacy 开关。
+
+## 0. 4.1 术语边界
+
+```text
+Scenario Rehearsal：Writer 下笔前的结构化叙事/世界/认知/爽点预检。
+Candidate Draft：Writer 产出的候选正文及其 scene/state/event/thread candidates。
+Candidate Draft Review：候选正文入 canon 前的 review/repair/final acceptance。
+Canon Commit：通过 review 后才正式改变 canonical world/timeline/thread state。
+Legacy Preview：旧 provisional band preview，仅在 legacy 开关启用时运行。
+Scenario Plan Patch：Scenario Rehearsal 产出的计划补丁记录，可自动应用、等待人工批准，或 rerun 后转为 pass/replan/block。
+```
+
+4.1 runtime 顺序：
+
+```text
+Book Genesis / Arc Plan
+  -> Scenario Rehearsal
+  -> pass | auto patch + rerun | replan | checkpoint/block
+  -> Chapter Context Assembly
+  -> Writer
+  -> Candidate Draft Review
+  -> Repair Loop
+  -> Canon Commit
+  -> World / Cognition / Reader State Update
+```
+
 1. 文档目的
 这份文档只回答一件事：
 > 当前设计里，`provisional` 到底是什么，它和 `canonical`、`Writer`、`Review Hub`、`State Updater`、`Audience Feedback`、`Arc/Band/Chapter` 的关系是什么，以及运行顺序是什么。

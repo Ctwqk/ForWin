@@ -46,6 +46,7 @@ from forwin.models.phase import (
     ProvisionalPromotionRecord,
 )
 from forwin.models.phase4 import NPCIntentSnapshot, WorldSimulationTurn
+from forwin.models.world_v4 import ScenarioRehearsalRunRow
 from forwin.models.publisher import (
     PublisherCommentSyncJob,
     PublisherBrowserSession,
@@ -2404,6 +2405,7 @@ class Phase05RegressionTests(unittest.TestCase):
                         "chapter_numbers": [1, 2],
                         "summary_lines": ["预演一", "预演二"],
                     },
+                    legacy_preview_enabled=True,
                 )
                 envelope = manager.ensure_active_arc_resolution(
                     session=session,
@@ -2421,6 +2423,9 @@ class Phase05RegressionTests(unittest.TestCase):
                 provisional_count = session.execute(
                     select(func.count(ProvisionalBandExecution.id))
                 ).scalar_one()
+                scenario_rehearsal_count = session.execute(
+                    select(func.count(ScenarioRehearsalRunRow.id))
+                ).scalar_one()
             finally:
                 session.close()
                 engine.dispose()
@@ -2432,6 +2437,7 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(structure_count, 1)
         self.assertEqual(analysis_count, 1)
         self.assertEqual(provisional_count, 1)
+        self.assertEqual(scenario_rehearsal_count, 1)
 
     def test_arc_envelope_backfill_batches_existing_resolution_lookup(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -2502,6 +2508,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     artifact_root=str(Path(tmp) / "artifacts"),
                     minimax_api_key="fake-key",
                     minimax_model="fake-model",
+                    legacy_provisional_blocking=True,
                 )
             )
             calls = {"count": 0}
@@ -3935,6 +3942,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     minimax_api_key="test-key",
                     minimax_model="fake-model",
                     operation_mode="blackbox",
+                    legacy_provisional_blocking=True,
                 ),
                 progress_callback=lambda event, payload: events.append((event, dict(payload))),
             )

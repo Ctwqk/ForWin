@@ -253,6 +253,14 @@ def build_handlers(
             decision_refs_for_chapter_review=decision_refs_for_chapter_review,
         )
 
+    def get_candidate_draft(project_id: str, chapter_number: int):
+        return api_project_ops.get_candidate_draft(
+            project_id,
+            chapter_number,
+            get_session=get_session,
+            decision_refs_for_chapter_review=decision_refs_for_chapter_review,
+        )
+
     def approve_chapter_review(
         project_id: str,
         chapter_number: int,
@@ -297,5 +305,6 @@ def build_handlers(
         "get_chapter": get_chapter,
         "create_project_chapter_upload_job": create_project_chapter_upload_job,
         "get_chapter_review": get_chapter_review,
+        "get_candidate_draft": get_candidate_draft,
         "approve_chapter_review": approve_chapter_review,
     }

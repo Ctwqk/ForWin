@@ -21,6 +21,7 @@ from forwin.api_schemas import (
     ProjectSummary,
     ProvisionalBandDetail,
     ProvisionalChapterLedgerInfo,
+    ScenarioRehearsalDetail,
     ThreadInfo,
 )
 from forwin.governance import (
@@ -47,6 +48,7 @@ from forwin.models.phase import (
     ProvisionalChapterLedger,
 )
 from forwin.models.phase4 import NPCIntentSnapshot, WorldSimulationTurn
+from forwin.models.world_v4 import ScenarioRehearsalRunRow
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
@@ -523,6 +525,7 @@ def project_arc_snapshot_payload(
     latest_provisional,
     latest_arc_structure=None,
     latest_band_experience=None,
+    latest_scenario_rehearsal=None,
 ) -> dict[str, Any]:
     payload = {
         "active_arc_id": "",
@@ -543,6 +546,16 @@ def project_arc_snapshot_payload(
         "provisional_preview_char_count": 0,
         "provisional_issue_count": 0,
         "provisional_failure_count": 0,
+        "scenario_rehearsal_band_id": "",
+        "scenario_rehearsal_recommendation": "",
+        "scenario_rehearsal_risk_count": 0,
+        "scenario_rehearsal_blocker_count": 0,
+        "scenario_rehearsal_required_patch_count": 0,
+        "scenario_rehearsal_resolution_status": "",
+        "scenario_rehearsal_trigger_reasons": [],
+        "scenario_rehearsal_patch_attempt_count": 0,
+        "scenario_rehearsal_checkpoint_id": "",
+        "scenario_rehearsal_replan_event_id": "",
         "active_reader_promise": {},
         "active_band_reward_mix": [],
         "active_band_stall_guard": 0,
@@ -585,6 +598,26 @@ def project_arc_snapshot_payload(
                 "provisional_preview_char_count": latest_provisional.preview_char_count,
                 "provisional_issue_count": latest_provisional.issue_count,
                 "provisional_failure_count": latest_provisional.failure_count,
+            }
+        )
+    if latest_scenario_rehearsal is not None:
+        rehearsal_report = _json_object(getattr(latest_scenario_rehearsal, "report_json", "{}"))
+        payload.update(
+            {
+                "scenario_rehearsal_band_id": latest_scenario_rehearsal.band_id,
+                "scenario_rehearsal_recommendation": latest_scenario_rehearsal.recommendation,
+                "scenario_rehearsal_risk_count": latest_scenario_rehearsal.risk_count,
+                "scenario_rehearsal_blocker_count": latest_scenario_rehearsal.blocker_count,
+                "scenario_rehearsal_required_patch_count": latest_scenario_rehearsal.required_patch_count,
+                "scenario_rehearsal_resolution_status": str(rehearsal_report.get("resolution_status") or ""),
+                "scenario_rehearsal_trigger_reasons": [
+                    str(item)
+                    for item in (rehearsal_report.get("trigger_reasons") or [])
+                    if str(item).strip()
+                ],
+                "scenario_rehearsal_patch_attempt_count": int(rehearsal_report.get("patch_attempt_count") or 0),
+                "scenario_rehearsal_checkpoint_id": str(rehearsal_report.get("checkpoint_id") or ""),
+                "scenario_rehearsal_replan_event_id": str(rehearsal_report.get("replan_event_id") or ""),
             }
         )
     if latest_arc_structure is not None:
@@ -969,6 +1002,29 @@ def load_project_upload_stats(
     return stats
 
 
+def load_latest_scenario_rehearsal_by_project(
+    session: Session,
+    project_ids: list[str],
+) -> dict[str, ScenarioRehearsalRunRow]:
+    if not project_ids:
+        return {}
+    rows = list(
+        session.execute(
+            select(ScenarioRehearsalRunRow)
+            .where(ScenarioRehearsalRunRow.project_id.in_(project_ids))
+            .order_by(
+                ScenarioRehearsalRunRow.project_id.asc(),
+                ScenarioRehearsalRunRow.created_at.desc(),
+                ScenarioRehearsalRunRow.id.desc(),
+            )
+        ).scalars().all()
+    )
+    latest: dict[str, ScenarioRehearsalRunRow] = {}
+    for row in rows:
+        latest.setdefault(row.project_id, row)
+    return latest
+
+
 def load_project_runtime_maps(
     session: Session,
     project_ids: list[str],
@@ -979,6 +1035,7 @@ def load_project_runtime_maps(
     latest_arc_envelope_map = load_latest_active_arc_envelope_by_project(session, project_ids)
     latest_arc_analysis_map = load_latest_arc_envelope_analysis_by_project(session, project_ids)
     provisional_map = load_latest_provisional_band_execution_by_project(session, project_ids)
+    scenario_rehearsal_map = load_latest_scenario_rehearsal_by_project(session, project_ids)
     latest_arc_structure_map = _load_latest_arc_structure_by_project(session, project_ids)
     latest_band_experience_map = _load_latest_band_experience_by_project(session, project_ids)
     recent_replans_map = load_recent_replan_events_by_project(session, project_ids, limit=5)
@@ -990,6 +1047,7 @@ def load_project_runtime_maps(
         "latest_arc_envelope_map": latest_arc_envelope_map,
         "latest_arc_analysis_map": latest_arc_analysis_map,
         "provisional_map": provisional_map,
+        "scenario_rehearsal_map": scenario_rehearsal_map,
         "latest_arc_structure_map": latest_arc_structure_map,
         "latest_band_experience_map": latest_band_experience_map,
         "recent_replans_map": recent_replans_map,
@@ -1080,6 +1138,7 @@ def build_project_summaries(
         latest_arc_envelope = runtime_maps["latest_arc_envelope_map"].get(project.id)
         latest_arc_analysis = runtime_maps["latest_arc_analysis_map"].get(project.id)
         latest_provisional = runtime_maps["provisional_map"].get(project.id)
+        latest_scenario_rehearsal = runtime_maps["scenario_rehearsal_map"].get(project.id)
         latest_arc_structure = runtime_maps["latest_arc_structure_map"].get(project.id)
         latest_band_experience = runtime_maps["latest_band_experience_map"].get(project.id)
         latest_checkpoint = latest_checkpoint_map.get(project.id)
@@ -1148,6 +1207,7 @@ def build_project_summaries(
                     latest_provisional,
                     latest_arc_structure,
                     latest_band_experience,
+                    latest_scenario_rehearsal,
                 ),
             )
         )
@@ -1246,6 +1306,7 @@ def build_project_detail(
     latest_arc_envelope = runtime_maps["latest_arc_envelope_map"].get(project_id)
     latest_arc_analysis = runtime_maps["latest_arc_analysis_map"].get(project_id)
     latest_provisional = runtime_maps["provisional_map"].get(project_id)
+    latest_scenario_rehearsal = runtime_maps["scenario_rehearsal_map"].get(project_id)
     latest_arc_structure = runtime_maps["latest_arc_structure_map"].get(project_id)
     latest_band_experience = runtime_maps["latest_band_experience_map"].get(project_id)
     npc_intents = runtime_maps["recent_npc_map"].get(project_id, [])
@@ -1346,6 +1407,7 @@ def build_project_detail(
             latest_provisional,
             latest_arc_structure,
             latest_band_experience,
+            latest_scenario_rehearsal,
         ),
         recent_npc_intents=[
             {
@@ -1393,6 +1455,25 @@ def latest_provisional_band_execution(
         stmt = stmt.where(ProvisionalBandExecution.arc_id == arc_id)
     return session.execute(
         stmt.order_by(ProvisionalBandExecution.created_at.desc()).limit(1)
+    ).scalar_one_or_none()
+
+
+def latest_scenario_rehearsal_run(
+    session: Session,
+    project_id: str,
+    *,
+    arc_id: str | None = None,
+) -> ScenarioRehearsalRunRow | None:
+    stmt = select(ScenarioRehearsalRunRow).where(
+        ScenarioRehearsalRunRow.project_id == project_id
+    )
+    if arc_id:
+        stmt = stmt.where(ScenarioRehearsalRunRow.arc_id == arc_id)
+    return session.execute(
+        stmt.order_by(
+            ScenarioRehearsalRunRow.created_at.desc(),
+            ScenarioRehearsalRunRow.id.desc(),
+        ).limit(1)
     ).scalar_one_or_none()
 
 
@@ -1455,6 +1536,38 @@ def build_provisional_band_detail(
             )
             for row in ledgers
         ],
+    )
+
+
+def build_scenario_rehearsal_detail(
+    *,
+    project_id: str,
+    latest: ScenarioRehearsalRunRow,
+    display_datetime: DisplayDatetime,
+) -> ScenarioRehearsalDetail:
+    chapter_numbers = _json_list_strings(latest.chapter_numbers_json)
+    trigger_reasons = _json_list_strings(latest.trigger_reasons_json)
+    return ScenarioRehearsalDetail(
+        project_id=project_id,
+        arc_id=str(latest.arc_id or ""),
+        band_id=str(latest.band_id or ""),
+        rehearsal_scope=str(latest.rehearsal_scope or "band"),
+        chapter_numbers=[
+            int(item)
+            for item in chapter_numbers
+            if str(item).strip().lstrip("-").isdigit()
+        ],
+        trigger_reasons=trigger_reasons,
+        recommendation=str(latest.recommendation or "pass"),
+        risk_count=int(latest.risk_count or 0),
+        blocker_count=int(latest.blocker_count or 0),
+        required_patch_count=int(latest.required_patch_count or 0),
+        resolution_status=str(_json_object(latest.report_json).get("resolution_status") or ""),
+        patch_attempt_count=int(_json_object(latest.report_json).get("patch_attempt_count") or 0),
+        checkpoint_id=str(_json_object(latest.report_json).get("checkpoint_id") or ""),
+        replan_event_id=str(_json_object(latest.report_json).get("replan_event_id") or ""),
+        report=_json_object(latest.report_json),
+        created_at=display_datetime(latest.created_at),
     )
 
 

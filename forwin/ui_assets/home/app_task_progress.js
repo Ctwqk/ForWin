@@ -1,7 +1,7 @@
     const CHAPTER_PIPELINE_STAGES = [
       ['assembling_context', '组装'],
       ['writing_chapter', '写作'],
-      ['continuity_review', '审查'],
+      ['continuity_review', 'Candidate Draft Review'],
       ['applying_canon', 'Canon'],
       ['running_post_acceptance', '后置'],
       ['paused_for_review', '人工检查'],
@@ -85,7 +85,7 @@
 
     function stageFailureInspectable(item, chapter, stage, state, entry, status) {
       if (state === 'failed' || state === 'paused') return true;
-      if (entry?.message && ['chapter_failed', 'paused_for_review', 'provisional_failed', 'failed'].includes(stage)) return true;
+      if (entry?.message && ['chapter_failed', 'paused_for_review', 'scenario_rehearsal_blocked', 'provisional_failed', 'failed'].includes(stage)) return true;
       if (stage === 'chapter_failed' && Array.isArray(item.failed_chapters) && item.failed_chapters.includes(Number(chapter?.chapter_number || 0))) return true;
       if (status === 'failed' && stage === 'chapter_failed') return true;
       if (status === 'needs_review' && stage === 'paused_for_review') return true;
@@ -138,6 +138,9 @@
       const requested = Number(item.requested_chapters || 0);
       const hasChapterWork = history.some((entry) => CHAPTER_RUNTIME_STAGES.has(entry.stage));
       const hasTerminal = ['completed', 'failed', 'partial_failed', 'needs_review', 'cancelled', 'paused'].includes(item.status);
+      const scenarioEntry = latestHistoryEntry(history, 'running_scenario_rehearsal');
+      const scenarioPatch = latestHistoryEntry(history, 'scenario_rehearsal_patch_required');
+      const scenarioBlocked = latestHistoryEntry(history, 'scenario_rehearsal_blocked');
       const provisionalEntry = latestHistoryEntry(history, 'running_provisional_preview');
       const provisionalFailed = latestHistoryEntry(history, 'provisional_failed');
       const currentIsChapterWork = CHAPTER_RUNTIME_STAGES.has(item.current_stage);
@@ -161,12 +164,22 @@
           note: formatStageNote(latestHistoryEntry(history, 'resolving_arc_envelope'), '未解析'),
         },
         {
-          key: 'provisional',
-          label: 'Provisional',
+          key: 'scenario_rehearsal',
+          label: 'Scenario Rehearsal',
+          state: scenarioBlocked ? 'failed' : (scenarioPatch ? 'paused' : (scenarioEntry ? 'completed' : 'upcoming')),
+          note: scenarioBlocked
+            ? formatStageNote(scenarioBlocked, '推演阻断')
+            : (scenarioPatch
+              ? formatStageNote(scenarioPatch, '等待 patch approve / rerun')
+              : formatStageNote(scenarioEntry, '低风险跳过或已通过')),
+        },
+        {
+          key: 'legacy_preview',
+          label: 'Legacy Preview',
           state: provisionalFailed ? 'failed' : (provisionalEntry ? 'completed' : 'upcoming'),
           note: provisionalFailed
-            ? formatStageNote(provisionalFailed, '预演失败')
-            : formatStageNote(provisionalEntry, '未执行或已跳过'),
+            ? formatStageNote(provisionalFailed, 'legacy preview 失败')
+            : formatStageNote(provisionalEntry, '默认关闭'),
         },
         {
           key: 'chapter_loop',

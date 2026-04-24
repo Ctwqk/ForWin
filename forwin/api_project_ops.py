@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from forwin.api_project_payloads import build_project_detail, build_project_summaries, normalize_project_automation
 from forwin.api_runtime import build_saved_runtime_config, copy_config
+from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.api_schemas import (
     BookGenesisDetail,
     BookGenesisNameGenerateRequest,
@@ -20,6 +21,7 @@ from forwin.api_schemas import (
     BookGenesisRefineRequest,
     BookGenesisStageRunRequest,
     BulkDeleteResponse,
+    CandidateDraftDetail,
     ChapterDetail,
     ChapterReviewApproveRequest,
     ChapterReviewApproveResponse,
@@ -1271,6 +1273,66 @@ def get_chapter_review(
                 for item in reversed(rewrite_attempts)
             ],
             decision_refs=decision_refs,
+        )
+    finally:
+        session.close()
+
+
+def get_candidate_draft(
+    project_id: str,
+    chapter_number: int,
+    *,
+    get_session,
+    decision_refs_for_chapter_review,
+) -> CandidateDraftDetail:
+    try:
+        review = get_chapter_review(
+            project_id,
+            chapter_number,
+            get_session=get_session,
+            decision_refs_for_chapter_review=decision_refs_for_chapter_review,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 404 and "draft" in str(exc.detail).lower():
+            raise HTTPException(404, f"第{chapter_number}章尚未生成 candidate draft") from exc
+        raise
+    session = get_session()
+    try:
+        record = CandidateDraftRepository(session).latest_for_chapter(
+            project_id=project_id,
+            chapter_number=chapter_number,
+        )
+        record_status = str(getattr(record, "status", "") or review.status or "")
+        canon_status = str(getattr(record, "canon_status", "") or "")
+        if not canon_status:
+            canon_status = "canon" if str(review.status or "") == "accepted" else "candidate"
+        canon_ready = canon_status == "canon" or str(review.status or "") == "accepted"
+        return CandidateDraftDetail(
+            project_id=review.project_id,
+            chapter_number=review.chapter_number,
+            title=review.title,
+            status=record_status,
+            candidate_draft_id=review.draft_id,
+            version=review.version,
+            body=review.body,
+            summary=review.summary,
+            char_count=len(review.body or ""),
+            scene_outputs=_load_json_object(getattr(record, "scene_outputs_json", "[]"), []) if record else [],
+            state_change_candidates=_load_json_object(getattr(record, "state_change_candidates_json", "[]"), []) if record else [],
+            event_candidates=_load_json_object(getattr(record, "event_candidates_json", "[]"), []) if record else [],
+            thread_beat_candidates=_load_json_object(getattr(record, "thread_beat_candidates_json", "[]"), []) if record else [],
+            review_verdict=review.verdict,
+            review_summary=review.review_summary,
+            repair_attempts=review.rewrite_attempts,
+            repair_attempt_count=(
+                int(getattr(record, "repair_attempt_count", 0) or 0)
+                if record is not None
+                else int(getattr(review, "repair_attempt_count", 0) or len(review.rewrite_attempts))
+            ),
+            canon_ready=canon_ready,
+            canon_status=canon_status,
+            canon_artifact_path=str(getattr(record, "canon_artifact_path", "") or ""),
+            failure_reason=str(getattr(record, "failure_reason", "") or ""),
         )
     finally:
         session.close()

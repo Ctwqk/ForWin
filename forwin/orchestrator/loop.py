@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_genesis import BookGenesisService
+from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.checker.rules import ContinuityChecker
 from forwin.config import Config
 from forwin.director import ArcDirector
@@ -54,7 +55,7 @@ from forwin.models.governance import BandCheckpoint
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
-from forwin.models.phase import ArcStructureDraft, BandExperiencePlan
+from forwin.models.phase import ArcStructureDraft, BandExperiencePlan, ChapterRewriteAttempt
 from forwin.extractor.world_v4 import WorldDeltaExtractor
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.experience import ArcPayoffMap, BandDelightSchedule, ChapterExperiencePlan
@@ -72,6 +73,7 @@ from forwin.orchestrator.phase4 import (
     save_npc_intents,
     save_world_turn,
 )
+from forwin.planning.scenario_rehearsal_resolution import latest_blocking_scenario_rehearsal
 from forwin.orchestrator.phase24 import ArcEnvelopeManager, ProvisionalBandPreview
 from forwin.retrieval import RetrievalBroker, create_memory_index
 from forwin.reviser import FinalAcceptanceGate, RepairPolicy, RepairVerifier
@@ -303,6 +305,8 @@ class WritingOrchestrator:
             director=self.arc_director,
             provisional_executor=self._run_provisional_band_preview,
             subworld_manager=self.subworld_manager,
+            legacy_preview_enabled=self.config.legacy_provisional_blocking,
+            scenario_progress_callback=lambda **payload: self._emit_progress("stage_changed", **payload),
         )
         self.review_hub = HistoricalReviewHub(
             experience_review_enabled=self.config.experience_review_enabled,
@@ -436,6 +440,13 @@ class WritingOrchestrator:
                 activation_chapter=1,
             )
             session.commit()
+            blocking_scenario = latest_blocking_scenario_rehearsal(session, project_id)
+            if blocking_scenario is not None:
+                return self._block_on_scenario_rehearsal(
+                    project_id=project_id,
+                    requested_chapters=num_chapters,
+                    row=blocking_scenario,
+                )
             failed_provisional = self._new_failed_provisional_gate(
                 session,
                 project_id=project_id,
@@ -611,6 +622,13 @@ class WritingOrchestrator:
                 activation_chapter=1,
             )
             session.commit()
+            blocking_scenario = latest_blocking_scenario_rehearsal(session, project_id)
+            if blocking_scenario is not None:
+                return self._block_on_scenario_rehearsal(
+                    project_id=project_id,
+                    requested_chapters=num_chapters,
+                    row=blocking_scenario,
+                )
             failed_provisional = self._new_failed_provisional_gate(
                 session,
                 project_id=project_id,
@@ -804,11 +822,54 @@ class WritingOrchestrator:
         latest = self._latest_provisional_gate_snapshot(session, project_id)
         if latest is None:
             return None
+        if not bool(getattr(self.config, "legacy_provisional_blocking", False)):
+            return None
         if previous_snapshot is not None and latest.id == previous_snapshot.id:
             return None
         if latest.aggregate_verdict == "fail" or latest.failure_count > 0:
             return latest
         return None
+
+    def _block_on_scenario_rehearsal(
+        self,
+        *,
+        project_id: str,
+        requested_chapters: int,
+        row,
+    ) -> RunResult:
+        try:
+            payload = json.loads(row.report_json or "{}") or {}
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        chapter_numbers = [
+            int(item)
+            for item in (payload.get("chapter_numbers") or [])
+            if str(item).strip().lstrip("-").isdigit()
+        ]
+        paused_chapters = chapter_numbers or [1]
+        status = str(payload.get("resolution_status") or "manual_patch_required")
+        self._emit_progress(
+            "stage_changed",
+            stage="paused_for_review",
+            project_id=project_id,
+            requested_chapters=requested_chapters,
+            current_chapter=paused_chapters[0],
+            completed_chapters=[],
+            failed_chapters=[],
+            paused_chapters=paused_chapters,
+        )
+        logger.warning(
+            "Scenario rehearsal paused canon writing for project=%s status=%s band=%s",
+            project_id,
+            status,
+            getattr(row, "band_id", ""),
+        )
+        return RunResult(
+            project_id=project_id,
+            requested_chapters=requested_chapters,
+            paused_chapters=paused_chapters,
+            paused=True,
+        )
 
     def _block_on_provisional_failure(
         self,
@@ -1009,6 +1070,13 @@ class WritingOrchestrator:
                 activation_chapter=min(pending_chapter_numbers),
             )
             session.commit()
+            blocking_scenario = latest_blocking_scenario_rehearsal(session, project_id)
+            if blocking_scenario is not None:
+                return self._block_on_scenario_rehearsal(
+                    project_id=project_id,
+                    requested_chapters=len(pending_chapter_numbers),
+                    row=blocking_scenario,
+                )
             failed_provisional = self._new_failed_provisional_gate(
                 session,
                 project_id=project_id,
@@ -1764,6 +1832,18 @@ class WritingOrchestrator:
             model_name=self.config.minimax_model,
         )
         review_row = updater.save_review(draft.id, review)
+        repair_attempt_count = session.query(ChapterRewriteAttempt).filter(
+            ChapterRewriteAttempt.project_id == project_id,
+            ChapterRewriteAttempt.chapter_number == chapter_number,
+        ).count()
+        CandidateDraftRepository(session).upsert_from_review(
+            project_id=project_id,
+            chapter_plan=chapter_plan,
+            draft=draft,
+            review=review_row,
+            writer_output=persisted_output,
+            repair_attempt_count=repair_attempt_count,
+        )
         updater.mark_chapter_status(project_id, chapter_number, "drafted")
         session.flush()
         return persisted_output, draft, review_row
@@ -3914,8 +3994,12 @@ class WritingOrchestrator:
                 summary=f"第{chapter_number}章 canon 写入成功。",
                 payload={"issue_count": len(verdict.issues)},
             )
+            CandidateDraftRepository(session).mark_canon_committed(
+                project_id=project_id,
+                chapter_number=chapter_number,
+            )
             return None
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "Canon update failed for chapter %d; keeping saved draft and review.",
                 chapter_number,
@@ -3942,6 +4026,12 @@ class WritingOrchestrator:
                 summary=f"第{chapter_number}章 canon 写入失败。",
             )
             session.rollback()
+            CandidateDraftRepository(session).mark_canon_failed(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                failure_reason=str(exc),
+                canon_artifact_path=frozen_path,
+            )
             return frozen_path or None
 
     @staticmethod

@@ -328,6 +328,16 @@ class ProjectArcSnapshotFields(BaseModel):
     provisional_preview_char_count: int = 0
     provisional_issue_count: int = 0
     provisional_failure_count: int = 0
+    scenario_rehearsal_band_id: str = ""
+    scenario_rehearsal_recommendation: str = ""
+    scenario_rehearsal_risk_count: int = 0
+    scenario_rehearsal_blocker_count: int = 0
+    scenario_rehearsal_required_patch_count: int = 0
+    scenario_rehearsal_resolution_status: str = ""
+    scenario_rehearsal_trigger_reasons: list[str] = Field(default_factory=list)
+    scenario_rehearsal_patch_attempt_count: int = 0
+    scenario_rehearsal_checkpoint_id: str = ""
+    scenario_rehearsal_replan_event_id: str = ""
     active_reader_promise: dict[str, Any] = Field(default_factory=dict)
     active_band_reward_mix: list[str] = Field(default_factory=list)
     active_band_stall_guard: int = 0
@@ -1044,6 +1054,53 @@ class ProvisionalBandDetail(BaseModel):
     chapter_numbers: list[int] = Field(default_factory=list)
     created_at: str = ""
     chapters: list[ProvisionalChapterLedgerInfo] = Field(default_factory=list)
+
+
+class ScenarioRehearsalDetail(BaseModel):
+    project_id: str
+    arc_id: str = ""
+    band_id: str = ""
+    rehearsal_scope: str = "band"
+    chapter_numbers: list[int] = Field(default_factory=list)
+    trigger_reasons: list[str] = Field(default_factory=list)
+    recommendation: str = "pass"
+    risk_count: int = 0
+    blocker_count: int = 0
+    required_patch_count: int = 0
+    resolution_status: str = ""
+    patch_attempt_count: int = 0
+    checkpoint_id: str = ""
+    replan_event_id: str = ""
+    report: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+
+
+class ScenarioPlanPatchApproveRequest(BaseModel):
+    reason: str = ""
+
+
+class CandidateDraftDetail(BaseModel):
+    project_id: str
+    chapter_number: int
+    title: str = ""
+    status: str = ""
+    candidate_draft_id: str = ""
+    version: int = 1
+    body: str = ""
+    summary: str = ""
+    char_count: int = 0
+    scene_outputs: list[dict[str, Any]] = Field(default_factory=list)
+    state_change_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    event_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    thread_beat_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    review_verdict: str = ""
+    review_summary: str = ""
+    repair_attempts: list[ChapterRewriteAttemptInfo] = Field(default_factory=list)
+    repair_attempt_count: int = 0
+    canon_ready: bool = False
+    canon_status: str = "candidate"
+    canon_artifact_path: str = ""
+    failure_reason: str = ""
 
 
 class PublisherPlatformInfo(BaseModel):

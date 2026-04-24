@@ -8,6 +8,8 @@ from .world_contracts import (
     RevealLadderStep,
     WorldContractRepository,
 )
+from .scenario_rehearsal import ScenarioRehearsalRepository, ScenarioRehearsalRunner
+from .scenario_triggers import ScenarioTriggerContext, ScenarioTriggerEvaluator
 
 __all__ = [
     "ArcWorldContract",
@@ -16,4 +18,8 @@ __all__ = [
     "ReaderCognitionTransition",
     "RevealLadderStep",
     "WorldContractRepository",
+    "ScenarioRehearsalRepository",
+    "ScenarioRehearsalRunner",
+    "ScenarioTriggerContext",
+    "ScenarioTriggerEvaluator",
 ]

@@ -10,6 +10,7 @@ from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVer
 from forwin.protocol.writer import WriterOutput
 from forwin.skills import inject_skill_layers
 from forwin.utils import LLMJSONParseError, parse_llm_json
+from forwin.llm.compat import call_chat_compat
 from forwin.writer.llm_client import LLMClient
 
 
@@ -133,7 +134,8 @@ class WebNovelExperienceReviewer:
         payload = self._llm_payload(context, writer_output)
         evidence_ids = [item["evidence_id"] for item in payload["evidence_index"]]
         try:
-            raw = self.llm_client.chat(
+            raw = call_chat_compat(
+                self.llm_client,
                 self._llm_review_messages(
                     payload=payload,
                     evidence_ids=evidence_ids,
@@ -143,6 +145,9 @@ class WebNovelExperienceReviewer:
                 max_tokens=3000,
                 timeout_seconds=45,
                 retry_on_timeout=True,
+                task_family="reviewer",
+                stage_key="chapter_review",
+                output_schema={"type": "object"},
             )
         except Exception:
             return None
@@ -393,6 +398,22 @@ class WebNovelExperienceReviewer:
             add_evidence("world:timeline", "world", context.timeline.model_dump_json())
         if context.world_pressure is not None:
             add_evidence("world:pressure", "world", context.world_pressure.model_dump_json())
+        if getattr(context, "world_context", None) is not None:
+            world_context = context.world_context
+            if world_context.snapshot_id:
+                add_evidence(
+                    f"world_model:snapshot:{world_context.snapshot_id}",
+                    "world_model",
+                    world_context.model_dump_json(),
+                )
+            for page in world_context.relevant_world_pages[:5]:
+                add_evidence(f"world_model:page:{page.page_key}", "world_model_page", page.markdown[:500])
+            for conflict in world_context.active_world_conflicts[:5]:
+                add_evidence(
+                    f"world_model:conflict:{conflict.id or conflict.subject_key}",
+                    "world_model_conflict",
+                    conflict.description,
+                )
         for item in context.active_rules[:5]:
             add_evidence(f"active_rule:{item.entity_id or item.name}", "active_rule", item.description)
 
@@ -486,6 +507,7 @@ class WebNovelExperienceReviewer:
                     context.world_pressure.model_dump(mode="json") if context.world_pressure is not None else {}
                 ),
                 "active_rules": [item.model_dump(mode="json") for item in context.active_rules[:5]],
+                "world_context": context.world_context.model_dump(mode="json"),
             },
             "audience": {
                 "reader_feedback": (
@@ -569,7 +591,8 @@ class WebNovelExperienceReviewer:
         evidence_ids: list[str],
     ) -> str | None:
         try:
-            return self.llm_client.chat(
+            return call_chat_compat(
+                self.llm_client,
                 [
                     {
                         "role": "system",
@@ -591,6 +614,9 @@ class WebNovelExperienceReviewer:
                 max_tokens=3000,
                 timeout_seconds=30,
                 retry_on_timeout=False,
+                task_family="reviewer",
+                stage_key="chapter_review_json_repair",
+                output_schema={"type": "object"},
             )
         except Exception:
             return None

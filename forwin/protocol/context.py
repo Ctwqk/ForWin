@@ -11,6 +11,7 @@ from .experience import (
 )
 from forwin.governance import NarrativeConstraintInfo, NextBandSummary, PlanTaskItem
 from .subworld import ChapterEntryTarget, SubWorldSummary
+from .world_model import WorldContextPack
 
 
 class EntitySnapshot(BaseModel):
@@ -208,6 +209,7 @@ class ChapterContextPack(BaseModel):
     chapter_task_contract: list[PlanTaskItem] = Field(default_factory=list)
     active_future_constraints: list[NarrativeConstraintInfo] = Field(default_factory=list)
     next_band_summary: NextBandSummary | None = None
+    world_context: WorldContextPack = Field(default_factory=WorldContextPack)
 
 
 class ReviewContextPack(BaseModel):
@@ -237,6 +239,7 @@ class ReviewContextPack(BaseModel):
     chapter_task_contract: list[PlanTaskItem] = Field(default_factory=list)
     active_future_constraints: list[NarrativeConstraintInfo] = Field(default_factory=list)
     next_band_summary: NextBandSummary | None = None
+    world_context: WorldContextPack = Field(default_factory=WorldContextPack)
     recent_canon_events: list[CanonEventEvidence] = Field(default_factory=list)
     recent_rule_events: list[CanonEventEvidence] = Field(default_factory=list)
     recent_review_notes: list[ReviewNote] = Field(default_factory=list)

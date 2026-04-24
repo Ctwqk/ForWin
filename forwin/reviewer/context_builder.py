@@ -87,6 +87,7 @@ def build_review_context_pack(
         chapter_task_contract=list(context.chapter_task_contract),
         active_future_constraints=list(context.active_future_constraints),
         next_band_summary=context.next_band_summary,
+        world_context=context.world_context,
         recent_canon_events=recent_canon_events,
         recent_rule_events=recent_rule_events,
         recent_review_notes=recent_review_notes,

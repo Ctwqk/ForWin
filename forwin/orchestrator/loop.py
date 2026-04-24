@@ -83,6 +83,8 @@ from forwin.subworld_manager import SubWorldManager
 from forwin.protocol.writer import WriterOutput
 from forwin.writer.chapter_writer import ChapterWriter
 from forwin.writer.llm_client import LLMClient
+from forwin.llm.factory import maybe_wrap_with_codex_router
+from forwin.world_model.compiler import WorldModelCompiler
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +179,7 @@ class WritingOrchestrator:
             retry_max_delay_seconds=self.config.llm_retry_max_delay_seconds,
             fallback_profiles=self.config.llm_fallback_profiles,
         )
+        self.llm_client = maybe_wrap_with_codex_router(self.llm_client, self.config)
         (
             self.skill_registry,
             self.skill_router,
@@ -282,11 +285,8 @@ class WritingOrchestrator:
             director=self.arc_director,
             subworld_manager=self.subworld_manager,
         )
-        phase4_llm = (
-            self.llm_client
-            if self.config.phase4_use_llm and bool(self.config.minimax_api_key)
-            else None
-        )
+        llm_available = bool(self.config.minimax_api_key) or bool(getattr(self.config, "codex_enabled", False))
+        phase4_llm = self.llm_client if self.config.phase4_use_llm and llm_available else None
         self.npc_intent_generator = NPCIntentGenerator(
             llm_client=phase4_llm,
             active_thread_limit=self.config.phase_active_thread_limit,
@@ -303,15 +303,15 @@ class WritingOrchestrator:
         self.review_hub = HistoricalReviewHub(
             experience_review_enabled=self.config.experience_review_enabled,
             lint_review_enabled=self.config.lint_review_enabled,
-            llm_client=self.llm_client if bool(self.config.minimax_api_key) else None,
-            llm_enabled=bool(self.config.minimax_api_key),
+            llm_client=self.llm_client if llm_available else None,
+            llm_enabled=llm_available,
         )
         self.repair_policy = RepairPolicy(
             max_attempts=max(1, min(3, int(self.config.review_fail_max_rewrites or 3)))
         )
         self.repair_verifier = RepairVerifier(
-            llm_client=self.llm_client if bool(self.config.minimax_api_key) else None,
-            llm_enabled=bool(self.config.minimax_api_key),
+            llm_client=self.llm_client if llm_available else None,
+            llm_enabled=llm_available,
         )
         self.final_acceptance_gate = FinalAcceptanceGate()
 
@@ -1119,6 +1119,12 @@ class WritingOrchestrator:
                 project_id=project_id,
                 chapter_number=chapter_number,
             )
+            self._compile_world_model_after_acceptance(
+                session=session,
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+            )
             self._record_decision_event(
                 updater=updater,
                 project_id=project_id,
@@ -1702,6 +1708,10 @@ class WritingOrchestrator:
             model_profile_json=json.dumps(payload.get("model_profile", {}), ensure_ascii=False),
             attempts_json=json.dumps(payload.get("attempts", []), ensure_ascii=False),
             output_summary_json=json.dumps(payload.get("output_summary", {}), ensure_ascii=False),
+            backend=str(payload.get("backend", "") or ""),
+            codex_job_id=str(payload.get("codex_job_id", "") or ""),
+            permission_profile=str(payload.get("permission_profile", "") or ""),
+            fallback_used=bool(payload.get("fallback_used", False)),
         )
         return row.id
 
@@ -3188,6 +3198,25 @@ class WritingOrchestrator:
                     project_id=project_id,
                     chapter_number=chapter_num,
                 )
+                world_model_ok = self._compile_world_model_after_acceptance(
+                    session=session,
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                )
+                if not world_model_ok:
+                    session.commit()
+                    completed_with_current = [*completed_chapters, chapter_num]
+                    paused_chapters.append(chapter_num)
+                    return self._paused_result(
+                        project_id,
+                        requested_chapters,
+                        completed_chapters=completed_with_current,
+                        failed_chapters=failed_chapters,
+                        paused_chapters=paused_chapters,
+                        frozen_artifacts=frozen_artifacts,
+                        current_chapter=chapter_num,
+                    )
                 checkpoint_pause = False
                 if bool(governance.auto_band_checkpoint):
                     try:
@@ -3926,6 +3955,66 @@ class WritingOrchestrator:
             cooldown_chapters=self.config.feedback_cooldown_chapters,
             comment_to_reader_ratio=self.config.comment_to_reader_ratio,
         )
+
+    def _compile_world_model_after_acceptance(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_number: int,
+    ) -> bool:
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.WORLD_MODEL_COMPILE_STARTED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 WorldModel compile 开始。",
+        )
+        try:
+            snapshot = WorldModelCompiler(session).compile_after_chapter(project_id, chapter_number)
+        except Exception as exc:
+            logger.exception("WorldModel compile failed for chapter %d.", chapter_number)
+            try:
+                WorldModelCompiler(session).record_failed_compile(
+                    project_id=project_id,
+                    as_of_chapter=chapter_number,
+                    trigger="chapter_accepted",
+                    error=f"{exc.__class__.__name__}: {exc}",
+                )
+            except Exception:
+                logger.warning("Failed to record WorldModel failed compile run.", exc_info=True)
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.WORLD_MODEL_COMPILE_FAILED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 WorldModel compile 失败，运行将暂停。",
+                reason=str(exc),
+                payload={"error_class": exc.__class__.__name__, "error_summary": str(exc)},
+            )
+            return False
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.WORLD_MODEL_COMPILE_SUCCEEDED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 WorldModel compile 完成。",
+            related_object_type="world_model_snapshot",
+            related_object_id=snapshot.id,
+            payload={
+                "snapshot_id": snapshot.id,
+                "as_of_chapter": snapshot.as_of_chapter,
+                "source_digest": snapshot.source_digest,
+            },
+        )
+        return True
 
     def _run_provisional_band_preview(
         self,

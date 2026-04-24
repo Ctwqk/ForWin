@@ -154,6 +154,11 @@ class ApiPagesRenderingTests(unittest.TestCase):
         self.assertIn("Arc 蓝图默认仍沿用自动生成", html)
         self.assertIn("const loc = Array.isArray(item.loc) ? item.loc.join('.') : '';", html)
         self.assertIn("JSON.stringify(detail, null, 2)", html)
+        self.assertIn("/world-studio", html)
+        self.assertIn("World Studio", html)
+        self.assertIn('aria-label="ForWin primary navigation"', html)
+        self.assertIn('aria-current="page">创作台</a>', html)
+        self.assertIn('href="/world-studio">World Studio</a>', html)
         self.assertNotIn("第${chapter.chapter_number}章 ${chapter.status}", html)
 
     def test_home_page_renders_javascript_that_passes_node_syntax_check(self) -> None:

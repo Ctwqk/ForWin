@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -52,4 +52,8 @@ class PromptTrace(Base):
     model_profile_json: Mapped[str] = mapped_column(Text, default="{}")
     attempts_json: Mapped[str] = mapped_column(Text, default="[]")
     output_summary_json: Mapped[str] = mapped_column(Text, default="{}")
+    backend: Mapped[str] = mapped_column(String, default="")
+    codex_job_id: Mapped[str] = mapped_column(String, default="")
+    permission_profile: Mapped[str] = mapped_column(String, default="")
+    fallback_used: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())

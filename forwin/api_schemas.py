@@ -102,6 +102,16 @@ class LLMSettingsResponse(BaseModel):
     message: str = ""
 
 
+class CodexBridgeStatusResponse(BaseModel):
+    enabled: bool = False
+    bridge_url: str = ""
+    healthy: bool = False
+    status: str = "disabled"
+    backend: str = "codex_bridge"
+    message: str = ""
+    health: dict[str, Any] = Field(default_factory=dict)
+
+
 class GenerationControlInfo(BaseModel):
     plan_state: str = "none"
     writing_state: str = "not_started"
@@ -381,6 +391,91 @@ class StartWritingResponse(BaseModel):
     creation_status: str = "writing"
     task_id: str = ""
     message: str = ""
+
+
+class WorldModelSnapshotInfo(BaseModel):
+    id: str
+    project_id: str
+    as_of_chapter: int = 0
+    version: int = 1
+    status: str = "live"
+    source_digest: str = ""
+    snapshot: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class WorldModelPageInfo(BaseModel):
+    id: str
+    project_id: str
+    page_key: str
+    page_type: str = "overview"
+    title: str
+    vault_path: str = ""
+    markdown: str = ""
+    frontmatter: dict[str, Any] = Field(default_factory=dict)
+    content_hash: str = ""
+    revision: int = 1
+    status: str = "canon_live"
+    as_of_chapter: int = 0
+    updated_at: str = ""
+
+
+class WorldModelConflictInfo(BaseModel):
+    id: str
+    project_id: str
+    conflict_type: str
+    severity: str = "warning"
+    subject_key: str = ""
+    description: str = ""
+    evidence_refs: list[dict[str, Any]] = Field(default_factory=list)
+    status: str = "open"
+    created_at: str = ""
+    resolved_at: str = ""
+
+
+class WorldEditProposalInfo(BaseModel):
+    id: str
+    project_id: str
+    source: str = "obsidian"
+    target_page_key: str = ""
+    target_field: str = ""
+    proposed_patch: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+    status: str = "pending"
+    created_by: str = ""
+    created_at: str = ""
+    reviewed_at: str = ""
+
+
+class WorldModelExportRequest(BaseModel):
+    vault_root: str = ""
+
+
+class WorldModelExportResponse(BaseModel):
+    ok: bool = True
+    project_id: str = ""
+    vault_root: str = ""
+    exported_count: int = 0
+    message: str = ""
+
+
+class WorldModelImportRequest(BaseModel):
+    vault_root: str = ""
+
+
+class WorldModelImportResponse(BaseModel):
+    ok: bool = True
+    project_id: str = ""
+    vault_root: str = ""
+    proposal_count: int = 0
+    changed_paths: list[str] = Field(default_factory=list)
+    message: str = ""
+
+
+class WorldEditProposalReviewRequest(BaseModel):
+    status: str
+    reason: str = ""
 
 
 class ProjectSummary(ProjectArcSnapshotFields):

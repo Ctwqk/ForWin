@@ -1,3 +1,13 @@
+FROM node:22-slim AS world-studio-builder
+
+WORKDIR /app/frontend/world-studio
+
+COPY frontend/world-studio/package.json frontend/world-studio/package-lock.json ./
+RUN npm ci
+COPY frontend/world-studio/index.html frontend/world-studio/tsconfig.json frontend/world-studio/vite.config.ts ./
+COPY frontend/world-studio/src/ src/
+RUN npm run build
+
 FROM python:3.13-slim
 
 WORKDIR /app
@@ -10,6 +20,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium xvfb xauth ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN python -m playwright install --with-deps chromium
+COPY --from=world-studio-builder /app/frontend/world-studio/dist/ frontend/world-studio/dist/
 COPY browser_extension/ browser_extension/
 COPY scripts/ scripts/
 

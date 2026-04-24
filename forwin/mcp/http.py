@@ -1,0 +1,268 @@
+from __future__ import annotations
+
+import os
+from typing import Callable
+
+import uvicorn
+from fastmcp import FastMCP
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
+
+from .client import ForWinAPIClient
+from .models import MutationResult, StageKey, WorldModelConflictListView
+
+
+def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
+    client = api_client or ForWinAPIClient(
+        base_url=os.environ.get("FORWIN_API_BASE_URL", "http://127.0.0.1:8899"),
+    )
+    mcp = FastMCP(
+        name="ForWin",
+        instructions=(
+            "Use these tools to operate the ForWin backend. "
+            "Read project/task state first, then mutate. "
+            "Do not bypass these tools with direct DB inspection when a matching MCP tool exists."
+        ),
+        on_duplicate_tools="error",
+    )
+
+    def register_read_tool(
+        name: str,
+        description: str,
+    ) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        return mcp.tool(
+            name=name,
+            description=description,
+            annotations={
+                "title": name.replace("_", " ").title(),
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False,
+            },
+        )
+
+    def register_write_tool(
+        name: str,
+        description: str,
+    ) -> Callable[[Callable[..., object]], Callable[..., object]]:
+        return mcp.tool(
+            name=name,
+            description=description,
+            annotations={
+                "title": name.replace("_", " ").title(),
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False,
+            },
+        )
+
+    @register_read_tool(
+        "project_list",
+        "List ForWin projects. Use this when you need the authoritative project roster before choosing a project_id. Do not inspect the database directly for this.",
+    )
+    async def project_list():
+        return await client.project_list()
+
+    @register_read_tool(
+        "project_get",
+        "Get one ForWin project's current state. Use this when you need creation_status, can_start_writing, next_gate, or chapter progress for a known project_id.",
+    )
+    async def project_get(project_id: str):
+        return await client.project_get(project_id)
+
+    @register_write_tool(
+        "project_create",
+        "Create a new Genesis-backed ForWin project. Use this when starting a new book from title and premise. This does not start chapter writing.",
+    )
+    async def project_create(
+        title: str,
+        premise: str,
+        genre: str = "玄幻",
+        setting_summary: str = "",
+        target_total_chapters: int = 3,
+    ) -> MutationResult:
+        return await client.project_create(
+            title=title,
+            premise=premise,
+            genre=genre,
+            setting_summary=setting_summary,
+            target_total_chapters=target_total_chapters,
+        )
+
+    @register_read_tool(
+        "genesis_get",
+        "Read the current Genesis pack for a project. Use this when inspecting stage state, world scaffolding, or whether Genesis is ready to hand off into writing.",
+    )
+    async def genesis_get(project_id: str):
+        return await client.genesis_get(project_id)
+
+    @register_write_tool(
+        "genesis_stage_generate",
+        "Generate one Genesis stage for a project. Use this when a stage is incomplete and you want ForWin to draft that specific stage.",
+    )
+    async def genesis_stage_generate(project_id: str, stage_key: StageKey) -> MutationResult:
+        return await client.genesis_stage_generate(project_id=project_id, stage_key=stage_key)
+
+    @register_write_tool(
+        "genesis_stage_refine",
+        "Refine one Genesis stage or target_path with an instruction. Use this when you want a focused rewrite inside Genesis rather than regenerating the whole stage.",
+    )
+    async def genesis_stage_refine(
+        project_id: str,
+        stage_key: StageKey,
+        instruction: str,
+        target_path: str = "",
+        reason: str = "",
+    ) -> MutationResult:
+        return await client.genesis_stage_refine(
+            project_id=project_id,
+            stage_key=stage_key,
+            instruction=instruction,
+            target_path=target_path,
+            reason=reason,
+        )
+
+    @register_write_tool(
+        "genesis_stage_lock",
+        "Lock one Genesis stage as current truth. Use this when a stage is accepted and should become the stable handoff state for later stages and writing.",
+    )
+    async def genesis_stage_lock(project_id: str, stage_key: StageKey) -> MutationResult:
+        return await client.genesis_stage_lock(project_id=project_id, stage_key=stage_key)
+
+    @register_write_tool(
+        "project_start_writing",
+        "Start writing for a Genesis-ready project. Use this when Genesis is complete and there is no active generation task.",
+    )
+    async def project_start_writing(project_id: str) -> MutationResult:
+        return await client.project_start_writing(project_id=project_id)
+
+    @register_write_tool(
+        "project_continue_generation",
+        "Continue chapter generation for an existing writing project. Use this when the project is already in writing state and no active generation task exists.",
+    )
+    async def project_continue_generation(project_id: str, max_chapters: int | None = None) -> MutationResult:
+        return await client.project_continue_generation(project_id=project_id, max_chapters=max_chapters)
+
+    @register_read_tool(
+        "task_list",
+        "List recent ForWin generation tasks. Use this when you need to inspect queued, running, paused, or failed generation work across projects.",
+    )
+    async def task_list(limit: int = 20):
+        return await client.task_list(limit=limit)
+
+    @register_read_tool(
+        "task_get",
+        "Get one generation task by task_id. Use this when polling a known task for current_stage, pause state, or recovery guidance.",
+    )
+    async def task_get(task_id: str):
+        return await client.task_get(task_id)
+
+    @register_read_tool(
+        "task_active_generation_check",
+        "Check whether generation is currently active. Use this when you are about to start writing, continue generation, restart services, or create another task.",
+    )
+    async def task_active_generation_check(project_id: str = ""):
+        return await client.task_active_generation_check(project_id=project_id)
+
+    @register_write_tool(
+        "task_pause",
+        "Request a safe pause for a running generation task. Use this when you need to stop generation safely instead of terminate or restart behavior.",
+    )
+    async def task_pause(task_id: str) -> MutationResult:
+        return await client.task_pause(task_id=task_id)
+
+    @register_read_tool(
+        "chapter_list",
+        "List chapters for a project. Use this when you need chapter numbers, statuses, summaries, or to choose a chapter_number for inspection.",
+    )
+    async def chapter_list(project_id: str):
+        return await client.chapter_list(project_id=project_id)
+
+    @register_read_tool(
+        "chapter_get",
+        "Get one chapter draft. Use this when you need the actual body text, summary, and review-related status for a specific chapter_number.",
+    )
+    async def chapter_get(project_id: str, chapter_number: int):
+        return await client.chapter_get(project_id=project_id, chapter_number=chapter_number)
+
+    @register_read_tool(
+        "world_model_get",
+        "Get the latest compiled WorldModel snapshot for a project. Use this when you need canonical world state as of a chapter.",
+    )
+    async def world_model_get(project_id: str, as_of_chapter: int | None = None):
+        return await client.world_model_get(project_id=project_id, as_of_chapter=as_of_chapter)
+
+    @register_read_tool(
+        "world_page_get",
+        "Get one compiled WorldModel page by page_key. Use this when you need a character, faction, region, promise, secret, or overview wiki projection.",
+    )
+    async def world_page_get(project_id: str, page_key: str):
+        return await client.world_page_get(project_id=project_id, page_key=page_key)
+
+    @register_read_tool(
+        "world_conflict_list",
+        "List deterministic WorldModel conflicts for a project. Use this when checking world-state contradictions before writing or reviewing.",
+    )
+    async def world_conflict_list(project_id: str):
+        return WorldModelConflictListView(conflicts=await client.world_conflict_list(project_id=project_id))
+
+    @register_read_tool(
+        "world_export_obsidian",
+        "Export the compiled WorldModel projection to an Obsidian vault. Use this when the user wants a read-only Markdown wiki refresh.",
+    )
+    async def world_export_obsidian(project_id: str, vault_root: str = ""):
+        return await client.world_export_obsidian(project_id=project_id, vault_root=vault_root)
+
+    return mcp
+
+
+def build_asgi_app(
+    *,
+    api_client: ForWinAPIClient | None = None,
+    mcp_server: FastMCP | None = None,
+) -> Starlette:
+    client = api_client or ForWinAPIClient(
+        base_url=os.environ.get("FORWIN_API_BASE_URL", "http://127.0.0.1:8899"),
+    )
+    server = mcp_server or build_mcp_server(api_client=client)
+    mcp_app = server.http_app(path="/mcp")
+
+    async def health_endpoint(_request):
+        try:
+            await client.health()
+        except Exception as exc:  # pragma: no cover - exercised in tests
+            return JSONResponse(
+                {"status": "degraded", "upstream": "error", "detail": str(exc)},
+                status_code=503,
+            )
+        return JSONResponse({"status": "ok", "upstream": "ok"})
+
+    return Starlette(
+        routes=[
+            Route("/health", health_endpoint),
+            Mount("/", app=mcp_app),
+        ],
+        lifespan=mcp_app.lifespan,
+    )
+
+
+def _env_host() -> str:
+    return str(os.environ.get("FORWIN_MCP_HOST", "0.0.0.0")).strip() or "0.0.0.0"
+
+
+def _env_port() -> int:
+    try:
+        return int(os.environ.get("FORWIN_MCP_PORT", "8898"))
+    except ValueError:
+        return 8898
+
+
+def main() -> None:
+    uvicorn.run("forwin.mcp.http:app", host=_env_host(), port=_env_port())
+
+
+mcp = build_mcp_server()
+app = build_asgi_app(mcp_server=mcp)

@@ -11,6 +11,8 @@ from forwin.protocol.context import (
     TimelineSnapshot,
     WorldPressureView,
 )
+from forwin.protocol.world_model import WorldContextPack
+from forwin.world_model.retriever import WorldModelRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +250,26 @@ def assemble_context(
     except json.JSONDecodeError:
         goals = []
 
+    world_context = WorldContextPack()
+    repo_session = getattr(repo, "session", None)
+    if repo_session is not None:
+        try:
+            query_terms = [
+                chapter_plan.title,
+                chapter_plan.one_line,
+                *goals,
+                *(entity.name for entity in entities[:8]),
+                *(thread.name for thread in threads[:4]),
+            ]
+            world_context = WorldModelRetriever(repo_session).build_context(
+                project_id=project_id,
+                chapter_number=chapter_plan.chapter_number,
+                query_terms=query_terms,
+                max_pages=6,
+            )
+        except Exception:
+            logger.warning("Failed to assemble world model context.", exc_info=True)
+
     # 8. Build and return pack
     return ChapterContextPack(
         project_id=project_id,
@@ -318,4 +340,5 @@ def assemble_context(
         band_task_contract=band_task_contract,
         active_future_constraints=active_constraints,
         next_band_summary=next_band_summary,
+        world_context=world_context,
     )

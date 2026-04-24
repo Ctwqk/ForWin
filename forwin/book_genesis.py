@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import json
 import logging
 import re
@@ -1361,6 +1362,10 @@ class BookGenesisService:
             model_profile_json=_json_dump(trace_payload.get("model_profile", {})),
             attempts_json=_json_dump(trace_payload.get("attempts", [])),
             output_summary_json=_json_dump(trace_payload.get("output_summary", {})),
+            backend=str(trace_payload.get("backend", "") or ""),
+            codex_job_id=str(trace_payload.get("codex_job_id", "") or ""),
+            permission_profile=str(trace_payload.get("permission_profile", "") or ""),
+            fallback_used=bool(trace_payload.get("fallback_used", False)),
         )
         stage_state["last_trace_id"] = trace.id
         new_row = updater.create_book_genesis_revision(
@@ -1447,6 +1452,10 @@ class BookGenesisService:
             model_profile_json=_json_dump(trace_payload.get("model_profile", {})),
             attempts_json=_json_dump(trace_payload.get("attempts", [])),
             output_summary_json=_json_dump(trace_payload.get("output_summary", {})),
+            backend=str(trace_payload.get("backend", "") or ""),
+            codex_job_id=str(trace_payload.get("codex_job_id", "") or ""),
+            permission_profile=str(trace_payload.get("permission_profile", "") or ""),
+            fallback_used=bool(trace_payload.get("fallback_used", False)),
         )
         stage_state["last_trace_id"] = trace.id
         new_row = updater.create_book_genesis_revision(
@@ -1772,6 +1781,10 @@ class BookGenesisService:
                 model_profile_json=_json_dump(trace_payload.get("model_profile", {})),
                 attempts_json=_json_dump(trace_payload.get("attempts", [])),
                 output_summary_json=_json_dump(trace_payload.get("output_summary", {})),
+                backend=str(trace_payload.get("backend", "") or ""),
+                codex_job_id=str(trace_payload.get("codex_job_id", "") or ""),
+                permission_profile=str(trace_payload.get("permission_profile", "") or ""),
+                fallback_used=bool(trace_payload.get("fallback_used", False)),
             )
         for index in range(chapter_count):
             number = chapter_start + index
@@ -2024,7 +2037,11 @@ class BookGenesisService:
         )
         attempts_payload: list[dict[str, Any]] = []
         max_tokens = min(self.max_tokens, int(max_tokens or self.max_tokens))
-        if hasattr(self.llm_client, "api_key") and not str(getattr(self.llm_client, "api_key", "") or "").strip():
+        if (
+            hasattr(self.llm_client, "api_key")
+            and not str(getattr(self.llm_client, "api_key", "") or "").strip()
+            and not bool(getattr(self.llm_client, "codex_enabled", False))
+        ):
             attempts_payload.append({"status": "fallback", "reason": "missing_api_key"})
             return fallback, self._trace_payload(
                 stage_key=stage_key,
@@ -2041,11 +2058,16 @@ class BookGenesisService:
         ]
         for attempt_no, attempt in enumerate(retry_plan, start=1):
             try:
-                raw = self.llm_client.chat(
+                is_chapter_plan = str(stage_key or "").startswith("launch_arc_")
+                raw = self._call_llm_chat(
                     effective_messages,
                     temperature=attempt["temperature"],
                     max_tokens=attempt["max_tokens"],
                     response_format={"type": "json_object"},
+                    task_family="chapter_plan_materialization" if is_chapter_plan else "genesis",
+                    stage_key=stage_key,
+                    codex_allowed=not is_chapter_plan,
+                    output_schema={"type": "object"},
                 )
                 payload = parse_llm_json(raw, error_prefix=f"Genesis {stage_key}")
                 attempts_payload.append(
@@ -2089,6 +2111,20 @@ class BookGenesisService:
             output_summary={"mode": "fallback", "payload": fallback},
         )
 
+    def _call_llm_chat(self, messages: list[dict[str, str]], **kwargs: Any) -> str:
+        signature = inspect.signature(self.llm_client.chat)
+        parameters = signature.parameters
+        accepts_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+        filtered = {
+            key: value
+            for key, value in kwargs.items()
+            if accepts_var_kwargs or key in parameters
+        }
+        return self.llm_client.chat(messages, **filtered)
+
     def _resolve_skill_layers(self, *, stage_key: str):
         if self.skill_router is None or self.skill_prompt_layer_builder is None:
             return [], []
@@ -2120,7 +2156,16 @@ class BookGenesisService:
         output_summary: dict[str, Any],
     ) -> dict[str, Any]:
         selected = list(selected_skills or [])
+        last_call_result = getattr(self.llm_client, "last_call_result", None)
+        trace = getattr(last_call_result, "trace", {}) if last_call_result is not None else {}
+        backend = str(trace.get("backend", "") or getattr(last_call_result, "backend", "") or "")
+        permission_profile = str(trace.get("permission_profile", "") or "")
+        fallback_used = bool(getattr(last_call_result, "fallback_used", False)) if last_call_result is not None else False
         return {
+            "backend": backend,
+            "codex_job_id": str(trace.get("codex_job_id", "") or ""),
+            "permission_profile": permission_profile,
+            "fallback_used": fallback_used,
             "effective_system_prompt": effective_system_prompt,
             "prompt_layers": prompt_layers
             if prompt_layers is not None

@@ -131,6 +131,12 @@ def _env_values() -> dict[str, object]:
             os.environ.get("REVIEW_FAIL_MAX_REWRITES", "3")
         ),
         "phase4_use_llm": os.environ.get("PHASE4_USE_LLM", "true").strip().lower() not in {"0", "false", "no"},
+        "codex_enabled": os.environ.get("FORWIN_CODEX_ENABLED", "false").strip().lower() in {"1", "true", "yes"},
+        "codex_bridge_url": os.environ.get("FORWIN_CODEX_BRIDGE_URL", "http://host.docker.internal:8897"),
+        "codex_bridge_token": os.environ.get("FORWIN_CODEX_BRIDGE_TOKEN", ""),
+        "codex_max_concurrent": int(os.environ.get("FORWIN_CODEX_MAX_CONCURRENT", "1")),
+        "codex_sync_timeout_seconds": float(os.environ.get("FORWIN_CODEX_SYNC_TIMEOUT_SECONDS", "90")),
+        "codex_job_timeout_seconds": float(os.environ.get("FORWIN_CODEX_JOB_TIMEOUT_SECONDS", "900")),
         "feedback_cooldown_chapters": int(os.environ.get("FEEDBACK_COOLDOWN_CHAPTERS", "3")),
         "comment_to_reader_ratio": int(os.environ.get("COMMENT_TO_READER_RATIO", "80")),
         "temperature": float(os.environ.get("TEMPERATURE", "0.85")),
@@ -205,6 +211,12 @@ class _ConfigFields:
     lint_review_enabled: bool = True
     review_fail_max_rewrites: int = 3
     phase4_use_llm: bool = True
+    codex_enabled: bool = False
+    codex_bridge_url: str = "http://host.docker.internal:8897"
+    codex_bridge_token: str = ""
+    codex_max_concurrent: int = 1
+    codex_sync_timeout_seconds: float = 90.0
+    codex_job_timeout_seconds: float = 900.0
     feedback_cooldown_chapters: int = 3
     comment_to_reader_ratio: int = 80
     temperature: float = 0.85

@@ -224,8 +224,45 @@
         applyGenerationPreferenceFields();
         updateTaskModalSelects();
         renderProfiles();
+        await loadCodexBridgeStatus();
       } catch (error) {
         setGlobalStatus(error.message || String(error), '模型配置读取失败');
+      }
+    }
+
+    async function loadCodexBridgeStatus() {
+      const badge = document.getElementById('codex_bridge_badge');
+      const panel = document.getElementById('codex_bridge_panel');
+      try {
+        const payload = await requestJson('/api/settings/codex/health');
+        const statusText = payload.enabled
+          ? (payload.healthy ? '可用' : `不可用 · ${payload.status || 'unknown'}`)
+          : '未启用';
+        if (badge) {
+          badge.textContent = `Codex：${statusText}`;
+          badge.className = `badge ${payload.healthy ? 'ok' : ''}`.trim();
+        }
+        if (panel) {
+          panel.innerHTML = '';
+          const item = createNode('div', '', 'list-item');
+          const title = createNode('strong', `Codex Bridge ${statusText}`);
+          const meta = createNode(
+            'div',
+            `${payload.bridge_url || '未配置 URL'} · ${payload.message || ''}`,
+            'meta-line'
+          );
+          item.append(title, meta);
+          panel.appendChild(item);
+        }
+      } catch (error) {
+        if (badge) {
+          badge.textContent = 'Codex：检查失败';
+          badge.className = 'badge';
+        }
+        if (panel) {
+          panel.innerHTML = '';
+          panel.appendChild(createNode('div', error.message || String(error), 'empty'));
+        }
       }
     }
 

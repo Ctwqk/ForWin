@@ -186,6 +186,7 @@ from forwin.skills import build_skill_runtime_components
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
 from forwin.writer.llm_client import LLMClient
+from forwin.llm.factory import maybe_wrap_with_codex_router
 
 logger = logging.getLogger(__name__)
 
@@ -354,6 +355,7 @@ def _build_genesis_service(
     )
     setattr(llm_client, "profile_id", resolved_profile.get("id", ""))
     setattr(llm_client, "profile_name", resolved_profile.get("name", ""))
+    llm_client = maybe_wrap_with_codex_router(llm_client, resolved)
     _registry, router, prompt_layer_builder = build_skill_runtime_components(
         root=resolved.skill_registry_path,
         enabled=resolved.skill_runtime_enabled,

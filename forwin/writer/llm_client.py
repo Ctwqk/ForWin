@@ -64,6 +64,9 @@ class OpenAICompatibleAdapter:
         response_format: dict | None = None,
         timeout_seconds: float | None = None,
         retry_on_timeout: bool = True,
+        task_family: str = "",
+        stage_key: str = "",
+        output_schema: dict | None = None,
     ) -> str:
         """Send a chat completion request and return the content string.
 
@@ -81,7 +84,19 @@ class OpenAICompatibleAdapter:
         )
 
         attempt_group_id = uuid.uuid4().hex
-        profiles = self._request_profiles()
+        llm_task_route = self._llm_task_route(
+            task_family=task_family,
+            stage_key=stage_key,
+            response_format=response_format,
+            output_schema=output_schema,
+        )
+        profiles = self._route_profiles(
+            self._request_profiles(),
+            task_family=task_family,
+            stage_key=stage_key,
+            response_format=response_format,
+            output_schema=output_schema,
+        )
         last_exc: Exception | None = None
         for profile_index, profile in enumerate(profiles):
             try:
@@ -94,6 +109,9 @@ class OpenAICompatibleAdapter:
                     request_timeout=request_timeout,
                     retry_on_timeout=retry_on_timeout,
                     attempt_group_id=attempt_group_id,
+                    task_family=task_family,
+                    stage_key=stage_key,
+                    llm_task_route=llm_task_route,
                     fallback_eligible_on_profile_failure=profile_index < len(profiles) - 1,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -110,6 +128,9 @@ class OpenAICompatibleAdapter:
                     "to_base_url": next_profile["base_url"],
                     "reason": str(exc),
                     "attempt_group_id": attempt_group_id,
+                    "task_family": str(task_family or ""),
+                    "stage_key": str(stage_key or ""),
+                    "llm_task_route": llm_task_route,
                 }
                 self.model_fallback_events.append(event)
                 logger.warning(
@@ -137,14 +158,36 @@ class OpenAICompatibleAdapter:
         request_timeout: httpx.Timeout,
         retry_on_timeout: bool,
         attempt_group_id: str,
+        task_family: str,
+        stage_key: str,
+        llm_task_route: str,
         fallback_eligible_on_profile_failure: bool,
     ) -> str:
+        requested_temperature = float(temperature)
+        effective_temperature = self._effective_temperature_for_profile(
+            profile,
+            requested_temperature,
+        )
+        send_temperature = self._should_send_temperature(profile)
+        requested_max_tokens = int(max_tokens)
+        effective_max_tokens = self._effective_max_tokens_for_profile(
+            profile,
+            requested_max_tokens,
+        )
+        effective_request_timeout = self._effective_timeout_for_profile(
+            profile,
+            request_timeout,
+        )
         payload = {
             "model": profile["model"],
             "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max_tokens,
         }
+        if send_temperature:
+            payload["temperature"] = effective_temperature
+        thinking = self._thinking_payload_for_profile(profile)
+        if thinking is not None:
+            payload["thinking"] = thinking
         if response_format:
             payload["response_format"] = response_format
         headers = {
@@ -163,13 +206,13 @@ class OpenAICompatibleAdapter:
                     self.retry_attempts,
                     profile["model"],
                     len(messages),
-                    max_tokens,
+                    effective_max_tokens,
                 )
                 response = self.client.post(
                     url,
                     json=payload,
                     headers=headers,
-                    timeout=request_timeout,
+                    timeout=effective_request_timeout,
                 )
 
                 if response.status_code in _RETRYABLE_HTTP_STATUS_CODES:
@@ -178,10 +221,10 @@ class OpenAICompatibleAdapter:
                         attempt_group_id=attempt_group_id,
                         profile=profile,
                         messages=messages,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
+                        temperature=effective_temperature,
+                        max_tokens=effective_max_tokens,
                         response_format=response_format,
-                        request_timeout=request_timeout,
+                        request_timeout=effective_request_timeout,
                         attempt_no=attempt_no,
                         http_status=response.status_code,
                         provider_request_id=self._provider_request_id(response),
@@ -190,7 +233,7 @@ class OpenAICompatibleAdapter:
                         sleep_ms=int(retry_delay * 1000) if attempt < self.retry_attempts - 1 else 0,
                         error_class="HTTPStatusError" if attempt >= self.retry_attempts - 1 else "",
                         error_message=(
-                            f"HTTP {response.status_code}"
+                            self._http_error_message_from_response(response, profile)
                             if attempt >= self.retry_attempts - 1
                             else ""
                         ),
@@ -202,6 +245,11 @@ class OpenAICompatibleAdapter:
                             else False
                         ),
                         final_failure=attempt >= self.retry_attempts - 1,
+                        requested_temperature=requested_temperature,
+                        requested_max_tokens=requested_max_tokens,
+                        task_family=task_family,
+                        stage_key=stage_key,
+                        llm_task_route=llm_task_route,
                     )
                     if attempt < self.retry_attempts - 1:
                         logger.warning(
@@ -223,15 +271,20 @@ class OpenAICompatibleAdapter:
                     attempt_group_id=attempt_group_id,
                     profile=profile,
                     messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
+                    temperature=effective_temperature,
+                    max_tokens=effective_max_tokens,
                     response_format=response_format,
-                    request_timeout=request_timeout,
+                    request_timeout=effective_request_timeout,
                     attempt_no=attempt_no,
                     http_status=response.status_code,
                     provider_request_id=self._provider_request_id(response),
                     duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
                     output_chars=len(content),
+                    requested_temperature=requested_temperature,
+                    requested_max_tokens=requested_max_tokens,
+                    task_family=task_family,
+                    stage_key=stage_key,
+                    llm_task_route=llm_task_route,
                 )
                 logger.debug(
                     "LLMClient.chat success: %d chars returned in %.2fs",
@@ -246,10 +299,10 @@ class OpenAICompatibleAdapter:
                     attempt_group_id=attempt_group_id,
                     profile=profile,
                     messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
+                    temperature=effective_temperature,
+                    max_tokens=effective_max_tokens,
                     response_format=response_format,
-                    request_timeout=request_timeout,
+                    request_timeout=effective_request_timeout,
                     attempt_no=attempt_no,
                     duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
                     error_class=exc.__class__.__name__,
@@ -259,6 +312,11 @@ class OpenAICompatibleAdapter:
                     retryable=bool(retry_on_timeout),
                     fallback_eligible=fallback_eligible_on_profile_failure if final_failure else False,
                     final_failure=final_failure,
+                    requested_temperature=requested_temperature,
+                    requested_max_tokens=requested_max_tokens,
+                    task_family=task_family,
+                    stage_key=stage_key,
+                    llm_task_route=llm_task_route,
                 )
                 if retry_on_timeout and attempt < self.retry_attempts - 1:
                     delay = self._retry_delay(attempt)
@@ -283,10 +341,10 @@ class OpenAICompatibleAdapter:
                     attempt_group_id=attempt_group_id,
                     profile=profile,
                     messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
+                    temperature=effective_temperature,
+                    max_tokens=effective_max_tokens,
                     response_format=response_format,
-                    request_timeout=request_timeout,
+                    request_timeout=effective_request_timeout,
                     attempt_no=attempt_no,
                     http_status=status_code,
                     provider_request_id=(
@@ -296,7 +354,7 @@ class OpenAICompatibleAdapter:
                     ),
                     duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
                     error_class=exc.__class__.__name__,
-                    error_message=str(exc),
+                    error_message=self._http_error_message(exc, profile),
                     error_category=(
                         self._error_category_for_status(status_code)
                         if status_code
@@ -308,6 +366,11 @@ class OpenAICompatibleAdapter:
                         and self._is_fallback_retryable(exc)
                     ),
                     final_failure=True,
+                    requested_temperature=requested_temperature,
+                    requested_max_tokens=requested_max_tokens,
+                    task_family=task_family,
+                    stage_key=stage_key,
+                    llm_task_route=llm_task_route,
                 )
                 raise
 
@@ -317,8 +380,8 @@ class OpenAICompatibleAdapter:
     def _request_profiles(self) -> list[dict[str, str]]:
         candidates = [
             {
-                "id": "",
-                "name": "",
+                "id": str(self.profile_id or ""),
+                "name": str(self.profile_name or ""),
                 "api_key": self.api_key,
                 "base_url": self.base_url,
                 "model": self.model,
@@ -326,7 +389,7 @@ class OpenAICompatibleAdapter:
         ]
         candidates.extend(self.fallback_profiles)
         profiles: list[dict[str, str]] = []
-        seen: set[tuple[str, str, str]] = set()
+        seen: dict[tuple[str, str, str], int] = {}
         for item in candidates:
             profile = {
                 "id": str(item.get("id", "")).strip(),
@@ -339,8 +402,13 @@ class OpenAICompatibleAdapter:
                 continue
             key = (profile["api_key"], profile["base_url"], profile["model"])
             if key in seen:
+                existing = profiles[seen[key]]
+                if not existing.get("id") and profile.get("id"):
+                    existing["id"] = profile["id"]
+                if not existing.get("name") and profile.get("name"):
+                    existing["name"] = profile["name"]
                 continue
-            seen.add(key)
+            seen[key] = len(profiles)
             profiles.append(profile)
         return profiles
 
@@ -379,6 +447,11 @@ class OpenAICompatibleAdapter:
         retryable: bool = False,
         fallback_eligible: bool = False,
         final_failure: bool = False,
+        requested_temperature: float | None = None,
+        requested_max_tokens: int | None = None,
+        task_family: str = "",
+        stage_key: str = "",
+        llm_task_route: str = "",
     ) -> None:
         base_url = str(profile.get("base_url") or "")
         self.llm_attempt_events.append(
@@ -389,7 +462,17 @@ class OpenAICompatibleAdapter:
                 "model": str(profile.get("model") or ""),
                 "base_url_host": urlparse(base_url).netloc or base_url,
                 "temperature": temperature,
+                "requested_temperature": (
+                    float(requested_temperature)
+                    if requested_temperature is not None
+                    else temperature
+                ),
                 "max_tokens": max_tokens,
+                "requested_max_tokens": (
+                    int(requested_max_tokens)
+                    if requested_max_tokens is not None
+                    else int(max_tokens)
+                ),
                 "timeout_seconds": self._timeout_seconds_value(request_timeout),
                 "attempt_no": attempt_no,
                 "http_status": int(http_status or 0),
@@ -402,6 +485,9 @@ class OpenAICompatibleAdapter:
                 ),
                 "output_chars": int(output_chars or 0),
                 "response_format": response_format or {},
+                "task_family": str(task_family or ""),
+                "stage_key": str(stage_key or ""),
+                "llm_task_route": str(llm_task_route or ""),
                 "retry_after": retry_after,
                 "sleep_ms": int(sleep_ms or 0),
                 "error_class": error_class,
@@ -413,6 +499,281 @@ class OpenAICompatibleAdapter:
                 "final_failure": bool(final_failure),
             }
         )
+
+    @classmethod
+    def _route_profiles(
+        cls,
+        profiles: list[dict[str, str]],
+        *,
+        task_family: str = "",
+        stage_key: str = "",
+        response_format: dict | None = None,
+        output_schema: dict | None = None,
+    ) -> list[dict[str, str]]:
+        if len(profiles) <= 1:
+            return profiles
+        route = cls._llm_task_route(
+            task_family=task_family,
+            stage_key=stage_key,
+            response_format=response_format,
+            output_schema=output_schema,
+        )
+        indexed = list(enumerate(profiles))
+        suitable = [
+            (index, profile)
+            for index, profile in indexed
+            if cls._profile_suitable_for_route(profile, route)
+        ]
+        routed = suitable or indexed
+        routed.sort(
+            key=lambda item: (
+                cls._profile_route_priority(item[1], route),
+                item[0],
+            )
+        )
+        return [profile for _index, profile in routed]
+
+    @classmethod
+    def _llm_task_route(
+        cls,
+        *,
+        task_family: str = "",
+        stage_key: str = "",
+        response_format: dict | None = None,
+        output_schema: dict | None = None,
+    ) -> str:
+        family = str(task_family or "").strip().lower()
+        stage = str(stage_key or "").strip().lower()
+        wants_json = bool(response_format or output_schema)
+        if any(token in stage for token in ("state_event", "thread_time", "lore_timeline")):
+            return "canon_extraction"
+        if stage in {"comment_analysis", "npc_intents", "world_pressure"} or family in {
+            "feedback",
+            "phase4",
+            "reader_feedback",
+        }:
+            return "feedback_analysis"
+        if stage in {
+            "chapter_review",
+            "chapter_review_json_repair",
+            "repair_verification",
+        } or family in {"reviewer", "review"}:
+            return "review_json"
+        if any(token in stage for token in ("chapter_rewrite", "repair")) or family == "repair":
+            return "repair_generation"
+        if stage in {
+            "chapter_draft",
+            "chapter_preview",
+            "provisional_preview",
+            "scene_generation",
+            "scene_stitch",
+        } or (family == "writer" and not wants_json):
+            return "prose_generation"
+        if stage in {
+            "scene_breakdown",
+            "genesis_brief",
+            "brief",
+            "world",
+            "map",
+            "story_engine",
+            "book_blueprint",
+            "bootstrap",
+            "arc_plan",
+            "band_plan",
+            "chapter_plan",
+        } or stage.startswith("launch_arc_") or family in {
+            "genesis",
+            "planning",
+            "arc_planning",
+            "world_model",
+        }:
+            return "planning_json" if wants_json else "planning_prose"
+        if wants_json:
+            return "planning_json"
+        return "general"
+
+    @classmethod
+    def _profile_suitable_for_route(cls, profile: dict[str, str], route: str) -> bool:
+        kind = cls._profile_kind(profile)
+        if kind == "minimax" and route in {
+            "prose_generation",
+            "repair_generation",
+            "canon_extraction",
+        }:
+            return False
+        return True
+
+    @classmethod
+    def _profile_route_priority(cls, profile: dict[str, str], route: str) -> int:
+        kind = cls._profile_kind(profile)
+        priorities = {
+            "prose_generation": {
+                "spark": 0,
+                "kimi": 1,
+                "openai": 2,
+                "other": 3,
+                "minimax": 99,
+            },
+            "repair_generation": {
+                "spark": 0,
+                "kimi": 1,
+                "openai": 2,
+                "other": 3,
+                "minimax": 99,
+            },
+            "canon_extraction": {
+                "spark": 0,
+                "kimi": 1,
+                "openai": 2,
+                "other": 3,
+                "minimax": 99,
+            },
+            "planning_json": {
+                "spark": 0,
+                "kimi": 1,
+                "minimax": 2,
+                "openai": 3,
+                "other": 4,
+            },
+            "planning_prose": {
+                "spark": 0,
+                "kimi": 1,
+                "openai": 2,
+                "other": 3,
+                "minimax": 4,
+            },
+            "review_json": {
+                "spark": 0,
+                "kimi": 1,
+                "minimax": 2,
+                "openai": 3,
+                "other": 4,
+            },
+            "feedback_analysis": {
+                "minimax": 0,
+                "spark": 1,
+                "kimi": 2,
+                "openai": 3,
+                "other": 4,
+            },
+        }
+        route_priorities = priorities.get(
+            route,
+            {
+                "spark": 0,
+                "kimi": 1,
+                "openai": 2,
+                "minimax": 3,
+                "other": 4,
+            },
+        )
+        return int(route_priorities.get(kind, route_priorities.get("other", 50)))
+
+    @staticmethod
+    def _profile_kind(profile: dict[str, str]) -> str:
+        text = " ".join(
+            str(profile.get(key) or "").strip().lower()
+            for key in ("id", "name", "base_url", "model")
+        )
+        if "codex-spark" in text or "gpt-5.3-codex-spark" in text:
+            return "spark"
+        if "minimax" in text or "minimaxi" in text:
+            return "minimax"
+        if "kimi" in text or "moonshot" in text:
+            return "kimi"
+        if "openai" in text or "gpt-" in text:
+            return "openai"
+        return "other"
+
+    @classmethod
+    def _effective_temperature_for_profile(
+        cls,
+        profile: dict[str, str],
+        requested_temperature: float,
+    ) -> float:
+        if cls._is_kimi_k25_profile(profile):
+            return 0.6
+        return float(requested_temperature)
+
+    @classmethod
+    def _should_send_temperature(cls, profile: dict[str, str]) -> bool:
+        return not cls._is_kimi_k25_profile(profile)
+
+    @classmethod
+    def _thinking_payload_for_profile(cls, profile: dict[str, str]) -> dict[str, str] | None:
+        if cls._is_kimi_k25_profile(profile):
+            return {"type": "disabled"}
+        return None
+
+    @classmethod
+    def _effective_max_tokens_for_profile(
+        cls,
+        profile: dict[str, str],
+        requested_max_tokens: int,
+    ) -> int:
+        if cls._is_kimi_k25_profile(profile):
+            return max(int(requested_max_tokens), 1800)
+        return int(requested_max_tokens)
+
+    @classmethod
+    def _effective_timeout_for_profile(
+        cls,
+        profile: dict[str, str],
+        request_timeout: httpx.Timeout,
+    ) -> httpx.Timeout:
+        if not cls._is_kimi_k25_profile(profile):
+            return request_timeout
+        read_timeout = max(
+            120.0,
+            float(getattr(request_timeout, "read", None) or 0.0),
+        )
+        connect_timeout = max(
+            min(10.0, read_timeout),
+            float(getattr(request_timeout, "connect", None) or 0.0),
+        )
+        return httpx.Timeout(read_timeout, connect=connect_timeout)
+
+    @staticmethod
+    def _is_kimi_k25_profile(profile: dict[str, str]) -> bool:
+        base_url = str(profile.get("base_url") or "").lower()
+        model = str(profile.get("model") or "").strip().lower()
+        return ("moonshot" in base_url or "kimi" in base_url) and model.startswith("kimi-k2.5")
+
+    @classmethod
+    def _http_error_message(
+        cls,
+        exc: BaseException,
+        profile: dict[str, str],
+    ) -> str:
+        response = getattr(exc, "response", None)
+        if isinstance(response, httpx.Response):
+            return cls._http_error_message_from_response(response, profile)
+        return str(exc)
+
+    @classmethod
+    def _http_error_message_from_response(
+        cls,
+        response: httpx.Response,
+        profile: dict[str, str],
+    ) -> str:
+        message = f"HTTP {response.status_code}"
+        try:
+            preview = response.text
+        except Exception:  # noqa: BLE001
+            preview = ""
+        preview = cls._redact_error_preview(preview, profile)
+        if preview:
+            message = f"{message}: {preview}"
+        return message
+
+    @staticmethod
+    def _redact_error_preview(text: str, profile: dict[str, str]) -> str:
+        preview = " ".join(str(text or "").split())
+        api_key = str(profile.get("api_key") or "").strip()
+        for secret in (api_key, f"Bearer {api_key}" if api_key else ""):
+            if secret:
+                preview = preview.replace(secret, "***")
+        return preview[:500]
 
     @staticmethod
     def _provider_request_id(response: httpx.Response) -> str:

@@ -252,7 +252,7 @@ class ContinuityChecker:
             resolved = self.repo.get_entities_by_names(project_id, sorted(maybe_event_names))
             for name in maybe_event_names:
                 entity = resolved.get(name)
-                if entity is None or entity.kind == "character":
+                if entity is not None and entity.kind == "character":
                     candidate_names.add(name)
 
         issues: list[ContinuityIssue] = []

@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from forwin.arc_sizing import allocate_arc_chapter_sizes
+from forwin.llm.compat import call_chat_compat
 from forwin.writer.llm_client import LLMClient
 from forwin.utils import LLMJSONParseError, parse_llm_json
 
@@ -152,6 +153,7 @@ class ArcDirector:
             temperature=0.35,
             max_tokens=min(self.max_tokens, 1300),
             fallback=fallback,
+            stage_key="subworld_delta",
         )
         return self._normalize_subworld_delta(payload, fallback=fallback)
 
@@ -219,6 +221,7 @@ class ArcDirector:
             temperature=0.5,
             max_tokens=min(self.max_tokens, 900),
             fallback=fallback,
+            stage_key="world_scaffold",
         )
 
     def _plan_chapters(
@@ -265,6 +268,7 @@ class ArcDirector:
             temperature=0.45,
             max_tokens=min(self.max_tokens, 1200),
             fallback=fallback,
+            stage_key="chapter_plan",
         )
         return self._as_list(payload.get("chapters"))
 
@@ -721,6 +725,7 @@ class ArcDirector:
             temperature=0.4,
             max_tokens=min(self.max_tokens, 1000),
             fallback=fallback,
+            stage_key="arc_plan",
         )
 
     def analyze_arc_envelope(
@@ -775,6 +780,7 @@ class ArcDirector:
             temperature=0.35,
             max_tokens=min(self.max_tokens, 1100),
             fallback=fallback,
+            stage_key="arc_envelope_analysis",
         )
 
     def rehearse_scenario(self, *, report: dict[str, Any]) -> dict:
@@ -814,6 +820,7 @@ class ArcDirector:
         temperature: float,
         max_tokens: int,
         fallback: dict,
+        stage_key: str = "arc_director_json",
     ) -> dict:
         if hasattr(self.llm_client, "api_key") and not getattr(self.llm_client, "api_key", "").strip():
             return fallback
@@ -826,19 +833,26 @@ class ArcDirector:
         for index, attempt in enumerate(attempts, start=1):
             try:
                 try:
-                    raw = self.llm_client.chat(
+                    raw = call_chat_compat(
+                        self.llm_client,
                         messages,
                         temperature=attempt["temperature"],
                         max_tokens=attempt["max_tokens"],
                         response_format={"type": "json_object"},
+                        task_family="planning",
+                        stage_key=stage_key,
+                        output_schema={"type": "object"},
                     )
                 except TypeError as exc:
                     if "response_format" not in str(exc):
                         raise
-                    raw = self.llm_client.chat(
+                    raw = call_chat_compat(
+                        self.llm_client,
                         messages,
                         temperature=attempt["temperature"],
                         max_tokens=attempt["max_tokens"],
+                        task_family="planning",
+                        stage_key=stage_key,
                     )
                 return parse_llm_json(raw, error_prefix="ArcDirector JSON parser")
             except Exception as exc:  # noqa: BLE001

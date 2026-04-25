@@ -62,6 +62,10 @@ class EvalAttemptResult(BaseModel):
     retry_count: int = 0
     input_chars: int = 0
     output_chars: int = 0
+    temperature: float | None = None
+    requested_temperature: float | None = None
+    max_tokens: int | None = None
+    requested_max_tokens: int | None = None
     parse_ok: bool = False
     schema_ok: bool = False
     required_keys_missing: list[str] = Field(default_factory=list)

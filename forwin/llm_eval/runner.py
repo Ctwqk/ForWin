@@ -139,6 +139,9 @@ class LLMReliabilityRunner:
                                 response_format=case.response_format,
                                 timeout_seconds=profile.timeout_seconds,
                                 retry_on_timeout=True,
+                                task_family=case.task_family,
+                                stage_key=case.stage_key,
+                                output_schema={"type": "object"} if case.response_format else None,
                             )
                         )
                     except BaseException as caught:  # noqa: BLE001
@@ -213,6 +216,26 @@ class LLMReliabilityRunner:
             retry_count=retry_count,
             input_chars=int(last_attempt.get("input_chars") or _input_chars(messages)),
             output_chars=int(validation.output_chars or last_attempt.get("output_chars") or 0),
+            temperature=(
+                float(last_attempt["temperature"])
+                if "temperature" in last_attempt and last_attempt["temperature"] is not None
+                else None
+            ),
+            requested_temperature=(
+                float(last_attempt["requested_temperature"])
+                if "requested_temperature" in last_attempt and last_attempt["requested_temperature"] is not None
+                else None
+            ),
+            max_tokens=(
+                int(last_attempt["max_tokens"])
+                if "max_tokens" in last_attempt and last_attempt["max_tokens"] is not None
+                else None
+            ),
+            requested_max_tokens=(
+                int(last_attempt["requested_max_tokens"])
+                if "requested_max_tokens" in last_attempt and last_attempt["requested_max_tokens"] is not None
+                else None
+            ),
             parse_ok=validation.parse_ok,
             schema_ok=validation.schema_ok,
             required_keys_missing=validation.required_keys_missing,

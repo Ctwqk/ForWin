@@ -82,6 +82,8 @@ class LLMRouterTests(unittest.TestCase):
         self.assertEqual(result, '{"source":"ordinary"}')
         self.assertEqual(len(codex.calls), 0)
         self.assertEqual(len(ordinary.calls), 1)
+        self.assertEqual(ordinary.calls[0]["kwargs"]["task_family"], "chapter_plan_materialization")
+        self.assertEqual(ordinary.calls[0]["kwargs"]["stage_key"], "launch_arc_1")
 
     def test_codex_primary_for_genesis_when_enabled(self) -> None:
         ordinary = OrdinaryAdapter()
@@ -108,6 +110,8 @@ class LLMRouterTests(unittest.TestCase):
         )
 
         self.assertEqual(result, '{"source":"ordinary"}')
+        self.assertEqual(ordinary.calls[0]["kwargs"]["task_family"], "reviewer")
+        self.assertEqual(ordinary.calls[0]["kwargs"]["stage_key"], "chapter_review")
         events = router.drain_model_fallback_events()
         self.assertEqual(events[0]["from_backend"], "codex_bridge")
         self.assertEqual(events[0]["to_backend"], "ordinary")

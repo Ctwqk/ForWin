@@ -93,8 +93,12 @@ class LLMCallRouter:
                         "reason": str(exc),
                     }
                 )
+        ordinary_kwargs = dict(kwargs)
+        ordinary_kwargs.setdefault("task_family", resolved_intent.task_family)
+        ordinary_kwargs.setdefault("stage_key", resolved_intent.stage_key)
+        ordinary_kwargs.setdefault("output_schema", resolved_intent.output_schema)
         result = LLMCallResult(
-            content=self.ordinary_adapter.chat(messages, **kwargs),
+            content=self.ordinary_adapter.chat(messages, **ordinary_kwargs),
             backend="ordinary",
             fallback_used=fallback_used,
             trace={
@@ -122,6 +126,12 @@ class LLMCallRouter:
         if callable(ordinary_drain):
             events.extend(list(ordinary_drain() or []))
         return events
+
+    def drain_llm_attempt_events(self) -> list[dict[str, object]]:
+        ordinary_drain = getattr(self.ordinary_adapter, "drain_llm_attempt_events", None)
+        if callable(ordinary_drain):
+            return list(ordinary_drain() or [])
+        return []
 
     def close(self) -> None:
         close_codex = getattr(self.codex_client, "close", None)
@@ -183,6 +193,9 @@ class RoutedModelAdapter:
 
     def drain_model_fallback_events(self) -> list[dict[str, str]]:
         return self.router.drain_model_fallback_events()
+
+    def drain_llm_attempt_events(self) -> list[dict[str, object]]:
+        return self.router.drain_llm_attempt_events()
 
     def close(self) -> None:
         self.router.close()

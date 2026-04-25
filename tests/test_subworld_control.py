@@ -29,6 +29,7 @@ from forwin.protocol import (
     SubWorldSummary,
     WriterOutput,
 )
+from forwin.protocol.state_change import EventCandidate
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.subworld_manager import SubWorldManager
@@ -37,6 +38,41 @@ from forwin.writer.prompts import build_single_chapter_draft_prompt
 
 
 class SubWorldControlTests(unittest.TestCase):
+    def test_subworld_admission_ignores_unresolved_event_only_locations_or_items(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林夜"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=1,
+                title="第一章",
+                body="正文内容" * 80,
+                end_of_chapter_summary="总结",
+                new_events=[
+                    EventCandidate(
+                        summary="林夜在潮雾旧城发现锈蚀罗盘",
+                        significance="major",
+                        involved_entity_names=["林夜", "潮雾旧城", "锈蚀罗盘"],
+                        roles=["protagonist", "location", "item"],
+                    )
+                ],
+            ),
+        )
+
+        self.assertFalse(any(issue.rule_name == "sub_world_unknown_named_entity" for issue in verdict.issues))
+
     def test_ensure_registry_bootstraps_global_core_with_existing_characters(self) -> None:
         with TemporaryDirectory() as tmp:
             engine = get_engine(str(Path(tmp) / "subworld.db"))

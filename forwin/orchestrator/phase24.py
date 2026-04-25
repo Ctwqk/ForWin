@@ -53,6 +53,21 @@ def _clamp_int(value: float | int, lower: int, upper: int) -> int:
     return max(lower, min(int(round(value)), upper))
 
 
+def _coerce_unit_float(value: object, *, default: float) -> float:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"high", "strong", "certain", "confident"}:
+            return 0.85
+        if normalized in {"medium", "moderate", "managed"}:
+            return 0.65
+        if normalized in {"low", "weak", "uncertain"}:
+            return 0.35
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def _load_long_window_audience_trends(
     session: Session,
     project_id: str,
@@ -1374,7 +1389,10 @@ class ArcEnvelopeManager:
                 base_soft_min,
                 base_soft_max,
             )
-            confidence = max(0.2, min(0.95, float(analysis_payload.get("confidence") or 0.65)))
+            confidence = max(
+                0.2,
+                min(0.95, _coerce_unit_float(analysis_payload.get("confidence"), default=0.65)),
+            )
         else:
             confidence = 0.65 if recommendation == "keep" else 0.72
 

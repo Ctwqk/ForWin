@@ -4139,7 +4139,7 @@ class WritingOrchestrator:
             resolved = repo.get_entities_by_names(project_id, sorted(maybe_event_names))
             for entity_name in maybe_event_names:
                 entity = resolved.get(entity_name)
-                if entity is None or entity.kind == "character":
+                if entity is not None and entity.kind == "character":
                     names.add(entity_name)
         return {name for name in names if len(name) <= 12}
 

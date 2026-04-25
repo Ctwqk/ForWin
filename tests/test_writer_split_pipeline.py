@@ -71,6 +71,48 @@ class SplitWriterPipelineTests(unittest.TestCase):
         self.assertEqual(output.generation_meta["call_count"], 4)
         self.assertEqual(output.generation_meta["structured_extraction_calls"], 3)
 
+    def test_single_writer_prompt_trace_records_business_retry_reason(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.responses = [
+                    "",
+                    (
+                        "<<FORWIN_TITLE>>\n"
+                        "雨夜旧站\n"
+                        "<<FORWIN_BODY>>\n"
+                        + "林夜踩着积水穿过旧站台，听见广播里多出了一段不属于这个时代的报站声。" * 20
+                        + "\n<<FORWIN_SUMMARY>>\n"
+                        "林夜确认旧站台里还藏着第二条线索。"
+                    ),
+                    '{"state_changes":[],"new_events":[]}',
+                    '{"thread_beats":[],"time_advance":null}',
+                    '{"lore_candidates":[],"timeline_hints":[],"writer_notes":[]}',
+                ]
+
+            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+                return self.responses.pop(0)
+
+        writer = ChapterWriter(FakeClient(), writer_mode="single")
+        context = ChapterContextPack(
+            project_id="p1",
+            project_title="测试书",
+            premise="前提",
+            genre="悬疑",
+            setting_summary="旧城站台",
+            chapter_number=3,
+            chapter_plan_title="第三章",
+            chapter_plan_one_line="主角继续追查",
+            chapter_goals=["确认异响来源"],
+        )
+
+        output = writer.write_chapter(context)
+
+        trace = output.generation_meta["prompt_trace"]
+        retry_events = trace["output_summary"]["business_retry_events"]
+        self.assertEqual(retry_events[0]["stage"], "preview_generation")
+        self.assertEqual(retry_events[0]["attempt_no"], 1)
+        self.assertIn("preview response body is empty", retry_events[0]["reason"])
+
     def test_scene_writer_outputs_continuation_contract(self) -> None:
         class FakeClient:
             def __init__(self) -> None:

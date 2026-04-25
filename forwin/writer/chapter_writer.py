@@ -72,6 +72,7 @@ class ChapterWriter:
         self.single_call_timeout_seconds = max(10.0, float(single_call_timeout_seconds))
         self.scene_call_timeout_seconds = max(10.0, float(scene_call_timeout_seconds))
         self._chat_signature = inspect.signature(self.llm_client.chat)
+        self._business_retry_events: list[dict[str, object]] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -150,6 +151,7 @@ class ChapterWriter:
             timeout_seconds=timeout_seconds or self.single_call_timeout_seconds,
             max_attempts=max_attempts,
             retry_on_timeout=retry_on_timeout,
+            stage_key=trace_stage_key,
         )
         draft_data = self._parse_preview_text(
             preview_text,
@@ -242,6 +244,7 @@ class ChapterWriter:
             timeout_seconds=timeout_seconds or self.single_call_timeout_seconds,
             max_attempts=max_attempts,
             retry_on_timeout=retry_on_timeout,
+            stage_key=trace_stage_key,
         )
         draft_data = self._parse_preview_text(
             raw_draft,
@@ -441,6 +444,7 @@ class ChapterWriter:
                 timeout_seconds=self.scene_call_timeout_seconds,
                 max_attempts=1,
                 retry_on_timeout=False,
+                stage_key="scene_breakdown",
             )
             scenes = self._build_list(data, "scenes", ScenePlan)
             if scenes:
@@ -488,6 +492,7 @@ class ChapterWriter:
             timeout_seconds=self.scene_call_timeout_seconds,
             max_attempts=2,
             retry_on_timeout=False,
+            stage_key="scene_generation",
         )
         data = self._parse_tagged_text(
             raw_scene,
@@ -575,6 +580,7 @@ class ChapterWriter:
             timeout_seconds=self.scene_call_timeout_seconds,
             max_attempts=2,
             retry_on_timeout=False,
+            stage_key="scene_stitch",
         )
         return self._parse_preview_text(
             raw_stitched,
@@ -690,6 +696,7 @@ class ChapterWriter:
                 timeout_seconds=self.scene_call_timeout_seconds,
                 max_attempts=2,
                 retry_on_timeout=False,
+                stage_key=label,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("%s primary pass failed, retrying with reduced body: %s", label, exc)
@@ -702,6 +709,7 @@ class ChapterWriter:
                     timeout_seconds=self.scene_call_timeout_seconds,
                     max_attempts=1,
                     retry_on_timeout=False,
+                    stage_key=label,
                 )
             except Exception as repair_exc:  # noqa: BLE001
                 logger.warning("%s degraded to empty metadata after retry: %s", label, repair_exc)
@@ -808,6 +816,7 @@ class ChapterWriter:
         timeout_seconds: float | None = None,
         max_attempts: int = 3,
         retry_on_timeout: bool = True,
+        stage_key: str = "writer_json",
     ) -> dict:
         attempts = [
             {"temperature": temperature, "max_tokens": max_tokens},
@@ -827,10 +836,17 @@ class ChapterWriter:
                     response_format={"type": "json_object"},
                     timeout_seconds=timeout_seconds,
                     retry_on_timeout=retry_on_timeout,
+                    stage_key=stage_key,
                 )
                 return parse_llm_json(raw, error_prefix="ChapterWriter JSON parser")
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
+                self._record_business_retry_event(
+                    stage="json_generation",
+                    attempt_no=index,
+                    max_attempts=len(attempts),
+                    reason=exc,
+                )
                 logger.warning(
                     "ChapterWriter JSON call failed on attempt %d/%d: %s",
                     index,
@@ -848,6 +864,7 @@ class ChapterWriter:
         timeout_seconds: float | None = None,
         max_attempts: int = 2,
         retry_on_timeout: bool = True,
+        stage_key: str = "chapter_draft",
     ) -> str:
         attempts = [
             {"temperature": temperature, "max_tokens": max_tokens},
@@ -866,6 +883,7 @@ class ChapterWriter:
                     max_tokens=attempt["max_tokens"],
                     timeout_seconds=timeout_seconds,
                     retry_on_timeout=retry_on_timeout,
+                    stage_key=stage_key,
                 )
                 parsed = self._parse_preview_text(raw, fallback_title="")
                 if str(parsed.get("body", "") or "").strip():
@@ -873,6 +891,12 @@ class ChapterWriter:
                 raise ValueError("preview response body is empty")
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
+                self._record_business_retry_event(
+                    stage="preview_generation",
+                    attempt_no=index,
+                    max_attempts=len(attempts),
+                    reason=exc,
+                )
                 logger.warning(
                     "ChapterWriter preview call failed on attempt %d/%d: %s",
                     index,
@@ -890,6 +914,9 @@ class ChapterWriter:
         response_format: dict | None = None,
         timeout_seconds: float | None = None,
         retry_on_timeout: bool = True,
+        task_family: str = "writer",
+        stage_key: str = "chapter_draft",
+        output_schema: dict | None = None,
     ) -> str:
         parameters = self._chat_signature.parameters
         kwargs: dict[str, object] = {
@@ -903,12 +930,31 @@ class ChapterWriter:
         if "retry_on_timeout" in parameters:
             kwargs["retry_on_timeout"] = retry_on_timeout
         if "task_family" in parameters:
-            kwargs["task_family"] = "writer"
+            kwargs["task_family"] = task_family
         if "stage_key" in parameters:
-            kwargs["stage_key"] = "chapter_draft"
+            kwargs["stage_key"] = stage_key
         if "output_schema" in parameters and response_format is not None:
-            kwargs["output_schema"] = {"type": "object"}
+            kwargs["output_schema"] = output_schema or {"type": "object"}
         return self.llm_client.chat(messages, **kwargs)
+
+    def _record_business_retry_event(
+        self,
+        *,
+        stage: str,
+        attempt_no: int,
+        max_attempts: int,
+        reason: BaseException,
+    ) -> None:
+        self._business_retry_events.append(
+            {
+                "stage": stage,
+                "attempt_no": int(attempt_no),
+                "max_attempts": int(max_attempts),
+                "reason_class": reason.__class__.__name__,
+                "reason": str(reason)[:500],
+                "retry_kind": "business_validation",
+            }
+        )
 
     def _attach_llm_fallback_events(self, output: WriterOutput) -> None:
         drain = getattr(self.llm_client, "drain_model_fallback_events", None)
@@ -931,6 +977,8 @@ class ChapterWriter:
         selected_skills = self._selected_skills_from_layers(skill_layers)
         drain_attempts = getattr(self.llm_client, "drain_llm_attempt_events", None)
         attempts = drain_attempts() if callable(drain_attempts) else []
+        business_retry_events = list(self._business_retry_events)
+        self._business_retry_events.clear()
         prompt_layers = serialize_prompt_layers(base_messages, skill_layers or [])
         effective_system_prompt = "\n\n".join(
             str(item.get("content", "")).strip()
@@ -965,6 +1013,7 @@ class ChapterWriter:
             "output_summary": {
                 **output_summary,
                 "skill_summary": selected_skills,
+                "business_retry_events": business_retry_events,
             },
         }
 

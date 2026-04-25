@@ -29,6 +29,9 @@ class ModelAdapter(Protocol):
         response_format: dict | None = None,
         timeout_seconds: float | None = None,
         retry_on_timeout: bool = True,
+        task_family: str = "",
+        stage_key: str = "",
+        output_schema: dict | None = None,
     ) -> str:
         ...
 

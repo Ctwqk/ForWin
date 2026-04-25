@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 from .subworld import ChapterEntryTarget
 
@@ -11,6 +11,40 @@ RewardTag = Literal["power", "social", "justice", "mystery", "emotion"]
 AmbiguityMode = Literal["stable", "managed", "high"]
 AmbiguityPayoffType = Literal["confirmation", "reversal", "constraint"]
 ProgressChannel = Literal["event", "state", "thread", "time", "status", "relationship", "rule"]
+
+
+def _stringify_llm_item(value: object) -> str:
+    if isinstance(value, dict):
+        primary = (
+            value.get("awe_type")
+            or value.get("aspect")
+            or value.get("name")
+            or value.get("type")
+            or value.get("summary")
+            or value.get("description")
+            or ""
+        )
+        detail = (
+            value.get("summary")
+            or value.get("rule")
+            or value.get("constraint")
+            or value.get("description")
+            or value.get("note")
+            or ""
+        )
+        if primary and detail and str(primary) != str(detail):
+            return f"{primary}：{detail}"
+        return str(primary or detail or value).strip()
+    return str(value or "").strip()
+
+
+def _stringify_window(value: object) -> str:
+    if isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+        if len(items) == 2:
+            return f"{items[0]}-{items[1]}"
+        return ", ".join(items)
+    return _stringify_llm_item(value)
 
 
 class ReaderPromise(BaseModel):
@@ -23,6 +57,16 @@ class ReaderPromise(BaseModel):
     ambiguity_mode: AmbiguityMode = "stable"
     world_legibility_target: str = ""
 
+    @field_validator("ambiguity_mode", mode="before")
+    @classmethod
+    def _normalize_ambiguity_mode(cls, value: object) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"stable", "managed", "high"}:
+            return normalized
+        if any(token in normalized for token in ("high", "opaque", "uncertain", "mystery")):
+            return "managed"
+        return "stable"
+
 
 class MacroPayoff(BaseModel):
     payoff_id: str
@@ -31,6 +75,27 @@ class MacroPayoff(BaseModel):
     target_chapter_hint: str = ""
     setup_requirement: str = ""
     success_signal: str = ""
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category(cls, value: object) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"power", "social", "justice", "mystery", "emotion"}:
+            return normalized
+        if any(token in normalized for token in ("item", "acquisition", "ability", "resource", "breakthrough", "power")):
+            return "power"
+        if any(token in normalized for token in ("social", "relationship", "alliance", "status")):
+            return "social"
+        if any(token in normalized for token in ("justice", "revenge", "punishment", "fair")):
+            return "justice"
+        if any(token in normalized for token in ("emotion", "bond", "heart", "affection")):
+            return "emotion"
+        return "mystery"
+
+    @field_validator("target_chapter_hint", "template_id", "setup_requirement", "success_signal", mode="before")
+    @classmethod
+    def _coerce_text_fields(cls, value: object) -> str:
+        return _stringify_llm_item(value)
 
 
 class RevelationLayer(BaseModel):
@@ -45,12 +110,33 @@ class RevelationLayer(BaseModel):
         validation_alias=AliasChoices("chapter_window", "reveal_window"),
     )
 
+    @field_validator("layer_id", "layer_type", "summary", mode="before")
+    @classmethod
+    def _coerce_text_fields(cls, value: object) -> str:
+        return _stringify_llm_item(value)
+
+    @field_validator("chapter_window", mode="before")
+    @classmethod
+    def _coerce_chapter_window(cls, value: object) -> str:
+        return _stringify_window(value)
+
 
 class ArcPayoffMap(BaseModel):
     macro_payoffs: list[MacroPayoff] = Field(default_factory=list)
     awe_kit: list[str] = Field(default_factory=list)
     revelation_layers: list[RevelationLayer] = Field(default_factory=list)
     ambiguity_constraints: list[str] = Field(default_factory=list)
+
+    @field_validator("awe_kit", "ambiguity_constraints", mode="before")
+    @classmethod
+    def _normalize_string_list(cls, value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [
+            text
+            for text in (_stringify_llm_item(item) for item in value)
+            if text
+        ]
 
 
 class BandRewardItem(BaseModel):

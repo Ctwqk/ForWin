@@ -681,6 +681,8 @@ class OpenAICompatibleAdapter:
             return "minimax"
         if "kimi" in text or "moonshot" in text:
             return "kimi"
+        if "deepseek" in text:
+            return "openai"
         if "openai" in text or "gpt-" in text:
             return "openai"
         return "other"

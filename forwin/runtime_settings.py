@@ -33,6 +33,7 @@ class RuntimeSettingsStore:
         default_skill_strictness: str = "normal",
         default_enabled_skill_groups: list[str] | None = None,
         default_disabled_skill_ids: list[str] | None = None,
+        env_llm_profiles: list[dict[str, str]] | None = None,
     ) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -65,6 +66,7 @@ class RuntimeSettingsStore:
             "enabled_skill_groups": self._normalize_string_list(default_enabled_skill_groups),
             "disabled_skill_ids": self._normalize_string_list(default_disabled_skill_ids),
         }
+        self._env_profiles = self._normalize_env_profiles(env_llm_profiles)
         self._cache: dict[str, object] | None = None
 
     @staticmethod
@@ -120,13 +122,109 @@ class RuntimeSettingsStore:
         data = raw if isinstance(raw, dict) else {}
         profile_id = str(data.get("id", "")).strip() or uuid.uuid4().hex[:12]
         name = str(data.get("name", "")).strip() or fallback_name
-        return {
+        profile = {
             "id": profile_id,
             "name": name,
             "api_key": str(data.get("api_key", "")).strip(),
             "base_url": str(data.get("base_url", "")).strip() or str(self._default_profile["base_url"]),
             "model": str(data.get("model", "")).strip() or str(self._default_profile["model"]),
         }
+        source = str(data.get("source", "")).strip()
+        if source:
+            profile["source"] = source
+        return profile
+
+    def _normalize_env_profiles(self, raw_profiles: object) -> list[dict[str, str]]:
+        if not isinstance(raw_profiles, list):
+            return []
+        profiles: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for index, item in enumerate(raw_profiles):
+            profile = self._normalize_profile(item, f".env 模型配置 {index + 1}")
+            if not profile["api_key"] or not profile["base_url"] or not profile["model"]:
+                continue
+            if profile["id"] in seen:
+                continue
+            seen.add(profile["id"])
+            profile["source"] = "env"
+            profiles.append(profile)
+        return profiles
+
+    @staticmethod
+    def _profile_kind(profile: dict[str, str]) -> str:
+        text = " ".join(
+            str(profile.get(key) or "").strip().lower()
+            for key in ("id", "name", "base_url", "model")
+        )
+        if "deepseek" in text:
+            return "deepseek"
+        if "kimi" in text or "moonshot" in text:
+            return "kimi"
+        if "minimax" in text or "minimaxi" in text:
+            return "minimax"
+        return ""
+
+    def _merge_env_profiles(
+        self,
+        profiles: list[dict[str, str]],
+        default_profile_id: str,
+    ) -> tuple[list[dict[str, str]], str]:
+        if not self._env_profiles:
+            return profiles, default_profile_id
+
+        env_by_kind = {
+            self._profile_kind(profile): profile
+            for profile in self._env_profiles
+            if self._profile_kind(profile)
+        }
+        env_by_id = {profile["id"]: profile for profile in self._env_profiles}
+        merged: list[dict[str, str]] = []
+        seen_ids: set[str] = set()
+        for profile in profiles:
+            profile_id = str(profile.get("id", "")).strip()
+            kind = self._profile_kind(profile)
+            replacement = env_by_kind.get(kind) if kind else env_by_id.get(profile_id)
+            if replacement is not None:
+                if profile_id == default_profile_id:
+                    default_profile_id = replacement["id"]
+                continue
+            if profile_id in seen_ids:
+                continue
+            seen_ids.add(profile_id)
+            merged.append(profile)
+
+        for profile in self._env_profiles:
+            profile_id = str(profile.get("id", "")).strip()
+            if not profile_id or profile_id in seen_ids:
+                continue
+            seen_ids.add(profile_id)
+            merged.append(dict(profile))
+
+        if default_profile_id not in seen_ids and merged:
+            default_profile_id = merged[0]["id"]
+        return merged, default_profile_id
+
+    @staticmethod
+    def _strip_env_profiles_for_disk(payload: dict[str, object]) -> dict[str, object]:
+        disk_payload = json.loads(json.dumps(payload, ensure_ascii=False))
+        profiles = [
+            {
+                key: value
+                for key, value in dict(item).items()
+                if key != "source"
+            }
+            for item in disk_payload.get("profiles", [])
+            if isinstance(item, dict) and str(item.get("source", "")).strip() != "env"
+        ]
+        disk_payload["profiles"] = profiles
+        env_selected = str(disk_payload.get("default_profile_id", "")).strip() not in {
+            str(item.get("id", "")).strip()
+            for item in profiles
+            if isinstance(item, dict)
+        }
+        if env_selected:
+            disk_payload["api_key"] = ""
+        return disk_payload
 
     def _normalize_profiles(self, raw: dict[str, object]) -> tuple[list[dict[str, str]], str]:
         items = raw.get("profiles")
@@ -154,6 +252,7 @@ class RuntimeSettingsStore:
         default_profile_id = str(raw.get("default_profile_id", "")).strip()
         if not default_profile_id or default_profile_id not in {profile["id"] for profile in profiles}:
             default_profile_id = profiles[0]["id"]
+        profiles, default_profile_id = self._merge_env_profiles(profiles, default_profile_id)
         return profiles, default_profile_id
 
     def _with_selected_profile(self, payload: dict[str, object]) -> dict[str, object]:
@@ -181,8 +280,9 @@ class RuntimeSettingsStore:
 
     def _persist_unlocked(self, payload: dict[str, object]) -> dict[str, object]:
         payload = self._with_selected_profile(payload)
+        disk_payload = self._strip_env_profiles_for_disk(payload)
         self.path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
+            json.dumps(disk_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         self._cache = self._clone(payload)
@@ -244,6 +344,11 @@ class RuntimeSettingsStore:
             payload["disabled_skill_ids"] = self._normalize_string_list(
                 raw.get("disabled_skill_ids", payload["disabled_skill_ids"])
             )
+        profiles = [dict(item) for item in payload.get("profiles", []) if isinstance(item, dict)]
+        default_profile_id = str(payload.get("default_profile_id", "")).strip()
+        profiles, default_profile_id = self._merge_env_profiles(profiles, default_profile_id)
+        payload["profiles"] = profiles
+        payload["default_profile_id"] = default_profile_id
         payload = self._with_selected_profile(payload)
         self._cache = self._clone(payload)
         return self._clone(payload)

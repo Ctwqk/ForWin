@@ -6,6 +6,8 @@ DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_MINIMAX_MODEL = "MiniMax-M2.7"
 DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_MOONSHOT_MODEL = "kimi-k2.5"
+DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 
 try:
     from pydantic_settings import BaseSettings as _ConfigBaseModel
@@ -25,7 +27,80 @@ def _csv_list(value: str | None) -> list[str]:
     ]
 
 
+def _read_env_file_values() -> dict[str, str]:
+    path = os.environ.get("FORWIN_ENV_FILE", ".env").strip() or ".env"
+    values: dict[str, str] = {}
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except OSError:
+        return values
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            values[key] = value
+    return values
+
+
+def _merged_env_values() -> dict[str, str]:
+    values = _read_env_file_values()
+    values.update({key: value for key, value in os.environ.items()})
+    return values
+
+
+def _env_llm_profiles(env: dict[str, str] | None = None) -> list[dict[str, str]]:
+    env = env or _merged_env_values()
+    profiles: list[dict[str, str]] = []
+    kimi_api_key = (
+        env.get("KIMI_API_KEY")
+        or env.get("MOONSHOT_API_KEY")
+        or ""
+    ).strip()
+    if kimi_api_key:
+        profiles.append(
+            {
+                "id": "env-kimi",
+                "name": "Kimi (.env)",
+                "api_key": kimi_api_key,
+                "base_url": (
+                    env.get("KIMI_BASE_URL")
+                    or env.get("MOONSHOT_BASE_URL")
+                    or DEFAULT_MOONSHOT_BASE_URL
+                ).strip(),
+                "model": (
+                    env.get("KIMI_MODEL")
+                    or env.get("MOONSHOT_MODEL")
+                    or DEFAULT_MOONSHOT_MODEL
+                ).strip(),
+            }
+        )
+
+    deepseek_api_key = env.get("DEEPSEEK_API_KEY", "").strip()
+    if deepseek_api_key:
+        profiles.append(
+            {
+                "id": "env-deepseek",
+                "name": "DeepSeek (.env)",
+                "api_key": deepseek_api_key,
+                "base_url": env.get(
+                    "DEEPSEEK_BASE_URL",
+                    DEFAULT_DEEPSEEK_BASE_URL,
+                ).strip(),
+                "model": env.get(
+                    "DEEPSEEK_MODEL",
+                    DEFAULT_DEEPSEEK_MODEL,
+                ).strip(),
+            }
+        )
+    return profiles
+
+
 def _env_values() -> dict[str, object]:
+    env = _merged_env_values()
     return {
         "db_path": os.environ.get("FORWIN_DB_PATH", "data/novel.db"),
         "artifact_root": os.environ.get("FORWIN_ARTIFACT_ROOT", "data/artifacts"),
@@ -61,11 +136,12 @@ def _env_values() -> dict[str, object]:
         "publisher_preferred_client_id": os.environ.get(
             "FORWIN_PUBLISHER_PREFERRED_CLIENT_ID", ""
         ),
-        "minimax_api_key": os.environ.get("MINIMAX_API_KEY", ""),
-        "minimax_base_url": os.environ.get(
+        "minimax_api_key": env.get("MINIMAX_API_KEY", ""),
+        "minimax_base_url": env.get(
             "MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL
         ),
-        "minimax_model": os.environ.get("MINIMAX_MODEL", DEFAULT_MINIMAX_MODEL),
+        "minimax_model": env.get("MINIMAX_MODEL", DEFAULT_MINIMAX_MODEL),
+        "llm_env_profiles": _env_llm_profiles(env),
         "llm_timeout_seconds": float(os.environ.get("LLM_TIMEOUT_SECONDS", "90")),
         "llm_retry_attempts": int(os.environ.get("LLM_RETRY_ATTEMPTS", "2")),
         "llm_retry_initial_delay_seconds": float(
@@ -170,6 +246,7 @@ class _ConfigFields:
     minimax_api_key: str = ""
     minimax_base_url: str = DEFAULT_MINIMAX_BASE_URL
     minimax_model: str = DEFAULT_MINIMAX_MODEL
+    llm_env_profiles: list[dict[str, str]] = []
     llm_timeout_seconds: float = 90.0
     llm_retry_attempts: int = 2
     llm_retry_initial_delay_seconds: float = 2.0

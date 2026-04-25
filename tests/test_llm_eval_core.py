@@ -78,19 +78,21 @@ def test_runtime_settings_profiles_are_loaded_without_changing_default_file() ->
     assert before == after
 
 
-def test_selected_minimax_and_kimi_aliases_fallback_to_default_profiles() -> None:
+def test_selected_provider_aliases_fallback_to_default_profiles() -> None:
     with TemporaryDirectory() as tmp:
         settings_path = Path(tmp) / "missing_runtime_settings.json"
         profiles = load_eval_profiles(
             runtime_settings_path=str(settings_path),
-            selected_ids=["minimax", "kimi"],
+            selected_ids=["minimax", "kimi", "deepseek"],
         )
 
-    assert [profile.id for profile in profiles] == ["minimax", "kimi"]
+    assert [profile.id for profile in profiles] == ["minimax", "kimi", "deepseek"]
     assert profiles[0].provider == "minimax"
     assert "minimax" in profiles[0].base_url.lower()
     assert profiles[1].provider == "moonshot"
     assert "moonshot" in profiles[1].base_url.lower()
+    assert profiles[2].provider == "deepseek"
+    assert "deepseek" in profiles[2].base_url.lower()
 
 
 def test_output_validator_handles_markdown_json_missing_keys_and_prose() -> None:

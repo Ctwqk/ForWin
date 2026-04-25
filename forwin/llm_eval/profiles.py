@@ -11,6 +11,8 @@ from forwin.config import (
     DEFAULT_MINIMAX_MODEL,
     DEFAULT_MOONSHOT_BASE_URL,
     DEFAULT_MOONSHOT_MODEL,
+    DEFAULT_DEEPSEEK_BASE_URL,
+    DEFAULT_DEEPSEEK_MODEL,
 )
 from forwin.runtime_settings import RuntimeSettingsStore
 
@@ -25,6 +27,8 @@ def _split_ids(value: str | list[str] | None) -> list[str]:
 
 def _provider_from_base_url(base_url: str) -> str:
     text = str(base_url or "").lower()
+    if "deepseek" in text:
+        return "deepseek"
     if "moonshot" in text or "kimi" in text:
         return "moonshot"
     if "minimax" in text or "minimaxi" in text:
@@ -72,9 +76,10 @@ def _load_manifest_profiles(path: str) -> list[EvalProfile]:
 
 
 def _load_runtime_profiles(path: str) -> list[EvalProfile]:
+    config = Config.from_env()
     if not path:
-        path = Config.from_env().runtime_settings_path
-    store = RuntimeSettingsStore(path)
+        path = config.runtime_settings_path
+    store = RuntimeSettingsStore(path, env_llm_profiles=config.llm_env_profiles)
     payload = store.get()
     profiles: list[EvalProfile] = []
     for index, item in enumerate(payload.get("profiles", [])):
@@ -127,6 +132,19 @@ def load_eval_profiles(
                     )
                 )
                 present.add("kimi")
+            elif alias == "deepseek":
+                profiles.append(
+                    EvalProfile(
+                        id="deepseek",
+                        name="DeepSeek 默认",
+                        provider="deepseek",
+                        base_url=os.environ.get("DEEPSEEK_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL),
+                        model=os.environ.get("DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL),
+                        api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+                        api_key_env="DEEPSEEK_API_KEY",
+                    )
+                )
+                present.add("deepseek")
     seen: set[str] = set()
     deduped: list[EvalProfile] = []
     for profile in profiles:

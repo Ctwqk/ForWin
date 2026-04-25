@@ -2033,6 +2033,7 @@ async def lifespan(app: FastAPI):
             default_skill_strictness=_config.skill_strictness,
             default_enabled_skill_groups=_config.enabled_skill_groups,
             default_disabled_skill_ids=_config.disabled_skill_ids,
+            env_llm_profiles=_config.llm_env_profiles,
         )
     _start_automation_scheduler()
     logger.info("ForWin API started. DB: %s", _config.db_path)

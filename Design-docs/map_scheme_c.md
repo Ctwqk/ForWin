@@ -2,7 +2,7 @@
 
 更新时间：2026-04-26
 
-状态：首轮代码落地完成；未切换线上 `8899` 服务。
+状态：首轮代码落地完成；未切换线上 `8899` 服务。当前代码与设计差距统一入口见 [V4.5_markstone.md](/home/taiwei/.codex/worktrees/2a32/ForWin/Design-docs/V4.5_markstone.md)。
 
 关键词：`方案 C：Graph-based Weighted Map Generation`、`SubWorld`、`RegionGraph`、`MapGraph`、`BookMapRuntime`、`CognitionOverlay`
 
@@ -375,7 +375,7 @@ python3 -m py_compile forwin/map/protocol.py forwin/map/service.py forwin/map/ge
 
 未完成 / 非本轮目标：
 
-- 未新增 FastAPI 路由。
+- 未新增独立地图 FastAPI 路由；当前只有 Python service 和 BookState map path debug API。
 - 未切换线上 `8899`。
 - 未做真实地理板块、tile renderer、Neo4j 主存储。
 - 未实现 Noise / Voronoi / BSP / WFC 作为主生成算法。

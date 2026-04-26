@@ -4,7 +4,7 @@
 
 状态：设计落档；BookState 基座与地图系统方案 C 首轮实现已落地，尚未切换线上主链路。
 
-来源：现有 `world_model_v4` 代码盘点、V4/V4.1 历史实现计划，以及最终版世界状态图 / 地图图 / 认知图数据结构设计。
+来源：现有 `world_model_v4` 代码盘点、V4/V4.1 历史实现计划，以及最终版世界状态图 / 地图图 / 认知图数据结构设计。当前代码与设计差距统一入口见 [V4.5_markstone.md](/home/taiwei/.codex/worktrees/2a32/ForWin/Design-docs/V4.5_markstone.md)。
 
 ## 1. 设计结论
 
@@ -906,14 +906,16 @@ E2E：
 - 跨 subworld 第一版复用 `map_edges`，通过 `world_gate`、exit `MapNode`、exit connector 和 `metadata.target_subworld_id` 表达。
 - writer context 新增 `map_context`，reviewer context 同步携带 map graph 紧凑数据。
 - reviewer heuristic 已能检查连续场景地图移动是否不可达，或 `travel_time` 是否超过章节时间推进。
+- BookState debug API 已接入路由，提供 runtime status、map path query 和 legacy import。
+- `WritingOrchestrator` 已在旧 V4 compiler commit 后追加 BookState review/compile gate。
 - 新增测试：`tests/test_map_models.py`、`tests/test_map_generation.py`、`tests/test_map_generation_scheme_c.py`、`tests/test_map_pathfinding.py`、`tests/test_map_cognition_path.py`、`tests/test_map_world_integration.py`。
 
 实现备注：
 
 - 由于旧轻量 v4 已占用 `cognition_snapshots` 表名，首轮最终版物化认知快照使用 `book_cognition_snapshots`。后续迁移阶段再决定是否破坏性收口为最终表名。
 - 现阶段尚未切换 orchestrator canon commit；旧 v4 compiler 仍在运行时路径中。
-- 现阶段没有实现 repository/compiler/API/UI/pipeline 的最终切换。
-- 地图系统本轮不新增 FastAPI 路由；只提供 service 层给 orchestrator、reviewer、writer 和测试调用。
+- 现阶段没有实现 repository/compiler/API/UI/pipeline 的最终切换；BookState gate 是追加阻断点，不是唯一 canon source。
+- 地图系统本轮不新增独立 FastAPI 路由；只提供 service 层给 orchestrator、reviewer、writer 和测试调用。BookState path debug API 可查询 runtime map path。
 - 本轮没有使用外部开源地图生成代码，生成器是 ForWin 内部 deterministic graph generator。
 
 验证：

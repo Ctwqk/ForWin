@@ -11,6 +11,24 @@
 
 ## 2026-04-26
 
+### V4.5 Markstone 文档收束与旧设计清理
+
+将旧 V2/V3 历史设计稿清理出 `Design-docs/`，新增 V4.5 当前差距与后续里程碑入口，避免新开发继续引用已被 BookState final runtime 和 Scheme C 地图覆盖的旧语义。
+
+关键变化：
+
+- 新增 [V4.5_markstone.md](/home/taiwei/.codex/worktrees/2a32/ForWin/Design-docs/V4.5_markstone.md)，汇总当前代码实况、保留文档、已删文档、文档-代码差距和 V4.5 后续里程碑。
+- 删除旧设计稿：`V2_8.md`、`V2_8_1.md`、`V2_8_1_completion_status.md`、`V2_9.md`、`V2_9_1.md`、`V3_0.md`、`project_master_plan.md`、`third_version_v2_3_writer_human_error_isolation.md`、`v2_6_phased_rollout_plan.md`、`v2_7.md`。
+- 更新 `V2_9_2.md`，明确其只保留 Genesis / Writer / Review / Governance 基线；其中旧 `SubWorld` 局部派生语义降级为历史兼容。
+- 更新 `V4_final_book_state_runtime.md` 与 `map_scheme_c.md`，统一指向 V4.5 差距入口，并补充 BookState API/gate 与地图 service/API 边界。
+
+验证：
+
+- `find Design-docs -maxdepth 1 -type f | sort`
+- `grep -RIn "V4.5_markstone\\|方案 C：Graph-based Weighted Map Generation\\|BookState debug API" Design-docs`
+
+部署状态：未部署到 `8899`。原因：本轮只更新文档和清理过期设计稿，不影响运行服务。切换条件：无。
+
 ### 地图系统方案 C：Graph-based Weighted Map Generation 首轮落地
 
 将地图系统从旧 `SubWorld` 局部舞台语义升级为大尺度 `BookMap`：`SubWorld -> Region -> MapNode -> MapEdge`。本轮不新增 FastAPI 路由，只提供 service 层给 orchestrator、reviewer、writer 和测试调用。

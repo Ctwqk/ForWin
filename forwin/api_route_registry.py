@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
 from forwin import (
+    api_book_state_routes,
     api_governance_routes,
     api_project_routes,
     api_publisher_routes,
@@ -246,6 +247,9 @@ def register_api_routes(
     world_model_v4_handlers = api_world_model_v4_routes.build_handlers(
         get_session=get_session,
     )
+    book_state_handlers = api_book_state_routes.build_handlers(
+        get_session=get_session,
+    )
 
     handlers = {
         **system_handlers,
@@ -255,6 +259,7 @@ def register_api_routes(
         **governance_handlers,
         **world_model_handlers,
         **world_model_v4_handlers,
+        **book_state_handlers,
     }
 
     route_definitions = [
@@ -345,6 +350,9 @@ def register_api_routes(
         ("/api/projects/{project_id}/world-model/v4/gaps", ["GET"], handlers["get_world_model_v4_gaps"], {"response_model": list[WorldModelV4GapInfo]}),
         ("/api/projects/{project_id}/world-model/v4/reveals", ["GET"], handlers["get_world_model_v4_reveals"], {"response_model": list[WorldModelV4RevealInfo]}),
         ("/api/projects/{project_id}/world-model/v4/export", ["GET"], handlers["get_world_model_v4_export"], {"response_model": WorldModelV4ExportResponse}),
+        ("/api/projects/{project_id}/book-state/runtime", ["GET"], handlers["get_book_state_runtime"], {}),
+        ("/api/projects/{project_id}/book-state/map/path", ["GET"], handlers["get_book_state_path"], {}),
+        ("/api/projects/{project_id}/book-state/legacy-import", ["POST"], handlers["import_book_state_legacy"], {}),
         ("/api/projects/{project_id}/chapters", ["GET"], handlers["list_chapters"], {"response_model": list[ChapterInfo]}),
         ("/api/projects/{project_id}/chapters/{chapter_number}", ["GET"], handlers["get_chapter"], {"response_model": ChapterDetail}),
         ("/api/projects/{project_id}/chapters/{chapter_number}/ledger", ["GET"], get_chapter_observability_ledger, {"response_model": ChapterLedgerResponse}),

@@ -12,6 +12,8 @@ from forwin.protocol.context import (
     WorldPressureView,
 )
 from forwin.planning.world_contracts import WorldContractRepository
+from forwin.map.pathfinding import MapGraph
+from forwin.map.repository import MapRepository
 from forwin.protocol.world_model import WorldContextPack
 from forwin.world_model.retriever import WorldModelRetriever
 
@@ -70,6 +72,106 @@ def _build_genesis_map_overview(map_atlas: dict, runtime_region_drafts: list[dic
         if draft_lines:
             parts.append(f"运行时地区草案：{'、'.join(draft_lines)}")
     return "；".join(part for part in parts if part)
+
+
+def _build_map_context(repo_session, project_id: str, entities: list) -> dict:
+    if repo_session is None:
+        return {}
+    try:
+        repo = MapRepository(repo_session)
+        nodes = repo.list_map_nodes(project_id)
+        edges = repo.list_map_edges(project_id)
+    except Exception:
+        logger.warning("Failed to load map context.", exc_info=True)
+        return {}
+    if not nodes:
+        return {}
+    node_by_id = {node.id: node for node in nodes}
+    region_by_id = {region.id: region for region in repo.list_regions(project_id)}
+    graph = MapGraph(nodes=nodes, edges=edges)
+    active_locations: list[dict] = []
+    for entity in entities:
+        state = getattr(entity, "current_state", {}) or {}
+        location_id = str(state.get("location_id", "") or state.get("location", "") or "").strip()
+        if not location_id or location_id not in node_by_id:
+            continue
+        node = node_by_id[location_id]
+        neighbors = graph.get_accessible_neighbors(location_id)[:8]
+        active_locations.append(
+            {
+                "entity_id": getattr(entity, "entity_id", ""),
+                "entity_name": getattr(entity, "name", ""),
+                "location_id": location_id,
+                "location_name": node.name,
+                "region_id": node.region_id,
+                "region_name": region_by_id.get(node.region_id).name if node.region_id in region_by_id else "",
+                "nearby_nodes": [
+                    {
+                        "node_id": neighbor_id,
+                        "name": node_by_id[neighbor_id].name,
+                        "edge_id": edge.id,
+                        "travel_time": edge.travel_time,
+                        "risk_level": edge.risk_level,
+                    }
+                    for neighbor_id, edge in neighbors
+                    if neighbor_id in node_by_id
+                ],
+                "reachable_nodes": [
+                    {
+                        "node_id": neighbor_id,
+                        "name": node_by_id[neighbor_id].name,
+                        "travel_time": edge.travel_time,
+                    }
+                    for neighbor_id, edge in neighbors
+                    if neighbor_id in node_by_id
+                ],
+            }
+        )
+    return {
+        "active_locations": active_locations,
+        "map_node_count": len(nodes),
+        "map_edge_count": len(edges),
+        "map_nodes": [
+            {
+                "id": node.id,
+                "project_id": node.project_id,
+                "subworld_id": node.subworld_id,
+                "region_id": node.region_id,
+                "node_type": str(node.node_type),
+                "name": node.name,
+                "description": node.description,
+                "terrain": node.terrain,
+                "culture_tag": node.culture_tag,
+                "default_danger_level": node.default_danger_level,
+                "access_level": node.access_level,
+                "status": node.status,
+                "metadata": dict(node.metadata),
+            }
+            for node in nodes
+        ],
+        "map_edges": [
+            {
+                "id": edge.id,
+                "project_id": edge.project_id,
+                "subworld_id": edge.subworld_id,
+                "from_node_id": edge.from_node_id,
+                "to_node_id": edge.to_node_id,
+                "edge_type": str(edge.edge_type),
+                "bidirectional": edge.bidirectional,
+                "distance": edge.distance,
+                "travel_time": edge.travel_time,
+                "travel_cost": edge.travel_cost,
+                "risk_level": edge.risk_level,
+                "narrative_cost": edge.narrative_cost,
+                "access_rule_id": edge.access_rule_id,
+                "status": edge.status,
+                "discovered_by_default": edge.discovered_by_default,
+                "visibility_default": edge.visibility_default,
+                "metadata": dict(edge.metadata),
+            }
+            for edge in edges
+        ],
+    }
 
 
 def assemble_context(
@@ -288,6 +390,7 @@ def assemble_context(
             )
         except Exception:
             logger.warning("Failed to assemble world model context.", exc_info=True)
+    map_context = _build_map_context(repo_session, project_id, entities)
 
     # 8. Build and return pack
     return ChapterContextPack(
@@ -360,6 +463,7 @@ def assemble_context(
         active_future_constraints=active_constraints,
         next_band_summary=next_band_summary,
         world_context=world_context,
+        map_context=map_context,
         active_world_lines=list(
             dict.fromkeys(
                 [

@@ -30,6 +30,13 @@ class SubWorld(Base):
     status: Mapped[str] = mapped_column(String, default="active")
     introduced_at_chapter: Mapped[int] = mapped_column(Integer, default=0)
     retired_at_chapter: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    subworld_type: Mapped[str] = mapped_column(String, default="")
+    scale_level: Mapped[str] = mapped_column(String, default="world")
+    culture_profile_json: Mapped[str] = mapped_column(Text, default="{}")
+    terrain_profile_json: Mapped[str] = mapped_column(Text, default="{}")
+    danger_profile_json: Mapped[str] = mapped_column(Text, default="{}")
+    generation_seed: Mapped[int] = mapped_column(Integer, default=0)
+    map_status: Mapped[str] = mapped_column(String, default="")
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

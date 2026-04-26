@@ -211,6 +211,7 @@ class ChapterContextPack(BaseModel):
     active_future_constraints: list[NarrativeConstraintInfo] = Field(default_factory=list)
     next_band_summary: NextBandSummary | None = None
     world_context: WorldContextPack = Field(default_factory=WorldContextPack)
+    map_context: dict[str, Any] = Field(default_factory=dict)
     active_world_lines: list[str] = Field(default_factory=list)
     visible_world_lines: list[str] = Field(default_factory=list)
     hidden_world_lines: list[str] = Field(default_factory=list)
@@ -313,6 +314,7 @@ class ReviewContextPack(BaseModel):
     active_future_constraints: list[NarrativeConstraintInfo] = Field(default_factory=list)
     next_band_summary: NextBandSummary | None = None
     world_context: WorldContextPack = Field(default_factory=WorldContextPack)
+    map_context: dict[str, Any] = Field(default_factory=dict)
     recent_canon_events: list[CanonEventEvidence] = Field(default_factory=list)
     recent_rule_events: list[CanonEventEvidence] = Field(default_factory=list)
     recent_review_notes: list[ReviewNote] = Field(default_factory=list)

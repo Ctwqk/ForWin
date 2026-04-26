@@ -33,6 +33,7 @@ from forwin.models import (
     EntityAlias,
     EventEntityLink,
     FeedbackActionRecord,
+    MapRegionRow,
     NarrativeConstraint,
     NPCIntentSnapshot,
     PlotThread,
@@ -780,6 +781,33 @@ class StateRepository:
             active_ids = self._fallback_global_core_ids(project_id)
         active_set = set(active_ids)
         drafts: list[dict] = []
+        map_region_rows = self.session.execute(
+            select(MapRegionRow)
+            .where(
+                MapRegionRow.project_id == project_id,
+                MapRegionRow.subworld_id.in_(active_set),
+            )
+            .order_by(MapRegionRow.created_at.asc(), MapRegionRow.id.asc())
+        ).scalars().all()
+        seen_names: set[tuple[str, str]] = set()
+        subworld_names = {row.id: row.name for row in self.list_subworlds(project_id) if row.id in active_set}
+        for region in map_region_rows:
+            metadata = _load_json_object(region.metadata_json or "{}", {})
+            payload = {
+                "id": region.id,
+                "name": region.name,
+                "kind": region.region_type,
+                "level": metadata.get("level", ""),
+                "summary": region.description,
+                "terrain": region.terrain,
+                "culture_traits": region.culture_tag,
+                "subworld_id": region.subworld_id,
+                "subworld_name": subworld_names.get(region.subworld_id, ""),
+                "region_source": metadata.get("legacy_source", "map_regions"),
+                "region_promotion_state": "promoted",
+            }
+            drafts.append(payload)
+            seen_names.add((region.subworld_id, region.name))
         for row in self.list_subworlds(project_id):
             if row.id not in active_set:
                 continue
@@ -789,6 +817,9 @@ class StateRepository:
                 continue
             for draft in region_drafts:
                 if not isinstance(draft, dict):
+                    continue
+                name = str(draft.get("name", "") or "").strip()
+                if (row.id, name) in seen_names:
                     continue
                 draft_payload = dict(draft)
                 draft_payload.setdefault("subworld_id", row.id)

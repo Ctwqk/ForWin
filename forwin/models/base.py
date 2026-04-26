@@ -2407,5 +2407,170 @@ def upgrade_db(engine: Engine) -> None:
             )
         )
 
+        def apply_book_state_schema_v1(conn) -> None:
+            from forwin import models as _models  # noqa: F401
+
+            Base.metadata.create_all(bind=conn)
+
+        migrations.append(MigrationSpec("book_state_schema_v1", apply_book_state_schema_v1))
+
+        def apply_map_graph_schema_v1(conn) -> None:
+            from forwin import models as _models  # noqa: F401
+
+            Base.metadata.create_all(bind=conn)
+
+            def column_names(table_name: str) -> set[str]:
+                return {
+                    str(row["name"])
+                    for row in conn.execute(text(f"PRAGMA table_info({table_name})")).mappings().all()
+                }
+
+            subworld_columns = column_names("sub_worlds")
+            subworld_alters = {
+                "subworld_type": "ALTER TABLE sub_worlds ADD COLUMN subworld_type TEXT NOT NULL DEFAULT ''",
+                "scale_level": "ALTER TABLE sub_worlds ADD COLUMN scale_level TEXT NOT NULL DEFAULT 'world'",
+                "culture_profile_json": "ALTER TABLE sub_worlds ADD COLUMN culture_profile_json TEXT NOT NULL DEFAULT '{}'",
+                "terrain_profile_json": "ALTER TABLE sub_worlds ADD COLUMN terrain_profile_json TEXT NOT NULL DEFAULT '{}'",
+                "danger_profile_json": "ALTER TABLE sub_worlds ADD COLUMN danger_profile_json TEXT NOT NULL DEFAULT '{}'",
+                "generation_seed": "ALTER TABLE sub_worlds ADD COLUMN generation_seed INTEGER NOT NULL DEFAULT 0",
+                "map_status": "ALTER TABLE sub_worlds ADD COLUMN map_status TEXT NOT NULL DEFAULT ''",
+            }
+            for column, ddl in subworld_alters.items():
+                if column not in subworld_columns:
+                    conn.execute(text(ddl))
+
+            map_node_columns = column_names("map_nodes") if "map_nodes" in {
+                str(row["name"]) for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).mappings().all()
+            } else set()
+            map_node_alters = {
+                "subworld_id": "ALTER TABLE map_nodes ADD COLUMN subworld_id TEXT NOT NULL DEFAULT ''",
+                "region_id": "ALTER TABLE map_nodes ADD COLUMN region_id TEXT NOT NULL DEFAULT ''",
+                "description": "ALTER TABLE map_nodes ADD COLUMN description TEXT NOT NULL DEFAULT ''",
+            }
+            for column, ddl in map_node_alters.items():
+                if column not in map_node_columns:
+                    conn.execute(text(ddl))
+
+            map_edge_columns = column_names("map_edges") if "map_edges" in {
+                str(row["name"]) for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).mappings().all()
+            } else set()
+            if "subworld_id" not in map_edge_columns:
+                conn.execute(text("ALTER TABLE map_edges ADD COLUMN subworld_id TEXT NOT NULL DEFAULT ''"))
+            for column in ("distance", "travel_time", "travel_cost", "risk_level", "narrative_cost"):
+                conn.execute(text(f"UPDATE map_edges SET {column} = 0 WHERE {column} IS NULL"))
+
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_map_nodes_project_subworld ON map_nodes(project_id, subworld_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_map_nodes_project_region ON map_nodes(project_id, region_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_map_edges_project_subworld ON map_edges(project_id, subworld_id)"))
+
+            for row in conn.execute(text("SELECT id, metadata_json FROM sub_worlds")).mappings().all():
+                try:
+                    metadata = json.loads(row["metadata_json"] or "{}") or {}
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    metadata = {}
+                subworld_type = str(metadata.get("subworld_type", "") or "").strip() or "continent"
+                scale_level = str(metadata.get("scale_level", "") or "").strip() or "world"
+                culture_profile = metadata.get("culture_profile") if isinstance(metadata.get("culture_profile"), dict) else {}
+                terrain_profile = metadata.get("terrain_profile") if isinstance(metadata.get("terrain_profile"), dict) else {}
+                danger_profile = metadata.get("danger_profile") if isinstance(metadata.get("danger_profile"), dict) else {}
+                try:
+                    generation_seed = int(metadata.get("generation_seed") or 0)
+                except (TypeError, ValueError):
+                    generation_seed = 0
+                map_status = str(metadata.get("map_status", "") or "").strip() or "legacy_pending"
+                metadata.setdefault("subworld_type", subworld_type)
+                metadata.setdefault("scale_level", scale_level)
+                metadata.setdefault("culture_profile", culture_profile)
+                metadata.setdefault("terrain_profile", terrain_profile)
+                metadata.setdefault("danger_profile", danger_profile)
+                metadata.setdefault("generation_seed", generation_seed)
+                metadata.setdefault("map_status", map_status)
+                conn.execute(
+                    text(
+                        """
+                        UPDATE sub_worlds
+                        SET subworld_type = CASE WHEN IFNULL(subworld_type, '') = '' THEN :subworld_type ELSE subworld_type END,
+                            scale_level = CASE WHEN IFNULL(scale_level, '') = '' THEN :scale_level ELSE scale_level END,
+                            culture_profile_json = CASE WHEN IFNULL(culture_profile_json, '{}') = '{}' THEN :culture_profile_json ELSE culture_profile_json END,
+                            terrain_profile_json = CASE WHEN IFNULL(terrain_profile_json, '{}') = '{}' THEN :terrain_profile_json ELSE terrain_profile_json END,
+                            danger_profile_json = CASE WHEN IFNULL(danger_profile_json, '{}') = '{}' THEN :danger_profile_json ELSE danger_profile_json END,
+                            generation_seed = CASE WHEN IFNULL(generation_seed, 0) = 0 THEN :generation_seed ELSE generation_seed END,
+                            map_status = CASE WHEN IFNULL(map_status, '') = '' THEN :map_status ELSE map_status END,
+                            metadata_json = :metadata_json
+                        WHERE id = :id
+                        """
+                    ),
+                    {
+                        "id": row["id"],
+                        "subworld_type": subworld_type,
+                        "scale_level": scale_level,
+                        "culture_profile_json": json.dumps(culture_profile, ensure_ascii=False),
+                        "terrain_profile_json": json.dumps(terrain_profile, ensure_ascii=False),
+                        "danger_profile_json": json.dumps(danger_profile, ensure_ascii=False),
+                        "generation_seed": generation_seed,
+                        "map_status": map_status,
+                        "metadata_json": json.dumps(metadata, ensure_ascii=False),
+                    },
+                )
+
+                region_drafts = metadata.get("region_drafts") if isinstance(metadata.get("region_drafts"), list) else []
+                for draft in region_drafts:
+                    if not isinstance(draft, dict):
+                        continue
+                    name = str(draft.get("name", "") or "").strip()
+                    if not name:
+                        continue
+                    exists = conn.execute(
+                        text(
+                            """
+                            SELECT 1 FROM map_regions
+                            WHERE subworld_id = :subworld_id
+                              AND name = :name
+                            LIMIT 1
+                            """
+                        ),
+                        {"subworld_id": row["id"], "name": name},
+                    ).scalar_one_or_none()
+                    if exists:
+                        continue
+                    meta = dict(draft)
+                    meta["legacy_source"] = "sub_worlds.metadata_json.region_drafts"
+                    conn.execute(
+                        text(
+                            """
+                            INSERT INTO map_regions(
+                                id, project_id, subworld_id, region_type, name,
+                                aliases_json, description, terrain, culture_tag,
+                                controlling_faction_id, danger_level,
+                                node_ids_json, boundary_node_ids_json, entry_node_ids_json,
+                                status, metadata_json, created_at, updated_at
+                            )
+                            SELECT :id, project_id, id, :region_type, :name,
+                                   '[]', :description, :terrain, :culture_tag,
+                                   '', 0,
+                                   '[]', '[]', '[]',
+                                   'active', :metadata_json, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                            FROM sub_worlds
+                            WHERE id = :subworld_id
+                            """
+                        ),
+                        {
+                            "id": new_id(),
+                            "subworld_id": row["id"],
+                            "region_type": str(draft.get("kind", "") or "local_region"),
+                            "name": name,
+                            "description": str(draft.get("summary", "") or ""),
+                            "terrain": ",".join(str(item) for item in draft.get("terrain", []) if str(item).strip())
+                            if isinstance(draft.get("terrain"), list)
+                            else str(draft.get("terrain", "") or ""),
+                            "culture_tag": ",".join(str(item) for item in draft.get("culture_traits", []) if str(item).strip())
+                            if isinstance(draft.get("culture_traits"), list)
+                            else "",
+                            "metadata_json": json.dumps(meta, ensure_ascii=False),
+                        },
+                    )
+
+        migrations.append(MigrationSpec("map_graph_schema_v1", apply_map_graph_schema_v1))
+
         for migration in migrations:
             _run_migration(conn, migration.version, migration.apply_fn)

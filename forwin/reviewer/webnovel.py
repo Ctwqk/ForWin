@@ -7,7 +7,9 @@ from typing import Any
 
 from forwin.protocol.context import ChapterContextPack, LintSignal, ReviewContextPack
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
+from forwin.protocol.book_state import MapEdge, MapNode
 from forwin.protocol.writer import WriterOutput
+from forwin.map.pathfinding import MapGraph
 from forwin.skills import inject_skill_layers
 from forwin.utils import LLMJSONParseError, parse_llm_json
 from forwin.llm.compat import call_chat_compat
@@ -35,6 +37,52 @@ def _trim(text: str, limit: int = 64) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: max(0, limit - 1)] + "…"
+
+
+def _duration_to_travel_time_budget(text: str) -> float | None:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return None
+    if "一炷香" in normalized:
+        return 0.5
+    if "片刻" in normalized or "须臾" in normalized:
+        return 0.25
+    if "半个时辰" in normalized:
+        return 1.0
+    if "时辰" in normalized:
+        return _extract_duration_number(normalized, default=1.0) * 2.0
+    if "小时" in normalized:
+        return _extract_duration_number(normalized, default=1.0)
+    if "半日" in normalized or "半天" in normalized:
+        return 12.0
+    if any(token in normalized for token in ("次日", "翌日", "第二天", "一天", "一日")):
+        return 24.0
+    if "天" in normalized or "日" in normalized:
+        return _extract_duration_number(normalized, default=1.0) * 24.0
+    return None
+
+
+def _extract_duration_number(text: str, *, default: float) -> float:
+    match = re.search(r"(\d+(?:\.\d+)?)", text)
+    if match:
+        return float(match.group(1))
+    chinese_numbers = {
+        "一": 1.0,
+        "二": 2.0,
+        "两": 2.0,
+        "三": 3.0,
+        "四": 4.0,
+        "五": 5.0,
+        "六": 6.0,
+        "七": 7.0,
+        "八": 8.0,
+        "九": 9.0,
+        "十": 10.0,
+    }
+    for key, value in chinese_numbers.items():
+        if key in text:
+            return value
+    return default
 
 
 class WebNovelExperienceReviewer:
@@ -105,6 +153,7 @@ class WebNovelExperienceReviewer:
             chapter_task_contract=list(context.chapter_task_contract),
             active_future_constraints=list(context.active_future_constraints),
             next_band_summary=context.next_band_summary,
+            map_context=dict(context.map_context),
             recent_canon_events=[],
             recent_rule_events=[],
             recent_review_notes=[],
@@ -265,6 +314,11 @@ class WebNovelExperienceReviewer:
         if rule_issue is not None:
             verdict = "fail"
             issues.append(rule_issue)
+
+        movement_issue = self._map_movement_issue(context, writer_output)
+        if movement_issue is not None:
+            verdict = "fail" if movement_issue.severity == "error" else ("warn" if verdict == "pass" else verdict)
+            issues.append(movement_issue)
 
         if immersion_score < 0.4 and writer_output.scene_outputs:
             verdict = "fail"
@@ -925,6 +979,106 @@ class WebNovelExperienceReviewer:
             )
         score = hits / max(1.0, len(writer_output.scene_outputs) * 2.0)
         return _clamp_score(score), refs
+
+    def _map_movement_issue(
+        self,
+        context: ReviewContextPack,
+        writer_output: WriterOutput,
+    ) -> ContinuityIssue | None:
+        if len(writer_output.scene_outputs) < 2:
+            return None
+        map_context = context.map_context or {}
+        node_payloads = map_context.get("map_nodes") if isinstance(map_context.get("map_nodes"), list) else []
+        edge_payloads = map_context.get("map_edges") if isinstance(map_context.get("map_edges"), list) else []
+        if not node_payloads or not edge_payloads:
+            return None
+        try:
+            nodes = [MapNode.model_validate(payload) for payload in node_payloads if isinstance(payload, dict)]
+            edges = [MapEdge.model_validate(payload) for payload in edge_payloads if isinstance(payload, dict)]
+        except Exception:
+            return None
+        node_by_id = {node.id: node for node in nodes}
+        node_id_by_name = {node.name: node.id for node in nodes if node.name}
+        graph = MapGraph(nodes=nodes, edges=edges)
+
+        ordered_scenes = sorted(writer_output.scene_outputs, key=lambda scene: scene.scene_no)
+        path_refs: list[str] = []
+        total_travel_time = 0.0
+        for previous, current in zip(ordered_scenes, ordered_scenes[1:]):
+            previous_id = self._resolve_scene_location_id(previous.scene_location_id, node_by_id, node_id_by_name)
+            current_id = self._resolve_scene_location_id(current.scene_location_id, node_by_id, node_id_by_name)
+            if not previous_id or not current_id or previous_id == current_id:
+                continue
+            result = graph.shortest_path(previous_id, current_id, metric="travel_time")
+            if not result.reachable:
+                return ContinuityIssue(
+                    rule_name="map_path_unreachable",
+                    severity="error",
+                    description="相邻场景发生地点切换，但地图图中没有可达路线。",
+                    reviewer="webnovel_experience",
+                    issue_type="continuity",
+                    target_scope="scene",
+                    evidence_refs=[
+                        f"scene:{previous.scene_no}->{current.scene_no}",
+                        f"from={previous_id}",
+                        f"to={current_id}",
+                        f"blocked_reason={result.blocked_reason}",
+                    ],
+                    suggested_fix="调整场景地点、补充合理赶路过程，或在地图中添加可达路线。",
+                )
+            total_travel_time += float(result.total_travel_time or 0.0)
+            path_refs.append(
+                f"scene:{previous.scene_no}->{current.scene_no}:travel_time={result.total_travel_time}:path={','.join(result.path_edge_ids)}"
+            )
+
+        if total_travel_time <= 0:
+            return None
+        budget = self._chapter_travel_time_budget(context, writer_output)
+        if budget is None or total_travel_time <= budget:
+            return None
+        return ContinuityIssue(
+            rule_name="map_travel_time_exceeds_chapter_time",
+            severity="error",
+            description="角色场景移动所需地图赶路时间超过本章时间推进。",
+            reviewer="webnovel_experience",
+            issue_type="continuity",
+            target_scope="scene",
+            evidence_refs=[
+                f"required_travel_time={round(total_travel_time, 3)}",
+                f"available_time={round(budget, 3)}",
+                *path_refs[:4],
+            ],
+            suggested_fix="延长章节时间推进、改为更近地点、使用已知快速路线，或补出合理中转。",
+        )
+
+    @staticmethod
+    def _resolve_scene_location_id(
+        raw_location: str,
+        node_by_id: dict[str, MapNode],
+        node_id_by_name: dict[str, str],
+    ) -> str:
+        text = str(raw_location or "").strip()
+        if not text:
+            return ""
+        if text in node_by_id:
+            return text
+        return node_id_by_name.get(text, "")
+
+    @staticmethod
+    def _chapter_travel_time_budget(
+        context: ReviewContextPack,
+        writer_output: WriterOutput,
+    ) -> float | None:
+        map_context = context.map_context or {}
+        explicit_budget = map_context.get("chapter_travel_time_budget")
+        if explicit_budget is not None:
+            try:
+                return max(0.0, float(explicit_budget))
+            except (TypeError, ValueError):
+                pass
+        if writer_output.time_advance is None:
+            return None
+        return _duration_to_travel_time_budget(writer_output.time_advance.duration_description)
 
     def _hook_score(
         self,

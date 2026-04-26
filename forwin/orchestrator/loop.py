@@ -57,6 +57,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.phase import ArcStructureDraft, BandExperiencePlan, ChapterRewriteAttempt
 from forwin.extractor.world_v4 import WorldDeltaExtractor
+from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStateReviewGate
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.experience import ArcPayoffMap, BandDelightSchedule, ChapterExperiencePlan
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
@@ -4126,6 +4127,57 @@ class WritingOrchestrator:
             compiler_run_id=f"compile_{project_id}_{chapter_number}",
             retrieval_pack_payload=retrieval_pack_payload,
         )
+        book_state_result = None
+        book_state_verdict = None
+        if compiler_result.committed and gate_verdict.approved_changes is not None:
+            book_state_changes = BookStateDeltaAdapter().from_world_change_set(
+                gate_verdict.approved_changes,
+                approved_by=["v4_review_gate"],
+                review_verdict_id=f"v4_review_{project_id}_{chapter_number}",
+            )
+            book_state_verdict = BookStateReviewGate(session).review(book_state_changes)
+            if book_state_verdict.accepted and book_state_verdict.approved_changes is not None:
+                book_state_result = BookStateCompiler(session).compile(
+                    book_state_verdict.approved_changes,
+                    compiler_run_id=f"book_state_compile_{project_id}_{chapter_number}",
+                )
+            else:
+                book_state_result = None
+        if compiler_result.committed and (
+            book_state_result is None
+            or not book_state_result.committed
+        ):
+            frozen_path = ""
+            if self.config.freeze_failed_candidates:
+                frozen_path = self.artifact_store.save_frozen_candidate(
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    payload={
+                        "reason": "book-state-review-gate-blocked",
+                        "chapter_number": chapter_number,
+                        "writer_output": writer_output.model_dump(mode="json"),
+                        "book_state_review": book_state_verdict.model_dump(mode="json") if book_state_verdict else None,
+                        "book_state_result": book_state_result.model_dump(mode="json") if book_state_result else None,
+                        "v4_compiler_result": compiler_result.model_dump(mode="json"),
+                    },
+                )
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.CANON_COMMIT_FAILED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 BookState review gate 阻止 canon 写入。",
+                payload={
+                    "book_state_review_issues": [
+                        issue.model_dump(mode="json")
+                        for issue in (book_state_verdict.issues if book_state_verdict else [])
+                    ],
+                    "book_state_blocked_reasons": list(book_state_result.blocked_reasons) if book_state_result else [],
+                },
+            )
+            return frozen_path or "book-state-review-gate-blocked"
         if compiler_result.committed:
             return None
 

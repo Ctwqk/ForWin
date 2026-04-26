@@ -39,6 +39,7 @@ from .subworld import SubWorld, SubWorldRosterItem
 from .task import GenerationTask
 from .thread import PlotThread, PlotThreadBeat
 from .timeline import ChapterTimeline, StoryTimePoint
+from forwin.map.models import MapGenerationRunRow, MapRegionEdgeRow, MapRegionRow
 from .world_model import (
     WorldEditProposalRow,
     WorldModelCompileRunRow,
@@ -63,6 +64,23 @@ from .world_v4 import (
     WorldDeltaRow,
     WorldLineRow,
     WorldModelSnapshotV4Row,
+)
+from .book_state import (
+    BookCognitionSnapshotRow,
+    CognitionOverlayPatchRow,
+    CognitionOverlayRow,
+    FactNodeRow,
+    GraphDeltaPatchRow,
+    GraphDeltaRow,
+    MapEdgeRow,
+    MapNodeRow,
+    MapSnapshotRow,
+    NarrativeEdgeRow,
+    NarrativeNodeRow,
+    WorldEdgeRow,
+    WorldNodeRow,
+    WorldNodeStateRow,
+    WorldSnapshotRow,
 )
 
 __all__ = [
@@ -149,4 +167,23 @@ __all__ = [
     "ArcWorldContractRow",
     "BandWorldContractRow",
     "ChapterWorldDeltaIntentRow",
+    # final book state
+    "WorldNodeRow",
+    "WorldNodeStateRow",
+    "WorldEdgeRow",
+    "FactNodeRow",
+    "MapNodeRow",
+    "MapEdgeRow",
+    "MapRegionRow",
+    "MapRegionEdgeRow",
+    "MapGenerationRunRow",
+    "GraphDeltaRow",
+    "GraphDeltaPatchRow",
+    "CognitionOverlayRow",
+    "CognitionOverlayPatchRow",
+    "WorldSnapshotRow",
+    "MapSnapshotRow",
+    "BookCognitionSnapshotRow",
+    "NarrativeNodeRow",
+    "NarrativeEdgeRow",
 ]

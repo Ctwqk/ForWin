@@ -9,6 +9,91 @@
 - 如果改动尚未部署到 `8899`，必须明确写“未部署原因”和“切换条件”。
 - 旧的专项日志可保留，但关键结论需要汇总到这里。
 
+## 2026-04-26
+
+### 地图系统方案 C：Graph-based Weighted Map Generation 首轮落地
+
+将地图系统从旧 `SubWorld` 局部舞台语义升级为大尺度 `BookMap`：`SubWorld -> Region -> MapNode -> MapEdge`。本轮不新增 FastAPI 路由，只提供 service 层给 orchestrator、reviewer、writer 和测试调用。
+
+关键变化：
+
+- 新增设计/实现文档：[map_scheme_c.md](/home/taiwei/.codex/worktrees/2a32/ForWin/Design-docs/map_scheme_c.md)。
+- 新增 `forwin/map/` 包，包含 `models / protocol / repository / generator / pathfinding / validator / service`。
+- `SubWorld` 升级为大陆、星球、位面、异世界等大尺度地图容器，并新增 map metadata 显式字段。
+- 新增 `map_regions / map_region_edges / map_generation_runs`，扩展 `map_nodes / map_edges`，并通过 `map_graph_schema_v1` 接入 lightweight migration。
+- 实现 `方案 C：Graph-based Weighted Map Generation`：required regions、anchor nodes、RegionGraph MST、MapGraph MST、extra edges、权重计算、validation report 和 generation run 记录。
+- 新增 `create_or_update_book_map()`，通过 `world_gate`、exit `MapNode` 和跨 subworld `MapEdge` 支持 BookMap 级连接。
+- 路径计算支持 Dijkstra、metric 切换、有向边、多重边、bidirectional runtime reverse、blocked/hidden filter、observer cognition overlay、field overrides 和 false edges。
+- `assemble_context()` 和 `ReviewContextPack` 接入 `map_context`；reviewer heuristic 可检查连续场景移动不可达或 travel time 超过章节时间推进。
+
+验证：
+
+- `python3 -m pytest tests/test_book_state_protocol.py tests/test_book_state_runtime.py tests/test_book_state_schema.py tests/test_map_models.py tests/test_map_generation_scheme_c.py tests/test_map_generation.py tests/test_map_pathfinding.py tests/test_map_cognition_path.py tests/test_map_world_integration.py tests/test_subworld_control.py -q`
+- 结果：`37 passed`
+- `python3 -m py_compile forwin/map/protocol.py forwin/map/service.py forwin/map/generator.py forwin/map/__init__.py forwin/context/assembler.py forwin/protocol/context.py forwin/reviewer/context_builder.py forwin/reviewer/webnovel.py tests/test_map_generation_scheme_c.py tests/test_map_world_integration.py`
+
+部署状态：未部署到 `8899`。原因：本轮是地图持久化、生成、路径和 reviewer/service 集成的代码与文档更新，未切换线上服务。切换条件：后续接入 orchestrator 主链路或线上 reviewer 前，先确认无 active generation，再重建并切换服务。
+
+### BookState API / V4 gate 接入同步
+
+同步 master worktree 中尚未提交的 BookState final runtime 接入：在保留当前地图升级与 BookState runtime 实现的基础上，补齐 API 调试入口和 V4 写作链路后的 BookState review/compile gate。
+
+关键变化：
+
+- 新增 `forwin/api_book_state_routes.py`，提供 runtime status、map path query 和 legacy import 三个 BookState 调试入口。
+- `api_route_registry` 注册 `/api/projects/{project_id}/book-state/runtime`、`/book-state/map/path`、`/book-state/legacy-import`。
+- `WritingOrchestrator` 在现有 V4 review/compiler commit 后，把 approved changes 转换为 `ApprovedGraphDeltaSet`，再经过 `BookStateReviewGate` 与 `BookStateCompiler`。
+- `forwin.book_state.__init__` re-export `BookStateDeltaAdapter`、`BookStateReviewGate` 和 `NarrativeControlGraph`，避免调用方直接依赖内部模块。
+- 新增 `tests/test_book_state_final.py` 作为 master worktree final runtime 集成测试。
+
+验证：
+
+- 待本轮 merge 后随地图/BookState 组合测试一起回归。
+
+部署状态：未部署到 `8899`。原因：本轮只是把 master worktree 的未提交 BookState 接入同步到当前 worktree；线上切换仍需先确认无 active generation。
+
+### BookState 持久化 / 回放 / 编译增量闭环
+
+在首轮 BookState DTO、ORM、runtime 基座上，新增独立的持久化与 replay 垂直切片。旧 `world_model_v4` 仍是当前 orchestrator 主链路；本轮没有切换生产章节生成入口。
+
+关键变化：
+
+- 新增 `BookStateRepository`，支持最终 BookState 表的 DTO/ORM 双向转换、ledger 追加、snapshot 读写和运行时基础加载。
+- 新增 `BookStateProjection`，支持按章节从 base rows、最近 snapshot 和 `GraphDelta` 回放重建 `BookStateRuntime`。
+- 新增 `BookStateCompiler`，支持 `ApprovedGraphDeltaSet` append-only 写入、patch old_value 冲突保护、状态行追加和 snapshot 物化。
+- 新增 `LegacyBookStateImporter`，把旧 `entities / entity_states / relation_edges` 与旧 V4 world lines / gaps / reveals 最小导入到最终 BookState 表。
+- 新增 `BookStateCompileResult`，为后续替换 extractor/reviewer/orchestrator 提供明确编译结果接口。
+
+验证：
+
+- `.venv/bin/python -m pytest -q tests/test_book_state_protocol.py tests/test_book_state_schema.py tests/test_book_state_runtime.py tests/test_book_state_repository_projection_compiler.py tests/test_book_state_legacy_import.py`
+- `.venv/bin/python -m pytest -q tests/test_world_v4_schema.py tests/test_world_v4_repository.py tests/test_world_v4_projection_materialization.py`
+
+部署状态：未部署到 `8899`。原因：本轮只新增并行 BookState 闭环，不切换 API 或 orchestrator。切换条件：后续接入主链路前，需补 extractor/reviewer/retrieval API 适配并确认无 active generation。
+
+### V4 Final BookState Runtime 设计落档与基础基座实现
+
+新增最终版 BookState Runtime 设计文档，并实现首轮协议 / schema / runtime 基座。后续世界模型不再继续强化轻量 `world_model_v4`，而是按 `Typed Property Graph + MapGraph + Sparse Cognition Overlay + Append-only Delta Ledger + Materialized Snapshot` 破坏性重建。
+
+关键变化：
+
+- 新增设计文档：[V4_final_book_state_runtime.md](/home/taiwei/ForWin/Design-docs/V4_final_book_state_runtime.md)。
+- 明确 canon source 改为 `GraphDelta + patch rows`，旧 `entities / entity_states / relation_edges` 和轻量 v4 rows 降级为兼容投影、迁移来源和历史审计证据。
+- 明确 `MapGraph` 独立于 ObjectiveWorldGraph，支持带权有向多重图、路径计算、hidden/blocked route、observer-aware known distance。
+- 明确 `CognitionOverlay` 不复制客观世界图，只保存 mask、override、false additions。
+- 给出 schema、runtime、pipeline、迁移、测试与验收标准。
+- 新增 `forwin/protocol/book_state.py`、`forwin/models/book_state.py`、`forwin/book_state/`，实现最终 BookState DTO、ORM 表、MapGraph 路径计算、CognitionView 和 ObjectiveWorldGraph patch replay 基础。
+- 首轮为避免旧 v4 `cognition_snapshots` 表冲突，最终版认知物化表先命名为 `book_cognition_snapshots`，后续迁移阶段再收口。
+
+验证：
+
+- `test -f Design-docs/V4_final_book_state_runtime.md`
+- `grep -n "Typed Property Graph\\|MapGraph\\|CognitionOverlay\\|GraphDelta" Design-docs/V4_final_book_state_runtime.md`
+- `PYTHONPATH=. pytest -q tests/test_book_state_protocol.py tests/test_book_state_schema.py tests/test_book_state_runtime.py`
+- `PYTHONPATH=. pytest -q tests/test_world_v4_schema.py tests/test_world_v4_repository.py tests/test_world_v4_projection_materialization.py`
+
+部署状态：未部署到 `8899`。原因：本轮新增基础代码但尚未切换 orchestrator / compiler 主路径，不需要服务切换。切换条件：后续实现进入服务切换前，必须先确认 `/api/tasks/active-generation-check` 返回 `safe_to_restart=true`。
+
 ## 2026-04-24
 
 ### V3.0 WorldModel 设计文档与维护口径更新

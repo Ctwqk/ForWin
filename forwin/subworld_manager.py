@@ -19,6 +19,8 @@ from forwin.models import (
     new_id,
 )
 from forwin.orchestrator.goals import load_goals_json
+from forwin.map.protocol import RegionNode
+from forwin.map.repository import MapRepository
 from forwin.protocol import (
     ChapterEntryTarget,
     SubWorldPlanDelta,
@@ -316,6 +318,13 @@ class SubWorldManager:
                 )
                 session.add(target_row)
                 session.flush()
+                if item.region_seeds:
+                    self._persist_region_seeds(
+                        session=session,
+                        project_id=project_id,
+                        subworld_id=target_row.id,
+                        seeds=item.region_seeds,
+                    )
             else:
                 if item.purpose and not str(target_row.purpose or "").strip():
                     target_row.purpose = item.purpose
@@ -332,6 +341,13 @@ class SubWorldManager:
                 target_row.metadata_json = json.dumps(meta, ensure_ascii=False)
                 target_row.status = "active"
                 session.add(target_row)
+                if item.region_seeds:
+                    self._persist_region_seeds(
+                        session=session,
+                        project_id=project_id,
+                        subworld_id=target_row.id,
+                        seeds=item.region_seeds,
+                    )
 
             for seed in item.core_named_characters:
                 entity = None
@@ -403,6 +419,50 @@ class SubWorldManager:
             new_subworlds=resolved_new_items,
             initial_active_subworld_ids=list(dict.fromkeys(normalized_initial_ids)),
         )
+
+    def _persist_region_seeds(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+        subworld_id: str,
+        seeds: Iterable,
+    ) -> None:
+        repo = MapRepository(session)
+        for seed in seeds:
+            payload = seed.model_dump(mode="json") if hasattr(seed, "model_dump") else dict(seed)
+            name = str(payload.get("name", "") or "").strip()
+            if not name:
+                continue
+            region_id = "region_" + md5(f"{project_id}:{subworld_id}:{name}".encode("utf-8")).hexdigest()[:16]
+            terrain_raw = payload.get("terrain", [])
+            terrain = (
+                ",".join(str(item) for item in terrain_raw if str(item).strip())
+                if isinstance(terrain_raw, list)
+                else str(terrain_raw or "")
+            )
+            culture_raw = payload.get("culture_traits", [])
+            culture_tag = (
+                ",".join(str(item) for item in culture_raw if str(item).strip())
+                if isinstance(culture_raw, list)
+                else str(culture_raw or "")
+            )
+            repo.upsert_region(
+                RegionNode(
+                    id=region_id,
+                    project_id=project_id,
+                    subworld_id=subworld_id,
+                    region_type=str(payload.get("kind", "") or "local_region"),
+                    name=name,
+                    description=str(payload.get("summary", "") or ""),
+                    terrain=terrain,
+                    culture_tag=culture_tag,
+                    metadata={
+                        **payload,
+                        "legacy_source": "SubWorldPlanItem.region_seeds",
+                    },
+                )
+            )
 
     def plan_band_activation(
         self,

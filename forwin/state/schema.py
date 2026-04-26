@@ -11,6 +11,7 @@ class _BaseStateModel(BaseModel):
 
 class CharacterState(_BaseStateModel):
     location: str = ""
+    location_id: str = ""
     status: str = ""
     goal: str = ""
     power_level: str = ""
@@ -25,6 +26,8 @@ class LocationState(_BaseStateModel):
 class FactionState(_BaseStateModel):
     status: str = ""
     location: str = ""
+    location_id: str = ""
+    headquarters_location_id: str = ""
     goal: str = ""
     power_level: str = ""
 

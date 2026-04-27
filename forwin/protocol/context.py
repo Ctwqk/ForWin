@@ -211,6 +211,7 @@ class ChapterContextPack(BaseModel):
     active_future_constraints: list[NarrativeConstraintInfo] = Field(default_factory=list)
     next_band_summary: NextBandSummary | None = None
     world_context: WorldContextPack = Field(default_factory=WorldContextPack)
+    knowledge_system_context: dict[str, Any] = Field(default_factory=dict)
     map_context: dict[str, Any] = Field(default_factory=dict)
     active_world_lines: list[str] = Field(default_factory=list)
     visible_world_lines: list[str] = Field(default_factory=list)
@@ -255,6 +256,16 @@ class WorldModelRetrievalPack(BaseModel):
     fair_misdirection_requirements: list[str] = Field(default_factory=list)
     accepted_delta_ids: list[str] = Field(default_factory=list)
     rejected_delta_ids: list[str] = Field(default_factory=list)
+    book_state_snapshot: dict[str, Any] = Field(default_factory=dict)
+    book_state_nodes: list[dict[str, Any]] = Field(default_factory=list)
+    book_state_edges: list[dict[str, Any]] = Field(default_factory=list)
+    book_state_facts: list[dict[str, Any]] = Field(default_factory=list)
+    book_state_map: dict[str, Any] = Field(default_factory=dict)
+    obsidian_pages: list[dict[str, Any]] = Field(default_factory=list)
+    llm_kb_context: dict[str, Any] = Field(default_factory=dict)
+    review_conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+    source_digest: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

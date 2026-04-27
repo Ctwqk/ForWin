@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -202,8 +203,54 @@ class ArtifactStore:
             content_type="application/json",
         )
 
+    def save_llm_artifact(
+        self,
+        *,
+        project_id: str,
+        artifact_kind: str,
+        content: str,
+        trace_scope: str = "llm",
+        stage_key: str = "",
+        chapter_number: int = 0,
+        attempt_group_id: str = "",
+        attempt_no: int = 0,
+        content_type: str = "application/json",
+    ) -> dict[str, object]:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        safe_kind = _safe_path_part(artifact_kind) or "artifact"
+        safe_scope = _safe_path_part(trace_scope) or "llm"
+        safe_stage = _safe_path_part(stage_key) or "stage"
+        safe_group = _safe_path_part(attempt_group_id) or "attempt"
+        suffix = "json" if "json" in content_type else "txt"
+        chapter_part = f"chapters/{int(chapter_number)}/" if int(chapter_number or 0) > 0 else ""
+        relative_path = (
+            f"projects/{project_id}/{chapter_part}llm_traces/{safe_scope}/{safe_stage}/"
+            f"{timestamp}_{safe_group}_{int(attempt_no or 0):02d}_{safe_kind}.{suffix}"
+        )
+        uri = self.object_store.write_text(
+            relative_path,
+            str(content or ""),
+            content_type=content_type,
+        )
+        encoded = str(content or "").encode("utf-8")
+        preview = " ".join(str(content or "").split())[:500]
+        return {
+            "artifact_uri": uri,
+            "artifact_kind": safe_kind,
+            "content_type": content_type,
+            "size": len(encoded),
+            "hash": hashlib.sha256(encoded).hexdigest(),
+            "preview": preview,
+        }
+
     def read_text(self, uri: str) -> str:
         return self.object_store.read_text(uri)
 
     def read_json(self, uri: str) -> dict:
         return json.loads(self.read_text(uri))
+
+
+def _safe_path_part(value: object) -> str:
+    text = str(value or "").strip()
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in text)
+    return cleaned.strip("_")[:96]

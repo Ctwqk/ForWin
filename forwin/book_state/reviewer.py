@@ -44,7 +44,9 @@ class BookStateReviewGate:
         )
         issues: list[BookStateReviewIssue] = []
         for delta in changes.graph_deltas:
+            issues.extend(_canon_permission_issues(delta))
             issues.extend(_schema_issues(delta))
+            issues.extend(_writer_hidden_truth_issues(delta))
             issues.extend(_movement_issues(runtime, delta))
         accepted = not any(issue.severity == "error" for issue in issues)
         return BookStateReviewVerdict(
@@ -68,6 +70,55 @@ def _schema_issues(delta: GraphDelta) -> list[BookStateReviewIssue]:
         )
         for issue in report.issues
     ]
+
+
+def _canon_permission_issues(delta: GraphDelta) -> list[BookStateReviewIssue]:
+    if delta.allowed_for_canon:
+        return []
+    return [
+        BookStateReviewIssue(
+            severity="error",
+            code="delta_not_allowed_for_canon",
+            target_ref=f"delta:{delta.id}",
+            message="GraphDelta is not approved for BookState canon.",
+        )
+    ]
+
+
+def _writer_hidden_truth_issues(delta: GraphDelta) -> list[BookStateReviewIssue]:
+    role = str(delta.metadata.get("role") or delta.metadata.get("pack_role") or delta.source_type or "").lower()
+    if role not in {"writer", "writing", "writer_pack"}:
+        return []
+    issues: list[BookStateReviewIssue] = []
+    for patch in delta.fact_patches:
+        hidden = patch.sensitivity_level in {"hidden", "secret", "must_not_reveal"}
+        payload_hidden = isinstance(patch.new_value, dict) and str(
+            patch.new_value.get("sensitivity_level", "")
+        ) in {"hidden", "secret", "must_not_reveal"}
+        if hidden or payload_hidden:
+            issues.append(
+                BookStateReviewIssue(
+                    severity="error",
+                    code="writer_hidden_truth_leak",
+                    target_ref=f"fact:{patch.fact_id}",
+                    message="writer-scoped deltas cannot introduce hidden objective truth.",
+                )
+            )
+    for patch in delta.node_patches:
+        visibility = str(getattr(patch, "visibility_default", "") or "")
+        payload = patch.new_value if isinstance(patch.new_value, dict) else {}
+        status = str(payload.get("status", "") or "")
+        tags = {str(tag) for tag in payload.get("tags", [])} if isinstance(payload.get("tags"), list) else set()
+        if visibility == "hidden" or status in {"hidden", "secret"} or tags.intersection({"hidden", "secret", "must_not_reveal"}):
+            issues.append(
+                BookStateReviewIssue(
+                    severity="error",
+                    code="writer_hidden_truth_leak",
+                    target_ref=f"node:{patch.node_id}",
+                    message="writer-scoped deltas cannot introduce hidden canon nodes.",
+                )
+            )
+    return issues
 
 
 def _movement_issues(runtime: BookStateRuntime, delta: GraphDelta) -> list[BookStateReviewIssue]:

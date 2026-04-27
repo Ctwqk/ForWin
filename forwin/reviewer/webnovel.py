@@ -11,6 +11,7 @@ from forwin.protocol.book_state import MapEdge, MapNode
 from forwin.protocol.writer import WriterOutput
 from forwin.map.pathfinding import MapGraph
 from forwin.skills import inject_skill_layers
+from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 from forwin.utils import LLMJSONParseError, parse_llm_json
 from forwin.llm.compat import call_chat_compat
 from forwin.writer.llm_client import LLMClient
@@ -118,6 +119,26 @@ class WebNovelExperienceReviewer:
             )
             if llm_verdict is not None:
                 return llm_verdict
+            heuristic = self._review_with_heuristics(review_context, writer_output)
+            attempts = self._drain_llm_attempts()
+            if attempts:
+                heuristic = heuristic.model_copy(
+                    update={
+                        "prompt_trace": self._build_prompt_trace(
+                            context=review_context,
+                            writer_output=writer_output,
+                            messages=[],
+                            attempts=attempts,
+                            output_summary={
+                                "status": "failed",
+                                "fallback": "heuristic",
+                                "verdict": heuristic.verdict,
+                                "issue_count": len(heuristic.issues),
+                            },
+                        )
+                    }
+                )
+            return heuristic
         return self._review_with_heuristics(review_context, writer_output)
 
     def _normalize_context(
@@ -182,14 +203,15 @@ class WebNovelExperienceReviewer:
     ) -> ReviewVerdict | None:
         payload = self._llm_payload(context, writer_output)
         evidence_ids = [item["evidence_id"] for item in payload["evidence_index"]]
+        messages = self._llm_review_messages(
+            payload=payload,
+            evidence_ids=evidence_ids,
+            reviewer_skill_layers=reviewer_skill_layers,
+        )
         try:
             raw = call_chat_compat(
                 self.llm_client,
-                self._llm_review_messages(
-                    payload=payload,
-                    evidence_ids=evidence_ids,
-                    reviewer_skill_layers=reviewer_skill_layers,
-                ),
+                messages,
                 temperature=0.1,
                 max_tokens=3000,
                 timeout_seconds=45,
@@ -205,14 +227,38 @@ class WebNovelExperienceReviewer:
         for repair_attempt in range(3):
             try:
                 parsed = parse_llm_json(raw, error_prefix="WNER")
-                return self._verdict_from_payload(
+                verdict = self._verdict_from_payload(
                     payload=parsed,
                     context=context,
                     writer_output=writer_output,
                     fallback_on_invalid=False,
                     allowed_evidence_ids=allowed_evidence_ids,
                 )
+                return verdict.model_copy(
+                    update={
+                        "prompt_trace": self._build_prompt_trace(
+                            context=context,
+                            writer_output=writer_output,
+                            messages=messages,
+                            attempts=self._drain_llm_attempts(),
+                            output_summary={
+                                "status": "succeeded",
+                                "verdict": verdict.verdict,
+                                "issue_count": len(verdict.issues),
+                                "repair_attempts": repair_attempt,
+                            },
+                        )
+                    }
+                )
             except (LLMJSONParseError, ValueError) as exc:
+                mark_latest_attempt_parse_failure(
+                    self.llm_client,
+                    parser_name="WNER",
+                    stage_key="chapter_review" if repair_attempt == 0 else "chapter_review_json_repair",
+                    schema_name="review_json",
+                    raw_output=raw,
+                    error=exc,
+                )
                 if repair_attempt >= 2:
                     return None
                 repaired = self._repair_llm_json(
@@ -225,6 +271,52 @@ class WebNovelExperienceReviewer:
                 raw = repaired
             except Exception:
                 return None
+
+    def _drain_llm_attempts(self) -> list[dict[str, object]]:
+        drain = getattr(self.llm_client, "drain_llm_attempt_events", None)
+        if not callable(drain):
+            return []
+        attempts = drain()
+        return attempts if isinstance(attempts, list) else []
+
+    @staticmethod
+    def _build_prompt_trace(
+        *,
+        context: ReviewContextPack,
+        writer_output: WriterOutput,
+        messages: list[dict],
+        attempts: list[dict[str, object]],
+        output_summary: dict[str, object],
+    ) -> dict[str, object]:
+        prompt_layers = [
+            {"role": str(item.get("role", "")).strip(), "content": str(item.get("content", ""))}
+            for item in messages
+            if isinstance(item, dict)
+        ]
+        effective_system_prompt = "\n\n".join(
+            str(item.get("content", "")).strip()
+            for item in prompt_layers
+            if str(item.get("role", "")).strip() == "system"
+        )
+        return {
+            "trace_scope": "reviewer",
+            "stage_key": "chapter_review",
+            "template_id": "reviewer:chapter_review",
+            "template_version": "v1",
+            "effective_system_prompt": effective_system_prompt,
+            "prompt_layers": prompt_layers,
+            "input_snapshot": {
+                "project_id": context.project_id,
+                "chapter_number": context.chapter_number,
+                "body_char_count": int(getattr(writer_output, "char_count", 0) or 0),
+            },
+            "model_profile": {},
+            "attempts": attempts,
+            "output_summary": {
+                "chapter_number": context.chapter_number,
+                **output_summary,
+            },
+        }
 
     def _review_with_heuristics(
         self,

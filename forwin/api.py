@@ -54,6 +54,7 @@ from forwin.api_runtime import (
     run_generation_with_config,
 )
 from forwin.api_task_history import augment_task_with_rehearsal_history
+from forwin.api_artifacts import build_artifact_store
 from forwin.api_schemas import (
     BandCheckpointApproveRequest,
     BandCheckpointDetail,
@@ -372,6 +373,7 @@ def _build_genesis_service(
         llm_client=llm_client,
         skill_router=router,
         skill_prompt_layer_builder=prompt_layer_builder,
+        artifact_store=build_artifact_store(resolved),
     )
 
 

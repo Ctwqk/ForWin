@@ -7,7 +7,8 @@ from tempfile import TemporaryDirectory
 import httpx
 
 from forwin.cli import build_parser
-from forwin.llm_eval.runner import EvalRunConfig, LLMReliabilityRunner
+from forwin.codex_bridge.runner import CodexExecResult
+from forwin.llm_eval.runner import CodexCliEvalAdapter, EvalRunConfig, LLMReliabilityRunner
 from forwin.llm_eval.schemas import EvalCase, EvalProfile
 
 
@@ -57,6 +58,25 @@ class FakeAdapter:
 
     def close(self) -> None:
         return None
+
+
+class FakeCodexRunner:
+    def __init__(self, content: str = '{"scenes":[{"scene_no":1}]}') -> None:
+        self.content = content
+        self.calls: list[dict[str, object]] = []
+
+    def run(self, request, *, timeout_seconds: float | None = None):  # noqa: ANN001
+        self.calls.append(
+            {
+                "prompt": request.prompt,
+                "output_schema": request.output_schema,
+                "model": request.model,
+                "ignore_user_config": request.ignore_user_config,
+                "ephemeral": request.ephemeral,
+                "timeout_seconds": timeout_seconds,
+            }
+        )
+        return CodexExecResult(ok=True, content=self.content, returncode=0)
 
 
 def test_direct_runner_writes_attempts_and_summary_without_raw_prompt_or_secret() -> None:
@@ -153,6 +173,39 @@ def test_direct_runner_records_http_529_failure_category() -> None:
     assert summary["profiles"]["kimi"]["grade"] == "fail"
 
 
+def test_codex_cli_eval_adapter_uses_codex_exec_without_api_key() -> None:
+    profile = EvalProfile(
+        id="codex-spark",
+        name="GPT-5.3-Codex-Spark",
+        provider="codex_cli",
+        base_url="codex://cli",
+        model="gpt-5.3-codex-spark",
+        api_key="",
+        timeout_seconds=12,
+    )
+    fake_runner = FakeCodexRunner()
+    adapter = CodexCliEvalAdapter(profile, runner=fake_runner)  # type: ignore[arg-type]
+
+    output = adapter.chat(
+        [{"role": "user", "content": "只输出 JSON"}],
+        response_format={"type": "json_object"},
+        task_family="writer",
+        stage_key="scene_breakdown",
+        output_schema={"type": "object"},
+    )
+    attempts = adapter.drain_llm_attempt_events()
+
+    assert output == '{"scenes":[{"scene_no":1}]}'
+    assert fake_runner.calls[0]["model"] == "gpt-5.3-codex-spark"
+    assert fake_runner.calls[0]["output_schema"] is None
+    assert fake_runner.calls[0]["ignore_user_config"] is True
+    assert fake_runner.calls[0]["ephemeral"] is True
+    assert attempts[0]["backend"] == "codex_cli"
+    assert attempts[0]["provider_kind"] == "spark"
+    assert attempts[0]["http_status"] == 200
+    assert attempts[0]["llm_task_route"] == "planning_json_low_risk"
+
+
 def test_cli_parser_exposes_llm_eval_run_and_report_subcommands() -> None:
     parser = build_parser()
     run_args = parser.parse_args(
@@ -162,14 +215,14 @@ def test_cli_parser_exposes_llm_eval_run_and_report_subcommands() -> None:
             "--suite",
             "medium",
             "--profiles",
-            "minimax,kimi",
+            "minimax,kimi,codex-spark",
             "--artifact-root",
             "data/artifacts",
         ]
     )
     assert run_args.command == "llm-eval"
     assert run_args.llm_eval_command == "run"
-    assert run_args.profiles == "minimax,kimi"
+    assert run_args.profiles == "minimax,kimi,codex-spark"
 
     report_args = parser.parse_args(["llm-eval", "report", "--run-id", "run-1"])
     assert report_args.command == "llm-eval"

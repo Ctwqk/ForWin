@@ -17,6 +17,11 @@ from forwin.model_adapter import ModelAdapter
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.naming import CULTURE_ALIAS_TO_KEY, CULTURES, CultureNameGenerator
+from forwin.observability.llm_trace import (
+    build_llm_decision_event_payloads,
+    mark_latest_attempt_parse_failure,
+    prepare_prompt_trace_payload,
+)
 from forwin.skills import (
     SkillPromptLayerBuilder,
     SkillRouter,
@@ -1004,11 +1009,13 @@ class BookGenesisService:
         max_tokens: int = 1600,
         skill_router: SkillRouter | None = None,
         skill_prompt_layer_builder: SkillPromptLayerBuilder | None = None,
+        artifact_store: object | None = None,
     ) -> None:
         self.llm_client = llm_client
         self.max_tokens = max_tokens
         self.skill_router = skill_router
         self.skill_prompt_layer_builder = skill_prompt_layer_builder
+        self.artifact_store = artifact_store
 
     def _build_stage_generation_messages(
         self,
@@ -1347,6 +1354,7 @@ class BookGenesisService:
                 related_object_id=str(getattr(revision, "id", "") or ""),
             )
         )
+        trace_payload = self._prepare_trace_payload_for_save(trace_payload, project_id=project.id)
         trace = updater.save_prompt_trace(
             project_id=project.id,
             genesis_revision_id=str(getattr(revision, "id", "") or ""),
@@ -1366,6 +1374,13 @@ class BookGenesisService:
             codex_job_id=str(trace_payload.get("codex_job_id", "") or ""),
             permission_profile=str(trace_payload.get("permission_profile", "") or ""),
             fallback_used=bool(trace_payload.get("fallback_used", False)),
+        )
+        self._record_llm_events_for_trace(
+            updater=updater,
+            project_id=project.id,
+            trace_id=trace.id,
+            trace_payload=trace_payload,
+            decision_event_id=decision.id,
         )
         stage_state["last_trace_id"] = trace.id
         new_row = updater.create_book_genesis_revision(
@@ -1437,6 +1452,7 @@ class BookGenesisService:
                 related_object_id=str(getattr(revision, "id", "") or ""),
             )
         )
+        trace_payload = self._prepare_trace_payload_for_save(trace_payload, project_id=project.id)
         trace = updater.save_prompt_trace(
             project_id=project.id,
             genesis_revision_id=str(getattr(revision, "id", "") or ""),
@@ -1456,6 +1472,13 @@ class BookGenesisService:
             codex_job_id=str(trace_payload.get("codex_job_id", "") or ""),
             permission_profile=str(trace_payload.get("permission_profile", "") or ""),
             fallback_used=bool(trace_payload.get("fallback_used", False)),
+        )
+        self._record_llm_events_for_trace(
+            updater=updater,
+            project_id=project.id,
+            trace_id=trace.id,
+            trace_payload=trace_payload,
+            decision_event_id=decision.id,
         )
         stage_state["last_trace_id"] = trace.id
         new_row = updater.create_book_genesis_revision(
@@ -1767,7 +1790,8 @@ class BookGenesisService:
             chapter_count=chapter_count,
         )
         if str(decision_event_id or "").strip():
-            updater.save_prompt_trace(
+            trace_payload = self._prepare_trace_payload_for_save(trace_payload, project_id=project.id)
+            trace = updater.save_prompt_trace(
                 project_id=project.id,
                 genesis_revision_id=str(getattr(revision, "id", "") or ""),
                 decision_event_id=str(decision_event_id or "").strip(),
@@ -1785,6 +1809,13 @@ class BookGenesisService:
                 codex_job_id=str(trace_payload.get("codex_job_id", "") or ""),
                 permission_profile=str(trace_payload.get("permission_profile", "") or ""),
                 fallback_used=bool(trace_payload.get("fallback_used", False)),
+            )
+            self._record_llm_events_for_trace(
+                updater=updater,
+                project_id=project.id,
+                trace_id=trace.id,
+                trace_payload=trace_payload,
+                decision_event_id=str(decision_event_id or "").strip(),
             )
         for index in range(chapter_count):
             number = chapter_start + index
@@ -2069,7 +2100,18 @@ class BookGenesisService:
                     codex_allowed=not is_chapter_plan,
                     output_schema={"type": "object"},
                 )
-                payload = parse_llm_json(raw, error_prefix=f"Genesis {stage_key}")
+                try:
+                    payload = parse_llm_json(raw, error_prefix=f"Genesis {stage_key}")
+                except Exception as exc:  # noqa: BLE001
+                    mark_latest_attempt_parse_failure(
+                        self.llm_client,
+                        parser_name=f"Genesis {stage_key}",
+                        stage_key=stage_key,
+                        schema_name=f"genesis:{stage_key}",
+                        raw_output=raw,
+                        error=exc,
+                    )
+                    raise
                 attempts_payload.append(
                     {
                         "attempt": attempt_no,
@@ -2156,6 +2198,13 @@ class BookGenesisService:
         output_summary: dict[str, Any],
     ) -> dict[str, Any]:
         selected = list(selected_skills or [])
+        drain_attempts = getattr(self.llm_client, "drain_llm_attempt_events", None)
+        llm_attempts = drain_attempts() if callable(drain_attempts) else []
+        business_attempts = [
+            {"attempt_type": "business", **dict(item)}
+            for item in attempts
+            if isinstance(item, dict)
+        ]
         last_call_result = getattr(self.llm_client, "last_call_result", None)
         trace = getattr(last_call_result, "trace", {}) if last_call_result is not None else {}
         backend = str(trace.get("backend", "") or getattr(last_call_result, "backend", "") or "")
@@ -2184,12 +2233,50 @@ class BookGenesisService:
                 "model": getattr(self.llm_client, "model", ""),
                 "base_url": getattr(self.llm_client, "base_url", ""),
             },
-            "attempts": attempts,
+            "attempts": (llm_attempts if isinstance(llm_attempts, list) else []) + business_attempts,
             "output_summary": {
                 **output_summary,
                 "skill_summary": selected,
+                "business_attempts": attempts,
             },
         }
+
+    def _prepare_trace_payload_for_save(
+        self,
+        trace_payload: dict[str, Any],
+        *,
+        project_id: str,
+    ) -> dict[str, Any]:
+        return prepare_prompt_trace_payload(
+            trace_payload,
+            artifact_store=getattr(self, "artifact_store", None),
+            project_id=project_id,
+        )
+
+    def _record_llm_events_for_trace(
+        self,
+        *,
+        updater: StateUpdater,
+        project_id: str,
+        trace_id: str,
+        trace_payload: dict[str, Any],
+        decision_event_id: str = "",
+    ) -> None:
+        for event_payload in build_llm_decision_event_payloads(trace_payload, prompt_trace_id=trace_id):
+            updater.save_decision_event(
+                DecisionEventInfo(
+                    project_id=project_id,
+                    scope="project",
+                    event_family=str(event_payload.get("event_family") or "runtime_observation"),
+                    event_type=str(event_payload.get("event_type") or DecisionEventType.LLM_REQUEST_FAILED),
+                    actor_type="system",
+                    summary=str(event_payload.get("summary") or "Genesis LLM trace event."),
+                    payload=event_payload.get("payload") if isinstance(event_payload.get("payload"), dict) else {},
+                    related_object_type="prompt_trace",
+                    related_object_id=trace_id,
+                    parent_event_id=str(decision_event_id or ""),
+                )
+            )
 
     def _normalize_world_payload(self, *, payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
         normalized = payload if isinstance(payload, dict) else {}

@@ -16,6 +16,7 @@ from forwin.protocol.state_change import (
 )
 from forwin.protocol.writer import EntityMention, LoreCandidate, TimelineHint, WriterNote, WriterOutput
 from forwin.skills import serialize_prompt_layers
+from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 from .prompts import (
     build_preview_chapter_prompt,
     build_lore_timeline_notes_extraction_prompt,
@@ -83,7 +84,7 @@ class ChapterWriter:
         context: ChapterContextPack,
         *,
         skill_layers: list[object] | None = None,
-        trace_stage_key: str = "chapter_draft",
+        trace_stage_key: str = "writer_preview",
     ) -> WriterOutput:
         """Write a single chapter.
 
@@ -828,6 +829,7 @@ class ChapterWriter:
         ][: max(1, int(max_attempts))]
         last_error: Exception | None = None
         for index, attempt in enumerate(attempts, start=1):
+            raw = ""
             try:
                 raw = self._call_chat(
                     messages,
@@ -838,7 +840,18 @@ class ChapterWriter:
                     retry_on_timeout=retry_on_timeout,
                     stage_key=stage_key,
                 )
-                return parse_llm_json(raw, error_prefix="ChapterWriter JSON parser")
+                try:
+                    return parse_llm_json(raw, error_prefix="ChapterWriter JSON parser")
+                except Exception as exc:  # noqa: BLE001
+                    mark_latest_attempt_parse_failure(
+                        self.llm_client,
+                        parser_name="ChapterWriter JSON parser",
+                        stage_key=stage_key,
+                        schema_name="writer_json",
+                        raw_output=raw,
+                        error=exc,
+                    )
+                    raise
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 self._record_business_retry_event(
@@ -876,6 +889,7 @@ class ChapterWriter:
         ][: max(1, int(max_attempts))]
         last_error: Exception | None = None
         for index, attempt in enumerate(attempts, start=1):
+            raw = ""
             try:
                 raw = self._call_chat(
                     messages,
@@ -890,6 +904,15 @@ class ChapterWriter:
                     return raw
                 raise ValueError("preview response body is empty")
             except Exception as exc:  # noqa: BLE001
+                if raw:
+                    mark_latest_attempt_parse_failure(
+                        self.llm_client,
+                        parser_name="ChapterWriter preview parser",
+                        stage_key=stage_key,
+                        schema_name="writer_preview",
+                        raw_output=raw,
+                        error=exc,
+                    )
                 last_error = exc
                 self._record_business_retry_event(
                     stage="preview_generation",

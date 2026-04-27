@@ -16,6 +16,8 @@ class CodexExecRequest:
     cwd: str = ""
     model: str = ""
     permission_profile: str = "prompt_only_readonly"
+    ignore_user_config: bool = False
+    ephemeral: bool = False
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,10 @@ class CodexExecRunner:
             ]
             if request.model:
                 cmd.extend(["--model", request.model])
+            if request.ignore_user_config:
+                cmd.append("--ignore-user-config")
+            if request.ephemeral:
+                cmd.append("--ephemeral")
             if request.output_schema:
                 schema_path = tmp_path / "output_schema.json"
                 schema_path.write_text(

@@ -58,6 +58,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.phase import ArcStructureDraft, BandExperiencePlan, ChapterRewriteAttempt
 from forwin.extractor.world_v4 import WorldDeltaExtractor
 from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStateReviewGate
+from forwin.knowledge_system import KnowledgeProjectionRefresher
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.experience import ArcPayoffMap, BandDelightSchedule, ChapterExperiencePlan
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
@@ -85,6 +86,10 @@ from forwin.state.repo import StateRepository
 from forwin.state.schema import KNOWN_STATE_FIELDS
 from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
+from forwin.observability.llm_trace import (
+    build_llm_decision_event_payloads,
+    prepare_prompt_trace_payload,
+)
 from forwin.subworld_manager import SubWorldManager
 from forwin.protocol.writer import WriterOutput
 from forwin.world_model_v4.compiler import WorldModelCompiler as WorldModelCompilerV4
@@ -236,6 +241,7 @@ class WritingOrchestrator:
             minio_prefix=self.config.minio_prefix,
             minio_secure=self.config.minio_secure,
         )
+        setattr(self.book_genesis, "artifact_store", self.artifact_store)
         self.writer = ChapterWriter(
             llm_client=self.llm_client,
             temperature=self.config.temperature,
@@ -1765,6 +1771,19 @@ class WritingOrchestrator:
         payload = prompt_trace if isinstance(prompt_trace, dict) else {}
         if not payload:
             return ""
+        input_snapshot = payload.get("input_snapshot") if isinstance(payload.get("input_snapshot"), dict) else {}
+        output_summary = payload.get("output_summary") if isinstance(payload.get("output_summary"), dict) else {}
+        trace_chapter_number = int(
+            (input_snapshot or {}).get("chapter_number")
+            or (output_summary or {}).get("chapter_number")
+            or 0
+        )
+        payload = prepare_prompt_trace_payload(
+            payload,
+            artifact_store=self.artifact_store,
+            project_id=project_id,
+            chapter_number=trace_chapter_number,
+        )
         project = session.get(Project, project_id)
         row = updater.save_prompt_trace(
             project_id=project_id,
@@ -1786,6 +1805,20 @@ class WritingOrchestrator:
             permission_profile=str(payload.get("permission_profile", "") or ""),
             fallback_used=bool(payload.get("fallback_used", False)),
         )
+        for event_payload in build_llm_decision_event_payloads(payload, prompt_trace_id=row.id):
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=trace_chapter_number,
+                event_family=str(event_payload.get("event_family") or "runtime_observation"),
+                event_type=str(event_payload.get("event_type") or DecisionEventType.LLM_REQUEST_FAILED),
+                scope="chapter" if trace_chapter_number else "project",
+                summary=str(event_payload.get("summary") or "LLM trace event."),
+                payload=event_payload.get("payload") if isinstance(event_payload.get("payload"), dict) else {},
+                related_object_type="prompt_trace",
+                related_object_id=row.id,
+                parent_event_id=str(decision_event_id or "").strip(),
+            )
         return row.id
 
     def _persist_draft_and_review(
@@ -3685,6 +3718,40 @@ class WritingOrchestrator:
                         "stage": "writing_chapter",
                     },
                 )
+                drain_attempts = getattr(self.writer.llm_client, "drain_llm_attempt_events", None)
+                failed_attempts = drain_attempts() if callable(drain_attempts) else []
+                if failed_attempts:
+                    self._save_prompt_trace_payload(
+                        session=updater.session,
+                        updater=updater,
+                        project_id=project_id,
+                        prompt_trace={
+                            "trace_scope": "writer",
+                            "stage_key": trace_stage_key,
+                            "template_id": "writer:failure",
+                            "template_version": "v1",
+                            "effective_system_prompt": "",
+                            "prompt_layers": [],
+                            "input_snapshot": {
+                                "chapter_number": chapter_number,
+                                "stage_key": trace_stage_key,
+                                "failure_path": "writer_before_output",
+                            },
+                            "model_profile": {
+                                "profile_id": model_profile_id,
+                                "model": model_name,
+                            },
+                            "attempts": failed_attempts,
+                            "output_summary": {
+                                "status": "failed",
+                                "chapter_number": chapter_number,
+                                "error_class": exc.__class__.__name__,
+                                "error_message": str(exc),
+                            },
+                        },
+                        parent_trace_id="",
+                        decision_event_id=str(getattr(failure_event, "id", "") or ""),
+                    )
                 last_failure_event_id = str(getattr(failure_event, "id", "") or "")
                 last_failed_attempt = attempt
                 if self._is_timeout_like(exc):
@@ -3746,7 +3813,7 @@ class WritingOrchestrator:
                     self.writer.write_preview_chapter,
                     context,
                     skill_layers=writer_skill_layers,
-                    trace_stage_key=trace_stage_key,
+                    trace_stage_key="writer_preview_fallback",
                     timeout_seconds=self.writer.scene_call_timeout_seconds,
                     max_attempts=preview_max_attempts,
                     retry_on_timeout=True,
@@ -4179,6 +4246,21 @@ class WritingOrchestrator:
             )
             return frozen_path or "book-state-review-gate-blocked"
         if compiler_result.committed:
+            projection_refresh = KnowledgeProjectionRefresher(session).refresh(
+                project_id,
+                as_of_chapter=chapter_number,
+                trigger="chapter_accepted",
+            )
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.KNOWLEDGE_PROJECTION_REFRESHED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 BookState projection refresh 完成。",
+                payload=projection_refresh.as_dict(),
+            )
             return None
 
         frozen_path = ""
@@ -4354,6 +4436,13 @@ class WritingOrchestrator:
             project_id=project_id,
             chapter_number=chapter_number,
         )
+        self._flush_background_llm_trace(
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            stage_key="npc_intents",
+            trace_scope="phase4",
+        )
         save_npc_intents(
             session=session,
             project_id=project_id,
@@ -4364,6 +4453,13 @@ class WritingOrchestrator:
             session=session,
             project_id=project_id,
             chapter_number=chapter_number,
+        )
+        self._flush_background_llm_trace(
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            stage_key="world_pressure",
+            trace_scope="phase4",
         )
         save_world_turn(
             session=session,
@@ -4378,6 +4474,49 @@ class WritingOrchestrator:
             chapter_number,
             cooldown_chapters=self.config.feedback_cooldown_chapters,
             comment_to_reader_ratio=self.config.comment_to_reader_ratio,
+        )
+
+    def _flush_background_llm_trace(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+        chapter_number: int,
+        stage_key: str,
+        trace_scope: str,
+    ) -> str:
+        drain_attempts = getattr(self.llm_client, "drain_llm_attempt_events", None)
+        attempts = drain_attempts() if callable(drain_attempts) else []
+        if not attempts:
+            return ""
+        return self._save_prompt_trace_payload(
+            session=session,
+            updater=StateUpdater(session),
+            project_id=project_id,
+            prompt_trace={
+                "trace_scope": trace_scope,
+                "stage_key": stage_key,
+                "template_id": f"{trace_scope}:{stage_key}",
+                "template_version": "v1",
+                "effective_system_prompt": "",
+                "prompt_layers": [],
+                "input_snapshot": {
+                    "project_id": project_id,
+                    "chapter_number": chapter_number,
+                    "stage_key": stage_key,
+                },
+                "model_profile": {
+                    "profile_id": getattr(self.llm_client, "profile_id", ""),
+                    "profile_name": getattr(self.llm_client, "profile_name", ""),
+                    "model": getattr(self.llm_client, "model", ""),
+                    "base_url": getattr(self.llm_client, "base_url", ""),
+                },
+                "attempts": attempts,
+                "output_summary": {
+                    "status": "recorded",
+                    "chapter_number": chapter_number,
+                },
+            },
         )
 
     def _compile_world_model_after_acceptance(
@@ -4507,6 +4646,7 @@ class WritingOrchestrator:
             try:
                 writer_output = self.provisional_writer.write_preview_chapter(
                     context,
+                    trace_stage_key="provisional_preview",
                     max_attempts=2,
                     retry_on_timeout=True,
                 )

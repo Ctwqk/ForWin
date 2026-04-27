@@ -12,8 +12,16 @@ from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.genesis import PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
-from forwin.observability import LogRecorder, OperationContext, redact_payload, stack_hash
+from forwin.observability import (
+    LogRecorder,
+    OperationContext,
+    mark_latest_attempt_parse_failure,
+    prepare_prompt_trace_payload,
+    redact_payload,
+    stack_hash,
+)
 from forwin.retrieval.broker import RetrievalBroker
+from forwin.storage import ArtifactStore
 from forwin.state.updater import StateUpdater
 from forwin.writer.chapter_writer import ChapterWriter
 
@@ -33,6 +41,10 @@ class ObservabilityCoreTests(unittest.TestCase):
         self.assertEqual(redacted["headers"]["Authorization"], "[REDACTED]")
         self.assertEqual(redacted["nested"][0]["cookies"], "[REDACTED]")
         self.assertEqual(redacted["raw_prompt"], "[REDACTED]")
+        self.assertEqual(
+            redact_payload({"response_artifact_uri": "artifact://x"})["response_artifact_uri"],
+            "artifact://x",
+        )
         self.assertEqual(payload["api_key"], "sk-secret")
 
     def test_log_recorder_persists_redacted_decision_event_with_context(self) -> None:
@@ -383,6 +395,87 @@ class WriterPromptTraceObservabilityTests(unittest.TestCase):
         )
 
         self.assertEqual(trace["attempts"], [{"attempt_no": 1, "model": "fake-model", "http_status": 200}])
+
+    def test_prompt_trace_attempt_artifacts_are_saved_without_inline_raw_payloads(self) -> None:
+        with TemporaryDirectory() as tmp:
+            store = ArtifactStore(str(Path(tmp) / "artifacts"))
+            payload = {
+                "trace_scope": "writer",
+                "stage_key": "chapter_draft",
+                "attempts": [
+                    {
+                        "attempt_group_id": "group-1",
+                        "attempt_no": 1,
+                        "model": "fake-model",
+                        "stage_key": "chapter_draft",
+                        "llm_task_route": "prose_generation",
+                        "http_status": 200,
+                        "output_chars": 2,
+                        "_raw_request_payload": {
+                            "model": "fake-model",
+                            "messages": [{"role": "user", "content": "完整 prompt"}],
+                        },
+                        "_raw_response_text": "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}",
+                    }
+                ],
+                "output_summary": {"status": "succeeded"},
+            }
+
+            prepared = prepare_prompt_trace_payload(
+                payload,
+                artifact_store=store,
+                project_id="project-1",
+                chapter_number=1,
+            )
+
+            attempt = prepared["attempts"][0]
+            self.assertIn("request_artifact_uri", attempt)
+            self.assertIn("response_artifact_uri", attempt)
+            self.assertIn("request_hash", attempt)
+            self.assertIn("response_hash", attempt)
+            self.assertNotIn("_raw_request_payload", attempt)
+            self.assertNotIn("_raw_response_text", attempt)
+            self.assertEqual(prepared["output_summary"]["drained_attempt_count"], 1)
+
+    def test_parse_failure_marker_adds_raw_output_artifact_metadata(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.llm_attempt_events = [
+                    {
+                        "attempt_group_id": "group-parse",
+                        "attempt_no": 1,
+                        "model": "fake-model",
+                        "stage_key": "chapter_review",
+                        "llm_task_route": "review_json",
+                        "http_status": 200,
+                        "output_chars": 7,
+                        "_raw_request_payload": {"messages": [{"role": "user", "content": "review"}]},
+                        "_raw_response_text": "not json",
+                    }
+                ]
+
+        with TemporaryDirectory() as tmp:
+            client = FakeClient()
+            mark_latest_attempt_parse_failure(
+                client,
+                parser_name="WNER",
+                stage_key="chapter_review",
+                schema_name="review_json",
+                raw_output="not json",
+                error=ValueError("bad json"),
+            )
+            prepared = prepare_prompt_trace_payload(
+                {"trace_scope": "reviewer", "stage_key": "chapter_review", "attempts": client.llm_attempt_events},
+                artifact_store=ArtifactStore(str(Path(tmp) / "artifacts")),
+                project_id="project-1",
+                chapter_number=3,
+            )
+
+            attempt = prepared["attempts"][0]
+            self.assertFalse(attempt["parse_ok"])
+            self.assertEqual(attempt["parser_name"], "WNER")
+            self.assertIn("raw_output_artifact_uri", attempt)
+            self.assertIn("raw_output_preview", attempt)
 
 
 class RetrievalObservabilityTests(unittest.TestCase):

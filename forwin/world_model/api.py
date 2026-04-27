@@ -18,6 +18,7 @@ from forwin.api_schemas import (
     WorldModelPageInfo,
     WorldModelSnapshotInfo,
 )
+from forwin.book_state.repository import BookStateRepository
 from forwin.models.project import Project
 from forwin.models.world_model import (
     WorldEditProposalRow,
@@ -30,6 +31,8 @@ from .compiler import WorldModelCompiler
 from .exporter_obsidian import ObsidianWorldExporter
 from .importer_obsidian import ObsidianWorldImporter
 from .store import load_json
+from forwin.obsidian import ObsidianExporter as BookStateObsidianExporter
+from forwin.obsidian import ObsidianImporter as BookStateObsidianImporter
 
 
 def _dt(value) -> str:
@@ -96,13 +99,18 @@ def _proposal_info(row: WorldEditProposalRow) -> WorldEditProposalInfo:
         project_id=row.project_id,
         source=row.source,
         target_page_key=row.target_page_key,
+        target_node_id=getattr(row, "target_node_id", "") or "",
         target_field=row.target_field,
+        proposal_type=getattr(row, "proposal_type", "") or "",
         proposed_patch=load_json(row.proposed_patch_json, {}),
         reason=row.reason,
+        human_notes=getattr(row, "human_notes", "") or "",
         status=row.status,
         created_by=row.created_by,
         created_at=_dt(row.created_at),
         reviewed_at=_dt(row.reviewed_at),
+        review_reason=getattr(row, "review_reason", "") or "",
+        graph_delta_id=getattr(row, "graph_delta_id", "") or "",
     )
 
 
@@ -199,8 +207,19 @@ def export_obsidian(
     session = get_session()
     try:
         _ensure_project(session, project_id)
-        _bootstrap_if_needed(session, project_id)
         vault_root = Path(req.vault_root) if str(req.vault_root or "").strip() else None
+        repo = BookStateRepository(session)
+        if repo.list_world_nodes(project_id) or repo.list_fact_nodes(project_id) or repo.list_map_nodes(project_id):
+            result = BookStateObsidianExporter(session).export_project(project_id, vault_root=vault_root)
+            session.commit()
+            return WorldModelExportResponse(
+                ok=True,
+                project_id=project_id,
+                vault_root=result.vault_root,
+                exported_count=result.exported_count,
+                message=f"exported BookState-backed Obsidian vault as of chapter {result.as_of_chapter}",
+            )
+        _bootstrap_if_needed(session, project_id)
         result = ObsidianWorldExporter(session).export_project(project_id, vault_root=vault_root)
         session.commit()
         return WorldModelExportResponse.model_validate(result.model_dump(mode="json"))
@@ -218,6 +237,18 @@ def import_obsidian(
     try:
         _ensure_project(session, project_id)
         vault_root = Path(req.vault_root) if str(req.vault_root or "").strip() else None
+        root = vault_root or Path("data/world_vaults") / project_id
+        if (root / "00_Index.md").exists() and "forwin_id:" in (root / "00_Index.md").read_text(encoding="utf-8"):
+            result = BookStateObsidianImporter(session).import_project(project_id, vault_root=vault_root)
+            session.commit()
+            return WorldModelImportResponse(
+                ok=True,
+                project_id=project_id,
+                vault_root=result.vault_root,
+                proposal_count=result.proposal_count,
+                changed_paths=result.changed_paths,
+                message=f"created {result.proposal_count} Obsidian proposal(s)",
+            )
         result = ObsidianWorldImporter(session).import_project(project_id, vault_root=vault_root)
         session.commit()
         return WorldModelImportResponse.model_validate(result.model_dump(mode="json"))
@@ -258,6 +289,7 @@ def review_proposal(
         row.status = status
         if req.reason:
             row.reason = req.reason
+            row.review_reason = req.reason
         row.reviewed_at = datetime.now(UTC)
         session.add(row)
         if status == "accepted":

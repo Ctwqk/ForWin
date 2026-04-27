@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import re
-from typing import Any
+
+from forwin.utils.json_repair import parse_llm_json
 
 from .schemas import EvalValidationResult
 
@@ -27,21 +26,9 @@ REQUIRED_TAGS: dict[str, list[str]] = {
 }
 
 
-def _strip_markdown_json(text: str) -> str:
-    stripped = str(text or "").strip()
-    match = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", stripped, flags=re.IGNORECASE | re.DOTALL)
-    if match:
-        return match.group(1).strip()
-    return stripped
-
-
 def _stable_hash(text: str) -> str:
     normalized = " ".join(str(text or "").split())
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest() if normalized else ""
-
-
-def _loads_json(text: str) -> Any:
-    return json.loads(_strip_markdown_json(text))
 
 
 def validate_output(
@@ -53,7 +40,7 @@ def validate_output(
     text = str(output or "")
     if expected_output_kind == "json":
         try:
-            payload = _loads_json(text)
+            payload = parse_llm_json(text, error_prefix="LLM eval JSON parser")
         except Exception as exc:  # noqa: BLE001
             return EvalValidationResult(
                 parse_ok=False,
@@ -72,10 +59,22 @@ def validate_output(
             schema_ok=not missing,
             required_keys_missing=missing,
             output_chars=len(text),
-            normalized_output_hash=_stable_hash(json.dumps(payload, ensure_ascii=False)),
+            normalized_output_hash=_stable_hash(str(payload)),
         )
 
     if expected_output_kind == "tagged_prose":
+        if schema_name == "writer_preview":
+            from forwin.writer.chapter_writer import ChapterWriter
+
+            parsed = ChapterWriter._parse_preview_text(text, fallback_title="")
+            body = str(parsed.get("body") or "").strip()
+            return EvalValidationResult(
+                parse_ok=bool(text.strip()),
+                schema_ok=bool(body),
+                required_keys_missing=[] if body else ["body"],
+                output_chars=len(text),
+                normalized_output_hash=_stable_hash(text),
+            )
         required_tags = REQUIRED_TAGS.get(schema_name, [])
         missing = [tag for tag in required_tags if tag not in text]
         return EvalValidationResult(

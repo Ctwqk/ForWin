@@ -20,6 +20,22 @@ class JsonRepairFallbackTests(unittest.TestCase):
         self.assertEqual(parsed["text"], parsed["body"])
         self.assertIn('识别"裂口"的方法', parsed["text"])
 
+    def test_parse_llm_json_preserves_smart_quotes_inside_valid_json_strings(self) -> None:
+        raw = '{"scenes":[{"scene_no":1,"objective":"确认“异常账目”与罗盘有关"}]}'
+
+        parsed = parse_llm_json(raw, error_prefix="test")
+
+        self.assertEqual(parsed["scenes"][0]["scene_no"], 1)
+        self.assertEqual(parsed["scenes"][0]["objective"], "确认“异常账目”与罗盘有关")
+
+    def test_parse_llm_json_repairs_smart_quotes_used_as_json_syntax(self) -> None:
+        raw = '```json\n{“scenes”:[{“scene_no”:1,“objective”:“建立异象”}]}\n```'
+
+        parsed = parse_llm_json(raw, error_prefix="test")
+
+        self.assertEqual(parsed["scenes"][0]["scene_no"], 1)
+        self.assertEqual(parsed["scenes"][0]["objective"], "建立异象")
+
 
 if __name__ == "__main__":
     unittest.main()

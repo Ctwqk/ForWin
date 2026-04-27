@@ -62,6 +62,8 @@ class LLMClientRetryTests(unittest.TestCase):
     def test_retries_minimax_529_then_returns_content(self) -> None:
         client = LLMClient(
             api_key="test-key",
+            base_url="https://primary.example/v1",
+            model="primary-model",
             retry_attempts=2,
             retry_initial_delay_seconds=0,
             retry_max_delay_seconds=0,
@@ -197,6 +199,8 @@ class LLMClientRetryTests(unittest.TestCase):
     def test_does_not_retry_timeout_when_disabled(self) -> None:
         client = LLMClient(
             api_key="test-key",
+            base_url="https://primary.example/v1",
+            model="primary-model",
             retry_attempts=2,
             retry_initial_delay_seconds=0,
             retry_max_delay_seconds=0,
@@ -526,7 +530,7 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertEqual([item["stage_key"] for item in attempts], ["state_event_extraction", "state_event_extraction"])
         self.assertEqual(attempts[0]["llm_task_route"], "canon_extraction")
 
-    def test_feedback_analysis_routes_minimax_before_spark_and_kimi(self) -> None:
+    def test_feedback_analysis_routes_spark_then_kimi_then_minimax(self) -> None:
         client = LLMClient(
             api_key="kimi-key",
             base_url="https://api.moonshot.cn/v1",
@@ -573,8 +577,9 @@ class LLMClientRetryTests(unittest.TestCase):
             client.close()
 
         self.assertEqual(result, "{\"signals\": []}")
-        self.assertEqual(calls, ["MiniMax-M2.7"])
+        self.assertEqual(calls, ["gpt-5.3-codex-spark"])
         self.assertEqual(attempts[0]["llm_task_route"], "feedback_analysis")
+        self.assertEqual(attempts[0]["candidate_chain"][0]["provider_kind"], "kimi")
 
     def test_chapter_prose_routes_to_spark_then_kimi_and_skips_minimax(self) -> None:
         client = LLMClient(
@@ -627,6 +632,137 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertEqual(result, "章节正文")
         self.assertEqual(calls, ["gpt-5.3-codex-spark", "kimi-k2.5"])
         self.assertEqual(attempts[0]["llm_task_route"], "prose_generation")
+
+    def test_writer_preview_allows_minimax_as_low_risk_fallback(self) -> None:
+        client = LLMClient(
+            api_key="minimax-key",
+            base_url="https://api.minimaxi.com/v1",
+            model="MiniMax-M2.7",
+            retry_attempts=1,
+        )
+        calls: list[str] = []
+
+        def fake_post(url, **kwargs):  # noqa: ANN001
+            calls.append(kwargs["json"]["model"])
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "标题\n\n正文"}}]},
+                request=request,
+            )
+
+        try:
+            with patch.object(client.client, "post", side_effect=fake_post):
+                result = client.chat(
+                    [{"role": "user", "content": "预览"}],
+                    task_family="writer",
+                    stage_key="writer_preview_fallback",
+                )
+            attempts = client.drain_llm_attempt_events()
+        finally:
+            client.close()
+
+        self.assertEqual(result, "标题\n\n正文")
+        self.assertEqual(calls, ["MiniMax-M2.7"])
+        self.assertEqual(attempts[0]["llm_task_route"], "writer_preview")
+
+    def test_launch_arc_routes_as_low_risk_planning_for_minimax_fallback(self) -> None:
+        client = LLMClient(
+            api_key="minimax-key",
+            base_url="https://api.minimaxi.com/v1",
+            model="MiniMax-M2.7",
+            retry_attempts=1,
+        )
+        try:
+            route = client._llm_task_route(
+                task_family="genesis",
+                stage_key="launch_arc_1",
+                response_format={"type": "json_object"},
+            )
+            routed = client._route_profiles(
+                client._request_profiles(),
+                task_family="genesis",
+                stage_key="launch_arc_1",
+                response_format={"type": "json_object"},
+            )
+        finally:
+            client.close()
+
+        self.assertEqual(route, "planning_json_low_risk")
+        self.assertEqual(routed[0]["model"], "MiniMax-M2.7")
+
+    def test_minimax_only_canon_route_fails_without_call(self) -> None:
+        client = LLMClient(
+            api_key="minimax-key",
+            base_url="https://api.minimaxi.com/v1",
+            model="MiniMax-M2.7",
+            retry_attempts=1,
+        )
+        try:
+            with self.assertRaises(RuntimeError):
+                client.chat(
+                    [{"role": "user", "content": "抽 canon"}],
+                    response_format={"type": "json_object"},
+                    task_family="writer",
+                    stage_key="state_event_extraction",
+                )
+            attempts = client.drain_llm_attempt_events()
+        finally:
+            client.close()
+
+        self.assertEqual(attempts[0]["error_category"], "no_usable_profile")
+        self.assertEqual(attempts[0]["skipped_profiles"][0]["reason"], "route_not_allowed")
+
+    def test_deepseek_and_gemini_hard_replacement_records_skipped_profiles(self) -> None:
+        client = LLMClient(
+            api_key="deepseek-key",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-chat",
+            retry_attempts=1,
+            fallback_profiles=[
+                {
+                    "id": "gemini",
+                    "name": "Gemini",
+                    "api_key": "gemini-key",
+                    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+                    "model": "gemini-2.5-pro",
+                },
+                {
+                    "id": "kimi",
+                    "name": "Kimi",
+                    "api_key": "kimi-key",
+                    "base_url": "https://api.moonshot.cn/v1",
+                    "model": "kimi-k2.5",
+                },
+            ],
+        )
+        calls: list[str] = []
+
+        def fake_post(url, **kwargs):  # noqa: ANN001
+            calls.append(kwargs["json"]["model"])
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "{\"ok\": true}"}}]},
+                request=request,
+            )
+
+        try:
+            with patch.object(client.client, "post", side_effect=fake_post):
+                client.chat(
+                    [{"role": "user", "content": "规划"}],
+                    response_format={"type": "json_object"},
+                    task_family="planning",
+                    stage_key="chapter_plan",
+                )
+            attempts = client.drain_llm_attempt_events()
+        finally:
+            client.close()
+
+        self.assertEqual(calls, ["kimi-k2.5"])
+        skipped = attempts[0]["skipped_profiles"]
+        self.assertIn("replaced_by_kimi", [item["reason"] for item in skipped])
+        self.assertIn("replaced_by_deepseek", [item["reason"] for item in skipped])
 
 
 def jsonable(value):  # noqa: ANN001

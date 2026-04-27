@@ -25,9 +25,31 @@ _SENSITIVE_KEY_PARTS = {
     "response",
 }
 
+_SAFE_KEY_EXACT = {
+    "request_artifact_uri",
+    "raw_prompt_artifact_uri",
+    "redacted_request_artifact_uri",
+    "response_artifact_uri",
+    "raw_response_artifact_uri",
+    "raw_output_artifact_uri",
+    "request_hash",
+    "response_hash",
+    "response_preview",
+    "response_format",
+    "response_size",
+    "request_size",
+    "raw_output_preview",
+    "input_chars",
+    "output_chars",
+}
+
 
 def _is_sensitive_key(key: object) -> bool:
     lowered = str(key or "").strip().lower()
+    if lowered in _SAFE_KEY_EXACT:
+        return False
+    if lowered.endswith("_artifact_uri") or lowered.endswith("_hash"):
+        return False
     return any(part in lowered for part in _SENSITIVE_KEY_PARTS)
 
 

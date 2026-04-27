@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from forwin.llm_eval.profiles import load_eval_profiles, redact_profile
+from forwin.llm_eval.profiles import load_eval_profiles, profile_requires_api_key, redact_profile
 from forwin.llm_eval.reporting import summarize_attempts
 from forwin.llm_eval.schemas import EvalAttemptResult
 from forwin.llm_eval.validators import validate_output
@@ -95,6 +95,22 @@ def test_selected_provider_aliases_fallback_to_default_profiles() -> None:
     assert "deepseek" in profiles[2].base_url.lower()
 
 
+def test_selected_codex_spark_alias_uses_cli_subscription_not_api_key() -> None:
+    with TemporaryDirectory() as tmp:
+        settings_path = Path(tmp) / "missing_runtime_settings.json"
+        profiles = load_eval_profiles(
+            runtime_settings_path=str(settings_path),
+            selected_ids=["codex-spark"],
+        )
+
+    assert [profile.id for profile in profiles] == ["codex-spark"]
+    assert profiles[0].provider == "codex_cli"
+    assert profiles[0].base_url == "codex://cli"
+    assert profiles[0].model == "gpt-5.3-codex-spark"
+    assert profiles[0].api_key == ""
+    assert profile_requires_api_key(profiles[0]) is False
+
+
 def test_output_validator_handles_markdown_json_missing_keys_and_prose() -> None:
     valid = validate_output(
         "```json\n{\"scenes\":[{\"scene_no\":1}]}\n```",
@@ -104,6 +120,14 @@ def test_output_validator_handles_markdown_json_missing_keys_and_prose() -> None
     assert valid.parse_ok is True
     assert valid.schema_ok is True
     assert valid.required_keys_missing == []
+
+    with_reasoning = validate_output(
+        "<think>internal draft</think>\n{\"scenes\":[{\"scene_no\":1}]}",
+        expected_output_kind="json",
+        schema_name="scene_breakdown",
+    )
+    assert with_reasoning.parse_ok is True
+    assert with_reasoning.schema_ok is True
 
     missing = validate_output(
         "{\"not_scenes\":[]}",
@@ -121,6 +145,14 @@ def test_output_validator_handles_markdown_json_missing_keys_and_prose() -> None
     )
     assert prose.parse_ok is True
     assert prose.schema_ok is True
+
+    untagged_preview = validate_output(
+        "潮声里的账本\n林夜沿着码头追查旧账，周澜在雾里压住了他的手。",
+        expected_output_kind="tagged_prose",
+        schema_name="writer_preview",
+    )
+    assert untagged_preview.parse_ok is True
+    assert untagged_preview.schema_ok is True
 
 
 def test_cache_buster_seed_is_stable_but_messages_are_unique_per_case() -> None:

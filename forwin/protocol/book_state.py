@@ -15,13 +15,27 @@ class WorldNodeType(_StrEnum):
     CHARACTER = "character"
     FACTION = "faction"
     GROUP = "group"
+    ORGANIZATION = "organization"
+    FAMILY = "family"
+    SUBWORLD = "subworld"
+    REGION = "region"
+    LOCATION = "location"
     ITEM = "item"
     RESOURCE = "resource"
     ABILITY = "ability"
     RULE = "rule"
+    INSTITUTION = "institution"
+    TECHNOLOGY = "technology"
+    MAGIC_SYSTEM = "magic_system"
     ACTIVITY = "activity"
     SITE_STATE = "site_state"
     EVENT = "event"
+    THREAD = "thread"
+    SECRET = "secret"
+    KNOWLEDGE_GAP = "knowledge_gap"
+    READER_PROMISE = "reader_promise"
+    CONFLICT = "conflict"
+    CONTRACT = "contract"
     FACT = "fact"
     OBJECTIVE = "objective"
 
@@ -35,6 +49,12 @@ class WorldEdgeFamily(_StrEnum):
     EVENT_CAUSAL = "event_causal"
     FACT_EVIDENCE = "fact_evidence"
     ACTIVITY_OBJECTIVE = "activity_objective"
+    SPATIAL = "spatial"
+    LOYALTY_CONFLICT = "loyalty_conflict"
+    KNOWLEDGE_VISIBILITY = "knowledge_visibility"
+    CAUSAL_CONSTRAINT = "causal_constraint"
+    READER_EXPERIENCE = "reader_experience"
+    KINSHIP_TRAINING = "kinship_training"
 
 
 WORLD_EDGE_TYPES_BY_FAMILY: dict[str, set[str]] = {
@@ -46,6 +66,12 @@ WORLD_EDGE_TYPES_BY_FAMILY: dict[str, set[str]] = {
     "event_causal": {"participates_in", "witnesses", "causes", "prevents", "enables", "results_in", "damages"},
     "fact_evidence": {"supports", "contradicts", "evidence_for", "proves", "disproves"},
     "activity_objective": {"organizes", "hosts", "competes_in", "rewards", "targets", "advances_objective"},
+    "spatial": {"located_in", "route_to"},
+    "loyalty_conflict": {"serves", "opposes", "allied_with"},
+    "knowledge_visibility": {"knows", "believes", "hides_from", "reveals", "misleads"},
+    "causal_constraint": {"caused_by", "depends_on", "constrains"},
+    "reader_experience": {"promises", "pays_off", "foreshadows"},
+    "kinship_training": {"kin_of", "master_of"},
 }
 WORLD_EDGE_TYPES: set[str] = {
     edge_type
@@ -103,10 +129,12 @@ class CognitionState(_StrEnum):
     UNKNOWN = "unknown"
     HINTED = "hinted"
     SUSPECTED = "suspected"
+    PARTIALLY_REVEALED = "partially_revealed"
     PARTIALLY_KNOWN = "partially_known"
     KNOWN = "known"
     CONFIRMED = "confirmed"
     MISLED = "misled"
+    FALSE_BELIEF = "false_belief"
     FALSE = "false"
     STALE = "stale"
 
@@ -153,10 +181,17 @@ class WorldNode(_BookStateModel):
     node_type: WorldNodeType | str
     name: str = ""
     aliases: list[str] = Field(default_factory=list)
+    summary: str = ""
     description: str = ""
+    status: str = "active"
     importance: int = Field(default=5, ge=1, le=10)
+    scope: str = ""
+    tags: list[str] = Field(default_factory=list)
     created_at_chapter: int = 0
     retired_at_chapter: int | None = None
+    valid_from_chapter: int = 0
+    valid_until_chapter: int | None = None
+    source_refs: list[str] = Field(default_factory=list)
     is_active: bool = True
     profile: dict[str, Any] = Field(default_factory=dict)
     state: dict[str, Any] = Field(default_factory=dict)
@@ -202,8 +237,14 @@ class WorldEdge(_BookStateModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     established_at_chapter: int = 0
     ended_at_chapter: int | None = None
+    valid_from_chapter: int = 0
+    valid_until_chapter: int | None = None
     is_active: bool = True
+    status: str = "active"
+    visibility: str = ""
+    truth_relation: str = "true"
     visibility_default: str = "visible"
+    source_refs: list[str] = Field(default_factory=list)
     state: dict[str, Any] = Field(default_factory=dict)
     evidence_refs: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -300,6 +341,60 @@ class PathResult(_BookStateModel):
     explanation: str = ""
 
 
+class ReaderPromise(_BookStateModel):
+    promise_id: str
+    project_id: str
+    promise_type: str = ""
+    summary: str = ""
+    created_at_chapter: int = 0
+    expected_payoff_window: str = ""
+    maximum_safe_delay: int = 0
+    current_debt_level: int = 0
+    reward_tags: list[str] = Field(default_factory=list)
+    linked_threads: list[str] = Field(default_factory=list)
+    linked_knowledge_gaps: list[str] = Field(default_factory=list)
+    status: str = "open"
+    source_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReaderExperienceDeltaRecord(_BookStateModel):
+    reader_experience_delta_id: str
+    project_id: str
+    chapter_number: int
+    reader_state_before: str = ""
+    reader_state_after: str = ""
+    cognition_transition: str = ""
+    payoff_type: str = ""
+    reward_tags: list[str] = Field(default_factory=list)
+    emotional_effect: str = ""
+    promise_debt_change: int = 0
+    next_desire: str = ""
+    fairness_evidence: list[str] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReaderExperienceState(_BookStateModel):
+    state_id: str
+    project_id: str
+    as_of_chapter: int = 0
+    short_term_delight: list[str] = Field(default_factory=list)
+    mid_term_delight: list[str] = Field(default_factory=list)
+    long_term_delight: list[str] = Field(default_factory=list)
+    active_promise_ids: list[str] = Field(default_factory=list)
+    promise_debt_by_id: dict[str, int] = Field(default_factory=dict)
+    suspense_delays: dict[str, int] = Field(default_factory=dict)
+    reveal_windows: dict[str, str] = Field(default_factory=dict)
+    emotion_curve: list[str] = Field(default_factory=list)
+    expectation_intensity: dict[str, float] = Field(default_factory=dict)
+    reader_misunderstandings: list[str] = Field(default_factory=list)
+    reader_extra_knowledge_refs: list[str] = Field(default_factory=list)
+    protagonist_extra_knowledge_refs: list[str] = Field(default_factory=list)
+    source_refs: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class NodePatch(_BookStateModel):
     node_id: str
     node_type: WorldNodeType | str
@@ -330,6 +425,7 @@ class FactPatch(_BookStateModel):
     proposition: str = ""
     truth_value: str = ""
     related_refs: list[str] = Field(default_factory=list)
+    field_path: str = ""
     old_value: Any = None
     new_value: Any = None
     reason: str = ""
@@ -377,6 +473,9 @@ class GraphDelta(_BookStateModel):
     chapter_number: int = 0
     story_time: str = ""
     delta_type: GraphDeltaType | str = GraphDeltaType.WORLD_STATE
+    operation: str = ""
+    target_type: str = ""
+    target_id: str = ""
     source_type: str = ""
     source_id: str = ""
     world_line_id: str = ""
@@ -388,6 +487,8 @@ class GraphDelta(_BookStateModel):
     cognition_patches: list[CognitionPatch] = Field(default_factory=list)
     narrative_patches: list[NarrativePatch] = Field(default_factory=list)
     evidence_refs: list[str] = Field(default_factory=list)
+    review_verdict_id: str = ""
+    allowed_for_canon: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -459,11 +560,18 @@ class WorldSnapshot(_BookStateModel):
     as_of_chapter: int = 0
     as_of_story_time: str = ""
     base_snapshot_id: str = ""
+    objective_graph_digest: str = ""
+    map_graph_digest: str = ""
+    reader_overlay_digest: str = ""
+    character_overlay_digests: dict[str, str] = Field(default_factory=dict)
     world_node_state_index: dict[str, dict[str, Any]] = Field(default_factory=dict)
     active_edge_ids: list[str] = Field(default_factory=list)
     active_fact_ids: list[str] = Field(default_factory=list)
     active_world_line_ids: list[str] = Field(default_factory=list)
     open_gap_ids: list[str] = Field(default_factory=list)
+    active_promise_ids: list[str] = Field(default_factory=list)
+    objective_state_summary: str = ""
+    reader_state_summary: str = ""
     source_delta_ids: list[str] = Field(default_factory=list)
     built_at: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)

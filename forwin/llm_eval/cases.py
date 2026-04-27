@@ -76,7 +76,7 @@ def default_eval_cases(*, suite: str = "medium") -> list[EvalCase]:
     cases = [
         EvalCase(
             case_id="writer_preview",
-            stage_key="chapter_preview",
+            stage_key="writer_preview",
             task_family="writer",
             expected_output_kind="tagged_prose",
             schema_name="writer_preview",
@@ -94,6 +94,7 @@ def default_eval_cases(*, suite: str = "medium") -> list[EvalCase]:
             messages=build_scene_breakdown_prompt(context, default_scene_count=3, max_scene_count=4),
             input_snapshot={"chapter_number": context.chapter_number},
             response_format=_json_response_format(),
+            max_tokens=2800,
         ),
         EvalCase(
             case_id="state_event_extraction",

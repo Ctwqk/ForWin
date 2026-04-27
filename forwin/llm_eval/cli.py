@@ -8,7 +8,7 @@ from pathlib import Path
 from forwin.config import Config
 
 from .cases import default_eval_cases
-from .profiles import load_eval_profiles
+from .profiles import load_eval_profiles, profile_requires_api_key
 from .runner import EvalRunConfig, LLMReliabilityRunner
 
 
@@ -31,7 +31,7 @@ def run_eval_from_args(args) -> int:  # noqa: ANN001
     if not profiles:
         print("No eval profiles found.")
         return 2
-    missing_keys = [profile.id for profile in profiles if not profile.api_key]
+    missing_keys = [profile.id for profile in profiles if profile_requires_api_key(profile) and not profile.api_key]
     if missing_keys and not getattr(args, "dry_run", False):
         print(f"Profiles missing API keys: {', '.join(missing_keys)}")
         return 2

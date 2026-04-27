@@ -9,6 +9,7 @@ from typing import Any, Callable
 import httpx
 
 from forwin.config import Config
+from forwin.codex_bridge.runner import CodexExecRequest, CodexExecResult, CodexExecRunner
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.writer.llm_client import OpenAICompatibleAdapter
 
@@ -47,6 +48,200 @@ def _input_chars(messages: list[dict]) -> int:
     return len(json.dumps(messages, ensure_ascii=False))
 
 
+def _is_codex_profile(profile: EvalProfile) -> bool:
+    return str(profile.provider or "").strip().lower() in {"codex_cli", "codex_app"} or str(profile.base_url or "").startswith("codex://")
+
+
+class CodexCliEvalAdapter:
+    provider = "codex_cli"
+    base_url = "codex://cli"
+
+    def __init__(
+        self,
+        profile: EvalProfile,
+        *,
+        runner: CodexExecRunner | None = None,
+    ) -> None:
+        self.profile_id = profile.id
+        self.profile_name = profile.name or profile.id
+        self.model = profile.model
+        self.base_url = profile.base_url or self.base_url
+        self.api_key = ""
+        self.timeout_seconds = max(5.0, float(profile.timeout_seconds or 180.0))
+        self.runner = runner or CodexExecRunner()
+        self.llm_attempt_events: list[dict[str, object]] = []
+
+    def chat(
+        self,
+        messages: list[dict],
+        temperature: float = 0.85,
+        max_tokens: int = 16384,
+        response_format: dict | None = None,
+        timeout_seconds: float | None = None,
+        retry_on_timeout: bool = True,  # noqa: ARG002
+        task_family: str = "",
+        stage_key: str = "",
+        output_schema: dict | None = None,
+    ) -> str:
+        attempt_group_id = uuid.uuid4().hex
+        started_at = time.perf_counter()
+        route_schema = output_schema
+        if route_schema is None and response_format and response_format.get("type") == "json_object":
+            route_schema = {"type": "object"}
+        schema = output_schema if self._is_codex_structured_schema(output_schema) else None
+        prompt = self._prompt_from_messages(
+            messages,
+            task_family=task_family,
+            stage_key=stage_key,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+        )
+        result: CodexExecResult | None = None
+        try:
+            result = self.runner.run(
+                CodexExecRequest(
+                    prompt=prompt,
+                    output_schema=schema,
+                    model=self.model,
+                    permission_profile="prompt_only_readonly",
+                    ignore_user_config=True,
+                    ephemeral=True,
+                ),
+                timeout_seconds=float(timeout_seconds or self.timeout_seconds),
+            )
+            if not result.ok:
+                raise RuntimeError(result.error or f"codex exec failed with return code {result.returncode}")
+            content = str(result.content or "")
+            self._record_attempt(
+                attempt_group_id=attempt_group_id,
+                started_at=started_at,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                output_schema=route_schema,
+                task_family=task_family,
+                stage_key=stage_key,
+                output_chars=len(content),
+                result=result,
+            )
+            return content
+        except Exception as exc:  # noqa: BLE001
+            self._record_attempt(
+                attempt_group_id=attempt_group_id,
+                started_at=started_at,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                output_schema=route_schema,
+                task_family=task_family,
+                stage_key=stage_key,
+                output_chars=0,
+                result=result,
+                error=exc,
+            )
+            raise
+
+    def drain_llm_attempt_events(self) -> list[dict[str, object]]:
+        events = list(self.llm_attempt_events)
+        self.llm_attempt_events.clear()
+        return events
+
+    def close(self) -> None:
+        return None
+
+    def _record_attempt(
+        self,
+        *,
+        attempt_group_id: str,
+        started_at: float,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+        response_format: dict | None,
+        output_schema: dict | None,
+        task_family: str,
+        stage_key: str,
+        output_chars: int,
+        result: CodexExecResult | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        status = 200 if error is None else 0
+        if isinstance(error, TimeoutError) or error.__class__.__name__ == "TimeoutExpired":
+            error_category = "timeout"
+        elif error is None:
+            error_category = ""
+        else:
+            error_category = "codex_cli_error"
+        self.llm_attempt_events.append(
+            {
+                "attempt_group_id": attempt_group_id,
+                "attempt_no": 1,
+                "profile_id": self.profile_id,
+                "profile_name": self.profile_name,
+                "model": self.model,
+                "base_url_host": self.base_url,
+                "provider_kind": "spark",
+                "backend": "codex_cli",
+                "http_status": status,
+                "duration_ms": max(0, int((time.perf_counter() - started_at) * 1000)),
+                "input_chars": _input_chars(messages),
+                "output_chars": output_chars,
+                "temperature": temperature,
+                "requested_temperature": temperature,
+                "max_tokens": max_tokens,
+                "requested_max_tokens": max_tokens,
+                "error_category": error_category,
+                "error_class": error.__class__.__name__ if error is not None else "",
+                "error_message": str(error) if error is not None else "",
+                "retryable": False,
+                "fallback_eligible": False,
+                "final_failure": error is not None,
+                "task_family": str(task_family or ""),
+                "stage_key": str(stage_key or ""),
+                "llm_task_route": OpenAICompatibleAdapter._llm_task_route(
+                    task_family=task_family,
+                    stage_key=stage_key,
+                    response_format=response_format,
+                    output_schema=output_schema,
+                ),
+                "codex_returncode": int(result.returncode) if result is not None else 0,
+            }
+        )
+
+    @staticmethod
+    def _prompt_from_messages(
+        messages: list[dict],
+        *,
+        task_family: str,
+        stage_key: str,
+        temperature: float,
+        max_tokens: int,
+        response_format: dict | None,
+    ) -> str:
+        return "\n\n".join(
+            [
+                "# ForWin Codex Spark Eval",
+                f"task_family: {task_family}",
+                f"stage_key: {stage_key}",
+                f"temperature: {temperature}",
+                f"max_tokens: {max_tokens}",
+                f"response_format: {json.dumps(response_format or {}, ensure_ascii=False)}",
+                "",
+                "Return only the requested final content. If JSON is requested, return a single JSON object.",
+                "",
+                "# Messages",
+                json.dumps(messages, ensure_ascii=False, indent=2),
+            ]
+        )
+
+    @staticmethod
+    def _is_codex_structured_schema(schema: dict | None) -> bool:
+        return isinstance(schema, dict) and isinstance(schema.get("properties"), dict)
+
+
 class LLMReliabilityRunner:
     def __init__(
         self,
@@ -69,7 +264,9 @@ class LLMReliabilityRunner:
         self.full_runs_path = self.run_dir / "full_runs.jsonl"
 
     @staticmethod
-    def _default_adapter_factory(profile: EvalProfile) -> OpenAICompatibleAdapter:
+    def _default_adapter_factory(profile: EvalProfile) -> Any:
+        if _is_codex_profile(profile):
+            return CodexCliEvalAdapter(profile)  # type: ignore[return-value]
         adapter = OpenAICompatibleAdapter(
             api_key=profile.api_key,
             base_url=profile.base_url,
@@ -87,7 +284,13 @@ class LLMReliabilityRunner:
         for profile in profiles:
             attempts.extend(self.run_direct_cases(profile=profile, cases=cases))
             if self.config.include_mini_real_run:
-                self.run_mini_real_for_profile(profile)
+                if _is_codex_profile(profile):
+                    self._record_skipped_mini_real_for_profile(
+                        profile,
+                        reason="codex_cli_direct_eval_only",
+                    )
+                else:
+                    self.run_mini_real_for_profile(profile)
         summary = summarize_attempts(attempts)
         summary.update(
             {
@@ -105,6 +308,16 @@ class LLMReliabilityRunner:
             encoding="utf-8",
         )
         return summary
+
+    def _record_skipped_mini_real_for_profile(self, profile: EvalProfile, *, reason: str) -> dict[str, Any]:
+        payload = {
+            "run_id": self.config.run_id,
+            "profile_id": profile.id,
+            "status": "skipped",
+            "reason": reason,
+        }
+        _json_dump_line(self.full_runs_path, payload)
+        return payload
 
     def run_direct_cases(
         self,

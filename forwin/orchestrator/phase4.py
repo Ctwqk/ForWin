@@ -22,6 +22,7 @@ from forwin.orchestrator.thread_sampling import sample_active_threads
 from forwin.state.query_helpers import load_latest_entity_states
 from forwin.utils import parse_llm_json
 from forwin.llm.compat import call_chat_compat
+from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 
 logger = logging.getLogger(__name__)
 
@@ -365,7 +366,15 @@ class CommentAnalyzer:
 
         try:
             payload = parse_llm_json(raw, error_prefix="CommentAnalyzer")
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            mark_latest_attempt_parse_failure(
+                self.llm_client,
+                parser_name="CommentAnalyzer",
+                stage_key="comment_analysis",
+                schema_name="comment_analysis",
+                raw_output=raw,
+                error=exc,
+            )
             logger.warning("CommentAnalyzer JSON parse failed.", exc_info=True)
             return None
 
@@ -827,7 +836,15 @@ class NPCIntentGenerator:
             return None
         try:
             payload = parse_llm_json(raw, error_prefix="NPC intent parser")
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            mark_latest_attempt_parse_failure(
+                self.llm_client,
+                parser_name="NPC intent parser",
+                stage_key="npc_intents",
+                schema_name="npc_intents",
+                raw_output=raw,
+                error=exc,
+            )
             logger.warning("Phase4 NPC intent parse failed.", exc_info=True)
             return None
         entity_map = {entity.name: entity for entity in entities}
@@ -1018,7 +1035,15 @@ class WorldSimulator:
             return None
         try:
             payload = parse_llm_json(raw, error_prefix="World simulator parser")
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
+            mark_latest_attempt_parse_failure(
+                self.llm_client,
+                parser_name="World simulator parser",
+                stage_key="world_pressure",
+                schema_name="world_pressure",
+                raw_output=raw,
+                error=exc,
+            )
             logger.warning("Phase4 world parse failed.", exc_info=True)
             return None
         level = str(payload.get("pressure_level") or "steady").strip().lower()

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+import hashlib
 from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 import json
@@ -14,6 +15,8 @@ from forwin.model_adapter import ModelCapabilities
 
 logger = logging.getLogger(__name__)
 _RETRYABLE_HTTP_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504, 529}
+_LLM_ROUTE_POLICY_VERSION = "v3.8-stage-aware-hard-replacement"
+_ATTEMPT_RECORDED_ATTR = "_forwin_llm_attempt_recorded"
 
 
 class OpenAICompatibleAdapter:
@@ -90,13 +93,47 @@ class OpenAICompatibleAdapter:
             response_format=response_format,
             output_schema=output_schema,
         )
-        profiles = self._route_profiles(
+        route_result = self._route_profiles_with_metadata(
             self._request_profiles(),
             task_family=task_family,
             stage_key=stage_key,
             response_format=response_format,
             output_schema=output_schema,
         )
+        profiles = route_result["profiles"]
+        candidate_chain = route_result["candidate_chain"]
+        skipped_profiles = route_result["skipped_profiles"]
+        if not profiles:
+            self._record_llm_attempt(
+                attempt_group_id=attempt_group_id,
+                profile={},
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                request_timeout=request_timeout,
+                attempt_no=0,
+                error_class="NoUsableLLMProfile",
+                error_message="no usable LLM profile after route policy filtering",
+                error_category="no_usable_profile",
+                retryable=False,
+                fallback_eligible=False,
+                final_failure=True,
+                requested_temperature=temperature,
+                requested_max_tokens=max_tokens,
+                task_family=task_family,
+                stage_key=stage_key,
+                llm_task_route=llm_task_route,
+                request_payload={
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "response_format": response_format or {},
+                },
+                candidate_chain=candidate_chain,
+                skipped_profiles=skipped_profiles,
+            )
+            raise RuntimeError("OpenAICompatibleAdapter.chat: no usable LLM profile")
         last_exc: Exception | None = None
         for profile_index, profile in enumerate(profiles):
             try:
@@ -113,6 +150,8 @@ class OpenAICompatibleAdapter:
                     stage_key=stage_key,
                     llm_task_route=llm_task_route,
                     fallback_eligible_on_profile_failure=profile_index < len(profiles) - 1,
+                    candidate_chain=candidate_chain,
+                    skipped_profiles=skipped_profiles,
                 )
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
@@ -162,6 +201,8 @@ class OpenAICompatibleAdapter:
         stage_key: str,
         llm_task_route: str,
         fallback_eligible_on_profile_failure: bool,
+        candidate_chain: list[dict[str, str]],
+        skipped_profiles: list[dict[str, str]],
     ) -> str:
         requested_temperature = float(temperature)
         effective_temperature = self._effective_temperature_for_profile(
@@ -250,6 +291,10 @@ class OpenAICompatibleAdapter:
                         task_family=task_family,
                         stage_key=stage_key,
                         llm_task_route=llm_task_route,
+                        request_payload=payload,
+                        response_text=self._safe_response_text(response),
+                        candidate_chain=candidate_chain,
+                        skipped_profiles=skipped_profiles,
                     )
                     if attempt < self.retry_attempts - 1:
                         logger.warning(
@@ -265,8 +310,41 @@ class OpenAICompatibleAdapter:
 
                 response.raise_for_status()
 
-                data = response.json()
-                content: str = data["choices"][0]["message"]["content"]
+                response_text = self._safe_response_text(response)
+                try:
+                    data = response.json()
+                    content: str = data["choices"][0]["message"]["content"]
+                except Exception as exc:  # noqa: BLE001
+                    self._record_llm_attempt(
+                        attempt_group_id=attempt_group_id,
+                        profile=profile,
+                        messages=messages,
+                        temperature=effective_temperature,
+                        max_tokens=effective_max_tokens,
+                        response_format=response_format,
+                        request_timeout=effective_request_timeout,
+                        attempt_no=attempt_no,
+                        http_status=response.status_code,
+                        provider_request_id=self._provider_request_id(response),
+                        duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
+                        error_class=exc.__class__.__name__,
+                        error_message=str(exc),
+                        error_category="parse_error",
+                        retryable=False,
+                        fallback_eligible=False,
+                        final_failure=True,
+                        requested_temperature=requested_temperature,
+                        requested_max_tokens=requested_max_tokens,
+                        task_family=task_family,
+                        stage_key=stage_key,
+                        llm_task_route=llm_task_route,
+                        request_payload=payload,
+                        response_text=response_text,
+                        candidate_chain=candidate_chain,
+                        skipped_profiles=skipped_profiles,
+                    )
+                    setattr(exc, _ATTEMPT_RECORDED_ATTR, True)
+                    raise
                 self._record_llm_attempt(
                     attempt_group_id=attempt_group_id,
                     profile=profile,
@@ -285,6 +363,10 @@ class OpenAICompatibleAdapter:
                     task_family=task_family,
                     stage_key=stage_key,
                     llm_task_route=llm_task_route,
+                    request_payload=payload,
+                    response_text=response_text,
+                    candidate_chain=candidate_chain,
+                    skipped_profiles=skipped_profiles,
                 )
                 logger.debug(
                     "LLMClient.chat success: %d chars returned in %.2fs",
@@ -317,6 +399,9 @@ class OpenAICompatibleAdapter:
                     task_family=task_family,
                     stage_key=stage_key,
                     llm_task_route=llm_task_route,
+                    request_payload=payload,
+                    candidate_chain=candidate_chain,
+                    skipped_profiles=skipped_profiles,
                 )
                 if retry_on_timeout and attempt < self.retry_attempts - 1:
                     delay = self._retry_delay(attempt)
@@ -333,6 +418,8 @@ class OpenAICompatibleAdapter:
                     continue
                 raise
             except Exception as exc:  # noqa: BLE001
+                if getattr(exc, _ATTEMPT_RECORDED_ATTR, False):
+                    raise
                 response = getattr(exc, "response", None)
                 status_code = int(getattr(response, "status_code", 0) or 0)
                 if status_code in _RETRYABLE_HTTP_STATUS_CODES:
@@ -371,6 +458,14 @@ class OpenAICompatibleAdapter:
                     task_family=task_family,
                     stage_key=stage_key,
                     llm_task_route=llm_task_route,
+                    request_payload=payload,
+                    response_text=(
+                        self._safe_response_text(response)
+                        if isinstance(response, httpx.Response)
+                        else ""
+                    ),
+                    candidate_chain=candidate_chain,
+                    skipped_profiles=skipped_profiles,
                 )
                 raise
 
@@ -452,8 +547,14 @@ class OpenAICompatibleAdapter:
         task_family: str = "",
         stage_key: str = "",
         llm_task_route: str = "",
+        request_payload: dict[str, object] | None = None,
+        response_text: str = "",
+        candidate_chain: list[dict[str, str]] | None = None,
+        skipped_profiles: list[dict[str, str]] | None = None,
     ) -> None:
         base_url = str(profile.get("base_url") or "")
+        request_text = json.dumps(request_payload or {}, ensure_ascii=False, sort_keys=True)
+        response_text = str(response_text or "")
         self.llm_attempt_events.append(
             {
                 "attempt_group_id": attempt_group_id,
@@ -497,6 +598,14 @@ class OpenAICompatibleAdapter:
                 "retryable": bool(retryable),
                 "fallback_eligible": bool(fallback_eligible),
                 "final_failure": bool(final_failure),
+                "route_policy_version": _LLM_ROUTE_POLICY_VERSION,
+                "candidate_chain": list(candidate_chain or []),
+                "skipped_profiles": list(skipped_profiles or []),
+                "request_hash": self._hash_text(request_text) if request_payload else "",
+                "response_hash": self._hash_text(response_text) if response_text else "",
+                "response_preview": self._redact_error_preview(response_text, profile) if response_text else "",
+                "_raw_request_payload": request_payload or {},
+                "_raw_response_text": response_text,
             }
         )
 
@@ -510,28 +619,80 @@ class OpenAICompatibleAdapter:
         response_format: dict | None = None,
         output_schema: dict | None = None,
     ) -> list[dict[str, str]]:
-        if len(profiles) <= 1:
-            return profiles
+        return cls._route_profiles_with_metadata(
+            profiles,
+            task_family=task_family,
+            stage_key=stage_key,
+            response_format=response_format,
+            output_schema=output_schema,
+        )["profiles"]
+
+    @classmethod
+    def _route_profiles_with_metadata(
+        cls,
+        profiles: list[dict[str, str]],
+        *,
+        task_family: str = "",
+        stage_key: str = "",
+        response_format: dict | None = None,
+        output_schema: dict | None = None,
+    ) -> dict[str, list[dict[str, str]]]:
         route = cls._llm_task_route(
             task_family=task_family,
             stage_key=stage_key,
             response_format=response_format,
             output_schema=output_schema,
         )
+        candidate_chain = [cls._profile_public_info(profile) for profile in profiles]
+        skipped_profiles: list[dict[str, str]] = []
+        kinds = {cls._profile_kind(profile) for profile in profiles}
+        has_kimi = "kimi" in kinds
+        has_deepseek_or_kimi = has_kimi or "deepseek" in kinds
         indexed = list(enumerate(profiles))
+        replacement_filtered: list[tuple[int, dict[str, str]]] = []
+        for index, profile in indexed:
+            kind = cls._profile_kind(profile)
+            reason = ""
+            if kind == "deepseek" and has_kimi:
+                reason = "replaced_by_kimi"
+            elif kind == "gemini" and has_deepseek_or_kimi:
+                reason = "replaced_by_deepseek" if "deepseek" in kinds else "replaced_by_kimi"
+            if reason:
+                skipped_profiles.append(
+                    {
+                        **cls._profile_public_info(profile),
+                        "reason": reason,
+                        "llm_task_route": route,
+                    }
+                )
+                continue
+            replacement_filtered.append((index, profile))
         suitable = [
             (index, profile)
-            for index, profile in indexed
+            for index, profile in replacement_filtered
             if cls._profile_suitable_for_route(profile, route)
         ]
-        routed = suitable or indexed
+        for index, profile in replacement_filtered:
+            if (index, profile) not in suitable:
+                skipped_profiles.append(
+                    {
+                        **cls._profile_public_info(profile),
+                        "reason": "route_not_allowed",
+                        "llm_task_route": route,
+                    }
+                )
+        routed = suitable
         routed.sort(
             key=lambda item: (
                 cls._profile_route_priority(item[1], route),
                 item[0],
             )
         )
-        return [profile for _index, profile in routed]
+        return {
+            "profiles": [profile for _index, profile in routed],
+            "candidate_chain": candidate_chain,
+            "skipped_profiles": skipped_profiles,
+        }
 
     @classmethod
     def _llm_task_route(
@@ -547,6 +708,8 @@ class OpenAICompatibleAdapter:
         wants_json = bool(response_format or output_schema)
         if any(token in stage for token in ("state_event", "thread_time", "lore_timeline")):
             return "canon_extraction"
+        if stage in {"writer_preview", "writer_preview_fallback", "chapter_preview_fallback"}:
+            return "writer_preview"
         if stage in {"comment_analysis", "npc_intents", "world_pressure"} or family in {
             "feedback",
             "phase4",
@@ -563,42 +726,46 @@ class OpenAICompatibleAdapter:
             return "repair_generation"
         if stage in {
             "chapter_draft",
-            "chapter_preview",
-            "provisional_preview",
             "scene_generation",
             "scene_stitch",
         } or (family == "writer" and not wants_json):
             return "prose_generation"
+        if stage == "provisional_preview":
+            return "prose_generation"
+        if stage == "chapter_preview":
+            return "writer_preview"
+        if stage in {"scene_breakdown", "genesis_brief", "brief", "arc_plan"} or stage.startswith("launch_arc_"):
+            return "planning_json_low_risk" if wants_json else "planning_prose"
         if stage in {
-            "scene_breakdown",
-            "genesis_brief",
-            "brief",
             "world",
             "map",
             "story_engine",
             "book_blueprint",
             "bootstrap",
-            "arc_plan",
             "band_plan",
             "chapter_plan",
-        } or stage.startswith("launch_arc_") or family in {
+        } or family in {
             "genesis",
             "planning",
             "arc_planning",
             "world_model",
         }:
-            return "planning_json" if wants_json else "planning_prose"
+            return "planning_json_general" if wants_json else "planning_prose"
         if wants_json:
-            return "planning_json"
+            return "planning_json_general"
         return "general"
 
     @classmethod
     def _profile_suitable_for_route(cls, profile: dict[str, str], route: str) -> bool:
         kind = cls._profile_kind(profile)
+        if kind == "gemini":
+            return False
         if kind == "minimax" and route in {
             "prose_generation",
             "repair_generation",
             "canon_extraction",
+            "planning_json_general",
+            "general",
         }:
             return False
         return True
@@ -625,36 +792,57 @@ class OpenAICompatibleAdapter:
                 "spark": 0,
                 "kimi": 1,
                 "openai": 2,
-                "other": 3,
+                "deepseek": 3,
+                "other": 4,
                 "minimax": 99,
             },
-            "planning_json": {
+            "writer_preview": {
+                "spark": 0,
+                "kimi": 1,
+                "openai": 2,
+                "deepseek": 3,
+                "minimax": 4,
+                "other": 5,
+            },
+            "planning_json_low_risk": {
                 "spark": 0,
                 "kimi": 1,
                 "minimax": 2,
                 "openai": 3,
+                "deepseek": 4,
+                "other": 5,
+            },
+            "planning_json_general": {
+                "spark": 0,
+                "kimi": 1,
+                "openai": 2,
+                "deepseek": 3,
                 "other": 4,
+                "minimax": 99,
             },
             "planning_prose": {
                 "spark": 0,
                 "kimi": 1,
                 "openai": 2,
-                "other": 3,
-                "minimax": 4,
+                "deepseek": 3,
+                "other": 4,
+                "minimax": 99,
             },
             "review_json": {
                 "spark": 0,
                 "kimi": 1,
                 "minimax": 2,
                 "openai": 3,
-                "other": 4,
+                "deepseek": 4,
+                "other": 5,
             },
             "feedback_analysis": {
-                "minimax": 0,
-                "spark": 1,
-                "kimi": 2,
+                "spark": 0,
+                "kimi": 1,
+                "minimax": 2,
                 "openai": 3,
-                "other": 4,
+                "deepseek": 4,
+                "other": 5,
             },
         }
         route_priorities = priorities.get(
@@ -663,8 +851,9 @@ class OpenAICompatibleAdapter:
                 "spark": 0,
                 "kimi": 1,
                 "openai": 2,
-                "minimax": 3,
+                "deepseek": 3,
                 "other": 4,
+                "minimax": 99,
             },
         )
         return int(route_priorities.get(kind, route_priorities.get("other", 50)))
@@ -682,10 +871,23 @@ class OpenAICompatibleAdapter:
         if "kimi" in text or "moonshot" in text:
             return "kimi"
         if "deepseek" in text:
-            return "openai"
+            return "deepseek"
+        if "gemini" in text or "generativelanguage" in text:
+            return "gemini"
         if "openai" in text or "gpt-" in text:
             return "openai"
         return "other"
+
+    @classmethod
+    def _profile_public_info(cls, profile: dict[str, str]) -> dict[str, str]:
+        base_url = str(profile.get("base_url") or "")
+        return {
+            "profile_id": str(profile.get("id") or ""),
+            "profile_name": str(profile.get("name") or ""),
+            "model": str(profile.get("model") or ""),
+            "base_url_host": urlparse(base_url).netloc or base_url,
+            "provider_kind": cls._profile_kind(profile),
+        }
 
     @classmethod
     def _effective_temperature_for_profile(
@@ -785,6 +987,17 @@ class OpenAICompatibleAdapter:
             or response.headers.get("request-id")
             or ""
         )
+
+    @staticmethod
+    def _safe_response_text(response: httpx.Response) -> str:
+        try:
+            return str(response.text or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    @staticmethod
+    def _hash_text(text: str) -> str:
+        return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()
 
     @staticmethod
     def _timeout_seconds_value(timeout: httpx.Timeout) -> float:

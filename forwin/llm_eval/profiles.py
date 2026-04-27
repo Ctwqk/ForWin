@@ -19,6 +19,10 @@ from forwin.runtime_settings import RuntimeSettingsStore
 from .schemas import EvalProfile
 
 
+DEFAULT_CODEX_CLI_BASE_URL = "codex://cli"
+DEFAULT_CODEX_SPARK_MODEL = "gpt-5.3-codex-spark"
+
+
 def _split_ids(value: str | list[str] | None) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
@@ -27,6 +31,8 @@ def _split_ids(value: str | list[str] | None) -> list[str]:
 
 def _provider_from_base_url(base_url: str) -> str:
     text = str(base_url or "").lower()
+    if text.startswith("codex://"):
+        return "codex_cli"
     if "deepseek" in text:
         return "deepseek"
     if "moonshot" in text or "kimi" in text:
@@ -58,6 +64,12 @@ def _profile_from_raw(raw: dict[str, Any], fallback_id: str) -> EvalProfile | No
         concurrency=max(1, int(raw.get("concurrency", 1) or 1)),
         timeout_seconds=max(5.0, float(raw.get("timeout_seconds", 90.0) or 90.0)),
     )
+
+
+def profile_requires_api_key(profile: EvalProfile) -> bool:
+    provider = str(profile.provider or "").strip().lower()
+    base_url = str(profile.base_url or "").strip().lower()
+    return provider not in {"codex_cli", "codex_app", "codex_bridge"} and not base_url.startswith("codex://")
 
 
 def _load_manifest_profiles(path: str) -> list[EvalProfile]:
@@ -145,6 +157,23 @@ def load_eval_profiles(
                     )
                 )
                 present.add("deepseek")
+            elif alias in {"codex-spark", "spark", "codex"}:
+                profiles.append(
+                    EvalProfile(
+                        id=alias,
+                        name="GPT-5.3-Codex-Spark",
+                        provider="codex_cli",
+                        base_url=os.environ.get("FORWIN_CODEX_CLI_URL", DEFAULT_CODEX_CLI_BASE_URL),
+                        model=os.environ.get(
+                            "FORWIN_CODEX_SPARK_MODEL",
+                            os.environ.get("CODEX_SPARK_MODEL", DEFAULT_CODEX_SPARK_MODEL),
+                        ),
+                        api_key="",
+                        api_key_env="",
+                        timeout_seconds=float(os.environ.get("FORWIN_CODEX_EVAL_TIMEOUT_SECONDS", "180")),
+                    )
+                )
+                present.add(alias)
     seen: set[str] = set()
     deduped: list[EvalProfile] = []
     for profile in profiles:

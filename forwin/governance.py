@@ -126,6 +126,7 @@ class DecisionEventType:
     WORLD_MODEL_COMPILE_STARTED = "world_model_compile_started"
     WORLD_MODEL_COMPILE_SUCCEEDED = "world_model_compile_succeeded"
     WORLD_MODEL_COMPILE_FAILED = "world_model_compile_failed"
+    KNOWLEDGE_PROJECTION_REFRESHED = "knowledge_projection_refreshed"
     TASK_OPERATION_STARTED = "task_operation_started"
     TASK_OPERATION_SUCCEEDED = "task_operation_succeeded"
     TASK_OPERATION_FAILED = "task_operation_failed"
@@ -228,6 +229,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.WORLD_MODEL_COMPILE_STARTED,
     DecisionEventType.WORLD_MODEL_COMPILE_SUCCEEDED,
     DecisionEventType.WORLD_MODEL_COMPILE_FAILED,
+    DecisionEventType.KNOWLEDGE_PROJECTION_REFRESHED,
     DecisionEventType.TASK_OPERATION_STARTED,
     DecisionEventType.TASK_OPERATION_SUCCEEDED,
     DecisionEventType.TASK_OPERATION_FAILED,

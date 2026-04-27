@@ -248,12 +248,12 @@ def build_parser() -> argparse.ArgumentParser:
     stat = sub.add_parser("status", help="查看项目状态")
     stat.add_argument("--project-id", required=True, help="项目ID")
 
-    eval_parser = sub.add_parser("llm-eval", help="评估 OpenAI-compatible LLM 在 ForWin 场景下的可靠性")
+    eval_parser = sub.add_parser("llm-eval", help="评估 LLM / Codex CLI 在 ForWin 场景下的可靠性")
     eval_sub = eval_parser.add_subparsers(dest="llm_eval_command", help="LLM eval 子命令")
 
     eval_run = eval_sub.add_parser("run", help="运行 LLM 可靠性测试")
     eval_run.add_argument("--suite", default="medium", choices=["smoke", "medium"], help="测试套件")
-    eval_run.add_argument("--profiles", default="", help="逗号分隔的 profile id，例如 minimax,kimi")
+    eval_run.add_argument("--profiles", default="", help="逗号分隔的 profile id，例如 minimax,kimi,codex-spark")
     eval_run.add_argument("--manifest", default="", help="独立 eval profile manifest JSON")
     eval_run.add_argument("--runtime-settings-path", default="", help="runtime settings JSON 路径")
     eval_run.add_argument("--artifact-root", default="", help="输出 artifact root")

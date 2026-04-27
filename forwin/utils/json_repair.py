@@ -189,7 +189,7 @@ def _extract_text_like_object(text: str) -> dict | None:
 
 
 def parse_llm_json(raw: str, *, error_prefix: str = "LLM JSON parser") -> dict:
-    original = _normalize_json_punctuation(strip_reasoning(raw))
+    original = strip_reasoning(raw)
     candidate = original.strip()
     if not candidate:
         raise LLMJSONParseError(
@@ -233,6 +233,18 @@ def parse_llm_json(raw: str, *, error_prefix: str = "LLM JSON parser") -> dict:
                 _close_unbalanced_json(candidate),
             ]
         )
+    normalized_original = _normalize_json_punctuation(original)
+    if normalized_original != original:
+        normalized_candidate = normalized_original.strip()
+        normalized_brace_candidate = _extract_balanced_object(normalized_original)
+        repair_candidates.extend(
+            [
+                normalized_candidate,
+                _close_unbalanced_json(normalized_candidate),
+                normalized_brace_candidate.strip() if normalized_brace_candidate else "",
+                _close_unbalanced_json(normalized_brace_candidate.strip()) if normalized_brace_candidate else "",
+            ]
+        )
 
     seen: set[str] = set()
     for raw_candidate in repair_candidates:
@@ -252,6 +264,8 @@ def parse_llm_json(raw: str, *, error_prefix: str = "LLM JSON parser") -> dict:
                 return parsed
 
     text_like = _extract_text_like_object(original)
+    if text_like is None and normalized_original != original:
+        text_like = _extract_text_like_object(normalized_original)
     if text_like is not None:
         return text_like
 

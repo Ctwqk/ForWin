@@ -24,10 +24,17 @@ class WorldNodeRow(Base):
     node_type: Mapped[str] = mapped_column(String, nullable=False)
     name: Mapped[str] = mapped_column(Text, default="")
     aliases_json: Mapped[str] = mapped_column(Text, default="[]")
+    summary: Mapped[str] = mapped_column(Text, default="")
     description: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String, default="active")
     importance: Mapped[int] = mapped_column(Integer, default=5)
+    scope: Mapped[str] = mapped_column(String, default="")
+    tags_json: Mapped[str] = mapped_column(Text, default="[]")
     created_at_chapter: Mapped[int] = mapped_column(Integer, default=0)
     retired_at_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    valid_from_chapter: Mapped[int] = mapped_column(Integer, default=0)
+    valid_until_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_refs_json: Mapped[str] = mapped_column(Text, default="[]")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     profile_json: Mapped[str] = mapped_column(Text, default="{}")
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -75,8 +82,14 @@ class WorldEdgeRow(Base):
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
     established_at_chapter: Mapped[int] = mapped_column(Integer, default=0)
     ended_at_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    valid_from_chapter: Mapped[int] = mapped_column(Integer, default=0)
+    valid_until_chapter: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String, default="active")
+    visibility: Mapped[str] = mapped_column(String, default="")
+    truth_relation: Mapped[str] = mapped_column(String, default="true")
     visibility_default: Mapped[str] = mapped_column(String, default="visible")
+    source_refs_json: Mapped[str] = mapped_column(Text, default="[]")
     state_json: Mapped[str] = mapped_column(Text, default="{}")
     evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -112,6 +125,60 @@ class FactNodeRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
 
+class BookReaderPromiseRow(Base):
+    __tablename__ = "book_reader_promises"
+    __table_args__ = (
+        Index("ux_book_reader_promises_project_promise", "project_id", "promise_id", unique=True),
+        Index("ix_book_reader_promises_project_status", "project_id", "status"),
+        Index("ix_book_reader_promises_project_chapter", "project_id", "created_at_chapter"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    promise_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
+    promise_type: Mapped[str] = mapped_column(String, default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    created_at_chapter: Mapped[int] = mapped_column(Integer, default=0)
+    expected_payoff_window: Mapped[str] = mapped_column(Text, default="")
+    maximum_safe_delay: Mapped[int] = mapped_column(Integer, default=0)
+    current_debt_level: Mapped[int] = mapped_column(Integer, default=0)
+    reward_tags_json: Mapped[str] = mapped_column(Text, default="[]")
+    linked_threads_json: Mapped[str] = mapped_column(Text, default="[]")
+    linked_knowledge_gaps_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String, default="open")
+    source_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class BookReaderExperienceDeltaRow(Base):
+    __tablename__ = "book_reader_experience_deltas"
+    __table_args__ = (
+        Index("ux_book_reader_exp_deltas_project_delta", "project_id", "reader_experience_delta_id", unique=True),
+        Index("ix_book_reader_exp_deltas_project_chapter", "project_id", "chapter_number"),
+        Index("ix_book_reader_exp_deltas_project_payoff", "project_id", "payoff_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    reader_experience_delta_id: Mapped[str] = mapped_column(String, nullable=False)
+    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
+    chapter_number: Mapped[int] = mapped_column(Integer, default=0)
+    reader_state_before: Mapped[str] = mapped_column(Text, default="")
+    reader_state_after: Mapped[str] = mapped_column(Text, default="")
+    cognition_transition: Mapped[str] = mapped_column(Text, default="")
+    payoff_type: Mapped[str] = mapped_column(String, default="")
+    reward_tags_json: Mapped[str] = mapped_column(Text, default="[]")
+    emotional_effect: Mapped[str] = mapped_column(Text, default="")
+    promise_debt_change: Mapped[int] = mapped_column(Integer, default=0)
+    next_desire: Mapped[str] = mapped_column(Text, default="")
+    fairness_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
+    source_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+
 class GraphDeltaRow(Base):
     __tablename__ = "graph_deltas"
     __table_args__ = (
@@ -125,11 +192,16 @@ class GraphDeltaRow(Base):
     chapter_number: Mapped[int] = mapped_column(Integer, default=0)
     story_time: Mapped[str] = mapped_column(Text, default="")
     delta_type: Mapped[str] = mapped_column(String, default="world_state")
+    operation: Mapped[str] = mapped_column(String, default="")
+    target_type: Mapped[str] = mapped_column(String, default="")
+    target_id: Mapped[str] = mapped_column(String, default="")
     source_type: Mapped[str] = mapped_column(String, default="")
     source_id: Mapped[str] = mapped_column(String, default="")
     world_line_id: Mapped[str] = mapped_column(String, default="")
     summary: Mapped[str] = mapped_column(Text, default="")
     evidence_refs_json: Mapped[str] = mapped_column(Text, default="[]")
+    review_verdict_id: Mapped[str] = mapped_column(String, default="")
+    allowed_for_canon: Mapped[bool] = mapped_column(Boolean, default=True)
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
@@ -219,11 +291,18 @@ class WorldSnapshotRow(Base):
     as_of_chapter: Mapped[int] = mapped_column(Integer, default=0)
     as_of_story_time: Mapped[str] = mapped_column(Text, default="")
     base_snapshot_id: Mapped[str] = mapped_column(String, default="")
+    objective_graph_digest: Mapped[str] = mapped_column(String, default="")
+    map_graph_digest: Mapped[str] = mapped_column(String, default="")
+    reader_overlay_digest: Mapped[str] = mapped_column(String, default="")
+    character_overlay_digests_json: Mapped[str] = mapped_column(Text, default="{}")
     world_node_state_index_json: Mapped[str] = mapped_column(Text, default="{}")
     active_edge_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     active_fact_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     active_world_line_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     open_gap_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    active_promise_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    objective_state_summary: Mapped[str] = mapped_column(Text, default="")
+    reader_state_summary: Mapped[str] = mapped_column(Text, default="")
     source_delta_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     built_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())

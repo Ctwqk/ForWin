@@ -172,7 +172,7 @@ def test_regenerating_subworld_preserves_valid_inter_subworld_edges() -> None:
         after = get_book_map_runtime(session, "p1")
 
         assert inter_edge_ids
-        assert inter_edge_ids.issubset(after.inter_subworld_edges_by_id)
+    assert inter_edge_ids.issubset(after.inter_subworld_edges_by_id)
 
 
 def test_arc_map_expansion_adds_missing_subworld_and_world_gate() -> None:

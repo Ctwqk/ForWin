@@ -2152,12 +2152,19 @@ class WritingOrchestrator:
         )
         current_review = self._review_current_output(
             repo=repo,
-            updater=updater,
             checker=checker,
             project_id=project_id,
-            chapter_plan=chapter_plan,
             context=context,
             writer_output=writer_output,
+        )
+        current_output, current_draft, current_review_row = self._persist_draft_and_review(
+            session=session,
+            updater=updater,
+            chapter_plan=chapter_plan,
+            project_id=project_id,
+            chapter_number=chapter_plan.chapter_number,
+            writer_output=current_output,
+            review=current_review,
         )
         current_review_event = self._record_decision_event(
             updater=updater,
@@ -4773,6 +4780,21 @@ class WritingOrchestrator:
                         operation_id=self._audit_operation_id(),
                     ),
                 )
+            projection_refresh = KnowledgeProjectionRefresher(session).refresh(
+                project_id,
+                as_of_chapter=chapter_number,
+                trigger="chapter_accepted",
+            )
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.KNOWLEDGE_PROJECTION_REFRESHED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 BookState projection refresh 完成。",
+                payload=projection_refresh.as_dict(),
+            )
             return None
         else:
             compiler_result = WorldModelCompilerV4(session).compile_gate_verdict(

@@ -163,6 +163,8 @@ class BookStateRepository:
         row.evidence_refs_json = _dump(edge.evidence_refs)
         metadata = dict(edge.metadata)
         metadata.setdefault("created_at_chapter", int(edge.established_at_chapter or 0))
+        row.created_at_chapter = _created_at_chapter(metadata)
+        metadata.setdefault("created_at_chapter", row.created_at_chapter)
         row.metadata_json = _dump(metadata)
         self.session.flush()
         return row

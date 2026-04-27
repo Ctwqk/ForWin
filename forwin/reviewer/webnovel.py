@@ -826,6 +826,11 @@ class WebNovelExperienceReviewer:
         raw_repair = payload.get("repair_instruction")
         if isinstance(raw_repair, dict) and raw_repair:
             repair_instruction = RepairInstruction.model_validate(raw_repair)
+            if repair_instruction.repair_scope == "arc":
+                scope_reason = repair_instruction.scope_reason or "ordinary review cannot escalate above band repair"
+                repair_instruction = repair_instruction.model_copy(
+                    update={"repair_scope": "band", "scope_reason": scope_reason}
+                )
         elif verdict == "fail":
             repair_instruction = heuristic.repair_instruction
         review_notes = [
@@ -1474,9 +1479,196 @@ class WebNovelExperienceReviewer:
                 context.chapter_plan_one_line,
                 *(context.chapter_goals[:2]),
             ],
+            scope_reason=(
+                "band-level cadence or structure issues need plan repair"
+                if scope == "band"
+                else "scene-level execution issues should be repaired locally first"
+            ),
             design_patch=design_patch,
             evidence_refs=evidence_refs[:12],
         )
+
+    def choose_repair_escalation(
+        self,
+        *,
+        context: ReviewContextPack,
+        writer_output: WriterOutput,
+        review: ReviewVerdict,
+        repair_attempts: list[dict[str, object]] | None = None,
+    ) -> RepairInstruction:
+        heuristic = self._review_with_heuristics(context, writer_output)
+        base_instruction = (
+            review.repair_instruction
+            or heuristic.repair_instruction
+            or RepairInstruction(
+                repair_scope="band",
+                failure_type="mixed",
+                must_fix=[item.description for item in review.issues if item.severity == "error"],
+                must_preserve=[
+                    context.chapter_plan_title,
+                    context.chapter_plan_one_line,
+                    *(context.chapter_goals[:2]),
+                ],
+                scope_reason="fallback escalation keeps repair inside current band",
+                design_patch={},
+                evidence_refs=list(review.evidence_refs),
+            )
+        )
+        if self.llm_enabled and self.llm_client is not None:
+            llm_decision = self._choose_repair_escalation_with_llm(
+                context=context,
+                writer_output=writer_output,
+                review=review,
+                repair_attempts=repair_attempts or [],
+                base_instruction=base_instruction,
+            )
+            if llm_decision is not None:
+                return llm_decision
+        return base_instruction.model_copy(
+            update={
+                "repair_scope": "band",
+                "scope_reason": (
+                    base_instruction.scope_reason
+                    or "LLM escalation unavailable; keep the third repair inside the current band."
+                ),
+            }
+        )
+
+    def _choose_repair_escalation_with_llm(
+        self,
+        *,
+        context: ReviewContextPack,
+        writer_output: WriterOutput,
+        review: ReviewVerdict,
+        repair_attempts: list[dict[str, object]],
+        base_instruction: RepairInstruction,
+    ) -> RepairInstruction | None:
+        payload = self._repair_escalation_payload(
+            context=context,
+            writer_output=writer_output,
+            review=review,
+            repair_attempts=repair_attempts,
+        )
+        try:
+            raw = self.llm_client.chat(
+                self._llm_escalation_messages(payload=payload),
+                temperature=0.0,
+                max_tokens=1600,
+                timeout_seconds=30,
+                retry_on_timeout=True,
+            )
+            parsed = parse_llm_json(raw, error_prefix="WNESC")
+        except (LLMJSONParseError, Exception):
+            return None
+
+        scope = str(parsed.get("repair_scope") or "").strip().lower()
+        if scope not in {"band", "arc"}:
+            return None
+        scope_reason = str(parsed.get("scope_reason") or "").strip()
+        design_patch = parsed.get("design_patch") if isinstance(parsed.get("design_patch"), dict) else {}
+        merged_design_patch = dict(base_instruction.design_patch)
+        merged_design_patch.update(design_patch)
+        evidence_refs = [
+            str(item)
+            for item in (parsed.get("evidence_refs") or [])
+            if str(item).strip()
+        ]
+        if not evidence_refs:
+            evidence_refs = list(base_instruction.evidence_refs or review.evidence_refs)
+        return base_instruction.model_copy(
+            update={
+                "repair_scope": scope,
+                "scope_reason": scope_reason or "LLM reviewer selected third repair scope.",
+                "design_patch": merged_design_patch,
+                "evidence_refs": evidence_refs[:12],
+            }
+        )
+
+    def _repair_escalation_payload(
+        self,
+        *,
+        context: ReviewContextPack,
+        writer_output: WriterOutput,
+        review: ReviewVerdict,
+        repair_attempts: list[dict[str, object]],
+    ) -> dict[str, Any]:
+        return {
+            "project_title": context.project_title,
+            "chapter_number": context.chapter_number,
+            "chapter_plan_title": context.chapter_plan_title,
+            "chapter_plan_one_line": context.chapter_plan_one_line,
+            "chapter_goals": list(context.chapter_goals[:3]),
+            "review_summary": review.review_summary,
+            "issues": [
+                {
+                    "rule_name": issue.rule_name,
+                    "severity": issue.severity,
+                    "description": issue.description,
+                    "issue_type": issue.issue_type,
+                    "target_scope": issue.target_scope,
+                    "evidence_refs": list(issue.evidence_refs[:4]),
+                }
+                for issue in review.issues
+            ],
+            "repair_attempts": [
+                {
+                    "attempt_no": int(item.get("attempt_no", 0) or 0),
+                    "repair_scope": str(item.get("repair_scope", "") or ""),
+                    "result_verdict": str(item.get("result_verdict", "") or ""),
+                }
+                for item in repair_attempts
+            ],
+            "band_delight_schedule": (
+                context.band_delight_schedule.model_dump(mode="json")
+                if context.band_delight_schedule is not None
+                else None
+            ),
+            "arc_payoff_map": (
+                context.arc_payoff_map.model_dump(mode="json")
+                if context.arc_payoff_map is not None
+                else None
+            ),
+            "next_band_summary": (
+                context.next_band_summary.model_dump(mode="json")
+                if context.next_band_summary is not None
+                else None
+            ),
+            "writer_output": {
+                "title": writer_output.title,
+                "end_of_chapter_summary": writer_output.end_of_chapter_summary,
+                "scene_outputs": [item.model_dump(mode="json") for item in writer_output.scene_outputs[:3]],
+                "new_events": [item.model_dump(mode="json") for item in writer_output.new_events[:4]],
+                "thread_beats": [item.model_dump(mode="json") for item in writer_output.thread_beats[:4]],
+                "state_changes": [item.model_dump(mode="json") for item in writer_output.state_changes[:4]],
+            },
+        }
+
+    def _llm_escalation_messages(
+        self,
+        *,
+        payload: dict[str, Any],
+    ) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": (
+                    "你是第三次 repair 的升级决策器。只输出 JSON。"
+                    "你只能在 band 和 arc 两个 scope 中二选一。"
+                    "arc 只表示需要改 arc 指导下的当前 band 计划，再重写当前章；"
+                    "不要把普通节奏、hook、scene 执行问题升级成 arc。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "请判断第三次 repair 应继续停留在 band，还是升级到 arc。"
+                    "只返回 JSON 对象，字段必须包含：repair_scope、scope_reason、design_patch、evidence_refs。\n"
+                    "只有当当前失败说明本 band 的任务分工已经受 arc 级 payoff / long-range structure 误导时，才允许 repair_scope=arc。\n"
+                    "如果只是正文执行、章内节奏、局部承诺兑现、当前 band 排布问题，必须返回 band。\n"
+                    f"决策数据：{json.dumps(payload, ensure_ascii=False)}"
+                ),
+            },
+        ]
 
     @staticmethod
     def _infer_tags_from_text(text: str) -> list[str]:

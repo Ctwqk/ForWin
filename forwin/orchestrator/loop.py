@@ -2092,19 +2092,12 @@ class WritingOrchestrator:
         )
         current_review = self._review_current_output(
             repo=repo,
+            updater=updater,
             checker=checker,
             project_id=project_id,
-            context=current_context,
-            writer_output=current_output,
-        )
-        current_output, current_draft, current_review_row = self._persist_draft_and_review(
-            session=session,
-            updater=updater,
             chapter_plan=chapter_plan,
-            project_id=project_id,
-            chapter_number=chapter_plan.chapter_number,
-            writer_output=current_output,
-            review=current_review,
+            context=context,
+            writer_output=writer_output,
         )
         current_review_event = self._record_decision_event(
             updater=updater,

@@ -823,8 +823,9 @@
     async function loadBooks(showStatus = false) {
       try {
         const nextBooksState = await requestJson('/api/projects');
-        const nextSignature = dataSignature(nextBooksState);
+        const nextSignature = bookListFingerprint(nextBooksState);
         booksState = nextBooksState;
+        booksRefreshPending = false;
         selectedBookIds = new Set(
           Array.from(selectedBookIds).filter((projectId) => booksState.some((book) => book.id === projectId))
         );
@@ -947,8 +948,13 @@
     async function loadTaskCenter(showStatus = false) {
       try {
         const nextTaskCenterState = await requestJson('/api/task-center/items?limit=80');
-        const nextSignature = dataSignature(nextTaskCenterState);
+        const nextSignature = taskCenterFingerprint(nextTaskCenterState);
+        const nextBookImpactSignature = taskCenterBookImpactFingerprint(nextTaskCenterState);
+        const tasksChanged = nextSignature !== taskCenterStateSignature;
+        const booksImpactChanged = nextBookImpactSignature !== taskCenterBookImpactSignature;
         taskCenterState = nextTaskCenterState;
+        taskCenterBookImpactSignature = nextBookImpactSignature;
+        if (booksImpactChanged) booksRefreshPending = true;
         const validSelectionKeys = new Set(
           taskCenterState
             .filter((item) => item.deletable)
@@ -958,7 +964,7 @@
           Array.from(selectedTaskKeys).filter((key) => validSelectionKeys.has(key))
         );
         taskPollHasActive = taskCenterState.some((item) => ACTIVE_TASK_STATUSES.has(item.status));
-        if (nextSignature !== taskCenterStateSignature) {
+        if (tasksChanged) {
           taskCenterStateSignature = nextSignature;
           renderTaskList();
         } else if (!document.getElementById('task_list')?.childNodes.length) {
@@ -968,8 +974,10 @@
           syncTaskBulkActions();
         }
         if (showStatus) setGlobalStatus(`已刷新 ${taskCenterState.length} 条任务。`, '任务中心');
+        return { changed: tasksChanged, booksImpactChanged };
       } catch (error) {
         setGlobalStatus(error.message || String(error), '任务中心读取失败');
+        return { changed: false, booksImpactChanged: false };
       }
     }
 

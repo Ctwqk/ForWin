@@ -7131,6 +7131,12 @@ class Phase05RegressionTests(unittest.TestCase):
                         select(ChapterReview).where(ChapterReview.draft_id == latest_draft.id).limit(1)
                     ).scalar_one()
                     plan = session.execute(select(ChapterPlan)).scalar_one()
+                    checkpoint = session.execute(
+                        select(BandCheckpoint)
+                        .where(BandCheckpoint.project_id == plan.project_id)
+                        .order_by(BandCheckpoint.created_at.desc(), BandCheckpoint.id.desc())
+                        .limit(1)
+                    ).scalar_one_or_none()
                 finally:
                     session.close()
             finally:
@@ -7139,9 +7145,11 @@ class Phase05RegressionTests(unittest.TestCase):
 
             self.assertEqual(result.status, "needs_review")
             self.assertEqual(plan.status, "needs_review")
+            self.assertIsNone(checkpoint)
             self.assertEqual(len(attempts), 3)
             ordered_attempts = sorted(attempts, key=lambda item: item.attempt_no)
             self.assertEqual([item.repair_scope for item in ordered_attempts], ["draft", "chapter_plan", "band_plan"])
+            self.assertFalse(any(item.forced_accept_applied for item in attempts))
             review_meta = json.loads(latest_review.review_meta_json)
             self.assertFalse(review_meta.get("forced_accept_applied"))
             self.assertEqual((review_meta.get("final_gate_decision") or {}).get("decision"), "manual_review_required")

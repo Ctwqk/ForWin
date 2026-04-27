@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 from typing import Any, Callable
 
@@ -22,37 +23,42 @@ def _is_sqlite_lock_error(exc: OperationalError) -> bool:
     return "database is locked" in message or "database table is locked" in message
 
 
+@dataclass(frozen=True)
+class TaskRouteDeps:
+    get_session: Callable[[], Any]
+    get_publisher_manager: Callable[[], Any]
+    list_generation_tasks: Callable[[int], list[tuple[str, dict[str, Any]]]]
+    serialize_task: Callable[[str, dict[str, Any]], Any]
+    get_generation_task_or_404: Callable[[str], dict[str, Any]]
+    serialize_generation_task_center_item: Callable[[str, dict[str, Any]], Any]
+    serialize_upload_task_center_item: Callable[[dict[str, Any]], Any]
+    list_project_backed_task_items: Callable[[int], list[Any]]
+    parse_project_task_id: Callable[[str], str | None]
+    get_project_backed_task_item_or_404: Callable[[str], Any]
+    task_is_terminal: Callable[[str], bool]
+    task_is_terminable: Callable[[dict[str, Any]], bool]
+    task_is_pausable: Callable[[dict[str, Any]], bool]
+    task_is_deletable: Callable[[dict[str, Any]], bool]
+    latest_related_decision_event: Callable[..., Any]
+    log_decision_event: Callable[..., Any]
+    update_task: Callable[..., None]
+
+
 def build_handlers(
     *,
-    get_session: Callable[[], Any],
-    get_publisher_manager: Callable[[], Any],
-    list_generation_tasks: Callable[[int], list[tuple[str, dict[str, Any]]]],
-    serialize_task: Callable[[str, dict[str, Any]], Any],
-    get_generation_task_or_404: Callable[[str], dict[str, Any]],
-    serialize_generation_task_center_item: Callable[[str, dict[str, Any]], Any],
-    serialize_upload_task_center_item: Callable[[dict[str, Any]], Any],
-    list_project_backed_task_items: Callable[[int], list[Any]],
-    parse_project_task_id: Callable[[str], str | None],
-    get_project_backed_task_item_or_404: Callable[[str], Any],
-    task_is_terminal: Callable[[str], bool],
-    task_is_terminable: Callable[[dict[str, Any]], bool],
-    task_is_pausable: Callable[[dict[str, Any]], bool],
-    task_is_deletable: Callable[[dict[str, Any]], bool],
-    latest_related_decision_event: Callable[..., Any],
-    log_decision_event: Callable[..., Any],
-    update_task: Callable[..., None],
+    deps: TaskRouteDeps,
 ) -> dict[str, Callable[..., Any]]:
     def active_generation_task_check(project_id: str = "") -> ActiveGenerationTaskCheckResponse:
         normalized_project_id = str(project_id or "").strip()
         active_ids: list[str] = []
-        for task_id, task in list_generation_tasks(200):
+        for task_id, task in deps.list_generation_tasks(200):
             if str(task.get("task_kind", "generation")) != "generation":
                 continue
             if task.get("deleted"):
                 continue
             if normalized_project_id and str(task.get("project_id", "") or "").strip() != normalized_project_id:
                 continue
-            if task_is_terminal(str(task.get("status", "")).strip()):
+            if deps.task_is_terminal(str(task.get("status", "")).strip()):
                 continue
             active_ids.append(task_id)
         return ActiveGenerationTaskCheckResponse(
@@ -68,22 +74,22 @@ def build_handlers(
         )
 
     def get_task(task_id: str):
-        task = get_generation_task_or_404(task_id)
-        return serialize_task(task_id, task)
+        task = deps.get_generation_task_or_404(task_id)
+        return deps.serialize_task(task_id, task)
 
     def list_tasks(limit: int = 30):
-        return [serialize_task(task_id, task) for task_id, task in list_generation_tasks(limit)]
+        return [deps.serialize_task(task_id, task) for task_id, task in deps.list_generation_tasks(limit)]
 
     def list_task_center_items(limit: int = 50):
         normalized_limit = max(1, min(int(limit or 50), 100))
         generation_items = [
-            serialize_generation_task_center_item(task_id, task)
-            for task_id, task in list_generation_tasks(normalized_limit)
+            deps.serialize_generation_task_center_item(task_id, task)
+            for task_id, task in deps.list_generation_tasks(normalized_limit)
         ]
-        project_items = list_project_backed_task_items(normalized_limit)
-        publisher_manager = get_publisher_manager()
+        project_items = deps.list_project_backed_task_items(normalized_limit)
+        publisher_manager = deps.get_publisher_manager()
         upload_items = [
-            serialize_upload_task_center_item(item)
+            deps.serialize_upload_task_center_item(item)
             for item in publisher_manager.list_upload_jobs(
                 limit=normalized_limit,
                 include_deleted=False,
@@ -96,26 +102,26 @@ def build_handlers(
     def get_task_center_item(task_kind: str, task_id: str):
         normalized_kind = str(task_kind or "").strip()
         if normalized_kind == "generation":
-            project_task_id = parse_project_task_id(task_id)
+            project_task_id = deps.parse_project_task_id(task_id)
             if project_task_id:
-                return get_project_backed_task_item_or_404(task_id)
-            task = get_generation_task_or_404(task_id)
-            return serialize_generation_task_center_item(task_id, task)
+                return deps.get_project_backed_task_item_or_404(task_id)
+            task = deps.get_generation_task_or_404(task_id)
+            return deps.serialize_generation_task_center_item(task_id, task)
         if normalized_kind == "upload":
-            publisher_manager = get_publisher_manager()
+            publisher_manager = deps.get_publisher_manager()
             try:
                 payload = publisher_manager.get_upload_job(task_id)
             except ValueError as exc:
                 raise HTTPException(404, str(exc)) from exc
-            return serialize_upload_task_center_item(payload)
+            return deps.serialize_upload_task_center_item(payload)
         raise HTTPException(404, "任务类型不存在")
 
     def terminate_task(task_id: str) -> TaskMutationResponse:
-        task = get_generation_task_or_404(task_id)
-        if not task_is_terminable(task):
+        task = deps.get_generation_task_or_404(task_id)
+        if not deps.task_is_terminable(task):
             raise HTTPException(400, "当前任务状态不支持终止")
         project_id = str(task.get("project_id", "") or "").strip()
-        update_task(
+        deps.update_task(
             task_id,
             cancel_requested=True,
             status="terminating",
@@ -124,14 +130,14 @@ def build_handlers(
         )
         if project_id:
             try:
-                with get_session() as session:
-                    parent = latest_related_decision_event(
+                with deps.get_session() as session:
+                    parent = deps.latest_related_decision_event(
                         session,
                         project_id=project_id,
                         related_object_type="generation_task",
                         related_object_id=task_id,
                     )
-                    log_decision_event(
+                    deps.log_decision_event(
                         session,
                         project_id=project_id,
                         task_id=task_id,
@@ -150,7 +156,7 @@ def build_handlers(
                 if not _is_sqlite_lock_error(exc):
                     raise
                 logger.warning("Terminate audit event skipped because database is busy: %s", exc)
-        updated = get_generation_task_or_404(task_id)
+        updated = deps.get_generation_task_or_404(task_id)
         return TaskMutationResponse(
             ok=True,
             task_kind="generation",
@@ -160,25 +166,25 @@ def build_handlers(
         )
 
     def pause_task(task_id: str) -> TaskMutationResponse:
-        task = get_generation_task_or_404(task_id)
-        if not task_is_pausable(task):
+        task = deps.get_generation_task_or_404(task_id)
+        if not deps.task_is_pausable(task):
             raise HTTPException(400, "当前任务状态不支持安全暂停")
         project_id = str(task.get("project_id", "") or "").strip()
-        update_task(
+        deps.update_task(
             task_id,
             pause_requested=True,
             message="已请求安全暂停，系统会在下一个安全检查点保存进度并暂停。",
         )
         if project_id:
             try:
-                with get_session() as session:
-                    parent = latest_related_decision_event(
+                with deps.get_session() as session:
+                    parent = deps.latest_related_decision_event(
                         session,
                         project_id=project_id,
                         related_object_type="generation_task",
                         related_object_id=task_id,
                     )
-                    log_decision_event(
+                    deps.log_decision_event(
                         session,
                         project_id=project_id,
                         task_id=task_id,
@@ -197,7 +203,7 @@ def build_handlers(
                 if not _is_sqlite_lock_error(exc):
                     raise
                 logger.warning("Pause audit event skipped because database is busy: %s", exc)
-        updated = get_generation_task_or_404(task_id)
+        updated = deps.get_generation_task_or_404(task_id)
         return TaskMutationResponse(
             ok=True,
             task_kind="generation",
@@ -207,10 +213,10 @@ def build_handlers(
         )
 
     def delete_task(task_id: str) -> TaskMutationResponse:
-        task = get_generation_task_or_404(task_id)
-        if not task_is_deletable(task):
+        task = deps.get_generation_task_or_404(task_id)
+        if not deps.task_is_deletable(task):
             raise HTTPException(400, "只有终态任务可以删除")
-        update_task(task_id, deleted=True, message="任务已删除。")
+        deps.update_task(task_id, deleted=True, message="任务已删除。")
         return TaskMutationResponse(
             ok=True,
             task_kind="generation",
@@ -223,7 +229,7 @@ def build_handlers(
         deleted_ids: list[str] = []
         skipped_ids: list[str] = []
         seen: set[str] = set()
-        publisher_manager = get_publisher_manager()
+        publisher_manager = deps.get_publisher_manager()
 
         for item in req.items:
             task_kind = str(item.task_kind or "").strip()
@@ -234,14 +240,14 @@ def build_handlers(
             seen.add(key)
             if task_kind == "generation":
                 try:
-                    task = get_generation_task_or_404(task_id)
+                    task = deps.get_generation_task_or_404(task_id)
                 except HTTPException:
                     skipped_ids.append(key)
                     continue
-                if not task_is_deletable(task):
+                if not deps.task_is_deletable(task):
                     skipped_ids.append(key)
                     continue
-                update_task(task_id, deleted=True, message="任务已删除。")
+                deps.update_task(task_id, deleted=True, message="任务已删除。")
                 deleted_ids.append(key)
                 continue
             if task_kind == "upload":

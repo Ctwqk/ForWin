@@ -21,8 +21,10 @@
       });
       window.setInterval(async () => {
         if (!taskPollHasActive && !currentDrawerTask) return;
-        await loadTaskCenter();
-        await loadBooks();
+        const refreshResult = await loadTaskCenter();
+        if (refreshResult?.booksImpactChanged && currentHomeTab === 'book') {
+          await loadBooks();
+        }
         if (currentDrawerTask) {
           await refreshCurrentDrawerIfChanged();
         }

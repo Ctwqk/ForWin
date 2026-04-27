@@ -12,6 +12,8 @@ from forwin.book_state.narrative import NarrativeControlGraph
 from forwin.book_state.runtime import ObjectiveWorldGraph
 from forwin.models.book_state import (
     BookCognitionSnapshotRow,
+    BookReaderExperienceDeltaRow,
+    BookReaderPromiseRow,
     CognitionOverlayPatchRow,
     CognitionOverlayRow,
     FactNodeRow,
@@ -43,6 +45,8 @@ from forwin.protocol.book_state import (
     NarrativeNode,
     NarrativePatch,
     NodePatch,
+    ReaderExperienceDeltaRecord,
+    ReaderPromise,
     WorldEdge,
     WorldNode,
     WorldSnapshot,
@@ -89,10 +93,17 @@ class BookStateRepository:
             self.session.add(row)
         row.name = node.name
         row.aliases_json = _dump(node.aliases)
+        row.summary = node.summary
         row.description = node.description
+        row.status = node.status
         row.importance = int(node.importance)
+        row.scope = node.scope
+        row.tags_json = _dump(node.tags)
         row.created_at_chapter = int(node.created_at_chapter or 0)
         row.retired_at_chapter = node.retired_at_chapter
+        row.valid_from_chapter = int(node.valid_from_chapter or node.created_at_chapter or 0)
+        row.valid_until_chapter = node.valid_until_chapter
+        row.source_refs_json = _dump(node.source_refs)
         row.is_active = bool(node.is_active)
         row.profile_json = _dump(node.profile)
         row.metadata_json = _dump(node.metadata)
@@ -137,8 +148,14 @@ class BookStateRepository:
         row.confidence = float(edge.confidence)
         row.established_at_chapter = int(edge.established_at_chapter or 0)
         row.ended_at_chapter = edge.ended_at_chapter
+        row.valid_from_chapter = int(edge.valid_from_chapter or edge.established_at_chapter or 0)
+        row.valid_until_chapter = edge.valid_until_chapter
         row.is_active = bool(edge.is_active)
+        row.status = edge.status
+        row.visibility = edge.visibility
+        row.truth_relation = edge.truth_relation
         row.visibility_default = edge.visibility_default
+        row.source_refs_json = _dump(edge.source_refs)
         row.state_json = _dump(edge.state)
         row.evidence_refs_json = _dump(edge.evidence_refs)
         row.metadata_json = _dump(edge.metadata)
@@ -166,6 +183,216 @@ class BookStateRepository:
         row.metadata_json = _dump(fact.metadata)
         self.session.flush()
         return row
+
+    def list_world_nodes(self, project_id: str, *, as_of_chapter: int | None = None) -> list[WorldNode]:
+        stmt = select(WorldNodeRow).where(WorldNodeRow.project_id == project_id)
+        if as_of_chapter is not None:
+            stmt = stmt.where(WorldNodeRow.created_at_chapter <= int(as_of_chapter))
+        rows = list(
+            self.session.execute(
+                stmt.order_by(WorldNodeRow.created_at_chapter.asc(), WorldNodeRow.id.asc())
+            )
+            .scalars()
+            .all()
+        )
+        if as_of_chapter is None:
+            return [_world_node_from_row(row) for row in rows]
+        return [
+            _world_node_from_row(row)
+            for row in rows
+            if row.retired_at_chapter is None or row.retired_at_chapter > int(as_of_chapter)
+        ]
+
+    def list_world_edges(self, project_id: str, *, as_of_chapter: int | None = None) -> list[WorldEdge]:
+        stmt = select(WorldEdgeRow).where(WorldEdgeRow.project_id == project_id)
+        if as_of_chapter is not None:
+            stmt = stmt.where(WorldEdgeRow.established_at_chapter <= int(as_of_chapter))
+        rows = list(
+            self.session.execute(
+                stmt.order_by(WorldEdgeRow.established_at_chapter.asc(), WorldEdgeRow.id.asc())
+            )
+            .scalars()
+            .all()
+        )
+        if as_of_chapter is None:
+            return [_world_edge_from_row(row) for row in rows]
+        return [
+            _world_edge_from_row(row)
+            for row in rows
+            if row.ended_at_chapter is None or row.ended_at_chapter > int(as_of_chapter)
+        ]
+
+    def list_fact_nodes(self, project_id: str, *, as_of_chapter: int | None = None) -> list[FactNode]:
+        stmt = select(FactNodeRow).where(FactNodeRow.project_id == project_id)
+        if as_of_chapter is not None:
+            stmt = stmt.where(FactNodeRow.created_at_chapter <= int(as_of_chapter))
+        return [
+            _fact_node_from_row(row)
+            for row in self.session.execute(
+                stmt.order_by(FactNodeRow.created_at_chapter.asc(), FactNodeRow.id.asc())
+            )
+            .scalars()
+            .all()
+        ]
+
+    def list_map_nodes(self, project_id: str) -> list[MapNode]:
+        return [
+            _map_node_from_row(row)
+            for row in self.session.execute(
+                select(MapNodeRow).where(MapNodeRow.project_id == project_id).order_by(MapNodeRow.id.asc())
+            )
+            .scalars()
+            .all()
+        ]
+
+    def list_map_edges(self, project_id: str) -> list[MapEdge]:
+        return [
+            _map_edge_from_row(row)
+            for row in self.session.execute(
+                select(MapEdgeRow).where(MapEdgeRow.project_id == project_id).order_by(MapEdgeRow.id.asc())
+            )
+            .scalars()
+            .all()
+        ]
+
+    def list_cognition_overlays(self, project_id: str, *, as_of_chapter: int | None = None) -> list[CognitionOverlay]:
+        stmt = select(CognitionOverlayRow).where(CognitionOverlayRow.project_id == project_id)
+        if as_of_chapter is not None:
+            stmt = stmt.where(CognitionOverlayRow.as_of_chapter <= int(as_of_chapter))
+        rows = list(
+            self.session.execute(
+                stmt.order_by(
+                    CognitionOverlayRow.observer_type.asc(),
+                    CognitionOverlayRow.observer_id.asc(),
+                    CognitionOverlayRow.as_of_chapter.desc(),
+                    CognitionOverlayRow.id.asc(),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        latest: dict[tuple[str, str], CognitionOverlay] = {}
+        for row in rows:
+            key = (row.observer_type, row.observer_id)
+            if key not in latest:
+                latest[key] = _cognition_overlay_from_row(row)
+        return list(latest.values())
+
+    def list_reader_promises(self, project_id: str, *, as_of_chapter: int | None = None) -> list[WorldNode]:
+        return [
+            node
+            for node in self.list_world_nodes(project_id, as_of_chapter=as_of_chapter)
+            if node.node_type == "reader_promise"
+        ]
+
+    def upsert_reader_promise(self, promise: ReaderPromise) -> BookReaderPromiseRow:
+        row = self.session.execute(
+            select(BookReaderPromiseRow).where(
+                BookReaderPromiseRow.project_id == promise.project_id,
+                BookReaderPromiseRow.promise_id == promise.promise_id,
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            row = BookReaderPromiseRow(
+                promise_id=promise.promise_id,
+                project_id=promise.project_id,
+            )
+            self.session.add(row)
+        row.promise_type = promise.promise_type
+        row.summary = promise.summary
+        row.created_at_chapter = int(promise.created_at_chapter or 0)
+        row.expected_payoff_window = promise.expected_payoff_window
+        row.maximum_safe_delay = int(promise.maximum_safe_delay or 0)
+        row.current_debt_level = int(promise.current_debt_level or 0)
+        row.reward_tags_json = _dump(promise.reward_tags)
+        row.linked_threads_json = _dump(promise.linked_threads)
+        row.linked_knowledge_gaps_json = _dump(promise.linked_knowledge_gaps)
+        row.status = promise.status
+        row.source_refs_json = _dump(promise.source_refs)
+        row.metadata_json = _dump(promise.metadata)
+        self.session.flush()
+        return row
+
+    def upsert_reader_experience_delta(
+        self,
+        reader_delta: ReaderExperienceDeltaRecord,
+    ) -> BookReaderExperienceDeltaRow:
+        row = self.session.execute(
+            select(BookReaderExperienceDeltaRow).where(
+                BookReaderExperienceDeltaRow.project_id == reader_delta.project_id,
+                BookReaderExperienceDeltaRow.reader_experience_delta_id
+                == reader_delta.reader_experience_delta_id
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            row = BookReaderExperienceDeltaRow(
+                reader_experience_delta_id=reader_delta.reader_experience_delta_id,
+                project_id=reader_delta.project_id,
+            )
+            self.session.add(row)
+        row.chapter_number = int(reader_delta.chapter_number or 0)
+        row.reader_state_before = reader_delta.reader_state_before
+        row.reader_state_after = reader_delta.reader_state_after
+        row.cognition_transition = reader_delta.cognition_transition
+        row.payoff_type = reader_delta.payoff_type
+        row.reward_tags_json = _dump(reader_delta.reward_tags)
+        row.emotional_effect = reader_delta.emotional_effect
+        row.promise_debt_change = int(reader_delta.promise_debt_change or 0)
+        row.next_desire = reader_delta.next_desire
+        row.fairness_evidence_json = _dump(reader_delta.fairness_evidence)
+        row.source_refs_json = _dump(reader_delta.source_refs)
+        row.metadata_json = _dump(reader_delta.metadata)
+        self.session.flush()
+        return row
+
+    def list_reader_promises_native(
+        self,
+        project_id: str,
+        *,
+        as_of_chapter: int | None = None,
+    ) -> list[ReaderPromise]:
+        stmt = select(BookReaderPromiseRow).where(BookReaderPromiseRow.project_id == project_id)
+        if as_of_chapter is not None:
+            stmt = stmt.where(BookReaderPromiseRow.created_at_chapter <= int(as_of_chapter))
+        return [
+            _reader_promise_from_row(row)
+            for row in self.session.execute(
+                stmt.order_by(BookReaderPromiseRow.created_at_chapter.asc(), BookReaderPromiseRow.promise_id.asc())
+            )
+            .scalars()
+            .all()
+        ]
+
+    def list_reader_experience_deltas(
+        self,
+        project_id: str,
+        *,
+        through_chapter: int | None = None,
+    ) -> list[ReaderExperienceDeltaRecord]:
+        stmt = select(BookReaderExperienceDeltaRow).where(BookReaderExperienceDeltaRow.project_id == project_id)
+        if through_chapter is not None:
+            stmt = stmt.where(BookReaderExperienceDeltaRow.chapter_number <= int(through_chapter))
+        return [
+            _reader_experience_delta_from_row(row)
+            for row in self.session.execute(
+                stmt.order_by(
+                    BookReaderExperienceDeltaRow.chapter_number.asc(),
+                    BookReaderExperienceDeltaRow.reader_experience_delta_id.asc(),
+                )
+            )
+            .scalars()
+            .all()
+        ]
+
+    def graph_delta_ids_exist(self, delta_ids: list[str]) -> set[str]:
+        if not delta_ids:
+            return set()
+        return {
+            row
+            for row in self.session.execute(
+                select(GraphDeltaRow.id).where(GraphDeltaRow.id.in_(delta_ids))
+            ).scalars()
+        }
 
     def create_map_node(self, node: MapNode) -> MapNodeRow:
         row = self.session.get(MapNodeRow, node.id)
@@ -306,11 +533,16 @@ class BookStateRepository:
             chapter_number=int(delta.chapter_number or 0),
             story_time=delta.story_time,
             delta_type=str(delta.delta_type),
+            operation=delta.operation,
+            target_type=delta.target_type,
+            target_id=delta.target_id,
             source_type=delta.source_type,
             source_id=delta.source_id,
             world_line_id=delta.world_line_id,
             summary=delta.summary,
             evidence_refs_json=_dump(delta.evidence_refs),
+            review_verdict_id=delta.review_verdict_id,
+            allowed_for_canon=bool(delta.allowed_for_canon),
             metadata_json=_dump(delta.metadata),
         )
         self.session.add(row)
@@ -495,6 +727,9 @@ class BookStateRepository:
             chapter_number=row.chapter_number,
             story_time=row.story_time,
             delta_type=row.delta_type,
+            operation=getattr(row, "operation", "") or "",
+            target_type=getattr(row, "target_type", "") or "",
+            target_id=getattr(row, "target_id", "") or "",
             source_type=row.source_type,
             source_id=row.source_id,
             world_line_id=row.world_line_id,
@@ -506,6 +741,8 @@ class BookStateRepository:
             cognition_patches=cognition_patches,
             narrative_patches=narrative_patches,
             evidence_refs=_loads(row.evidence_refs_json, []),
+            review_verdict_id=getattr(row, "review_verdict_id", "") or "",
+            allowed_for_canon=bool(getattr(row, "allowed_for_canon", True)),
             metadata=_loads(row.metadata_json, {}),
         )
 
@@ -724,11 +961,18 @@ class BookStateRepository:
             as_of_chapter=snapshot.as_of_chapter,
             as_of_story_time=snapshot.as_of_story_time,
             base_snapshot_id=snapshot.base_snapshot_id,
+            objective_graph_digest=snapshot.objective_graph_digest,
+            map_graph_digest=snapshot.map_graph_digest,
+            reader_overlay_digest=snapshot.reader_overlay_digest,
+            character_overlay_digests_json=_dump(snapshot.character_overlay_digests),
             world_node_state_index_json=_dump(snapshot.world_node_state_index),
             active_edge_ids_json=_dump(snapshot.active_edge_ids),
             active_fact_ids_json=_dump(snapshot.active_fact_ids),
             active_world_line_ids_json=_dump(snapshot.active_world_line_ids),
             open_gap_ids_json=_dump(snapshot.open_gap_ids),
+            active_promise_ids_json=_dump(snapshot.active_promise_ids),
+            objective_state_summary=snapshot.objective_state_summary,
+            reader_state_summary=snapshot.reader_state_summary,
             source_delta_ids_json=_dump(snapshot.source_delta_ids),
             metadata_json=_dump(snapshot.metadata),
         )
@@ -776,10 +1020,17 @@ def _world_node_from_row(row: WorldNodeRow) -> WorldNode:
         node_type=row.node_type,
         name=row.name,
         aliases=_loads(row.aliases_json, []),
+        summary=getattr(row, "summary", "") or "",
         description=row.description,
+        status=getattr(row, "status", "") or "active",
         importance=row.importance,
+        scope=getattr(row, "scope", "") or "",
+        tags=_loads(getattr(row, "tags_json", "[]"), []),
         created_at_chapter=row.created_at_chapter,
         retired_at_chapter=row.retired_at_chapter,
+        valid_from_chapter=getattr(row, "valid_from_chapter", row.created_at_chapter) or 0,
+        valid_until_chapter=getattr(row, "valid_until_chapter", None),
+        source_refs=_loads(getattr(row, "source_refs_json", "[]"), []),
         is_active=row.is_active,
         profile=_loads(row.profile_json, {}),
         metadata=_loads(row.metadata_json, {}),
@@ -799,8 +1050,14 @@ def _world_edge_from_row(row: WorldEdgeRow) -> WorldEdge:
         confidence=row.confidence,
         established_at_chapter=row.established_at_chapter,
         ended_at_chapter=row.ended_at_chapter,
+        valid_from_chapter=getattr(row, "valid_from_chapter", row.established_at_chapter) or 0,
+        valid_until_chapter=getattr(row, "valid_until_chapter", None),
         is_active=row.is_active,
+        status=getattr(row, "status", "") or "active",
+        visibility=getattr(row, "visibility", "") or "",
+        truth_relation=getattr(row, "truth_relation", "") or "true",
         visibility_default=row.visibility_default,
+        source_refs=_loads(getattr(row, "source_refs_json", "[]"), []),
         state=_loads(row.state_json, {}),
         evidence_refs=_loads(row.evidence_refs_json, []),
         metadata=_loads(row.metadata_json, {}),
@@ -824,6 +1081,44 @@ def _fact_node_from_row(row: FactNodeRow) -> FactNode:
         sensitivity_level=row.sensitivity_level,
         narrative_function=row.narrative_function,
         state=_loads(row.state_json, {}),
+        metadata=_loads(row.metadata_json, {}),
+    )
+
+
+def _reader_promise_from_row(row: BookReaderPromiseRow) -> ReaderPromise:
+    return ReaderPromise(
+        promise_id=row.promise_id,
+        project_id=row.project_id,
+        promise_type=row.promise_type,
+        summary=row.summary,
+        created_at_chapter=row.created_at_chapter,
+        expected_payoff_window=row.expected_payoff_window,
+        maximum_safe_delay=row.maximum_safe_delay,
+        current_debt_level=row.current_debt_level,
+        reward_tags=_loads(row.reward_tags_json, []),
+        linked_threads=_loads(row.linked_threads_json, []),
+        linked_knowledge_gaps=_loads(row.linked_knowledge_gaps_json, []),
+        status=row.status,
+        source_refs=_loads(row.source_refs_json, []),
+        metadata=_loads(row.metadata_json, {}),
+    )
+
+
+def _reader_experience_delta_from_row(row: BookReaderExperienceDeltaRow) -> ReaderExperienceDeltaRecord:
+    return ReaderExperienceDeltaRecord(
+        reader_experience_delta_id=row.reader_experience_delta_id,
+        project_id=row.project_id,
+        chapter_number=row.chapter_number,
+        reader_state_before=row.reader_state_before,
+        reader_state_after=row.reader_state_after,
+        cognition_transition=row.cognition_transition,
+        payoff_type=row.payoff_type,
+        reward_tags=_loads(row.reward_tags_json, []),
+        emotional_effect=row.emotional_effect,
+        promise_debt_change=row.promise_debt_change,
+        next_desire=row.next_desire,
+        fairness_evidence=_loads(row.fairness_evidence_json, []),
+        source_refs=_loads(row.source_refs_json, []),
         metadata=_loads(row.metadata_json, {}),
     )
 
@@ -946,11 +1241,18 @@ def _world_snapshot_from_row(row: WorldSnapshotRow) -> WorldSnapshot:
         as_of_chapter=row.as_of_chapter,
         as_of_story_time=row.as_of_story_time,
         base_snapshot_id=row.base_snapshot_id,
+        objective_graph_digest=getattr(row, "objective_graph_digest", "") or "",
+        map_graph_digest=getattr(row, "map_graph_digest", "") or "",
+        reader_overlay_digest=getattr(row, "reader_overlay_digest", "") or "",
+        character_overlay_digests=_loads(getattr(row, "character_overlay_digests_json", "{}"), {}),
         world_node_state_index=_loads(row.world_node_state_index_json, {}),
         active_edge_ids=_loads(row.active_edge_ids_json, []),
         active_fact_ids=_loads(row.active_fact_ids_json, []),
         active_world_line_ids=_loads(row.active_world_line_ids_json, []),
         open_gap_ids=_loads(row.open_gap_ids_json, []),
+        active_promise_ids=_loads(getattr(row, "active_promise_ids_json", "[]"), []),
+        objective_state_summary=getattr(row, "objective_state_summary", "") or "",
+        reader_state_summary=getattr(row, "reader_state_summary", "") or "",
         source_delta_ids=_loads(row.source_delta_ids_json, []),
         built_at=row.built_at.isoformat() if row.built_at else "",
         metadata=_loads(row.metadata_json, {}),

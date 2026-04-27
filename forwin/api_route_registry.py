@@ -9,6 +9,8 @@ from fastapi.responses import HTMLResponse
 from forwin import (
     api_book_state_routes,
     api_governance_routes,
+    api_llm_kb_routes,
+    api_obsidian_routes,
     api_project_routes,
     api_publisher_routes,
     api_system_routes,
@@ -250,6 +252,12 @@ def register_api_routes(
     book_state_handlers = api_book_state_routes.build_handlers(
         get_session=get_session,
     )
+    obsidian_handlers = api_obsidian_routes.build_handlers(
+        get_session=get_session,
+    )
+    llm_kb_handlers = api_llm_kb_routes.build_handlers(
+        get_session=get_session,
+    )
 
     handlers = {
         **system_handlers,
@@ -260,6 +268,8 @@ def register_api_routes(
         **world_model_handlers,
         **world_model_v4_handlers,
         **book_state_handlers,
+        **obsidian_handlers,
+        **llm_kb_handlers,
     }
 
     route_definitions = [
@@ -350,9 +360,25 @@ def register_api_routes(
         ("/api/projects/{project_id}/world-model/v4/gaps", ["GET"], handlers["get_world_model_v4_gaps"], {"response_model": list[WorldModelV4GapInfo]}),
         ("/api/projects/{project_id}/world-model/v4/reveals", ["GET"], handlers["get_world_model_v4_reveals"], {"response_model": list[WorldModelV4RevealInfo]}),
         ("/api/projects/{project_id}/world-model/v4/export", ["GET"], handlers["get_world_model_v4_export"], {"response_model": WorldModelV4ExportResponse}),
+        ("/api/projects/{project_id}/book-state/snapshot", ["GET"], handlers["get_book_state_snapshot"], {}),
+        ("/api/projects/{project_id}/book-state/nodes", ["GET"], handlers["list_book_state_nodes"], {}),
+        ("/api/projects/{project_id}/book-state/edges", ["GET"], handlers["list_book_state_edges"], {}),
+        ("/api/projects/{project_id}/book-state/deltas", ["GET"], handlers["list_book_state_deltas"], {}),
+        ("/api/projects/{project_id}/book-state/cognition", ["GET"], handlers["list_book_state_cognition"], {}),
+        ("/api/projects/{project_id}/book-state/reader-promises", ["GET"], handlers["list_book_state_reader_promises"], {}),
         ("/api/projects/{project_id}/book-state/runtime", ["GET"], handlers["get_book_state_runtime"], {}),
         ("/api/projects/{project_id}/book-state/map/path", ["GET"], handlers["get_book_state_path"], {}),
         ("/api/projects/{project_id}/book-state/legacy-import", ["POST"], handlers["import_book_state_legacy"], {}),
+        ("/api/projects/{project_id}/obsidian/export", ["POST"], handlers["export_obsidian"], {"response_model": WorldModelExportResponse}),
+        ("/api/projects/{project_id}/obsidian/import", ["POST"], handlers["import_obsidian"], {"response_model": WorldModelImportResponse}),
+        ("/api/projects/{project_id}/obsidian/proposals", ["GET"], handlers["list_obsidian_proposals"], {"response_model": list[WorldEditProposalInfo]}),
+        ("/api/projects/{project_id}/obsidian/proposals/{proposal_id}/approve", ["POST"], handlers["approve_obsidian_proposal"], {"response_model": WorldEditProposalInfo}),
+        ("/api/projects/{project_id}/obsidian/proposals/{proposal_id}/reject", ["POST"], handlers["reject_obsidian_proposal"], {"response_model": WorldEditProposalInfo}),
+        ("/api/projects/{project_id}/llm-kb/rebuild", ["POST"], handlers["rebuild_llm_kb"], {}),
+        ("/api/projects/{project_id}/llm-kb/files", ["GET"], handlers["list_llm_kb_files"], {}),
+        ("/api/projects/{project_id}/llm-kb/file/{file_key}", ["GET"], handlers["get_llm_kb_file"], {}),
+        ("/api/projects/{project_id}/llm-kb/search", ["GET"], handlers["search_llm_kb"], {}),
+        ("/api/projects/{project_id}/context-pack/{role}", ["GET"], handlers["get_context_pack"], {}),
         ("/api/projects/{project_id}/chapters", ["GET"], handlers["list_chapters"], {"response_model": list[ChapterInfo]}),
         ("/api/projects/{project_id}/chapters/{chapter_number}", ["GET"], handlers["get_chapter"], {"response_model": ChapterDetail}),
         ("/api/projects/{project_id}/chapters/{chapter_number}/ledger", ["GET"], get_chapter_observability_ledger, {"response_model": ChapterLedgerResponse}),

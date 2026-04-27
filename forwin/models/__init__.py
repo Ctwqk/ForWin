@@ -67,6 +67,8 @@ from .world_v4 import (
 )
 from .book_state import (
     BookCognitionSnapshotRow,
+    BookReaderExperienceDeltaRow,
+    BookReaderPromiseRow,
     CognitionOverlayPatchRow,
     CognitionOverlayRow,
     FactNodeRow,
@@ -184,6 +186,8 @@ __all__ = [
     "WorldSnapshotRow",
     "MapSnapshotRow",
     "BookCognitionSnapshotRow",
+    "BookReaderPromiseRow",
+    "BookReaderExperienceDeltaRow",
     "NarrativeNodeRow",
     "NarrativeEdgeRow",
 ]

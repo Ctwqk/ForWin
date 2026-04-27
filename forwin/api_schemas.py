@@ -513,13 +513,19 @@ class WorldEditProposalInfo(BaseModel):
     project_id: str
     source: str = "obsidian"
     target_page_key: str = ""
+    target_node_id: str = ""
     target_field: str = ""
+    proposal_type: str = ""
     proposed_patch: dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
+    human_notes: str = ""
     status: str = "pending"
     created_by: str = ""
     created_at: str = ""
     reviewed_at: str = ""
+    review_reason: str = ""
+    graph_delta_id: str = ""
+    projection_refresh: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorldModelExportRequest(BaseModel):

@@ -46,13 +46,16 @@ class BookStateDeltaAdapter:
             deltas.append(self._reveal_delta(changes.project_id, changes.chapter_number, reveal))
         for reader_delta in changes.reader_experience_deltas:
             deltas.append(self._reader_experience_delta(reader_delta))
+        verdict_id = review_verdict_id or getattr(changes, "review_verdict_id", "")
+        if verdict_id:
+            deltas = [delta.model_copy(update={"review_verdict_id": verdict_id}) for delta in deltas]
 
         return ApprovedGraphDeltaSet(
             project_id=changes.project_id,
             chapter_number=changes.chapter_number,
             graph_deltas=deltas,
             approved_by=approved_by or getattr(changes, "approved_by", []),
-            review_verdict_id=review_verdict_id or getattr(changes, "review_verdict_id", ""),
+            review_verdict_id=verdict_id,
             forced_accept_reason=forced_accept_reason or getattr(changes, "forced_accept_reason", ""),
         )
 
@@ -87,6 +90,9 @@ class BookStateDeltaAdapter:
             chapter_number=delta.narrative_chapter or 0,
             story_time=delta.objective_story_time,
             delta_type=GraphDeltaType.WORLD_STATE,
+            operation="create_event_fact",
+            target_type="world_delta",
+            target_id=delta.delta_id,
             source_type=str(delta.source.source_type),
             source_id=delta.delta_id,
             world_line_id=delta.world_line_id,
@@ -177,6 +183,7 @@ class BookStateDeltaAdapter:
                 ),
             ],
             evidence_refs=list(delta.source_refs),
+            allowed_for_canon=bool(delta.allowed_for_canon),
         )
 
     def _belief_delta(self, project_id: str, chapter_number: int, belief: Belief) -> GraphDelta:
@@ -338,6 +345,9 @@ class BookStateDeltaAdapter:
             project_id=delta.project_id,
             chapter_number=delta.chapter_number,
             delta_type=GraphDeltaType.NARRATIVE_CONTROL,
+            operation="update_reader_promise",
+            target_type="reader_experience",
+            target_id=delta.reader_experience_delta_id,
             source_type="reader_experience_delta",
             source_id=delta.reader_experience_delta_id,
             summary=delta.reader_state_after or delta.next_desire,
@@ -355,6 +365,7 @@ class BookStateDeltaAdapter:
                 )
             ],
             evidence_refs=list(delta.source_refs),
+            metadata={"reader_experience_delta": delta.model_dump(mode="json")},
         )
 
 

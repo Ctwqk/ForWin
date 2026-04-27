@@ -79,13 +79,18 @@ class WorldEditProposalRow(Base):
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     source: Mapped[str] = mapped_column(String, nullable=False, default="obsidian")
     target_page_key: Mapped[str] = mapped_column(String, nullable=False, default="")
+    target_node_id: Mapped[str] = mapped_column(String, nullable=False, default="")
     target_field: Mapped[str] = mapped_column(String, nullable=False, default="")
+    proposal_type: Mapped[str] = mapped_column(String, nullable=False, default="")
     proposed_patch_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    human_notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
     status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
     created_by: Mapped[str] = mapped_column(String, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    review_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    graph_delta_id: Mapped[str] = mapped_column(String, nullable=False, default="")
 
 
 class WorldModelConflictRow(Base):

@@ -2414,6 +2414,109 @@ def upgrade_db(engine: Engine) -> None:
 
         migrations.append(MigrationSpec("book_state_schema_v1", apply_book_state_schema_v1))
 
+        def apply_knowledge_system_v46(conn) -> None:
+            from forwin import models as _models  # noqa: F401
+
+            Base.metadata.create_all(bind=conn)
+
+            table_names = {
+                str(row["name"])
+                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).mappings().all()
+            }
+
+            def column_names(table_name: str) -> set[str]:
+                if table_name not in table_names:
+                    return set()
+                return {
+                    str(row["name"])
+                    for row in conn.execute(text(f"PRAGMA table_info({table_name})")).mappings().all()
+                }
+
+            alters_by_table: dict[str, dict[str, str]] = {
+                "world_nodes": {
+                    "summary": "ALTER TABLE world_nodes ADD COLUMN summary TEXT NOT NULL DEFAULT ''",
+                    "status": "ALTER TABLE world_nodes ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+                    "scope": "ALTER TABLE world_nodes ADD COLUMN scope TEXT NOT NULL DEFAULT ''",
+                    "tags_json": "ALTER TABLE world_nodes ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
+                    "valid_from_chapter": "ALTER TABLE world_nodes ADD COLUMN valid_from_chapter INTEGER NOT NULL DEFAULT 0",
+                    "valid_until_chapter": "ALTER TABLE world_nodes ADD COLUMN valid_until_chapter INTEGER",
+                    "source_refs_json": "ALTER TABLE world_nodes ADD COLUMN source_refs_json TEXT NOT NULL DEFAULT '[]'",
+                },
+                "world_edges": {
+                    "valid_from_chapter": "ALTER TABLE world_edges ADD COLUMN valid_from_chapter INTEGER NOT NULL DEFAULT 0",
+                    "valid_until_chapter": "ALTER TABLE world_edges ADD COLUMN valid_until_chapter INTEGER",
+                    "status": "ALTER TABLE world_edges ADD COLUMN status TEXT NOT NULL DEFAULT 'active'",
+                    "visibility": "ALTER TABLE world_edges ADD COLUMN visibility TEXT NOT NULL DEFAULT ''",
+                    "truth_relation": "ALTER TABLE world_edges ADD COLUMN truth_relation TEXT NOT NULL DEFAULT 'true'",
+                    "source_refs_json": "ALTER TABLE world_edges ADD COLUMN source_refs_json TEXT NOT NULL DEFAULT '[]'",
+                },
+                "graph_deltas": {
+                    "operation": "ALTER TABLE graph_deltas ADD COLUMN operation TEXT NOT NULL DEFAULT ''",
+                    "target_type": "ALTER TABLE graph_deltas ADD COLUMN target_type TEXT NOT NULL DEFAULT ''",
+                    "target_id": "ALTER TABLE graph_deltas ADD COLUMN target_id TEXT NOT NULL DEFAULT ''",
+                    "review_verdict_id": "ALTER TABLE graph_deltas ADD COLUMN review_verdict_id TEXT NOT NULL DEFAULT ''",
+                    "allowed_for_canon": "ALTER TABLE graph_deltas ADD COLUMN allowed_for_canon BOOLEAN NOT NULL DEFAULT 1",
+                },
+                "world_snapshots": {
+                    "objective_graph_digest": "ALTER TABLE world_snapshots ADD COLUMN objective_graph_digest TEXT NOT NULL DEFAULT ''",
+                    "map_graph_digest": "ALTER TABLE world_snapshots ADD COLUMN map_graph_digest TEXT NOT NULL DEFAULT ''",
+                    "reader_overlay_digest": "ALTER TABLE world_snapshots ADD COLUMN reader_overlay_digest TEXT NOT NULL DEFAULT ''",
+                    "character_overlay_digests_json": "ALTER TABLE world_snapshots ADD COLUMN character_overlay_digests_json TEXT NOT NULL DEFAULT '{}'",
+                    "active_promise_ids_json": "ALTER TABLE world_snapshots ADD COLUMN active_promise_ids_json TEXT NOT NULL DEFAULT '[]'",
+                    "objective_state_summary": "ALTER TABLE world_snapshots ADD COLUMN objective_state_summary TEXT NOT NULL DEFAULT ''",
+                    "reader_state_summary": "ALTER TABLE world_snapshots ADD COLUMN reader_state_summary TEXT NOT NULL DEFAULT ''",
+                },
+                "world_edit_proposals": {
+                    "target_node_id": "ALTER TABLE world_edit_proposals ADD COLUMN target_node_id TEXT NOT NULL DEFAULT ''",
+                    "proposal_type": "ALTER TABLE world_edit_proposals ADD COLUMN proposal_type TEXT NOT NULL DEFAULT ''",
+                    "human_notes": "ALTER TABLE world_edit_proposals ADD COLUMN human_notes TEXT NOT NULL DEFAULT ''",
+                    "review_reason": "ALTER TABLE world_edit_proposals ADD COLUMN review_reason TEXT NOT NULL DEFAULT ''",
+                    "graph_delta_id": "ALTER TABLE world_edit_proposals ADD COLUMN graph_delta_id TEXT NOT NULL DEFAULT ''",
+                },
+            }
+            for table_name, alters in alters_by_table.items():
+                existing = column_names(table_name)
+                for column_name, ddl in alters.items():
+                    if column_name not in existing:
+                        conn.execute(text(ddl))
+
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_world_nodes_project_status ON world_nodes(project_id, status)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_graph_deltas_project_target ON graph_deltas(project_id, target_type, target_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_world_edit_proposals_project_type ON world_edit_proposals(project_id, proposal_type)"))
+
+        migrations.append(MigrationSpec("knowledge_system_v46", apply_knowledge_system_v46))
+
+        def apply_book_reader_experience_v46(conn) -> None:
+            from forwin import models as _models  # noqa: F401
+
+            Base.metadata.create_all(bind=conn)
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_book_reader_promises_project_promise "
+                    "ON book_reader_promises(project_id, promise_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_book_reader_exp_deltas_project_delta "
+                    "ON book_reader_experience_deltas(project_id, reader_experience_delta_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_book_reader_promises_project_status "
+                    "ON book_reader_promises(project_id, status)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_book_reader_exp_deltas_project_chapter "
+                    "ON book_reader_experience_deltas(project_id, chapter_number)"
+                )
+            )
+
+        migrations.append(MigrationSpec("book_reader_experience_v46", apply_book_reader_experience_v46))
+
         def apply_map_graph_schema_v1(conn) -> None:
             from forwin import models as _models  # noqa: F401
 

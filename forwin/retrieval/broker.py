@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Iterable
 
 from sqlalchemy import select
 
+from forwin.book_state.repository import BookStateRepository
 from forwin.context.assembler import assemble_context
+from forwin.llm_kb.retriever import LLMKnowledgeBaseRetriever
+from forwin.llm_kb.store import LLMKnowledgeBaseStore
+from forwin.models.world_model import WorldModelConflictRow, WorldModelPageRow
 from forwin.models.world_v4 import (
     ArcWorldContractRow,
     BeliefRow,
@@ -35,6 +40,8 @@ from forwin.protocol.context import (
     WritingPack,
 )
 from forwin.protocol.world_model import WorldContextPack
+from forwin.world_model.store import load_json
+from forwin.obsidian.frontmatter import parse_sections
 from .memory_index import ChapterMemoryIndex, create_memory_index
 
 
@@ -50,6 +57,7 @@ class RetrievalBroker:
         max_memories: int = 3,
         max_world_pages: int = 6,
         memory_index: ChapterMemoryIndex | None = None,
+        llm_kb_root: Path | None = None,
     ) -> None:
         self.context_budget_chars = context_budget_chars
         self.max_entities = max_entities
@@ -58,10 +66,21 @@ class RetrievalBroker:
         self.max_memories = max_memories
         self.max_world_pages = max_world_pages
         self.memory_index = memory_index or create_memory_index()
+        self.llm_kb_root = llm_kb_root
         self.last_observability_summary: dict[str, object] = {}
 
     def build_chapter_context(self, repo, project_id: str, chapter_plan) -> ChapterContextPack:
         base_pack = assemble_context(repo, project_id, chapter_plan)
+        try:
+            world_pack = self.build_world_model_pack(
+                repo,
+                project_id,
+                int(getattr(chapter_plan, "chapter_number", 0) or 0),
+                "writing",
+            )
+            base_pack = self._merge_writer_world_model_pack(base_pack, world_pack)
+        except Exception:
+            pass
 
         summaries = self._pick_summaries(base_pack.previous_chapter_summaries)
         entities = self._pick_entities(base_pack.active_entities)
@@ -171,6 +190,7 @@ class RetrievalBroker:
         project_id: str,
         chapter_number: int,
         pack_kind: str,
+        query: str = "",
     ) -> WorldModelRetrievalPack:
         """Build a role-specific v4 world-model retrieval pack.
 
@@ -329,7 +349,7 @@ class RetrievalBroker:
         ]
 
         pack_cls = pack_classes[pack_kind]
-        return pack_cls(
+        base_pack = pack_cls(
             project_id=project_id,
             as_of_chapter=chapter_number,
             active_world_lines=active_lines,
@@ -359,6 +379,209 @@ class RetrievalBroker:
             ],
             metadata={"hidden_truth_included": include_hidden_truth},
         )
+        return self._augment_v46_context(
+            session=session,
+            pack=base_pack,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            pack_kind=pack_kind,
+            include_hidden_truth=include_hidden_truth,
+            query=query,
+        )
+
+    def _augment_v46_context(
+        self,
+        *,
+        session,
+        pack: WorldModelRetrievalPack,
+        project_id: str,
+        chapter_number: int,
+        pack_kind: str,
+        include_hidden_truth: bool,
+        query: str = "",
+    ) -> WorldModelRetrievalPack:
+        repo = BookStateRepository(session)
+        snapshot = repo.latest_world_snapshot(project_id, chapter_number)
+        nodes = repo.list_world_nodes(project_id, as_of_chapter=chapter_number)
+        edges = repo.list_world_edges(project_id, as_of_chapter=chapter_number)
+        facts = repo.list_fact_nodes(project_id, as_of_chapter=chapter_number)
+        map_nodes = repo.list_map_nodes(project_id)
+        map_edges = repo.list_map_edges(project_id)
+        if not include_hidden_truth:
+            visible_node_ids = {node.id for node in nodes if not _book_state_node_hidden(node)}
+            nodes = [node for node in nodes if node.id in visible_node_ids]
+            edges = [
+                edge for edge in edges
+                if edge.source_id in visible_node_ids
+                and edge.target_id in visible_node_ids
+                and not _book_state_edge_hidden(edge)
+            ]
+            facts = [fact for fact in facts if not _book_state_fact_hidden(fact)]
+            map_edges = [edge for edge in map_edges if not _map_edge_hidden(edge)]
+            map_nodes = [node for node in map_nodes if not _map_node_hidden(node)]
+
+        book_state_snapshot = snapshot.model_dump(mode="json") if snapshot is not None else {}
+        book_state_nodes = [_node_context(node) for node in nodes[: self.max_world_pages * 4]]
+        book_state_edges = [_edge_context(edge) for edge in edges[: self.max_world_pages * 4]]
+        book_state_facts = [_fact_context(fact) for fact in facts[: self.max_world_pages * 4]]
+        book_state_map = {
+            "nodes": [_map_node_context(node) for node in map_nodes[: self.max_world_pages * 4]],
+            "edges": [_map_edge_context(edge) for edge in map_edges[: self.max_world_pages * 4]],
+        }
+        obsidian_pages = self._load_obsidian_page_context(
+            session,
+            project_id,
+            include_hidden_truth=include_hidden_truth,
+        )
+        llm_kb_context = self._load_llm_kb_context(project_id, pack_kind=pack_kind, query=query)
+        conflicts = self._load_review_conflicts(session, project_id)
+        source_refs = [
+            *list(pack.source_refs),
+            *([f"book_state:snapshot:{snapshot.id}"] if snapshot is not None else []),
+            *[f"book_state:node:{item['id']}" for item in book_state_nodes[:8]],
+            *[f"book_state:fact:{item['id']}" for item in book_state_facts[:8]],
+        ]
+        source_digest = (
+            book_state_snapshot.get("objective_graph_digest")
+            or llm_kb_context.get("source_digest")
+            or pack.source_digest
+        )
+        metadata = {
+            **pack.metadata,
+            "knowledge_system_v46": True,
+            "book_state_node_count": len(book_state_nodes),
+            "book_state_fact_count": len(book_state_facts),
+            "obsidian_page_count": len(obsidian_pages),
+            "llm_kb_files": sorted(llm_kb_context.get("files", [])),
+        }
+        return pack.model_copy(
+            update={
+                "book_state_snapshot": book_state_snapshot,
+                "book_state_nodes": book_state_nodes,
+                "book_state_edges": book_state_edges,
+                "book_state_facts": book_state_facts,
+                "book_state_map": book_state_map,
+                "obsidian_pages": obsidian_pages[: self.max_world_pages],
+                "llm_kb_context": llm_kb_context,
+                "review_conflicts": conflicts,
+                "source_refs": list(dict.fromkeys(source_refs)),
+                "source_digest": str(source_digest or ""),
+                "metadata": metadata,
+            }
+        )
+
+    def _load_obsidian_page_context(
+        self,
+        session,
+        project_id: str,
+        *,
+        include_hidden_truth: bool,
+    ) -> list[dict[str, object]]:
+        rows = list(
+            session.execute(
+                select(WorldModelPageRow)
+                .where(WorldModelPageRow.project_id == project_id, WorldModelPageRow.status == "canon_live")
+                .order_by(WorldModelPageRow.as_of_chapter.desc(), WorldModelPageRow.updated_at.desc(), WorldModelPageRow.id.desc())
+                .limit(max(self.max_world_pages * 4, 12))
+            )
+            .scalars()
+            .all()
+        )
+        pages: list[dict[str, object]] = []
+        for row in rows:
+            frontmatter = load_json(row.frontmatter_json, {})
+            if not include_hidden_truth and _frontmatter_hidden(frontmatter):
+                continue
+            sections = parse_sections(row.markdown or "")
+            pages.append(
+                {
+                    "page_key": row.page_key,
+                    "page_type": row.page_type,
+                    "title": row.title,
+                    "vault_path": row.vault_path,
+                    "content_hash": row.content_hash,
+                    "visibility": frontmatter.get("visibility", ""),
+                    "truth_relation": frontmatter.get("truth_relation", ""),
+                    "source_refs": frontmatter.get("source_refs", []),
+                    "canon_summary": _truncate(sections.get("Canon Summary", "")),
+                    "manual_notes_present": bool(sections.get("Manual Notes", "").strip()),
+                    "proposed_correction_present": bool(sections.get("Proposed Correction", "").strip()),
+                }
+            )
+        return pages
+
+    def _load_llm_kb_context(self, project_id: str, *, pack_kind: str, query: str = "") -> dict[str, object]:
+        store = LLMKnowledgeBaseStore(root=self.llm_kb_root)
+        files = store.list_files(project_id)
+        if not files:
+            return {}
+        safe_file_keys = [
+            "CURRENT_STATE.md",
+            "NEXT_CHAPTER_CONTEXT.md",
+            "ACTIVE_THREADS.md",
+            "CHARACTER_MEMORY.md",
+            "MAP_CONTEXT.md",
+            "READER_PROMISES.md",
+            "KNOWLEDGE_GAPS.md",
+            "MUST_NOT_REVEAL.md",
+            "RECENT_CHANGES.md",
+        ]
+        excerpts: dict[str, str] = {}
+        source_digest = ""
+        for key in safe_file_keys:
+            try:
+                content = store.read_file(project_id, key)
+            except (FileNotFoundError, ValueError):
+                continue
+            excerpts[key] = _truncate(content, limit=1200)
+            if not source_digest:
+                source_digest = _extract_source_digest(content)
+        search_results: list[dict[str, object]] = []
+        if str(query or "").strip():
+            role = {
+                "writing": "writer",
+                "review": "reviewer",
+                "planning": "planner",
+                "compiler": "compiler",
+            }.get(pack_kind, "writer")
+            search_results = LLMKnowledgeBaseRetriever(root=self.llm_kb_root).search(
+                project_id,
+                query,
+                role=role,
+                limit=5,
+            )
+        return {
+            "root_policy": "writer_safe",
+            "pack_kind": pack_kind,
+            "files": [item["file_key"] for item in files],
+            "source_digest": source_digest,
+            "excerpts": excerpts,
+            "search_results": search_results,
+        }
+
+    @staticmethod
+    def _load_review_conflicts(session, project_id: str) -> list[dict[str, object]]:
+        rows = list(
+            session.execute(
+                select(WorldModelConflictRow)
+                .where(WorldModelConflictRow.project_id == project_id, WorldModelConflictRow.status == "open")
+                .order_by(WorldModelConflictRow.created_at.desc(), WorldModelConflictRow.id.desc())
+                .limit(12)
+            )
+            .scalars()
+            .all()
+        )
+        return [
+            {
+                "id": row.id,
+                "conflict_type": row.conflict_type,
+                "severity": row.severity,
+                "subject_key": row.subject_key,
+                "description": row.description,
+                "evidence_refs": load_json(row.evidence_refs_json, []),
+            }
+            for row in rows
+        ]
 
     def _filter_writer_safe_world_context(self, pack: ChapterContextPack) -> ChapterContextPack:
         """Keep writer-facing v4 context to IDs, hints, and explicit reveal guards."""
@@ -376,6 +599,58 @@ class RetrievalBroker:
                 "chapter_world_delta_intent": safe_intent,
                 "recent_offscreen_deltas": [],
                 "must_not_reveal": list(intent.must_not_reveal),
+            }
+        )
+
+    def _merge_writer_world_model_pack(
+        self,
+        pack: ChapterContextPack,
+        world_pack: WorldModelRetrievalPack,
+    ) -> ChapterContextPack:
+        metadata = {
+            "knowledge_system_v46": {
+                "source_digest": world_pack.source_digest,
+                "source_refs": list(world_pack.source_refs),
+                "book_state_snapshot": world_pack.book_state_snapshot,
+                "book_state_nodes": world_pack.book_state_nodes,
+                "book_state_edges": world_pack.book_state_edges,
+                "book_state_facts": world_pack.book_state_facts,
+                "book_state_map": world_pack.book_state_map,
+                "obsidian_pages": world_pack.obsidian_pages,
+                "llm_kb_context": world_pack.llm_kb_context,
+                "review_conflicts": world_pack.review_conflicts,
+            }
+        }
+        map_context = dict(pack.map_context or {})
+        if world_pack.book_state_map:
+            map_context["book_state"] = world_pack.book_state_map
+        knowledge_system_context = {
+            **dict(getattr(pack, "knowledge_system_context", {}) or {}),
+            **metadata,
+        }
+        return pack.model_copy(
+            update={
+                "active_world_lines": world_pack.active_world_lines or pack.active_world_lines,
+                "visible_world_lines": world_pack.visible_world_lines or pack.visible_world_lines,
+                "hidden_world_lines": world_pack.hidden_world_lines or pack.hidden_world_lines,
+                "recent_world_deltas": world_pack.recent_world_deltas or pack.recent_world_deltas,
+                "recent_offscreen_deltas": world_pack.recent_offscreen_deltas,
+                "active_knowledge_gaps": world_pack.active_knowledge_gaps or pack.active_knowledge_gaps,
+                "planned_reveal_ladder": world_pack.planned_reveal_ladder or pack.planned_reveal_ladder,
+                "promise_debts": world_pack.promise_debts or pack.promise_debts,
+                "recent_reader_experience_deltas": world_pack.recent_reader_experience_deltas or pack.recent_reader_experience_deltas,
+                "must_not_reveal": world_pack.must_not_reveal or pack.must_not_reveal,
+                "fair_misdirection_requirements": world_pack.fair_misdirection_requirements or pack.fair_misdirection_requirements,
+                "map_context": map_context,
+                "knowledge_system_context": knowledge_system_context,
+                "world_context": pack.world_context.model_copy(
+                    update={
+                        "world_model_refs": {
+                            **pack.world_context.world_model_refs,
+                            "knowledge_system_v46": world_pack.source_digest or "book_state",
+                        }
+                    }
+                ),
             }
         )
 
@@ -562,3 +837,137 @@ class RetrievalBroker:
             if isinstance(payload, list):
                 requirements.extend(str(item) for item in payload if str(item).strip())
         return requirements
+
+
+def _book_state_node_hidden(node) -> bool:
+    tags = {str(tag).lower() for tag in getattr(node, "tags", []) or []}
+    metadata = getattr(node, "metadata", {}) if isinstance(getattr(node, "metadata", {}), dict) else {}
+    return (
+        str(getattr(node, "status", "") or "").lower() in {"hidden", "secret", "must_not_reveal"}
+        or str(metadata.get("visibility", "") or "").lower() in {"hidden", "secret", "must_not_reveal"}
+        or bool(tags.intersection({"hidden", "secret", "must_not_reveal"}))
+    )
+
+
+def _book_state_edge_hidden(edge) -> bool:
+    metadata = getattr(edge, "metadata", {}) if isinstance(getattr(edge, "metadata", {}), dict) else {}
+    return (
+        str(getattr(edge, "status", "") or "").lower() in {"hidden", "secret", "must_not_reveal"}
+        or str(getattr(edge, "visibility", "") or "").lower() in {"hidden", "secret", "must_not_reveal"}
+        or str(getattr(edge, "visibility_default", "") or "").lower() == "hidden"
+        or str(metadata.get("visibility", "") or "").lower() in {"hidden", "secret", "must_not_reveal"}
+    )
+
+
+def _book_state_fact_hidden(fact) -> bool:
+    return str(getattr(fact, "sensitivity_level", "") or "").lower() in {
+        "hidden",
+        "secret",
+        "must_not_reveal",
+    }
+
+
+def _map_node_hidden(node) -> bool:
+    metadata = getattr(node, "metadata", {}) if isinstance(getattr(node, "metadata", {}), dict) else {}
+    return (
+        str(getattr(node, "status", "") or "").lower() in {"hidden", "secret", "must_not_reveal"}
+        or str(metadata.get("visibility", "") or "").lower() in {"hidden", "secret", "must_not_reveal"}
+    )
+
+
+def _map_edge_hidden(edge) -> bool:
+    return (
+        str(getattr(edge, "status", "") or "").lower() in {"hidden", "secret", "must_not_reveal"}
+        or str(getattr(edge, "visibility_default", "") or "").lower() == "hidden"
+        or not bool(getattr(edge, "discovered_by_default", True))
+    )
+
+
+def _frontmatter_hidden(frontmatter: dict[str, object]) -> bool:
+    visibility = str(frontmatter.get("visibility", "") or "").lower()
+    truth = str(frontmatter.get("truth_relation", "") or "").lower()
+    status = str(frontmatter.get("status", "") or "").lower()
+    node_type = str(frontmatter.get("node_type", "") or "").lower()
+    return (
+        visibility in {"hidden", "secret", "must_not_reveal"}
+        or truth in {"hidden", "secret"}
+        or status in {"hidden", "secret"}
+        or node_type in {"secret"}
+    )
+
+
+def _node_context(node) -> dict[str, object]:
+    return {
+        "id": node.id,
+        "node_type": str(node.node_type),
+        "name": node.name,
+        "summary": node.summary or node.description,
+        "status": node.status,
+        "importance": node.importance,
+        "source_refs": list(node.source_refs),
+        "state_summary": str(node.state.get("state_summary", "")) if isinstance(node.state, dict) else "",
+    }
+
+
+def _edge_context(edge) -> dict[str, object]:
+    return {
+        "id": edge.id,
+        "source_id": edge.source_id,
+        "target_id": edge.target_id,
+        "edge_type": edge.edge_type,
+        "edge_family": str(edge.edge_family),
+        "status": edge.status,
+        "visibility": edge.visibility or edge.visibility_default,
+        "truth_relation": edge.truth_relation,
+        "source_refs": list(edge.source_refs or edge.evidence_refs),
+    }
+
+
+def _fact_context(fact) -> dict[str, object]:
+    return {
+        "id": fact.id,
+        "proposition": fact.proposition,
+        "fact_type": fact.fact_type,
+        "truth_value": fact.truth_value,
+        "confidence": fact.confidence,
+        "source_refs": list(fact.source_refs),
+    }
+
+
+def _map_node_context(node) -> dict[str, object]:
+    return {
+        "id": node.id,
+        "node_type": str(node.node_type),
+        "name": node.name,
+        "subworld_id": node.subworld_id,
+        "region_id": node.region_id,
+        "status": node.status,
+        "danger_level": node.default_danger_level,
+    }
+
+
+def _map_edge_context(edge) -> dict[str, object]:
+    return {
+        "id": edge.id,
+        "from_node_id": edge.from_node_id,
+        "to_node_id": edge.to_node_id,
+        "edge_type": str(edge.edge_type),
+        "status": edge.status,
+        "travel_time": edge.travel_time,
+        "risk_level": edge.risk_level,
+        "visibility": edge.visibility_default,
+    }
+
+
+def _truncate(value: str, *, limit: int = 600) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _extract_source_digest(content: str) -> str:
+    for line in content.splitlines():
+        if line.startswith("source_digest:"):
+            return line.split(":", 1)[1].strip()
+    return ""

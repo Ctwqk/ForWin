@@ -17,6 +17,8 @@ from forwin.protocol.book_state import (
     GraphDeltaType,
     MapPatch,
     NodePatch,
+    ReaderExperienceDeltaRecord,
+    ReaderPromise,
 )
 
 
@@ -34,6 +36,40 @@ class BookStateCompiler:
         *,
         compiler_run_id: str = "",
     ) -> BookStateCompileResult:
+        requested_delta_ids = [delta.id for delta in approved_changes.graph_deltas]
+        existing_delta_ids = self.repo.graph_delta_ids_exist(requested_delta_ids)
+        if existing_delta_ids:
+            if existing_delta_ids == set(requested_delta_ids):
+                world_snapshot = self.repo.latest_world_snapshot(
+                    approved_changes.project_id,
+                    approved_changes.chapter_number,
+                )
+                map_snapshot = self.repo.latest_map_snapshot(
+                    approved_changes.project_id,
+                    approved_changes.chapter_number,
+                )
+                return BookStateCompileResult(
+                    project_id=approved_changes.project_id,
+                    chapter_number=approved_changes.chapter_number,
+                    compiler_run_id=compiler_run_id
+                    or f"book_state_compile_idempotent_{approved_changes.project_id}_{approved_changes.chapter_number}",
+                    committed=True,
+                    graph_delta_ids=requested_delta_ids,
+                    world_snapshot_id=world_snapshot.id if world_snapshot else "",
+                    map_snapshot_id=map_snapshot.id if map_snapshot else "",
+                    forced_accept_reason=approved_changes.forced_accept_reason,
+                    metadata={"idempotent": True},
+                )
+            return BookStateCompileResult(
+                project_id=approved_changes.project_id,
+                chapter_number=approved_changes.chapter_number,
+                compiler_run_id=compiler_run_id
+                or f"book_state_compile_blocked_{approved_changes.project_id}_{approved_changes.chapter_number}",
+                committed=False,
+                graph_delta_ids=sorted(existing_delta_ids),
+                blocked_reasons=[f"partial duplicate graph_delta ids: {sorted(existing_delta_ids)}"],
+                forced_accept_reason=approved_changes.forced_accept_reason,
+            )
         base_chapter = max(int(approved_changes.chapter_number or 0) - 1, 0)
         runtime = self.projection.load_runtime_as_of(
             approved_changes.project_id,
@@ -163,8 +199,7 @@ class BookStateCompiler:
             node = runtime.world.nodes_by_id.get(patch.node_id)
             if node is None:
                 continue
-            if str(patch.op) == "create":
-                self.repo.create_world_node(node)
+            self.repo.create_world_node(node)
             if str(patch.op) == "create" or patch.field_path.startswith("state."):
                 self.repo.append_world_node_state(
                     project_id=delta.project_id,
@@ -176,14 +211,12 @@ class BookStateCompiler:
                     source_delta_id=delta.id,
                 )
         for patch in delta.edge_patches:
-            if str(patch.op) == "create" and patch.edge_id in runtime.world.edges_by_id:
+            if patch.edge_id in runtime.world.edges_by_id:
                 self.repo.create_world_edge(runtime.world.edges_by_id[patch.edge_id])
         for patch in delta.fact_patches:
-            if str(patch.op) == "create" and patch.fact_id in runtime.world.facts_by_id:
+            if patch.fact_id in runtime.world.facts_by_id:
                 self.repo.create_fact_node(runtime.world.facts_by_id[patch.fact_id])
         for patch in delta.map_patches:
-            if str(patch.op) != "create":
-                continue
             if patch.target_type == "map_node" and patch.target_id in runtime.map.nodes_by_id:
                 node = runtime.map.nodes_by_id[patch.target_id]
                 if "created_at_chapter" not in node.metadata:
@@ -206,6 +239,45 @@ class BookStateCompiler:
                 self.repo.create_narrative_edge(runtime.narrative.edges_by_id[target_id])
             elif target_id in runtime.narrative.nodes_by_id:
                 self.repo.create_narrative_node(runtime.narrative.nodes_by_id[target_id])
+        self._persist_reader_experience_side_effects(delta)
+
+    def _persist_reader_experience_side_effects(self, delta: GraphDelta) -> None:
+        payload = delta.metadata.get("reader_experience_delta") if isinstance(delta.metadata, dict) else None
+        if not isinstance(payload, dict):
+            return
+        reader_delta = ReaderExperienceDeltaRecord.model_validate(
+            {
+                **payload,
+                "project_id": delta.project_id,
+                "chapter_number": int(payload.get("chapter_number") or delta.chapter_number or 0),
+            }
+        )
+        self.repo.upsert_reader_experience_delta(reader_delta)
+        promise_id = str(payload.get("promise_id") or f"promise:{reader_delta.reader_experience_delta_id}")
+        self.repo.upsert_reader_promise(
+            ReaderPromise(
+                promise_id=promise_id,
+                project_id=delta.project_id,
+                promise_type=reader_delta.payoff_type or "reader_experience",
+                summary=reader_delta.reader_state_after or reader_delta.next_desire,
+                created_at_chapter=reader_delta.chapter_number,
+                current_debt_level=max(int(reader_delta.promise_debt_change or 0), 0),
+                reward_tags=list(reader_delta.reward_tags),
+                linked_threads=list(reader_delta.metadata.get("linked_threads", []))
+                if isinstance(reader_delta.metadata, dict)
+                else [],
+                linked_knowledge_gaps=list(reader_delta.metadata.get("linked_knowledge_gaps", []))
+                if isinstance(reader_delta.metadata, dict)
+                else [],
+                status="open" if int(reader_delta.promise_debt_change or 0) > 0 else "resolved",
+                source_refs=list(reader_delta.source_refs),
+                metadata={
+                    "source_delta_id": delta.id,
+                    "reader_experience_delta_id": reader_delta.reader_experience_delta_id,
+                    **(reader_delta.metadata if isinstance(reader_delta.metadata, dict) else {}),
+                },
+            )
+        )
 
 
 def _node_current(runtime: BookStateRuntime, patch: NodePatch) -> Any:
@@ -234,7 +306,10 @@ def _fact_current(runtime: BookStateRuntime, patch: FactPatch) -> Any:
     fact = runtime.world.facts_by_id.get(patch.fact_id)
     if fact is None:
         return None
-    return fact.model_dump(mode="json")
+    payload = fact.model_dump(mode="json")
+    if patch.field_path:
+        return _get_path(payload, patch.field_path)
+    return payload
 
 
 def _map_current(runtime: BookStateRuntime, patch: MapPatch) -> Any:

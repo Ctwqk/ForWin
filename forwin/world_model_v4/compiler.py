@@ -5,6 +5,9 @@ import json
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.adapter import BookStateDeltaAdapter
+from forwin.book_state.compiler import BookStateCompiler as BookStateCompilerV46
+from forwin.book_state.reviewer import BookStateReviewGate
 from forwin.models.event import CanonEvent
 from forwin.models.world_v4 import WorldCompileRunV4Row
 from forwin.protocol.world_v4 import (
@@ -111,6 +114,9 @@ class WorldModelCompiler:
                 snapshot.metadata.get("derived_entity_state_ids", [])
             ),
         )
+        book_state_sync = self._sync_book_state(request)
+        if book_state_sync:
+            result = result.model_copy(update={"metadata": {**result.metadata, "book_state_sync": book_state_sync}})
         self._record_compile_run(
             project_id=request.project_id,
             chapter_number=request.chapter_number,
@@ -125,6 +131,28 @@ class WorldModelCompiler:
         )
         self.session.flush()
         return result
+
+    def _sync_book_state(self, request: WorldCompileRequest) -> dict[str, object]:
+        changes = BookStateDeltaAdapter().from_world_change_set(
+            request.approved_changes,
+            approved_by=["v4_compiler"],
+            review_verdict_id=request.review_verdict_id,
+            forced_accept_reason=request.forced_accept_reason,
+        )
+        if not changes.graph_deltas:
+            return {"committed": True, "graph_delta_ids": []}
+        verdict = BookStateReviewGate(self.session).review(changes)
+        if not verdict.accepted or verdict.approved_changes is None:
+            return {
+                "committed": False,
+                "blocked_stage": "review_gate",
+                "issues": [issue.model_dump(mode="json") for issue in verdict.issues],
+            }
+        result = BookStateCompilerV46(self.session).compile(
+            verdict.approved_changes,
+            compiler_run_id=f"book_state_compile_{request.project_id}_{request.chapter_number}",
+        )
+        return result.model_dump(mode="json")
 
     def compile_gate_verdict(
         self,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -139,6 +141,30 @@ class BookStateProjection:
             as_of_chapter=as_of_chapter,
             as_of_story_time=as_of_story_time,
             base_snapshot_id=base_snapshot_id,
+            objective_graph_digest=_digest(
+                {
+                    "nodes": runtime.world.nodes_by_id,
+                    "edges": runtime.world.edges_by_id,
+                    "facts": runtime.world.facts_by_id,
+                    "states": runtime.world.states_by_node_id,
+                }
+            ),
+            map_graph_digest=_digest(
+                {
+                    "nodes": runtime.map.nodes_by_id,
+                    "edges": {
+                        edge_id: edge
+                        for edge_id, edge in runtime.map.edges_by_id.items()
+                        if "__reverse" not in edge_id
+                    },
+                }
+            ),
+            reader_overlay_digest=_digest(runtime.cognition_by_observer.get(("reader", "reader"), {})),
+            character_overlay_digests={
+                observer_id: _digest(view.overlay)
+                for (observer_type, observer_id), view in runtime.cognition_by_observer.items()
+                if observer_type == "character"
+            },
             world_node_state_index={
                 node_id: dict(state)
                 for node_id, state in runtime.world.states_by_node_id.items()
@@ -151,6 +177,13 @@ class BookStateProjection:
             active_fact_ids=list(runtime.world.facts_by_id),
             active_world_line_ids=active_world_line_ids or runtime.narrative.active_world_line_ids(),
             open_gap_ids=open_gap_ids or runtime.narrative.open_gap_ids(),
+            active_promise_ids=[
+                node_id
+                for node_id, node in runtime.world.nodes_by_id.items()
+                if node.node_type == "reader_promise" and node.is_active
+            ],
+            objective_state_summary=_summary_from_runtime(runtime),
+            reader_state_summary=_reader_summary_from_runtime(runtime),
             source_delta_ids=source_delta_ids,
         )
         map_snapshot = MapSnapshot(
@@ -209,6 +242,44 @@ class BookStateProjection:
             self.repo.persist_cognition_snapshot(snapshot)
         self.session.flush()
         return world_snapshot, map_snapshot, cognition_snapshots
+
+
+def _jsonable(value: Any) -> Any:
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if hasattr(value, "diff_against_objective"):
+        return value.diff_against_objective()
+    if isinstance(value, set):
+        return sorted(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    return value
+
+
+def _digest(value: Any) -> str:
+    raw = json.dumps(_jsonable(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _summary_from_runtime(runtime: BookStateRuntime) -> str:
+    return (
+        f"nodes={len(runtime.world.nodes_by_id)} "
+        f"edges={len(runtime.world.edges_by_id)} "
+        f"facts={len(runtime.world.facts_by_id)}"
+    )
+
+
+def _reader_summary_from_runtime(runtime: BookStateRuntime) -> str:
+    reader = runtime.cognition_by_observer.get(("reader", "reader"))
+    if reader is None:
+        return "reader_overlay=missing"
+    return (
+        f"visible={len(reader.visible_refs)} "
+        f"suspected={len(reader.suspected_refs)} "
+        f"confirmed={len(reader.confirmed_refs)}"
+    )
 
 
 def _apply_payload_patch(payload: dict[str, Any], field_path: str, op: str, value: Any) -> None:

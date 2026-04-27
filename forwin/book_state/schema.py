@@ -395,6 +395,48 @@ WORLD_NODE_FIELDS: dict[str, dict[str, set[str]]] = {
     },
 }
 
+_V46_GENERIC_PROFILE_FIELDS = {
+    "summary",
+    "scope",
+    "status",
+    "source_refs",
+    "visibility_level",
+    "narrative_role",
+    "metadata",
+}
+_V46_GENERIC_STATE_FIELDS = {
+    "status",
+    "current_state",
+    "state_summary",
+    "visibility_level",
+    "last_updated_chapter",
+    "source_refs",
+    "metadata",
+}
+for _node_type in (
+    "organization",
+    "family",
+    "subworld",
+    "region",
+    "location",
+    "institution",
+    "technology",
+    "magic_system",
+    "thread",
+    "secret",
+    "knowledge_gap",
+    "reader_promise",
+    "conflict",
+    "contract",
+):
+    WORLD_NODE_FIELDS.setdefault(
+        _node_type,
+        {
+            "profile": set(_V46_GENERIC_PROFILE_FIELDS),
+            "state": set(_V46_GENERIC_STATE_FIELDS),
+        },
+    )
+
 COGNITION_REF_PREFIXES = {
     "node:",
     "field:",

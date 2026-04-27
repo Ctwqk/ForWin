@@ -58,6 +58,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.phase import ArcStructureDraft, BandExperiencePlan, ChapterRewriteAttempt
 from forwin.extractor.world_v4 import WorldDeltaExtractor
 from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStateReviewGate
+from forwin.knowledge_system import KnowledgeProjectionRefresher
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.experience import ArcPayoffMap, BandDelightSchedule, ChapterExperiencePlan
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
@@ -4179,6 +4180,21 @@ class WritingOrchestrator:
             )
             return frozen_path or "book-state-review-gate-blocked"
         if compiler_result.committed:
+            projection_refresh = KnowledgeProjectionRefresher(session).refresh(
+                project_id,
+                as_of_chapter=chapter_number,
+                trigger="chapter_accepted",
+            )
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.KNOWLEDGE_PROJECTION_REFRESHED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 BookState projection refresh 完成。",
+                payload=projection_refresh.as_dict(),
+            )
             return None
 
         frozen_path = ""

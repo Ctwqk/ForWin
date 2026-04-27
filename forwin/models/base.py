@@ -2675,5 +2675,71 @@ def upgrade_db(engine: Engine) -> None:
 
         migrations.append(MigrationSpec("map_graph_schema_v1", apply_map_graph_schema_v1))
 
+        def apply_map_graph_schema_v2(conn) -> None:
+            def column_names(table_name: str) -> set[str]:
+                return {
+                    str(row["name"])
+                    for row in conn.execute(text(f"PRAGMA table_info({table_name})")).mappings().all()
+                }
+
+            tables = {
+                str(row["name"])
+                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).mappings().all()
+            }
+            if "map_nodes" in tables:
+                columns = column_names("map_nodes")
+                if "created_at_chapter" not in columns:
+                    conn.execute(text("ALTER TABLE map_nodes ADD COLUMN created_at_chapter INTEGER NOT NULL DEFAULT 0"))
+                for row in conn.execute(text("SELECT id, metadata_json FROM map_nodes")).mappings().all():
+                    try:
+                        metadata = json.loads(row["metadata_json"] or "{}") or {}
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        metadata = {}
+                    try:
+                        chapter = int(metadata.get("created_at_chapter") or 0)
+                    except (TypeError, ValueError):
+                        chapter = 0
+                    if chapter > 0:
+                        conn.execute(
+                            text("UPDATE map_nodes SET created_at_chapter = :chapter WHERE id = :id"),
+                            {"chapter": chapter, "id": row["id"]},
+                        )
+                conn.execute(
+                    text(
+                        """
+                        CREATE INDEX IF NOT EXISTS ix_map_nodes_project_created_chapter
+                        ON map_nodes(project_id, created_at_chapter)
+                        """
+                    )
+                )
+            if "map_edges" in tables:
+                columns = column_names("map_edges")
+                if "created_at_chapter" not in columns:
+                    conn.execute(text("ALTER TABLE map_edges ADD COLUMN created_at_chapter INTEGER NOT NULL DEFAULT 0"))
+                for row in conn.execute(text("SELECT id, metadata_json FROM map_edges")).mappings().all():
+                    try:
+                        metadata = json.loads(row["metadata_json"] or "{}") or {}
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        metadata = {}
+                    try:
+                        chapter = int(metadata.get("created_at_chapter") or 0)
+                    except (TypeError, ValueError):
+                        chapter = 0
+                    if chapter > 0:
+                        conn.execute(
+                            text("UPDATE map_edges SET created_at_chapter = :chapter WHERE id = :id"),
+                            {"chapter": chapter, "id": row["id"]},
+                        )
+                conn.execute(
+                    text(
+                        """
+                        CREATE INDEX IF NOT EXISTS ix_map_edges_project_created_chapter
+                        ON map_edges(project_id, created_at_chapter)
+                        """
+                    )
+                )
+
+        migrations.append(MigrationSpec("map_graph_schema_v2", apply_map_graph_schema_v2))
+
         for migration in migrations:
             _run_migration(conn, migration.version, migration.apply_fn)

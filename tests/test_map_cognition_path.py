@@ -52,7 +52,11 @@ def test_field_overrides_and_false_edges_change_observer_path() -> None:
                 from_node_id="city",
                 to_node_id="false_goal",
                 edge_type="road",
+                distance=0.2,
                 travel_time=0.1,
+                travel_cost=3,
+                risk_level=4,
+                narrative_cost=5,
             )
         },
     )
@@ -71,3 +75,8 @@ def test_field_overrides_and_false_edges_change_observer_path() -> None:
     assert blocked_known.reachable is False
     assert false_known.reachable is True
     assert false_known.path_edge_ids == ["false_shortcut"]
+    assert false_known.total_distance == 0.2
+    assert false_known.total_travel_time == 0.1
+    assert false_known.total_travel_cost == 3
+    assert false_known.total_risk == 4
+    assert false_known.total_narrative_cost == 5

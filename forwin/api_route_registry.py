@@ -11,6 +11,7 @@ from forwin import (
     api_book_state_routes,
     api_governance_routes,
     api_llm_kb_routes,
+    api_map_routes,
     api_obsidian_routes,
     api_project_routes,
     api_publisher_routes,
@@ -26,6 +27,9 @@ from forwin.api_schemas import (
     BandExperienceOverrideResponse,
     BookGenesisDetail,
     BookGenesisNameGenerateResponse,
+    BookStateLegacyImportResponse,
+    BookStatePathResponse,
+    BookStateRuntimeResponse,
     BulkDeleteResponse,
     CausalReplayResponse,
     CandidateDraftDetail,
@@ -44,6 +48,9 @@ from forwin.api_schemas import (
     ExtensionSessionSyncResponse,
     GovernanceInsightsResponse,
     LLMSettingsResponse,
+    MapEnsureResponse,
+    MapPathResponse,
+    MapRuntimeResponse,
     NarrativeConstraintInfo,
     NarrativeConstraintsResponse,
     ProjectAutomationUpdateResponse,
@@ -327,6 +334,9 @@ def register_api_routes(
     llm_kb_handlers = api_llm_kb_routes.build_handlers(
         get_session=get_session,
     )
+    map_handlers = api_map_routes.build_handlers(
+        get_session=get_session,
+    )
 
     handlers = {
         **system_handlers,
@@ -339,6 +349,7 @@ def register_api_routes(
         **book_state_handlers,
         **obsidian_handlers,
         **llm_kb_handlers,
+        **map_handlers,
     }
 
     route_definitions = [
@@ -435,9 +446,12 @@ def register_api_routes(
         ("/api/projects/{project_id}/book-state/deltas", ["GET"], handlers["list_book_state_deltas"], {}),
         ("/api/projects/{project_id}/book-state/cognition", ["GET"], handlers["list_book_state_cognition"], {}),
         ("/api/projects/{project_id}/book-state/reader-promises", ["GET"], handlers["list_book_state_reader_promises"], {}),
-        ("/api/projects/{project_id}/book-state/runtime", ["GET"], handlers["get_book_state_runtime"], {}),
-        ("/api/projects/{project_id}/book-state/map/path", ["GET"], handlers["get_book_state_path"], {}),
-        ("/api/projects/{project_id}/book-state/legacy-import", ["POST"], handlers["import_book_state_legacy"], {}),
+        ("/api/projects/{project_id}/book-state/runtime", ["GET"], handlers["get_book_state_runtime"], {"response_model": BookStateRuntimeResponse}),
+        ("/api/projects/{project_id}/book-state/map/path", ["GET"], handlers["get_book_state_path"], {"response_model": BookStatePathResponse}),
+        ("/api/projects/{project_id}/book-state/legacy-import", ["POST"], handlers["import_book_state_legacy"], {"response_model": BookStateLegacyImportResponse}),
+        ("/api/projects/{project_id}/map/runtime", ["GET"], handlers["get_project_map_runtime"], {"response_model": MapRuntimeResponse}),
+        ("/api/projects/{project_id}/map/path", ["GET"], handlers["get_project_map_path"], {"response_model": MapPathResponse}),
+        ("/api/projects/{project_id}/map/ensure-from-genesis", ["POST"], handlers["ensure_project_map_from_genesis"], {"response_model": MapEnsureResponse}),
         ("/api/projects/{project_id}/obsidian/export", ["POST"], handlers["export_obsidian"], {"response_model": WorldModelExportResponse}),
         ("/api/projects/{project_id}/obsidian/import", ["POST"], handlers["import_obsidian"], {"response_model": WorldModelImportResponse}),
         ("/api/projects/{project_id}/obsidian/proposals", ["GET"], handlers["list_obsidian_proposals"], {"response_model": list[WorldEditProposalInfo]}),

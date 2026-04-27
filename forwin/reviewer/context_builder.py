@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import logging
+
+from forwin.book_state.repository import BookStateRepository
+from forwin.map.repository import MapRepository
 from forwin.protocol.context import ChapterContextPack, LintSignal, ReviewContextPack
+
+logger = logging.getLogger(__name__)
 
 
 def build_review_context_pack(
@@ -60,6 +66,8 @@ def build_review_context_pack(
             context.project_id,
             before_chapter=context.chapter_number,
         )
+    map_context = dict(context.map_context)
+    map_context.update(_build_reviewer_only_map_context(repo=repo, context=context))
     return ReviewContextPack(
         project_id=context.project_id,
         project_title=context.project_title,
@@ -88,9 +96,43 @@ def build_review_context_pack(
         active_future_constraints=list(context.active_future_constraints),
         next_band_summary=context.next_band_summary,
         world_context=context.world_context,
-        map_context=dict(context.map_context),
+        map_context=map_context,
         recent_canon_events=recent_canon_events,
         recent_rule_events=recent_rule_events,
         recent_review_notes=recent_review_notes,
         lint_signals=list(lint_signals or []),
     )
+
+
+def _build_reviewer_only_map_context(*, repo, context: ChapterContextPack) -> dict:
+    session = getattr(repo, "session", None) if repo is not None else None
+    if session is None:
+        return {}
+    payload: dict = {}
+    try:
+        map_repo = MapRepository(session)
+        nodes = map_repo.list_map_nodes(context.project_id)
+        edges = map_repo.list_map_edges(context.project_id)
+        if nodes or edges:
+            payload["objective_review_graph"] = {
+                "available": True,
+                "node_count": len(nodes),
+                "edge_count": len(edges),
+                "map_nodes": [node.model_dump(mode="json") for node in nodes],
+                "map_edges": [edge.model_dump(mode="json") for edge in edges],
+            }
+    except Exception:
+        logger.warning("Failed to build reviewer objective map context.", exc_info=True)
+    try:
+        views = BookStateRepository(session).load_cognition_views(
+            context.project_id,
+            as_of_chapter=max(0, int(context.chapter_number or 0)),
+        )
+        if views:
+            payload["observer_cognition"] = {
+                f"{observer_type}:{observer_id}": view.overlay.model_dump(mode="json")
+                for (observer_type, observer_id), view in views.items()
+            }
+    except Exception:
+        logger.warning("Failed to build reviewer cognition context.", exc_info=True)
+    return payload

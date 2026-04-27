@@ -81,6 +81,7 @@ class MapNodeRow(Base):
         Index("ix_map_nodes_project_type", "project_id", "node_type"),
         Index("ix_map_nodes_project_path", "project_id", "hierarchy_path"),
         Index("ix_map_nodes_project_status", "project_id", "status"),
+        Index("ix_map_nodes_project_created_chapter", "project_id", "created_at_chapter"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
@@ -102,6 +103,7 @@ class MapNodeRow(Base):
     default_danger_level: Mapped[float] = mapped_column(Float, default=0.0)
     access_level: Mapped[str] = mapped_column(String, default="open")
     status: Mapped[str] = mapped_column(String, default="normal")
+    created_at_chapter: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -120,6 +122,7 @@ class MapEdgeRow(Base):
         Index("ix_map_edges_project_to", "project_id", "to_node_id"),
         Index("ix_map_edges_project_type", "project_id", "edge_type"),
         Index("ix_map_edges_project_status", "project_id", "status"),
+        Index("ix_map_edges_project_created_chapter", "project_id", "created_at_chapter"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
@@ -138,6 +141,7 @@ class MapEdgeRow(Base):
     status: Mapped[str] = mapped_column(String, default="open")
     discovered_by_default: Mapped[bool] = mapped_column(Boolean, default=True)
     visibility_default: Mapped[str] = mapped_column(String, default="visible")
+    created_at_chapter: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     metadata_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

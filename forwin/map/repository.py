@@ -94,8 +94,24 @@ class MapRepository:
             raise ValueError("cannot persist invalid map generation result")
 
         self.session.execute(delete(MapRegionEdgeRow).where(MapRegionEdgeRow.subworld_id == spec.subworld_id))
-        self.session.execute(delete(MapEdgeRow).where(MapEdgeRow.subworld_id == spec.subworld_id))
-        self.session.execute(delete(MapNodeRow).where(MapNodeRow.subworld_id == spec.subworld_id))
+        edge_rows = self.session.execute(
+            select(MapEdgeRow).where(MapEdgeRow.subworld_id == spec.subworld_id)
+        ).scalars().all()
+        for row in edge_rows:
+            metadata = _loads(row.metadata_json, {})
+            if isinstance(metadata, dict) and (
+                metadata.get("inter_subworld_edge") is True or metadata.get("exit_connector") is True
+            ):
+                continue
+            self.session.delete(row)
+        node_rows = self.session.execute(
+            select(MapNodeRow).where(MapNodeRow.subworld_id == spec.subworld_id)
+        ).scalars().all()
+        for row in node_rows:
+            metadata = _loads(row.metadata_json, {})
+            if isinstance(metadata, dict) and metadata.get("node_role") == "exit_node":
+                continue
+            self.session.delete(row)
         self.session.execute(delete(MapRegionRow).where(MapRegionRow.subworld_id == spec.subworld_id))
 
         for region in result.regions:
@@ -106,6 +122,7 @@ class MapRepository:
             self.upsert_region_edge(region_edge)
         for edge in result.map_edges:
             self.upsert_map_edge(edge)
+        self._delete_orphan_inter_subworld_edges(spec.project_id)
 
         subworld = self.session.get(SubWorld, spec.subworld_id)
         if subworld is not None:
@@ -209,7 +226,10 @@ class MapRepository:
         row.default_danger_level = float(node.default_danger_level)
         row.access_level = node.access_level
         row.status = node.status
-        row.metadata_json = _dump(node.metadata)
+        metadata = dict(node.metadata)
+        row.created_at_chapter = _created_at_chapter(metadata)
+        metadata.setdefault("created_at_chapter", row.created_at_chapter)
+        row.metadata_json = _dump(metadata)
         self.session.flush()
         return row
 
@@ -233,7 +253,10 @@ class MapRepository:
         row.status = edge.status
         row.discovered_by_default = bool(edge.discovered_by_default)
         row.visibility_default = edge.visibility_default
-        row.metadata_json = _dump(edge.metadata)
+        metadata = dict(edge.metadata)
+        row.created_at_chapter = _created_at_chapter(metadata)
+        metadata.setdefault("created_at_chapter", row.created_at_chapter)
+        row.metadata_json = _dump(metadata)
         self.session.flush()
         return row
 
@@ -251,17 +274,33 @@ class MapRepository:
         rows = self.session.execute(stmt.order_by(MapRegionEdgeRow.id.asc())).scalars().all()
         return [_region_edge_from_row(row) for row in rows]
 
-    def list_map_nodes(self, project_id: str, subworld_id: str | None = None) -> list[MapNode]:
+    def list_map_nodes(
+        self,
+        project_id: str,
+        subworld_id: str | None = None,
+        *,
+        as_of_chapter: int | None = None,
+    ) -> list[MapNode]:
         stmt = select(MapNodeRow).where(MapNodeRow.project_id == project_id)
         if subworld_id:
             stmt = stmt.where(MapNodeRow.subworld_id == subworld_id)
+        if as_of_chapter is not None:
+            stmt = stmt.where(MapNodeRow.created_at_chapter <= int(as_of_chapter))
         rows = self.session.execute(stmt.order_by(MapNodeRow.id.asc())).scalars().all()
         return [_map_node_from_row(row) for row in rows]
 
-    def list_map_edges(self, project_id: str, subworld_id: str | None = None) -> list[MapEdge]:
+    def list_map_edges(
+        self,
+        project_id: str,
+        subworld_id: str | None = None,
+        *,
+        as_of_chapter: int | None = None,
+    ) -> list[MapEdge]:
         stmt = select(MapEdgeRow).where(MapEdgeRow.project_id == project_id)
         if subworld_id:
             stmt = stmt.where(MapEdgeRow.subworld_id == subworld_id)
+        if as_of_chapter is not None:
+            stmt = stmt.where(MapEdgeRow.created_at_chapter <= int(as_of_chapter))
         rows = self.session.execute(stmt.order_by(MapEdgeRow.id.asc())).scalars().all()
         return [_map_edge_from_row(row) for row in rows]
 
@@ -320,6 +359,24 @@ class MapRepository:
             runtime.path_cache = {}
         return runtime
 
+    def _delete_orphan_inter_subworld_edges(self, project_id: str) -> None:
+        node_ids = {
+            row[0]
+            for row in self.session.execute(
+                select(MapNodeRow.id).where(MapNodeRow.project_id == project_id)
+            ).all()
+        }
+        rows = self.session.execute(
+            select(MapEdgeRow).where(MapEdgeRow.project_id == project_id)
+        ).scalars().all()
+        for row in rows:
+            if row.from_node_id not in node_ids or row.to_node_id not in node_ids:
+                self.session.delete(row)
+                continue
+            metadata = _loads(row.metadata_json, {})
+            if not (isinstance(metadata, dict) and metadata.get("inter_subworld_edge") is True):
+                continue
+
 
 def _subworld_from_row(row: SubWorld) -> SubWorldNode:
     return SubWorldNode(
@@ -377,6 +434,11 @@ def _region_edge_from_row(row: MapRegionEdgeRow) -> RegionEdge:
 
 def _map_node_from_row(row: MapNodeRow) -> MapNode:
     coordinates = _loads(row.coordinates_json, {})
+    metadata = _loads(row.metadata_json, {})
+    if isinstance(metadata, dict):
+        metadata.setdefault("created_at_chapter", int(getattr(row, "created_at_chapter", 0) or 0))
+    else:
+        metadata = {"created_at_chapter": int(getattr(row, "created_at_chapter", 0) or 0)}
     return MapNode(
         id=row.id,
         project_id=row.project_id,
@@ -397,11 +459,16 @@ def _map_node_from_row(row: MapNodeRow) -> MapNode:
         default_danger_level=float(row.default_danger_level or 0.0),
         access_level=row.access_level,
         status=row.status,
-        metadata=_loads(row.metadata_json, {}),
+        metadata=metadata,
     )
 
 
 def _map_edge_from_row(row: MapEdgeRow) -> MapEdge:
+    metadata = _loads(row.metadata_json, {})
+    if isinstance(metadata, dict):
+        metadata.setdefault("created_at_chapter", int(getattr(row, "created_at_chapter", 0) or 0))
+    else:
+        metadata = {"created_at_chapter": int(getattr(row, "created_at_chapter", 0) or 0)}
     return MapEdge(
         id=row.id,
         project_id=row.project_id,
@@ -419,7 +486,7 @@ def _map_edge_from_row(row: MapEdgeRow) -> MapEdge:
         status=row.status,
         discovered_by_default=bool(row.discovered_by_default),
         visibility_default=row.visibility_default,
-        metadata=_loads(row.metadata_json, {}),
+        metadata=metadata,
     )
 
 
@@ -427,6 +494,13 @@ def _ensure_non_negative_edge(edge: MapEdge) -> None:
     for field_name in ("distance", "travel_time", "travel_cost", "risk_level", "narrative_cost"):
         if float(getattr(edge, field_name) or 0.0) < 0:
             raise ValueError(f"MapEdge.{field_name} must be non-negative")
+
+
+def _created_at_chapter(metadata: dict[str, Any]) -> int:
+    try:
+        return max(0, int(metadata.get("created_at_chapter") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def cognition_views_from_overlays(overlays: list[CognitionOverlay]) -> dict[tuple[str, str], CognitionView]:

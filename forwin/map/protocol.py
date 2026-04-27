@@ -50,6 +50,9 @@ class MapAnchorNodeSpec(_MapProtocolModel):
     narrative_function: str
     required: bool = True
     tags: list[str] = Field(default_factory=list)
+    source_node_id: str = ""
+    source_region_id: str = ""
+    source_subworld_id: str = ""
 
 
 class SubWorldMapSpec(_MapProtocolModel):

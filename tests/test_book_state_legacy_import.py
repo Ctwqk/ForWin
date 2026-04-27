@@ -5,10 +5,12 @@ import json
 from sqlalchemy import func, select
 
 from forwin.book_state import LegacyBookStateImporter
+from forwin.map.models import MapNodeRow, MapRegionRow
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import NarrativeNodeRow, WorldEdgeRow, WorldNodeRow, WorldNodeStateRow
 from forwin.models.entity import Entity, EntityState, RelationEdge
+from forwin.models.subworld import SubWorld
 from forwin.protocol.world_v4 import (
     DeltaSource,
     DeltaSourceType,
@@ -124,3 +126,110 @@ def test_legacy_import_maps_entities_relations_and_v4_narrative_nodes() -> None:
     assert edge.edge_type == "ally_of"
     assert edge.edge_family == "social"
     assert {"world_line", "knowledge_gap", "reveal_plan"}.issubset(narrative_node_types)
+
+
+def test_legacy_import_reports_site_state_map_bindings_without_subworld_scope_leak() -> None:
+    engine = get_engine(":memory:")
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project = Project(
+            title="legacy import map",
+            premise="旧地点迁移",
+            genre="玄幻",
+            setting_summary="黑石城",
+        )
+        session.add(project)
+        session.flush()
+        city = Entity(
+            project_id=project.id,
+            kind="city",
+            name="黑石城",
+            description="主舞台城市",
+            created_at_chapter=1,
+        )
+        session.add(city)
+        session.flush()
+
+        counts = LegacyBookStateImporter(session).import_project(project.id)
+
+        world_node = session.get(WorldNodeRow, city.id)
+        map_node_count = session.scalar(select(func.count()).select_from(MapNodeRow))
+        subworld_count = session.scalar(select(func.count()).select_from(SubWorld))
+        profile = json.loads(world_node.profile_json)
+
+    assert counts["map_nodes"] == 1
+    assert counts["site_state_bindings"] == 1
+    assert counts["migration_report"]["created_site_state_map_bindings"][0]["site_state_id"] == city.id
+    assert profile["map_node_id"].startswith("legacy_map_node_")
+    assert map_node_count == 1
+    assert subworld_count == 0
+
+
+def test_legacy_import_promotes_subworld_region_drafts_idempotently() -> None:
+    engine = get_engine(":memory:")
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project = Project(
+            title="legacy import regions",
+            premise="旧 region 草案迁移",
+            genre="玄幻",
+            setting_summary="秘境",
+        )
+        session.add(project)
+        session.flush()
+        subworld = SubWorld(
+            id="sw_legacy_realm",
+            project_id=project.id,
+            name="旧秘境",
+            purpose="承接旧运行时生成的 region_drafts",
+            scope="arc_local",
+            status="active",
+            metadata_json=json.dumps(
+                {
+                    "region_source": "runtime_generated",
+                    "region_promotion_state": "draft",
+                    "region_drafts": [
+                        {
+                            "name": "秘境核心区",
+                            "kind": "ancient_ruin",
+                            "summary": "旧 runtime 草案中的核心区域。",
+                            "terrain": ["stone_forest", "rift"],
+                            "culture_traits": ["ancient_oath"],
+                        },
+                        {"name": "", "kind": "invalid_region"},
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        )
+        session.add(subworld)
+        session.flush()
+
+        first_counts = LegacyBookStateImporter(session).import_project(project.id)
+        first_report = first_counts["migration_report"]
+        region = session.execute(select(MapRegionRow).where(MapRegionRow.project_id == project.id)).scalar_one()
+        metadata_after_first = json.loads(session.get(SubWorld, subworld.id).metadata_json)
+
+        second_counts = LegacyBookStateImporter(session).import_project(project.id)
+        second_report = second_counts["migration_report"]
+        region_count = session.scalar(select(func.count()).select_from(MapRegionRow))
+        subworld_count = session.scalar(select(func.count()).select_from(SubWorld))
+
+    assert first_report["promoted_region_draft_count"] == 1
+    assert first_report["created_region_ids"] == [region.id]
+    assert first_report["skipped_region_drafts"][0]["reason"] == "missing_name"
+    assert region.name == "秘境核心区"
+    assert region.region_type == "ancient_ruin"
+    assert "stone_forest" in region.terrain
+    assert json.loads(region.metadata_json)["legacy_source"] == "sub_worlds.metadata_json.region_drafts"
+    assert metadata_after_first["region_promotion_state"] == "promoted"
+    assert metadata_after_first["region_promotion_report"]["promoted_region_draft_count"] == 1
+    assert metadata_after_first["region_drafts"][0]["name"] == "秘境核心区"
+    assert second_report["promoted_region_draft_count"] == 1
+    assert second_report["created_region_ids"] == []
+    assert region_count == 1
+    assert subworld_count == 1

@@ -11,13 +11,109 @@
 
 ## 2026-04-26
 
+### V4.5.1 残余设计文档收束
+
+将 V4.5 后端验收完成后仍散落在各设计文档里的“未完成设计”重新分流：V4.5.x 仍需追踪的后端 contract、migration audit、trace payload、movement policy、Skill governance 进入 `V4.5.1_markstone.md`；World Studio、dashboard、脚本型 Skill、native GraphDelta extractor、完整 route/rule 产品化明确排除到 V4.6+。
+
+关键变化：
+
+- 新增 [V4.5.1_markstone.md](/home/taiwei/.codex/worktrees/b77d/ForWin/Design-docs/V4.5.1_markstone.md)，作为 V4.5.1 残余设计债入口。
+- 更新 `V4.5_markstone.md`，把原有“差距”改为 V4.5.1 / V4.6+ 分类，避免把 4.6 产品化能力误当成 4.5.1 阻塞项。
+- V4.5.1 明确只保留后端 contract / 文档 / 测试口径，不扩大到 UI、dashboard、脚本执行或 native extractor。
+- 逐份审计 `V2_9_2.md`、`V2_9_3_skill_runtime.md`、`V3_8.md`、`V4_final_book_state_runtime.md`、`map_scheme_c.md`、`provisional_mechanism_check.md`、`review-design.rtf`、`review_fix_log_2026-04-15.md`；已覆盖或冲突的旧待办改为历史兼容/已覆盖，仍有效的后端残项并入 `V4.5.1_markstone.md`。
+
+验证：
+
+- `python3 -m pytest tests/test_v45_markstone_docs.py -q`
+- 结果：`3 passed`
+
+部署状态：未部署到 `8899`。原因：本轮只更新设计文档，不影响运行服务。切换条件：无。
+
+### V4.5.1 Markstone 残余闭环
+
+收束 V4.5 后端与文档口径：legacy region draft migration、SubWorldMetaGraph planner v0、movement reviewer policy v1 与文档旧状态 guard 已落地。
+
+关键变化：
+
+- `LegacyBookStateImporter` 会把 `SubWorld.metadata_json.region_drafts` 幂等提升为 `map_regions`，保留原草案，并在 migration report / subworld metadata 中写入 promotion report。
+- Legacy import API 新增 `legacy_region_promotion_started / succeeded / failed` DecisionEvent，失败可通过 chapter/project ledger 关联定位。
+- `ensure_book_map_from_genesis_atlas()` 会解析 Genesis `map_atlas.edges` 的跨 subworld edge，显式生成 `world_gate`，summary 记录 `interconnection_source=atlas_edges`；无可解析 edge 时回退 `default_chain`。
+- Movement reviewer 新增 reviewer-only `map_context.movement_policy`：`allowed_access_rule_ids`、`travel_time_multiplier_by_edge_type`、`team_speed_multiplier`，并新增 deterministic issue `map_access_rule_unmet`。
+- 新增文档 grep 测试，防止 BookState 追加 gate、无 map route、arc expansion 未接入等旧表述回流。
+
+验证：
+
+- `python3 -m pytest tests/test_book_state_legacy_import.py tests/test_map_world_integration.py -q`
+- 结果：`17 passed`
+- `python3 -m pytest tests/test_book_state_legacy_import.py tests/test_map_world_integration.py tests/test_v45_markstone_docs.py -q`
+- 结果：`19 passed`
+- `python3 -m pytest tests/test_book_state_legacy_import.py tests/test_map_world_integration.py tests/test_book_genesis_flow.py -q`
+- 结果：`35 passed`
+- `python3 -m pytest tests/test_world_v4_orchestrator_gate.py tests/test_api_split_modules.py -q`
+- 结果：`7 passed`
+- `python3 -m pytest -q --ignore=tests/browser --ignore=tests/test_mcp_server.py`
+- 结果：`440 passed, 8 subtests passed`
+
+部署状态：未部署到 `8899`。原因：本轮为代码与文档更新，当前会话未执行容器重建/重启。切换条件：确认无 active generation 后，重建并重启 `forwin` 服务。
+
+### V4.5 Markstone 验收闭环补完
+
+补齐 V4.5 验收闭环后端范围：BookState 成为 canon 优先路径，Scheme C 地图支持 arc expansion，reviewer 区分 objective path 与 observer-known path，并把 BookState / map / reviewer 的关键失败接入 `DecisionEvent`。
+
+关键变化：
+
+- `assemble_context()` 优先读取 BookState runtime overlay：narrative line、knowledge gap、角色地点和 `site_state <-> MapNode` binding。
+- `WritingOrchestrator` 改为 BookState review/compile 先提交 canon；旧 `world_model_v4` 降级为 compatibility projection，失败记录 `legacy_projection_failed`，不回滚 BookState canon。
+- 新增 `ensure_book_map_from_genesis_atlas()`，arc materialization 可从 Genesis atlas 增量生成缺失 subworld/region，并通过 `world_gate` 连通已有 BookMap。
+- 新增最小 map API：map runtime、map path、ensure-from-genesis；BookState runtime/path/legacy import API 增加稳定 response model。
+- Reviewer context 增加 reviewer-only objective graph 和 cognition overlay；movement reviewer 增加 hidden route、blocked route、false route、observer-known detour 的 deterministic issue code。
+- Legacy import 返回 migration report，并为 legacy location/city/ruin 创建 `site_state <-> MapNode` binding，避免误建为 `SubWorld`。
+
+验证：
+
+- `python3 -m pytest tests/test_book_state_repository_projection_compiler.py::test_context_assembly_prefers_book_state_runtime_overlay tests/test_map_world_integration.py::test_arc_map_expansion_adds_missing_subworld_and_world_gate tests/test_map_world_integration.py::test_reviewer_flags_observer_known_hidden_route_detour -q`
+- 结果：`3 passed`
+- `python3 -m pytest tests/test_book_state_repository_projection_compiler.py tests/test_book_state_legacy_import.py tests/test_book_state_final.py tests/test_map_world_integration.py tests/test_map_genesis_adapter.py tests/test_map_generation.py -q`
+- 结果：`27 passed`
+- `python3 -m pytest tests/test_api_split_modules.py tests/test_world_v4_api.py tests/test_governance_decision_api.py -q`
+- 结果：`10 passed, 3 subtests passed`
+- `python3 -m pytest tests/test_book_genesis_flow.py tests/test_world_v4_orchestrator_gate.py -q`
+- 结果：`22 passed`
+- `python3 -m pytest -q --ignore=tests/browser --ignore=tests/test_mcp_server.py`
+- 结果：`434 passed, 8 subtests passed`
+
+部署状态：未部署到 `8899`。原因：本轮为代码与文档更新，当前会话未执行容器重建/重启。切换条件：确认无 active generation 后，重建并重启 `forwin` 服务。
+
+### V4.5 M3：Genesis start-writing 自动生成 Scheme C BookMap
+
+将 Scheme C 地图接入 Genesis 到写作的首段主链。新 Genesis 项目在 `start-writing` handoff 时会把 `world.map_atlas` 转换为 `SubWorldMapSpec`，生成初始 BookMap，并把可见地图摘要送入 writer context；已有 BookMap 的项目会跳过自动生成，避免覆盖手工地图。
+
+关键变化：
+
+- 新增 `forwin/map/genesis_adapter.py`，把 Genesis `submaps / regions / nodes / key_locations` 转为 Scheme C map spec，并保留 source ids 到 anchor metadata。
+- `start_project_writing()` 在启动 generation task 前调用 BookMap 初始化；地图 validation 失败时阻断启动、回滚 arc/chapter 物化，并写入 `map_generation_failed` DecisionEvent。
+- 新增 `map_generation_started / map_generation_succeeded / map_generation_failed` 审计事件类型。
+- `assemble_context()` 会解析 Genesis core_cast 的 `current_base / home_location`，映射到生成后的 `MapNode`，并给 writer prompt 输出 `【地图运行时】` 可见位置和 nearby route 摘要。
+- 更新 `V4.5_markstone.md`，将 M3 差距从 “start-writing 或 arc expansion 均未接入” 调整为 “start-writing 已接入”；后续 V4.5 验收闭环已补齐 arc expansion。
+
+验证：
+
+- `python3 -m pytest tests/test_map_genesis_adapter.py tests/test_map_generation.py tests/test_map_pathfinding.py tests/test_map_cognition_path.py tests/test_map_world_integration.py tests/test_book_genesis_flow.py tests/test_subworld_control.py -q`
+- 结果：`46 passed`
+- `python3 -m pytest tests/test_api_split_modules.py tests/test_api_pages_rendering.py -q`
+- 结果：`6 passed`
+- `python3 -m pytest -q --ignore=tests/browser --ignore=tests/test_mcp_server.py`
+- 结果：`427 passed, 8 subtests passed`
+
+部署状态：未部署到 `8899`。原因：本轮是主链代码与文档更新，当前会话未执行容器重建/重启。切换条件：确认无 active generation 后，重建并重启 `forwin` 服务。
+
 ### V4.5 Markstone 文档收束与旧设计清理
 
 将旧 V2/V3 历史设计稿清理出 `Design-docs/`，新增 V4.5 当前差距与后续里程碑入口，避免新开发继续引用已被 BookState final runtime 和 Scheme C 地图覆盖的旧语义。
 
 关键变化：
 
-- 新增 [V4.5_markstone.md](/home/taiwei/.codex/worktrees/2a32/ForWin/Design-docs/V4.5_markstone.md)，汇总当前代码实况、保留文档、已删文档、文档-代码差距和 V4.5 后续里程碑。
+- 新增 [V4.5_markstone.md](/home/taiwei/.codex/worktrees/b77d/ForWin/Design-docs/V4.5_markstone.md)，汇总当前代码实况、保留文档、已删文档、文档-代码差距和 V4.5 后续里程碑。
 - 删除旧设计稿：`V2_8.md`、`V2_8_1.md`、`V2_8_1_completion_status.md`、`V2_9.md`、`V2_9_1.md`、`V3_0.md`、`project_master_plan.md`、`third_version_v2_3_writer_human_error_isolation.md`、`v2_6_phased_rollout_plan.md`、`v2_7.md`。
 - 更新 `V2_9_2.md`，明确其只保留 Genesis / Writer / Review / Governance 基线；其中旧 `SubWorld` 局部派生语义降级为历史兼容。
 - 更新 `V4_final_book_state_runtime.md` 与 `map_scheme_c.md`，统一指向 V4.5 差距入口，并补充 BookState API/gate 与地图 service/API 边界。
@@ -35,7 +131,7 @@
 
 关键变化：
 
-- 新增设计/实现文档：[map_scheme_c.md](/home/taiwei/.codex/worktrees/2a32/ForWin/Design-docs/map_scheme_c.md)。
+- 新增设计/实现文档：[map_scheme_c.md](/home/taiwei/.codex/worktrees/b77d/ForWin/Design-docs/map_scheme_c.md)。
 - 新增 `forwin/map/` 包，包含 `models / protocol / repository / generator / pathfinding / validator / service`。
 - `SubWorld` 升级为大陆、星球、位面、异世界等大尺度地图容器，并新增 map metadata 显式字段。
 - 新增 `map_regions / map_region_edges / map_generation_runs`，扩展 `map_nodes / map_edges`，并通过 `map_graph_schema_v1` 接入 lightweight migration。
@@ -46,9 +142,9 @@
 
 验证：
 
-- `python3 -m pytest tests/test_book_state_protocol.py tests/test_book_state_runtime.py tests/test_book_state_schema.py tests/test_map_models.py tests/test_map_generation_scheme_c.py tests/test_map_generation.py tests/test_map_pathfinding.py tests/test_map_cognition_path.py tests/test_map_world_integration.py tests/test_subworld_control.py -q`
-- 结果：`37 passed`
-- `python3 -m py_compile forwin/map/protocol.py forwin/map/service.py forwin/map/generator.py forwin/map/__init__.py forwin/context/assembler.py forwin/protocol/context.py forwin/reviewer/context_builder.py forwin/reviewer/webnovel.py tests/test_map_generation_scheme_c.py tests/test_map_world_integration.py`
+- `python3 -m pytest tests/test_book_state_protocol.py tests/test_book_state_runtime.py tests/test_book_state_schema.py tests/test_map_models.py tests/test_map_generation.py tests/test_map_pathfinding.py tests/test_map_cognition_path.py tests/test_map_world_integration.py tests/test_subworld_control.py -q`
+- 结果：`38 passed`
+- `python3 -m py_compile forwin/map/protocol.py forwin/map/service.py forwin/map/generator.py forwin/map/__init__.py forwin/context/assembler.py forwin/protocol/context.py forwin/reviewer/context_builder.py forwin/reviewer/webnovel.py tests/test_map_generation.py tests/test_map_world_integration.py`
 
 部署状态：未部署到 `8899`。原因：本轮是地图持久化、生成、路径和 reviewer/service 集成的代码与文档更新，未切换线上服务。切换条件：后续接入 orchestrator 主链路或线上 reviewer 前，先确认无 active generation，再重建并切换服务。
 
@@ -95,7 +191,7 @@
 
 关键变化：
 
-- 新增设计文档：[V4_final_book_state_runtime.md](/home/taiwei/ForWin/Design-docs/V4_final_book_state_runtime.md)。
+- 新增设计文档：[V4_final_book_state_runtime.md](/home/taiwei/.codex/worktrees/b77d/ForWin/Design-docs/V4_final_book_state_runtime.md)。
 - 明确 canon source 改为 `GraphDelta + patch rows`，旧 `entities / entity_states / relation_edges` 和轻量 v4 rows 降级为兼容投影、迁移来源和历史审计证据。
 - 明确 `MapGraph` 独立于 ObjectiveWorldGraph，支持带权有向多重图、路径计算、hidden/blocked route、observer-aware known distance。
 - 明确 `CognitionOverlay` 不复制客观世界图，只保存 mask、override、false additions。
@@ -120,7 +216,7 @@
 
 关键变化：
 
-- 新增设计文档：[V3_0.md](/home/taiwei/ForWin/Design-docs/V3_0.md)。
+- 新增设计文档：`V3_0.md`。该历史文档已在 V4.5 文档清理中删除，语义由 `V4_final_book_state_runtime.md` 和 `V4.5_markstone.md` 覆盖。
 - 文档把原 V3.1-V3.6 六轨路线压缩为四个交付阶段：`V3.1` WorldModel 核心基座与只读 Wiki、`V3.2` canon 后自动编译与上下文接入、`V3.3` World Studio 与 Obsidian proposal 闭环、`V3.4` 冲突治理/图谱/LLM Wiki 维护。
 - 明确权威边界：DB / raw events / DecisionEvent 是源，`WorldModelSnapshot` 是可重建投影，Markdown / Obsidian 不是 canon。
 - 记录当前实现边界：proposal review 已有状态流和重新编译框架，但完整 adapter 到 Genesis / EntityState / RelationEdge / Conflict resolution 仍是后续工作。

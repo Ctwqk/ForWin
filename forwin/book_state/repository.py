@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.cognition import CognitionView
@@ -106,7 +106,10 @@ class BookStateRepository:
         row.source_refs_json = _dump(node.source_refs)
         row.is_active = bool(node.is_active)
         row.profile_json = _dump(node.profile)
-        row.metadata_json = _dump(node.metadata)
+        metadata = dict(node.metadata)
+        row.created_at_chapter = _created_at_chapter(metadata, default=int(node.created_at_chapter or 0))
+        metadata.setdefault("created_at_chapter", row.created_at_chapter)
+        row.metadata_json = _dump(metadata)
         self.session.flush()
         return row
 
@@ -158,7 +161,9 @@ class BookStateRepository:
         row.source_refs_json = _dump(edge.source_refs)
         row.state_json = _dump(edge.state)
         row.evidence_refs_json = _dump(edge.evidence_refs)
-        row.metadata_json = _dump(edge.metadata)
+        metadata = dict(edge.metadata)
+        metadata.setdefault("created_at_chapter", int(edge.established_at_chapter or 0))
+        row.metadata_json = _dump(metadata)
         self.session.flush()
         return row
 
@@ -415,7 +420,10 @@ class BookStateRepository:
         row.default_danger_level = float(node.default_danger_level)
         row.access_level = node.access_level
         row.status = node.status
-        row.metadata_json = _dump(node.metadata)
+        metadata = dict(node.metadata)
+        row.created_at_chapter = _created_at_chapter(metadata, default=int(getattr(row, "created_at_chapter", 0) or 0))
+        metadata.setdefault("created_at_chapter", row.created_at_chapter)
+        row.metadata_json = _dump(metadata)
         self.session.flush()
         return row
 
@@ -438,7 +446,10 @@ class BookStateRepository:
         row.status = edge.status
         row.discovered_by_default = bool(edge.discovered_by_default)
         row.visibility_default = edge.visibility_default
-        row.metadata_json = _dump(edge.metadata)
+        metadata = dict(edge.metadata)
+        row.created_at_chapter = _created_at_chapter(metadata, default=int(getattr(row, "created_at_chapter", 0) or 0))
+        metadata.setdefault("created_at_chapter", row.created_at_chapter)
+        row.metadata_json = _dump(metadata)
         self.session.flush()
         return row
 
@@ -681,6 +692,7 @@ class BookStateRepository:
                     )
                 )
             elif patch_type == "fact":
+                fact_base = {key: value for key, value in base.items() if key != "field_path"}
                 fact_patches.append(
                     FactPatch(
                         fact_id=str(metadata.get("fact_id", "")),
@@ -688,7 +700,7 @@ class BookStateRepository:
                         truth_value=str(metadata.get("truth_value", "")),
                         related_refs=list(metadata.get("related_refs", [])),
                         sensitivity_level=str(metadata.get("sensitivity_level", "")),
-                        **base,
+                        **fact_base,
                     )
                 )
             elif patch_type == "map":
@@ -771,7 +783,15 @@ class BookStateRepository:
             .all()
             if row.retired_at_chapter is None or row.retired_at_chapter > as_of_chapter
         ]
-        states = state_index or self._latest_state_index(project_id, as_of_chapter)
+        states = self._latest_state_index(project_id, as_of_chapter)
+        if state_index:
+            states.update(
+                {
+                    node_id: dict(state)
+                    for node_id, state in state_index.items()
+                    if state
+                }
+            )
         edges = [
             _world_edge_from_row(row)
             for row in self.session.execute(
@@ -840,12 +860,14 @@ class BookStateRepository:
                 _map_node_from_row(row)
                 for row in self.session.execute(
                     select(MapNodeRow)
-                    .where(MapNodeRow.project_id == project_id)
+                    .where(
+                        MapNodeRow.project_id == project_id,
+                        MapNodeRow.created_at_chapter <= as_of_chapter,
+                    )
                     .order_by(MapNodeRow.id.asc())
                 )
                 .scalars()
                 .all()
-                if _created_at_chapter(_loads(row.metadata_json, {})) <= as_of_chapter
             ]
         else:
             nodes = list(map_node_index.values())
@@ -855,12 +877,14 @@ class BookStateRepository:
                 _map_edge_from_row(row)
                 for row in self.session.execute(
                     select(MapEdgeRow)
-                    .where(MapEdgeRow.project_id == project_id)
+                    .where(
+                        MapEdgeRow.project_id == project_id,
+                        MapEdgeRow.created_at_chapter <= as_of_chapter,
+                    )
                     .order_by(MapEdgeRow.id.asc())
                 )
                 .scalars()
                 .all()
-                if _created_at_chapter(_loads(row.metadata_json, {})) <= as_of_chapter
             ]
         else:
             edges = list(map_edge_index.values())
@@ -903,7 +927,7 @@ class BookStateRepository:
             overlays[key] = _cognition_overlay_from_row(row)
         return {key: CognitionView(overlay) for key, overlay in overlays.items()}
 
-    def load_narrative_graph(self, project_id: str) -> NarrativeControlGraph:
+    def load_narrative_graph(self, project_id: str, *, as_of_chapter: int | None = None) -> NarrativeControlGraph:
         nodes = [
             _narrative_node_from_row(row)
             for row in self.session.execute(
@@ -913,6 +937,7 @@ class BookStateRepository:
             )
             .scalars()
             .all()
+            if as_of_chapter is None or _created_at_chapter(_loads(row.metadata_json, {})) <= as_of_chapter
         ]
         edges = [
             _narrative_edge_from_row(row)
@@ -923,6 +948,7 @@ class BookStateRepository:
             )
             .scalars()
             .all()
+            if as_of_chapter is None or _created_at_chapter(_loads(row.metadata_json, {})) <= as_of_chapter
         ]
         return NarrativeControlGraph(nodes=nodes, edges=edges)
 
@@ -953,6 +979,29 @@ class BookStateRepository:
             .limit(1)
         ).scalar_one_or_none()
         return _map_snapshot_from_row(row) if row else None
+
+    def latest_available_chapter(self, project_id: str) -> int:
+        values = [
+            self.session.scalar(
+                select(func.max(GraphDeltaRow.chapter_number)).where(GraphDeltaRow.project_id == project_id)
+            ),
+            self.session.scalar(
+                select(func.max(WorldSnapshotRow.as_of_chapter)).where(WorldSnapshotRow.project_id == project_id)
+            ),
+            self.session.scalar(
+                select(func.max(MapSnapshotRow.as_of_chapter)).where(MapSnapshotRow.project_id == project_id)
+            ),
+            self.session.scalar(
+                select(func.max(CognitionOverlayRow.as_of_chapter)).where(CognitionOverlayRow.project_id == project_id)
+            ),
+            self.session.scalar(
+                select(func.max(MapNodeRow.created_at_chapter)).where(MapNodeRow.project_id == project_id)
+            ),
+            self.session.scalar(
+                select(func.max(MapEdgeRow.created_at_chapter)).where(MapEdgeRow.project_id == project_id)
+            ),
+        ]
+        return max([int(value or 0) for value in values] or [0])
 
     def persist_world_snapshot(self, snapshot: WorldSnapshot) -> WorldSnapshotRow:
         row = WorldSnapshotRow(
@@ -1125,6 +1174,11 @@ def _reader_experience_delta_from_row(row: BookReaderExperienceDeltaRow) -> Read
 
 def _map_node_from_row(row: MapNodeRow) -> MapNode:
     coordinates = _loads(row.coordinates_json, {})
+    metadata = _loads(row.metadata_json, {})
+    if isinstance(metadata, dict):
+        metadata.setdefault("created_at_chapter", int(getattr(row, "created_at_chapter", 0) or 0))
+    else:
+        metadata = {"created_at_chapter": int(getattr(row, "created_at_chapter", 0) or 0)}
     return MapNode(
         id=row.id,
         project_id=row.project_id,
@@ -1145,11 +1199,16 @@ def _map_node_from_row(row: MapNodeRow) -> MapNode:
         default_danger_level=row.default_danger_level,
         access_level=row.access_level,
         status=row.status,
-        metadata=_loads(row.metadata_json, {}),
+        metadata=metadata,
     )
 
 
 def _map_edge_from_row(row: MapEdgeRow) -> MapEdge:
+    metadata = _loads(row.metadata_json, {})
+    if isinstance(metadata, dict):
+        metadata.setdefault("created_at_chapter", int(getattr(row, "created_at_chapter", 0) or 0))
+    else:
+        metadata = {"created_at_chapter": int(getattr(row, "created_at_chapter", 0) or 0)}
     return MapEdge(
         id=row.id,
         project_id=row.project_id,
@@ -1167,7 +1226,7 @@ def _map_edge_from_row(row: MapEdgeRow) -> MapEdge:
         status=row.status,
         discovered_by_default=row.discovered_by_default,
         visibility_default=row.visibility_default,
-        metadata=_loads(row.metadata_json, {}),
+        metadata=metadata,
     )
 
 
@@ -1336,11 +1395,11 @@ def _patch_target_and_metadata(
     return patch.target_ref, {"evidence_refs": list(patch.evidence_refs)}
 
 
-def _created_at_chapter(metadata: dict[str, Any]) -> int:
+def _created_at_chapter(metadata: dict[str, Any], *, default: int = 0) -> int:
     try:
-        return int(metadata.get("created_at_chapter", 0) or 0)
+        return int(metadata.get("created_at_chapter", default) or default)
     except (TypeError, ValueError):
-        return 0
+        return int(default or 0)
 
 
 __all__ = [

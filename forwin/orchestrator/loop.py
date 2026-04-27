@@ -56,6 +56,7 @@ from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.phase import ArcStructureDraft, BandExperiencePlan, ChapterRewriteAttempt
+from forwin.observability.payloads import attempt_group_ids, audit_payload, event_error_payload, safe_error_summary
 from forwin.extractor.world_v4 import WorldDeltaExtractor
 from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStateReviewGate
 from forwin.knowledge_system import KnowledgeProjectionRefresher
@@ -1170,6 +1171,20 @@ class WritingOrchestrator:
             )
 
             repair_attempt_count = len(repo.list_chapter_rewrite_attempts(project_id, chapter_number))
+            if frozen_path:
+                updater.mark_chapter_status(
+                    project_id,
+                    chapter_number,
+                    "needs_review",
+                    repair_attempt_count=repair_attempt_count,
+                    residual_review_issues=self._review_issue_payloads(verdict),
+                    canon_risk_level="high",
+                )
+                session.commit()
+                return {
+                    "message": f"第{chapter_number}章 canon gate 阻止接受，已转为 needs_review。",
+                    "frozen_artifact": frozen_path,
+                }
             acceptance_mode = (
                 "checkpoint_approved"
                 if project is not None and self._project_governance(project).default_operation_mode == "checkpoint"
@@ -1929,6 +1944,51 @@ class WritingOrchestrator:
         issues = review.residual_review_issues or review.issues
         return [issue.model_dump(mode="json") for issue in issues]
 
+    def _record_map_movement_review_issues(
+        self,
+        *,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_number: int,
+        review: ReviewVerdict,
+        parent_event_id: str = "",
+    ) -> None:
+        issues = [
+            issue
+            for issue in review.issues
+            if str(getattr(issue, "rule_name", "") or "").startswith("map_")
+        ]
+        if not issues:
+            return
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.MAP_MOVEMENT_REVIEW_ISSUE,
+            scope="chapter",
+            summary=f"第{chapter_number}章 map movement reviewer 发现 {len(issues)} 个问题。",
+            payload=audit_payload(
+                stage="map_movement_review",
+                status="issue",
+                operation_id=self._audit_operation_id(),
+                issue_count=len(issues),
+                issues=[
+                    {
+                        "rule_name": str(issue.rule_name or ""),
+                        "issue_type": str(issue.issue_type or ""),
+                        "severity": str(issue.severity or ""),
+                        "issue_group": str(issue.issue_group or ""),
+                        "target_scope": str(issue.target_scope or ""),
+                        "entity_names": list(issue.entity_names or []),
+                        "evidence_refs": list(issue.evidence_refs or []),
+                    }
+                    for issue in issues
+                ],
+            ),
+            parent_event_id=parent_event_id,
+        )
+
     @staticmethod
     def _review_canon_risk(review: ReviewVerdict) -> str:
         if review.final_gate_decision is not None:
@@ -2110,6 +2170,13 @@ class WritingOrchestrator:
             related_object_type="chapter_review",
             related_object_id=current_review_row.id,
             payload=self._review_event_payload(current_review),
+        )
+        self._record_map_movement_review_issues(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_plan.chapter_number,
+            review=current_review,
+            parent_event_id=str(current_review_event.id or ""),
         )
         current_review_trace_id = self._save_prompt_trace_payload(
             session=session,
@@ -2434,6 +2501,13 @@ class WritingOrchestrator:
                 related_object_id=rewritten_review_row.id,
                 payload=self._review_event_payload(rewritten_review),
                 parent_event_id=str(repair_result_event.id or ""),
+            )
+            self._record_map_movement_review_issues(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_plan.chapter_number,
+                review=rewritten_review,
+                parent_event_id=str(current_review_event.id or ""),
             )
             current_review_trace_id = self._save_prompt_trace_payload(
                 session=session,
@@ -3597,13 +3671,15 @@ class WritingOrchestrator:
                     event_type=DecisionEventType.LLM_REQUEST_STARTED,
                     scope="chapter",
                     summary=f"第{chapter_number}章 writer 第 {attempt}/{max_attempts} 次调用开始。",
-                    payload={
-                        "attempt_no": attempt,
-                        "max_attempts": max_attempts,
-                        "stage": "writing_chapter",
-                        "model_profile_id": model_profile_id,
-                        "model": model_name,
-                    },
+                    payload=audit_payload(
+                        stage="writing_chapter",
+                        status="started",
+                        operation_id=self._audit_operation_id(),
+                        attempt_no=attempt,
+                        max_attempts=max_attempts,
+                        model_profile_id=model_profile_id,
+                        model=model_name,
+                    ),
                 )
                 output = self._call_with_compatible_kwargs(
                     self.writer.write_chapter,
@@ -3627,14 +3703,16 @@ class WritingOrchestrator:
                     event_type=DecisionEventType.LLM_REQUEST_SUCCEEDED,
                     scope="chapter",
                     summary=f"第{chapter_number}章 writer 第 {attempt}/{max_attempts} 次调用成功。",
-                    payload={
-                        "attempt_no": attempt,
-                        "max_attempts": max_attempts,
-                        "stage": "writing_chapter",
-                        "model_profile_id": model_profile_id,
-                        "model": model_name,
-                        "duration_ms": duration_ms,
-                    },
+                    payload=audit_payload(
+                        stage="writing_chapter",
+                        status="succeeded",
+                        operation_id=self._audit_operation_id(),
+                        duration_ms=duration_ms,
+                        attempt_no=attempt,
+                        max_attempts=max_attempts,
+                        model_profile_id=model_profile_id,
+                        model=model_name,
+                    ),
                 )
                 self._record_decision_event(
                     updater=updater,
@@ -3644,13 +3722,15 @@ class WritingOrchestrator:
                     event_type=DecisionEventType.STAGE_DURATION_SUMMARY,
                     scope="chapter",
                     summary=f"第{chapter_number}章 writer 调用耗时 {duration_ms}ms。",
-                    payload={
-                        "stage": "writing_chapter",
-                        "model_profile_id": model_profile_id,
-                        "model": model_name,
-                        "attempt_no": attempt,
-                        "duration_ms": duration_ms,
-                    },
+                    payload=audit_payload(
+                        stage="writing_chapter",
+                        status="succeeded",
+                        operation_id=self._audit_operation_id(),
+                        duration_ms=duration_ms,
+                        model_profile_id=model_profile_id,
+                        model=model_name,
+                        attempt_no=attempt,
+                    ),
                 )
                 self._record_decision_event(
                     updater=updater,
@@ -3660,16 +3740,18 @@ class WritingOrchestrator:
                     event_type=DecisionEventType.WRITER_OUTPUT_BUILT,
                     scope="chapter",
                     summary=f"第{chapter_number}章 writer output 已生成。",
-                    payload={
-                        "stage": "writing_chapter",
-                        "duration_ms": duration_ms,
-                        "char_count": int(getattr(output, "char_count", 0) or 0),
-                        "mode": str((getattr(output, "generation_meta", {}) or {}).get("mode") or ""),
-                        "scene_count": len(getattr(output, "scene_outputs", []) or []),
-                        "state_changes_count": len(getattr(output, "state_changes", []) or []),
-                        "events_count": len(getattr(output, "new_events", []) or []),
-                        "thread_beats_count": len(getattr(output, "thread_beats", []) or []),
-                    },
+                    payload=audit_payload(
+                        stage="writing_chapter",
+                        status="succeeded",
+                        operation_id=self._audit_operation_id(),
+                        duration_ms=duration_ms,
+                        char_count=int(getattr(output, "char_count", 0) or 0),
+                        mode=str((getattr(output, "generation_meta", {}) or {}).get("mode") or ""),
+                        scene_count=len(getattr(output, "scene_outputs", []) or []),
+                        state_changes_count=len(getattr(output, "state_changes", []) or []),
+                        events_count=len(getattr(output, "new_events", []) or []),
+                        thread_beats_count=len(getattr(output, "thread_beats", []) or []),
+                    ),
                 )
                 return output
             except Exception as exc:  # noqa: BLE001
@@ -3684,6 +3766,13 @@ class WritingOrchestrator:
                     parent_stage="writing_chapter",
                     events=list(getattr(self.writer.llm_client, "drain_model_fallback_events", lambda: [])() or []),
                 )
+                llm_attempts = self._safe_prompt_trace_attempts(
+                    self._drain_llm_attempt_events(),
+                    fallback_attempt_no=attempt,
+                    exc=exc,
+                    duration_ms=duration_ms,
+                )
+                error_category = self._error_category_from_attempts(llm_attempts, exc)
                 logger.warning(
                     "Writer failed for chapter %d on attempt %d/%d: %s",
                     chapter_number,
@@ -3698,18 +3787,21 @@ class WritingOrchestrator:
                     event_family="runtime_observation",
                     event_type=DecisionEventType.LLM_REQUEST_FAILED,
                     scope="chapter",
-                    summary=f"Writer 第 {attempt}/{max_attempts} 次调用失败：{exc}",
-                    payload={
-                        "attempt_no": attempt,
-                        "max_attempts": max_attempts,
-                        "is_transient": is_transient,
-                        "model_profile_id": model_profile_id,
-                        "model": model_name,
-                        "duration_ms": duration_ms,
-                        "error_class": exc.__class__.__name__,
-                        "error_summary": str(exc),
-                        "stage": "writing_chapter",
-                    },
+                    summary=f"Writer 第 {attempt}/{max_attempts} 次调用失败：{safe_error_summary(exc)}",
+                    payload=event_error_payload(
+                        exc,
+                        stage="writing_chapter",
+                        operation_id=self._audit_operation_id(),
+                        duration_ms=duration_ms,
+                        error_category=error_category,
+                        attempt_no=attempt,
+                        max_attempts=max_attempts,
+                        is_transient=is_transient,
+                        model_profile_id=model_profile_id,
+                        model=model_name,
+                        attempt_count=len(llm_attempts),
+                        attempt_group_ids=attempt_group_ids(llm_attempts),
+                    ),
                 )
                 drain_attempts = getattr(self.writer.llm_client, "drain_llm_attempt_events", None)
                 failed_attempts = drain_attempts() if callable(drain_attempts) else []
@@ -3747,6 +3839,19 @@ class WritingOrchestrator:
                     )
                 last_failure_event_id = str(getattr(failure_event, "id", "") or "")
                 last_failed_attempt = attempt
+                self._record_failure_prompt_trace(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    context=context,
+                    stage_key=trace_stage_key,
+                    template_id="writer:failure",
+                    source_event_id=last_failure_event_id,
+                    exc=exc,
+                    duration_ms=duration_ms,
+                    attempts=llm_attempts,
+                    skill_layers=writer_skill_layers,
+                )
                 if self._is_timeout_like(exc):
                     logger.warning(
                         "Writer timeout detected for chapter %d; skipping extra retries.",
@@ -3770,14 +3875,16 @@ class WritingOrchestrator:
                         event_type=DecisionEventType.RETRY_ATTEMPT,
                         scope="chapter",
                         summary=f"第{chapter_number}章准备进行 writer retry。",
-                        payload={
-                            "attempt_no": attempt + 1,
-                            "previous_attempt": attempt,
-                            "delay_seconds": delay,
-                            "stage": "writing_chapter",
-                            "model_profile_id": model_profile_id,
-                            "model": model_name,
-                        },
+                        payload=audit_payload(
+                            stage="writing_chapter",
+                            status="retry_scheduled",
+                            operation_id=self._audit_operation_id(),
+                            attempt_no=attempt + 1,
+                            previous_attempt=attempt,
+                            delay_seconds=delay,
+                            model_profile_id=model_profile_id,
+                            model=model_name,
+                        ),
                     )
                     time.sleep(delay)
         if last_error is not None:
@@ -3792,14 +3899,16 @@ class WritingOrchestrator:
                 scope="chapter",
                 summary=f"第{chapter_number}章 writer preview fallback 已开始。",
                 parent_event_id=last_failure_event_id,
-                payload={
-                    "stage": "chapter_preview_fallback",
-                    "source_error_class": last_error.__class__.__name__,
-                    "source_error_message": str(last_error),
-                    "source_attempt_no": last_failed_attempt,
-                    "max_attempts": preview_max_attempts,
-                    "timeout_seconds": self.writer.scene_call_timeout_seconds,
-                },
+                payload=audit_payload(
+                    stage="chapter_preview_fallback",
+                    status="started",
+                    operation_id=self._audit_operation_id(),
+                    source_error_class=last_error.__class__.__name__,
+                    source_error_message=safe_error_summary(last_error),
+                    source_attempt_no=last_failed_attempt,
+                    max_attempts=preview_max_attempts,
+                    timeout_seconds=self.writer.scene_call_timeout_seconds,
+                ),
             )
             try:
                 preview_output = self._call_with_compatible_kwargs(
@@ -3827,18 +3936,20 @@ class WritingOrchestrator:
                     scope="chapter",
                     summary=f"第{chapter_number}章 writer preview fallback 成功。",
                     parent_event_id=last_failure_event_id,
-                    payload={
-                        "stage": "chapter_preview_fallback",
-                        "source_error_class": last_error.__class__.__name__,
-                        "source_error_message": str(last_error),
-                        "source_attempt_no": last_failed_attempt,
-                        "fallback_attempt_no": fallback_summary.get("successful_attempt_no", 0),
-                        "max_attempts": preview_max_attempts,
-                        "timeout_seconds": self.writer.scene_call_timeout_seconds,
-                        "duration_ms": max(0, int((time.perf_counter() - preview_started_at) * 1000)),
-                        "char_count": int(getattr(preview_output, "char_count", 0) or 0),
+                    payload=audit_payload(
+                        stage="chapter_preview_fallback",
+                        status="succeeded",
+                        operation_id=self._audit_operation_id(),
+                        source_error_class=last_error.__class__.__name__,
+                        source_error_message=safe_error_summary(last_error),
+                        source_attempt_no=last_failed_attempt,
+                        fallback_attempt_no=fallback_summary.get("successful_attempt_no", 0),
+                        max_attempts=preview_max_attempts,
+                        timeout_seconds=self.writer.scene_call_timeout_seconds,
+                        duration_ms=max(0, int((time.perf_counter() - preview_started_at) * 1000)),
+                        char_count=int(getattr(preview_output, "char_count", 0) or 0),
                         **fallback_summary,
-                    },
+                    ),
                 )
                 logger.warning(
                     "Writer preview fallback succeeded for chapter %d after writer failure: %s",
@@ -3847,7 +3958,15 @@ class WritingOrchestrator:
                 )
                 return preview_output
             except Exception as preview_exc:  # noqa: BLE001
-                self._record_decision_event(
+                preview_duration_ms = max(0, int((time.perf_counter() - preview_started_at) * 1000))
+                preview_attempts = self._safe_prompt_trace_attempts(
+                    self._drain_llm_attempt_events(),
+                    fallback_attempt_no=0,
+                    exc=preview_exc,
+                    duration_ms=preview_duration_ms,
+                )
+                preview_error_category = self._error_category_from_attempts(preview_attempts, preview_exc)
+                preview_failure_event = self._record_decision_event(
                     updater=updater,
                     project_id=project_id,
                     chapter_number=chapter_number,
@@ -3856,17 +3975,34 @@ class WritingOrchestrator:
                     scope="chapter",
                     summary=f"第{chapter_number}章 writer preview fallback 失败。",
                     parent_event_id=str(getattr(preview_started_event, "id", "") or last_failure_event_id),
-                    payload={
-                        "stage": "chapter_preview_fallback",
-                        "source_error_class": last_error.__class__.__name__,
-                        "source_error_message": str(last_error),
-                        "source_attempt_no": last_failed_attempt,
-                        "max_attempts": preview_max_attempts,
-                        "timeout_seconds": self.writer.scene_call_timeout_seconds,
-                        "duration_ms": max(0, int((time.perf_counter() - preview_started_at) * 1000)),
-                        "error_class": preview_exc.__class__.__name__,
-                        "error_message": str(preview_exc),
-                    },
+                    payload=event_error_payload(
+                        preview_exc,
+                        stage="chapter_preview_fallback",
+                        operation_id=self._audit_operation_id(),
+                        duration_ms=preview_duration_ms,
+                        error_category=preview_error_category,
+                        source_error_class=last_error.__class__.__name__,
+                        source_error_message=safe_error_summary(last_error),
+                        source_attempt_no=last_failed_attempt,
+                        max_attempts=preview_max_attempts,
+                        timeout_seconds=self.writer.scene_call_timeout_seconds,
+                        attempt_count=len(preview_attempts),
+                        attempt_group_ids=attempt_group_ids(preview_attempts),
+                    ),
+                )
+                self._record_failure_prompt_trace(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    context=context,
+                    stage_key=trace_stage_key,
+                    template_id="writer:preview_failure",
+                    source_event_id=str(getattr(preview_failure_event, "id", "") or ""),
+                    exc=preview_exc,
+                    duration_ms=preview_duration_ms,
+                    attempts=preview_attempts,
+                    skill_layers=writer_skill_layers,
+                    fallback_stage="chapter_preview_fallback",
                 )
                 logger.warning(
                     "Writer preview fallback failed for chapter %d: %s",
@@ -3947,6 +4083,231 @@ class WritingOrchestrator:
             profile_id = str(primary.get("id", "")).strip()
         return profile_id, str(self.config.minimax_model or "").strip()
 
+    def _audit_operation_id(self) -> str:
+        return str(self._governance_task_id or self._governance_root_event_id or "").strip()
+
+    def _drain_llm_attempt_events(self) -> list[dict[str, object]]:
+        drain = getattr(getattr(self.writer, "llm_client", None), "drain_llm_attempt_events", None)
+        if not callable(drain):
+            return []
+        events = drain()
+        return [dict(item) for item in events if isinstance(item, dict)] if isinstance(events, list) else []
+
+    @staticmethod
+    def _safe_prompt_trace_attempts(
+        attempts: list[dict[str, object]],
+        *,
+        fallback_attempt_no: int = 0,
+        exc: BaseException | None = None,
+        duration_ms: int = 0,
+    ) -> list[dict[str, object]]:
+        allowed_keys = {
+            "attempt_group_id",
+            "profile_id",
+            "profile_name",
+            "model",
+            "base_url_host",
+            "requested_temperature",
+            "requested_max_tokens",
+            "timeout_seconds",
+            "attempt_no",
+            "http_status",
+            "provider_request_id",
+            "duration_ms",
+            "input_chars",
+            "output_chars",
+            "task_family",
+            "stage_key",
+            "llm_task_route",
+            "retry_after",
+            "sleep_ms",
+            "error_class",
+            "error_message",
+            "error_category",
+            "timeout_kind",
+            "retryable",
+            "fallback_eligible",
+            "final_failure",
+        }
+        safe_attempts: list[dict[str, object]] = []
+        for attempt in attempts:
+            safe: dict[str, object] = {
+                key: value
+                for key, value in attempt.items()
+                if key in allowed_keys and value is not None
+            }
+            if "error_message" in safe:
+                safe["error_message"] = safe_error_summary(str(safe.get("error_message") or ""))
+            safe_attempts.append(safe)
+        if not safe_attempts and exc is not None:
+            safe_attempts.append(
+                {
+                    "attempt_no": int(fallback_attempt_no or 0),
+                    "duration_ms": max(0, int(duration_ms or 0)),
+                    "error_class": exc.__class__.__name__,
+                    "error_message": safe_error_summary(exc),
+                    "error_category": "unknown",
+                    "final_failure": True,
+                }
+            )
+        return safe_attempts
+
+    @staticmethod
+    def _error_category_from_attempts(attempts: list[dict[str, object]], exc: BaseException) -> str:
+        for attempt in reversed(attempts):
+            category = str(attempt.get("error_category") or "").strip()
+            if category and category != "unknown":
+                return category
+        message = str(exc).lower()
+        if "timeout" in message or "timed out" in message:
+            return "timeout"
+        if "429" in message or "rate limit" in message:
+            return "rate_limit"
+        if any(token in message for token in ("529", "500", "502", "503", "504", "overload")):
+            return "provider_overload"
+        if "400" in message or "bad request" in message:
+            return "bad_request"
+        if "parse" in message or "json" in message or "schema" in message:
+            return "parse_or_schema"
+        return "unknown"
+
+    @staticmethod
+    def _diagnostic_kind_for_failure(exc: BaseException, error_category: str) -> str:
+        message = str(exc).lower()
+        if error_category == "bad_request" or "400" in message or "bad request" in message:
+            return "provider_bad_request"
+        if error_category == "parse_or_schema" or any(
+            token in message for token in ("parse", "json", "schema")
+        ):
+            return "parse_or_schema_failure"
+        return "writer_failure_without_draft"
+
+    def _record_failure_prompt_trace(
+        self,
+        *,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_number: int,
+        context,
+        stage_key: str,
+        template_id: str,
+        source_event_id: str,
+        exc: BaseException,
+        duration_ms: int,
+        attempts: list[dict[str, object]],
+        skill_layers: list[object] | None,
+        fallback_stage: str = "",
+    ) -> str:
+        if not isinstance(updater, StateUpdater):
+            return ""
+        fallback_attempt_no = 0
+        if attempts:
+            try:
+                fallback_attempt_no = int(attempts[-1].get("attempt_no") or 0)
+            except (TypeError, ValueError):
+                fallback_attempt_no = 0
+        safe_attempts = self._safe_prompt_trace_attempts(
+            attempts,
+            fallback_attempt_no=fallback_attempt_no,
+            exc=exc,
+            duration_ms=duration_ms,
+        )
+        error_category = self._error_category_from_attempts(safe_attempts, exc)
+        selected_skills = ChapterWriter._selected_skills_from_layers(skill_layers)
+        operation_id = self._audit_operation_id()
+        model_profile_id, model_name = self._current_model_identity()
+        trace_payload = {
+            "trace_scope": "writer",
+            "stage_key": stage_key,
+            "template_id": template_id,
+            "template_version": "v1",
+            "effective_system_prompt": "",
+            "prompt_layers": [],
+            "input_snapshot": audit_payload(
+                stage=stage_key,
+                status="failed",
+                operation_id=operation_id,
+                chapter_number=chapter_number,
+                writer_mode=str(getattr(self.writer, "writer_mode", "") or ""),
+                selected_skills=selected_skills,
+            ),
+            "model_profile": {
+                "profile_id": model_profile_id,
+                "model": model_name,
+                "base_url": str(getattr(self.llm_client, "base_url", "") or ""),
+            },
+            "attempts": safe_attempts,
+            "output_summary": audit_payload(
+                stage=stage_key,
+                status="failed",
+                operation_id=operation_id,
+                duration_ms=duration_ms,
+                error_category=error_category,
+                chapter_number=chapter_number,
+                context_chapter_number=int(getattr(context, "chapter_number", chapter_number) or chapter_number),
+                error_class=exc.__class__.__name__,
+                error_summary=safe_error_summary(exc),
+                fallback_stage=fallback_stage,
+                attempt_count=len(safe_attempts),
+                attempt_group_ids=attempt_group_ids(safe_attempts),
+            ),
+        }
+        trace_id = self._save_prompt_trace_payload(
+            session=updater.session,
+            updater=updater,
+            project_id=project_id,
+            prompt_trace=trace_payload,
+            decision_event_id=source_event_id,
+        )
+        artifact_manifest: list[dict[str, object]] = []
+        try:
+            manifest = self.artifact_store.save_observability_diagnostic(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                kind=self._diagnostic_kind_for_failure(exc, error_category),
+                source_event_id=source_event_id,
+                trace_id=trace_id,
+                payload={
+                    "schema_version": "v4.5.1-audit",
+                    "project_id": project_id,
+                    "chapter_number": chapter_number,
+                    "stage": stage_key,
+                    "status": "failed",
+                    "operation_id": operation_id,
+                    "error_class": exc.__class__.__name__,
+                    "error_summary": safe_error_summary(exc),
+                    "error_category": error_category,
+                    "attempts": safe_attempts,
+                    "selected_skills": selected_skills,
+                },
+            )
+            artifact_manifest.append(manifest)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to persist observability diagnostic artifact.", exc_info=True)
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.PROMPT_TRACE_RECORDED,
+            scope="chapter",
+            summary=f"第{chapter_number}章失败 prompt trace 已落盘。",
+            parent_event_id=source_event_id,
+            related_object_type="prompt_trace",
+            related_object_id=trace_id,
+            payload=audit_payload(
+                stage=stage_key,
+                status="failed",
+                operation_id=operation_id,
+                duration_ms=duration_ms,
+                error_category=error_category,
+                trace_id=trace_id,
+                source_event_id=source_event_id,
+                artifact_manifest=artifact_manifest,
+            ),
+        )
+        return trace_id
+
     def _record_model_fallback_payloads(
         self,
         *,
@@ -3970,14 +4331,16 @@ class WritingOrchestrator:
                     f"writer fallback: {str(item.get('from_model') or '-')} -> "
                     f"{str(item.get('to_model') or '-')}"
                 ),
-                payload={
-                    "stage": parent_stage,
-                    "model_profile_id": str(item.get("to_profile_id") or ""),
-                    "model": str(item.get("to_model") or ""),
-                    "error_summary": str(item.get("reason") or ""),
-                    "from_model_profile_id": str(item.get("from_profile_id") or ""),
-                    "from_model": str(item.get("from_model") or ""),
-                },
+                payload=audit_payload(
+                    stage=parent_stage,
+                    status="profile_switched",
+                    operation_id=self._audit_operation_id(),
+                    model_profile_id=str(item.get("to_profile_id") or ""),
+                    model=str(item.get("to_model") or ""),
+                    error_summary=safe_error_summary(str(item.get("reason") or "")),
+                    from_model_profile_id=str(item.get("from_profile_id") or ""),
+                    from_model=str(item.get("from_model") or ""),
+                ),
             )
 
     def _apply_canon_candidate(
@@ -4180,30 +4543,246 @@ class WritingOrchestrator:
             chapter_intent=chapter_intent,
             chapter_body=writer_output.body,
         )
-        compiler_result = WorldModelCompilerV4(session).compile_gate_verdict(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            verdict=gate_verdict,
-            compiler_run_id=f"compile_{project_id}_{chapter_number}",
-            retrieval_pack_payload=retrieval_pack_payload,
-        )
         book_state_result = None
         book_state_verdict = None
-        if compiler_result.committed and gate_verdict.approved_changes is not None:
+        compiler_result = None
+        if gate_verdict.passed and gate_verdict.approved_changes is not None:
             book_state_changes = BookStateDeltaAdapter().from_world_change_set(
                 gate_verdict.approved_changes,
                 approved_by=["v4_review_gate"],
                 review_verdict_id=f"v4_review_{project_id}_{chapter_number}",
             )
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.BOOK_STATE_REVIEW_STARTED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 BookState review gate 开始。",
+                payload=audit_payload(
+                    stage="book_state_review",
+                    status="started",
+                    operation_id=self._audit_operation_id(),
+                    graph_delta_count=len(book_state_changes.graph_deltas),
+                ),
+            )
             book_state_verdict = BookStateReviewGate(session).review(book_state_changes)
-            if book_state_verdict.accepted and book_state_verdict.approved_changes is not None:
+            if not book_state_verdict.accepted or book_state_verdict.approved_changes is None:
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.BOOK_STATE_REVIEW_FAILED,
+                    scope="chapter",
+                    summary=f"第{chapter_number}章 BookState review gate 未通过。",
+                    payload=audit_payload(
+                        stage="book_state_review",
+                        status="failed",
+                        operation_id=self._audit_operation_id(),
+                        issue_count=len(book_state_verdict.issues),
+                        issues=[issue.model_dump(mode="json") for issue in book_state_verdict.issues],
+                    ),
+                )
+                frozen_path = ""
+                if self.config.freeze_failed_candidates:
+                    frozen_path = self.artifact_store.save_frozen_candidate(
+                        project_id=project_id,
+                        chapter_number=chapter_number,
+                        payload={
+                            "reason": "book-state-review-gate-blocked",
+                            "chapter_number": chapter_number,
+                            "writer_output": writer_output.model_dump(mode="json"),
+                            "book_state_review": book_state_verdict.model_dump(mode="json"),
+                            "v4_gate_verdict": gate_verdict.model_dump(mode="json"),
+                        },
+                    )
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.CANON_COMMIT_FAILED,
+                    scope="chapter",
+                    summary=f"第{chapter_number}章 BookState review gate 阻止 canon 写入。",
+                    payload={
+                        "book_state_review_issues": [
+                            issue.model_dump(mode="json") for issue in book_state_verdict.issues
+                        ],
+                    },
+                )
+                return frozen_path or "book-state-review-gate-blocked"
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.BOOK_STATE_REVIEW_SUCCEEDED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 BookState review gate 通过。",
+                payload=audit_payload(
+                    stage="book_state_review",
+                    status="succeeded",
+                    operation_id=self._audit_operation_id(),
+                    issue_count=len(book_state_verdict.issues),
+                ),
+            )
+
+            nested = session.begin_nested()
+            try:
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.BOOK_STATE_COMPILE_STARTED,
+                    scope="chapter",
+                    summary=f"第{chapter_number}章 BookState compile 开始。",
+                    payload=audit_payload(
+                        stage="book_state_compile",
+                        status="started",
+                        operation_id=self._audit_operation_id(),
+                        graph_delta_count=len(book_state_verdict.approved_changes.graph_deltas),
+                    ),
+                )
                 book_state_result = BookStateCompiler(session).compile(
                     book_state_verdict.approved_changes,
                     compiler_run_id=f"book_state_compile_{project_id}_{chapter_number}",
                 )
-            else:
-                book_state_result = None
-        if compiler_result.committed and (
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=(
+                        DecisionEventType.BOOK_STATE_COMPILE_SUCCEEDED
+                        if book_state_result.committed
+                        else DecisionEventType.BOOK_STATE_COMPILE_FAILED
+                    ),
+                    scope="chapter",
+                    summary=(
+                        f"第{chapter_number}章 BookState compile 完成。"
+                        if book_state_result.committed
+                        else f"第{chapter_number}章 BookState compile 未提交。"
+                    ),
+                    payload=audit_payload(
+                        stage="book_state_compile",
+                        status="succeeded" if book_state_result.committed else "failed",
+                        operation_id=self._audit_operation_id(),
+                        result=book_state_result.model_dump(mode="json"),
+                    ),
+                )
+                if not book_state_result.committed:
+                    nested.rollback()
+                else:
+                    nested.commit()
+            except Exception as exc:
+                nested.rollback()
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.BOOK_STATE_COMPILE_FAILED,
+                    scope="chapter",
+                    summary=f"第{chapter_number}章 BookState compile 异常失败。",
+                    reason=str(exc),
+                    payload=event_error_payload(
+                        exc,
+                        stage="book_state_compile",
+                        operation_id=self._audit_operation_id(),
+                    ),
+                )
+                raise
+            if book_state_result is None or not book_state_result.committed:
+                frozen_path = ""
+                if self.config.freeze_failed_candidates:
+                    frozen_path = self.artifact_store.save_frozen_candidate(
+                        project_id=project_id,
+                        chapter_number=chapter_number,
+                        payload={
+                            "reason": "book-state-compile-blocked",
+                            "chapter_number": chapter_number,
+                            "writer_output": writer_output.model_dump(mode="json"),
+                            "book_state_review": book_state_verdict.model_dump(mode="json"),
+                            "book_state_result": (
+                                book_state_result.model_dump(mode="json") if book_state_result else None
+                            ),
+                            "v4_gate_verdict": gate_verdict.model_dump(mode="json"),
+                        },
+                    )
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.CANON_COMMIT_FAILED,
+                    scope="chapter",
+                    summary=f"第{chapter_number}章 BookState compile 阻止 canon 写入。",
+                    payload={
+                        "book_state_blocked_reasons": (
+                            list(book_state_result.blocked_reasons) if book_state_result else []
+                        ),
+                    },
+                )
+                return frozen_path or "book-state-compile-blocked"
+
+            legacy_nested = session.begin_nested()
+            try:
+                compiler_result = WorldModelCompilerV4(session).compile_gate_verdict(
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    verdict=gate_verdict,
+                    compiler_run_id=f"compile_{project_id}_{chapter_number}",
+                    retrieval_pack_payload=retrieval_pack_payload,
+                )
+                if compiler_result.committed:
+                    legacy_nested.commit()
+                else:
+                    legacy_nested.rollback()
+                    self._record_decision_event(
+                        updater=updater,
+                        project_id=project_id,
+                        chapter_number=chapter_number,
+                        event_family="runtime_observation",
+                        event_type=DecisionEventType.LEGACY_PROJECTION_FAILED,
+                        scope="chapter",
+                        summary=f"第{chapter_number}章 world_model_v4 compatibility projection 未提交，BookState canon 已保留。",
+                        payload=audit_payload(
+                            stage="legacy_projection",
+                            status="failed",
+                            operation_id=self._audit_operation_id(),
+                            result=compiler_result.model_dump(mode="json"),
+                        ),
+                    )
+            except Exception as exc:
+                legacy_nested.rollback()
+                self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.LEGACY_PROJECTION_FAILED,
+                    scope="chapter",
+                    summary=f"第{chapter_number}章 world_model_v4 compatibility projection 失败，BookState canon 已保留。",
+                    reason=str(exc),
+                    payload=event_error_payload(
+                        exc,
+                        stage="legacy_projection",
+                        operation_id=self._audit_operation_id(),
+                    ),
+                )
+            return None
+        else:
+            compiler_result = WorldModelCompilerV4(session).compile_gate_verdict(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                verdict=gate_verdict,
+                compiler_run_id=f"compile_{project_id}_{chapter_number}",
+                retrieval_pack_payload=retrieval_pack_payload,
+            )
+        if compiler_result is not None and compiler_result.committed and (
             book_state_result is None
             or not book_state_result.committed
         ):
@@ -4238,7 +4817,7 @@ class WritingOrchestrator:
                 },
             )
             return frozen_path or "book-state-review-gate-blocked"
-        if compiler_result.committed:
+        if compiler_result is not None and compiler_result.committed:
             projection_refresh = KnowledgeProjectionRefresher(session).refresh(
                 project_id,
                 as_of_chapter=chapter_number,
@@ -4551,7 +5130,26 @@ class WritingOrchestrator:
                 scope="chapter",
                 summary=f"第{chapter_number}章 WorldModel compile 失败，运行将暂停。",
                 reason=str(exc),
-                payload={"error_class": exc.__class__.__name__, "error_summary": str(exc)},
+                payload=event_error_payload(
+                    exc,
+                    stage="world_model_compile",
+                    operation_id=self._audit_operation_id(),
+                ),
+            )
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.LEGACY_PROJECTION_FAILED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 legacy world_model_v4 projection 失败，BookState canon 不回滚。",
+                reason=str(exc),
+                payload=event_error_payload(
+                    exc,
+                    stage="legacy_projection",
+                    operation_id=self._audit_operation_id(),
+                ),
             )
             return False
         self._record_decision_event(
@@ -4564,11 +5162,14 @@ class WritingOrchestrator:
             summary=f"第{chapter_number}章 WorldModel compile 完成。",
             related_object_type="world_model_snapshot",
             related_object_id=snapshot.id,
-            payload={
-                "snapshot_id": snapshot.id,
-                "as_of_chapter": snapshot.as_of_chapter,
-                "source_digest": snapshot.source_digest,
-            },
+            payload=audit_payload(
+                stage="world_model_compile",
+                status="succeeded",
+                operation_id=self._audit_operation_id(),
+                snapshot_id=snapshot.id,
+                as_of_chapter=snapshot.as_of_chapter,
+                source_digest=snapshot.source_digest,
+            ),
         )
         return True
 

@@ -48,16 +48,28 @@ class BookStateProjection:
         world = self.repo.load_base_world_graph(
             project_id,
             as_of_chapter=as_of_chapter,
-            state_index=world_snapshot.world_node_state_index if world_snapshot else None,
+            state_index=(
+                world_snapshot.world_node_state_index
+                if world_snapshot is not None and world_snapshot.world_node_state_index
+                else None
+            ),
         )
         map_graph = self.repo.load_base_map_graph(
             project_id,
             as_of_chapter=as_of_chapter,
-            map_node_index=map_snapshot.map_node_index if map_snapshot else None,
-            map_edge_index=map_snapshot.map_edge_index if map_snapshot else None,
+            map_node_index=(
+                map_snapshot.map_node_index
+                if map_snapshot is not None and map_snapshot.map_node_index
+                else None
+            ),
+            map_edge_index=(
+                map_snapshot.map_edge_index
+                if map_snapshot is not None and map_snapshot.map_edge_index
+                else None
+            ),
             cognition_by_observer=cognition_views,
         )
-        narrative = self.repo.load_narrative_graph(project_id)
+        narrative = self.repo.load_narrative_graph(project_id, as_of_chapter=as_of_chapter)
         runtime = BookStateRuntime(
             project_id=project_id,
             as_of_chapter=as_of_chapter,
@@ -69,7 +81,11 @@ class BookStateProjection:
 
         world_after = world_snapshot.as_of_chapter if world_snapshot else -1
         map_after = map_snapshot.as_of_chapter if map_snapshot else -1
-        after_chapter = min(world_after, map_after)
+        cognition_after = max((int(view.as_of_chapter or 0) for view in cognition_views.values()), default=-1)
+        # Narrative rows are persisted as side effects without full snapshots; replay
+        # narrative deltas from the beginning and rely on graph upserts to be idempotent.
+        narrative_after = -1
+        after_chapter = min(world_after, map_after, cognition_after, narrative_after)
         for delta in self.repo.list_graph_deltas(
             project_id,
             after_chapter=after_chapter,
@@ -80,8 +96,8 @@ class BookStateProjection:
                 delta,
                 apply_world=delta.chapter_number > world_after,
                 apply_map=delta.chapter_number > map_after,
-                apply_cognition=True,
-                apply_narrative=True,
+                apply_cognition=delta.chapter_number > cognition_after,
+                apply_narrative=delta.chapter_number > narrative_after,
             )
         return runtime
 

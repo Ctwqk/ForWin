@@ -11,13 +11,20 @@ from forwin.protocol.context import (
     TimelineSnapshot,
     WorldPressureView,
 )
+from forwin.book_state import BookStateProjection, BookStateRepository
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.map.pathfinding import MapGraph
 from forwin.map.repository import MapRepository
+from forwin.map.visibility import is_writer_visible_map_edge
+from forwin.protocol.book_state import MapNode, WorldNode
 from forwin.protocol.world_model import WorldContextPack
 from forwin.world_model.retriever import WorldModelRetriever
 
 logger = logging.getLogger(__name__)
+
+_MAP_CONTEXT_NEIGHBOR_LIMIT = 8
+_MAP_CONTEXT_REVIEW_GRAPH_NODE_LIMIT = 256
+_MAP_CONTEXT_REVIEW_GRAPH_EDGE_LIMIT = 512
 
 
 def _build_genesis_map_overview(map_atlas: dict, runtime_region_drafts: list[dict]) -> str:
@@ -74,7 +81,112 @@ def _build_genesis_map_overview(map_atlas: dict, runtime_region_drafts: list[dic
     return "；".join(part for part in parts if part)
 
 
-def _build_map_context(repo_session, project_id: str, entities: list) -> dict:
+def _visible_map_edge(edge) -> bool:
+    return is_writer_visible_map_edge(edge)
+
+
+def _resolve_map_node_id(
+    raw_location: str,
+    *,
+    node_by_id: dict,
+    node_id_by_source: dict[str, str],
+    node_id_by_name: dict[str, str],
+) -> str:
+    text = str(raw_location or "").strip()
+    if not text:
+        return ""
+    if text in node_by_id:
+        return text
+    if text in node_id_by_source:
+        return node_id_by_source[text]
+    return node_id_by_name.get(text, "")
+
+
+def _visible_neighbors(graph: MapGraph, location_id: str, node_by_id: dict) -> list[tuple[str, object]]:
+    result: list[tuple[str, object]] = []
+    for edge_id in graph.outgoing_edges.get(location_id, []):
+        edge = graph.edges_by_id.get(edge_id)
+        if edge is None or not _visible_map_edge(edge):
+            continue
+        if edge.to_node_id in node_by_id:
+            result.append((edge.to_node_id, edge))
+    return result
+
+
+def _genesis_active_location_refs(story_engine: dict) -> list[dict[str, str]]:
+    refs: list[dict[str, str]] = []
+    core_cast = story_engine.get("core_cast") if isinstance(story_engine.get("core_cast"), list) else []
+    for item in core_cast[:8]:
+        if not isinstance(item, dict):
+            continue
+        location_ref = str(item.get("current_base", "") or item.get("home_location", "") or "").strip()
+        if not location_ref:
+            continue
+        refs.append(
+            {
+                "entity_id": "",
+                "entity_name": str(item.get("name", "") or "Genesis 核心角色").strip(),
+                "location_ref": location_ref,
+                "source": "genesis_story_engine",
+            }
+        )
+    return refs
+
+
+def _append_review_node_id(node_ids: list[str], seen: set[str], node_id: str, node_by_id: dict) -> None:
+    if node_id in seen or node_id not in node_by_id:
+        return
+    if len(node_ids) >= _MAP_CONTEXT_REVIEW_GRAPH_NODE_LIMIT:
+        return
+    seen.add(node_id)
+    node_ids.append(node_id)
+
+
+def _review_graph_node_ids(
+    *,
+    node_by_id: dict,
+    visible_node_ids: set[str],
+    visible_edges: list,
+    active_locations: list[dict],
+    visible_anchor_nodes: list[dict],
+    available: bool,
+) -> list[str]:
+    if available:
+        return sorted(visible_node_ids)
+
+    selected: list[str] = []
+    seen: set[str] = set()
+    for location in active_locations:
+        if not isinstance(location, dict):
+            continue
+        _append_review_node_id(selected, seen, str(location.get("location_id", "") or ""), node_by_id)
+        for key in ("nearby_nodes", "reachable_nodes"):
+            for item in location.get(key, []) if isinstance(location.get(key), list) else []:
+                if isinstance(item, dict):
+                    _append_review_node_id(selected, seen, str(item.get("node_id", "") or ""), node_by_id)
+    for anchor in visible_anchor_nodes:
+        if isinstance(anchor, dict):
+            _append_review_node_id(selected, seen, str(anchor.get("node_id", "") or ""), node_by_id)
+    for edge in visible_edges:
+        _append_review_node_id(selected, seen, edge.from_node_id, node_by_id)
+        _append_review_node_id(selected, seen, edge.to_node_id, node_by_id)
+        if len(selected) >= _MAP_CONTEXT_REVIEW_GRAPH_NODE_LIMIT:
+            break
+    return sorted(selected)
+
+
+def _review_graph_edges(visible_edges: list, selected_node_ids: set[str], *, available: bool) -> list:
+    if available:
+        return visible_edges
+    selected = [
+        edge
+        for edge in visible_edges
+        if edge.from_node_id in selected_node_ids and edge.to_node_id in selected_node_ids
+    ]
+    return selected[:_MAP_CONTEXT_REVIEW_GRAPH_EDGE_LIMIT]
+
+
+def _build_map_context(repo_session, project_id: str, entities: list, genesis_story_engine: dict | None = None) -> dict:
     if repo_session is None:
         return {}
     try:
@@ -87,16 +199,35 @@ def _build_map_context(repo_session, project_id: str, entities: list) -> dict:
     if not nodes:
         return {}
     node_by_id = {node.id: node for node in nodes}
+    node_id_by_source = {
+        str(node.metadata.get("source_node_id", "") or ""): node.id
+        for node in nodes
+        if str(node.metadata.get("source_node_id", "") or "").strip()
+    }
+    node_id_by_name = {node.name: node.id for node in nodes if node.name}
     region_by_id = {region.id: region for region in repo.list_regions(project_id)}
-    graph = MapGraph(nodes=nodes, edges=edges)
+    visible_edges = [edge for edge in edges if _visible_map_edge(edge)]
+    visible_node_ids = {
+        node_id
+        for edge in visible_edges
+        for node_id in (edge.from_node_id, edge.to_node_id)
+        if node_id in node_by_id
+    }
+    graph = MapGraph(nodes=nodes, edges=visible_edges)
     active_locations: list[dict] = []
     for entity in entities:
         state = getattr(entity, "current_state", {}) or {}
-        location_id = str(state.get("location_id", "") or state.get("location", "") or "").strip()
-        if not location_id or location_id not in node_by_id:
+        location_id = _resolve_map_node_id(
+            str(state.get("location_id", "") or state.get("location", "") or ""),
+            node_by_id=node_by_id,
+            node_id_by_source=node_id_by_source,
+            node_id_by_name=node_id_by_name,
+        )
+        if not location_id:
             continue
+        visible_node_ids.add(location_id)
         node = node_by_id[location_id]
-        neighbors = graph.get_accessible_neighbors(location_id)[:8]
+        neighbors = _visible_neighbors(graph, location_id, node_by_id)[:_MAP_CONTEXT_NEIGHBOR_LIMIT]
         active_locations.append(
             {
                 "entity_id": getattr(entity, "entity_id", ""),
@@ -127,51 +258,309 @@ def _build_map_context(repo_session, project_id: str, entities: list) -> dict:
                 ],
             }
         )
+    seen_location_keys = {(item["entity_name"], item["location_id"]) for item in active_locations}
+    for ref in _genesis_active_location_refs(genesis_story_engine or {}):
+        location_id = _resolve_map_node_id(
+            ref["location_ref"],
+            node_by_id=node_by_id,
+            node_id_by_source=node_id_by_source,
+            node_id_by_name=node_id_by_name,
+        )
+        if not location_id:
+            continue
+        visible_node_ids.add(location_id)
+        key = (ref["entity_name"], location_id)
+        if key in seen_location_keys:
+            continue
+        node = node_by_id[location_id]
+        neighbors = _visible_neighbors(graph, location_id, node_by_id)[:_MAP_CONTEXT_NEIGHBOR_LIMIT]
+        active_locations.append(
+            {
+                "entity_id": "",
+                "entity_name": ref["entity_name"],
+                "location_id": location_id,
+                "location_name": node.name,
+                "region_id": node.region_id,
+                "region_name": region_by_id.get(node.region_id).name if node.region_id in region_by_id else "",
+                "source": ref["source"],
+                "nearby_nodes": [
+                    {
+                        "node_id": neighbor_id,
+                        "name": node_by_id[neighbor_id].name,
+                        "edge_id": edge.id,
+                        "travel_time": edge.travel_time,
+                        "risk_level": edge.risk_level,
+                    }
+                    for neighbor_id, edge in neighbors
+                    if neighbor_id in node_by_id
+                ],
+                "reachable_nodes": [
+                    {
+                        "node_id": neighbor_id,
+                        "name": node_by_id[neighbor_id].name,
+                        "travel_time": edge.travel_time,
+                    }
+                    for neighbor_id, edge in neighbors
+                    if neighbor_id in node_by_id
+                ],
+            }
+        )
+        seen_location_keys.add(key)
+    visible_anchor_nodes = [
+        {
+            "node_id": node.id,
+            "name": node.name,
+            "region_id": node.region_id,
+            "region_name": region_by_id.get(node.region_id).name if node.region_id in region_by_id else "",
+        }
+        for node in nodes
+        if str(node.metadata.get("node_role", "") or "") in {"anchor", "hub"}
+        and str(node.status or "").lower() not in {"hidden", "destroyed", "inactive"}
+    ][:12]
+    review_graph_available = (
+        len(visible_node_ids) <= _MAP_CONTEXT_REVIEW_GRAPH_NODE_LIMIT
+        and len(visible_edges) <= _MAP_CONTEXT_REVIEW_GRAPH_EDGE_LIMIT
+    )
+    review_node_ids = _review_graph_node_ids(
+        node_by_id=node_by_id,
+        visible_node_ids=visible_node_ids,
+        visible_edges=visible_edges,
+        active_locations=active_locations,
+        visible_anchor_nodes=visible_anchor_nodes,
+        available=review_graph_available,
+    )
+    review_node_id_set = set(review_node_ids)
+    review_edges = _review_graph_edges(
+        visible_edges,
+        review_node_id_set,
+        available=review_graph_available,
+    )
+    review_graph = {
+        "available": review_graph_available,
+        "node_count": len(visible_node_ids),
+        "edge_count": len(visible_edges),
+        "reason": "" if review_graph_available else "map_context_graph_cap_exceeded",
+        "map_nodes": _map_node_payloads([node_by_id[node_id] for node_id in review_node_ids]),
+        "map_edges": [_map_edge_payload(edge) for edge in review_edges],
+    }
     return {
         "active_locations": active_locations,
+        "visible_anchor_nodes": visible_anchor_nodes,
         "map_node_count": len(nodes),
         "map_edge_count": len(edges),
-        "map_nodes": [
+        "visible_map_node_count": len(visible_node_ids),
+        "visible_map_edge_count": len(visible_edges),
+        "regions": [
             {
-                "id": node.id,
-                "project_id": node.project_id,
-                "subworld_id": node.subworld_id,
-                "region_id": node.region_id,
-                "node_type": str(node.node_type),
-                "name": node.name,
-                "description": node.description,
-                "terrain": node.terrain,
-                "culture_tag": node.culture_tag,
-                "default_danger_level": node.default_danger_level,
-                "access_level": node.access_level,
-                "status": node.status,
-                "metadata": dict(node.metadata),
+                "id": region.id,
+                "subworld_id": region.subworld_id,
+                "name": region.name,
+                "region_type": str(region.region_type),
+                "danger_level": region.danger_level,
+                "status": region.status,
             }
-            for node in nodes
+            for region in sorted(region_by_id.values(), key=lambda item: item.id)[:32]
         ],
-        "map_edges": [
-            {
-                "id": edge.id,
-                "project_id": edge.project_id,
-                "subworld_id": edge.subworld_id,
-                "from_node_id": edge.from_node_id,
-                "to_node_id": edge.to_node_id,
-                "edge_type": str(edge.edge_type),
-                "bidirectional": edge.bidirectional,
-                "distance": edge.distance,
-                "travel_time": edge.travel_time,
-                "travel_cost": edge.travel_cost,
-                "risk_level": edge.risk_level,
-                "narrative_cost": edge.narrative_cost,
-                "access_rule_id": edge.access_rule_id,
-                "status": edge.status,
-                "discovered_by_default": edge.discovered_by_default,
-                "visibility_default": edge.visibility_default,
-                "metadata": dict(edge.metadata),
-            }
-            for edge in edges
-        ],
+        "review_graph": review_graph,
     }
+
+
+def _map_node_payloads(nodes) -> list[dict]:
+    return [
+        {
+            "id": node.id,
+            "project_id": node.project_id,
+            "subworld_id": node.subworld_id,
+            "region_id": node.region_id,
+            "node_type": str(node.node_type),
+            "name": node.name,
+            "terrain": node.terrain,
+            "culture_tag": node.culture_tag,
+            "default_danger_level": node.default_danger_level,
+            "access_level": node.access_level,
+            "status": node.status,
+        }
+        for node in nodes
+    ]
+
+
+def _map_edge_payload(edge) -> dict:
+    return {
+        "id": edge.id,
+        "project_id": edge.project_id,
+        "subworld_id": edge.subworld_id,
+        "from_node_id": edge.from_node_id,
+        "to_node_id": edge.to_node_id,
+        "edge_type": str(edge.edge_type),
+        "bidirectional": edge.bidirectional,
+        "distance": edge.distance,
+        "travel_time": edge.travel_time,
+        "travel_cost": edge.travel_cost,
+        "risk_level": edge.risk_level,
+        "narrative_cost": edge.narrative_cost,
+        "status": edge.status,
+        "discovered_by_default": edge.discovered_by_default,
+        "visibility_default": edge.visibility_default,
+    }
+
+
+def _book_state_context_overlay(
+    repo_session,
+    project_id: str,
+    chapter_number: int,
+) -> dict:
+    if repo_session is None:
+        return {}
+    try:
+        repository = BookStateRepository(repo_session)
+        latest_chapter = repository.latest_available_chapter(project_id)
+        as_of_chapter = max(0, min(int(latest_chapter or 0), int(chapter_number or 0) - 1))
+        runtime = BookStateProjection(repo_session).load_runtime_as_of(
+            project_id,
+            as_of_chapter=as_of_chapter,
+        )
+    except Exception:
+        logger.warning("Failed to load BookState context overlay.", exc_info=True)
+        return {}
+
+    map_nodes_by_id = runtime.map.nodes_by_id
+    node_id_by_name = {node.name: node.id for node in map_nodes_by_id.values() if node.name}
+    active_locations: list[dict] = []
+    site_states: list[dict] = []
+    for node in runtime.world.nodes_by_id.values():
+        node_type = str(getattr(node, "node_type", "") or "")
+        if node_type == "character":
+            location_id = _resolve_book_state_location_id(
+                node,
+                runtime.world.get_state(node.id),
+                map_nodes_by_id=map_nodes_by_id,
+                node_id_by_name=node_id_by_name,
+            )
+            if not location_id:
+                continue
+            location = map_nodes_by_id.get(location_id)
+            active_locations.append(
+                {
+                    "entity_id": node.id,
+                    "entity_name": node.name,
+                    "location_id": location_id,
+                    "location_name": location.name if location else location_id,
+                    "region_id": location.region_id if location else "",
+                    "region_name": "",
+                    "source": "book_state",
+                    "nearby_nodes": _book_state_neighbors(runtime.map, location_id, map_nodes_by_id),
+                    "reachable_nodes": [
+                        {
+                            "node_id": item["node_id"],
+                            "name": item["name"],
+                            "travel_time": item["travel_time"],
+                        }
+                        for item in _book_state_neighbors(runtime.map, location_id, map_nodes_by_id)
+                    ],
+                }
+            )
+        elif node_type == "site_state":
+            map_node_id = str(node.profile.get("map_node_id", "") or "").strip()
+            if not map_node_id:
+                continue
+            map_node = map_nodes_by_id.get(map_node_id)
+            site_states.append(
+                {
+                    "site_state_id": node.id,
+                    "site_state_name": node.name,
+                    "map_node_id": map_node_id,
+                    "map_node_name": map_node.name if map_node else map_node_id,
+                    "source": "book_state",
+                }
+            )
+    return {
+        "as_of_chapter": as_of_chapter,
+        "active_world_lines": runtime.narrative.active_world_line_ids(),
+        "active_knowledge_gaps": runtime.narrative.open_gap_ids(),
+        "active_locations": active_locations,
+        "site_states": site_states,
+    }
+
+
+def _resolve_book_state_location_id(
+    node: WorldNode,
+    state: dict,
+    *,
+    map_nodes_by_id: dict[str, MapNode],
+    node_id_by_name: dict[str, str],
+) -> str:
+    for raw in (
+        state.get("location_id"),
+        state.get("current_location_id"),
+        state.get("location"),
+        node.profile.get("map_node_id"),
+        node.profile.get("location_id"),
+    ):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        if text in map_nodes_by_id:
+            return text
+        if text in node_id_by_name:
+            return node_id_by_name[text]
+    return ""
+
+
+def _book_state_neighbors(graph, location_id: str, map_nodes_by_id: dict[str, MapNode]) -> list[dict]:
+    neighbors: list[dict] = []
+    for edge_id in graph.outgoing_edges.get(location_id, []):
+        edge = graph.edges_by_id.get(edge_id)
+        if edge is None or edge.to_node_id not in map_nodes_by_id or not _visible_map_edge(edge):
+            continue
+        node = map_nodes_by_id[edge.to_node_id]
+        neighbors.append(
+            {
+                "node_id": node.id,
+                "name": node.name,
+                "edge_id": edge.id,
+                "travel_time": edge.travel_time,
+                "risk_level": edge.risk_level,
+            }
+        )
+        if len(neighbors) >= _MAP_CONTEXT_NEIGHBOR_LIMIT:
+            break
+    return neighbors
+
+
+def _merge_book_state_map_overlay(map_context: dict, overlay: dict) -> dict:
+    if not overlay:
+        return map_context
+    merged = dict(map_context or {})
+    active_locations = [
+        item
+        for item in merged.get("active_locations", [])
+        if isinstance(item, dict)
+    ]
+    for overlay_location in overlay.get("active_locations", []):
+        if not isinstance(overlay_location, dict):
+            continue
+        entity_id = str(overlay_location.get("entity_id", "") or "")
+        entity_name = str(overlay_location.get("entity_name", "") or "")
+        active_locations = [
+            item
+            for item in active_locations
+            if not (
+                (entity_id and str(item.get("entity_id", "") or "") == entity_id)
+                or (entity_name and str(item.get("entity_name", "") or "") == entity_name)
+            )
+        ]
+        active_locations.append(overlay_location)
+    merged["active_locations"] = active_locations
+    if overlay.get("site_states"):
+        existing_site_states = [
+            item
+            for item in merged.get("site_states", [])
+            if isinstance(item, dict)
+        ]
+        merged["site_states"] = [*existing_site_states, *overlay["site_states"]]
+    if "as_of_chapter" in overlay:
+        merged["book_state_as_of_chapter"] = overlay["as_of_chapter"]
+    return merged
 
 
 def assemble_context(
@@ -196,6 +585,7 @@ def assemble_context(
     genesis_map_overview = ""
     genesis_story_engine_summary = ""
     genesis_map_atlas: dict = {}
+    genesis_story_engine: dict = {}
     runtime_region_drafts: list[dict] = []
     genesis_getter = getattr(repo, "get_active_genesis_revision", None)
     if callable(genesis_getter):
@@ -216,6 +606,7 @@ def assemble_context(
                 world_bible = world_root.get("world_bible") if isinstance(world_root.get("world_bible"), dict) else {}
                 genesis_map_atlas = world_root.get("map_atlas") if isinstance(world_root.get("map_atlas"), dict) else {}
                 story_engine = world_root.get("story_engine") if isinstance(world_root.get("story_engine"), dict) else {}
+                genesis_story_engine = story_engine
                 genesis_world_overview = str(world_bible.get("overview", "") or "")
                 long_arcs = story_engine.get("long_arcs") if isinstance(story_engine.get("long_arcs"), list) else []
                 genesis_story_engine_summary = "；".join(str(item).strip() for item in long_arcs if str(item).strip())
@@ -390,7 +781,28 @@ def assemble_context(
             )
         except Exception:
             logger.warning("Failed to assemble world model context.", exc_info=True)
-    map_context = _build_map_context(repo_session, project_id, entities)
+    map_context = _build_map_context(
+        repo_session,
+        project_id,
+        entities,
+        genesis_story_engine=genesis_story_engine,
+    )
+    book_state_overlay = _book_state_context_overlay(
+        repo_session,
+        project_id,
+        chapter_plan.chapter_number,
+    )
+    map_context = _merge_book_state_map_overlay(map_context, book_state_overlay)
+    book_state_world_lines = [
+        str(item)
+        for item in book_state_overlay.get("active_world_lines", [])
+        if str(item).strip()
+    ]
+    book_state_knowledge_gaps = [
+        str(item)
+        for item in book_state_overlay.get("active_knowledge_gaps", [])
+        if str(item).strip()
+    ]
 
     # 8. Build and return pack
     return ChapterContextPack(
@@ -467,6 +879,7 @@ def assemble_context(
         active_world_lines=list(
             dict.fromkeys(
                 [
+                    *book_state_world_lines,
                     *(arc_world_contract.primary_world_line_ids if arc_world_contract else []),
                     *(arc_world_contract.hidden_world_line_ids if arc_world_contract else []),
                 ]
@@ -483,9 +896,14 @@ def assemble_context(
             else []
         ),
         active_knowledge_gaps=(
-            list(arc_world_contract.major_gap_ids)
-            if arc_world_contract is not None
-            else []
+            list(
+                dict.fromkeys(
+                    [
+                        *book_state_knowledge_gaps,
+                        *(arc_world_contract.major_gap_ids if arc_world_contract else []),
+                    ]
+                )
+            )
         ),
         planned_reveal_ladder=(
             list(arc_world_contract.reveal_ladder)

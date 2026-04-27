@@ -8,7 +8,11 @@ from sqlalchemy import func, select
 
 from forwin.config import Config
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.models.project import ChapterPlan
 from forwin.models.world_v4 import WorldCompileRunV4Row, WorldDeltaRow
+from forwin.models.book_state import GraphDeltaRow
+from forwin.protocol.book_state import BookStateCompileResult
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent, WorldContractRepository
 from forwin.protocol.review import ReviewVerdict
@@ -133,3 +137,104 @@ def test_apply_canon_candidate_blocks_v4_review_failure() -> None:
         assert retrieval_packs["writing"]["must_not_reveal"] == ["father_sieged"]
         assert retrieval_packs["compiler"]["metadata"]["hidden_truth_included"] is True
         assert delta_count == 0
+
+
+def test_book_state_compile_failure_rolls_back_v4_rows(monkeypatch) -> None:
+    def fail_compile(self, approved_changes, *, compiler_run_id: str = ""):
+        return BookStateCompileResult(
+            project_id=approved_changes.project_id,
+            chapter_number=approved_changes.chapter_number,
+            compiler_run_id=compiler_run_id,
+            committed=False,
+            blocked_reasons=["forced test failure"],
+        )
+
+    monkeypatch.setattr("forwin.orchestrator.loop.BookStateCompiler.compile", fail_compile)
+    with TemporaryDirectory() as tmp:
+        db_path = str(Path(tmp) / "orchestrator-v4-bookstate-rollback.db")
+        engine = get_engine(db_path)
+        init_db(engine)
+        Session = get_session_factory(engine)
+        orchestrator = WritingOrchestrator(
+            Config(db_path=db_path, minimax_api_key="", minimax_model="fake-model")
+        )
+        with Session.begin() as session:
+            repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
+            project, _chapter = _setup_project(session)
+            result = orchestrator._apply_canon_candidate(  # noqa: SLF001
+                session=session,
+                repo=repo,
+                updater=updater,
+                project_id=project.id,
+                chapter_number=23,
+                writer_output=WriterOutput(
+                    project_id=project.id,
+                    chapter_number=23,
+                    title="乱码呼号",
+                    body="防线修复后，通讯台传出乱码和父亲旧部呼号。",
+                    end_of_chapter_summary="收到异常通讯。",
+                ),
+                verdict=ReviewVerdict(verdict="pass", issues=[]),
+            )
+
+        with Session() as session:
+            compile_runs = session.scalar(select(func.count()).select_from(WorldCompileRunV4Row))
+            world_deltas = session.scalar(select(func.count()).select_from(WorldDeltaRow))
+            graph_deltas = session.scalar(select(func.count()).select_from(GraphDeltaRow))
+
+        assert result
+        assert compile_runs == 0
+        assert world_deltas == 0
+        assert graph_deltas == 0
+
+
+def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
+    with TemporaryDirectory() as tmp:
+        db_path = str(Path(tmp) / "accept-review-block.db")
+        engine = get_engine(db_path)
+        init_db(engine)
+        Session = get_session_factory(engine)
+        orchestrator = WritingOrchestrator(
+            Config(db_path=db_path, minimax_api_key="", minimax_model="fake-model")
+        )
+        with Session.begin() as session:
+            updater = StateUpdater(session)
+            project = updater.create_project(title="Accept", premise="p", genre="g")
+            arc = updater.create_arc_plan(project.id, "arc", chapter_start=1, chapter_end=1)
+            chapter = updater.create_chapter_plan(
+                project_id=project.id,
+                arc_plan_id=arc.id,
+                chapter_number=1,
+                title="一",
+                one_line="一",
+                goals=["一"],
+            )
+            draft = ChapterDraft(chapter_plan_id=chapter.id, version=1, body_text="正文", llm_raw_response="{}")
+            session.add(draft)
+            session.flush()
+            session.add(ChapterReview(draft_id=draft.id, verdict="pass", issues_json="[]"))
+
+        monkeypatch.setattr(
+            orchestrator,
+            "_load_writer_output_from_meta",
+            lambda _meta: WriterOutput(
+                project_id=project.id,
+                chapter_number=1,
+                title="一",
+                body="正文",
+                end_of_chapter_summary="总结",
+            ),
+        )
+        monkeypatch.setattr(orchestrator, "_load_review_verdict", lambda _review: ReviewVerdict(verdict="pass", issues=[]))
+        monkeypatch.setattr(orchestrator, "_apply_canon_candidate", lambda **_kwargs: "book-state-review-gate-blocked")
+        monkeypatch.setattr(orchestrator, "_run_phase3_pass", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("phase3 should not run")))
+        monkeypatch.setattr(orchestrator, "_compile_world_model_after_acceptance", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("world compile should not run")))
+
+        result = orchestrator.accept_review(project.id, 1)
+
+        with Session() as session:
+            status = session.scalar(select(ChapterPlan.status).where(ChapterPlan.id == chapter.id))
+
+        assert "needs_review" in result["message"]
+        assert result["frozen_artifact"] == "book-state-review-gate-blocked"
+        assert status == "needs_review"

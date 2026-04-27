@@ -3,6 +3,8 @@ Provisional / Scenario Rehearsal 逻辑说明（4.1 代码核对版）
 > 4.1 修订：旧 `provisional preview` 已从核心机制降级为 legacy compatibility。新的主流程把“写之前判断计划能不能写”交给 `Scenario Rehearsal`，把“写之后判断正文能不能入 canon”交给 `Candidate Draft Review`。旧 `ProvisionalBandExecution` / `ProvisionalChapterLedger` / `ProvisionalPromotionRecord` 仍保留，用于历史兼容、legacy preview 和审计展示，但不再默认阻断正式写作。
 >
 > 4.1 完整架构补齐：`Candidate Draft` 已成为独立语义记录层，链接 `ChapterDraft` / `ChapterReview` / repair attempts / canon commit 状态；`Scenario Rehearsal` 已拆出 trigger matrix、deterministic rule pack、hybrid director simulation、plan patch approve / rerun API。legacy provisional 不参与新主线判断，除非显式开启 legacy 开关。
+>
+> V4.5.1 口径：本文档只保留 legacy provisional 边界说明。BookState canon 优先路径、Scheme C map gate、movement reviewer policy 的残余设计收束见 `V4.5.1_markstone.md`；World Studio、dashboard、脚本型 Skill runtime 不写入本文档。
 
 ## 0. 4.1 术语边界
 

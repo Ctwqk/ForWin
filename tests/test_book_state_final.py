@@ -79,6 +79,8 @@ def test_compiler_persists_delta_snapshots_and_review_gate() -> None:
         repo = BookStateRepository(session)
         repo.create_world_node(WorldNode(id="char_mc", project_id=project_id, node_type="character", state={"location_id": "loc_a"}))
         repo.append_world_node_state(project_id=project_id, node_id="char_mc", node_type="character", as_of_chapter=0, state={"location_id": "loc_a"})
+        repo.create_world_node(WorldNode(id="char_origin", project_id=project_id, node_type="character", state={"location_id": "loc_a"}))
+        repo.append_world_node_state(project_id=project_id, node_id="char_origin", node_type="character", as_of_chapter=0, state={"location_id": "loc_a"})
         repo.create_map_node(MapNode(id="loc_a", project_id=project_id, node_type="settlement"))
         repo.create_map_node(MapNode(id="loc_b", project_id=project_id, node_type="settlement"))
         repo.create_map_edge(MapEdge(id="edge_ab", project_id=project_id, from_node_id="loc_a", to_node_id="loc_b", edge_type="road", travel_time=1))
@@ -103,7 +105,39 @@ def test_compiler_persists_delta_snapshots_and_review_gate() -> None:
     assert result.committed is True
     assert delta_count == 1
     assert runtime.world.get_state("char_mc")["location_id"] == "loc_b"
-    assert distance_between_world_nodes(runtime.world, runtime.map, "char_mc", "char_mc").reachable is True
+    movement_path = distance_between_world_nodes(runtime.world, runtime.map, "char_origin", "char_mc")
+    assert movement_path.reachable is True
+    assert movement_path.path_edge_ids == ["edge_ab"]
+    assert movement_path.total_travel_time == 1
+
+
+def test_review_gate_blocks_unknown_location_id_but_warns_for_legacy_location() -> None:
+    Session = _session()
+    with Session.begin() as session:
+        project_id = _project(session)
+        repo = BookStateRepository(session)
+        repo.create_map_node(MapNode(id="loc_a", project_id=project_id, node_type="settlement"))
+        changes = ApprovedGraphDeltaSet(
+            project_id=project_id,
+            chapter_number=1,
+            graph_deltas=[
+                GraphDelta(
+                    id="delta_bad_location",
+                    project_id=project_id,
+                    node_patches=[
+                        NodePatch(node_id="char_mc", node_type="character", op="set", field_path="state.location_id", old_value="loc_a", new_value="missing"),
+                        NodePatch(node_id="char_old", node_type="character", op="set", field_path="state.location", old_value="loc_a", new_value="missing"),
+                    ],
+                )
+            ],
+        )
+
+        verdict = BookStateReviewGate(session).review(changes)
+
+    severities = {issue.target_ref: issue.severity for issue in verdict.issues if issue.code == "movement_unknown_map_node"}
+    assert verdict.accepted is False
+    assert severities["node:char_mc"] == "error"
+    assert severities["node:char_old"] == "warning"
 
 
 def test_v4_adapter_and_legacy_import_create_book_state_rows() -> None:

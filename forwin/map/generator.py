@@ -14,7 +14,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from forwin.protocol.book_state import MapEdge, MapNode
 
-from .protocol import MapGenerationResult, RegionEdge, RegionNode, SubWorldMapSpec
+from .protocol import SCHEME_C_NAME, MapGenerationResult, RegionEdge, RegionNode, SubWorldMapSpec
 from .validator import validate_subworld_map
 
 
@@ -61,13 +61,14 @@ def generate_subworld_map(spec: SubWorldMapSpec) -> MapGenerationResult:
         project_id=spec.project_id,
         subworld_id=spec.subworld_id,
         generation_seed=spec.generation_seed,
+        algorithm=SCHEME_C_NAME,
         regions=regions,
         region_edges=region_edges,
         map_nodes=nodes,
         map_edges=map_edges,
         validation_report=report,
         summary={
-            "algorithm": "anchor_graph_v1",
+            "algorithm": SCHEME_C_NAME,
             "region_count": len(regions),
             "region_edge_count": len(region_edges),
             "node_count": len(nodes),
@@ -154,6 +155,7 @@ def _generate_region_nodes(
                 rng,
                 narrative_function=anchor.narrative_function,
                 anchor_name=anchor.name,
+                source_anchor=anchor,
             )
         )
 
@@ -338,6 +340,7 @@ def _node(
     region_index: int = 0,
     narrative_function: str = "",
     anchor_name: str = "",
+    source_anchor=None,
 ) -> MapNode:
     base_x = float(region.metadata.get("generation_index", region_index)) * 10.0
     coordinates = {
@@ -364,6 +367,9 @@ def _node(
             "region_role": region.metadata.get("role", region.name),
             "narrative_function": narrative_function,
             "anchor_name": anchor_name,
+            "source_node_id": str(getattr(source_anchor, "source_node_id", "") or ""),
+            "source_region_id": str(getattr(source_anchor, "source_region_id", "") or ""),
+            "source_subworld_id": str(getattr(source_anchor, "source_subworld_id", "") or ""),
         },
     )
 

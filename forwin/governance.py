@@ -123,10 +123,27 @@ class DecisionEventType:
     MEMORY_INDEX_UPSERT_STARTED = "memory_index_upsert_started"
     MEMORY_INDEX_UPSERT_SUCCEEDED = "memory_index_upsert_succeeded"
     MEMORY_INDEX_UPSERT_FAILED = "memory_index_upsert_failed"
+    MAP_GENERATION_STARTED = "map_generation_started"
+    MAP_GENERATION_SUCCEEDED = "map_generation_succeeded"
+    MAP_GENERATION_FAILED = "map_generation_failed"
+    MAP_EXPANSION_STARTED = "map_expansion_started"
+    MAP_EXPANSION_SUCCEEDED = "map_expansion_succeeded"
+    MAP_EXPANSION_FAILED = "map_expansion_failed"
+    MAP_MOVEMENT_REVIEW_ISSUE = "map_movement_review_issue"
     WORLD_MODEL_COMPILE_STARTED = "world_model_compile_started"
     WORLD_MODEL_COMPILE_SUCCEEDED = "world_model_compile_succeeded"
     WORLD_MODEL_COMPILE_FAILED = "world_model_compile_failed"
     KNOWLEDGE_PROJECTION_REFRESHED = "knowledge_projection_refreshed"
+    BOOK_STATE_REVIEW_STARTED = "book_state_review_started"
+    BOOK_STATE_REVIEW_SUCCEEDED = "book_state_review_succeeded"
+    BOOK_STATE_REVIEW_FAILED = "book_state_review_failed"
+    BOOK_STATE_COMPILE_STARTED = "book_state_compile_started"
+    BOOK_STATE_COMPILE_SUCCEEDED = "book_state_compile_succeeded"
+    BOOK_STATE_COMPILE_FAILED = "book_state_compile_failed"
+    LEGACY_PROJECTION_FAILED = "legacy_projection_failed"
+    LEGACY_REGION_PROMOTION_STARTED = "legacy_region_promotion_started"
+    LEGACY_REGION_PROMOTION_SUCCEEDED = "legacy_region_promotion_succeeded"
+    LEGACY_REGION_PROMOTION_FAILED = "legacy_region_promotion_failed"
     TASK_OPERATION_STARTED = "task_operation_started"
     TASK_OPERATION_SUCCEEDED = "task_operation_succeeded"
     TASK_OPERATION_FAILED = "task_operation_failed"
@@ -226,10 +243,27 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.MEMORY_INDEX_UPSERT_STARTED,
     DecisionEventType.MEMORY_INDEX_UPSERT_SUCCEEDED,
     DecisionEventType.MEMORY_INDEX_UPSERT_FAILED,
+    DecisionEventType.MAP_GENERATION_STARTED,
+    DecisionEventType.MAP_GENERATION_SUCCEEDED,
+    DecisionEventType.MAP_GENERATION_FAILED,
+    DecisionEventType.MAP_EXPANSION_STARTED,
+    DecisionEventType.MAP_EXPANSION_SUCCEEDED,
+    DecisionEventType.MAP_EXPANSION_FAILED,
+    DecisionEventType.MAP_MOVEMENT_REVIEW_ISSUE,
     DecisionEventType.WORLD_MODEL_COMPILE_STARTED,
     DecisionEventType.WORLD_MODEL_COMPILE_SUCCEEDED,
     DecisionEventType.WORLD_MODEL_COMPILE_FAILED,
     DecisionEventType.KNOWLEDGE_PROJECTION_REFRESHED,
+    DecisionEventType.BOOK_STATE_REVIEW_STARTED,
+    DecisionEventType.BOOK_STATE_REVIEW_SUCCEEDED,
+    DecisionEventType.BOOK_STATE_REVIEW_FAILED,
+    DecisionEventType.BOOK_STATE_COMPILE_STARTED,
+    DecisionEventType.BOOK_STATE_COMPILE_SUCCEEDED,
+    DecisionEventType.BOOK_STATE_COMPILE_FAILED,
+    DecisionEventType.LEGACY_PROJECTION_FAILED,
+    DecisionEventType.LEGACY_REGION_PROMOTION_STARTED,
+    DecisionEventType.LEGACY_REGION_PROMOTION_SUCCEEDED,
+    DecisionEventType.LEGACY_REGION_PROMOTION_FAILED,
     DecisionEventType.TASK_OPERATION_STARTED,
     DecisionEventType.TASK_OPERATION_SUCCEEDED,
     DecisionEventType.TASK_OPERATION_FAILED,

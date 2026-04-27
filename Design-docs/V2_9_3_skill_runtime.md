@@ -4,7 +4,7 @@
 
 来源：`V2_9_2.md` 当前主干架构 + `V2.9.3` Skill Runtime 增量实现。
 
-说明：本文件定义 `SKILL.md` 类工作流在 ForWin 产品运行时中的接入方式。目标不是把外部 Superpower 作为插件挂进生产链路，而是把 Skills 吸收为 ForWin 自己的 prompt / workflow layer。
+说明：本文件定义 `SKILL.md` 类工作流在 ForWin 产品运行时中的接入方式。目标不是把外部 Superpower 作为插件挂进生产链路，而是把 Skills 吸收为 ForWin 自己的 prompt / workflow layer。V4.5.1 只收束 prompt-layer governance、project policy 与 PromptTrace 口径；Skill API / UI、脚本型 Skill、tool-backed execution 归入 V4.6+，不作为 V4.5.1 未完成项。
 
 ---
 
@@ -298,9 +298,8 @@ P0 / P1 固定只允许 `instruction_only`。
 5. `PromptTrace` 持久化 skill prompt layers 与 selected skills
 6. 新增 `ModelAdapter` 抽象并落一个 OpenAI-compatible 实现
 
-后续阶段：
+后续阶段按 V4.5.1 重新归档：
 
-- P1：项目级 skill 管理与只读展示 API/UI
-- P2：多 provider adapter
-- P3：受限只读工具型 skills
-
+- V4.5.1：只收束 prompt-layer skill governance，包括项目级 policy 语义、strictness 启用/禁用口径、PromptTrace 可解释性，以及“不绕过 BookState canon gate”的约束。
+- 后续产品化版本：Skill API / UI、脚本型 Skill runtime、tool-backed / read-only tool skills。
+- 已不作为本文档残项：多 provider adapter 基础已由现有 LLM compatibility / runtime profile 链路承担，后续只在模型治理设计中继续扩展。

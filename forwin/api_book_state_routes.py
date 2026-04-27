@@ -5,10 +5,11 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from forwin.book_state import BookStateProjection, LegacyBookStateImporter
-from forwin.book_state.repository import BookStateRepository
-from forwin.models.book_state import GraphDeltaRow, WorldSnapshotRow
+from forwin.book_state import BookStateProjection, BookStateRepository, LegacyBookStateImporter
+from forwin.governance import DecisionEventInfo, DecisionEventType
+from forwin.observability.payloads import audit_payload, event_error_payload
 from forwin.models.project import Project
+from forwin.state.updater import StateUpdater
 
 
 def _require_project(session, project_id: str) -> Project:
@@ -19,33 +20,24 @@ def _require_project(session, project_id: str) -> Project:
 
 
 def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[..., Any]]:
-    def _resolve_as_of_chapter(session, project_id: str, as_of_chapter: int) -> int:
-        if as_of_chapter and as_of_chapter > 0:
+    def _resolve_as_of_chapter(session, project_id: str, as_of_chapter: int | None = None) -> int:
+        if as_of_chapter is not None and int(as_of_chapter or 0) > 0:
             return int(as_of_chapter)
-        latest_snapshot = session.execute(
-            select(WorldSnapshotRow.as_of_chapter)
-            .where(WorldSnapshotRow.project_id == project_id)
-            .order_by(WorldSnapshotRow.as_of_chapter.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        if latest_snapshot is not None:
-            return int(latest_snapshot or 0)
-        latest_delta = session.execute(
-            select(GraphDeltaRow.chapter_number)
-            .where(GraphDeltaRow.project_id == project_id)
-            .order_by(GraphDeltaRow.chapter_number.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        return int(latest_delta or 0)
+        return BookStateRepository(session).latest_available_chapter(project_id)
 
-    def get_book_state_runtime(project_id: str, as_of_chapter: int = 0) -> dict[str, Any]:
+    def get_book_state_runtime(project_id: str, as_of_chapter: int | None = None) -> dict[str, Any]:
         with get_session() as session:
             _require_project(session, project_id)
-            as_of = _resolve_as_of_chapter(session, project_id, as_of_chapter)
-            runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=as_of)
+            resolved_chapter = (
+                BookStateRepository(session).latest_available_chapter(project_id)
+                if as_of_chapter is None
+                else int(as_of_chapter)
+            )
+            runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=resolved_chapter)
             return {
+                "schema_version": "book_state.runtime.v1",
                 "project_id": project_id,
-                "as_of_chapter": as_of,
+                "as_of_chapter": resolved_chapter,
                 "world_node_count": len(runtime.world.nodes_by_id),
                 "world_edge_count": len(runtime.world.edges_by_id),
                 "fact_count": len(runtime.world.facts_by_id),
@@ -168,7 +160,7 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
         from_node_id: str,
         to_node_id: str,
         metric: str = "travel_time",
-        as_of_chapter: int = 0,
+        as_of_chapter: int | None = None,
         observer_type: str = "",
         observer_id: str = "",
         allow_hidden: bool = False,
@@ -180,15 +172,85 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
             observer = (observer_type, observer_id) if observer_type and observer_id else None
             runtime = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=as_of, observer_keys=[observer] if observer else None)
             result = runtime.map.shortest_path(from_node_id, to_node_id, metric=metric, observer=observer, allow_hidden=allow_hidden, allow_blocked=allow_blocked)
-            return result.model_dump(mode="json")
+            return {
+                "schema_version": "book_state.path.v1",
+                "project_id": project_id,
+                "as_of_chapter": as_of,
+                **result.model_dump(mode="json"),
+            }
 
     def import_book_state_legacy(project_id: str) -> dict[str, Any]:
         with get_session() as session:
             _require_project(session, project_id)
-            with session.begin_nested():
-                counts = LegacyBookStateImporter(session).import_project(project_id)
+            updater = StateUpdater(session)
+            started = updater.save_decision_event(
+                DecisionEventInfo(
+                    project_id=project_id,
+                    scope="project",
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.LEGACY_REGION_PROMOTION_STARTED,
+                    actor_type="system",
+                    summary="开始执行 legacy BookState import 与 region_drafts promotion。",
+                    payload=audit_payload(
+                        stage="legacy_region_promotion",
+                        status="started",
+                        project_id=project_id,
+                    ),
+                    related_object_type="project",
+                    related_object_id=project_id,
+                )
+            )
+            try:
+                with session.begin_nested():
+                    counts = LegacyBookStateImporter(session).import_project(project_id)
+            except Exception as exc:
+                updater.save_decision_event(
+                    DecisionEventInfo(
+                        project_id=project_id,
+                        scope="project",
+                        event_family="runtime_observation",
+                        event_type=DecisionEventType.LEGACY_REGION_PROMOTION_FAILED,
+                        actor_type="system",
+                        summary="legacy BookState import 或 region_drafts promotion 失败。",
+                        reason=str(exc),
+                        payload=event_error_payload(
+                            exc,
+                            stage="legacy_region_promotion",
+                            project_id=project_id,
+                        ),
+                        related_object_type="project",
+                        related_object_id=project_id,
+                        parent_event_id=started.id,
+                    )
+                )
+                session.commit()
+                raise
+            updater.save_decision_event(
+                DecisionEventInfo(
+                    project_id=project_id,
+                    scope="project",
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.LEGACY_REGION_PROMOTION_SUCCEEDED,
+                    actor_type="system",
+                    summary="legacy BookState import 与 region_drafts promotion 已完成。",
+                    payload=audit_payload(
+                        stage="legacy_region_promotion",
+                        status="succeeded",
+                        project_id=project_id,
+                        migration_report=counts.get("migration_report", {}) if isinstance(counts, dict) else {},
+                    ),
+                    related_object_type="project",
+                    related_object_id=project_id,
+                    parent_event_id=started.id,
+                )
+            )
             session.commit()
-            return {"project_id": project_id, "imported": counts}
+            return {
+                "schema_version": "book_state.legacy_import.v1",
+                "project_id": project_id,
+                "imported": counts,
+                "migration_report": counts.get("migration_report", {}) if isinstance(counts, dict) else {},
+            }
 
     return {
         "get_book_state_runtime": get_book_state_runtime,

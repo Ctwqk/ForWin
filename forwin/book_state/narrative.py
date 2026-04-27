@@ -59,6 +59,16 @@ class NarrativeControlGraph:
     def add_edge(self, edge: NarrativeEdge) -> None:
         if edge.edge_type not in NARRATIVE_EDGE_TYPES:
             raise ValueError(f"unknown narrative edge type: {edge.edge_type}")
+        existing = self.edges_by_id.get(edge.id)
+        if existing is not None:
+            if edge.id in self.outgoing_edges.get(existing.source_id, []):
+                self.outgoing_edges[existing.source_id] = [
+                    edge_id for edge_id in self.outgoing_edges[existing.source_id] if edge_id != edge.id
+                ]
+            if edge.id in self.incoming_edges.get(existing.target_id, []):
+                self.incoming_edges[existing.target_id] = [
+                    edge_id for edge_id in self.incoming_edges[existing.target_id] if edge_id != edge.id
+                ]
         self.edges_by_id[edge.id] = edge
         self.outgoing_edges[edge.source_id].append(edge.id)
         self.incoming_edges[edge.target_id].append(edge.id)

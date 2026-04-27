@@ -301,6 +301,84 @@ class WorldModelV4ExportResponse(BaseModel):
     debug: WorldModelV4DebugResponse
 
 
+class BookStateRuntimeResponse(BaseModel):
+    schema_version: str = "book_state.runtime.v1"
+    project_id: str
+    as_of_chapter: int = 0
+    world_node_count: int = 0
+    world_edge_count: int = 0
+    fact_count: int = 0
+    map_node_count: int = 0
+    map_edge_count: int = 0
+    observer_count: int = 0
+    narrative_node_count: int = 0
+    narrative_edge_count: int = 0
+    active_world_line_ids: list[str] = Field(default_factory=list)
+    open_gap_ids: list[str] = Field(default_factory=list)
+
+
+class BookStatePathResponse(BaseModel):
+    schema_version: str = "book_state.path.v1"
+    project_id: str
+    as_of_chapter: int = 0
+    reachable: bool = False
+    from_node_id: str = ""
+    to_node_id: str = ""
+    metric: str = "travel_time"
+    total_distance: float = 0.0
+    total_travel_time: float = 0.0
+    total_travel_cost: float = 0.0
+    total_risk: float = 0.0
+    total_narrative_cost: float = 0.0
+    path_node_ids: list[str] = Field(default_factory=list)
+    path_edge_ids: list[str] = Field(default_factory=list)
+    blocked_reason: str = ""
+    explanation: str = ""
+
+
+class BookStateLegacyImportResponse(BaseModel):
+    schema_version: str = "book_state.legacy_import.v1"
+    project_id: str
+    imported: dict[str, Any] = Field(default_factory=dict)
+    migration_report: dict[str, Any] = Field(default_factory=dict)
+
+
+class MapRuntimeResponse(BaseModel):
+    schema_version: str = "map.runtime.v1"
+    project_id: str
+    subworld_count: int = 0
+    region_count: int = 0
+    map_node_count: int = 0
+    map_edge_count: int = 0
+    inter_subworld_edge_count: int = 0
+    subworld_ids: list[str] = Field(default_factory=list)
+
+
+class MapPathResponse(BaseModel):
+    schema_version: str = "map.path.v1"
+    project_id: str
+    reachable: bool = False
+    from_node_id: str = ""
+    to_node_id: str = ""
+    metric: str = "travel_time"
+    total_distance: float = 0.0
+    total_travel_time: float = 0.0
+    total_travel_cost: float = 0.0
+    total_risk: float = 0.0
+    total_narrative_cost: float = 0.0
+    path_node_ids: list[str] = Field(default_factory=list)
+    path_edge_ids: list[str] = Field(default_factory=list)
+    blocked_reason: str = ""
+    explanation: str = ""
+
+
+class MapEnsureResponse(BaseModel):
+    schema_version: str = "map.ensure.v1"
+    project_id: str
+    summary: dict[str, Any] = Field(default_factory=dict)
+    validation_report: dict[str, Any] = Field(default_factory=dict)
+
+
 class TaskBulkDeleteRequest(BaseModel):
     items: list[TaskBulkDeleteItem] = Field(default_factory=list)
 
@@ -746,10 +824,30 @@ class DecisionEventsResponse(BaseModel):
     items: list[DecisionEventInfo] = Field(default_factory=list)
 
 
+class StageDurationAggregate(BaseModel):
+    stage: str = ""
+    event_count: int = 0
+    total_duration_ms: int = 0
+    max_duration_ms: int = 0
+    last_duration_ms: int = 0
+
+
+class ArtifactManifestItem(BaseModel):
+    uri: str = ""
+    kind: str = ""
+    redaction_state: str = ""
+    source_event_id: str = ""
+    trace_id: str = ""
+    hash: str = ""
+    size: int = 0
+
+
 class TaskTimelineResponse(BaseModel):
     task_id: str
     project_id: str = ""
     events: list[DecisionEventInfo] = Field(default_factory=list)
+    stage_durations: list[StageDurationAggregate] = Field(default_factory=list)
+    operation_ids: list[str] = Field(default_factory=list)
 
 
 class ChapterLedgerResponse(BaseModel):
@@ -759,6 +857,9 @@ class ChapterLedgerResponse(BaseModel):
     events: list[DecisionEventInfo] = Field(default_factory=list)
     prompt_trace_ids: list[str] = Field(default_factory=list)
     artifact_uris: list[str] = Field(default_factory=list)
+    stage_durations: list[StageDurationAggregate] = Field(default_factory=list)
+    operation_ids: list[str] = Field(default_factory=list)
+    artifact_manifest: list[ArtifactManifestItem] = Field(default_factory=list)
 
 
 class PromptTraceDetailResponse(PromptTraceInfo):

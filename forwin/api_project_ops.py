@@ -48,9 +48,13 @@ from forwin.api_schemas import (
 )
 from forwin.book_genesis import GENESIS_STAGE_ORDER, StaleGenesisRevisionError
 from forwin.governance import DecisionEventInfo, DecisionEventType, new_project_governance
+from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis
+from forwin.map.models import MapNodeRow
+from forwin.map.service import build_interconnections_from_genesis_atlas, create_or_update_book_map
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.genesis import PromptTrace
 from forwin.models.governance import DecisionEvent
+from forwin.observability.payloads import audit_payload, event_error_payload
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
@@ -84,6 +88,122 @@ def _serialize_model_row(row) -> dict[str, Any]:  # noqa: ANN001
         column.name: _jsonable(getattr(row, column.name))
         for column in row.__table__.columns
     }
+
+
+def _ensure_initial_book_map_from_genesis(
+    *,
+    session,
+    updater: StateUpdater,
+    project: Project,
+    revision,
+    pack: dict[str, Any],
+    decision_event_id: str,
+) -> dict[str, Any]:
+    existing_nodes = int(
+        session.execute(
+            select(func.count(MapNodeRow.id)).where(MapNodeRow.project_id == project.id)
+        ).scalar_one()
+        or 0
+    )
+    if existing_nodes > 0:
+        summary = {
+            "skipped": True,
+            "reason": "existing_book_map",
+            "map_node_count": existing_nodes,
+        }
+        updater.save_decision_event(
+            DecisionEventInfo(
+                project_id=project.id,
+                scope="project",
+                event_family="runtime_observation",
+                event_type=DecisionEventType.MAP_GENERATION_SUCCEEDED,
+                actor_type="system",
+                summary="项目已有 BookMap，跳过 Genesis 自动地图生成。",
+                payload=summary,
+                related_object_type="book_genesis_revision",
+                related_object_id=str(getattr(revision, "id", "") or ""),
+                parent_event_id=decision_event_id,
+            )
+        )
+        return summary
+
+    world = pack.get("world") if isinstance(pack.get("world"), dict) else {}
+    if not world:
+        world = {
+            "map_atlas": pack.get("map_atlas") if isinstance(pack.get("map_atlas"), dict) else {},
+        }
+    map_atlas = world.get("map_atlas") if isinstance(world.get("map_atlas"), dict) else {}
+    specs = build_subworld_map_specs_from_genesis(
+        project_id=project.id,
+        genesis_revision_id=str(getattr(revision, "id", "") or ""),
+        map_atlas=map_atlas,
+    )
+    if not specs:
+        raise ValueError("Genesis map_atlas 未能生成 BookMap spec。")
+
+    updater.save_decision_event(
+        DecisionEventInfo(
+            project_id=project.id,
+            scope="project",
+            event_family="runtime_observation",
+            event_type=DecisionEventType.MAP_GENERATION_STARTED,
+            actor_type="system",
+            summary="开始从 Genesis map_atlas 生成 Scheme C BookMap。",
+            payload=audit_payload(
+                stage="map_generation",
+                status="started",
+                subworld_count=len(specs),
+                subworld_ids=[spec.subworld_id for spec in specs],
+            ),
+            related_object_type="book_genesis_revision",
+            related_object_id=str(getattr(revision, "id", "") or ""),
+            parent_event_id=decision_event_id,
+        )
+    )
+    interconnections, interconnection_source = build_interconnections_from_genesis_atlas(
+        project_id=project.id,
+        specs=specs,
+        map_atlas=map_atlas,
+        genesis_revision_id=str(getattr(revision, "id", "") or ""),
+    )
+    result = create_or_update_book_map(
+        session,
+        specs,
+        interconnections=interconnections if interconnections else None,
+        interconnection_source=interconnection_source,
+        commit=False,
+    )
+    if not result.validation_report.valid:
+        message = "；".join(result.validation_report.errors) or "BookMap validation failed."
+        raise ValueError(message)
+
+    summary = {
+        "skipped": False,
+        "subworld_count": len(result.subworld_results),
+        "region_count": sum(len(item.regions) for item in result.subworld_results),
+        "map_node_count": sum(len(item.map_nodes) for item in result.subworld_results),
+        "map_edge_count": sum(len(item.map_edges) for item in result.subworld_results)
+        + len(result.inter_subworld_edges),
+        "inter_subworld_edge_count": len(result.inter_subworld_edges),
+        "interconnection_source": result.summary.get("interconnection_source", interconnection_source),
+        "generation_run_count": len(result.subworld_results),
+        "subworld_ids": [item.subworld_id for item in result.subworld_results],
+    }
+    updater.save_decision_event(
+        DecisionEventInfo(
+            project_id=project.id,
+            scope="project",
+            event_family="runtime_observation",
+            event_type=DecisionEventType.MAP_GENERATION_SUCCEEDED,
+            actor_type="system",
+            summary="Genesis map_atlas 已生成 Scheme C BookMap。",
+            payload=audit_payload(stage="map_generation", status="succeeded", **summary),
+            related_object_type="book_genesis_revision",
+            related_object_id=str(getattr(revision, "id", "") or ""),
+            parent_event_id=decision_event_id,
+        )
+    )
+    return summary
 
 
 def _export_project_audit_bundle(
@@ -782,12 +902,47 @@ def start_project_writing(
             revision=revision,
             arc_number=active_arc.arc_number,
             decision_event_id=decision.id,
+            ensure_arc_map=False,
         )
         pack = genesis_service.load_pack(revision)
         world = pack.get("world") if isinstance(pack.get("world"), dict) else {}
         world_bible = world.get("world_bible") if isinstance(world.get("world_bible"), dict) else {}
         if not str(project.setting_summary or "").strip():
             project.setting_summary = str(world_bible.get("overview", "") or "").strip()
+        project_id_for_failure = project.id
+        revision_id_for_failure = revision.id
+        try:
+            _ensure_initial_book_map_from_genesis(
+                session=session,
+                updater=updater,
+                project=project,
+                revision=revision,
+                pack=pack,
+                decision_event_id=decision.id,
+            )
+        except ValueError as exc:
+            failure_summary = str(exc) or "Genesis map_atlas 无法生成 BookMap。"
+            session.rollback()
+            StateUpdater(session).save_decision_event(
+                DecisionEventInfo(
+                    project_id=project_id_for_failure,
+                    scope="project",
+                    event_family="runtime_observation",
+                    event_type=DecisionEventType.MAP_GENERATION_FAILED,
+                    actor_type="system",
+                    summary="Genesis map_atlas 生成 Scheme C BookMap 失败。",
+                    reason=failure_summary,
+                    payload=event_error_payload(
+                        exc,
+                        stage="map_generation",
+                        failure_summary=failure_summary,
+                    ),
+                    related_object_type="book_genesis_revision",
+                    related_object_id=revision_id_for_failure,
+                )
+            )
+            session.commit()
+            raise HTTPException(409, f"地图生成失败，不能启动写作：{failure_summary}") from exc
         WorldModelCompiler(session).bootstrap_from_genesis(project.id)
         project.creation_status = "writing"
         session.add(project)

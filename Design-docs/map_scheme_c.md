@@ -2,7 +2,7 @@
 
 更新时间：2026-04-26
 
-状态：首轮代码落地完成；未切换线上 `8899` 服务。当前代码与设计差距统一入口见 [V4.5_markstone.md](/home/taiwei/.codex/worktrees/2a32/ForWin/Design-docs/V4.5_markstone.md)。
+状态：Scheme C 后端主链已补齐到 V4.5.1：初始生成、arc expansion、显式 atlas edge、legacy region promotion、movement policy 和最小 map API 已落地。当前代码与设计差距统一入口见 [V4.5_markstone.md](/home/taiwei/.codex/worktrees/b77d/ForWin/Design-docs/V4.5_markstone.md)，V4.5.1 残余设计债见 [V4.5.1_markstone.md](/home/taiwei/.codex/worktrees/b77d/ForWin/Design-docs/V4.5.1_markstone.md)。完整可视化编辑器、复杂 route policy、交通工具体系和多策略 path planner 归入 V4.6+。
 
 关键词：`方案 C：Graph-based Weighted Map Generation`、`SubWorld`、`RegionGraph`、`MapGraph`、`BookMapRuntime`、`CognitionOverlay`
 
@@ -341,19 +341,19 @@ Reviewer：
 当前验证命令：
 
 ```bash
-python3 -m pytest tests/test_book_state_protocol.py tests/test_book_state_runtime.py tests/test_book_state_schema.py tests/test_map_models.py tests/test_map_generation_scheme_c.py tests/test_map_generation.py tests/test_map_pathfinding.py tests/test_map_cognition_path.py tests/test_map_world_integration.py tests/test_subworld_control.py -q
+python3 -m pytest tests/test_book_state_protocol.py tests/test_book_state_runtime.py tests/test_book_state_schema.py tests/test_map_models.py tests/test_map_generation.py tests/test_map_pathfinding.py tests/test_map_cognition_path.py tests/test_map_world_integration.py tests/test_subworld_control.py -q
 ```
 
 当前结果：
 
 ```text
-37 passed
+38 passed
 ```
 
 编译检查：
 
 ```bash
-python3 -m py_compile forwin/map/protocol.py forwin/map/service.py forwin/map/generator.py forwin/map/__init__.py forwin/context/assembler.py forwin/protocol/context.py forwin/reviewer/context_builder.py forwin/reviewer/webnovel.py tests/test_map_generation_scheme_c.py tests/test_map_world_integration.py
+python3 -m py_compile forwin/map/protocol.py forwin/map/service.py forwin/map/generator.py forwin/map/__init__.py forwin/context/assembler.py forwin/protocol/context.py forwin/reviewer/context_builder.py forwin/reviewer/webnovel.py tests/test_map_generation.py tests/test_map_world_integration.py
 ```
 
 ## 11. 当前实现边界
@@ -373,14 +373,23 @@ python3 -m py_compile forwin/map/protocol.py forwin/map/service.py forwin/map/ge
 - reviewer 移动时间检查落地。
 - 测试中明确包含 `方案 C：Graph-based Weighted Map Generation`。
 
-未完成 / 非本轮目标：
+V4.5.1 已补齐：
 
-- 未新增独立地图 FastAPI 路由；当前只有 Python service 和 BookState map path debug API。
-- 未切换线上 `8899`。
-- 未做真实地理板块、tile renderer、Neo4j 主存储。
-- 未实现 Noise / Voronoi / BSP / WFC 作为主生成算法。
-- 未把完整 compiler canon gate 切到 BookState final pipeline。
-- reviewer 当前只做跨场景移动的最小 deterministic 检查，后续仍需接入更完整的 map/cognition rule pack。
+- 最小地图 FastAPI route：map runtime、map path、ensure-from-genesis；仍不声明为外部公共 API。
+- SubWorldMetaGraph planner v0 已能解析 Genesis `map_atlas.edges` 的跨 subworld edge，显式生成 `world_gate`，并在无可解析 edge 时回退默认相邻链。
+- reviewer 当前已覆盖 objective / observer-known path、hidden / blocked / false route、detour、access rule 与 movement speed policy。
+
+仍作为 V4.5.1 后端残项追踪：
+
+- Movement policy 字段语义、issue code 和 trace payload 需要保持稳定。
+- Genesis map_atlas 到 BookMap 的 source id、冲突报告和重复 ensure 行为需要继续以后端 contract 固化。
+
+排除到后续产品化版本：
+
+- 线上 `8899` 切换不属于设计完成口径。
+- 真实地理板块、tile renderer、Neo4j 主存储。
+- Noise / Voronoi / BSP / WFC 作为主生成算法。
+- 完整 map/cognition rule pack、复杂 route policy、交通工具体系和可视化编辑器。
 
 ## 12. 后续注意事项
 

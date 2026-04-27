@@ -20,8 +20,12 @@ from forwin.api_schemas import (
 from forwin.book_genesis import BookGenesisService
 from forwin.book_genesis import StaleGenesisRevisionError
 from forwin.config import Config
+from forwin.governance import DecisionEventType
+from forwin.map.models import MapEdgeRow, MapGenerationRunRow, MapNodeRow, MapRegionRow
+from forwin.map.protocol import BookMapGenerationResult, MapValidationReport
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
+from forwin.models.governance import DecisionEvent
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.orchestrator.phase24 import ArcEnvelopeManager
 from forwin.runtime_settings import RuntimeSettingsStore
@@ -322,6 +326,21 @@ class BookGenesisFlowTests(unittest.TestCase):
                 .where(PromptTrace.project_id == created.project_id)
                 .order_by(PromptTrace.created_at.asc())
             ).scalars().all()
+            map_runs = session.execute(
+                select(MapGenerationRunRow).where(MapGenerationRunRow.project_id == created.project_id)
+            ).scalars().all()
+            map_region_count = session.execute(
+                select(MapRegionRow).where(MapRegionRow.project_id == created.project_id)
+            ).scalars().all()
+            map_node_count = session.execute(
+                select(MapNodeRow).where(MapNodeRow.project_id == created.project_id)
+            ).scalars().all()
+            map_edge_count = session.execute(
+                select(MapEdgeRow).where(MapEdgeRow.project_id == created.project_id)
+            ).scalars().all()
+            decision_events = session.execute(
+                select(DecisionEvent).where(DecisionEvent.project_id == created.project_id)
+            ).scalars().all()
 
         assert project is not None
         self.assertEqual(response.task_id, "task-genesis-001")
@@ -332,6 +351,114 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(arcs[1].status, "planned")
         self.assertEqual([plan.chapter_number for plan in plans], [1, 2, 3])
         self.assertTrue(any(trace.trace_scope == "start_writing" for trace in traces))
+        self.assertTrue(map_runs)
+        self.assertTrue(map_region_count)
+        self.assertTrue(map_node_count)
+        self.assertTrue(map_edge_count)
+        self.assertTrue(
+            any(event.event_type == DecisionEventType.MAP_GENERATION_SUCCEEDED for event in decision_events)
+        )
+
+    def test_start_writing_blocks_when_initial_book_map_generation_fails(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {
+                    "title": "Genesis 地图失败书",
+                    "premise": "启动写作前地图生成失败时不能进入写作。",
+                    "genre": "玄幻",
+                    "target_total_chapters": 3,
+                }
+            )
+        )
+
+        api_module.patch_project_genesis(
+            created.project_id,
+            BookGenesisPatchRequest.model_validate(
+                {
+                    "world": {
+                        "world_bible": {"overview": "旧城与禁术并存的世界。"},
+                        "map_atlas": {"overview": "旧城、城外荒原、地下遗迹。"},
+                        "story_engine": {"long_arcs": ["旧术复苏"]},
+                    },
+                    "book_arc_blueprint": {
+                        "summary": "单 arc 蓝图",
+                        "arcs": [
+                            {
+                                "arc_number": 1,
+                                "title": "旧城开局",
+                                "arc_synopsis": "主角被迫卷入旧城禁术。",
+                                "goal": "立主冲突",
+                                "stakes": "失去立足点",
+                                "payoff_direction": "局部揭秘",
+                                "chapter_start": 1,
+                                "chapter_end": 3,
+                                "chapter_count": 3,
+                                "target_size": 3,
+                            }
+                        ],
+                    },
+                    "execution_bootstrap": {"operation_mode": "blackbox", "root_ready": True},
+                }
+            ),
+        )
+        for stage_key in ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap"):
+            api_module.lock_project_genesis_stage(created.project_id, stage_key)
+
+        def fake_genesis_call(self, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+            if str(stage_key).startswith("launch_arc_"):
+                return (
+                    {
+                        "chapters": [
+                            {"title": "雨夜", "one_line": "主角进入旧城。", "goals": ["建立危机"]},
+                            {"title": "债务", "one_line": "势力围拢。", "goals": ["扩大冲突"]},
+                            {"title": "遗迹", "one_line": "得到遗迹坐标。", "goals": ["转入下一阶段"]},
+                        ]
+                    },
+                    {
+                        "effective_system_prompt": "launch arc planner",
+                        "prompt_layers": [],
+                        "input_snapshot": {"stage_key": stage_key},
+                        "model_profile": {"model": "fake-model"},
+                        "attempts": [{"attempt": 1, "status": "success"}],
+                        "output_summary": {"mode": "success"},
+                    },
+                )
+            return fallback, {
+                "effective_system_prompt": "fallback",
+                "prompt_layers": [],
+                "input_snapshot": {},
+                "model_profile": {"model": "fake-model"},
+                "attempts": [{"attempt": 1, "status": "fallback"}],
+                "output_summary": {"mode": "fallback"},
+            }
+
+        invalid_map = BookMapGenerationResult(
+            project_id=created.project_id,
+            validation_report=MapValidationReport(valid=False, errors=["bad map"]),
+        )
+        with (
+            patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_genesis_call),
+            patch("forwin.api_project_ops.create_or_update_book_map", return_value=invalid_map),
+            patch("forwin.api._create_continue_generation_task") as task_mock,
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                api_module.start_project_writing(created.project_id)
+
+        self.assertEqual(raised.exception.status_code, 409)
+        task_mock.assert_not_called()
+        with self.session_factory() as session:
+            project = session.get(Project, created.project_id)
+            plans = session.execute(
+                select(ChapterPlan).where(ChapterPlan.project_id == created.project_id)
+            ).scalars().all()
+            events = session.execute(
+                select(DecisionEvent).where(DecisionEvent.project_id == created.project_id)
+            ).scalars().all()
+
+        assert project is not None
+        self.assertEqual(project.creation_status, "genesis_ready")
+        self.assertEqual(plans, [])
+        self.assertTrue(any(event.event_type == DecisionEventType.MAP_GENERATION_FAILED for event in events))
 
     def test_arc_envelope_uses_genesis_persisted_arc_sizing(self) -> None:
         created = api_module.create_project(

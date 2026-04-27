@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.book_state.cognition import CognitionView
+from forwin.book_state.repository import BookStateRepository
 from forwin.book_state.runtime import ObjectiveWorldGraph
 from forwin.models.book_state import CognitionOverlayRow
 from forwin.protocol.book_state import CognitionOverlay, FactNode, MapEdge, MapNode, PathResult, WorldEdge, WorldNode
@@ -47,32 +48,57 @@ def create_or_update_book_map(
     specs: list[SubWorldMapSpec],
     *,
     interconnections: list[InterSubWorldConnectionSpec] | None = None,
+    interconnection_source: str = "",
     commit: bool = False,
 ) -> BookMapGenerationResult:
     if not specs:
-        return BookMapGenerationResult(project_id="", summary={"subworld_count": 0})
+        return BookMapGenerationResult(project_id="", summary={"subworld_count": 0, "interconnection_source": "none"})
     project_id = specs[0].project_id
     if any(spec.project_id != project_id for spec in specs):
         raise ValueError("all SubWorldMapSpec entries must share project_id")
 
-    subworld_results = [
-        create_or_update_subworld_map(session, spec, commit=False)
-        for spec in specs
-    ]
-    errors = [
-        error
-        for result in subworld_results
-        for error in result.validation_report.errors
-    ]
+    nested = session.begin_nested()
+    subworld_results: list[MapGenerationResult] = []
     inter_edges: list[MapEdge] = []
-    if not errors:
+    site_state_bindings: list[dict[str, str]] = []
+    errors: list[str] = []
+    try:
+        for spec in specs:
+            result = create_or_update_subworld_map(session, spec, commit=False)
+            subworld_results.append(result)
+            errors.extend(result.validation_report.errors)
+        if errors:
+            nested.rollback()
+            return BookMapGenerationResult(
+                project_id=project_id,
+                subworld_results=subworld_results,
+                inter_subworld_edges=[],
+                validation_report=MapValidationReport(valid=False, errors=errors),
+                summary={
+                    "subworld_count": len(subworld_results),
+                    "inter_subworld_edge_count": 0,
+                    "interconnection_source": interconnection_source or "none",
+                },
+            )
         repo = MapRepository(session)
-        for connection in list(interconnections or _default_interconnections(specs)):
+        if interconnections is None:
+            resolved_interconnections = _default_interconnections(specs)
+            resolved_interconnection_source = interconnection_source or "default_chain"
+        else:
+            resolved_interconnections = interconnections
+            resolved_interconnection_source = interconnection_source or "provided"
+        for connection in list(resolved_interconnections):
             if connection.project_id != project_id:
                 raise ValueError("all InterSubWorldConnectionSpec entries must share project_id")
             inter_edges.append(_persist_inter_subworld_connection(repo, connection))
-    if commit:
-        session.commit()
+        site_state_bindings = _ensure_site_state_map_bindings(session, project_id)
+    except Exception:
+        nested.rollback()
+        raise
+    else:
+        nested.commit()
+        if commit:
+            session.commit()
     return BookMapGenerationResult(
         project_id=project_id,
         subworld_results=subworld_results,
@@ -81,8 +107,95 @@ def create_or_update_book_map(
         summary={
             "subworld_count": len(subworld_results),
             "inter_subworld_edge_count": len(inter_edges),
+            "interconnection_source": resolved_interconnection_source,
+            "site_state_binding_count": len(site_state_bindings),
+            "site_state_bindings": site_state_bindings,
         },
     )
+
+
+def ensure_book_map_from_genesis_atlas(
+    session: Session,
+    *,
+    project_id: str,
+    genesis_revision_id: str = "",
+    map_atlas: dict[str, Any] | None = None,
+    commit: bool = False,
+) -> BookMapGenerationResult:
+    from .genesis_adapter import build_subworld_map_specs_from_genesis
+
+    specs = build_subworld_map_specs_from_genesis(
+        project_id=project_id,
+        genesis_revision_id=genesis_revision_id,
+        map_atlas=map_atlas if isinstance(map_atlas, dict) else {},
+    )
+    if not specs:
+        return BookMapGenerationResult(
+            project_id=project_id,
+            validation_report=MapValidationReport(valid=True),
+            summary={
+                "skipped": True,
+                "reason": "genesis_map_atlas_empty",
+                "created_subworld_ids": [],
+                "interconnection_source": "none",
+            },
+        )
+
+    repo = MapRepository(session)
+    existing_subworld_ids = sorted(
+        {
+            node.subworld_id
+            for node in repo.list_map_nodes(project_id)
+            if str(node.subworld_id or "").strip()
+        }
+    )
+    existing_set = set(existing_subworld_ids)
+    missing_specs = [spec for spec in specs if spec.subworld_id not in existing_set]
+    if not missing_specs:
+        return BookMapGenerationResult(
+            project_id=project_id,
+            validation_report=MapValidationReport(valid=True),
+            summary={
+                "skipped": True,
+                "reason": "book_map_up_to_date",
+                "created_subworld_ids": [],
+                "skipped_existing_subworld_ids": [spec.subworld_id for spec in specs],
+                "interconnection_source": "none",
+            },
+        )
+
+    interconnections, interconnection_source = build_interconnections_from_genesis_atlas(
+        project_id=project_id,
+        specs=specs,
+        map_atlas=map_atlas if isinstance(map_atlas, dict) else {},
+        genesis_revision_id=genesis_revision_id,
+        required_subworld_ids={spec.subworld_id for spec in missing_specs},
+    )
+    if not interconnections:
+        interconnections = _arc_expansion_default_interconnections(
+            project_id=project_id,
+            existing_subworld_ids=existing_subworld_ids,
+            missing_specs=missing_specs,
+            genesis_revision_id=genesis_revision_id,
+        )
+        interconnection_source = "default_chain"
+
+    result = create_or_update_book_map(
+        session,
+        missing_specs,
+        interconnections=interconnections,
+        interconnection_source=interconnection_source,
+        commit=commit,
+    )
+    result.summary = {
+        **dict(result.summary),
+        "skipped": False,
+        "created_subworld_ids": [spec.subworld_id for spec in missing_specs],
+        "skipped_existing_subworld_ids": existing_subworld_ids,
+        "source": "genesis_map_atlas",
+        "interconnection_source": interconnection_source,
+    }
+    return result
 
 
 def get_subworld_map(
@@ -199,6 +312,217 @@ def resolve_world_node_location_id(world: ObjectiveWorldGraph, node_id: str) -> 
         if map_node_id:
             return map_node_id
     return ""
+
+
+def _ensure_site_state_map_bindings(session: Session, project_id: str) -> list[dict[str, str]]:
+    map_repo = MapRepository(session)
+    book_repo = BookStateRepository(session)
+    latest_chapter = book_repo.latest_available_chapter(project_id)
+    world = book_repo.load_base_world_graph(project_id, as_of_chapter=max(0, int(latest_chapter or 0)))
+    bound_map_node_ids = {
+        str(node.profile.get("map_node_id", "") or "")
+        for node in world.nodes_by_id.values()
+        if str(getattr(node, "node_type", "") or "") == "site_state"
+    }
+    created: list[dict[str, str]] = []
+    for node in map_repo.list_map_nodes(project_id):
+        if node.id in bound_map_node_ids:
+            continue
+        source_node_id = str(node.metadata.get("source_node_id", "") or "").strip()
+        node_role = str(node.metadata.get("node_role", "") or "").strip()
+        if not source_node_id and node_role != "anchor":
+            continue
+        site_state_id = f"site_state_{source_node_id or node.id}"
+        book_repo.create_world_node(
+            WorldNode(
+                id=site_state_id,
+                project_id=project_id,
+                node_type="site_state",
+                name=node.name,
+                description=node.description,
+                profile={
+                    "map_node_id": node.id,
+                    "source_node_id": source_node_id,
+                    "source": "map_generation",
+                },
+                metadata={
+                    "map_node_id": node.id,
+                    "source_node_id": source_node_id,
+                    "source": "map_generation",
+                    "created_at_chapter": int(node.metadata.get("created_at_chapter") or 0),
+                },
+            )
+        )
+        bound_map_node_ids.add(node.id)
+        created.append(
+            {
+                "site_state_id": site_state_id,
+                "map_node_id": node.id,
+                "source_node_id": source_node_id,
+            }
+        )
+    return created
+
+
+def build_interconnections_from_genesis_atlas(
+    *,
+    project_id: str,
+    specs: list[SubWorldMapSpec],
+    map_atlas: dict[str, Any],
+    genesis_revision_id: str = "",
+    required_subworld_ids: set[str] | None = None,
+) -> tuple[list[InterSubWorldConnectionSpec], str]:
+    subworld_by_ref: dict[str, str] = {}
+    for spec in specs:
+        for ref in [spec.subworld_id, spec.name]:
+            text = str(ref or "").strip()
+            if text:
+                subworld_by_ref[text] = spec.subworld_id
+    node_subworld_by_ref = _atlas_node_subworld_lookup(map_atlas, subworld_by_ref)
+    required = set(required_subworld_ids or [])
+    available = {spec.subworld_id for spec in specs}
+    connections: list[InterSubWorldConnectionSpec] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for edge in [item for item in (map_atlas.get("edges") or []) if isinstance(item, dict)]:
+        from_subworld_id = _resolve_atlas_edge_subworld(
+            edge=edge,
+            subworld_keys=["from_subworld_id", "source_subworld_id", "from_subworld", "source_subworld"],
+            node_keys=["from_node_id", "source_node_id", "from_node", "source_node", "from", "source"],
+            subworld_by_ref=subworld_by_ref,
+            node_subworld_by_ref=node_subworld_by_ref,
+        )
+        to_subworld_id = _resolve_atlas_edge_subworld(
+            edge=edge,
+            subworld_keys=["to_subworld_id", "target_subworld_id", "to_subworld", "target_subworld"],
+            node_keys=["to_node_id", "target_node_id", "to_node", "target_node", "to", "target"],
+            subworld_by_ref=subworld_by_ref,
+            node_subworld_by_ref=node_subworld_by_ref,
+        )
+        if not from_subworld_id or not to_subworld_id or from_subworld_id == to_subworld_id:
+            continue
+        if from_subworld_id not in available or to_subworld_id not in available:
+            continue
+        if required and from_subworld_id not in required and to_subworld_id not in required:
+            continue
+        pair = tuple(sorted([from_subworld_id, to_subworld_id]))
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        source_edge_id = _text(edge.get("id") or edge.get("edge_id") or edge.get("source_edge_id"))
+        connections.append(
+            InterSubWorldConnectionSpec(
+                project_id=project_id,
+                from_subworld_id=from_subworld_id,
+                to_subworld_id=to_subworld_id,
+                edge_type="world_gate",
+                bidirectional=_truthy(edge.get("bidirectional"), default=True),
+                hidden=_edge_is_hidden(edge),
+                metadata={
+                    "source": "genesis_atlas_edges",
+                    "source_edge_id": source_edge_id,
+                    "source_edge_type": _text(edge.get("kind") or edge.get("edge_type") or edge.get("type")),
+                    "source_from_ref": _text(
+                        edge.get("from_node_id")
+                        or edge.get("source_node_id")
+                        or edge.get("from")
+                        or edge.get("source")
+                    ),
+                    "source_to_ref": _text(
+                        edge.get("to_node_id")
+                        or edge.get("target_node_id")
+                        or edge.get("to")
+                        or edge.get("target")
+                    ),
+                    "genesis_revision_id": genesis_revision_id,
+                },
+            )
+        )
+    return connections, "atlas_edges" if connections else "default_chain"
+
+
+def _atlas_node_subworld_lookup(
+    map_atlas: dict[str, Any],
+    subworld_by_ref: dict[str, str],
+) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for node in [item for item in (map_atlas.get("nodes") or []) if isinstance(item, dict)]:
+        node_refs = [
+            _text(node.get("id")),
+            _text(node.get("node_id")),
+            _text(node.get("name")),
+        ]
+        subworld_ref = _text(
+            node.get("parent_subworld")
+            or node.get("parent_subworld_id")
+            or node.get("subworld_id")
+            or node.get("subworld_name")
+        )
+        subworld_id = subworld_by_ref.get(subworld_ref, subworld_ref if subworld_ref in subworld_by_ref.values() else "")
+        if not subworld_id:
+            continue
+        for ref in node_refs:
+            if ref:
+                result[ref] = subworld_id
+    return result
+
+
+def _resolve_atlas_edge_subworld(
+    *,
+    edge: dict[str, Any],
+    subworld_keys: list[str],
+    node_keys: list[str],
+    subworld_by_ref: dict[str, str],
+    node_subworld_by_ref: dict[str, str],
+) -> str:
+    for key in subworld_keys:
+        subworld_ref = _text(edge.get(key))
+        if subworld_ref:
+            resolved = subworld_by_ref.get(subworld_ref, subworld_ref if subworld_ref in subworld_by_ref.values() else "")
+            if resolved:
+                return resolved
+    for key in node_keys:
+        node_ref = _text(edge.get(key))
+        if not node_ref:
+            continue
+        if node_ref in node_subworld_by_ref:
+            return node_subworld_by_ref[node_ref]
+        resolved = subworld_by_ref.get(node_ref, node_ref if node_ref in subworld_by_ref.values() else "")
+        if resolved:
+            return resolved
+    return ""
+
+
+def _arc_expansion_default_interconnections(
+    *,
+    project_id: str,
+    existing_subworld_ids: list[str],
+    missing_specs: list[SubWorldMapSpec],
+    genesis_revision_id: str,
+) -> list[InterSubWorldConnectionSpec]:
+    interconnections: list[InterSubWorldConnectionSpec] = []
+    if existing_subworld_ids and missing_specs:
+        interconnections.append(
+            InterSubWorldConnectionSpec(
+                project_id=project_id,
+                from_subworld_id=existing_subworld_ids[0],
+                to_subworld_id=missing_specs[0].subworld_id,
+                edge_type="world_gate",
+                bidirectional=True,
+                metadata={"source": "arc_map_expansion", "genesis_revision_id": genesis_revision_id},
+            )
+        )
+    interconnections.extend(
+        InterSubWorldConnectionSpec(
+            project_id=project_id,
+            from_subworld_id=left.subworld_id,
+            to_subworld_id=right.subworld_id,
+            edge_type="world_gate",
+            bidirectional=True,
+            metadata={"source": "arc_map_expansion", "genesis_revision_id": genesis_revision_id},
+        )
+        for left, right in zip(missing_specs, missing_specs[1:])
+    )
+    return interconnections
 
 
 def _default_interconnections(specs: list[SubWorldMapSpec]) -> list[InterSubWorldConnectionSpec]:
@@ -347,6 +671,34 @@ def _ensure_exit_connector(repo: MapRepository, exit_node: MapNode) -> None:
 
 def _stable_map_id(prefix: str, *parts: str) -> str:
     return f"{prefix}_{uuid5(NAMESPACE_URL, '|'.join(str(part) for part in parts)).hex[:16]}"
+
+
+def _text(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ["id", "node_id", "name", "subworld_id", "subworld_name"]:
+            text = str(value.get(key, "") or "").strip()
+            if text:
+                return text
+        return ""
+    return str(value or "").strip()
+
+
+def _truthy(value: Any, *, default: bool = False) -> bool:
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _edge_is_hidden(edge: dict[str, Any]) -> bool:
+    status = str(edge.get("status", "") or edge.get("visibility", "") or "").strip().lower()
+    return _truthy(edge.get("hidden"), default=False) or status in {"hidden", "secret", "concealed"}
 
 
 def _latest_overlay(

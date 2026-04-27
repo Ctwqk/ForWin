@@ -158,7 +158,7 @@ class MapGraph:
             )
 
         distances: dict[str, float] = {from_node_id: 0.0}
-        previous: dict[str, tuple[str, str]] = {}
+        previous: dict[str, tuple[str, MapEdge]] = {}
         use_astar = algorithm == "astar" or (algorithm == "auto" and self._has_coordinates(from_node_id, to_node_id))
         queue: list[_QueueItem] = [_QueueItem(0.0, from_node_id)]
         visited: set[str] = set()
@@ -181,7 +181,7 @@ class MapGraph:
                 next_cost = current_cost + weight
                 if next_cost < distances.get(neighbor_id, float("inf")):
                     distances[neighbor_id] = next_cost
-                    previous[neighbor_id] = (current.node_id, edge.id)
+                    previous[neighbor_id] = (current.node_id, edge)
                     priority = next_cost
                     if use_astar:
                         priority += self._heuristic(neighbor_id, to_node_id, str(metric))
@@ -190,8 +190,8 @@ class MapGraph:
         if to_node_id not in distances:
             return self._unreachable(from_node_id, to_node_id, metric, "no accessible path")
 
-        path_node_ids, path_edge_ids = self._reconstruct_path(from_node_id, to_node_id, previous)
-        result = self._path_result(from_node_id, to_node_id, str(metric), path_node_ids, path_edge_ids)
+        path_node_ids, path_edges = self._reconstruct_path(from_node_id, to_node_id, previous)
+        result = self._path_result(from_node_id, to_node_id, str(metric), path_node_ids, path_edges)
         if not allow_hidden and not allow_blocked:
             self.path_cache[cache_key] = result
         return result
@@ -202,22 +202,22 @@ class MapGraph:
         metric: str = PathMetric.TRAVEL_TIME,
         node_ids: list[str] | None = None,
         observer: tuple[str, str] | None = None,
-        max_nodes: int = 200,
+        max_nodes: int = 64,
     ) -> dict[tuple[str, str], PathResult]:
         selected = node_ids or sorted(self.nodes_by_id)
         if len(selected) > max_nodes:
             raise ValueError(f"all-pairs path index is limited to {max_nodes} nodes")
-        return {
-            (source_id, target_id): self.shortest_path(
-                source_id,
-                target_id,
-                metric=metric,
-                observer=observer,
+        results: dict[tuple[str, str], PathResult] = {}
+        for source_id in selected:
+            results.update(
+                self._single_source_shortest_paths(
+                    source_id,
+                    target_ids=[target_id for target_id in selected if target_id != source_id],
+                    metric=str(metric),
+                    observer=observer,
+                )
             )
-            for source_id in selected
-            for target_id in selected
-            if source_id != target_id
-        }
+        return results
 
     def apply_map_patch(self, patch: MapPatch) -> None:
         if patch.target_type == "map_node":
@@ -336,14 +336,14 @@ class MapGraph:
     def _reconstruct_path(
         from_node_id: str,
         to_node_id: str,
-        previous: dict[str, tuple[str, str]],
-    ) -> tuple[list[str], list[str]]:
+        previous: dict[str, tuple[str, MapEdge]],
+    ) -> tuple[list[str], list[MapEdge]]:
         nodes = [to_node_id]
-        edges: list[str] = []
+        edges: list[MapEdge] = []
         current = to_node_id
         while current != from_node_id:
-            prev_node, edge_id = previous[current]
-            edges.append(edge_id)
+            prev_node, edge = previous[current]
+            edges.append(edge)
             nodes.append(prev_node)
             current = prev_node
         nodes.reverse()
@@ -356,23 +356,84 @@ class MapGraph:
         to_node_id: str,
         metric: str,
         path_node_ids: list[str],
-        path_edge_ids: list[str],
+        path_edges: list[MapEdge],
     ) -> PathResult:
-        edges = [self.edges_by_id[edge_id] for edge_id in path_edge_ids if edge_id in self.edges_by_id]
         return PathResult(
             reachable=True,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
             metric=metric,
-            total_distance=sum(float(edge.distance or 0.0) for edge in edges),
-            total_travel_time=sum(float(edge.travel_time or 0.0) for edge in edges),
-            total_travel_cost=sum(float(edge.travel_cost or 0.0) for edge in edges),
-            total_risk=sum(float(edge.risk_level or 0.0) for edge in edges),
-            total_narrative_cost=sum(float(edge.narrative_cost or 0.0) for edge in edges),
+            total_distance=sum(float(edge.distance or 0.0) for edge in path_edges),
+            total_travel_time=sum(float(edge.travel_time or 0.0) for edge in path_edges),
+            total_travel_cost=sum(float(edge.travel_cost or 0.0) for edge in path_edges),
+            total_risk=sum(float(edge.risk_level or 0.0) for edge in path_edges),
+            total_narrative_cost=sum(float(edge.narrative_cost or 0.0) for edge in path_edges),
             path_node_ids=path_node_ids,
-            path_edge_ids=path_edge_ids,
+            path_edge_ids=[edge.id for edge in path_edges],
             explanation=" -> ".join(path_node_ids),
         )
+
+    def _single_source_shortest_paths(
+        self,
+        source_id: str,
+        *,
+        target_ids: list[str],
+        metric: str,
+        observer: tuple[str, str] | None,
+    ) -> dict[tuple[str, str], PathResult]:
+        if source_id not in self.nodes_by_id:
+            return {
+                (source_id, target_id): self._unreachable(
+                    source_id,
+                    target_id,
+                    metric,
+                    f"unknown from_node_id: {source_id}",
+                )
+                for target_id in target_ids
+            }
+
+        distances: dict[str, float] = {source_id: 0.0}
+        previous: dict[str, tuple[str, MapEdge]] = {}
+        queue: list[_QueueItem] = [_QueueItem(0.0, source_id)]
+        visited: set[str] = set()
+        remaining_targets = {target_id for target_id in target_ids if target_id in self.nodes_by_id}
+
+        while queue and remaining_targets:
+            current = heapq.heappop(queue)
+            if current.node_id in visited:
+                continue
+            visited.add(current.node_id)
+            remaining_targets.discard(current.node_id)
+            for neighbor_id, edge in self.get_accessible_neighbors(current.node_id, observer=observer):
+                weight = self._metric_weight(edge, metric)
+                next_cost = distances.get(current.node_id, float("inf")) + weight
+                if next_cost < distances.get(neighbor_id, float("inf")):
+                    distances[neighbor_id] = next_cost
+                    previous[neighbor_id] = (current.node_id, edge)
+                    heapq.heappush(queue, _QueueItem(next_cost, neighbor_id))
+
+        results: dict[tuple[str, str], PathResult] = {}
+        for target_id in target_ids:
+            if target_id not in self.nodes_by_id:
+                results[(source_id, target_id)] = self._unreachable(
+                    source_id,
+                    target_id,
+                    metric,
+                    f"unknown to_node_id: {target_id}",
+                )
+                continue
+            if target_id not in distances:
+                results[(source_id, target_id)] = self._unreachable(source_id, target_id, metric, "no accessible path")
+                continue
+            path_node_ids, path_edges = self._reconstruct_path(source_id, target_id, previous)
+            results[(source_id, target_id)] = self._path_result(
+                source_id,
+                target_id,
+                metric,
+                path_node_ids,
+                path_edges,
+            )
+        return results
 
     @staticmethod
     def _unreachable(from_node_id: str, to_node_id: str, metric: str, reason: str) -> PathResult:

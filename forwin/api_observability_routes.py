@@ -8,9 +8,11 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from forwin.api_schemas import (
+    ArtifactManifestItem,
     ArtifactReadResponse,
     ChapterLedgerResponse,
     PromptTraceDetailResponse,
+    StageDurationAggregate,
     TaskTimelineResponse,
 )
 from forwin.config import Config
@@ -85,6 +87,17 @@ def build_handlers(
                 task_id=normalized_task_id,
                 project_id=project_id,
                 events=[serialize_decision_event(row) for row in rows],
+                stage_durations=stage_duration_aggregates(rows),
+                operation_ids=list(
+                    dict.fromkeys(
+                        [normalized_task_id]
+                        + [
+                            item
+                            for row in rows
+                            for item in collect_operation_ids(json_load_object(row.payload_json))
+                        ]
+                    )
+                ),
             )
 
     def get_prompt_trace_detail(trace_id: str) -> PromptTraceDetailResponse:
@@ -101,7 +114,13 @@ def build_handlers(
         found: list[str] = []
         if isinstance(value, dict):
             for key, item in value.items():
-                if str(key).endswith("_uri") or str(key).endswith("_path") or "artifact" in str(key):
+                normalized_key = str(key)
+                if (
+                    normalized_key == "uri"
+                    or normalized_key.endswith("_uri")
+                    or normalized_key.endswith("_path")
+                    or "artifact" in normalized_key
+                ):
                     if isinstance(item, str) and item.strip():
                         found.append(item.strip())
                 found.extend(collect_artifact_uris(item))
@@ -109,6 +128,124 @@ def build_handlers(
             for item in value:
                 found.extend(collect_artifact_uris(item))
         return found
+
+    def collect_operation_ids(value: Any) -> list[str]:
+        found: list[str] = []
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if str(key) == "operation_id" and isinstance(item, str) and item.strip():
+                    found.append(item.strip())
+                found.extend(collect_operation_ids(item))
+        elif isinstance(value, list):
+            for item in value:
+                found.extend(collect_operation_ids(item))
+        return found
+
+    def stage_duration_aggregates(event_rows: list[DecisionEvent]) -> list[StageDurationAggregate]:
+        grouped: dict[str, dict[str, int]] = {}
+        for event in event_rows:
+            payload = json_load_object(event.payload_json)
+            event_type = str(event.event_type or "")
+            if event_type not in {"stage_duration_summary", "stage_exited"} and "duration_ms" not in payload:
+                continue
+            try:
+                duration_ms = max(0, int(payload.get("duration_ms") or 0))
+            except (TypeError, ValueError):
+                continue
+            if duration_ms <= 0:
+                continue
+            stage = str(payload.get("stage") or event_type or "unknown").strip() or "unknown"
+            current = grouped.setdefault(
+                stage,
+                {"event_count": 0, "total_duration_ms": 0, "max_duration_ms": 0, "last_duration_ms": 0},
+            )
+            current["event_count"] += 1
+            current["total_duration_ms"] += duration_ms
+            current["max_duration_ms"] = max(current["max_duration_ms"], duration_ms)
+            current["last_duration_ms"] = duration_ms
+        return [
+            StageDurationAggregate(stage=stage, **values)
+            for stage, values in sorted(grouped.items(), key=lambda item: item[0])
+        ]
+
+    def normalize_artifact_manifest_item(
+        value: Any,
+        *,
+        source_event_id: str = "",
+        trace_id: str = "",
+    ) -> ArtifactManifestItem | None:
+        if not isinstance(value, dict):
+            return None
+        uri = str(value.get("uri") or value.get("artifact_uri") or "").strip()
+        if not uri:
+            return None
+        try:
+            size = max(0, int(value.get("size") or 0))
+        except (TypeError, ValueError):
+            size = 0
+        return ArtifactManifestItem(
+            uri=uri,
+            kind=str(value.get("kind") or value.get("artifact_kind") or "").strip(),
+            redaction_state=str(value.get("redaction_state") or "").strip(),
+            source_event_id=str(value.get("source_event_id") or source_event_id or "").strip(),
+            trace_id=str(value.get("trace_id") or trace_id or "").strip(),
+            hash=str(value.get("hash") or "").strip(),
+            size=size,
+        )
+
+    def collect_artifact_manifest(
+        value: Any,
+        *,
+        source_event_id: str = "",
+        trace_id: str = "",
+    ) -> list[ArtifactManifestItem]:
+        found: list[ArtifactManifestItem] = []
+        if isinstance(value, dict):
+            items = value.get("artifact_manifest")
+            if isinstance(items, list):
+                for item in items:
+                    normalized = normalize_artifact_manifest_item(
+                        item,
+                        source_event_id=source_event_id,
+                        trace_id=trace_id,
+                    )
+                    if normalized is not None:
+                        found.append(normalized)
+            elif items is not None:
+                normalized = normalize_artifact_manifest_item(
+                    items,
+                    source_event_id=source_event_id,
+                    trace_id=trace_id,
+                )
+                if normalized is not None:
+                    found.append(normalized)
+            normalized_self = normalize_artifact_manifest_item(
+                value,
+                source_event_id=source_event_id,
+                trace_id=trace_id,
+            )
+            if normalized_self is not None and (
+                normalized_self.redaction_state or normalized_self.kind or normalized_self.source_event_id
+            ):
+                found.append(normalized_self)
+            for item in value.values():
+                found.extend(
+                    collect_artifact_manifest(item, source_event_id=source_event_id, trace_id=trace_id)
+                )
+        elif isinstance(value, list):
+            for item in value:
+                found.extend(
+                    collect_artifact_manifest(item, source_event_id=source_event_id, trace_id=trace_id)
+                )
+        return found
+
+    def dedupe_manifest(items: list[ArtifactManifestItem]) -> list[ArtifactManifestItem]:
+        deduped: dict[tuple[str, str, str], ArtifactManifestItem] = {}
+        for item in items:
+            key = (item.uri, item.kind, item.source_event_id)
+            if item.uri and key not in deduped:
+                deduped[key] = item
+        return list(deduped.values())
 
     def get_chapter_observability_ledger(project_id: str, chapter_number: int) -> ChapterLedgerResponse:
         normalized_project_id = str(project_id or "").strip()
@@ -139,6 +276,8 @@ def build_handlers(
             ).scalars().all()
             trace_ids: list[str] = []
             artifact_uris: list[str] = []
+            operation_ids: list[str] = []
+            artifact_manifest: list[ArtifactManifestItem] = []
             for trace in traces:
                 input_snapshot = json_load_object(trace.input_snapshot_json)
                 output_summary = json_load_object(trace.output_summary_json)
@@ -147,6 +286,10 @@ def build_handlers(
                     trace_ids.append(trace.id)
                     artifact_uris.extend(collect_artifact_uris(input_snapshot))
                     artifact_uris.extend(collect_artifact_uris(output_summary))
+                    operation_ids.extend(collect_operation_ids(input_snapshot))
+                    operation_ids.extend(collect_operation_ids(output_summary))
+                    artifact_manifest.extend(collect_artifact_manifest(input_snapshot, trace_id=trace.id))
+                    artifact_manifest.extend(collect_artifact_manifest(output_summary, trace_id=trace.id))
             drafts = session.execute(
                 select(ChapterDraft)
                 .where(ChapterDraft.chapter_plan_id == plan.id)
@@ -157,7 +300,14 @@ def build_handlers(
                 if raw_response:
                     artifact_uris.append(raw_response)
             for event in event_rows:
-                artifact_uris.extend(collect_artifact_uris(json_load_object(event.payload_json)))
+                payload = json_load_object(event.payload_json)
+                artifact_uris.extend(collect_artifact_uris(payload))
+                if str(event.task_id or "").strip():
+                    operation_ids.append(str(event.task_id or "").strip())
+                operation_ids.extend(collect_operation_ids(payload))
+                artifact_manifest.extend(
+                    collect_artifact_manifest(payload, source_event_id=str(event.id or ""))
+                )
             deduped_artifacts = list(dict.fromkeys(item for item in artifact_uris if item))
             return ChapterLedgerResponse(
                 project_id=normalized_project_id,
@@ -166,6 +316,9 @@ def build_handlers(
                 events=[serialize_decision_event(row) for row in event_rows],
                 prompt_trace_ids=list(dict.fromkeys(trace_ids)),
                 artifact_uris=deduped_artifacts,
+                stage_durations=stage_duration_aggregates(event_rows),
+                operation_ids=list(dict.fromkeys(item for item in operation_ids if item)),
+                artifact_manifest=dedupe_manifest(artifact_manifest),
             )
 
     def read_artifact_preview(uri: str, preview_chars: int = 20000) -> ArtifactReadResponse:

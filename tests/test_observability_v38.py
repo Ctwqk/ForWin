@@ -4,6 +4,8 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import forwin.api as api_module
 from forwin.api_runtime import run_orchestrator_task
@@ -20,6 +22,7 @@ from forwin.observability import (
     redact_payload,
     stack_hash,
 )
+from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.retrieval.broker import RetrievalBroker
 from forwin.storage import ArtifactStore
 from forwin.state.updater import StateUpdater
@@ -103,6 +106,41 @@ class ObservabilityCoreTests(unittest.TestCase):
             finally:
                 engine.dispose()
 
+    def test_state_updater_redacts_direct_decision_event_payloads(self) -> None:
+        with TemporaryDirectory() as tmp:
+            engine = get_engine(str(Path(tmp) / "direct-redaction.db"))
+            init_db(engine)
+            session_factory = get_session_factory(engine)
+            try:
+                with session_factory() as session:
+                    updater = StateUpdater(session)
+                    project = updater.create_project(
+                        title="直接写入观测测试",
+                        premise="premise",
+                        genre="玄幻",
+                        target_total_chapters=1,
+                    )
+                    row = updater.save_decision_event(
+                        DecisionEventInfo(
+                            project_id=project.id,
+                            event_family="runtime_observation",
+                            event_type=DecisionEventType.LLM_REQUEST_FAILED,
+                            summary="failed",
+                            payload={
+                                "api_key": "sk-secret",
+                                "raw_prompt": "full prompt",
+                                "safe_count": 1,
+                            },
+                        )
+                    )
+                    session.commit()
+                    payload = json.loads(row.payload_json)
+                self.assertEqual(payload["api_key"], "[REDACTED]")
+                self.assertEqual(payload["raw_prompt"], "[REDACTED]")
+                self.assertEqual(payload["safe_count"], 1)
+            finally:
+                engine.dispose()
+
     def test_stack_hash_is_stable_for_same_exception_shape(self) -> None:
         def make_error() -> Exception:
             try:
@@ -180,6 +218,9 @@ class ObservabilityReadApiTests(unittest.TestCase):
                     related_object_id=task_id,
                 )
             )
+            artifact_path = self.artifact_root / "projects" / project_id / "raw.txt"
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text("artifact-body", encoding="utf-8")
             updater.save_decision_event(
                 DecisionEventInfo(
                     project_id=project_id,
@@ -189,7 +230,21 @@ class ObservabilityReadApiTests(unittest.TestCase):
                     event_family="business_event",
                     event_type=DecisionEventType.CANON_COMMIT,
                     summary="canon",
-                    payload={"duration_ms": 7},
+                    payload={
+                        "stage": "canon_commit",
+                        "duration_ms": 7,
+                        "operation_id": "op-v38",
+                        "artifact_manifest": [
+                            {
+                                "uri": str(artifact_path),
+                                "kind": "test_artifact",
+                                "redaction_state": "redacted",
+                                "source_event_id": root.id,
+                                "hash": "hash",
+                                "size": 13,
+                            }
+                        ],
+                    },
                     parent_event_id=root.id,
                     causal_root_id=root.id,
                 )
@@ -199,12 +254,23 @@ class ObservabilityReadApiTests(unittest.TestCase):
                 trace_scope="writer",
                 stage_key="chapter_draft",
                 template_id="writer:single",
+                input_snapshot_json=json.dumps({"chapter_number": 1, "operation_id": "op-v38"}),
                 attempts_json=json.dumps([{"attempt_no": 1, "model": "fake"}]),
-                output_summary_json=json.dumps({"char_count": 4}),
+                output_summary_json=json.dumps(
+                    {
+                        "char_count": 4,
+                        "operation_id": "op-v38",
+                        "artifact_manifest": [
+                            {
+                                "uri": str(artifact_path),
+                                "kind": "trace_artifact",
+                                "redaction_state": "redacted",
+                                "trace_id": "trace-placeholder",
+                            }
+                        ],
+                    }
+                ),
             )
-            artifact_path = self.artifact_root / "projects" / project_id / "raw.txt"
-            artifact_path.parent.mkdir(parents=True, exist_ok=True)
-            artifact_path.write_text("artifact-body", encoding="utf-8")
             session.commit()
             return project_id, task_id, trace.id
 
@@ -217,6 +283,9 @@ class ObservabilityReadApiTests(unittest.TestCase):
         self.assertEqual(timeline.task_id, task_id)
         self.assertEqual(timeline.project_id, project_id)
         self.assertEqual([item.event_type for item in timeline.events], ["generation_requested", "canon_commit"])
+        self.assertIn("op-v38", timeline.operation_ids)
+        self.assertEqual(timeline.stage_durations[0].stage, "canon_commit")
+        self.assertEqual(timeline.stage_durations[0].total_duration_ms, 7)
         self.assertEqual(trace.id, trace_id)
         self.assertEqual(trace.attempts[0]["attempt_no"], 1)
 
@@ -231,10 +300,92 @@ class ObservabilityReadApiTests(unittest.TestCase):
         self.assertEqual(ledger.chapter_number, 1)
         self.assertIn("canon_commit", [item.event_type for item in ledger.events])
         self.assertIn(trace_id, ledger.prompt_trace_ids)
+        self.assertIn("op-v38", ledger.operation_ids)
+        self.assertEqual(ledger.stage_durations[0].stage, "canon_commit")
+        self.assertTrue(any(item.kind == "test_artifact" for item in ledger.artifact_manifest))
         self.assertEqual(artifact.preview, "artifact")
         self.assertTrue(artifact.truncated)
         with self.assertRaises(api_module.HTTPException):
             api_module.read_artifact_preview(uri="/etc/passwd")
+
+    def test_failed_writer_call_flushes_prompt_trace_and_artifact_manifest(self) -> None:
+        project_id = new_id()
+        arc_id = new_id()
+        with api_module._get_session() as session:
+            updater = StateUpdater(session)
+            session.add(Project(id=project_id, title="失败 Trace", premise="p", genre="玄幻"))
+            session.flush()
+            session.add(
+                ArcPlanVersion(
+                    id=arc_id,
+                    project_id=project_id,
+                    version=1,
+                    arc_synopsis="arc",
+                    status="active",
+                )
+            )
+            session.flush()
+            updater.create_chapter_plan(project_id, arc_id, 1, "第一章", "开场", ["推进"])
+            session.commit()
+
+        orchestrator = WritingOrchestrator(
+            api_module.Config(
+                db_path=self.db_path,
+                artifact_root=str(self.artifact_root),
+                minimax_api_key="",
+                minimax_model="fake-model",
+                operation_mode="blackbox",
+                blackbox_writer_attention_retries=1,
+                freeze_failed_candidates=False,
+            )
+        )
+        try:
+            with api_module._get_session() as session:
+                updater = StateUpdater(session)
+                with (
+                    patch.object(
+                        orchestrator.writer,
+                        "write_chapter",
+                        side_effect=RuntimeError("HTTP 400 Bad Request: invalid request body"),
+                    ),
+                    patch.object(
+                        orchestrator.writer,
+                        "write_preview_chapter",
+                        side_effect=RuntimeError("schema parse failed"),
+                    ),
+                ):
+                    with self.assertRaises(RuntimeError):
+                        orchestrator._write_chapter_with_attention_fallback(
+                            context=SimpleNamespace(chapter_number=1, chapter_plan_title="第一章"),
+                            project_id=project_id,
+                            chapter_number=1,
+                            updater=updater,
+                            paused_chapters=[],
+                            frozen_artifacts=[],
+                        )
+                session.commit()
+        finally:
+            orchestrator.llm_client.close()
+            orchestrator.engine.dispose()
+
+        with api_module._get_session() as session:
+            traces = session.query(PromptTrace).filter(PromptTrace.project_id == project_id).all()
+            events = session.query(api_module.DecisionEvent).filter(
+                api_module.DecisionEvent.project_id == project_id,
+                api_module.DecisionEvent.chapter_number == 1,
+            ).all()
+
+        self.assertGreaterEqual(len(traces), 2)
+        output_summaries = [json.loads(trace.output_summary_json or "{}") for trace in traces]
+        self.assertTrue(any(summary.get("status") == "failed" for summary in output_summaries))
+        self.assertIn(DecisionEventType.PROMPT_TRACE_RECORDED, [event.event_type for event in events])
+
+        ledger = api_module.get_chapter_observability_ledger(project_id, 1)
+        self.assertTrue(ledger.artifact_manifest)
+        self.assertTrue(any(item.redaction_state == "redacted" for item in ledger.artifact_manifest))
+        preview = api_module.read_artifact_preview(ledger.artifact_manifest[0].uri, preview_chars=2000)
+        self.assertIn('"status": "failed"', preview.preview)
+        self.assertNotIn("raw_prompt", preview.preview)
 
 
 class ApiRuntimeObservabilityTests(unittest.TestCase):

@@ -37,6 +37,14 @@ def generate_subworld_map(*args: Any, **kwargs: Any) -> Any:
     from .generator import generate_subworld_map as _generate_subworld_map
 
     return _generate_subworld_map(*args, **kwargs)
+
+
+def build_subworld_map_specs_from_genesis(*args: Any, **kwargs: Any) -> Any:
+    from .genesis_adapter import build_subworld_map_specs_from_genesis as _build_specs
+
+    return _build_specs(*args, **kwargs)
+
+
 class MapRepository:  # type: ignore[no-redef]
     def __new__(cls, *args: Any, **kwargs: Any) -> Any:
         from .repository import MapRepository as _MapRepository
@@ -66,6 +74,12 @@ def create_or_update_book_map(*args: Any, **kwargs: Any) -> Any:
     from .service import create_or_update_book_map as _create_or_update_book_map
 
     return _create_or_update_book_map(*args, **kwargs)
+
+
+def ensure_book_map_from_genesis_atlas(*args: Any, **kwargs: Any) -> Any:
+    from .service import ensure_book_map_from_genesis_atlas as _ensure_book_map_from_genesis_atlas
+
+    return _ensure_book_map_from_genesis_atlas(*args, **kwargs)
 
 
 def get_book_map_runtime(*args: Any, **kwargs: Any) -> Any:
@@ -102,11 +116,13 @@ __all__ = [
     "RegionNode",
     "SCHEME_C_NAME",
     "SubWorldMapSpec",
+    "build_subworld_map_specs_from_genesis",
     "compute_distance",
     "compute_known_distance",
     "create_or_update_subworld_map",
     "create_or_update_book_map",
     "distance_between_world_nodes",
+    "ensure_book_map_from_genesis_atlas",
     "generate_subworld_map",
     "get_book_map_runtime",
     "get_subworld_map",

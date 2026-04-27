@@ -19,6 +19,7 @@ from forwin.governance import (
     new_project_governance,
     plan_task_contract_to_json,
 )
+from forwin.observability.redaction import redact_payload
 from forwin.models import (
     ArcPlanVersion,
     BandCheckpoint,
@@ -990,6 +991,7 @@ class StateUpdater:
         self,
         info: DecisionEventInfo,
     ) -> DecisionEvent:
+        payload = redact_payload(info.payload)
         row = DecisionEvent(
             id=info.id or new_id(),
             project_id=info.project_id,
@@ -1003,7 +1005,7 @@ class StateUpdater:
             actor_id=info.actor_id,
             summary=info.summary,
             reason=info.reason,
-            payload_json=json.dumps(info.payload, ensure_ascii=False),
+            payload_json=json.dumps(payload, ensure_ascii=False),
             related_object_type=info.related_object_type,
             related_object_id=info.related_object_id,
             parent_event_id=info.parent_event_id,

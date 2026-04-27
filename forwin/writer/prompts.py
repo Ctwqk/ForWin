@@ -252,6 +252,49 @@ def _subworld_control_section(context: ChapterContextPack) -> str | None:
     return "\n".join(lines)
 
 
+def _map_runtime_section(context: ChapterContextPack) -> str | None:
+    map_context = getattr(context, "map_context", {}) or {}
+    if not isinstance(map_context, dict) or not int(map_context.get("map_node_count") or 0):
+        return None
+    lines = [
+        "【地图运行时】",
+        f"  · 地图规模：{int(map_context.get('map_node_count') or 0)} 个地点，{int(map_context.get('map_edge_count') or 0)} 条路线",
+    ]
+    active_locations = map_context.get("active_locations") if isinstance(map_context.get("active_locations"), list) else []
+    if active_locations:
+        lines.append("  · 当前角色位置：")
+        for item in active_locations[:5]:
+            if not isinstance(item, dict):
+                continue
+            entity_name = str(item.get("entity_name", "") or "角色").strip()
+            location_name = str(item.get("location_name", "") or item.get("location_id", "") or "").strip()
+            region_name = str(item.get("region_name", "") or "").strip()
+            location_line = f"    · {entity_name}：{location_name}"
+            if region_name:
+                location_line += f" / {region_name}"
+            lines.append(location_line)
+            nearby_nodes = item.get("nearby_nodes") if isinstance(item.get("nearby_nodes"), list) else []
+            nearby = [
+                f"{str(node.get('name', '') or node.get('node_id', '')).strip()}({float(node.get('travel_time') or 0):.1f})"
+                for node in nearby_nodes[:5]
+                if isinstance(node, dict) and str(node.get("name", "") or node.get("node_id", "")).strip()
+            ]
+            if nearby:
+                lines.append("      · 附近可达：" + "、".join(nearby))
+    else:
+        anchors = map_context.get("visible_anchor_nodes") if isinstance(map_context.get("visible_anchor_nodes"), list) else []
+        if anchors:
+            lines.append(
+                "  · 公开锚点："
+                + "、".join(
+                    str(item.get("name", "") or item.get("node_id", "")).strip()
+                    for item in anchors[:8]
+                    if isinstance(item, dict) and str(item.get("name", "") or item.get("node_id", "")).strip()
+                )
+            )
+    return "\n".join(lines)
+
+
 def _active_threads_section(context: ChapterContextPack, *, limit: int) -> str | None:
     if not context.active_threads:
         return None
@@ -435,6 +478,7 @@ def _scene_prompt_sections(
         _previous_summaries_section(context, limit=previous_limit),
         _active_entities_section(context, limit=entity_limit),
         _subworld_control_section(context),
+        _map_runtime_section(context),
         _active_threads_section(context, limit=thread_limit),
         _experience_overlay_section(context),
         _world_model_v4_section(context),
@@ -474,6 +518,7 @@ def build_single_chapter_draft_prompt(
         _previous_summaries_section(context, limit=3),
         _active_entities_section(context, limit=6),
         _subworld_control_section(context),
+        _map_runtime_section(context),
         _active_threads_section(context, limit=3),
         _experience_overlay_section(context),
         _world_model_v4_section(context),
@@ -526,6 +571,7 @@ def build_preview_chapter_prompt(
         _chapter_plan_section(context, "预演章节计划"),
         _previous_summaries_section(context, limit=2),
         _active_entities_section(context, limit=5),
+        _map_runtime_section(context),
         _active_threads_section(context, limit=3),
         _experience_overlay_section(context),
         _world_model_v4_section(context),

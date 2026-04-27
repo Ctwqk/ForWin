@@ -236,9 +236,19 @@ class BookStateCompiler:
                 continue
             target_kind, target_id = _split_target_ref(patch.target_ref)
             if target_kind == "narrative_edge" and target_id in runtime.narrative.edges_by_id:
-                self.repo.create_narrative_edge(runtime.narrative.edges_by_id[target_id])
+                edge = runtime.narrative.edges_by_id[target_id]
+                if "created_at_chapter" not in edge.metadata:
+                    edge = edge.model_copy(
+                        update={"metadata": {**edge.metadata, "created_at_chapter": delta.chapter_number}}
+                    )
+                self.repo.create_narrative_edge(edge)
             elif target_id in runtime.narrative.nodes_by_id:
-                self.repo.create_narrative_node(runtime.narrative.nodes_by_id[target_id])
+                node = runtime.narrative.nodes_by_id[target_id]
+                if "created_at_chapter" not in node.metadata:
+                    node = node.model_copy(
+                        update={"metadata": {**node.metadata, "created_at_chapter": delta.chapter_number}}
+                    )
+                self.repo.create_narrative_node(node)
         self._persist_reader_experience_side_effects(delta)
 
     def _persist_reader_experience_side_effects(self, delta: GraphDelta) -> None:

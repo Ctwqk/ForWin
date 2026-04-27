@@ -3,7 +3,9 @@ from __future__ import annotations
 from sqlalchemy import func, select
 
 from forwin.book_state import BookStateCompiler, BookStateProjection, BookStateRepository
-from forwin.models import Project
+from forwin.context.assembler import assemble_context
+from forwin.api_book_state_routes import build_handlers
+from forwin.models import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaPatchRow, GraphDeltaRow, WorldNodeStateRow
 from forwin.protocol.book_state import (
@@ -14,9 +16,11 @@ from forwin.protocol.book_state import (
     MapEdge,
     MapNode,
     MapPatch,
+    NarrativePatch,
     NodePatch,
     WorldNode,
 )
+from forwin.state.repo import StateRepository
 
 
 def _create_project(session, title: str = "BookState 测试") -> str:
@@ -95,6 +99,132 @@ def test_repository_roundtrip_loads_runtime_with_map_and_cognition() -> None:
     )
     assert known.reachable is False
     assert runtime.cognition_by_observer[("character", "char_mc")].get_belief("map_edge:edge_secret") == "hidden"
+
+
+def test_projection_honors_created_at_chapter_for_world_and_map_rows() -> None:
+    engine = get_engine(":memory:")
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        repo = BookStateRepository(session)
+        repo.create_world_node(
+            WorldNode(
+                id="char_future",
+                project_id=project_id,
+                node_type="character",
+                name="未来角色",
+                created_at_chapter=5,
+            )
+        )
+        repo.create_map_node(MapNode(id="loc_now", project_id=project_id, node_type="settlement"))
+        repo.create_map_node(
+            MapNode(
+                id="loc_future",
+                project_id=project_id,
+                node_type="site",
+                metadata={"created_at_chapter": 5},
+            )
+        )
+        repo.create_map_edge(
+            MapEdge(
+                id="edge_future",
+                project_id=project_id,
+                from_node_id="loc_now",
+                to_node_id="loc_future",
+                edge_type="road",
+                metadata={"created_at_chapter": 5},
+            )
+        )
+
+        chapter_zero = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=0)
+        chapter_five = BookStateProjection(session).load_runtime_as_of(project_id, as_of_chapter=5)
+
+    assert "char_future" not in chapter_zero.world.nodes_by_id
+    assert "loc_future" not in chapter_zero.map.nodes_by_id
+    assert "edge_future" not in chapter_zero.map.edges_by_id
+    assert "char_future" in chapter_five.world.nodes_by_id
+    assert "loc_future" in chapter_five.map.nodes_by_id
+    assert "edge_future" in chapter_five.map.edges_by_id
+
+
+def test_context_assembly_prefers_book_state_runtime_overlay() -> None:
+    engine = get_engine(":memory:")
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        arc = ArcPlanVersion(
+            id="arc1",
+            project_id=project_id,
+            arc_number=1,
+            chapter_start=1,
+            chapter_end=1,
+            arc_synopsis="BookState arc",
+            status="active",
+        )
+        chapter = ChapterPlan(
+            id="chapter1",
+            project_id=project_id,
+            arc_plan_id=arc.id,
+            chapter_number=2,
+            title="入城",
+            one_line="主角进入黑石城。",
+        )
+        session.add_all([arc, chapter])
+        repo = BookStateRepository(session)
+        repo.create_map_node(MapNode(id="loc_city", project_id=project_id, node_type="settlement", name="黑石城"))
+        repo.create_world_node(
+            WorldNode(
+                id="char_mc",
+                project_id=project_id,
+                node_type="character",
+                name="陆沉",
+                state={"location_id": "loc_city"},
+            )
+        )
+        repo.append_world_node_state(
+            project_id=project_id,
+            node_id="char_mc",
+            node_type="character",
+            as_of_chapter=1,
+            state={"location_id": "loc_city"},
+        )
+        BookStateCompiler(session).compile(
+            ApprovedGraphDeltaSet(
+                project_id=project_id,
+                chapter_number=1,
+                graph_deltas=[
+                    GraphDelta(
+                        id="delta_narrative",
+                        project_id=project_id,
+                        chapter_number=1,
+                        narrative_patches=[
+                            NarrativePatch(
+                                target_ref="world_line:line_main",
+                                op="create",
+                                new_value={"title": "黑石城主线", "status": "active"},
+                            ),
+                            NarrativePatch(
+                                target_ref="knowledge_gap:gap_secret",
+                                op="create",
+                                new_value={"title": "密道真相", "status": "open"},
+                            ),
+                        ],
+                    )
+                ],
+            )
+        )
+
+        context = assemble_context(StateRepository(session), project_id, chapter)
+
+    assert "line_main" in context.active_world_lines
+    assert "gap_secret" in context.active_knowledge_gaps
+    active_location = next(item for item in context.map_context["active_locations"] if item["entity_id"] == "char_mc")
+    assert active_location["location_id"] == "loc_city"
+    assert active_location["source"] == "book_state"
 
 
 def test_compiler_commits_delta_patches_and_rebuilds_snapshots() -> None:
@@ -199,6 +329,92 @@ def test_compiler_commits_delta_patches_and_rebuilds_snapshots() -> None:
     assert delta_count == 1
     assert patch_count == 3
     assert state_count == 2
+
+
+def test_projection_does_not_replay_persisted_cognition_overlay_evidence() -> None:
+    engine = get_engine(":memory:")
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        result = BookStateCompiler(session).compile(
+            ApprovedGraphDeltaSet(
+                project_id=project_id,
+                chapter_number=1,
+                graph_deltas=[
+                    GraphDelta(
+                        id="delta_cognition",
+                        project_id=project_id,
+                        chapter_number=1,
+                        cognition_patches=[
+                            CognitionPatch(
+                                observer_type="character",
+                                observer_id="char_mc",
+                                op="append",
+                                field_path="hidden_refs",
+                                new_value="map_edge:secret",
+                                evidence_refs=["chapter:1"],
+                            )
+                        ],
+                    )
+                ],
+            )
+        )
+        runtime = BookStateProjection(session).load_runtime_as_of(
+            project_id,
+            as_of_chapter=1,
+            observer_keys=[("character", "char_mc")],
+        )
+
+    view = runtime.cognition_by_observer[("character", "char_mc")]
+    assert result.committed is True
+    assert sorted(view.hidden_refs) == ["map_edge:secret"]
+    assert view.evidence_by_ref["map_edge:secret"] == ["chapter:1"]
+
+
+def test_book_state_api_defaults_to_latest_but_keeps_explicit_chapter_zero() -> None:
+    engine = get_engine(":memory:")
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        BookStateCompiler(session).compile(
+            ApprovedGraphDeltaSet(
+                project_id=project_id,
+                chapter_number=1,
+                graph_deltas=[
+                    GraphDelta(
+                        id="delta_latest",
+                        project_id=project_id,
+                        chapter_number=1,
+                        node_patches=[
+                            NodePatch(
+                                node_id="char_mc",
+                                node_type="character",
+                                op="create",
+                                new_value={
+                                    "id": "char_mc",
+                                    "project_id": project_id,
+                                    "node_type": "character",
+                                    "state": {"location_id": ""},
+                                },
+                            )
+                        ],
+                    )
+                ],
+            )
+        )
+
+    handlers = build_handlers(get_session=Session)
+
+    latest = handlers["get_book_state_runtime"](project_id)
+    chapter_zero = handlers["get_book_state_runtime"](project_id, as_of_chapter=0)
+
+    assert latest["schema_version"] == "book_state.runtime.v1"
+    assert latest["as_of_chapter"] == 1
+    assert chapter_zero["as_of_chapter"] == 0
 
 
 def test_compiler_blocks_stale_old_value_without_writing_delta() -> None:

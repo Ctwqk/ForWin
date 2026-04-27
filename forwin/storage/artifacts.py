@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
+from forwin.observability.payloads import artifact_manifest_item
+from forwin.observability.redaction import redact_payload
 from forwin.protocol.scene import SceneOutput
 from forwin.protocol.writer import WriterOutput
 
@@ -242,6 +244,36 @@ class ArtifactStore:
             "hash": hashlib.sha256(encoded).hexdigest(),
             "preview": preview,
         }
+
+    def save_observability_diagnostic(
+        self,
+        *,
+        project_id: str,
+        chapter_number: int,
+        kind: str,
+        payload: dict,
+        source_event_id: str = "",
+        trace_id: str = "",
+    ) -> dict[str, object]:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        safe_kind = "".join(
+            ch if ch.isalnum() or ch in {"-", "_"} else "_"
+            for ch in str(kind or "diagnostic")
+        ).strip("_") or "diagnostic"
+        content = json.dumps(redact_payload(payload), ensure_ascii=False, indent=2, sort_keys=True)
+        uri = self.object_store.write_text(
+            f"projects/{project_id}/chapters/{chapter_number}/observability/{safe_kind}_{timestamp}.json",
+            content,
+            content_type="application/json",
+        )
+        return artifact_manifest_item(
+            uri=uri,
+            kind=safe_kind,
+            redaction_state="redacted",
+            source_event_id=source_event_id,
+            trace_id=trace_id,
+            content=content,
+        )
 
     def read_text(self, uri: str) -> str:
         return self.object_store.read_text(uri)

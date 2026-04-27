@@ -2,9 +2,9 @@
 
 更新时间：2026-04-26
 
-状态：设计落档；BookState 基座与地图系统方案 C 首轮实现已落地，尚未切换线上主链路。
+状态：设计落档；BookState 基座与地图系统方案 C 已接入 V4.5 后端主链，旧 `world_model_v4` 降级为 compatibility projection。
 
-来源：现有 `world_model_v4` 代码盘点、V4/V4.1 历史实现计划，以及最终版世界状态图 / 地图图 / 认知图数据结构设计。当前代码与设计差距统一入口见 [V4.5_markstone.md](/home/taiwei/.codex/worktrees/2a32/ForWin/Design-docs/V4.5_markstone.md)。
+来源：现有 `world_model_v4` 代码盘点、V4/V4.1 历史实现计划，以及最终版世界状态图 / 地图图 / 认知图数据结构设计。当前代码与设计差距统一入口见 [V4.5_markstone.md](/home/taiwei/.codex/worktrees/b77d/ForWin/Design-docs/V4.5_markstone.md)。V4.5.1 残余设计债见 [V4.5.1_markstone.md](/home/taiwei/.codex/worktrees/b77d/ForWin/Design-docs/V4.5.1_markstone.md)；native GraphDelta extractor、World Studio 和完整 rule pack 归入 V4.6+。
 
 ## 1. 设计结论
 
@@ -871,7 +871,9 @@ E2E：
 - 主角发现密道后 MapPatch + CognitionPatch 让 known distance 变短。
 - reviewer 能发现角色在未知道密道前使用密道的越权移动。
 
-## 17. 验收标准
+## 17. 最终验收标准与 V4.5.1 边界
+
+本节描述 BookState 最终形态。V4.5.1 已完成后端 canon 优先路径、adapter、snapshot/replay、map/reviewer/legacy import contract；以下涉及 World Studio、native extractor、完整 rule pack 的内容属于后续产品化版本，不作为 V4.5.1 未完成项。
 
 本次最终版实现完成的最低标准：
 
@@ -881,7 +883,7 @@ E2E：
 - 能计算客观地图距离与 observer known distance。
 - writer pack 不泄露 hidden objective truth。
 - review/compiler pack 能看到客观真相并阻止信息越权。
-- World Studio 能展示至少 graph nodes、map path、cognition refs、delta ledger 四类调试信息。
+- 后续产品化版本中，World Studio 能展示至少 graph nodes、map path、cognition refs、delta ledger 四类调试信息。
 - 旧 v4 测试要么迁移到 final BookState 语义，要么明确标记 legacy compatibility。
 
 ## 18. 当前实现进度
@@ -897,7 +899,7 @@ E2E：
 
 2026-04-26 地图系统方案 C 首轮实现范围：
 
-- 新增设计文档：[map_scheme_c.md](/home/taiwei/.codex/worktrees/2a32/ForWin/Design-docs/map_scheme_c.md)。
+- 新增设计文档：[map_scheme_c.md](/home/taiwei/.codex/worktrees/b77d/ForWin/Design-docs/map_scheme_c.md)。
 - 新增 `forwin/map/`，实现 `models / protocol / repository / generator / pathfinding / validator / service`。
 - `SubWorld` 显式升级为大尺度地图容器，新增 `subworld_type / scale_level / culture_profile_json / terrain_profile_json / danger_profile_json / generation_seed / map_status`。
 - 新增 `map_regions / map_region_edges / map_generation_runs`，并扩展 `map_nodes` 的 `subworld_id / region_id / description` 与 `map_edges` 的 `subworld_id` 等字段。
@@ -906,24 +908,25 @@ E2E：
 - 跨 subworld 第一版复用 `map_edges`，通过 `world_gate`、exit `MapNode`、exit connector 和 `metadata.target_subworld_id` 表达。
 - writer context 新增 `map_context`，reviewer context 同步携带 map graph 紧凑数据。
 - reviewer heuristic 已能检查连续场景地图移动是否不可达，或 `travel_time` 是否超过章节时间推进。
-- BookState debug API 已接入路由，提供 runtime status、map path query 和 legacy import。
-- `WritingOrchestrator` 已在旧 V4 compiler commit 后追加 BookState review/compile gate。
-- 新增测试：`tests/test_map_models.py`、`tests/test_map_generation.py`、`tests/test_map_generation_scheme_c.py`、`tests/test_map_pathfinding.py`、`tests/test_map_cognition_path.py`、`tests/test_map_world_integration.py`。
+- BookState API 已接入路由，提供 runtime status、map path query 和 legacy import，并使用稳定 response schema。
+- `WritingOrchestrator` 已切到 BookState review/compile 优先 canon 语义；旧 V4 compiler 降级为 compatibility projection，失败只记录 projection failure。
+- Legacy import 已提升 `SubWorld.metadata_json.region_drafts` 为 `map_regions`，保留原草案并写入 promotion report。
+- 新增测试：`tests/test_map_models.py`、`tests/test_map_generation.py`、`tests/test_map_pathfinding.py`、`tests/test_map_cognition_path.py`、`tests/test_map_world_integration.py`。
 
 实现备注：
 
 - 由于旧轻量 v4 已占用 `cognition_snapshots` 表名，首轮最终版物化认知快照使用 `book_cognition_snapshots`。后续迁移阶段再决定是否破坏性收口为最终表名。
-- 现阶段尚未切换 orchestrator canon commit；旧 v4 compiler 仍在运行时路径中。
-- 现阶段没有实现 repository/compiler/API/UI/pipeline 的最终切换；BookState gate 是追加阻断点，不是唯一 canon source。
-- 地图系统本轮不新增独立 FastAPI 路由；只提供 service 层给 orchestrator、reviewer、writer 和测试调用。BookState path debug API 可查询 runtime map path。
+- 现阶段 BookState 已是 orchestrator canon 优先路径；旧 v4 compiler 仅保留 compatibility projection 与历史调试入口。
+- 现阶段没有实现 World Studio/UI，也没有把 writer/extractor 原生输出完整 `GraphDelta` 作为强制 contract；V4.5 采用稳定 `BookStateDeltaAdapter` 转换为 `ApprovedGraphDeltaSet`，native GraphDelta extractor 归入 V4.6+。
+- 地图系统已有最小 FastAPI map route：runtime、path、ensure-from-genesis；BookState path API 也可查询 runtime map path。
 - 本轮没有使用外部开源地图生成代码，生成器是 ForWin 内部 deterministic graph generator。
 
 验证：
 
 - `PYTHONPATH=. pytest -q tests/test_book_state_protocol.py tests/test_book_state_schema.py tests/test_book_state_runtime.py`
 - `PYTHONPATH=. pytest -q tests/test_world_v4_schema.py tests/test_world_v4_repository.py tests/test_world_v4_projection_materialization.py`
-- `python3 -m pytest tests/test_book_state_protocol.py tests/test_book_state_runtime.py tests/test_book_state_schema.py tests/test_map_models.py tests/test_map_generation_scheme_c.py tests/test_map_generation.py tests/test_map_pathfinding.py tests/test_map_cognition_path.py tests/test_map_world_integration.py tests/test_subworld_control.py -q`
-- 当前地图相关验证结果：`37 passed`
+- `python3 -m pytest tests/test_book_state_protocol.py tests/test_book_state_runtime.py tests/test_book_state_schema.py tests/test_map_models.py tests/test_map_generation.py tests/test_map_pathfinding.py tests/test_map_cognition_path.py tests/test_map_world_integration.py tests/test_subworld_control.py -q`
+- 当前地图相关验证结果：`38 passed`
 
 ## 19. 后续实现注意事项
 

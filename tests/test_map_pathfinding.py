@@ -65,3 +65,24 @@ def test_blocked_edges_are_skipped() -> None:
 
     assert result.reachable is True
     assert result.path_edge_ids == ["ac", "cb"]
+
+
+def test_all_pairs_uses_cap_and_preserves_path_results() -> None:
+    graph = MapGraph(
+        nodes=_nodes(),
+        edges=[
+            MapEdge(id="ab", project_id="p1", subworld_id="sw1", from_node_id="a", to_node_id="b", edge_type="road", travel_time=1),
+            MapEdge(id="bc", project_id="p1", subworld_id="sw1", from_node_id="b", to_node_id="c", edge_type="road", travel_time=2),
+        ],
+    )
+
+    paths = graph.all_pairs_shortest_paths(node_ids=["a", "b", "c"])
+
+    assert paths[("a", "c")].path_edge_ids == ["ab", "bc"]
+    assert paths[("a", "c")].total_travel_time == 3
+    try:
+        graph.all_pairs_shortest_paths(node_ids=["a", "b", "c"], max_nodes=2)
+    except ValueError as exc:
+        assert "limited to 2 nodes" in str(exc)
+    else:
+        raise AssertionError("all_pairs_shortest_paths should enforce max_nodes")

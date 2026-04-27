@@ -131,9 +131,10 @@ def _movement_issues(runtime: BookStateRuntime, delta: GraphDelta) -> list[BookS
         if not old_location or not new_location or old_location == new_location:
             continue
         if old_location not in runtime.map.nodes_by_id or new_location not in runtime.map.nodes_by_id:
+            is_legacy_location = patch.field_path == "state.location"
             issues.append(
                 BookStateReviewIssue(
-                    severity="warning",
+                    severity="warning" if is_legacy_location else "error",
                     code="movement_unknown_map_node",
                     target_ref=f"node:{patch.node_id}",
                     message=f"movement references unknown map node: {old_location} -> {new_location}",
@@ -154,7 +155,7 @@ def _movement_issues(runtime: BookStateRuntime, delta: GraphDelta) -> list[BookS
 
 
 def _is_location_patch(patch: NodePatch) -> bool:
-    return str(patch.op) in {"set", "replace"} and patch.field_path == "state.location_id"
+    return str(patch.op) in {"set", "replace"} and patch.field_path in {"state.location_id", "state.location"}
 
 
 __all__ = ["BookStateReviewGate", "BookStateReviewIssue", "BookStateReviewVerdict"]

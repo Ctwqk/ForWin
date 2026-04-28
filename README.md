@@ -65,6 +65,24 @@ docker compose up --build
 
 By default the main web API is exposed on `http://localhost:8899`.
 
+### Configuration
+
+ForWin reads configuration through `Config.from_env()`. It loads the file
+pointed to by `FORWIN_ENV_FILE`, or `.env` when unset, then overlays the real
+process environment. Real environment variables always win over values from the
+file.
+
+Docker Compose uses `.env` as the default env file. Copy `.env.example` to
+`.env`, set server paths, storage settings, and any API keys, then start the
+stack. If you use a different file, set `FORWIN_ENV_FILE` for the services and
+pass the same file to Compose interpolation when needed, for example
+`docker compose --env-file ./prod.env up --build`.
+
+LLM API keys can be configured either in `.env` or through runtime settings.
+For personal-server deployments, `.env` is usually the right place for stable
+server credentials because it is loaded at process start and can be managed with
+the rest of the deployment configuration.
+
 ## Testing
 
 ```bash

@@ -6,43 +6,13 @@ services:
       - qdrant
       - minio
     env_file:
-      - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
+      - ${FORWIN_ENV_FILE:-.env}
     ports:
-      - "8899:8899"
+      - "${FORWIN_HTTP_BIND:-127.0.0.1}:${FORWIN_HTTP_PORT:-8899}:8899"
     volumes:
       - forwin-data:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    environment:
-      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
-      - MINIMAX_BASE_URL=${MINIMAX_BASE_URL:-https://api.minimaxi.com/v1}
-      - MINIMAX_MODEL=${MINIMAX_MODEL:-MiniMax-M2.7}
-      - KIMI_API_KEY=${KIMI_API_KEY:-}
-      - KIMI_BASE_URL=${KIMI_BASE_URL:-https://api.moonshot.cn/v1}
-      - KIMI_MODEL=${KIMI_MODEL:-kimi-k2.5}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
-      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat}
-      - LLM_RETRY_ATTEMPTS=${LLM_RETRY_ATTEMPTS:-2}
-      - LLM_RETRY_INITIAL_DELAY_SECONDS=${LLM_RETRY_INITIAL_DELAY_SECONDS:-2}
-      - LLM_RETRY_MAX_DELAY_SECONDS=${LLM_RETRY_MAX_DELAY_SECONDS:-15}
-      - WRITER_MODE=${WRITER_MODE:-scene}
-      - FORWIN_RETRIEVAL_BACKEND=${FORWIN_RETRIEVAL_BACKEND:-qdrant}
-      - FORWIN_QDRANT_URL=${FORWIN_QDRANT_URL:-http://qdrant:6333}
-      - FORWIN_QDRANT_COLLECTION=${FORWIN_QDRANT_COLLECTION:-chapter_memories}
-      - FORWIN_ARTIFACT_BACKEND=${FORWIN_ARTIFACT_BACKEND:-minio}
-      - FORWIN_MINIO_ENDPOINT=${FORWIN_MINIO_ENDPOINT:-minio:9000}
-      - FORWIN_MINIO_ACCESS_KEY=${FORWIN_MINIO_ACCESS_KEY:-forwinminio}
-      - FORWIN_MINIO_SECRET_KEY=${FORWIN_MINIO_SECRET_KEY:-forwinminio123}
-      - FORWIN_MINIO_BUCKET=${FORWIN_MINIO_BUCKET:-forwin-artifacts}
-      - FORWIN_MINIO_PREFIX=${FORWIN_MINIO_PREFIX:-artifacts}
-      - FORWIN_MINIO_SECURE=${FORWIN_MINIO_SECURE:-false}
-      - FORWIN_CODEX_ENABLED=${FORWIN_CODEX_ENABLED:-false}
-      - FORWIN_CODEX_BRIDGE_URL=${FORWIN_CODEX_BRIDGE_URL:-http://host.docker.internal:8897}
-      - FORWIN_CODEX_BRIDGE_TOKEN=${FORWIN_CODEX_BRIDGE_TOKEN:-}
-      - FORWIN_CODEX_MAX_CONCURRENT=${FORWIN_CODEX_MAX_CONCURRENT:-1}
-      - FORWIN_CODEX_SYNC_TIMEOUT_SECONDS=${FORWIN_CODEX_SYNC_TIMEOUT_SECONDS:-90}
-      - FORWIN_CODEX_JOB_TIMEOUT_SECONDS=${FORWIN_CODEX_JOB_TIMEOUT_SECONDS:-900}
     restart: unless-stopped
 
   forwin-mcp:
@@ -53,7 +23,7 @@ services:
         condition: service_healthy
     command: ["python", "-m", "uvicorn", "forwin.mcp.http:app", "--host", "0.0.0.0", "--port", "8898"]
     env_file:
-      - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
+      - ${FORWIN_ENV_FILE:-.env}
     environment:
       - FORWIN_API_BASE_URL=${FORWIN_API_BASE_URL:-http://forwin:8899}
       - FORWIN_MCP_HOST=${FORWIN_MCP_HOST:-0.0.0.0}
@@ -80,11 +50,9 @@ services:
         condition: service_healthy
     command: ["bash", "-lc", "exec scripts/launch_linux_extension_browser.sh"]
     env_file:
-      - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
+      - ${FORWIN_ENV_FILE:-.env}
     environment:
       - FORWIN_BACKEND_URL=${FORWIN_PUBLISHER_BROWSER_BACKEND_URL:-http://forwin:8899}
-      - FORWIN_PUBLISHER_EXTENSION_API_KEY=${FORWIN_PUBLISHER_EXTENSION_API_KEY:-}
-      - FORWIN_PUBLISHER_PREFERRED_CLIENT_ID=${FORWIN_PUBLISHER_PREFERRED_CLIENT_ID:-}
       - FORWIN_EXTENSION_TEST_PROFILE=${FORWIN_EXTENSION_TEST_PROFILE:-/app/data/chrome_profiles/forwin-extension}
       - FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE=${FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE:-true}
       - FORWIN_EXTENSION_AUTO_QUALIFY_PROFILE=${FORWIN_EXTENSION_AUTO_QUALIFY_PROFILE:-true}
@@ -124,8 +92,8 @@ services:
     container_name: forwin-minio
     command: server /data --console-address ":9001"
     environment:
-      - MINIO_ROOT_USER=${FORWIN_MINIO_ACCESS_KEY:-forwinminio}
-      - MINIO_ROOT_PASSWORD=${FORWIN_MINIO_SECRET_KEY:-forwinminio123}
+      - MINIO_ROOT_USER=${FORWIN_MINIO_ACCESS_KEY:?Set FORWIN_MINIO_ACCESS_KEY in .env}
+      - MINIO_ROOT_PASSWORD=${FORWIN_MINIO_SECRET_KEY:?Set FORWIN_MINIO_SECRET_KEY in .env}
     volumes:
       - forwin-minio:/data
     restart: unless-stopped

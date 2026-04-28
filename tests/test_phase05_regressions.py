@@ -428,8 +428,12 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertFalse(config.phase4_use_llm)
 
     def test_config_defaults_to_scene_writer_mode(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
-            config = Config.from_env()
+        with TemporaryDirectory() as tmp:
+            missing_env = str(Path(tmp) / "missing.env")
+            with patch.dict(
+                "os.environ", {"FORWIN_ENV_FILE": missing_env}, clear=True
+            ):
+                config = Config.from_env()
 
         self.assertEqual(config.writer_mode, "scene")
 

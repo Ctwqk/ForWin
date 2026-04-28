@@ -8,9 +8,23 @@ from .vector_index import LLMKBVectorIndex
 
 
 class LLMKnowledgeBaseRetriever:
-    def __init__(self, *, root: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        root: Path | None = None,
+        qdrant_url: str | None = None,
+        qdrant_collection: str | None = None,
+        qdrant_client: Any | None = None,
+        qdrant_models: Any | None = None,
+    ) -> None:
         self.root = root or DEFAULT_LLM_KB_ROOT
-        self.index = LLMKBVectorIndex(self.root)
+        self.index = LLMKBVectorIndex(
+            self.root,
+            qdrant_url=qdrant_url,
+            collection_name=qdrant_collection,
+            qdrant_client=qdrant_client,
+            qdrant_models=qdrant_models,
+        )
 
     def search(
         self,

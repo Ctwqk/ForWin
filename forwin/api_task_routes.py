@@ -18,9 +18,23 @@ from forwin.governance import DecisionEventType
 logger = logging.getLogger(__name__)
 
 
-def _is_sqlite_lock_error(exc: OperationalError) -> bool:
+def _is_retryable_db_error(exc: OperationalError) -> bool:
+    orig = getattr(exc, "orig", None)
+    sqlstate = str(getattr(orig, "sqlstate", "") or getattr(orig, "pgcode", "") or "").strip()
+    if sqlstate in {"40001", "40P01", "55P03", "57014", "08000", "08003", "08006", "08001"}:
+        return True
     message = str(exc).lower()
-    return "database is locked" in message or "database table is locked" in message
+    return (
+        "database is locked" in message
+        or "database table is locked" in message
+        or "deadlock detected" in message
+        or "could not serialize access" in message
+        or "lock timeout" in message
+        or "connection refused" in message
+        or "connection not open" in message
+        or "server closed the connection" in message
+        or "terminating connection" in message
+    )
 
 
 @dataclass(frozen=True)
@@ -159,7 +173,7 @@ def build_handlers(
                     )
                     session.commit()
             except OperationalError as exc:
-                if not _is_sqlite_lock_error(exc):
+                if not _is_retryable_db_error(exc):
                     raise
                 logger.warning("Terminate audit event skipped because database is busy: %s", exc)
         updated = deps.get_generation_task_or_404(task_id)
@@ -206,7 +220,7 @@ def build_handlers(
                     )
                     session.commit()
             except OperationalError as exc:
-                if not _is_sqlite_lock_error(exc):
+                if not _is_retryable_db_error(exc):
                     raise
                 logger.warning("Pause audit event skipped because database is busy: %s", exc)
         updated = deps.get_generation_task_or_404(task_id)

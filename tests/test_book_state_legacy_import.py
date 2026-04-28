@@ -22,7 +22,7 @@ from forwin.world_model_v4.repository import WorldModelRepository
 
 
 def test_legacy_import_maps_entities_relations_and_v4_narrative_nodes() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -129,7 +129,7 @@ def test_legacy_import_maps_entities_relations_and_v4_narrative_nodes() -> None:
 
 
 def test_legacy_import_reports_site_state_map_bindings_without_subworld_scope_leak() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -168,7 +168,7 @@ def test_legacy_import_reports_site_state_map_bindings_without_subworld_scope_le
 
 
 def test_legacy_import_promotes_subworld_region_drafts_idempotently() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

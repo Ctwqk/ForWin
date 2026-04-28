@@ -11,7 +11,7 @@ from forwin.state.updater import StateUpdater
 
 
 def test_candidate_draft_alias_returns_latest_draft_review_and_canon_status() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -64,7 +64,7 @@ def test_candidate_draft_alias_returns_latest_draft_review_and_canon_status() ->
 
 
 def test_candidate_draft_alias_404s_when_no_candidate_exists() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

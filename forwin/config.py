@@ -4,10 +4,18 @@ import os
 
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_MINIMAX_MODEL = "MiniMax-M2.7"
+LEGACY_DATABASE_PATH_ENV = "FORWIN_" + "DB_PATH"
+DEFAULT_DATABASE_URL = "postgresql+psycopg://forwin:forwin@localhost:5432/forwin"
 DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_MOONSHOT_MODEL = "kimi-k2.5"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+DEFAULT_HTTP_BASIC_EXEMPT_PATHS = (
+    "/health",
+    "/api/extension/",
+    "/api/publisher/extension/",
+    "/api/publishers/extension/",
+)
 
 try:
     from pydantic_settings import BaseSettings as _ConfigBaseModel
@@ -17,14 +25,6 @@ except ImportError:
     from pydantic import BaseModel as _ConfigBaseModel
 
     _USES_BASE_SETTINGS = False
-
-
-def _csv_list(value: str | None) -> list[str]:
-    return [
-        item.strip()
-        for item in str(value or "").split(",")
-        if item.strip()
-    ]
 
 
 def _read_env_file_values() -> dict[str, str]:
@@ -46,20 +46,74 @@ def _read_env_file_values() -> dict[str, str]:
     return values
 
 
-def _merged_env_values() -> dict[str, str]:
+def _resolved_env() -> dict[str, str]:
     values = _read_env_file_values()
     values.update({key: value for key, value in os.environ.items()})
     return values
 
 
+def _merged_env_values() -> dict[str, str]:
+    return _resolved_env()
+
+
+def _env_str(env: dict[str, str], key: str, default: str = "") -> str:
+    value = env.get(key)
+    if value is None:
+        return default
+    value = str(value).strip()
+    if value == "":
+        return default
+    return value
+
+
+def _env_int(env: dict[str, str], key: str, default: int) -> int:
+    value = _env_str(env, key, "")
+    if value == "":
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid integer for {key}: {value}") from exc
+
+
+def _env_float(env: dict[str, str], key: str, default: float) -> float:
+    value = _env_str(env, key, "")
+    if value == "":
+        return default
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid float for {key}: {value}") from exc
+
+
+def _env_bool(env: dict[str, str], key: str, default: bool) -> bool:
+    value = _env_str(env, key, "")
+    if value == "":
+        return default
+    normalized = value.lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean for {key}: {value}")
+
+
+def _env_csv(env: dict[str, str], key: str) -> list[str]:
+    value = _env_str(env, key, "")
+    return [
+        item.strip()
+        for item in value.split(",")
+        if item.strip()
+    ]
+
+
 def _env_llm_profiles(env: dict[str, str] | None = None) -> list[dict[str, str]]:
-    env = env or _merged_env_values()
+    env = env or _resolved_env()
     profiles: list[dict[str, str]] = []
     kimi_api_key = (
-        env.get("KIMI_API_KEY")
-        or env.get("MOONSHOT_API_KEY")
-        or ""
-    ).strip()
+        _env_str(env, "KIMI_API_KEY")
+        or _env_str(env, "MOONSHOT_API_KEY")
+    )
     if kimi_api_key:
         profiles.append(
             {
@@ -67,162 +121,202 @@ def _env_llm_profiles(env: dict[str, str] | None = None) -> list[dict[str, str]]
                 "name": "Kimi (.env)",
                 "api_key": kimi_api_key,
                 "base_url": (
-                    env.get("KIMI_BASE_URL")
-                    or env.get("MOONSHOT_BASE_URL")
+                    _env_str(env, "KIMI_BASE_URL")
+                    or _env_str(env, "MOONSHOT_BASE_URL")
                     or DEFAULT_MOONSHOT_BASE_URL
-                ).strip(),
+                ),
                 "model": (
-                    env.get("KIMI_MODEL")
-                    or env.get("MOONSHOT_MODEL")
+                    _env_str(env, "KIMI_MODEL")
+                    or _env_str(env, "MOONSHOT_MODEL")
                     or DEFAULT_MOONSHOT_MODEL
-                ).strip(),
+                ),
             }
         )
 
-    deepseek_api_key = env.get("DEEPSEEK_API_KEY", "").strip()
+    deepseek_api_key = _env_str(env, "DEEPSEEK_API_KEY")
     if deepseek_api_key:
         profiles.append(
             {
                 "id": "env-deepseek",
                 "name": "DeepSeek (.env)",
                 "api_key": deepseek_api_key,
-                "base_url": env.get(
+                "base_url": _env_str(
+                    env,
                     "DEEPSEEK_BASE_URL",
                     DEFAULT_DEEPSEEK_BASE_URL,
-                ).strip(),
-                "model": env.get(
+                ),
+                "model": _env_str(
+                    env,
                     "DEEPSEEK_MODEL",
                     DEFAULT_DEEPSEEK_MODEL,
-                ).strip(),
+                ),
             }
         )
     return profiles
 
 
 def _env_values() -> dict[str, object]:
-    env = _merged_env_values()
+    env = _resolved_env()
+    database_url = (
+        _env_str(env, "FORWIN_DATABASE_URL")
+        or _env_str(env, LEGACY_DATABASE_PATH_ENV)
+        or DEFAULT_DATABASE_URL
+    )
     return {
-        "db_path": os.environ.get("FORWIN_DB_PATH", "data/novel.db"),
-        "artifact_root": os.environ.get("FORWIN_ARTIFACT_ROOT", "data/artifacts"),
-        "artifact_backend": os.environ.get("FORWIN_ARTIFACT_BACKEND", "local"),
-        "minio_endpoint": os.environ.get("FORWIN_MINIO_ENDPOINT", ""),
-        "minio_access_key": os.environ.get("FORWIN_MINIO_ACCESS_KEY", ""),
-        "minio_secret_key": os.environ.get("FORWIN_MINIO_SECRET_KEY", ""),
-        "minio_bucket": os.environ.get("FORWIN_MINIO_BUCKET", "forwin-artifacts"),
-        "minio_prefix": os.environ.get("FORWIN_MINIO_PREFIX", "artifacts"),
-        "minio_secure": os.environ.get("FORWIN_MINIO_SECURE", "false").strip().lower() in {"1", "true", "yes"},
-        "retrieval_backend": os.environ.get("FORWIN_RETRIEVAL_BACKEND", "local"),
-        "retrieval_root": os.environ.get("FORWIN_RETRIEVAL_ROOT", "data/retrieval"),
-        "qdrant_url": os.environ.get("FORWIN_QDRANT_URL", ""),
-        "qdrant_collection": os.environ.get("FORWIN_QDRANT_COLLECTION", "chapter_memories"),
-        "embedding_backend": os.environ.get("FORWIN_EMBEDDING_BACKEND", "hash"),
-        "embedding_base_url": os.environ.get(
+        "database_url": database_url,
+        "db_path": database_url,
+        "artifact_root": _env_str(env, "FORWIN_ARTIFACT_ROOT", "data/artifacts"),
+        "artifact_backend": _env_str(env, "FORWIN_ARTIFACT_BACKEND", "local"),
+        "minio_endpoint": _env_str(env, "FORWIN_MINIO_ENDPOINT"),
+        "minio_access_key": _env_str(env, "FORWIN_MINIO_ACCESS_KEY"),
+        "minio_secret_key": _env_str(env, "FORWIN_MINIO_SECRET_KEY"),
+        "minio_bucket": _env_str(env, "FORWIN_MINIO_BUCKET", "forwin-artifacts"),
+        "minio_prefix": _env_str(env, "FORWIN_MINIO_PREFIX", "artifacts"),
+        "minio_secure": _env_bool(env, "FORWIN_MINIO_SECURE", False),
+        "retrieval_backend": _env_str(env, "FORWIN_RETRIEVAL_BACKEND", "qdrant"),
+        "retrieval_root": _env_str(env, "FORWIN_RETRIEVAL_ROOT", "data/retrieval"),
+        "qdrant_url": _env_str(env, "FORWIN_QDRANT_URL", "http://localhost:6333"),
+        "qdrant_collection": _env_str(
+            env, "FORWIN_QDRANT_COLLECTION", "chapter_memories"
+        ),
+        "llm_kb_qdrant_collection": _env_str(
+            env, "FORWIN_LLM_KB_QDRANT_COLLECTION", "llm_kb_vectors"
+        ),
+        "embedding_backend": _env_str(env, "FORWIN_EMBEDDING_BACKEND", "hash"),
+        "embedding_base_url": _env_str(
+            env,
             "FORWIN_EMBEDDING_BASE_URL",
-            os.environ.get("MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL),
+            _env_str(env, "MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL),
         ),
-        "embedding_api_key": os.environ.get(
+        "embedding_api_key": _env_str(
+            env,
             "FORWIN_EMBEDDING_API_KEY",
-            os.environ.get("MINIMAX_API_KEY", ""),
+            _env_str(env, "MINIMAX_API_KEY"),
         ),
-        "embedding_model": os.environ.get("FORWIN_EMBEDDING_MODEL", ""),
-        "embedding_dims": int(os.environ.get("FORWIN_EMBEDDING_DIMS", "64")),
-        "runtime_settings_path": os.environ.get(
+        "embedding_model": _env_str(env, "FORWIN_EMBEDDING_MODEL"),
+        "embedding_dims": _env_int(env, "FORWIN_EMBEDDING_DIMS", 64),
+        "runtime_settings_path": _env_str(
+            env,
             "FORWIN_RUNTIME_SETTINGS_PATH", "data/runtime_settings.json"
         ),
-        "publisher_extension_api_key": os.environ.get(
+        "publisher_extension_api_key": _env_str(
+            env,
             "FORWIN_PUBLISHER_EXTENSION_API_KEY",
-            os.environ.get("PUBLISHER_EXTENSION_API_KEY", ""),
+            _env_str(env, "PUBLISHER_EXTENSION_API_KEY"),
         ),
-        "publisher_preferred_client_id": os.environ.get(
+        "publisher_session_secret": _env_str(
+            env, "FORWIN_PUBLISHER_SESSION_SECRET"
+        ),
+        "publisher_session_encryption_required": _env_bool(
+            env, "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED", False
+        ),
+        "publisher_preferred_client_id": _env_str(
+            env,
             "FORWIN_PUBLISHER_PREFERRED_CLIENT_ID", ""
         ),
-        "minimax_api_key": env.get("MINIMAX_API_KEY", ""),
-        "minimax_base_url": env.get(
+        "http_bind": _env_str(env, "FORWIN_HTTP_BIND", "127.0.0.1"),
+        "http_port": _env_int(env, "FORWIN_HTTP_PORT", 8899),
+        "http_basic_user": _env_str(env, "FORWIN_HTTP_BASIC_USER"),
+        "http_basic_password": _env_str(env, "FORWIN_HTTP_BASIC_PASSWORD"),
+        "http_basic_exempt_paths": tuple(
+            _env_csv(env, "FORWIN_HTTP_BASIC_EXEMPT_PATHS")
+        )
+        or DEFAULT_HTTP_BASIC_EXEMPT_PATHS,
+        "minimax_api_key": _env_str(env, "MINIMAX_API_KEY"),
+        "minimax_base_url": _env_str(
+            env,
             "MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL
         ),
-        "minimax_model": env.get("MINIMAX_MODEL", DEFAULT_MINIMAX_MODEL),
+        "minimax_model": _env_str(env, "MINIMAX_MODEL", DEFAULT_MINIMAX_MODEL),
         "llm_env_profiles": _env_llm_profiles(env),
-        "llm_timeout_seconds": float(os.environ.get("LLM_TIMEOUT_SECONDS", "90")),
-        "llm_retry_attempts": int(os.environ.get("LLM_RETRY_ATTEMPTS", "2")),
-        "llm_retry_initial_delay_seconds": float(
-            os.environ.get("LLM_RETRY_INITIAL_DELAY_SECONDS", "2")
+        "llm_timeout_seconds": _env_float(env, "LLM_TIMEOUT_SECONDS", 90.0),
+        "llm_retry_attempts": _env_int(env, "LLM_RETRY_ATTEMPTS", 2),
+        "llm_retry_initial_delay_seconds": _env_float(
+            env, "LLM_RETRY_INITIAL_DELAY_SECONDS", 2.0
         ),
-        "llm_retry_max_delay_seconds": float(
-            os.environ.get("LLM_RETRY_MAX_DELAY_SECONDS", "15")
+        "llm_retry_max_delay_seconds": _env_float(
+            env, "LLM_RETRY_MAX_DELAY_SECONDS", 15.0
         ),
-        "scene_call_timeout_seconds": float(
-            os.environ.get("SCENE_CALL_TIMEOUT_SECONDS", "45")
+        "scene_call_timeout_seconds": _env_float(
+            env, "SCENE_CALL_TIMEOUT_SECONDS", 45.0
         ),
-        "max_chapter_chars": int(os.environ.get("MAX_CHAPTER_CHARS", "3200")),
-        "min_chapter_chars": int(os.environ.get("MIN_CHAPTER_CHARS", "2500")),
-        "target_chapter_chars": int(
-            os.environ.get("TARGET_CHAPTER_CHARS", "2800")
+        "max_chapter_chars": _env_int(env, "MAX_CHAPTER_CHARS", 3200),
+        "min_chapter_chars": _env_int(env, "MIN_CHAPTER_CHARS", 2500),
+        "target_chapter_chars": _env_int(env, "TARGET_CHAPTER_CHARS", 2800),
+        "writer_mode": _env_str(env, "WRITER_MODE", "scene"),
+        "operation_mode": _env_str(env, "OPERATION_MODE", "blackbox"),
+        "freeze_failed_candidates": _env_bool(
+            env, "FREEZE_FAILED_CANDIDATES", True
         ),
-        "writer_mode": os.environ.get("WRITER_MODE", "scene"),
-        "operation_mode": os.environ.get("OPERATION_MODE", "blackbox"),
-        "freeze_failed_candidates": os.environ.get("FREEZE_FAILED_CANDIDATES", "true").strip().lower() not in {"0", "false", "no"},
-        "review_interval_chapters": int(os.environ.get("REVIEW_INTERVAL_CHAPTERS", "0")),
-        "progression_mode": os.environ.get("PROGRESSION_MODE", "serial_canon_band_guard"),
-        "auto_band_checkpoint": os.environ.get("AUTO_BAND_CHECKPOINT", "true").strip().lower() in {"1", "true", "yes"},
-        "band_warn_action": os.environ.get("BAND_WARN_ACTION", "pause"),
-        "manual_checkpoints_enabled": os.environ.get("MANUAL_CHECKPOINTS_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
-        "future_constraints_enabled": os.environ.get("FUTURE_CONSTRAINTS_ENABLED", "true").strip().lower() in {"1", "true", "yes"},
-        "legacy_provisional_blocking": os.environ.get("FORWIN_LEGACY_PROVISIONAL_BLOCKING", "false").strip().lower() in {"1", "true", "yes"},
-        "skill_runtime_enabled": os.environ.get("FORWIN_SKILL_RUNTIME_ENABLED", "true").strip().lower() not in {"0", "false", "no"},
-        "skill_registry_path": os.environ.get("FORWIN_SKILL_REGISTRY_PATH", "forwin_skills"),
-        "skill_strictness": os.environ.get("FORWIN_SKILL_STRICTNESS", "normal"),
-        "enabled_skill_groups": _csv_list(os.environ.get("FORWIN_ENABLED_SKILL_GROUPS", "")),
-        "disabled_skill_ids": _csv_list(os.environ.get("FORWIN_DISABLED_SKILL_IDS", "")),
-        "default_scene_count": int(os.environ.get("DEFAULT_SCENE_COUNT", "3")),
-        "max_scene_count": int(os.environ.get("MAX_SCENE_COUNT", "4")),
-        "context_budget_chars": int(os.environ.get("CONTEXT_BUDGET_CHARS", "6000")),
-        "retrieval_max_entities": int(
-            os.environ.get("RETRIEVAL_MAX_ENTITIES", "8")
+        "review_interval_chapters": _env_int(env, "REVIEW_INTERVAL_CHAPTERS", 0),
+        "progression_mode": _env_str(
+            env, "PROGRESSION_MODE", "serial_canon_band_guard"
         ),
-        "retrieval_max_threads": int(
-            os.environ.get("RETRIEVAL_MAX_THREADS", "4")
+        "auto_band_checkpoint": _env_bool(env, "AUTO_BAND_CHECKPOINT", True),
+        "band_warn_action": _env_str(env, "BAND_WARN_ACTION", "pause"),
+        "manual_checkpoints_enabled": _env_bool(
+            env, "MANUAL_CHECKPOINTS_ENABLED", True
         ),
-        "retrieval_max_summaries": int(
-            os.environ.get("RETRIEVAL_MAX_SUMMARIES", "3")
+        "future_constraints_enabled": _env_bool(
+            env, "FUTURE_CONSTRAINTS_ENABLED", True
         ),
-        "pacing_window_size": int(os.environ.get("PACING_WINDOW_SIZE", "3")),
-        "stale_thread_window": int(os.environ.get("STALE_THREAD_WINDOW", "3")),
-        "pacing_min_avg_chars": int(os.environ.get("PACING_MIN_AVG_CHARS", "1600")),
-        "pacing_max_avg_chars": int(os.environ.get("PACING_MAX_AVG_CHARS", "3800")),
-        "phase_active_thread_limit": int(
-            os.environ.get("PHASE_ACTIVE_THREAD_LIMIT", "20")
+        "legacy_provisional_blocking": _env_bool(
+            env, "FORWIN_LEGACY_PROVISIONAL_BLOCKING", False
         ),
-        "replan_cooldown_chapters": int(
-            os.environ.get("REPLAN_COOLDOWN_CHAPTERS", "3")
+        "skill_runtime_enabled": _env_bool(
+            env, "FORWIN_SKILL_RUNTIME_ENABLED", True
         ),
-        "blackbox_writer_attention_retries": int(
-            os.environ.get("BLACKBOX_WRITER_ATTENTION_RETRIES", "3")
+        "skill_registry_path": _env_str(
+            env, "FORWIN_SKILL_REGISTRY_PATH", "forwin_skills"
         ),
-        "experience_review_enabled": os.environ.get(
-            "EXPERIENCE_REVIEW_ENABLED", "true"
-        ).strip().lower() not in {"0", "false", "no"},
-        "lint_review_enabled": os.environ.get(
-            "LINT_REVIEW_ENABLED", "true"
-        ).strip().lower() not in {"0", "false", "no"},
-        "review_fail_max_rewrites": int(
-            os.environ.get("REVIEW_FAIL_MAX_REWRITES", "3")
+        "skill_strictness": _env_str(env, "FORWIN_SKILL_STRICTNESS", "normal"),
+        "enabled_skill_groups": _env_csv(env, "FORWIN_ENABLED_SKILL_GROUPS"),
+        "disabled_skill_ids": _env_csv(env, "FORWIN_DISABLED_SKILL_IDS"),
+        "default_scene_count": _env_int(env, "DEFAULT_SCENE_COUNT", 3),
+        "max_scene_count": _env_int(env, "MAX_SCENE_COUNT", 4),
+        "context_budget_chars": _env_int(env, "CONTEXT_BUDGET_CHARS", 6000),
+        "retrieval_max_entities": _env_int(env, "RETRIEVAL_MAX_ENTITIES", 8),
+        "retrieval_max_threads": _env_int(env, "RETRIEVAL_MAX_THREADS", 4),
+        "retrieval_max_summaries": _env_int(env, "RETRIEVAL_MAX_SUMMARIES", 3),
+        "pacing_window_size": _env_int(env, "PACING_WINDOW_SIZE", 3),
+        "stale_thread_window": _env_int(env, "STALE_THREAD_WINDOW", 3),
+        "pacing_min_avg_chars": _env_int(env, "PACING_MIN_AVG_CHARS", 1600),
+        "pacing_max_avg_chars": _env_int(env, "PACING_MAX_AVG_CHARS", 3800),
+        "phase_active_thread_limit": _env_int(env, "PHASE_ACTIVE_THREAD_LIMIT", 20),
+        "replan_cooldown_chapters": _env_int(env, "REPLAN_COOLDOWN_CHAPTERS", 3),
+        "blackbox_writer_attention_retries": _env_int(
+            env, "BLACKBOX_WRITER_ATTENTION_RETRIES", 3
         ),
-        "phase4_use_llm": os.environ.get("PHASE4_USE_LLM", "true").strip().lower() not in {"0", "false", "no"},
-        "codex_enabled": os.environ.get("FORWIN_CODEX_ENABLED", "false").strip().lower() in {"1", "true", "yes"},
-        "codex_bridge_url": os.environ.get("FORWIN_CODEX_BRIDGE_URL", "http://host.docker.internal:8897"),
-        "codex_bridge_token": os.environ.get("FORWIN_CODEX_BRIDGE_TOKEN", ""),
-        "codex_max_concurrent": int(os.environ.get("FORWIN_CODEX_MAX_CONCURRENT", "1")),
-        "codex_sync_timeout_seconds": float(os.environ.get("FORWIN_CODEX_SYNC_TIMEOUT_SECONDS", "90")),
-        "codex_job_timeout_seconds": float(os.environ.get("FORWIN_CODEX_JOB_TIMEOUT_SECONDS", "900")),
-        "feedback_cooldown_chapters": int(os.environ.get("FEEDBACK_COOLDOWN_CHAPTERS", "3")),
-        "comment_to_reader_ratio": int(os.environ.get("COMMENT_TO_READER_RATIO", "80")),
-        "temperature": float(os.environ.get("TEMPERATURE", "0.85")),
-        "max_tokens": int(os.environ.get("MAX_TOKENS", "16384")),
+        "experience_review_enabled": _env_bool(
+            env, "EXPERIENCE_REVIEW_ENABLED", True
+        ),
+        "lint_review_enabled": _env_bool(env, "LINT_REVIEW_ENABLED", True),
+        "review_fail_max_rewrites": _env_int(env, "REVIEW_FAIL_MAX_REWRITES", 3),
+        "phase4_use_llm": _env_bool(env, "PHASE4_USE_LLM", True),
+        "codex_enabled": _env_bool(env, "FORWIN_CODEX_ENABLED", False),
+        "codex_bridge_url": _env_str(
+            env, "FORWIN_CODEX_BRIDGE_URL", "http://host.docker.internal:8897"
+        ),
+        "codex_bridge_token": _env_str(env, "FORWIN_CODEX_BRIDGE_TOKEN"),
+        "codex_max_concurrent": _env_int(env, "FORWIN_CODEX_MAX_CONCURRENT", 1),
+        "codex_sync_timeout_seconds": _env_float(
+            env, "FORWIN_CODEX_SYNC_TIMEOUT_SECONDS", 90.0
+        ),
+        "codex_job_timeout_seconds": _env_float(
+            env, "FORWIN_CODEX_JOB_TIMEOUT_SECONDS", 900.0
+        ),
+        "feedback_cooldown_chapters": _env_int(
+            env, "FEEDBACK_COOLDOWN_CHAPTERS", 3
+        ),
+        "comment_to_reader_ratio": _env_int(env, "COMMENT_TO_READER_RATIO", 80),
+        "temperature": _env_float(env, "TEMPERATURE", 0.85),
+        "max_tokens": _env_int(env, "MAX_TOKENS", 16384),
     }
 
 
 class _ConfigFields:
-    db_path: str = "data/novel.db"
+    database_url: str = DEFAULT_DATABASE_URL
+    db_path: str = DEFAULT_DATABASE_URL
     artifact_root: str = "data/artifacts"
     artifact_backend: str = "local"
     minio_endpoint: str = ""
@@ -231,10 +325,11 @@ class _ConfigFields:
     minio_bucket: str = "forwin-artifacts"
     minio_prefix: str = "artifacts"
     minio_secure: bool = False
-    retrieval_backend: str = "local"
+    retrieval_backend: str = "qdrant"
     retrieval_root: str = "data/retrieval"
-    qdrant_url: str = ""
+    qdrant_url: str = "http://localhost:6333"
     qdrant_collection: str = "chapter_memories"
+    llm_kb_qdrant_collection: str = "llm_kb_vectors"
     embedding_backend: str = "hash"
     embedding_base_url: str = DEFAULT_MINIMAX_BASE_URL
     embedding_api_key: str = ""
@@ -242,7 +337,14 @@ class _ConfigFields:
     embedding_dims: int = 64
     runtime_settings_path: str = "data/runtime_settings.json"
     publisher_extension_api_key: str = ""
+    publisher_session_secret: str = ""
+    publisher_session_encryption_required: bool = False
     publisher_preferred_client_id: str = ""
+    http_bind: str = "127.0.0.1"
+    http_port: int = 8899
+    http_basic_user: str = ""
+    http_basic_password: str = ""
+    http_basic_exempt_paths: tuple[str, ...] = DEFAULT_HTTP_BASIC_EXEMPT_PATHS
     minimax_api_key: str = ""
     minimax_base_url: str = DEFAULT_MINIMAX_BASE_URL
     minimax_model: str = DEFAULT_MINIMAX_MODEL
@@ -308,4 +410,32 @@ class _ConfigFields:
 
 class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
     if _USES_BASE_SETTINGS:
-        model_config = {"env_prefix": ""}
+        model_config = {"env_prefix": "", "extra": "forbid"}
+    else:
+        model_config = {"extra": "forbid"}
+
+    def __init__(self, **data: object) -> None:
+        super().__init__(**data)
+        database_url = str(getattr(self, "database_url", "") or "").strip()
+        legacy_db_path = str(getattr(self, "db_path", "") or "").strip()
+        if (
+            legacy_db_path
+            and legacy_db_path != DEFAULT_DATABASE_URL
+            and database_url == DEFAULT_DATABASE_URL
+        ):
+            object.__setattr__(self, "database_url", legacy_db_path)
+        elif database_url:
+            object.__setattr__(self, "db_path", database_url)
+        user = str(self.http_basic_user or "")
+        password = str(self.http_basic_password or "")
+        if bool(user) != bool(password):
+            raise ValueError(
+                "FORWIN_HTTP_BASIC_USER and FORWIN_HTTP_BASIC_PASSWORD must be set together"
+            )
+        if self.publisher_session_encryption_required and not str(
+            self.publisher_session_secret or ""
+        ).strip():
+            raise ValueError(
+                "FORWIN_PUBLISHER_SESSION_SECRET must be set when "
+                "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED=true"
+            )

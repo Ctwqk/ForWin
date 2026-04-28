@@ -3,46 +3,74 @@ services:
     build: .
     container_name: forwin
     depends_on:
-      - qdrant
-      - minio
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_started
     env_file:
-      - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
+      - path: ${FORWIN_ENV_FILE:-.env}
+        required: false
+    environment:
+      - FORWIN_DATABASE_URL=${FORWIN_DATABASE_URL:-postgresql+psycopg://forwin:forwin@postgres:5432/forwin}
     ports:
-      - "8899:8899"
+      - "${FORWIN_HTTP_BIND:-127.0.0.1}:${FORWIN_HTTP_PORT:-8899}:8899"
     volumes:
       - forwin-data:/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: forwin-postgres
     environment:
-      - MINIMAX_API_KEY=${MINIMAX_API_KEY:-}
-      - MINIMAX_BASE_URL=${MINIMAX_BASE_URL:-https://api.minimaxi.com/v1}
-      - MINIMAX_MODEL=${MINIMAX_MODEL:-MiniMax-M2.7}
-      - KIMI_API_KEY=${KIMI_API_KEY:-}
-      - KIMI_BASE_URL=${KIMI_BASE_URL:-https://api.moonshot.cn/v1}
-      - KIMI_MODEL=${KIMI_MODEL:-kimi-k2.5}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
-      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL:-deepseek-chat}
-      - LLM_RETRY_ATTEMPTS=${LLM_RETRY_ATTEMPTS:-2}
-      - LLM_RETRY_INITIAL_DELAY_SECONDS=${LLM_RETRY_INITIAL_DELAY_SECONDS:-2}
-      - LLM_RETRY_MAX_DELAY_SECONDS=${LLM_RETRY_MAX_DELAY_SECONDS:-15}
-      - WRITER_MODE=${WRITER_MODE:-scene}
-      - FORWIN_RETRIEVAL_BACKEND=${FORWIN_RETRIEVAL_BACKEND:-qdrant}
-      - FORWIN_QDRANT_URL=${FORWIN_QDRANT_URL:-http://qdrant:6333}
-      - FORWIN_QDRANT_COLLECTION=${FORWIN_QDRANT_COLLECTION:-chapter_memories}
-      - FORWIN_ARTIFACT_BACKEND=${FORWIN_ARTIFACT_BACKEND:-minio}
-      - FORWIN_MINIO_ENDPOINT=${FORWIN_MINIO_ENDPOINT:-minio:9000}
-      - FORWIN_MINIO_ACCESS_KEY=${FORWIN_MINIO_ACCESS_KEY:-forwinminio}
-      - FORWIN_MINIO_SECRET_KEY=${FORWIN_MINIO_SECRET_KEY:-forwinminio123}
-      - FORWIN_MINIO_BUCKET=${FORWIN_MINIO_BUCKET:-forwin-artifacts}
-      - FORWIN_MINIO_PREFIX=${FORWIN_MINIO_PREFIX:-artifacts}
-      - FORWIN_MINIO_SECURE=${FORWIN_MINIO_SECURE:-false}
-      - FORWIN_CODEX_ENABLED=${FORWIN_CODEX_ENABLED:-false}
-      - FORWIN_CODEX_BRIDGE_URL=${FORWIN_CODEX_BRIDGE_URL:-http://host.docker.internal:8897}
-      - FORWIN_CODEX_BRIDGE_TOKEN=${FORWIN_CODEX_BRIDGE_TOKEN:-}
-      - FORWIN_CODEX_MAX_CONCURRENT=${FORWIN_CODEX_MAX_CONCURRENT:-1}
-      - FORWIN_CODEX_SYNC_TIMEOUT_SECONDS=${FORWIN_CODEX_SYNC_TIMEOUT_SECONDS:-90}
-      - FORWIN_CODEX_JOB_TIMEOUT_SECONDS=${FORWIN_CODEX_JOB_TIMEOUT_SECONDS:-900}
+      - POSTGRES_USER=${FORWIN_POSTGRES_USER:-forwin}
+      - POSTGRES_PASSWORD=${FORWIN_POSTGRES_PASSWORD:-forwin}
+      - POSTGRES_DB=${FORWIN_POSTGRES_DB:-forwin}
+    volumes:
+      - forwin-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: forwin-postgres-test
+    environment:
+      - POSTGRES_USER=${FORWIN_TEST_POSTGRES_USER:-forwin}
+      - POSTGRES_PASSWORD=${FORWIN_TEST_POSTGRES_PASSWORD:-forwin}
+      - POSTGRES_DB=${FORWIN_TEST_POSTGRES_DB:-forwin_test}
+    ports:
+      - "${FORWIN_TEST_POSTGRES_BIND:-127.0.0.1:55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:${QDRANT_IMAGE_TAG:-v1.15.4}
+    container_name: forwin-qdrant
+    volumes:
+      - forwin-qdrant:/qdrant/storage
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -ec '</dev/tcp/127.0.0.1/6333'",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
   forwin-mcp:
@@ -53,7 +81,8 @@ services:
         condition: service_healthy
     command: ["python", "-m", "uvicorn", "forwin.mcp.http:app", "--host", "0.0.0.0", "--port", "8898"]
     env_file:
-      - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
+      - path: ${FORWIN_ENV_FILE:-.env}
+        required: false
     environment:
       - FORWIN_API_BASE_URL=${FORWIN_API_BASE_URL:-http://forwin:8899}
       - FORWIN_MCP_HOST=${FORWIN_MCP_HOST:-0.0.0.0}
@@ -80,11 +109,11 @@ services:
         condition: service_healthy
     command: ["bash", "-lc", "exec scripts/launch_linux_extension_browser.sh"]
     env_file:
-      - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
+      - path: ${FORWIN_ENV_FILE:-.env}
+        required: false
     environment:
       - FORWIN_BACKEND_URL=${FORWIN_PUBLISHER_BROWSER_BACKEND_URL:-http://forwin:8899}
-      - FORWIN_PUBLISHER_EXTENSION_API_KEY=${FORWIN_PUBLISHER_EXTENSION_API_KEY:-}
-      - FORWIN_PUBLISHER_PREFERRED_CLIENT_ID=${FORWIN_PUBLISHER_PREFERRED_CLIENT_ID:-}
+      - FORWIN_DATABASE_URL=${FORWIN_DATABASE_URL:-postgresql+psycopg://forwin:forwin@postgres:5432/forwin}
       - FORWIN_EXTENSION_TEST_PROFILE=${FORWIN_EXTENSION_TEST_PROFILE:-/app/data/chrome_profiles/forwin-extension}
       - FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE=${FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE:-true}
       - FORWIN_EXTENSION_AUTO_QUALIFY_PROFILE=${FORWIN_EXTENSION_AUTO_QUALIFY_PROFILE:-true}
@@ -112,25 +141,19 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: forwin-qdrant
-    volumes:
-      - forwin-qdrant:/qdrant/storage
-    restart: unless-stopped
-
   minio:
-    image: minio/minio:latest
+    image: minio/minio:${MINIO_IMAGE_TAG:-RELEASE.2025-09-07T16-13-09Z}
     container_name: forwin-minio
     command: server /data --console-address ":9001"
     environment:
-      - MINIO_ROOT_USER=${FORWIN_MINIO_ACCESS_KEY:-forwinminio}
-      - MINIO_ROOT_PASSWORD=${FORWIN_MINIO_SECRET_KEY:-forwinminio123}
+      - MINIO_ROOT_USER=${FORWIN_MINIO_ACCESS_KEY:?set FORWIN_MINIO_ACCESS_KEY in .env}
+      - MINIO_ROOT_PASSWORD=${FORWIN_MINIO_SECRET_KEY:?set FORWIN_MINIO_SECRET_KEY in .env}
     volumes:
       - forwin-minio:/data
     restart: unless-stopped
 
 volumes:
   forwin-data:
+  forwin-postgres:
   forwin-qdrant:
   forwin-minio:

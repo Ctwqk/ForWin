@@ -56,12 +56,12 @@ def _setup_project(session):
 
 def test_apply_canon_candidate_runs_v4_compiler_before_legacy_state_update() -> None:
     with TemporaryDirectory() as tmp:
-        db_path = str(Path(tmp) / "orchestrator-v4.db")
+        db_path = postgres_test_url("orchestrator-v4")
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
         orchestrator = WritingOrchestrator(
-            Config(db_path=db_path, minimax_api_key="", minimax_model="fake-model")
+            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
         )
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
@@ -96,13 +96,13 @@ def test_apply_canon_candidate_runs_v4_compiler_before_legacy_state_update() -> 
 
 def test_apply_canon_candidate_blocks_v4_review_failure() -> None:
     with TemporaryDirectory() as tmp:
-        db_path = str(Path(tmp) / "orchestrator-v4-block.db")
+        db_path = postgres_test_url("orchestrator-v4-block")
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
         orchestrator = WritingOrchestrator(
             Config(
-                db_path=db_path,
+                database_url=db_path,
                 artifact_root=str(Path(tmp) / "artifacts"),
                 minimax_api_key="",
                 minimax_model="fake-model",
@@ -151,12 +151,12 @@ def test_book_state_compile_failure_rolls_back_v4_rows(monkeypatch) -> None:
 
     monkeypatch.setattr("forwin.orchestrator.loop.BookStateCompiler.compile", fail_compile)
     with TemporaryDirectory() as tmp:
-        db_path = str(Path(tmp) / "orchestrator-v4-bookstate-rollback.db")
+        db_path = postgres_test_url("orchestrator-v4-bookstate-rollback")
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
         orchestrator = WritingOrchestrator(
-            Config(db_path=db_path, minimax_api_key="", minimax_model="fake-model")
+            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
         )
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
@@ -190,12 +190,12 @@ def test_book_state_compile_failure_rolls_back_v4_rows(monkeypatch) -> None:
 
 def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
     with TemporaryDirectory() as tmp:
-        db_path = str(Path(tmp) / "accept-review-block.db")
+        db_path = postgres_test_url("accept-review-block")
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
         orchestrator = WritingOrchestrator(
-            Config(db_path=db_path, minimax_api_key="", minimax_model="fake-model")
+            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
         )
         with Session.begin() as session:
             updater = StateUpdater(session)

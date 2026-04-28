@@ -33,7 +33,7 @@ from forwin.world_model_v4.repository import WorldModelRepository
 
 
 def test_v4_debug_endpoint_exposes_world_model_diagnostics() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

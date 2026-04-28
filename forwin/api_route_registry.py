@@ -46,6 +46,7 @@ from forwin.api_schemas import (
     ExtensionCommentsBatchResponse,
     ExtensionHeartbeatResponse,
     ExtensionSessionSyncResponse,
+    PublisherBrowserSessionSummaryResponse,
     GovernanceInsightsResponse,
     LLMSettingsResponse,
     MapEnsureResponse,
@@ -330,9 +331,11 @@ def register_api_routes(
     )
     obsidian_handlers = api_obsidian_routes.build_handlers(
         get_session=get_session,
+        get_config=get_config,
     )
     llm_kb_handlers = api_llm_kb_routes.build_handlers(
         get_session=get_session,
+        get_config=get_config,
     )
     map_handlers = api_map_routes.build_handlers(
         get_session=get_session,
@@ -384,7 +387,9 @@ def register_api_routes(
         ("/api/publishers/upload-jobs/{job_id}/terminate", ["POST"], handlers["terminate_publisher_upload_job"], {"response_model": TaskMutationResponse}),
         ("/api/publishers/upload-jobs/{job_id}", ["DELETE"], handlers["delete_publisher_upload_job"], {"response_model": TaskMutationResponse}),
         ("/api/publishers/extension/heartbeat", ["POST"], handlers["publisher_extension_heartbeat"], {"response_model": ExtensionHeartbeatResponse}),
+        ("/api/publishers/extension/heartbeat-status", ["GET"], handlers["publisher_extension_heartbeat_status"], {}),
         ("/api/publishers/extension/session-sync", ["POST"], handlers["publisher_extension_session_sync"], {"response_model": ExtensionSessionSyncResponse}),
+        ("/api/publishers/browser-sessions/{platform}", ["GET"], handlers["get_publisher_browser_session_summary"], {"response_model": PublisherBrowserSessionSummaryResponse | None}),
         ("/api/publishers/extension/browser-sessions/{platform}", ["GET"], handlers["publisher_extension_get_browser_session"], {"response_model": ExtensionBrowserSessionResponse | None}),
         ("/api/publishers/upload-jobs/{job_id}/result", ["POST"], handlers["update_publisher_upload_job_result"], {"response_model": PublisherUploadJobResponse}),
         ("/api/publishers/extension/upload-jobs/claim", ["POST"], handlers["claim_publisher_upload_job"], {"response_model": ExtensionClaimUploadJobResponse}),

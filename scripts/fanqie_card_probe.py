@@ -13,13 +13,32 @@ EXTENSION_DIR = REPO_ROOT / "browser_extension" / "forwin-publisher"
 
 
 def load_cookies() -> list[dict]:
-    query = (
-        "import sqlite3; conn=sqlite3.connect('/app/data/novel.db'); "
-        "cur=conn.cursor(); "
-        "cur.execute(\"SELECT cookies_json FROM publisher_browser_sessions "
-        "WHERE platform_id='fanqie' ORDER BY updated_at DESC LIMIT 1\"); "
-        "row=cur.fetchone(); print(row[0] if row else '')"
-    )
+    query = """
+import json
+from sqlalchemy import text
+from forwin.config import Config
+from forwin.models.base import get_engine
+from forwin.secret_store import SecretStoreError, decrypt_json_with_secret
+
+config = Config.from_env()
+engine = get_engine(config.database_url)
+try:
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT cookies_json FROM publisher_browser_sessions WHERE platform_id = :platform ORDER BY updated_at DESC LIMIT 1"),
+            {"platform": "fanqie"},
+        ).first()
+        raw = row[0] if row else "[]"
+        payload = json.loads(raw or "[]")
+        if isinstance(payload, dict) and payload.get("encoding") == "fernet-v1":
+            try:
+                payload = decrypt_json_with_secret(config.publisher_session_secret, str(payload.get("ciphertext") or ""))
+            except SecretStoreError:
+                payload = []
+        print(json.dumps(payload if isinstance(payload, list) else [], ensure_ascii=False))
+finally:
+    engine.dispose()
+"""
     out = subprocess.check_output(["docker", "exec", "forwin", "python", "-c", query], text=True)
     return json.loads(out)
 

@@ -163,7 +163,7 @@ def run_deterministic_v4_runtime_fixture(
     fixture_name: str,
 ) -> DeterministicV4RuntimeResult:
     assert fixture_name == "arc2_homeworld_crisis"
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
     writer = DeterministicChapterWriter()

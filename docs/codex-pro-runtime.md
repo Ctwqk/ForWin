@@ -1,8 +1,13 @@
 # ForWin Codex Pro Runtime
 
-ForWin does not treat Codex Pro as an OpenAI API-key model profile. It uses a local Host Codex Bridge that runs on the host machine, reuses the local `codex` CLI login, and exposes a protected localhost HTTP API to the ForWin Docker container.
+ForWin uses two separate Codex paths:
 
-## Start the Bridge
+- Codex operates ForWin through the `forwin` MCP server. See [codex-forwin-mcp.md](codex-forwin-mcp.md).
+- ForWin background generation may call Codex through the Host Codex Bridge described here.
+
+The bridge is not an OpenAI API-key model profile. It runs on the host machine, reuses the local `codex` CLI login, and exposes a protected localhost HTTP API to the ForWin Docker container.
+
+## Start The Bridge
 
 On the host, make sure the Codex CLI is logged in through the Pro subscription, then run:
 
@@ -19,7 +24,7 @@ The bridge exposes:
 - `POST /v1/codex/jobs`
 - `GET /v1/codex/jobs/{job_id}`
 
-The bridge runs `codex exec --json --sandbox read-only -c approval_policy="never"`, so background Codex calls are prompt-only and read-only by default.
+The bridge runs `codex exec --json --sandbox read-only -c approval_policy="never"`, so background Codex calls are prompt-only and read-only by default. It must not be used as a shortcut to mutate ForWin state.
 
 ## Enable ForWin Routing
 
@@ -42,7 +47,7 @@ Routing policy:
 - `genesis`, `writer`, `reviewer`, `repair`, `phase4`, and `world_model` prefer Codex when enabled.
 - Bridge failures fall back to the ordinary adapter and record model fallback metadata.
 
-## Governed Write
+## Governed Writes
 
 Codex never writes canon directly. It may only return governed action requests such as:
 
@@ -51,4 +56,20 @@ Codex never writes canon directly. It may only return governed action requests s
 - `repair_suggestion_create`
 - `conflict_explanation_create`
 
-ForWin validates those requests and stores them in the proposal/review/conflict management layer. Canon changes still go through explicit adapters, `StateUpdater`, and `WorldModelCompiler`.
+ForWin validates those requests and stores them in the proposal, review, or conflict-management layer. Canon changes still go through explicit adapters, `StateUpdater`, and `WorldModelCompiler`.
+
+## Health Checks
+
+Check the bridge directly from the host:
+
+```bash
+curl http://127.0.0.1:8897/health
+```
+
+Check the ForWin view of bridge health:
+
+```bash
+curl http://127.0.0.1:8899/api/settings/codex/health
+```
+
+Bridge health is optional for MCP operation. A Codex operator can still inspect and control ForWin through MCP when the bridge is disabled.

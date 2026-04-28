@@ -92,7 +92,7 @@ def _approved_changes(project_id: str) -> ApprovedWorldChangeSet:
 
 
 def test_compiler_writes_approved_ledgers_snapshot_and_derived_canon_event() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -151,7 +151,7 @@ def test_compiler_writes_approved_ledgers_snapshot_and_derived_canon_event() -> 
 
 
 def test_compiler_blocks_failed_review_without_writing_ledgers() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

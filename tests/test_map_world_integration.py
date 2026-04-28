@@ -76,7 +76,7 @@ def _realm_spec() -> SubWorldMapSpec:
 
 
 def test_service_persists_generation_run_and_builds_runtime() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
     with Session() as session:
@@ -94,7 +94,7 @@ def test_service_persists_generation_run_and_builds_runtime() -> None:
 
 
 def test_book_map_generation_links_subworlds_with_world_gate_path() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
     with Session() as session:
@@ -121,7 +121,7 @@ def test_book_map_generation_links_subworlds_with_world_gate_path() -> None:
 def test_book_map_generation_rolls_back_partial_rows_when_later_subworld_fails(monkeypatch) -> None:
     from forwin.map import service as map_service
 
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
     original_create_or_update_subworld_map = map_service.create_or_update_subworld_map
@@ -157,7 +157,7 @@ def test_book_map_generation_rolls_back_partial_rows_when_later_subworld_fails(m
 
 
 def test_regenerating_subworld_preserves_valid_inter_subworld_edges() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
     with Session() as session:
@@ -176,7 +176,7 @@ def test_regenerating_subworld_preserves_valid_inter_subworld_edges() -> None:
 
 
 def test_arc_map_expansion_adds_missing_subworld_and_world_gate() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
     atlas = {
@@ -220,7 +220,7 @@ def test_arc_map_expansion_adds_missing_subworld_and_world_gate() -> None:
 
 
 def test_arc_map_expansion_uses_explicit_atlas_cross_subworld_edges() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
     atlas = {
@@ -548,7 +548,7 @@ def test_reviewer_applies_movement_policy_speed_multiplier() -> None:
 
 
 def test_map_context_is_compact_and_filters_hidden_edges() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
     with Session() as session:
@@ -586,7 +586,7 @@ def test_map_context_is_compact_and_filters_hidden_edges() -> None:
 
 
 def test_genesis_book_map_feeds_context_and_writer_prompt() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
     atlas = {

@@ -70,9 +70,9 @@ def parse_args() -> argparse.Namespace:
         help="When auto-selecting, prefer the latest provisional ledger whose error contains this text.",
     )
     parser.add_argument(
-        "--db-path",
+        "--database-url",
         default="",
-        help="Override FORWIN_DB_PATH before loading config.",
+        help="Override FORWIN_DATABASE_URL before loading config.",
     )
     parser.add_argument(
         "--call",
@@ -88,7 +88,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def pick_latest_provisional_failure(
-    session, error_contains: str, db_path: str
+    session, error_contains: str, database_url: str
 ) -> tuple[str, int, str]:
     stmt = select(ProvisionalChapterLedger).order_by(
         ProvisionalChapterLedger.created_at.desc(),
@@ -105,7 +105,7 @@ def pick_latest_provisional_failure(
         error_text = str(ledger.error_text or "")
         if error_text.strip():
             return ledger.project_id, int(ledger.chapter_number), error_text
-    raise SystemExit(f"No provisional failure ledger found in db: {db_path}")
+    raise SystemExit(f"No provisional failure ledger found in database: {database_url}")
 
 
 def pick_target_from_task(session, task_id: str) -> tuple[str, int]:
@@ -138,7 +138,7 @@ def resolve_target(session, args: argparse.Namespace) -> tuple[str, int, str]:
     if args.project_id and args.chapter > 0:
         return args.project_id, int(args.chapter), ""
     project_id, chapter, error_text = pick_latest_provisional_failure(
-        session, args.error_contains, os.environ.get("FORWIN_DB_PATH", "")
+        session, args.error_contains, os.environ.get("FORWIN_DATABASE_URL", "")
     )
     return project_id, chapter, error_text
 
@@ -200,8 +200,8 @@ def write_payload_files(
 def main() -> int:
     load_env_defaults()
     args = parse_args()
-    if args.db_path:
-        os.environ["FORWIN_DB_PATH"] = str(args.db_path)
+    if args.database_url:
+        os.environ["FORWIN_DATABASE_URL"] = str(args.database_url)
     config = Config.from_env()
     orchestrator = WritingOrchestrator(config)
     try:

@@ -172,12 +172,8 @@ class WritingOrchestrator:
         self._governance_stage_name = ""
         self._governance_stage_started_at = 0.0
 
-        # Ensure the database directory exists.
-        db_dir = Path(self.config.db_path).parent
-        db_dir.mkdir(parents=True, exist_ok=True)
-
         # Database setup.
-        self.engine = get_engine(self.config.db_path)
+        self.engine = get_engine(self.config.database_url)
         init_db(self.engine)
         self._SessionFactory = get_session_factory(self.engine)
 
@@ -220,9 +216,16 @@ class WritingOrchestrator:
             max_entities=self.config.retrieval_max_entities,
             max_threads=self.config.retrieval_max_threads,
             max_summaries=self.config.retrieval_max_summaries,
+            database_url=self.config.database_url,
+            retrieval_backend=self.config.retrieval_backend,
+            qdrant_url=self.config.qdrant_url,
+            qdrant_collection=self.config.qdrant_collection,
+            llm_kb_qdrant_url=self.config.qdrant_url,
+            llm_kb_qdrant_collection=self.config.llm_kb_qdrant_collection,
             memory_index=create_memory_index(
                 backend=self.config.retrieval_backend,
                 root_dir=self.config.retrieval_root,
+                database_url=self.config.database_url,
                 qdrant_url=self.config.qdrant_url,
                 qdrant_collection=self.config.qdrant_collection,
                 embedding_backend=self.config.embedding_backend,
@@ -523,7 +526,7 @@ class WritingOrchestrator:
                     + ", ".join(str(chapter) for chapter in result.failed_chapters)
                 )
             print(f"项目ID: {project_id}")
-            print(f"数据库: {self.config.db_path}")
+            print(f"数据库: {self.engine.url.render_as_string(hide_password=True)}")
             print(f"{'='*60}\n")
 
             self._emit_progress(
@@ -4780,7 +4783,11 @@ class WritingOrchestrator:
                         operation_id=self._audit_operation_id(),
                     ),
                 )
-            projection_refresh = KnowledgeProjectionRefresher(session).refresh(
+            projection_refresh = KnowledgeProjectionRefresher(
+                session,
+                qdrant_url=self.config.qdrant_url,
+                qdrant_collection=self.config.llm_kb_qdrant_collection,
+            ).refresh(
                 project_id,
                 as_of_chapter=chapter_number,
                 trigger="chapter_accepted",
@@ -4840,7 +4847,11 @@ class WritingOrchestrator:
             )
             return frozen_path or "book-state-review-gate-blocked"
         if compiler_result is not None and compiler_result.committed:
-            projection_refresh = KnowledgeProjectionRefresher(session).refresh(
+            projection_refresh = KnowledgeProjectionRefresher(
+                session,
+                qdrant_url=self.config.qdrant_url,
+                qdrant_collection=self.config.llm_kb_qdrant_collection,
+            ).refresh(
                 project_id,
                 as_of_chapter=chapter_number,
                 trigger="chapter_accepted",

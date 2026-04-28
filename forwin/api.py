@@ -17,11 +17,11 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy import case, delete, func, or_, select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 from forwin.api_pages import render_home_page, render_publishers_page
 from forwin import (
@@ -56,6 +56,7 @@ from forwin.api_runtime import (
 )
 from forwin.api_task_history import augment_task_with_rehearsal_history
 from forwin.api_artifacts import build_artifact_store
+from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
 from forwin.api_schemas import (
     BandCheckpointApproveRequest,
     BandCheckpointDetail,
@@ -332,7 +333,7 @@ def _resolve_runtime_profile(requested_profile_id: str = "") -> dict[str, str]:
 
 def _saved_runtime_config_or_default(model_profile_id: str = "") -> Config:
     if not _config:
-        return Config(db_path=":memory:", minimax_api_key="")
+        return Config(minimax_api_key="")
     if model_profile_id:
         return build_runtime_config(
             GenerateRequest(
@@ -459,6 +460,8 @@ def _generation_task_from_row(row: GenerationTask) -> dict[str, Any]:
         "started_at": row.started_at,
         "finished_at": row.finished_at,
         "paused_at": getattr(row, "paused_at", None),
+        "persistence_degraded": False,
+        "persistence_error": None,
     }
 
 
@@ -615,29 +618,84 @@ def _augment_task_with_provisional_history(session, task: dict[str, Any]) -> dic
     )
 
 
+class GenerationTaskPersistenceError(RuntimeError):
+    pass
+
+
 def _is_sqlite_locked_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return "database is locked" in message or "database table is locked" in message
 
 
-def _run_generation_task_db_write(operation, *, context: str, attempts: int = 5, delay: float = 0.25) -> bool:
+def _is_retryable_generation_task_db_error(exc: Exception) -> bool:
+    if _is_sqlite_locked_error(exc):
+        return True
+    orig = getattr(exc, "orig", None)
+    sqlstate = str(
+        getattr(orig, "sqlstate", "")
+        or getattr(orig, "pgcode", "")
+        or ""
+    ).strip()
+    if sqlstate in {"40001", "40P01", "55P03", "57014", "08000", "08003", "08006", "08001"}:
+        return True
+    message = str(exc).lower()
+    retryable_fragments = (
+        "deadlock detected",
+        "could not serialize access",
+        "canceling statement due to lock timeout",
+        "lock not available",
+        "lock timeout",
+        "connection refused",
+        "connection not open",
+        "server closed the connection",
+        "terminating connection",
+    )
+    return any(fragment in message for fragment in retryable_fragments)
+
+
+def _run_generation_task_db_write(
+    operation,
+    *,
+    context: str,
+    attempts: int = 5,
+    delay: float = 0.25,
+    raise_on_failure: bool = True,
+) -> bool:
+    final_exc: Exception | None = None
     for attempt in range(1, attempts + 1):
         try:
             operation()
             return True
-        except OperationalError as exc:
-            if not _is_sqlite_locked_error(exc):
+        except DBAPIError as exc:
+            if not _is_retryable_generation_task_db_error(exc):
                 raise
+            final_exc = exc
             if attempt == attempts:
-                logger.warning(
-                    "Generation task DB write skipped after %d lock retries in %s: %s",
-                    attempts,
-                    context,
-                    exc,
-                )
+                message = f"Generation task DB write failed after {attempts} retries in {context}"
+                logger.error("%s: %s", message, exc, exc_info=True)
+                if raise_on_failure:
+                    raise GenerationTaskPersistenceError(message) from exc
                 return False
             time.sleep(delay * attempt)
+    if raise_on_failure:
+        raise GenerationTaskPersistenceError(
+            f"Generation task DB write failed after {attempts} retries in {context}"
+        ) from final_exc
     return False
+
+
+def _mark_task_persistence_degraded(task_id: str, task: dict[str, Any], exc: Exception) -> None:
+    task["persistence_degraded"] = True
+    task["persistence_error"] = str(exc)
+    task["updated_at"] = _utcnow()
+    _sync_task_cache(task_id, task)
+
+
+def _clear_task_persistence_degraded(task_id: str, task: dict[str, Any]) -> None:
+    if task.get("persistence_degraded") or task.get("persistence_error"):
+        task["persistence_degraded"] = False
+        task["persistence_error"] = None
+        _sync_task_cache(task_id, task)
 
 
 def _prune_generation_tasks_db(now: datetime | None = None) -> None:
@@ -685,7 +743,13 @@ def _prune_generation_tasks_db(now: datetime | None = None) -> None:
                     session.execute(delete(GenerationTask).where(GenerationTask.id.in_(overflow_ids)))
             session.commit()
 
-    _run_generation_task_db_write(_operation, context="generation_task_prune", attempts=2, delay=0.15)
+    _run_generation_task_db_write(
+        _operation,
+        context="generation_task_prune",
+        attempts=2,
+        delay=0.15,
+        raise_on_failure=False,
+    )
 
 
 def _prune_tasks(*, include_db: bool = True) -> None:
@@ -714,9 +778,9 @@ def _load_generation_task(task_id: str, *, include_deleted: bool = False) -> dic
             include_deleted=include_deleted,
         )
     except OperationalError as exc:
-        if not _is_sqlite_locked_error(exc):
+        if not _is_retryable_generation_task_db_error(exc):
             raise
-        logger.warning("Generation task read fell back to cache due to DB lock for %s", task_id)
+        logger.warning("Generation task read fell back to cache due to DB retryable error for %s", task_id)
         return _apply_task_visibility_rules(
             _cached_generation_task(task_id),
             include_deleted=include_deleted,
@@ -737,7 +801,14 @@ def _persist_generation_task(task_id: str, task: dict[str, Any]) -> None:
             session.add(row)
             session.commit()
 
-    _run_generation_task_db_write(_operation, context=f"persist_generation_task:{task_id}")
+    try:
+        _run_generation_task_db_write(_operation, context=f"persist_generation_task:{task_id}")
+    except GenerationTaskPersistenceError as exc:
+        if task.get("status") in _GENERATION_TERMINAL_STATUSES:
+            raise
+        _mark_task_persistence_degraded(task_id, task, exc)
+    else:
+        _clear_task_persistence_degraded(task_id, task)
 
 
 def _recover_interrupted_generation_tasks() -> list[str]:
@@ -887,6 +958,8 @@ def _create_task_record(
         "cancel_requested": False,
         "pause_requested": False,
         "deleted": False,
+        "persistence_degraded": False,
+        "persistence_error": None,
         "created_at": now,
         "updated_at": now,
     }
@@ -933,6 +1006,12 @@ def _serialize_task(task_id: str, task: dict[str, Any]) -> TaskSummaryResponse:
         deletable=_task_is_deletable(task),
         interrupted_by_restart=_task_interrupted_by_restart(task),
         recovery_suggestion=_task_recovery_suggestion(task),
+        persistence_degraded=bool(task.get("persistence_degraded")),
+        persistence_error=(
+            str(task.get("persistence_error")).strip()
+            if task.get("persistence_error")
+            else None
+        ),
         created_at=_display_datetime(task.get("created_at")),
         updated_at=_display_datetime(task.get("updated_at")),
     )
@@ -1164,7 +1243,14 @@ def _update_task(task_id: str, **changes: Any) -> None:
                 session.add(row)
                 session.commit()
 
-        _run_generation_task_db_write(_operation, context=f"update_generation_task:{task_id}")
+        try:
+            _run_generation_task_db_write(_operation, context=f"update_generation_task:{task_id}")
+        except GenerationTaskPersistenceError as exc:
+            if task.get("status") in _GENERATION_TERMINAL_STATUSES:
+                raise
+            _mark_task_persistence_degraded(task_id, task, exc)
+        else:
+            _clear_task_persistence_degraded(task_id, task)
 
 
 def _task_should_abort(task_id: str) -> bool:
@@ -1848,11 +1934,15 @@ async def lifespan(app: FastAPI):
 
     if _config is None:
         _config = Config.from_env()
+    if str(_config.http_bind or "").strip() in {"0.0.0.0", "::"} and not basic_auth_enabled(_config):
+        logger.warning(
+            "ForWin is reachable beyond localhost and HTTP Basic Auth is disabled. "
+            "This is acceptable only on a trusted LAN."
+        )
     if _engine is None:
-        db_path = os.environ.get("FORWIN_DB_PATH", _config.db_path)
-        _config = _config.model_copy(update={"db_path": db_path})
-        Path(_config.db_path).parent.mkdir(parents=True, exist_ok=True)
-        _engine = get_engine(_config.db_path)
+        database_url = os.environ.get("FORWIN_DATABASE_URL", _config.database_url)
+        _config = _config.model_copy(update={"database_url": database_url, "db_path": database_url})
+        _engine = get_engine(_config.database_url)
         init_db(_engine)
     if _SessionFactory is None:
         _SessionFactory = get_session_factory(_engine)
@@ -1878,6 +1968,8 @@ async def lifespan(app: FastAPI):
             _SessionFactory,
             extension_api_key=_config.publisher_extension_api_key,
             preferred_client_id=_config.publisher_preferred_client_id,
+            publisher_session_secret=_config.publisher_session_secret,
+            publisher_session_encryption_required=_config.publisher_session_encryption_required,
         )
     _publisher_manager.requeue_interrupted_upload_jobs()
     if _runtime_settings is None:
@@ -1903,7 +1995,7 @@ async def lifespan(app: FastAPI):
             env_llm_profiles=_config.llm_env_profiles,
         )
     _start_automation_scheduler()
-    logger.info("ForWin API started. DB: %s", _config.db_path)
+    logger.info("ForWin API started. DB: %s", _engine.url.render_as_string(hide_password=True))
     try:
         yield
     finally:
@@ -1928,6 +2020,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def optional_basic_auth(request: Request, call_next):
+    config = _config
+    if config is None or not basic_auth_enabled(config):
+        return await call_next(request)
+    return await make_basic_auth_middleware(config)(request, call_next)
 
 
 # ---------------------------------------------------------------------------

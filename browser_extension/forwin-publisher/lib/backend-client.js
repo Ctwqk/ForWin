@@ -29,7 +29,9 @@ export function createBackendClient(fetchImpl, rawSettings) {
     },
 
     async getUploadJob(jobId) {
-      const response = await fetchImpl(`${settings.backendBaseUrl}/api/publishers/upload-jobs/${jobId}`);
+      const response = await fetchImpl(`${settings.backendBaseUrl}/api/publishers/upload-jobs/${jobId}`, {
+        headers: headers(),
+      });
       return parseJson(response);
     },
 

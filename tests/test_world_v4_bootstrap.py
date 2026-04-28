@@ -12,7 +12,7 @@ from forwin.world_model_v4.repository import WorldModelRepository
 
 
 def test_bootstrap_initial_world_model_creates_primary_line_and_observers() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

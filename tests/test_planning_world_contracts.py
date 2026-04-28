@@ -14,7 +14,7 @@ from forwin.planning.world_contracts import (
 
 
 def test_world_contract_repository_persists_arc_band_and_chapter_contracts() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -132,7 +132,7 @@ def test_world_contract_repository_persists_arc_band_and_chapter_contracts() -> 
 
 
 def test_phase24_persists_homeworld_crisis_contracts_for_arc_plan() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

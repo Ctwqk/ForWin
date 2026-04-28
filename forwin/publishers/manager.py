@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -23,12 +24,30 @@ from forwin.models.publisher import (
     PublisherRawComment,
     PublisherUploadJob,
 )
+from forwin.secret_store import (
+    SecretStoreError,
+    decrypt_json_with_secret,
+    encrypt_json_with_secret,
+)
 from forwin.state.updater import StateUpdater
 
 from .platforms import SUPPORTED_PLATFORMS, PlatformSpec
 
 logger = logging.getLogger(__name__)
 _DISPLAY_TZ = ZoneInfo("America/Los_Angeles")
+_SESSION_COOKIE_ENCODING = "fernet-v1"
+
+
+class PublisherExtensionAuthError(ValueError):
+    pass
+
+
+class PublisherExtensionAuthNotConfigured(RuntimeError):
+    pass
+
+
+class PublisherBrowserSessionDecodeError(ValueError):
+    pass
 
 
 def _utc_now() -> datetime:
@@ -57,9 +76,23 @@ def _as_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _is_sqlite_lock_error(exc: OperationalError) -> bool:
+def _is_retryable_db_error(exc: OperationalError) -> bool:
+    orig = getattr(exc, "orig", None)
+    sqlstate = str(getattr(orig, "sqlstate", "") or getattr(orig, "pgcode", "") or "").strip()
+    if sqlstate in {"40001", "40P01", "55P03", "57014", "08000", "08003", "08006", "08001"}:
+        return True
     message = str(exc).lower()
-    return "database is locked" in message or "database table is locked" in message
+    return (
+        "database is locked" in message
+        or "database table is locked" in message
+        or "deadlock detected" in message
+        or "could not serialize access" in message
+        or "lock timeout" in message
+        or "connection refused" in message
+        or "connection not open" in message
+        or "server closed the connection" in message
+        or "terminating connection" in message
+    )
 
 
 def _terminal_upload_event_type(status: str) -> str:
@@ -87,11 +120,29 @@ class PublisherManager:
         extension_api_key: str = "",
         heartbeat_stale_seconds: int = 90,
         preferred_client_id: str = "",
+        publisher_session_secret: str = "",
+        publisher_session_encryption_required: bool = False,
     ) -> None:
         self.session_factory = session_factory
-        self.extension_api_key = extension_api_key
+        self.extension_api_key = str(extension_api_key or "").strip()
         self.heartbeat_stale_seconds = heartbeat_stale_seconds
         self.preferred_client_id = str(preferred_client_id or "").strip()
+        self.publisher_session_secret = str(publisher_session_secret or "").strip()
+        self.publisher_session_encryption_required = bool(
+            publisher_session_encryption_required
+        )
+        self._plaintext_cookie_storage_warned = False
+        if (
+            self.publisher_session_encryption_required
+            and not self.publisher_session_secret
+        ):
+            raise ValueError(
+                "Publisher session encryption is required but no session secret is configured"
+            )
+        if not self.publisher_session_secret:
+            logger.warning(
+                "Publisher session secret is not configured; browser cookies will be stored as plaintext."
+            )
 
     def _record_project_event(
         self,
@@ -678,6 +729,7 @@ class PublisherManager:
             for item in cookies
             if isinstance(item, dict) and str(item.get("name", "")).strip()
         ]
+        encoded_cookies = self._encode_cookies_for_storage(normalized)
         try:
             with self.session_factory() as session:
                 self._ensure_extension_client(session, client_id)
@@ -692,7 +744,7 @@ class PublisherManager:
                     )
                     session.add(entry)
                 entry.cookie_count = len(normalized)
-                entry.cookies_json = json.dumps(normalized, ensure_ascii=False)
+                entry.cookies_json = encoded_cookies
                 entry.synced_at = now
                 entry.last_error = ""
 
@@ -702,7 +754,7 @@ class PublisherManager:
                     session.add(stored)
                 stored.extension_client_id = client_id
                 stored.cookie_count = len(normalized)
-                stored.cookies_json = json.dumps(normalized, ensure_ascii=False)
+                stored.cookies_json = encoded_cookies
                 stored.synced_at = now
                 stored.last_error = ""
                 connected = self._is_browser_session_connected(
@@ -743,7 +795,7 @@ class PublisherManager:
                 )
                 session.commit()
         except OperationalError as exc:
-            if not _is_sqlite_lock_error(exc):
+            if not _is_retryable_db_error(exc):
                 raise
             logger.warning("Publisher browser session sync skipped because database is busy: %s", exc)
             return {
@@ -760,7 +812,12 @@ class PublisherManager:
             "cookie_count": len(normalized),
         }
 
-    def get_browser_session(self, platform: str) -> dict[str, Any] | None:
+    def get_browser_session(
+        self,
+        platform: str,
+        *,
+        upgrade_legacy: bool = False,
+    ) -> dict[str, Any] | None:
         self._spec(platform)
         with self.session_factory() as session:
             entries = session.execute(
@@ -770,25 +827,73 @@ class PublisherManager:
             ).scalars().all()
             selected_entry = self._pick_browser_session_entry(entries)
             if selected_entry is not None:
+                cookies, metadata = self._decode_cookies_from_storage_with_metadata(
+                    selected_entry.cookies_json
+                )
+                if upgrade_legacy and metadata["legacy"] and self.publisher_session_secret:
+                    selected_entry.cookies_json = self._encode_cookies_for_storage(cookies)
+                    session.commit()
                 return {
                     "platform": selected_entry.platform_id,
                     "client_id": selected_entry.client_id,
                     "cookie_count": selected_entry.cookie_count,
-                    "cookies": json.loads(selected_entry.cookies_json or "[]"),
+                    "cookies": cookies,
                     "synced_at": _isoformat(selected_entry.synced_at),
-                    "last_error": selected_entry.last_error,
+                    "last_error": selected_entry.last_error or metadata["error"],
                 }
 
             stored = session.get(PublisherBrowserSession, platform)
             if stored is None:
                 return None
+            cookies, metadata = self._decode_cookies_from_storage_with_metadata(
+                stored.cookies_json
+            )
+            if upgrade_legacy and metadata["legacy"] and self.publisher_session_secret:
+                stored.cookies_json = self._encode_cookies_for_storage(cookies)
+                session.commit()
             return {
                 "platform": stored.platform_id,
                 "client_id": stored.extension_client_id,
                 "cookie_count": stored.cookie_count,
-                "cookies": json.loads(stored.cookies_json or "[]"),
+                "cookies": cookies,
                 "synced_at": _isoformat(stored.synced_at),
-                "last_error": stored.last_error,
+                "last_error": stored.last_error or metadata["error"],
+            }
+
+    def get_browser_session_summary(self, platform: str) -> dict[str, Any] | None:
+        self._spec(platform)
+        with self.session_factory() as session:
+            entries = session.execute(
+                select(PublisherBrowserSessionEntry).where(
+                    PublisherBrowserSessionEntry.platform_id == platform
+                )
+            ).scalars().all()
+            selected_entry = self._pick_browser_session_entry(entries)
+            row = selected_entry or session.get(PublisherBrowserSession, platform)
+            if row is None:
+                return None
+            raw = str(row.cookies_json or "")
+            metadata = self._decode_cookies_from_storage_metadata(raw)
+            cookie_names = self._cookie_names_from_json(raw)
+            last_error = str(getattr(row, "last_error", "") or "") or metadata["error"]
+            connected = self._is_browser_session_connected(
+                platform,
+                raw,
+                last_error,
+            )
+            return {
+                "platform": platform,
+                "client_id": str(
+                    getattr(row, "client_id", "")
+                    or getattr(row, "extension_client_id", "")
+                    or ""
+                ),
+                "cookie_count": int(getattr(row, "cookie_count", 0) or 0),
+                "cookie_names": cookie_names,
+                "cookies_redacted": True,
+                "synced_at": _isoformat(getattr(row, "synced_at", None)),
+                "last_error": last_error,
+                "connected": connected,
             }
 
     def has_browser_session(self, platform: str) -> bool:
@@ -797,7 +902,7 @@ class PublisherManager:
             return False
         return self._is_browser_session_connected(
             platform,
-            json.dumps(payload["cookies"], ensure_ascii=False),
+            self._encode_cookies_for_storage(payload["cookies"]),
             str(payload.get("last_error", "")).strip(),
         )
 
@@ -1108,7 +1213,7 @@ class PublisherManager:
 
                 session.commit()
         except OperationalError as exc:
-            if not _is_sqlite_lock_error(exc):
+            if not _is_retryable_db_error(exc):
                 raise
             logger.warning("Publisher extension heartbeat skipped because database is busy: %s", exc)
             return {
@@ -1547,13 +1652,130 @@ class PublisherManager:
         }
 
     def verify_extension_api_key(self, provided_key: str | None) -> None:
-        if not self.extension_api_key:
-            raise RuntimeError("后端尚未配置扩展 API Key。")
-        if not provided_key or provided_key != self.extension_api_key:
-            raise ValueError("扩展鉴权失败。")
+        expected = str(self.extension_api_key or "").strip()
+        candidate = str(provided_key or "").strip()
+        if not expected:
+            raise PublisherExtensionAuthNotConfigured(
+                "Publisher extension API key is not configured"
+            )
+        if not candidate or not hmac.compare_digest(candidate, expected):
+            raise PublisherExtensionAuthError("Invalid publisher extension API key")
 
     def backend_ready_payload(self) -> dict[str, Any]:
         return {"extension_api_key_configured": bool(self.extension_api_key)}
+
+    def preferred_client_heartbeat(
+        self,
+        *,
+        preferred_client_id: str = "",
+        stale_seconds: int = 90,
+        allow_latest_recent_fallback: bool = False,
+    ) -> dict[str, Any]:
+        resolved_client_id = str(preferred_client_id or "").strip()
+        cutoff = _utc_now() - timedelta(seconds=max(int(stale_seconds or 90), 1))
+        with self.session_factory() as session:
+            latest_recent = session.execute(
+                select(PublisherExtensionClient)
+                .where(PublisherExtensionClient.last_heartbeat_at >= cutoff)
+                .order_by(PublisherExtensionClient.last_heartbeat_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            latest_recent_client_id = (
+                str(latest_recent.client_id or "").strip() if latest_recent is not None else ""
+            )
+            client_id = resolved_client_id
+            if not client_id and allow_latest_recent_fallback:
+                client_id = latest_recent_client_id
+            client = session.get(PublisherExtensionClient, client_id) if client_id else None
+            recent_platforms = []
+            if client_id:
+                recent_platforms = list(
+                    session.execute(
+                        select(PublisherExtensionPlatformState.platform_id)
+                        .where(
+                            PublisherExtensionPlatformState.client_id == client_id,
+                            PublisherExtensionPlatformState.last_heartbeat_at >= cutoff,
+                        )
+                        .order_by(PublisherExtensionPlatformState.platform_id.asc())
+                    ).scalars()
+                )
+
+        latest_payload = {
+            "latest_recent_client_id": latest_recent_client_id,
+            "latest_recent_backend_base_url": (
+                str(latest_recent.backend_base_url or "").strip()
+                if latest_recent is not None
+                else ""
+            ),
+            "latest_recent_heartbeat_at": _isoformat(
+                latest_recent.last_heartbeat_at if latest_recent is not None else None
+            ),
+        }
+        using_latest_recent = bool(
+            allow_latest_recent_fallback
+            and client_id
+            and latest_recent_client_id
+            and client_id == latest_recent_client_id
+            and not resolved_client_id
+        )
+        if not client_id:
+            return {
+                "ok": False,
+                "client_id": "",
+                "backend_base_url": "",
+                "last_heartbeat_at": "",
+                "recent_platforms": [],
+                "message": "preferred publisher client id is empty and no recent publisher client heartbeat was found",
+                **latest_payload,
+            }
+        if client is None:
+            return {
+                "ok": False,
+                "client_id": client_id,
+                "backend_base_url": "",
+                "last_heartbeat_at": "",
+                "recent_platforms": [],
+                "message": "preferred publisher client heartbeat was not found",
+                **latest_payload,
+            }
+        heartbeat = _as_utc(client.last_heartbeat_at)
+        if heartbeat is None:
+            return {
+                "ok": False,
+                "client_id": client_id,
+                "backend_base_url": str(client.backend_base_url or ""),
+                "last_heartbeat_at": "",
+                "recent_platforms": [],
+                "message": "preferred publisher client heartbeat timestamp is missing or invalid",
+                **latest_payload,
+            }
+        if heartbeat < cutoff or not recent_platforms:
+            return {
+                "ok": False,
+                "client_id": client_id,
+                "backend_base_url": str(client.backend_base_url or ""),
+                "last_heartbeat_at": _isoformat(heartbeat),
+                "recent_platforms": recent_platforms,
+                "message": (
+                    "latest publisher client heartbeat is stale"
+                    if using_latest_recent
+                    else "preferred publisher client heartbeat is stale"
+                ),
+                **latest_payload,
+            }
+        return {
+            "ok": True,
+            "client_id": client_id,
+            "backend_base_url": str(client.backend_base_url or ""),
+            "last_heartbeat_at": _isoformat(heartbeat),
+            "recent_platforms": recent_platforms,
+            "message": (
+                "latest publisher client heartbeat is recent"
+                if using_latest_recent
+                else "preferred publisher client heartbeat is recent"
+            ),
+            **latest_payload,
+        }
 
     @staticmethod
     def _normalize_cookie(cookie: dict[str, Any]) -> dict[str, Any]:
@@ -1834,8 +2056,105 @@ class PublisherManager:
             return has_session and has_writer_signal
         return bool(cookie_names)
 
+    def _encode_cookies_for_storage(self, cookies: list[dict[str, Any]]) -> str:
+        if self.publisher_session_secret:
+            ciphertext = encrypt_json_with_secret(self.publisher_session_secret, cookies)
+            return json.dumps(
+                {"encoding": _SESSION_COOKIE_ENCODING, "ciphertext": ciphertext},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        if not self._plaintext_cookie_storage_warned:
+            logger.warning(
+                "Publisher session secret is not configured; storing browser cookies as plaintext."
+            )
+            self._plaintext_cookie_storage_warned = True
+        return json.dumps(cookies, ensure_ascii=False)
+
+    def _decode_cookies_from_storage(self, raw: str) -> list[dict[str, Any]]:
+        cookies, _metadata = self._decode_cookies_from_storage_with_metadata(raw)
+        return cookies
+
+    def _decode_cookies_from_storage_metadata(self, raw: str) -> dict[str, Any]:
+        _cookies, metadata = self._decode_cookies_from_storage_with_metadata(raw)
+        return metadata
+
+    def _decode_cookies_from_storage_with_metadata(
+        self,
+        raw: str,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        metadata: dict[str, Any] = {
+            "legacy": False,
+            "encrypted": False,
+            "error": "",
+        }
+        text = str(raw or "").strip()
+        if not text:
+            metadata["legacy"] = True
+            return [], metadata
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            metadata["error"] = "publisher_session_malformed"
+            logger.warning("Stored publisher browser session is malformed JSON.")
+            return [], metadata
+        if isinstance(payload, list):
+            metadata["legacy"] = True
+            return self._normalize_cookie_list(payload), metadata
+        if not isinstance(payload, dict):
+            metadata["error"] = "publisher_session_malformed"
+            logger.warning("Stored publisher browser session has an invalid payload shape.")
+            return [], metadata
+        if payload.get("encoding") != _SESSION_COOKIE_ENCODING:
+            metadata["error"] = "publisher_session_unknown_encoding"
+            logger.warning(
+                "Stored publisher browser session has unknown encoding: %s",
+                payload.get("encoding"),
+            )
+            return [], metadata
+        metadata["encrypted"] = True
+        if not self.publisher_session_secret:
+            metadata["error"] = "publisher_session_secret_missing"
+            logger.warning(
+                "Stored publisher browser session is encrypted but no session secret is configured."
+            )
+            return [], metadata
+        try:
+            decrypted = decrypt_json_with_secret(
+                self.publisher_session_secret,
+                str(payload.get("ciphertext") or ""),
+            )
+        except SecretStoreError:
+            metadata["error"] = "publisher_session_decrypt_failed"
+            logger.warning(
+                "Stored publisher browser session could not be decrypted.",
+                exc_info=True,
+            )
+            return [], metadata
+        if not isinstance(decrypted, list):
+            metadata["error"] = "publisher_session_malformed"
+            logger.warning("Decrypted publisher browser session is not a cookie list.")
+            return [], metadata
+        return self._normalize_cookie_list(decrypted), metadata
+
+    def _normalize_cookie_list(self, cookies: list[Any]) -> list[dict[str, Any]]:
+        return [
+            self._normalize_cookie(item)
+            for item in cookies
+            if isinstance(item, dict) and str(item.get("name", "")).strip()
+        ]
+
+    def _cookie_names_from_json(self, cookies_json: str) -> list[str]:
+        cookies = self._decode_cookies_from_storage(cookies_json)
+        names = [
+            str(item.get("name", "")).strip()
+            for item in cookies
+            if isinstance(item, dict) and str(item.get("name", "")).strip()
+        ]
+        return sorted(dict.fromkeys(names))
+
     @staticmethod
-    def _cookie_names_from_json(cookies_json: str) -> list[str]:
+    def _legacy_cookie_names_from_json(cookies_json: str) -> list[str]:
         try:
             cookies = json.loads(cookies_json or "[]")
         except json.JSONDecodeError:

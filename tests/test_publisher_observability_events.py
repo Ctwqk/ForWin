@@ -21,7 +21,7 @@ def _event_payload(row: DecisionEvent) -> dict[str, object]:
 
 def test_publisher_upload_job_lifecycle_records_project_events_without_body_text() -> None:
     with TemporaryDirectory() as tmp:
-        engine = get_engine(str(Path(tmp) / "publisher-events.db"))
+        engine = get_engine(postgres_test_url("publisher-events"))
         init_db(engine)
         session_factory = get_session_factory(engine)
         project_id = new_id()
@@ -88,7 +88,7 @@ def test_publisher_upload_job_lifecycle_records_project_events_without_body_text
 
 def test_comment_sync_and_ingest_records_project_events_without_author_identity() -> None:
     with TemporaryDirectory() as tmp:
-        engine = get_engine(str(Path(tmp) / "comment-events.db"))
+        engine = get_engine(postgres_test_url("comment-events"))
         init_db(engine)
         session_factory = get_session_factory(engine)
         project_id = new_id()

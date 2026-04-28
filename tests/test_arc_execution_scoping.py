@@ -31,9 +31,9 @@ def _chapter_payloads(total: int) -> list[dict]:
 class ArcExecutionScopingTests(unittest.TestCase):
     def test_seed_state_distributes_chapters_across_arc_outlines(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "seed-state.db")
+            db_path = postgres_test_url("seed-state")
             orchestrator = WritingOrchestrator(
-                Config(db_path=db_path, minimax_api_key="", minimax_model="fake-model")
+                Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
             )
             try:
                 session = orchestrator._SessionFactory()
@@ -102,9 +102,9 @@ class ArcExecutionScopingTests(unittest.TestCase):
 
     def test_new_project_run_executes_only_first_active_arc(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "run-scope.db")
+            db_path = postgres_test_url("run-scope")
             orchestrator = WritingOrchestrator(
-                Config(db_path=db_path, minimax_api_key="", minimax_model="fake-model")
+                Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
             )
             captured: dict[str, object] = {}
 
@@ -176,7 +176,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
 
     def test_continue_project_only_runs_active_arc_pending_chapters(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "continue-scope.db")
+            db_path = postgres_test_url("continue-scope")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -212,7 +212,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
                 session.commit()
 
             orchestrator = WritingOrchestrator(
-                Config(db_path=db_path, minimax_api_key="", minimax_model="fake-model")
+                Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
             )
             captured: dict[str, object] = {}
 
@@ -241,7 +241,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
 
     def test_arc_resolution_activates_target_arc_and_uses_project_total(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "arc-resolution.db")
+            db_path = postgres_test_url("arc-resolution")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()

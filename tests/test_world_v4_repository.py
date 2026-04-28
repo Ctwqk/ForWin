@@ -28,7 +28,7 @@ from forwin.world_model_v4.repository import WorldModelRepository
 
 
 def test_repository_appends_ledgers_and_projection_rebuilds_snapshot() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -135,7 +135,7 @@ def test_repository_appends_ledgers_and_projection_rebuilds_snapshot() -> None:
 
 
 def test_repository_create_or_update_gap_preserves_latest_observer_state() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

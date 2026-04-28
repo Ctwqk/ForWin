@@ -37,13 +37,13 @@ class WriterAttentionFallbackTests(unittest.TestCase):
 
     def test_blackbox_writer_failure_uses_preview_fallback_before_needs_review(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "writer-fallback.db")
+            db_path = postgres_test_url("writer-fallback")
             engine = get_engine(db_path)
             init_db(engine)
 
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="blackbox",
@@ -101,13 +101,13 @@ class WriterAttentionFallbackTests(unittest.TestCase):
 
     def test_preview_fallback_records_auditable_span_with_effective_model(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "writer-preview-span.db")
+            db_path = postgres_test_url("writer-preview-span")
             engine = get_engine(db_path)
             init_db(engine)
 
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="blackbox",
@@ -189,10 +189,10 @@ class WriterAttentionFallbackTests(unittest.TestCase):
 
     def test_transient_llm_failure_stops_before_advancing_to_next_chapter(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "transient-llm.db")
+            db_path = postgres_test_url("transient-llm")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="blackbox",

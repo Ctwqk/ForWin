@@ -6,7 +6,7 @@ from forwin.models.base import get_engine, init_db
 
 
 def test_init_db_exposes_final_book_state_tables() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
 
     init_db(engine)
 

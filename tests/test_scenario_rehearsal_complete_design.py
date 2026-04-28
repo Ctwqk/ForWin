@@ -46,7 +46,7 @@ def _setup_project(session, *, chapter_start: int = 1, chapter_end: int = 4):
 
 
 def test_trigger_evaluator_skips_low_risk_and_triggers_review_repair_future_dependencies() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -120,7 +120,7 @@ class _DirectorFails:
 
 
 def test_hybrid_simulation_uses_director_but_deterministic_block_wins() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -168,7 +168,7 @@ def test_hybrid_simulation_uses_director_but_deterministic_block_wins() -> None:
 
 
 def test_hybrid_simulation_fallback_records_director_error() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -217,7 +217,7 @@ def test_hybrid_simulation_fallback_records_director_error() -> None:
 
 
 def test_subworld_resource_rehearsal_checks_region_node_culture_and_key_roles() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -286,7 +286,7 @@ def test_subworld_resource_rehearsal_checks_region_node_culture_and_key_roles() 
 
 
 def test_scenario_patch_rows_can_be_approved_and_rehearsal_can_rerun() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

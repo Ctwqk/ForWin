@@ -85,12 +85,13 @@ from forwin.protocol.state_change import EventCandidate, StateChangeCandidate, T
 from forwin.protocol.writer import WriterOutput
 from forwin.publishers import PublisherManager
 from forwin.retrieval import RetrievalBroker
-from forwin.retrieval.memory_index import LocalChapterMemoryIndex, RemoteTextEmbedder, create_memory_index
+from forwin.retrieval.memory_index import QdrantChapterMemoryIndex, RemoteTextEmbedder, create_memory_index
 from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
 from forwin.utils import LLMJSONParseError, parse_llm_json
+from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 from forwin.writer.chapter_writer import ChapterWriter
 from forwin.writer.prompts import (
     build_preview_chapter_prompt,
@@ -271,6 +272,7 @@ class Phase05RegressionTests(unittest.TestCase):
             "os.environ",
             {
                 "FORWIN_DB_PATH": "tmp/test.db",
+                "FORWIN_DATABASE_URL": "postgresql+psycopg://forwin:forwin@localhost:5432/forwin",
                 "TEMPERATURE": "0.42",
                 "MAX_TOKENS": "4096",
             },
@@ -278,7 +280,14 @@ class Phase05RegressionTests(unittest.TestCase):
         ):
             config = Config.from_env()
 
-        self.assertEqual(config.db_path, "tmp/test.db")
+        self.assertEqual(
+            config.database_url,
+            "postgresql+psycopg://forwin:forwin@localhost:5432/forwin",
+        )
+        self.assertEqual(
+            config.db_path,
+            "postgresql+psycopg://forwin:forwin@localhost:5432/forwin",
+        )
         self.assertEqual(config.temperature, 0.42)
         self.assertEqual(config.max_tokens, 4096)
 
@@ -330,7 +339,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_project_task_center_items_batch_load_chapter_plans(self) -> None:
         tmp = TemporaryDirectory()
-        engine = get_engine(str(Path(tmp.name) / "task-center.db"))
+        engine = get_engine(postgres_test_url("task-center"))
         init_db(engine)
         session_factory = get_session_factory(engine)
         old_session_factory = api_module._SessionFactory
@@ -428,17 +437,21 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertFalse(config.phase4_use_llm)
 
     def test_config_defaults_to_scene_writer_mode(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
-            config = Config.from_env()
+        with TemporaryDirectory() as tmp:
+            missing_env = str(Path(tmp) / "missing.env")
+            with patch.dict(
+                "os.environ", {"FORWIN_ENV_FILE": missing_env}, clear=True
+            ):
+                config = Config.from_env()
 
         self.assertEqual(config.writer_mode, "scene")
 
     def test_cli_read_initializes_empty_database(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "fresh-read.db")
+            db_path = postgres_test_url("fresh-read")
             output = StringIO()
             args = SimpleNamespace(
-                db=db_path,
+                database_url=db_path,
                 api_key=None,
                 model=None,
                 base_url=None,
@@ -453,10 +466,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_cli_status_initializes_empty_database(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "fresh-status.db")
+            db_path = postgres_test_url("fresh-status")
             output = StringIO()
             args = SimpleNamespace(
-                db=db_path,
+                database_url=db_path,
                 api_key=None,
                 model=None,
                 base_url=None,
@@ -470,10 +483,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_orchestrator_surfaces_partial_failures(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "orchestrator.db")
+            db_path = postgres_test_url("orchestrator")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="copilot",
@@ -598,9 +611,9 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_orchestrator_keeps_draft_when_structured_state_is_dirty(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "dirty-state.db")
+            db_path = postgres_test_url("dirty-state")
             orchestrator = WritingOrchestrator(
-                Config(db_path=db_path, minimax_api_key="", minimax_model="fake-model")
+                Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
             )
             try:
                 def fake_plan_arc(premise: str, genre: str, num_chapters: int) -> dict:
@@ -685,10 +698,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_orchestrator_checkpoint_mode_pauses_after_first_draft(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "checkpoint.db")
+            db_path = postgres_test_url("checkpoint")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="checkpoint",
@@ -749,11 +762,11 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_orchestrator_freezes_candidate_when_canon_update_fails(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "freeze.db")
+            db_path = postgres_test_url("freeze")
             artifact_root = str(Path(tmp) / "artifacts")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     artifact_root=artifact_root,
                     minimax_api_key="",
                     minimax_model="fake-model",
@@ -832,10 +845,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_orchestrator_filters_unknown_event_entities_before_canon_update(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "filter-events.db")
+            db_path = postgres_test_url("filter-events")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     freeze_failed_candidates=True,
@@ -959,10 +972,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 )
 
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "hard-final-gate.db")
+            db_path = postgres_test_url("hard-final-gate")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="blackbox",
@@ -1067,10 +1080,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 return ReviewVerdict(verdict="pass", issues=[])
 
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "draft-overlay.db")
+            db_path = postgres_test_url("draft-overlay")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="blackbox",
@@ -1170,10 +1183,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 )
 
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "band-plan-rollback.db")
+            db_path = postgres_test_url("band-plan-rollback")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="blackbox",
@@ -1238,10 +1251,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_orchestrator_can_accept_review_and_continue_project(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "resume.db")
+            db_path = postgres_test_url("resume")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="checkpoint",
@@ -1312,10 +1325,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_orchestrator_records_phase3_analysis_and_replan_cooldown(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "phase3.db")
+            db_path = postgres_test_url("phase3")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     pacing_window_size=3,
@@ -1395,7 +1408,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_replan_governor_supports_patch_reband_and_rearc(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "replan-strategy.db")
+            db_path = postgres_test_url("replan-strategy")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -1509,7 +1522,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_pacing_strategist_respects_configured_thresholds(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "pacing-thresholds.db")
+            db_path = postgres_test_url("pacing-thresholds")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -1564,7 +1577,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_api_projects_include_phase3_summary_fields(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "phase3-api.db")
+            db_path = postgres_test_url("phase3-api")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -1621,7 +1634,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_api_projects_include_chapter_summaries(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "projects-with-chapters.db")
+            db_path = postgres_test_url("projects-with-chapters")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -1688,7 +1701,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_api_projects_include_generation_and_upload_counts(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "projects-with-counts.db")
+            db_path = postgres_test_url("projects-with-counts")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -1774,13 +1787,13 @@ class Phase05RegressionTests(unittest.TestCase):
             temp_engine = None
             try:
                 api_module._config = Config(
-                    db_path=str(Path(tmp) / "books.db"),
+                    database_url=postgres_test_url("books"),
                     runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
                     minimax_model="MiniMax-M2.7",
                 )
-                temp_engine = get_engine(api_module._config.db_path)
+                temp_engine = get_engine(api_module._config.database_url)
                 init_db(temp_engine)
                 api_module._engine = temp_engine
                 api_module._SessionFactory = get_session_factory(temp_engine)
@@ -1828,13 +1841,13 @@ class Phase05RegressionTests(unittest.TestCase):
             temp_engine = None
             try:
                 api_module._config = Config(
-                    db_path=str(Path(tmp) / "book-publish-defaults.db"),
+                    database_url=postgres_test_url("book-publish-defaults"),
                     runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
                     minimax_model="MiniMax-M2.7",
                 )
-                temp_engine = get_engine(api_module._config.db_path)
+                temp_engine = get_engine(api_module._config.database_url)
                 init_db(temp_engine)
                 api_module._engine = temp_engine
                 api_module._SessionFactory = get_session_factory(temp_engine)
@@ -1874,13 +1887,13 @@ class Phase05RegressionTests(unittest.TestCase):
             temp_engine = None
             try:
                 api_module._config = Config(
-                    db_path=str(Path(tmp) / "book-total-consistency.db"),
+                    database_url=postgres_test_url("book-total-consistency"),
                     runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
                     minimax_model="MiniMax-M2.7",
                 )
-                temp_engine = get_engine(api_module._config.db_path)
+                temp_engine = get_engine(api_module._config.database_url)
                 init_db(temp_engine)
                 api_module._engine = temp_engine
                 api_module._SessionFactory = get_session_factory(temp_engine)
@@ -1942,13 +1955,13 @@ class Phase05RegressionTests(unittest.TestCase):
             temp_engine = None
             try:
                 api_module._config = Config(
-                    db_path=str(Path(tmp) / "book-automation.db"),
+                    database_url=postgres_test_url("book-automation"),
                     runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="saved-key",
                     minimax_base_url="https://api.minimaxi.com/v1",
                     minimax_model="MiniMax-M2.7",
                 )
-                temp_engine = get_engine(api_module._config.db_path)
+                temp_engine = get_engine(api_module._config.database_url)
                 init_db(temp_engine)
                 api_module._engine = temp_engine
                 api_module._SessionFactory = get_session_factory(temp_engine)
@@ -2007,7 +2020,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_automation_scheduler_batches_project_metric_queries(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "automation-scheduler.db")
+            db_path = postgres_test_url("automation-scheduler")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -2077,7 +2090,7 @@ class Phase05RegressionTests(unittest.TestCase):
                         )
                     session.commit()
 
-                api_module._config = Config(db_path=db_path)
+                api_module._config = Config(database_url=db_path)
                 api_module._SessionFactory = session_factory
                 fixed_now = datetime(2026, 4, 18, 17, 0, tzinfo=timezone.utc)
 
@@ -2085,7 +2098,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     with patch.object(api_module, "_utcnow", return_value=fixed_now), patch.object(
                         api_module,
                         "_saved_runtime_config_or_503",
-                        return_value=Config(db_path=db_path),
+                        return_value=Config(database_url=db_path),
                     ), patch.object(
                         api_module,
                         "_create_generation_task",
@@ -2141,7 +2154,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_auto_publish_enqueue_batches_plan_draft_and_upload_queries(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "auto-publish.db")
+            db_path = postgres_test_url("auto-publish")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -2247,9 +2260,15 @@ class Phase05RegressionTests(unittest.TestCase):
                 api_module._publisher_manager = old_manager
                 engine.dispose()
 
-    def test_local_memory_index_persists_and_searches_across_instances(self) -> None:
+    def test_qdrant_memory_index_persists_and_searches_across_instances(self) -> None:
         with TemporaryDirectory() as tmp:
-            index = LocalChapterMemoryIndex(root_dir=tmp)
+            client = FakeQdrantClient()
+            index = QdrantChapterMemoryIndex(
+                url="http://qdrant.test:6333",
+                collection_name="chapter_memories",
+                client=client,
+                qdrant_models=FakeQdrantModels,
+            )
             index.upsert_chapter(
                 project_id="p1",
                 chapter_number=1,
@@ -2265,7 +2284,12 @@ class Phase05RegressionTests(unittest.TestCase):
                 body="他们在仓库里翻找旧档案。",
             )
 
-            reloaded = LocalChapterMemoryIndex(root_dir=tmp)
+            reloaded = QdrantChapterMemoryIndex(
+                url="http://qdrant.test:6333",
+                collection_name="chapter_memories",
+                client=client,
+                qdrant_models=FakeQdrantModels,
+            )
             hits = reloaded.search(project_id="p1", query="末班车", limit=2)
 
         self.assertEqual(len(hits), 2)
@@ -2311,7 +2335,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_thread_sampling_balances_stale_and_hot_threads(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "thread-sampling.db")
+            db_path = postgres_test_url("thread-sampling")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -2375,7 +2399,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_arc_envelope_manager_creates_v24_records(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "arc-envelope.db")
+            db_path = postgres_test_url("arc-envelope")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -2441,7 +2465,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_arc_envelope_backfill_batches_existing_resolution_lookup(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "arc-envelope-backfill.db")
+            db_path = postgres_test_url("arc-envelope-backfill")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -2501,10 +2525,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_provisional_preview_falls_back_per_chapter_without_disabling_later_previews(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "provisional-degrade.db")
+            db_path = postgres_test_url("provisional-degrade")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     artifact_root=str(Path(tmp) / "artifacts"),
                     minimax_api_key="fake-key",
                     minimax_model="fake-model",
@@ -2721,10 +2745,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_provisional_preview_uses_preview_checker_thresholds(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "preview-thresholds.db")
+            db_path = postgres_test_url("preview-thresholds")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     artifact_root=str(Path(tmp) / "artifacts"),
                     minimax_api_key="fake-key",
                     minimax_model="fake-model",
@@ -2788,11 +2812,11 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_orchestrator_emits_project_created_progress(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "progress-callback.db")
+            db_path = postgres_test_url("progress-callback")
             progress_events: list[tuple[str, dict[str, object]]] = []
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     artifact_root=str(Path(tmp) / "artifacts"),
                     minimax_api_key="",
                     minimax_model="fake-model",
@@ -2845,7 +2869,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_api_projects_expose_active_arc_envelope_fields(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "arc-envelope-api.db")
+            db_path = postgres_test_url("arc-envelope-api")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -2925,7 +2949,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_api_projects_created_at_uses_pacific_display_time(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "projects-timezone.db")
+            db_path = postgres_test_url("projects-timezone")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -2952,7 +2976,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_api_exposes_latest_provisional_band_shadow_ledger(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "provisional-api.db")
+            db_path = postgres_test_url("provisional-api")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -3017,7 +3041,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_api_exposes_latest_provisional_band_pass_verdict(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "provisional-pass-api.db")
+            db_path = postgres_test_url("provisional-pass-api")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -3087,7 +3111,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_api_list_chapters_uses_latest_draft_values(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "chapter-list.db")
+            db_path = postgres_test_url("chapter-list")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -3246,7 +3270,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_state_repository_active_entities_uses_latest_state_and_alias_rows(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "repo-entities.db")
+            db_path = postgres_test_url("repo-entities")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -3490,7 +3514,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 return '{"pressure_level":"critical","pressure_summary":"世界开始围堵主角。","notable_shifts":["失踪信号扩散","同盟开始动摇"]}'
 
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "phase4-llm.db")
+            db_path = postgres_test_url("phase4-llm")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -3534,10 +3558,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_orchestrator_records_phase4_outputs(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "phase4.db")
+            db_path = postgres_test_url("phase4")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                 )
@@ -3641,7 +3665,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_repo_summarizes_reader_feedback_by_work_name(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "reader-feedback.db")
+            db_path = postgres_test_url("reader-feedback")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -3692,7 +3716,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_repo_reader_feedback_prefers_project_scope_and_respects_before_chapter_titles(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "reader-feedback-scope.db")
+            db_path = postgres_test_url("reader-feedback-scope")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -3755,7 +3779,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_phase4_rule_fallback_uses_reader_feedback(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "phase4-feedback.db")
+            db_path = postgres_test_url("phase4-feedback")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -3840,10 +3864,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_blackbox_writer_failure_fails_without_empty_review(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "blackbox-attention.db")
+            db_path = postgres_test_url("blackbox-attention")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="blackbox",
@@ -3891,10 +3915,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_blackbox_timeout_stops_extra_writer_retries(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "blackbox-timeout.db")
+            db_path = postgres_test_url("blackbox-timeout")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="blackbox",
@@ -3934,11 +3958,11 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_provisional_failure_blocks_formal_writing(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "provisional-gate.db")
+            db_path = postgres_test_url("provisional-gate")
             events: list[tuple[str, dict[str, object]]] = []
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="test-key",
                     minimax_model="fake-model",
                     operation_mode="blackbox",
@@ -4016,7 +4040,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_api_project_detail_includes_phase4_fields(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "phase4-api.db")
+            db_path = postgres_test_url("phase4-api")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -4072,7 +4096,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_api_project_summary_includes_replan_strategy(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "phase3-strategy-api.db")
+            db_path = postgres_test_url("phase3-strategy-api")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -4112,7 +4136,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_project_runtime_history_queries_use_windowed_limits(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "runtime-history.db")
+            db_path = postgres_test_url("runtime-history")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -4195,7 +4219,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_apply_events_rejects_partial_event_writes(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "events.db")
+            db_path = postgres_test_url("events")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -4234,7 +4258,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_apply_state_changes_rejects_unknown_character_under_subworld_control(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "same-chapter-events.db")
+            db_path = postgres_test_url("same-chapter-events")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -4347,7 +4371,15 @@ class Phase05RegressionTests(unittest.TestCase):
             one_line="开场",
             goals_json='["推进主线"]',
         )
-        broker = RetrievalBroker(context_budget_chars=420, max_threads=4)
+        class FakeMemoryIndex:
+            def search(self, **_kwargs):
+                return []
+
+        broker = RetrievalBroker(
+            context_budget_chars=420,
+            max_threads=4,
+            memory_index=FakeMemoryIndex(),
+        )
         broker._estimate_chars = lambda _pack: 999  # type: ignore[method-assign]
 
         with patch("forwin.retrieval.broker.assemble_context") as mocked:
@@ -4376,7 +4408,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_typed_state_schema_rejects_unknown_new_fields(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "schema.db")
+            db_path = postgres_test_url("schema")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -4425,7 +4457,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_repo_resolves_entity_alias_without_full_entity_scan(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "aliases.db")
+            db_path = postgres_test_url("aliases")
             engine = get_engine(db_path)
             init_db(engine)
             session = get_session_factory(engine)()
@@ -4488,6 +4520,7 @@ class Phase05RegressionTests(unittest.TestCase):
             max_entities=2,
             max_threads=1,
             max_summaries=2,
+            memory_index=type("FakeMemoryIndex", (), {"search": lambda self, **_kwargs: []})(),
         )
 
         class FakeRepo:
@@ -4683,8 +4716,12 @@ class Phase05RegressionTests(unittest.TestCase):
     def test_create_memory_index_supports_remote_embedder(self) -> None:
         with TemporaryDirectory() as tmp:
             index = create_memory_index(
-                backend="local",
+                backend="qdrant",
                 root_dir=tmp,
+                qdrant_url="http://qdrant.test:6333",
+                qdrant_collection="chapter_memories",
+                qdrant_client=FakeQdrantClient(),
+                qdrant_models=FakeQdrantModels,
                 embedding_backend="remote",
                 embedding_base_url="https://embed.example/v1",
                 embedding_api_key="sk-test",
@@ -4843,7 +4880,7 @@ class Phase05RegressionTests(unittest.TestCase):
         preferred_client_id: str = "",
     ) -> tuple[TemporaryDirectory, object, PublisherManager]:
         tmp = TemporaryDirectory()
-        db_path = str(Path(tmp.name) / "publisher.db")
+        db_path = postgres_test_url("publisher")
         engine = get_engine(db_path)
         init_db(engine)
         session_factory = get_session_factory(engine)
@@ -5482,8 +5519,15 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_publishers_page_and_extension_api_routes(self) -> None:
         tmp, engine, manager = self._make_publisher_manager()
+        old_config = api_module._config
         old_manager = api_module._publisher_manager
         try:
+            api_module._config = Config(
+                database_url=engine.url.render_as_string(hide_password=False),
+                publisher_extension_api_key="secret",
+                minimax_api_key="",
+                minimax_model="fake-model",
+            )
             api_module._publisher_manager = manager
             with TestClient(api_module.app) as client:
                 page = client.get("/publishers")
@@ -5735,6 +5779,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.assertEqual(client.post("/api/publishers/fanqie/login").status_code, 404)
                 self.assertEqual(client.post("/api/publishers/upload", json={}).status_code, 404)
         finally:
+            api_module._config = old_config
             api_module._publisher_manager = old_manager
             engine.dispose()
             tmp.cleanup()
@@ -5745,7 +5790,7 @@ class Phase05RegressionTests(unittest.TestCase):
             old_store = api_module._runtime_settings
             try:
                 api_module._config = Config(
-                    db_path=":memory:",
+                    database_url=postgres_test_url(),
                     runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
@@ -5777,8 +5822,19 @@ class Phase05RegressionTests(unittest.TestCase):
                 api_module._runtime_settings = old_store
 
     def test_publishers_page_uses_extension_bridge_flow(self) -> None:
-        with TestClient(api_module.app) as client:
-            page = client.get("/publishers")
+        with TemporaryDirectory() as tmp:
+            old_config = api_module._config
+            try:
+                api_module._config = Config(
+                    database_url=postgres_test_url("publishers-extension-flow"),
+                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                )
+                with TestClient(api_module.app) as client:
+                    page = client.get("/publishers")
+            finally:
+                api_module._config = old_config
 
         self.assertEqual(page.status_code, 200)
         self.assertIn("forwin-publisher-extension", page.text)
@@ -5805,10 +5861,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.started = True
 
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "review_api.db")
+            db_path = postgres_test_url("review_api")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="checkpoint",
@@ -5863,7 +5919,7 @@ class Phase05RegressionTests(unittest.TestCase):
             temp_engine = None
             try:
                 api_module._config = Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
@@ -5933,7 +5989,7 @@ class Phase05RegressionTests(unittest.TestCase):
         old_tasks = api_module._tasks
         try:
             api_module._config = Config(
-                db_path=":memory:",
+                database_url=postgres_test_url(),
                 minimax_api_key="",
                 minimax_base_url="https://api.minimaxi.com/v1",
                 minimax_model="MiniMax-M2.7",
@@ -5981,7 +6037,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.started = True
 
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "existing-project-generate.db")
+            db_path = postgres_test_url("existing-project-generate")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -5996,7 +6052,7 @@ class Phase05RegressionTests(unittest.TestCase):
             old_tasks = api_module._tasks
             try:
                 api_module._config = Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="saved-key",
                     minimax_base_url="https://api.minimaxi.com/v1",
                     minimax_model="MiniMax-M2.7",
@@ -6054,7 +6110,7 @@ class Phase05RegressionTests(unittest.TestCase):
             updates.append(changes)
 
         config = Config(
-            db_path=":memory:",
+            database_url=postgres_test_url(),
             minimax_api_key="saved-key",
             minimax_base_url="https://api.minimaxi.com/v1",
             minimax_model="MiniMax-M2.7",
@@ -6112,7 +6168,7 @@ class Phase05RegressionTests(unittest.TestCase):
             updates.append(changes)
 
         config = Config(
-            db_path=":memory:",
+            database_url=postgres_test_url(),
             minimax_api_key="saved-key",
             minimax_base_url="https://api.minimaxi.com/v1",
             minimax_model="MiniMax-M2.7",
@@ -6152,7 +6208,7 @@ class Phase05RegressionTests(unittest.TestCase):
         old_store = api_module._runtime_settings
         try:
             api_module._config = Config(
-                db_path=":memory:",
+                database_url=postgres_test_url(),
                 runtime_settings_path="data/runtime_settings.json",
                 minimax_api_key="",
                 minimax_base_url="https://api.minimaxi.com/v1",
@@ -6190,17 +6246,9 @@ class Phase05RegressionTests(unittest.TestCase):
             api_module._tasks = old_tasks
             api_module._runtime_settings = old_store
 
-    def test_sqlite_engine_enables_foreign_keys(self) -> None:
-        with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "fk.db")
-            engine = get_engine(db_path)
-            try:
-                with engine.connect() as conn:
-                    foreign_keys = conn.execute(text("PRAGMA foreign_keys")).scalar_one()
-            finally:
-                engine.dispose()
-
-        self.assertEqual(foreign_keys, 1)
+    def test_get_engine_rejects_sqlite_database_urls(self) -> None:
+        with self.assertRaises(ValueError):
+            get_engine(("sqlite" + ":///tmp/forwin.db"))
 
     def test_llm_settings_api_persists_runtime_defaults(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -6208,7 +6256,7 @@ class Phase05RegressionTests(unittest.TestCase):
             old_store = api_module._runtime_settings
             try:
                 api_module._config = Config(
-                    db_path=":memory:",
+                    database_url=postgres_test_url(),
                     runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
@@ -6249,7 +6297,7 @@ class Phase05RegressionTests(unittest.TestCase):
             old_store = api_module._runtime_settings
             try:
                 api_module._config = Config(
-                    db_path=":memory:",
+                    database_url=postgres_test_url(),
                     runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
@@ -6290,7 +6338,7 @@ class Phase05RegressionTests(unittest.TestCase):
             old_store = api_module._runtime_settings
             try:
                 api_module._config = Config(
-                    db_path=":memory:",
+                    database_url=postgres_test_url(),
                     runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
@@ -6375,7 +6423,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_project_delete_endpoint_cascades_related_rows(self) -> None:
         tmp = TemporaryDirectory()
-        engine = get_engine(str(Path(tmp.name) / "project-delete.db"))
+        engine = get_engine(postgres_test_url("project-delete"))
         init_db(engine)
         session_factory = get_session_factory(engine)
 
@@ -6439,7 +6487,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_project_chapter_upload_job_uses_generated_chapter_body(self) -> None:
         tmp = TemporaryDirectory()
-        engine = get_engine(str(Path(tmp.name) / "project-upload.db"))
+        engine = get_engine(postgres_test_url("project-upload"))
         init_db(engine)
         session_factory = get_session_factory(engine)
         manager = PublisherManager(session_factory, extension_api_key="secret")
@@ -6516,7 +6564,7 @@ class Phase05RegressionTests(unittest.TestCase):
             old_tasks = api_module._tasks
             try:
                 api_module._config = Config(
-                    db_path=":memory:",
+                    database_url=postgres_test_url(),
                     runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
@@ -6560,10 +6608,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_phase24_persists_experience_overlay_artifacts(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "overlay.db")
+            db_path = postgres_test_url("overlay")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="checkpoint",
@@ -6723,10 +6771,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 )
 
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "copilot-rewrite.db")
+            db_path = postgres_test_url("copilot-rewrite")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="copilot",
@@ -6820,10 +6868,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 )
 
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "blackbox-force.db")
+            db_path = postgres_test_url("blackbox-force")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="blackbox",
@@ -6977,10 +7025,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_copilot_rewrite_writer_error_pauses_instead_of_failed(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "copilot-rewrite-error.db")
+            db_path = postgres_test_url("copilot-rewrite-error")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="copilot",
@@ -7057,10 +7105,10 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_blackbox_rewrite_writer_error_reaches_manual_review_gate(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "blackbox-rewrite-error.db")
+            db_path = postgres_test_url("blackbox-rewrite-error")
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="blackbox",
@@ -7479,7 +7527,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_chapter_review_api_exposes_v27_fields(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "review-detail-v27.db")
+            db_path = postgres_test_url("review-detail-v27")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -7689,13 +7737,13 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_trope_templates_and_band_experience_override_api(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "band-override-v27.db")
+            db_path = postgres_test_url("band-override-v27")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                 )
@@ -7838,9 +7886,9 @@ class SkillRuntimeTraceRegressionTests(unittest.TestCase):
         from forwin.state.repo import StateRepository
 
         with TemporaryDirectory() as tmpdir:
-            db_path = str(Path(tmpdir) / "skill-trace.db")
+            db_path = postgres_test_url("skill-trace")
             config = Config(
-                db_path=db_path,
+                database_url=db_path,
                 minimax_api_key="test-key",
                 minimax_base_url="http://example.invalid",
                 minimax_model="fake-model",

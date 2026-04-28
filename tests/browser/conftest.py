@@ -13,6 +13,8 @@ from urllib.request import urlopen
 import pytest
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
+from tests.postgres import postgres_test_url
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BASE_URL = "http://127.0.0.1:8899"
@@ -51,7 +53,7 @@ def browser_test_base_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
     env = os.environ.copy()
     env.update(
         {
-            "FORWIN_DB_PATH": str(run_root / "novel.db"),
+            "FORWIN_DATABASE_URL": postgres_test_url("browser_e2e"),
             "FORWIN_ARTIFACT_ROOT": str(run_root / "artifacts"),
             "FORWIN_RUNTIME_SETTINGS_PATH": str(run_root / "runtime_settings.json"),
             "FORWIN_RETRIEVAL_ROOT": str(run_root / "retrieval"),

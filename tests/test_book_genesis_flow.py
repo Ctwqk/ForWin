@@ -36,8 +36,8 @@ from forwin.state.updater import StateUpdater
 class BookGenesisFlowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = TemporaryDirectory()
-        self.db_path = str(Path(self.tmpdir.name) / "genesis.db")
-        engine = get_engine(self.db_path)
+        self.database_url = postgres_test_url("genesis")
+        engine = get_engine(self.database_url)
         init_db(engine)
         self.session_factory = get_session_factory(engine)
         self.engine = engine
@@ -46,7 +46,7 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.old_runtime_settings = api_module._runtime_settings
         api_module._SessionFactory = self.session_factory
         api_module._config = Config(
-            db_path=self.db_path,
+            database_url=self.database_url,
             minimax_api_key="test-key",
             minimax_base_url="http://example.invalid",
             minimax_model="fake-model",

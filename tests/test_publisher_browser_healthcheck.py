@@ -4,6 +4,8 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import create_engine
+
 from forwin.publishers.healthcheck import (
     get_preferred_client_heartbeat,
     resolve_target_client_id,
@@ -63,6 +65,12 @@ def _seed_db(path, *, client_id: str, heartbeat_at: datetime, backend_base_url: 
     conn.close()
 
 
+def _patch_healthcheck_engine(monkeypatch, db_path) -> str:
+    engine = create_engine(f"sqlite:///{db_path}")
+    monkeypatch.setattr("forwin.publishers.healthcheck.get_engine", lambda _database_url: engine)
+    return "postgresql+psycopg://forwin:forwin@localhost:5432/forwin"
+
+
 def test_resolve_target_client_id_falls_back_to_profile_marker(tmp_path):
     profile_dir = tmp_path / "profile"
     profile_dir.mkdir()
@@ -74,13 +82,14 @@ def test_resolve_target_client_id_falls_back_to_profile_marker(tmp_path):
     assert resolve_target_client_id("", profile_dir=profile_dir) == "marker-client"
 
 
-def test_get_preferred_client_heartbeat_accepts_recent_client(tmp_path):
+def test_get_preferred_client_heartbeat_accepts_recent_client(tmp_path, monkeypatch):
     db_path = tmp_path / "novel.db"
     now = datetime.now(timezone.utc)
     _seed_db(db_path, client_id="preferred-client", heartbeat_at=now)
+    database_url = _patch_healthcheck_engine(monkeypatch, db_path)
 
     result = get_preferred_client_heartbeat(
-        db_path,
+        database_url,
         preferred_client_id="preferred-client",
         stale_seconds=90,
     )
@@ -91,13 +100,14 @@ def test_get_preferred_client_heartbeat_accepts_recent_client(tmp_path):
     assert result.recent_platforms == ("fanqie",)
 
 
-def test_get_preferred_client_heartbeat_rejects_stale_client(tmp_path):
+def test_get_preferred_client_heartbeat_rejects_stale_client(tmp_path, monkeypatch):
     db_path = tmp_path / "novel.db"
     stale_at = datetime.now(timezone.utc) - timedelta(minutes=5)
     _seed_db(db_path, client_id="preferred-client", heartbeat_at=stale_at)
+    database_url = _patch_healthcheck_engine(monkeypatch, db_path)
 
     result = get_preferred_client_heartbeat(
-        db_path,
+        database_url,
         preferred_client_id="preferred-client",
         stale_seconds=90,
     )
@@ -107,13 +117,14 @@ def test_get_preferred_client_heartbeat_rejects_stale_client(tmp_path):
     assert result.message == "preferred publisher client heartbeat is stale"
 
 
-def test_get_preferred_client_heartbeat_falls_back_to_latest_recent_client(tmp_path):
+def test_get_preferred_client_heartbeat_falls_back_to_latest_recent_client(tmp_path, monkeypatch):
     db_path = tmp_path / "novel.db"
     now = datetime.now(timezone.utc)
     _seed_db(db_path, client_id="recent-client", heartbeat_at=now)
+    database_url = _patch_healthcheck_engine(monkeypatch, db_path)
 
     result = get_preferred_client_heartbeat(
-        db_path,
+        database_url,
         preferred_client_id="",
         stale_seconds=90,
         allow_latest_recent_fallback=True,
@@ -124,13 +135,14 @@ def test_get_preferred_client_heartbeat_falls_back_to_latest_recent_client(tmp_p
     assert result.message == "latest publisher client heartbeat is recent"
 
 
-def test_get_preferred_client_heartbeat_rejects_stale_latest_recent_fallback(tmp_path):
+def test_get_preferred_client_heartbeat_rejects_stale_latest_recent_fallback(tmp_path, monkeypatch):
     db_path = tmp_path / "novel.db"
     stale_at = datetime.now(timezone.utc) - timedelta(minutes=5)
     _seed_db(db_path, client_id="recent-client", heartbeat_at=stale_at)
+    database_url = _patch_healthcheck_engine(monkeypatch, db_path)
 
     result = get_preferred_client_heartbeat(
-        db_path,
+        database_url,
         preferred_client_id="",
         stale_seconds=90,
         allow_latest_recent_fallback=True,

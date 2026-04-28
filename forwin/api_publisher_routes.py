@@ -13,6 +13,7 @@ from forwin.api_schemas import (
     ExtensionCommentsBatchRequest,
     ExtensionHeartbeatRequest,
     ExtensionSessionSyncRequest,
+    PublisherBrowserSessionSummaryResponse,
     PublisherCommentSyncJobRequest,
     PublisherUploadJobCreateRequest,
     UploadJobResultRequest,
@@ -96,6 +97,23 @@ def build_handlers(
             x_forwin_extension_key=x_forwin_extension_key,
         )
 
+    def get_publisher_browser_session_summary(platform: str):
+        return api_publisher_ops.get_publisher_browser_session_summary(
+            platform,
+            publisher_manager=get_publisher_manager(),
+        )
+
+    def publisher_extension_heartbeat_status(
+        client_id: str = "",
+        stale_seconds: int = 90,
+        allow_latest_recent_fallback: bool = False,
+    ):
+        return get_publisher_manager().preferred_client_heartbeat(
+            preferred_client_id=client_id,
+            stale_seconds=stale_seconds,
+            allow_latest_recent_fallback=allow_latest_recent_fallback,
+        )
+
     def update_publisher_upload_job_result(
         job_id: str,
         req: UploadJobResultRequest,
@@ -167,6 +185,8 @@ def build_handlers(
         "publisher_extension_heartbeat": publisher_extension_heartbeat,
         "publisher_extension_session_sync": publisher_extension_session_sync,
         "publisher_extension_get_browser_session": publisher_extension_get_browser_session,
+        "get_publisher_browser_session_summary": get_publisher_browser_session_summary,
+        "publisher_extension_heartbeat_status": publisher_extension_heartbeat_status,
         "update_publisher_upload_job_result": update_publisher_upload_job_result,
         "claim_publisher_upload_job": claim_publisher_upload_job,
         "claim_publisher_comment_sync_job": claim_publisher_comment_sync_job,

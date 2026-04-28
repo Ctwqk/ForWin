@@ -9,6 +9,16 @@ description: Use when operating the ForWin backend through its MCP tools for pro
 
 This skill teaches Codex how to operate ForWin as a workflow system. Use the `forwin` MCP server as the authoritative interface for project, Genesis, task, and chapter actions.
 
+## Preflight
+
+Before operating a running backend from the ForWin server, confirm the operator path is available:
+
+1. `python3 scripts/check_codex_operator_ready.py`
+2. If API or MCP health fails, run `docker compose up -d forwin forwin-mcp`.
+3. Global `codex mcp list` registration is optional when the repo-local plugin supplies the MCP definition.
+
+If the readiness check says the ForWin API or MCP endpoint is unavailable, report that setup problem and stop. Do not compensate by reading SQLite directly or by calling raw ForWin HTTP routes when an equivalent MCP tool exists.
+
 ## When To Use The MCP Server
 
 Use `forwin` MCP when you need to:
@@ -39,6 +49,13 @@ If a matching MCP tool exists, do not inspect the SQLite database or improvise r
 3. If a task is already active, inspect it with `task_get` instead of starting another.
 4. If no task is active and the project is already in writing state, call `project_continue_generation`.
 
+### Status Triage
+
+1. Call `project_list` when the project id is unknown.
+2. Call `project_get` for `creation_status`, `next_gate`, and chapter counts.
+3. Call `task_active_generation_check` before any generation handoff or service restart.
+4. Call `task_get` for active task progress and recovery guidance.
+
 ### Inspect Recent Output
 
 1. Call `project_get` or `chapter_list`.
@@ -52,6 +69,7 @@ If a matching MCP tool exists, do not inspect the SQLite database or improvise r
 - Do not call `project_continue_generation` if `task_active_generation_check` says generation is active.
 - Prefer `task_pause` instead of terminate/restart behavior when you need a safe stop.
 - Read state first, mutate second.
+- Treat Codex Bridge as ForWin's background model route, not as the operator path. Operator actions still go through MCP.
 
 ## Example Prompts
 

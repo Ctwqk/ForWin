@@ -162,6 +162,8 @@ class TaskResponse(BaseModel):
     deletable: bool = False
     interrupted_by_restart: bool = False
     recovery_suggestion: str = ""
+    persistence_degraded: bool = False
+    persistence_error: str | None = None
 
 
 class TaskSummaryResponse(TaskResponse):
@@ -1340,6 +1342,17 @@ class ExtensionBrowserSessionResponse(BaseModel):
     cookies: list[ExtensionBrowserCookie] = Field(default_factory=list)
     synced_at: str = ""
     last_error: str = ""
+
+
+class PublisherBrowserSessionSummaryResponse(BaseModel):
+    platform: str
+    client_id: str = ""
+    cookie_count: int = 0
+    cookie_names: list[str] = Field(default_factory=list)
+    cookies_redacted: bool = True
+    synced_at: str = ""
+    last_error: str = ""
+    connected: bool = False
 
 
 class ExtensionClaimUploadJobRequest(BaseModel):

@@ -2,20 +2,29 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
-import subprocess
 import sys
 import time
 import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+from sqlalchemy import text
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from forwin.config import Config, DEFAULT_DATABASE_URL
+from forwin.models.base import get_engine
+from forwin.secret_store import SecretStoreError, decrypt_json_with_secret
+
 EXTENSION_DIR = REPO_ROOT / "browser_extension" / "forwin-publisher"
-DB_PATH = REPO_ROOT / "data" / "novel.db"
-BACKEND_URL = "http://127.0.0.1:8899"
+DATABASE_URL = os.environ.get("FORWIN_DATABASE_URL", DEFAULT_DATABASE_URL)
+BACKEND_URL = os.environ.get("FORWIN_BACKEND_URL", "http://127.0.0.1:8899")
+SESSION_COOKIE_ENCODING = "fernet-v1"
 
 
 def find_browser_executable() -> str | None:
@@ -27,7 +36,12 @@ def find_browser_executable() -> str | None:
 
 
 def load_api_key() -> str:
+    env_value = os.environ.get("FORWIN_PUBLISHER_EXTENSION_API_KEY", "").strip()
+    if env_value:
+        return env_value
     env_path = REPO_ROOT / ".env"
+    if not env_path.exists():
+        raise RuntimeError("FORWIN_PUBLISHER_EXTENSION_API_KEY not found in environment or .env")
     for line in env_path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -80,59 +94,74 @@ def load_book_meta() -> dict:
 
 
 def load_platform_session(platform: str) -> list[dict]:
-    row = _load_platform_session_from_sqlite(DB_PATH, platform)
-    if row:
-        return row
-    row = _load_platform_session_from_container(platform)
-    if row:
-        return row
-    raise RuntimeError(f"no synced session found for platform={platform}")
-
-
-def _load_platform_session_from_sqlite(path: Path, platform: str) -> list[dict] | None:
-    if not path.exists():
-        return None
-    conn = sqlite3.connect(path)
+    cookies: list[dict] | None = None
+    api_error: Exception | None = None
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT cookies_json
-            FROM publisher_browser_sessions
-            WHERE platform_id = ?
-            ORDER BY updated_at DESC
-            LIMIT 1
-            """,
-            (platform,),
+        req = urllib.request.Request(
+            f"{BACKEND_URL.rstrip('/')}/api/publishers/extension/browser-sessions/{platform}",
+            headers={"x-forwin-extension-key": load_api_key()},
         )
-        row = cur.fetchone()
-    except sqlite3.Error:
-        row = None
+        with urllib.request.urlopen(req, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8") or "null")
+        if isinstance(payload, dict):
+            cookies = payload.get("cookies") or []
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        api_error = exc
+    if not isinstance(cookies, list) or not cookies:
+        cookies = _load_platform_session_from_postgres(DATABASE_URL, platform)
+    if not isinstance(cookies, list) or not cookies:
+        if api_error is not None:
+            raise RuntimeError(f"failed to load synced session for platform={platform}: {api_error}") from api_error
+        raise RuntimeError(f"no synced session found for platform={platform}")
+    return [item for item in cookies if isinstance(item, dict)]
+
+
+def _load_platform_session_from_postgres(database_url: str, platform: str) -> list[dict] | None:
+    engine = None
+    try:
+        engine = get_engine(database_url)
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT cookies_json
+                    FROM publisher_browser_sessions
+                    WHERE platform_id = :platform
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"platform": platform},
+            ).first()
+    except Exception:
+        return None
     finally:
-        conn.close()
+        if engine is not None:
+            engine.dispose()
     if not row:
         return None
-    return json.loads(row[0])
+    return _decode_stored_cookies(row[0])
 
 
-def _load_platform_session_from_container(platform: str) -> list[dict] | None:
-    query = (
-        "import sqlite3; conn=sqlite3.connect('/app/data/novel.db'); "
-        "cur=conn.cursor(); "
-        f"cur.execute(\"SELECT cookies_json FROM publisher_browser_sessions WHERE platform_id='{platform}' ORDER BY updated_at DESC LIMIT 1\"); "
-        "row=cur.fetchone(); "
-        "print(row[0] if row else '')"
-    )
-    result = subprocess.run(
-        ["docker", "exec", "forwin", "python", "-c", query],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    payload = (result.stdout or "").strip()
-    if result.returncode != 0 or not payload:
-        return None
-    return json.loads(payload)
+def _decode_stored_cookies(raw: str) -> list[dict]:
+    try:
+        payload = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return []
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict) or payload.get("encoding") != SESSION_COOKIE_ENCODING:
+        return []
+    secret = Config.from_env().publisher_session_secret
+    if not secret:
+        return []
+    try:
+        decrypted = decrypt_json_with_secret(secret, str(payload.get("ciphertext") or ""))
+    except SecretStoreError:
+        return []
+    if not isinstance(decrypted, list):
+        return []
+    return [item for item in decrypted if isinstance(item, dict)]
 
 
 def load_extension_id(context) -> str:

@@ -23,11 +23,16 @@ from forwin.api_schemas import (
     ExtensionSessionSyncResponse,
     PublisherCommentSyncJobRequest,
     PublisherCommentSyncJobResponse,
+    PublisherBrowserSessionSummaryResponse,
     PublisherPlatformInfo,
     PublisherUploadJobCreateRequest,
     PublisherUploadJobResponse,
     TaskMutationResponse,
     UploadJobResultRequest,
+)
+from forwin.publishers.manager import (
+    PublisherExtensionAuthError,
+    PublisherExtensionAuthNotConfigured,
 )
 
 
@@ -37,9 +42,14 @@ def _build_extension_package(extension_root: Path) -> bytes:
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(extension_root.rglob("*")):
-            if path.is_dir():
-                continue
+        paths = sorted(path for path in extension_root.rglob("*") if path.is_file())
+        paths.sort(
+            key=lambda path: (
+                path.name != "manifest.json",
+                str(path.relative_to(extension_root)),
+            )
+        )
+        for path in paths:
             archive.write(path, arcname=Path("forwin-publisher") / path.relative_to(extension_root))
     buffer.seek(0)
     return buffer.getvalue()
@@ -48,9 +58,9 @@ def _build_extension_package(extension_root: Path) -> bytes:
 def _require_extension_auth(publisher_manager, x_forwin_extension_key: str | None) -> None:
     try:
         publisher_manager.verify_extension_api_key(x_forwin_extension_key)
-    except RuntimeError as exc:
+    except PublisherExtensionAuthNotConfigured as exc:
         raise HTTPException(503, str(exc)) from exc
-    except ValueError as exc:
+    except PublisherExtensionAuthError as exc:
         raise HTTPException(401, str(exc)) from exc
 
 
@@ -191,10 +201,21 @@ def publisher_extension_get_browser_session(
     x_forwin_extension_key: str | None = None,
 ) -> ExtensionBrowserSessionResponse | None:
     _require_extension_auth(publisher_manager, x_forwin_extension_key)
-    payload = publisher_manager.get_browser_session(platform)
+    payload = publisher_manager.get_browser_session(platform, upgrade_legacy=True)
     if payload is None:
         return None
     return ExtensionBrowserSessionResponse(**payload)
+
+
+def get_publisher_browser_session_summary(
+    platform: str,
+    *,
+    publisher_manager,
+) -> PublisherBrowserSessionSummaryResponse | None:
+    payload = publisher_manager.get_browser_session_summary(platform)
+    if payload is None:
+        return None
+    return PublisherBrowserSessionSummaryResponse(**payload)
 
 
 def update_publisher_upload_job_result(

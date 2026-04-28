@@ -14,7 +14,7 @@ from forwin.state.updater import StateUpdater
 
 
 def test_writer_context_includes_v4_hint_intent_without_hidden_truth() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -89,7 +89,9 @@ def test_writer_context_includes_v4_hint_intent_without_hidden_truth() -> None:
         chapter_plan = session.get(type(chapter), chapter_id)
         assert chapter_plan is not None
         raw_pack = assemble_context(StateRepository(session), project_id, chapter_plan)
-        writer_pack = RetrievalBroker().build_chapter_context(
+        writer_pack = RetrievalBroker(
+            memory_index=type("FakeMemoryIndex", (), {"search": lambda self, **_kwargs: []})()
+        ).build_chapter_context(
             StateRepository(session),
             project_id,
             chapter_plan,

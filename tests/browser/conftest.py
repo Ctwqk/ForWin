@@ -51,7 +51,10 @@ def browser_test_base_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
     env = os.environ.copy()
     env.update(
         {
-            "FORWIN_DB_PATH": str(run_root / "novel.db"),
+            "FORWIN_DATABASE_URL": env.get(
+                "FORWIN_TEST_DATABASE_URL",
+                "postgresql+psycopg://forwin:forwin@localhost:5432/forwin_test",
+            ),
             "FORWIN_ARTIFACT_ROOT": str(run_root / "artifacts"),
             "FORWIN_RUNTIME_SETTINGS_PATH": str(run_root / "runtime_settings.json"),
             "FORWIN_RETRIEVAL_ROOT": str(run_root / "retrieval"),

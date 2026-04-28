@@ -162,6 +162,8 @@ class TaskResponse(BaseModel):
     deletable: bool = False
     interrupted_by_restart: bool = False
     recovery_suggestion: str = ""
+    persistence_degraded: bool = False
+    persistence_error: str | None = None
 
 
 class TaskSummaryResponse(TaskResponse):

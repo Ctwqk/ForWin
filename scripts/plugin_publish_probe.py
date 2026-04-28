@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import time
@@ -10,11 +9,18 @@ import tempfile
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+from sqlalchemy import text
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from forwin.config import DEFAULT_DATABASE_URL
+from forwin.models.base import get_engine
+
 EXTENSION_DIR = REPO_ROOT / "browser_extension" / "forwin-publisher"
-DB_PATH = REPO_ROOT / "data" / "novel.db"
+DATABASE_URL = os.environ.get("FORWIN_DATABASE_URL", DEFAULT_DATABASE_URL)
 BACKEND_URL = "http://127.0.0.1:8899"
 
 
@@ -80,7 +86,7 @@ def load_book_meta() -> dict:
 
 
 def load_platform_session(platform: str) -> list[dict]:
-    row = _load_platform_session_from_sqlite(DB_PATH, platform)
+    row = _load_platform_session_from_postgres(DATABASE_URL, platform)
     if row:
         return row
     row = _load_platform_session_from_container(platform)
@@ -89,40 +95,50 @@ def load_platform_session(platform: str) -> list[dict]:
     raise RuntimeError(f"no synced session found for platform={platform}")
 
 
-def _load_platform_session_from_sqlite(path: Path, platform: str) -> list[dict] | None:
-    if not path.exists():
-        return None
-    conn = sqlite3.connect(path)
+def _load_platform_session_from_postgres(database_url: str, platform: str) -> list[dict] | None:
+    engine = get_engine(database_url)
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT cookies_json
-            FROM publisher_browser_sessions
-            WHERE platform_id = ?
-            ORDER BY updated_at DESC
-            LIMIT 1
-            """,
-            (platform,),
-        )
-        row = cur.fetchone()
-    except sqlite3.Error:
-        row = None
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT cookies_json
+                    FROM publisher_browser_sessions
+                    WHERE platform_id = :platform
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """
+                ),
+                {"platform": platform},
+            ).first()
+    except Exception:
+        return None
     finally:
-        conn.close()
+        engine.dispose()
     if not row:
         return None
     return json.loads(row[0])
 
 
 def _load_platform_session_from_container(platform: str) -> list[dict] | None:
-    query = (
-        "import sqlite3; conn=sqlite3.connect('/app/data/novel.db'); "
-        "cur=conn.cursor(); "
-        f"cur.execute(\"SELECT cookies_json FROM publisher_browser_sessions WHERE platform_id='{platform}' ORDER BY updated_at DESC LIMIT 1\"); "
-        "row=cur.fetchone(); "
-        "print(row[0] if row else '')"
-    )
+    platform_json = json.dumps(platform)
+    query = f"""
+from sqlalchemy import text
+from forwin.config import Config
+from forwin.models.base import get_engine
+
+platform = {platform_json}
+engine = get_engine(Config.from_env().database_url)
+try:
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT cookies_json FROM publisher_browser_sessions WHERE platform_id = :platform ORDER BY updated_at DESC LIMIT 1"),
+            {{"platform": platform}},
+        ).first()
+        print(row[0] if row else "")
+finally:
+    engine.dispose()
+"""
     result = subprocess.run(
         ["docker", "exec", "forwin", "python", "-c", query],
         capture_output=True,

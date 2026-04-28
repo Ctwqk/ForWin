@@ -17,7 +17,7 @@ COPY forwin/ forwin/
 
 RUN pip install --no-cache-dir .
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium xvfb xauth ca-certificates \
+    && apt-get install -y --no-install-recommends chromium xvfb xauth ca-certificates postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 RUN python -m playwright install --with-deps chromium
 COPY --from=world-studio-builder /app/frontend/world-studio/dist/ frontend/world-studio/dist/
@@ -31,7 +31,7 @@ EXPOSE 8899
 ENV MINIMAX_API_KEY=""
 ENV MINIMAX_BASE_URL="https://api.minimaxi.com/v1"
 ENV MINIMAX_MODEL="MiniMax-M2.7"
-ENV FORWIN_DB_PATH="/app/data/novel.db"
+ENV FORWIN_DATABASE_URL="postgresql+psycopg://forwin:forwin@postgres:5432/forwin"
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import httpx; httpx.get('http://localhost:8899/health')" || exit 1

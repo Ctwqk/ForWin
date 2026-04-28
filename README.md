@@ -54,6 +54,7 @@ tests/                        # Automated test suite
 
 ```bash
 python -m pip install -e .[test]
+export FORWIN_DATABASE_URL=postgresql+psycopg://forwin:forwin@localhost:5432/forwin
 uvicorn forwin.api:app --reload --host 0.0.0.0 --port 8899
 ```
 
@@ -65,11 +66,33 @@ docker compose up --build
 
 By default the main web API is exposed on `http://localhost:8899`.
 
+The application now requires PostgreSQL for its main persistence store. SQLite
+files such as `data/novel.db` are no longer supported as a runtime database.
+
 ## Testing
 
 ```bash
+export FORWIN_TEST_DATABASE_URL=postgresql+psycopg://forwin:forwin@localhost:5432/forwin_test
 pytest
 ```
+
+## Backup and restore
+
+Run before upgrades or large refactors:
+
+```bash
+python scripts/backup_forwin_data.py --output-dir backups --zip
+python scripts/verify_forwin_backup.py backups/forwin-backup-YYYYmmdd-HHMMSS
+```
+
+For full restore verification, provide an empty PostgreSQL database:
+
+```bash
+python scripts/verify_forwin_backup.py backups/forwin-backup-YYYYmmdd-HHMMSS \
+  --restore-database-url postgresql+psycopg://forwin:forwin@localhost:5432/forwin_restore_check
+```
+
+Backups include a `pg_dump` custom-format database dump, runtime settings, local artifacts when `FORWIN_ARTIFACT_BACKEND=local`, a manifest with SHA256 checksums, and `.env.keys.txt` with environment key names only. `.env` values are not copied to avoid leaking LLM API keys. When using MinIO or Qdrant, also back up the Docker volumes `forwin-minio` and `forwin-qdrant`.
 
 ## Notes
 

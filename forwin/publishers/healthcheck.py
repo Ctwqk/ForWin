@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from sqlalchemy import text
+
+from forwin.models.base import get_engine
 
 
 def _utc_now() -> datetime:
@@ -75,7 +78,7 @@ class PreferredClientHeartbeat:
 
 
 def get_preferred_client_heartbeat(
-    db_path: str | Path,
+    database_url: str | Path,
     *,
     preferred_client_id: str = "",
     profile_dir: str | Path = "",
@@ -87,50 +90,66 @@ def get_preferred_client_heartbeat(
         profile_dir=profile_dir,
     )
     client_id = resolved_client_id
-    db_file = Path(db_path).expanduser()
-    if not db_file.exists():
+
+    try:
+        engine = get_engine(str(database_url))
+    except Exception as exc:  # noqa: BLE001
         return PreferredClientHeartbeat(
             ok=False,
             client_id=client_id,
-            message=f"db file not found: {db_file}",
+            message=f"database URL is invalid: {exc}",
         )
 
     cutoff = _utc_now() - timedelta(seconds=max(int(stale_seconds or 90), 1))
-    with sqlite3.connect(str(db_file)) as conn:
-        conn.row_factory = sqlite3.Row
-        latest_recent = conn.execute(
-            """
-            SELECT client_id, backend_base_url, last_heartbeat_at
-            FROM publisher_extension_clients
-            ORDER BY last_heartbeat_at DESC
-            LIMIT 1
-            """
-        ).fetchone()
-        latest_recent_client_id = str(latest_recent["client_id"] or "").strip() if latest_recent else ""
-        if not client_id and allow_latest_recent_fallback:
-            client_id = latest_recent_client_id
-        row = (
-            conn.execute(
-                """
-                SELECT client_id, backend_base_url, last_heartbeat_at
-                FROM publisher_extension_clients
-                WHERE client_id = ?
-                """,
-                (client_id,),
-            ).fetchone()
-            if client_id
-            else None
+    try:
+        with engine.connect() as conn:
+            latest_recent = conn.execute(
+                text(
+                    """
+                    SELECT client_id, backend_base_url, last_heartbeat_at
+                    FROM publisher_extension_clients
+                    ORDER BY last_heartbeat_at DESC
+                    LIMIT 1
+                    """
+                )
+            ).mappings().first()
+            latest_recent_client_id = str(latest_recent["client_id"] or "").strip() if latest_recent else ""
+            if not client_id and allow_latest_recent_fallback:
+                client_id = latest_recent_client_id
+            row = (
+                conn.execute(
+                    text(
+                        """
+                        SELECT client_id, backend_base_url, last_heartbeat_at
+                        FROM publisher_extension_clients
+                        WHERE client_id = :client_id
+                        """
+                    ),
+                    {"client_id": client_id},
+                ).mappings().first()
+                if client_id
+                else None
+            )
+            recent_platform_rows = conn.execute(
+                text(
+                    """
+                    SELECT platform_id
+                    FROM publisher_extension_platform_states
+                    WHERE client_id = :client_id
+                      AND last_heartbeat_at >= :cutoff
+                    ORDER BY platform_id
+                    """
+                ),
+                {"client_id": client_id, "cutoff": cutoff.replace(tzinfo=None)},
+            ).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        return PreferredClientHeartbeat(
+            ok=False,
+            client_id=client_id,
+            message=f"database heartbeat query failed: {exc}",
         )
-        recent_platform_rows = conn.execute(
-            """
-            SELECT platform_id
-            FROM publisher_extension_platform_states
-            WHERE client_id = ?
-              AND last_heartbeat_at >= ?
-            ORDER BY platform_id
-            """,
-            (client_id, cutoff.replace(tzinfo=None).isoformat(sep=" ")),
-        ).fetchall()
+    finally:
+        engine.dispose()
 
     latest_recent_backend_base_url = str(latest_recent["backend_base_url"] or "").strip() if latest_recent else ""
     latest_recent_heartbeat_at = str(latest_recent["last_heartbeat_at"] or "").strip() if latest_recent else ""

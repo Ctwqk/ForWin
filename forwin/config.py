@@ -8,6 +8,7 @@ DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_MOONSHOT_MODEL = "kimi-k2.5"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+DEFAULT_DATABASE_URL = "postgresql+psycopg://forwin:forwin@localhost:5432/forwin"
 
 try:
     from pydantic_settings import BaseSettings as _ConfigBaseModel
@@ -101,8 +102,12 @@ def _env_llm_profiles(env: dict[str, str] | None = None) -> list[dict[str, str]]
 
 def _env_values() -> dict[str, object]:
     env = _merged_env_values()
+    database_url = env.get("FORWIN_DATABASE_URL", DEFAULT_DATABASE_URL)
     return {
-        "db_path": os.environ.get("FORWIN_DB_PATH", "data/novel.db"),
+        "database_url": database_url,
+        # Kept only so older config construction sites fail later with the
+        # PostgreSQL-only engine error instead of at Pydantic validation time.
+        "db_path": database_url,
         "artifact_root": os.environ.get("FORWIN_ARTIFACT_ROOT", "data/artifacts"),
         "artifact_backend": os.environ.get("FORWIN_ARTIFACT_BACKEND", "local"),
         "minio_endpoint": os.environ.get("FORWIN_MINIO_ENDPOINT", ""),
@@ -222,7 +227,8 @@ def _env_values() -> dict[str, object]:
 
 
 class _ConfigFields:
-    db_path: str = "data/novel.db"
+    database_url: str = DEFAULT_DATABASE_URL
+    db_path: str = DEFAULT_DATABASE_URL
     artifact_root: str = "data/artifacts"
     artifact_backend: str = "local"
     minio_endpoint: str = ""
@@ -309,3 +315,9 @@ class _ConfigFields:
 class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
     if _USES_BASE_SETTINGS:
         model_config = {"env_prefix": ""}
+
+    def model_post_init(self, __context: object) -> None:
+        legacy_db_path = str(getattr(self, "db_path", "") or "").strip()
+        database_url = str(getattr(self, "database_url", "") or "").strip()
+        if legacy_db_path and legacy_db_path != DEFAULT_DATABASE_URL and database_url == DEFAULT_DATABASE_URL:
+            object.__setattr__(self, "database_url", legacy_db_path)

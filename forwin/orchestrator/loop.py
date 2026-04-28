@@ -172,12 +172,8 @@ class WritingOrchestrator:
         self._governance_stage_name = ""
         self._governance_stage_started_at = 0.0
 
-        # Ensure the database directory exists.
-        db_dir = Path(self.config.db_path).parent
-        db_dir.mkdir(parents=True, exist_ok=True)
-
         # Database setup.
-        self.engine = get_engine(self.config.db_path)
+        self.engine = get_engine(self.config.database_url)
         init_db(self.engine)
         self._SessionFactory = get_session_factory(self.engine)
 
@@ -523,7 +519,7 @@ class WritingOrchestrator:
                     + ", ".join(str(chapter) for chapter in result.failed_chapters)
                 )
             print(f"项目ID: {project_id}")
-            print(f"数据库: {self.config.db_path}")
+            print(f"数据库: {self.config.database_url}")
             print(f"{'='*60}\n")
 
             self._emit_progress(

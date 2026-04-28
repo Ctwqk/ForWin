@@ -3,8 +3,12 @@ services:
     build: .
     container_name: forwin
     depends_on:
-      - qdrant
-      - minio
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      minio:
+        condition: service_started
     env_file:
       - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
     ports:
@@ -26,6 +30,7 @@ services:
       - LLM_RETRY_ATTEMPTS=${LLM_RETRY_ATTEMPTS:-2}
       - LLM_RETRY_INITIAL_DELAY_SECONDS=${LLM_RETRY_INITIAL_DELAY_SECONDS:-2}
       - LLM_RETRY_MAX_DELAY_SECONDS=${LLM_RETRY_MAX_DELAY_SECONDS:-15}
+      - FORWIN_DATABASE_URL=${FORWIN_DATABASE_URL:-postgresql+psycopg://forwin:forwin@postgres:5432/forwin}
       - WRITER_MODE=${WRITER_MODE:-scene}
       - FORWIN_RETRIEVAL_BACKEND=${FORWIN_RETRIEVAL_BACKEND:-qdrant}
       - FORWIN_QDRANT_URL=${FORWIN_QDRANT_URL:-http://qdrant:6333}
@@ -43,6 +48,23 @@ services:
       - FORWIN_CODEX_MAX_CONCURRENT=${FORWIN_CODEX_MAX_CONCURRENT:-1}
       - FORWIN_CODEX_SYNC_TIMEOUT_SECONDS=${FORWIN_CODEX_SYNC_TIMEOUT_SECONDS:-90}
       - FORWIN_CODEX_JOB_TIMEOUT_SECONDS=${FORWIN_CODEX_JOB_TIMEOUT_SECONDS:-900}
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    container_name: forwin-postgres
+    environment:
+      - POSTGRES_USER=${FORWIN_POSTGRES_USER:-forwin}
+      - POSTGRES_PASSWORD=${FORWIN_POSTGRES_PASSWORD:-forwin}
+      - POSTGRES_DB=${FORWIN_POSTGRES_DB:-forwin}
+    volumes:
+      - forwin-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${FORWIN_POSTGRES_USER:-forwin} -d ${FORWIN_POSTGRES_DB:-forwin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
   forwin-mcp:
@@ -83,6 +105,7 @@ services:
       - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
     environment:
       - FORWIN_BACKEND_URL=${FORWIN_PUBLISHER_BROWSER_BACKEND_URL:-http://forwin:8899}
+      - FORWIN_DATABASE_URL=${FORWIN_DATABASE_URL:-postgresql+psycopg://forwin:forwin@postgres:5432/forwin}
       - FORWIN_PUBLISHER_EXTENSION_API_KEY=${FORWIN_PUBLISHER_EXTENSION_API_KEY:-}
       - FORWIN_PUBLISHER_PREFERRED_CLIENT_ID=${FORWIN_PUBLISHER_PREFERRED_CLIENT_ID:-}
       - FORWIN_EXTENSION_TEST_PROFILE=${FORWIN_EXTENSION_TEST_PROFILE:-/app/data/chrome_profiles/forwin-extension}
@@ -132,5 +155,6 @@ services:
 
 volumes:
   forwin-data:
+  forwin-postgres:
   forwin-qdrant:
   forwin-minio:

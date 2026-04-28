@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
+import os
 import sys
 import time
 import urllib.error
@@ -10,10 +10,16 @@ import urllib.request
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+from sqlalchemy import bindparam, text
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB_PATH = REPO_ROOT / "data" / "novel.db"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from forwin.config import DEFAULT_DATABASE_URL
+from forwin.models.base import get_engine
+
 SUPPORTED_PLATFORMS = ("fanqie", "qidian")
 
 
@@ -27,9 +33,9 @@ def parse_args() -> argparse.Namespace:
         help="CDP endpoint for the running Chromium instance.",
     )
     parser.add_argument(
-        "--db-path",
-        default=str(DEFAULT_DB_PATH),
-        help="Path to the ForWin SQLite database.",
+        "--database-url",
+        default=os.environ.get("FORWIN_DATABASE_URL", DEFAULT_DATABASE_URL),
+        help="ForWin PostgreSQL SQLAlchemy URL.",
     )
     parser.add_argument(
         "--wait-seconds",
@@ -58,27 +64,28 @@ def wait_for_cdp(cdp_url: str, timeout_seconds: float) -> None:
     raise RuntimeError(f"CDP endpoint not ready at {cdp_url}")
 
 
-def load_latest_sessions(db_path: Path) -> dict[str, list[dict]]:
-    if not db_path.exists():
-        return {}
-    conn = sqlite3.connect(str(db_path))
+def load_latest_sessions(database_url: str) -> dict[str, list[dict]]:
+    engine = get_engine(database_url)
     try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT platform_id, cookies_json
-            FROM publisher_browser_sessions
-            WHERE platform_id IN (?, ?)
-            ORDER BY platform_id ASC
-            """,
-            SUPPORTED_PLATFORMS,
-        )
-        rows = cur.fetchall()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT platform_id, cookies_json
+                    FROM publisher_browser_sessions
+                    WHERE platform_id IN :platforms
+                    ORDER BY platform_id ASC
+                    """
+                ).bindparams(bindparam("platforms", expanding=True)),
+                {"platforms": tuple(SUPPORTED_PLATFORMS)},
+            ).mappings().all()
     finally:
-        conn.close()
+        engine.dispose()
 
     sessions: dict[str, list[dict]] = {}
-    for platform_id, cookies_json in rows:
+    for row in rows:
+        platform_id = row["platform_id"]
+        cookies_json = row["cookies_json"]
         try:
             cookies = json.loads(cookies_json or "[]")
         except json.JSONDecodeError:
@@ -116,8 +123,7 @@ def to_browser_cookie(cookie: dict) -> dict | None:
 
 def main() -> int:
     args = parse_args()
-    db_path = Path(args.db_path)
-    sessions = load_latest_sessions(db_path)
+    sessions = load_latest_sessions(args.database_url)
     cookies_to_add = [
         browser_cookie
         for platform in SUPPORTED_PLATFORMS

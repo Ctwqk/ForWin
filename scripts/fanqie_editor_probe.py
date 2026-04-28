@@ -14,13 +14,22 @@ EXTENSION_DIR = REPO_ROOT / "browser_extension" / "forwin-publisher"
 
 
 def load_cookies() -> list[dict]:
-    query = (
-        "import sqlite3; conn=sqlite3.connect('/app/data/novel.db'); "
-        "cur=conn.cursor(); "
-        "cur.execute(\"SELECT cookies_json FROM publisher_browser_sessions "
-        "WHERE platform_id='fanqie' ORDER BY updated_at DESC LIMIT 1\"); "
-        "row=cur.fetchone(); print(row[0] if row else '')"
-    )
+    query = """
+from sqlalchemy import text
+from forwin.config import Config
+from forwin.models.base import get_engine
+
+engine = get_engine(Config.from_env().database_url)
+try:
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT cookies_json FROM publisher_browser_sessions WHERE platform_id = :platform ORDER BY updated_at DESC LIMIT 1"),
+            {"platform": "fanqie"},
+        ).first()
+        print(row[0] if row else "")
+finally:
+    engine.dispose()
+"""
     out = subprocess.check_output(["docker", "exec", "forwin", "python", "-c", query], text=True)
     return json.loads(out)
 

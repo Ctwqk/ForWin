@@ -271,6 +271,7 @@ class Phase05RegressionTests(unittest.TestCase):
             "os.environ",
             {
                 "FORWIN_DB_PATH": "tmp/test.db",
+                "FORWIN_DATABASE_URL": "postgresql+psycopg://forwin:forwin@localhost:5432/forwin_test",
                 "TEMPERATURE": "0.42",
                 "MAX_TOKENS": "4096",
             },
@@ -278,7 +279,8 @@ class Phase05RegressionTests(unittest.TestCase):
         ):
             config = Config.from_env()
 
-        self.assertEqual(config.db_path, "tmp/test.db")
+        self.assertEqual(config.database_url, "postgresql+psycopg://forwin:forwin@localhost:5432/forwin_test")
+        self.assertEqual(config.db_path, "postgresql+psycopg://forwin:forwin@localhost:5432/forwin_test")
         self.assertEqual(config.temperature, 0.42)
         self.assertEqual(config.max_tokens, 4096)
 
@@ -6190,17 +6192,11 @@ class Phase05RegressionTests(unittest.TestCase):
             api_module._tasks = old_tasks
             api_module._runtime_settings = old_store
 
-    def test_sqlite_engine_enables_foreign_keys(self) -> None:
+    def test_get_engine_rejects_sqlite_paths(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = str(Path(tmp) / "fk.db")
-            engine = get_engine(db_path)
-            try:
-                with engine.connect() as conn:
-                    foreign_keys = conn.execute(text("PRAGMA foreign_keys")).scalar_one()
-            finally:
-                engine.dispose()
-
-        self.assertEqual(foreign_keys, 1)
+            with self.assertRaises(ValueError):
+                get_engine(db_path)
 
     def test_llm_settings_api_persists_runtime_defaults(self) -> None:
         with TemporaryDirectory() as tmp:

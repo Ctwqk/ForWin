@@ -201,6 +201,7 @@ class WebNovelExperienceReviewer:
             recent_rule_events=[],
             recent_review_notes=[],
             lint_signals=[],
+            active_personality_contexts=list(context.active_personality_contexts),
         )
 
     @staticmethod
@@ -584,6 +585,10 @@ class WebNovelExperienceReviewer:
                 )
         for item in context.active_rules[:5]:
             add_evidence(f"active_rule:{item.entity_id or item.name}", "active_rule", item.description)
+        for item in context.active_personality_contexts[:8]:
+            character_id = str(item.get("character_id") or item.get("character_name") or "").strip()
+            if character_id:
+                add_evidence(f"personality:{character_id}", "personality", json.dumps(item, ensure_ascii=False))
 
         add_evidence("draft:summary", "draft", writer_output.end_of_chapter_summary)
         add_evidence("draft:body_head", "draft", writer_output.body[:500])
@@ -695,6 +700,7 @@ class WebNovelExperienceReviewer:
                 ),
                 "recent_review_notes": [item.model_dump(mode="json") for item in context.recent_review_notes[:5]],
             },
+            "personality": list(context.active_personality_contexts[:8]),
             "draft": {
                 "title": writer_output.title,
                 "summary": writer_output.end_of_chapter_summary,
@@ -727,6 +733,7 @@ class WebNovelExperienceReviewer:
                     "你是 Web-Novel Experience Reviewer。只输出 JSON。"
                     "你审查的是网文体验而不是文学腔：看爽点兑现、问题梯子、沉浸感、规则可读性、"
                     "拖感是否仍有推进。所有 warn/fail issue 必须引用给定 evidence_id。"
+                    "同时检查人物是否符合 active_personality_context，但人格 skill 不能覆盖 canon。"
                 ),
             },
             {
@@ -743,6 +750,8 @@ class WebNovelExperienceReviewer:
                     "repair_instruction 可以为 null，否则必须包含：repair_scope(draft/chapter_plan/band_plan)、"
                     "failure_type、must_fix、must_preserve、design_patch、evidence_refs。\n"
                     "若章节拖但仍有问题梯子/微进展/关系变化/规则稳态，只能给 warn 或 pass，不能给 fail。\n"
+                    "人物一致性检查：决策是否符合 dominant skill；对白是否符合 expression/social mask；"
+                    "压力反应是否符合 stress mode；是否把倾向误写成绝对规则；是否由 skill 发明新 canon。\n"
                     "只有当 no-payoff stall 连续成立，或出现因果/stakes/规则可读性断裂且能指向证据时，才给 fail。\n"
                     f"允许引用的 evidence_id：{json.dumps(evidence_ids, ensure_ascii=False)}\n"
                     f"审查数据：{json.dumps(payload, ensure_ascii=False)}"

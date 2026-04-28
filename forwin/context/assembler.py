@@ -16,6 +16,7 @@ from forwin.planning.world_contracts import WorldContractRepository
 from forwin.map.pathfinding import MapGraph
 from forwin.map.repository import MapRepository
 from forwin.map.visibility import is_writer_visible_map_edge
+from forwin.personality import CharacterPersonalityLibrary, build_active_personality_contexts
 from forwin.protocol.book_state import MapNode, WorldNode
 from forwin.protocol.world_model import WorldContextPack
 from forwin.world_model.retriever import WorldModelRetriever
@@ -426,10 +427,20 @@ def _book_state_context_overlay(
     map_nodes_by_id = runtime.map.nodes_by_id
     node_id_by_name = {node.name: node.id for node in map_nodes_by_id.values() if node.name}
     active_locations: list[dict] = []
+    personality_characters: list[dict] = []
     site_states: list[dict] = []
     for node in runtime.world.nodes_by_id.values():
         node_type = str(getattr(node, "node_type", "") or "")
         if node_type == "character":
+            loadout = node.profile.get("personality_loadout") if isinstance(node.profile, dict) else None
+            if isinstance(loadout, dict) and loadout:
+                personality_characters.append(
+                    {
+                        "character_id": node.id,
+                        "character_name": node.name,
+                        "personality_loadout": loadout,
+                    }
+                )
             location_id = _resolve_book_state_location_id(
                 node,
                 runtime.world.get_state(node.id),
@@ -478,6 +489,7 @@ def _book_state_context_overlay(
         "active_world_lines": runtime.narrative.active_world_line_ids(),
         "active_knowledge_gaps": runtime.narrative.open_gap_ids(),
         "active_locations": active_locations,
+        "personality_characters": personality_characters,
         "site_states": site_states,
     }
 
@@ -803,6 +815,33 @@ def assemble_context(
         for item in book_state_overlay.get("active_knowledge_gaps", [])
         if str(item).strip()
     ]
+    active_personality_contexts: list[dict] = []
+    try:
+        pressure_triggers = []
+        if world_pressure is not None:
+            pressure_triggers.extend(
+                [
+                    str(world_pressure.pressure_level or "").strip(),
+                    str(world_pressure.pressure_summary or "").strip(),
+                ]
+            )
+            pressure_triggers.extend(str(item).strip() for item in world_pressure.notable_shifts if str(item).strip())
+        active_personality_contexts = [
+            item.model_dump(mode="json")
+            for item in build_active_personality_contexts(
+                [
+                    item
+                    for item in (book_state_overlay.get("personality_characters") or [])
+                    if str(item.get("character_name") or "") in allowed_entities
+                    or str(item.get("character_id") or "") in allowed_entities
+                ],
+                library=CharacterPersonalityLibrary(),
+                scene_flags=["chapter_generation"],
+                pressure_triggers=pressure_triggers,
+            )
+        ]
+    except Exception:
+        logger.warning("Failed to build active personality contexts.", exc_info=True)
 
     # 8. Build and return pack
     return ChapterContextPack(
@@ -931,4 +970,5 @@ def assemble_context(
             else []
         ),
         chapter_world_delta_intent=chapter_world_delta_intent,
+        active_personality_contexts=active_personality_contexts,
     )

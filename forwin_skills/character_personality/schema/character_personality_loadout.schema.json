@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ForWin Character Personality Loadout v2",
+  "type": "object",
+  "properties": {
+    "dominant": { "$ref": "#/$defs/skill_ref" },
+    "secondary": { "type": "array", "items": { "$ref": "#/$defs/skill_ref" } },
+    "social_mask": { "type": "array", "items": { "$ref": "#/$defs/conditional_skill_ref" } },
+    "stress_modes": { "type": "array", "items": { "$ref": "#/$defs/stress_skill_ref" } },
+    "relationship_patterns": { "type": "array", "items": { "$ref": "#/$defs/relationship_skill_ref" } },
+    "growth_stage": { "type": "string" },
+    "overrides": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "skill_ref": {
+      "type": ["object", "null"],
+      "required": ["skill"],
+      "properties": {
+        "skill": { "type": "string" },
+        "weight": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "additionalProperties": true
+    },
+    "conditional_skill_ref": {
+      "allOf": [
+        { "$ref": "#/$defs/skill_ref" },
+        {
+          "type": "object",
+          "properties": {
+            "active_when": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      ]
+    },
+    "stress_skill_ref": {
+      "allOf": [
+        { "$ref": "#/$defs/skill_ref" },
+        {
+          "type": "object",
+          "properties": {
+            "trigger": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      ]
+    },
+    "relationship_skill_ref": {
+      "allOf": [
+        { "$ref": "#/$defs/skill_ref" },
+        {
+          "type": "object",
+          "properties": {
+            "target": { "type": "string" }
+          }
+        }
+      ]
+    }
+  }
+}

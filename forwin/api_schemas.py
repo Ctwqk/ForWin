@@ -345,6 +345,11 @@ class BookStateLegacyImportResponse(BaseModel):
     migration_report: dict[str, Any] = Field(default_factory=dict)
 
 
+class PersonalityLoadoutUpdateRequest(BaseModel):
+    personality_loadout: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+
+
 class MapRuntimeResponse(BaseModel):
     schema_version: str = "map.runtime.v1"
     project_id: str

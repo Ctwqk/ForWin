@@ -553,6 +553,74 @@ pre {
   max-height: 340px;
 }
 
+.personality-editor {
+  display: grid;
+  gap: 16px;
+}
+
+.personality-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(280px, 1.2fr);
+  gap: 14px;
+}
+
+.field-stack {
+  display: grid;
+  gap: 7px;
+  color: #607083;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.skill-catalog {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.skill-catalog div {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #f7f9fb;
+}
+
+.skill-catalog strong,
+.skill-catalog span,
+.skill-catalog small {
+  overflow-wrap: anywhere;
+}
+
+.skill-catalog span,
+.skill-catalog small {
+  color: #607083;
+  font-size: 12px;
+}
+
+.json-editor {
+  width: 100%;
+  min-height: 340px;
+  resize: vertical;
+  border: 1px solid #c9d3df;
+  border-radius: 8px;
+  background: #0f1720;
+  color: #e7edf4;
+  padding: 14px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.inline-error {
+  margin: 8px 0 0;
+  color: #a43a2d;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .empty {
   display: grid;
   place-content: center;
@@ -590,6 +658,10 @@ pre {
   }
 
   .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .personality-grid {
     grid-template-columns: 1fr;
   }
 

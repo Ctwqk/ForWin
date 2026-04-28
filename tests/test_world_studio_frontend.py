@@ -19,6 +19,17 @@ class WorldStudioFrontendTests(unittest.TestCase):
         self.assertIn("studio-nav", app_source)
         self.assertIn(".studio-nav", css_source)
 
+    def test_world_studio_exposes_personality_loadout_editor(self) -> None:
+        app_source = (REPO_ROOT / "frontend/world-studio/src/App.tsx").read_text(encoding="utf-8")
+        css_source = (REPO_ROOT / "frontend/world-studio/src/styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('"personality"', app_source)
+        self.assertIn("人物性格", app_source)
+        self.assertIn("/api/personality-skills", app_source)
+        self.assertIn("personality-loadout", app_source)
+        self.assertIn("PersonalityEditor", app_source)
+        self.assertIn(".personality-editor", css_source)
+
 
 if __name__ == "__main__":
     unittest.main()

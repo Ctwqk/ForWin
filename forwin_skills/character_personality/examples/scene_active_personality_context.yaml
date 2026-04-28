@@ -1,0 +1,29 @@
+active_personality_context:
+  character_id: char_example
+  character_name: Example
+  active_skills:
+    dominant:
+      - trait-suspicious-survivor
+    secondary:
+      - trait-loyal-protector
+    social_mask:
+      - mask-cold-professional
+    stress_mode:
+      - stress-paranoid-controller
+  current_behavior_bias:
+    perception:
+      - TBD
+    decision:
+      - TBD
+    dialogue:
+      - TBD
+    body_language:
+      - TBD
+    relationship_behavior:
+      - TBD
+    stress_behavior:
+      - TBD
+  constraints:
+    - Do not override canon.
+    - Do not make the character omniscient.
+    - Do not flatten the character into one repeated behavior.

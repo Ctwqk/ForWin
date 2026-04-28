@@ -9,6 +9,29 @@
 - 如果改动尚未部署到 `8899`，必须明确写“未部署原因”和“切换条件”。
 - 旧的专项日志可保留，但关键结论需要汇总到这里。
 
+## 2026-04-27
+
+### V4.7 Character Personality Skill 设计与维护文档落档
+
+将人物性格 skill 系统正式标记为 V4.7，并补齐设计规格与维护指南。V4.7 定位为 BookState canon 与 V4.6 Knowledge System 之上的人物行为机制层：skill 只控制感知、决策、表达、关系、压力和成长倾向，不覆盖角色卡、canon、当前剧情状态或关系状态。
+
+关键变化：
+
+- 新增 [V4.7_character_personality_skill.md](/home/taiwei/.codex/worktrees/37d5/ForWin/Design-docs/V4.7_character_personality_skill.md)，记录 V4.7 的定位、数据边界、skill 类型、六层模型、runtime loading、writer/reviewer/World Studio/API 接入和后续里程碑。
+- 新增 [V4.7_character_personality_maintenance.md](/home/taiwei/.codex/worktrees/37d5/ForWin/Design-docs/V4.7_character_personality_maintenance.md)，记录 skill 新增/修改流程、prompt compression 维护、loadout 维护、reviewer issue 分类、World Studio 维护、测试命令和读者 OOC 反馈处理流程。
+- 明确 `forwin_skills/character_personality/` 是 V4.7 skill 仓库，当前已有 41 个 skill 目录、5 个完整样例和 36 个 v2 模板占位。
+- 明确 V4.7 当前实现落点：`WorldNode.profile.personality_loadout`、`forwin/personality` runtime、writer prompt `【人物性格运行时】`、reviewer personality evidence、World Studio 人物性格页。
+
+验证：
+
+- `test -f Design-docs/V4.7_character_personality_skill.md && test -f Design-docs/V4.7_character_personality_maintenance.md`
+- `grep -n "ForWin V4.7 Character Personality Skill\\|Runtime Loading\\|Reviewer 接入\\|World Studio 接入" Design-docs/V4.7_character_personality_skill.md`
+- `grep -n "维护对象\\|新增 Skill 流程\\|Prompt Compression 维护\\|读者 OOC 反馈处理" Design-docs/V4.7_character_personality_maintenance.md`
+- `uv run --extra test python -m pytest tests/test_personality_runtime.py tests/test_world_studio_frontend.py -q`
+- 结果：`9 passed`
+
+部署状态：未部署到 `8899`。原因：本轮新增设计与维护文档，不影响运行服务。切换条件：无。
+
 ## 2026-04-26
 
 ### V4.5.1 残余设计文档收束

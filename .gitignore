@@ -3,6 +3,7 @@
 __pycache__/
 .pytest_cache/
 *.pyc
+*.tsbuildinfo
 data/
 node_modules/
 dist/

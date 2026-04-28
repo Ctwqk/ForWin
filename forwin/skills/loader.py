@@ -27,6 +27,7 @@ def load_skill_manifest(path: str | Path, *, root: str | Path | None = None) -> 
         path=relative_path,
         skill_hash=f"sha256:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}",
         group=group,
+        metadata=dict(metadata),
         capability=SkillCapability(mode=mode, instruction_only=(mode == "instruction_only")),
     )
 
@@ -64,10 +65,44 @@ def _split_frontmatter(raw: str, path: Path) -> tuple[dict[str, object], str]:
 def _parse_frontmatter_lines(lines: list[str]) -> dict[str, object]:
     metadata: dict[str, object] = {}
     current_key = ""
+    current_nested_key = ""
     for raw_line in lines:
         line = raw_line.rstrip()
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent > 0:
+            if not current_key:
+                raise ValueError("Indented frontmatter line is missing a parent key")
+            if stripped.startswith("- "):
+                parent = metadata.setdefault(current_key, [])
+                if isinstance(parent, list):
+                    parent.append(_parse_scalar(stripped[2:].strip()))
+                    continue
+                if not isinstance(parent, dict):
+                    raise ValueError(f"Frontmatter key {current_key} mixes scalar and list values")
+                if not current_nested_key:
+                    raise ValueError("Nested frontmatter list item is missing a key")
+                values = parent.setdefault(current_nested_key, [])
+                if not isinstance(values, list):
+                    raise ValueError(
+                        f"Nested frontmatter key {current_key}.{current_nested_key} mixes scalar and list values"
+                )
+                values.append(_parse_scalar(stripped[2:].strip()))
+                continue
+            parent = metadata.setdefault(current_key, {})
+            if isinstance(parent, list) and not parent:
+                parent = {}
+                metadata[current_key] = parent
+            if not isinstance(parent, dict):
+                raise ValueError(f"Frontmatter key {current_key} mixes scalar and nested values")
+            if ":" not in stripped:
+                raise ValueError(f"Invalid nested frontmatter line: {line}")
+            nested_key, raw_value = stripped.split(":", 1)
+            current_nested_key = nested_key.strip()
+            value = raw_value.strip()
+            parent[current_nested_key] = [] if not value else _parse_scalar(value)
             continue
         if stripped.startswith("- "):
             if not current_key:
@@ -81,6 +116,7 @@ def _parse_frontmatter_lines(lines: list[str]) -> dict[str, object]:
             raise ValueError(f"Invalid frontmatter line: {line}")
         key, raw_value = line.split(":", 1)
         current_key = key.strip()
+        current_nested_key = ""
         value = raw_value.strip()
         if not value:
             metadata[current_key] = []

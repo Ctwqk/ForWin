@@ -10,6 +10,7 @@ import {
   Search,
   ShieldAlert,
   Upload,
+  UserRound,
   X
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -73,6 +74,29 @@ type WorldEditProposalInfo = {
   reviewed_at: string;
 };
 
+type PersonalitySkillInfo = {
+  name: string;
+  version: string;
+  description: string;
+  skill_type: string;
+  path: string;
+  incomplete?: boolean;
+};
+
+type CharacterPersonalityInfo = {
+  character_id: string;
+  character_name: string;
+  personality_loadout: Record<string, unknown>;
+};
+
+type PersonalityCatalogResponse = {
+  skills: PersonalitySkillInfo[];
+};
+
+type CharacterPersonalityResponse = {
+  characters: CharacterPersonalityInfo[];
+};
+
 type ExportResponse = {
   ok: boolean;
   vault_root: string;
@@ -88,7 +112,7 @@ type ImportResponse = {
   message: string;
 };
 
-type TabKey = "pages" | "conflicts" | "proposals";
+type TabKey = "pages" | "conflicts" | "proposals" | "personality";
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -117,6 +141,21 @@ function statusLabel(value: string): string {
   return value || "unknown";
 }
 
+function formatLoadout(value: Record<string, unknown>): string {
+  return JSON.stringify(value && Object.keys(value).length > 0 ? value : defaultPersonalityLoadout(), null, 2);
+}
+
+function defaultPersonalityLoadout(): Record<string, unknown> {
+  return {
+    dominant: null,
+    secondary: [],
+    social_mask: [],
+    stress_modes: [],
+    relationship_patterns: [],
+    overrides: {}
+  };
+}
+
 function snapshotTitle(snapshot: WorldModelSnapshotInfo | null): string {
   if (!snapshot) return "暂无快照";
   return `第 ${snapshot.as_of_chapter} 章后 · v${snapshot.version}`;
@@ -130,6 +169,10 @@ export default function App() {
   const [pages, setPages] = useState<WorldModelPageInfo[]>([]);
   const [conflicts, setConflicts] = useState<WorldModelConflictInfo[]>([]);
   const [proposals, setProposals] = useState<WorldEditProposalInfo[]>([]);
+  const [personalitySkills, setPersonalitySkills] = useState<PersonalitySkillInfo[]>([]);
+  const [characterPersonalities, setCharacterPersonalities] = useState<CharacterPersonalityInfo[]>([]);
+  const [selectedCharacterId, setSelectedCharacterId] = useState("");
+  const [personalityDraft, setPersonalityDraft] = useState("");
   const [selectedPageKey, setSelectedPageKey] = useState("");
   const [query, setQuery] = useState("");
   const [pageType, setPageType] = useState("all");
@@ -200,16 +243,26 @@ export default function App() {
     setError("");
     try {
       const pageRows = await apiJson<WorldModelPageInfo[]>(`/api/projects/${nextProjectId}/world-model/pages`);
-      const [snapshotRows, conflictRows, proposalRows] = await Promise.all([
+      const [snapshotRows, conflictRows, proposalRows, skillRows, personalityRows] = await Promise.all([
         apiJson<WorldModelSnapshotInfo[]>(`/api/projects/${nextProjectId}/world-model/snapshots`),
         apiJson<WorldModelConflictInfo[]>(`/api/projects/${nextProjectId}/world-model/conflicts`),
-        apiJson<WorldEditProposalInfo[]>(`/api/projects/${nextProjectId}/world-model/proposals`)
+        apiJson<WorldEditProposalInfo[]>(`/api/projects/${nextProjectId}/world-model/proposals`),
+        apiJson<PersonalityCatalogResponse>("/api/personality-skills"),
+        apiJson<CharacterPersonalityResponse>(`/api/projects/${nextProjectId}/book-state/characters/personality`)
       ]);
       setSnapshots(snapshotRows);
       setLatest(snapshotRows[0] ?? null);
       setPages(pageRows);
       setConflicts(conflictRows);
       setProposals(proposalRows);
+      setPersonalitySkills(skillRows.skills);
+      setCharacterPersonalities(personalityRows.characters);
+      const nextCharacter =
+        personalityRows.characters.find((item) => item.character_id === selectedCharacterId) ??
+        personalityRows.characters[0] ??
+        null;
+      setSelectedCharacterId(nextCharacter?.character_id ?? "");
+      setPersonalityDraft(formatLoadout(nextCharacter?.personality_loadout ?? {}));
       if (!selectedPageKey && pageRows.length > 0) {
         setSelectedPageKey(pageRows[0].page_key);
       }
@@ -279,6 +332,30 @@ export default function App() {
       await refreshWorldModel(projectId, { updateMessage: false });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Proposal 审核失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function savePersonalityLoadout(loadout: Record<string, unknown>) {
+    if (!projectId || !selectedCharacterId) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await apiJson<CharacterPersonalityInfo>(
+        `/api/projects/${projectId}/book-state/characters/${selectedCharacterId}/personality-loadout`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ personality_loadout: loadout, reason: "World Studio personality editor." })
+        }
+      );
+      setMessage("人物性格 loadout 已保存。");
+      setCharacterPersonalities((current) =>
+        current.map((item) => (item.character_id === result.character_id ? result : item))
+      );
+      setPersonalityDraft(formatLoadout(result.personality_loadout));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "人物性格保存失败");
     } finally {
       setBusy(false);
     }
@@ -372,6 +449,10 @@ export default function App() {
               <GitBranch size={16} />
               Proposal
             </button>
+            <button className={tab === "personality" ? "active" : ""} type="button" onClick={() => setTab("personality")}>
+              <UserRound size={16} />
+              人物性格
+            </button>
           </div>
 
           {tab === "pages" ? (
@@ -405,12 +486,32 @@ export default function App() {
 
           {tab === "conflicts" ? <ConflictList conflicts={conflicts} /> : null}
           {tab === "proposals" ? <ProposalList proposals={proposals} onReview={reviewProposal} busy={busy} /> : null}
+          {tab === "personality" ? (
+            <PersonalityCharacterList
+              characters={characterPersonalities}
+              selectedCharacterId={selectedCharacterId}
+              onSelect={(character) => {
+                setSelectedCharacterId(character.character_id);
+                setPersonalityDraft(formatLoadout(character.personality_loadout));
+              }}
+            />
+          ) : null}
         </aside>
 
         <section className="main-panel">
           {tab === "pages" ? <PageDetail page={selectedPage} snapshots={snapshots} /> : null}
           {tab === "conflicts" ? <ConflictDetail conflicts={conflicts} /> : null}
           {tab === "proposals" ? <ProposalDetail proposals={proposals} /> : null}
+          {tab === "personality" ? (
+            <PersonalityEditor
+              character={characterPersonalities.find((item) => item.character_id === selectedCharacterId) ?? null}
+              skills={personalitySkills}
+              draft={personalityDraft}
+              setDraft={setPersonalityDraft}
+              onSave={savePersonalityLoadout}
+              busy={busy}
+            />
+          ) : null}
         </section>
       </div>
     </main>
@@ -596,6 +697,147 @@ function ProposalDetail({ proposals }: { proposals: WorldEditProposalInfo[] }) {
       </div>
     </>
   );
+}
+
+function PersonalityCharacterList({
+  characters,
+  selectedCharacterId,
+  onSelect
+}: {
+  characters: CharacterPersonalityInfo[];
+  selectedCharacterId: string;
+  onSelect: (character: CharacterPersonalityInfo) => void;
+}) {
+  if (characters.length === 0) {
+    return <EmptyState title="没有角色" text="BookState character 节点出现后，可在这里设置人物性格 loadout。" compact />;
+  }
+  return (
+    <div className="list-scroll">
+      {characters.map((character) => (
+        <button
+          className={selectedCharacterId === character.character_id ? "page-item active" : "page-item"}
+          key={character.character_id}
+          type="button"
+          onClick={() => onSelect(character)}
+        >
+          <span>{character.character_name || character.character_id}</span>
+          <small>{dominantSkillName(character.personality_loadout) || "未设置主性格"}</small>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function PersonalityEditor({
+  character,
+  skills,
+  draft,
+  setDraft,
+  onSave,
+  busy
+}: {
+  character: CharacterPersonalityInfo | null;
+  skills: PersonalitySkillInfo[];
+  draft: string;
+  setDraft: (value: string) => void;
+  onSave: (loadout: Record<string, unknown>) => void;
+  busy: boolean;
+}) {
+  if (!character) {
+    return <EmptyState title="人物性格" text="选择一个 BookState character 后编辑 personality_loadout。" />;
+  }
+  const parsed = parseLoadoutDraft(draft);
+  const dominant = parsed.ok ? dominantSkillName(parsed.value) : "";
+  const traits = skills.filter((skill) => skill.skill_type === "trait");
+
+  function updateDominant(skillName: string) {
+    const base = parsed.ok ? parsed.value : defaultPersonalityLoadout();
+    setDraft(
+      formatLoadout({
+        ...base,
+        dominant: skillName ? { skill: skillName, weight: 0.75 } : null
+      })
+    );
+  }
+
+  return (
+    <div className="personality-editor">
+      <div className="panel-head">
+        <div>
+          <p className="eyebrow">Character Personality</p>
+          <h2>{character.character_name || character.character_id}</h2>
+        </div>
+        <button
+          type="button"
+          disabled={busy || !parsed.ok}
+          onClick={() => {
+            if (parsed.ok) onSave(parsed.value);
+          }}
+        >
+          <Check size={16} />
+          保存
+        </button>
+      </div>
+
+      <div className="personality-grid">
+        <section className="summary-panel">
+          <h3>Dominant Trait</h3>
+          <label className="field-stack">
+            <span>主性格 skill</span>
+            <select value={dominant} onChange={(event) => updateDominant(event.target.value)}>
+              <option value="">未设置</option>
+              {traits.map((skill) => (
+                <option key={skill.name} value={skill.name}>
+                  {skill.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </section>
+        <section className="summary-panel">
+          <h3>Skill Catalog</h3>
+          <div className="skill-catalog">
+            {skills.slice(0, 48).map((skill) => (
+              <div key={skill.name}>
+                <strong>{skill.name}</strong>
+                <span>{skill.skill_type || "unknown"}</span>
+                <small>{skill.description || (skill.incomplete ? "待填写 metadata" : "")}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <section className="markdown-panel">
+        <h3>personality_loadout JSON</h3>
+        <textarea
+          className="json-editor"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          spellCheck={false}
+        />
+        {!parsed.ok ? <p className="inline-error">JSON 格式不正确，修正后才能保存。</p> : null}
+      </section>
+    </div>
+  );
+}
+
+function parseLoadoutDraft(raw: string): { ok: true; value: Record<string, unknown> } | { ok: false; value: Record<string, unknown> } {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { ok: true, value: parsed as Record<string, unknown> }
+      : { ok: false, value: {} };
+  } catch {
+    return { ok: false, value: {} };
+  }
+}
+
+function dominantSkillName(loadout: Record<string, unknown>): string {
+  const dominant = loadout.dominant;
+  if (!dominant || typeof dominant !== "object" || Array.isArray(dominant)) return "";
+  const skill = (dominant as Record<string, unknown>).skill;
+  return typeof skill === "string" ? skill : "";
 }
 
 function EmptyState({ title, text, compact = false }: { title: string; text: string; compact?: boolean }) {

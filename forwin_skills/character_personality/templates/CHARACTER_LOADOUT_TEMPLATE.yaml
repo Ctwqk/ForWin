@@ -1,0 +1,13 @@
+character_id: char_example
+name: TBD
+role: TBD
+
+personality_loadout:
+  dominant:
+    skill: trait-suspicious-survivor
+    weight: 0.75
+  secondary: []
+  social_mask: []
+  stress_modes: []
+  relationship_patterns: []
+  overrides: {}

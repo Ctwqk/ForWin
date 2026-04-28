@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ForWin Active Personality Context v2",
+  "type": "object",
+  "required": ["character_id", "active_skills", "current_behavior_bias", "constraints"],
+  "properties": {
+    "character_id": { "type": "string" },
+    "character_name": { "type": "string" },
+    "active_skills": {
+      "type": "object",
+      "properties": {
+        "dominant": { "type": "array", "items": { "type": "string" } },
+        "secondary": { "type": "array", "items": { "type": "string" } },
+        "social_mask": { "type": "array", "items": { "type": "string" } },
+        "stress_mode": { "type": "array", "items": { "type": "string" } },
+        "relationship_pattern": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "current_behavior_bias": {
+      "type": "object",
+      "properties": {
+        "perception": { "type": "array", "items": { "type": "string" } },
+        "decision": { "type": "array", "items": { "type": "string" } },
+        "dialogue": { "type": "array", "items": { "type": "string" } },
+        "body_language": { "type": "array", "items": { "type": "string" } },
+        "relationship_behavior": { "type": "array", "items": { "type": "string" } },
+        "stress_behavior": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "string" },
+      "contains": { "const": "Do not infer behavior from model labels." }
+    }
+  },
+  "additionalProperties": false
+}

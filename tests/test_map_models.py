@@ -11,7 +11,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 
 
 def test_init_db_exposes_graph_map_tables_and_columns() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     inspector = inspect(engine)
 
@@ -26,7 +26,7 @@ def test_init_db_exposes_graph_map_tables_and_columns() -> None:
 
 
 def test_repository_persists_region_node_and_non_negative_edge() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
     with Session() as session:

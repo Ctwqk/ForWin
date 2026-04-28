@@ -41,8 +41,8 @@ from forwin.reviewer.context_builder import build_review_context_pack
 class WorldModelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = TemporaryDirectory()
-        self.db_path = str(Path(self.tmpdir.name) / "world_model.db")
-        self.engine = get_engine(self.db_path)
+        self.database_url = postgres_test_url("world_model")
+        self.engine = get_engine(self.database_url)
         init_db(self.engine)
         self.session_factory = get_session_factory(self.engine)
         self.old_session_factory = api_module._SessionFactory
@@ -50,7 +50,7 @@ class WorldModelTests(unittest.TestCase):
         self.old_runtime_settings = api_module._runtime_settings
         api_module._SessionFactory = self.session_factory
         api_module._config = Config(
-            db_path=self.db_path,
+            database_url=self.database_url,
             minimax_api_key="test-key",
             minimax_base_url="http://example.invalid",
             minimax_model="fake-model",

@@ -29,7 +29,7 @@ from forwin.world_model_v4.repository import WorldModelRepository
 
 
 def test_projection_rebuilds_reader_and_character_cognition_snapshots() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -129,7 +129,7 @@ def test_projection_rebuilds_reader_and_character_cognition_snapshots() -> None:
 
 
 def test_projection_materializes_entity_state_without_overwriting_hidden_truth() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

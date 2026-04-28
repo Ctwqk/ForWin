@@ -45,10 +45,18 @@ class KnowledgeProjectionRefresher:
         *,
         obsidian_root: Path | None = None,
         llm_kb_root: Path | None = None,
+        qdrant_url: str | None = None,
+        qdrant_collection: str | None = None,
+        qdrant_client: Any | None = None,
+        qdrant_models: Any | None = None,
     ) -> None:
         self.session = session
         self.obsidian_root = obsidian_root
         self.llm_kb_root = llm_kb_root
+        self.qdrant_url = qdrant_url
+        self.qdrant_collection = qdrant_collection
+        self.qdrant_client = qdrant_client
+        self.qdrant_models = qdrant_models
 
     def refresh(
         self,
@@ -78,10 +86,14 @@ class KnowledgeProjectionRefresher:
             result.errors.append(f"obsidian: {exc}")
 
         try:
-            kb = LLMKnowledgeBaseCompiler(self.session, root=self.llm_kb_root).rebuild(
-                project_id,
-                as_of_chapter=as_of_chapter,
-            )
+            kb = LLMKnowledgeBaseCompiler(
+                self.session,
+                root=self.llm_kb_root,
+                qdrant_url=self.qdrant_url,
+                qdrant_collection=self.qdrant_collection,
+                qdrant_client=self.qdrant_client,
+                qdrant_models=self.qdrant_models,
+            ).rebuild(project_id, as_of_chapter=as_of_chapter)
             result.llm_kb = {
                 "root": kb.root,
                 "files": list(kb.files),

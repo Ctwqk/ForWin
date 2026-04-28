@@ -53,7 +53,7 @@ def _setup_project(session, *, chapter_start: int = 21, chapter_end: int = 24):
 
 
 def test_patch_resolution_adds_reveal_ladder_and_rehearses_again() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -117,7 +117,7 @@ def test_patch_resolution_adds_reveal_ladder_and_rehearses_again() -> None:
 
 
 def test_subworld_without_roster_is_a_patchable_rehearsal_risk() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -166,7 +166,7 @@ def test_subworld_without_roster_is_a_patchable_rehearsal_risk() -> None:
 
 
 def test_early_reveal_before_visibility_guard_blocks_rehearsal() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -214,7 +214,7 @@ def test_early_reveal_before_visibility_guard_blocks_rehearsal() -> None:
 
 
 def test_replan_resolution_creates_new_plan_version_and_governance_events() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

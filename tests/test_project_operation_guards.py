@@ -26,7 +26,7 @@ from forwin.models.task import GenerationTask
 class ProjectOperationGuardTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = TemporaryDirectory()
-        self.engine = get_engine(str(Path(self.tmpdir.name) / "operation-guards.db"))
+        self.engine = get_engine(postgres_test_url("operation-guards"))
         init_db(self.engine)
         self.session_factory = get_session_factory(self.engine)
 
@@ -37,7 +37,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         api_module._SessionFactory = self.session_factory
         api_module._config = Config(
-            db_path=str(Path(self.tmpdir.name) / "operation-guards.db"),
+            database_url=postgres_test_url("operation-guards"),
             minimax_api_key="saved-key",
             minimax_base_url="https://api.minimaxi.com/v1",
             minimax_model="MiniMax-M2.7",

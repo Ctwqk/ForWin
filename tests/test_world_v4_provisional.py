@@ -18,7 +18,7 @@ from forwin.world_model_v4.repository import WorldModelRepository
 
 
 def test_planned_and_provisional_deltas_do_not_enter_actual_canon_until_promoted() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

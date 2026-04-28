@@ -14,7 +14,7 @@ from forwin.state.updater import StateUpdater
 class CodexGovernanceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = TemporaryDirectory()
-        self.engine = get_engine(str(Path(self.tmpdir.name) / "codex_governance.db"))
+        self.engine = get_engine(postgres_test_url("codex_governance"))
         init_db(self.engine)
         self.session_factory = get_session_factory(self.engine)
 

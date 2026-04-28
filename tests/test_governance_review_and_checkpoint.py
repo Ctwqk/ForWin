@@ -229,7 +229,7 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
 
     def test_auto_band_checkpoint_warns_when_band_task_is_unfulfilled(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "governance-band-checkpoint.db")
+            db_path = postgres_test_url("governance-band-checkpoint")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -313,7 +313,7 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
 
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="blackbox",
@@ -411,7 +411,7 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
 
     def test_future_constraint_protect_until_includes_boundary_chapter(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "constraint-boundary.db")
+            db_path = postgres_test_url("constraint-boundary")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -449,7 +449,7 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
 
     def test_future_constraints_enabled_controls_band_checkpoint_constraints(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "governance-constraints-toggle.db")
+            db_path = postgres_test_url("governance-constraints-toggle")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -531,7 +531,7 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
 
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="blackbox",

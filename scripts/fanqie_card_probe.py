@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
-import subprocess
+import os
 import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -10,18 +12,40 @@ from playwright.sync_api import sync_playwright
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXTENSION_DIR = REPO_ROOT / "browser_extension" / "forwin-publisher"
+BACKEND_URL = os.environ.get("FORWIN_BACKEND_URL", "http://127.0.0.1:8899")
+
+
+def load_api_key() -> str:
+    env_value = os.environ.get("FORWIN_PUBLISHER_EXTENSION_API_KEY", "").strip()
+    if env_value:
+        return env_value
+    env_path = REPO_ROOT / ".env"
+    if not env_path.exists():
+        return ""
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() == "FORWIN_PUBLISHER_EXTENSION_API_KEY":
+            return value.strip()
+    return ""
 
 
 def load_cookies() -> list[dict]:
-    query = (
-        "import sqlite3; conn=sqlite3.connect('/app/data/novel.db'); "
-        "cur=conn.cursor(); "
-        "cur.execute(\"SELECT cookies_json FROM publisher_browser_sessions "
-        "WHERE platform_id='fanqie' ORDER BY updated_at DESC LIMIT 1\"); "
-        "row=cur.fetchone(); print(row[0] if row else '')"
+    req = urllib.request.Request(
+        f"{BACKEND_URL.rstrip('/')}/api/publishers/extension/browser-sessions/fanqie",
+        headers={"x-forwin-extension-key": load_api_key()},
     )
-    out = subprocess.check_output(["docker", "exec", "forwin", "python", "-c", query], text=True)
-    return json.loads(out)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8") or "null")
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"failed to load Fanqie session from backend API: {exc}") from exc
+    if not isinstance(payload, dict):
+        return []
+    cookies = payload.get("cookies") or []
+    return [item for item in cookies if isinstance(item, dict)]
 
 
 def main() -> int:

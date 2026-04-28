@@ -48,9 +48,22 @@ class LLMKBCompileResult:
 class LLMKnowledgeBaseCompiler:
     """Compile a writer-safe Karpathy-style KB from BookState canon."""
 
-    def __init__(self, session: Session, *, root: Path | None = None) -> None:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        root: Path | None = None,
+        qdrant_url: str | None = None,
+        qdrant_collection: str | None = None,
+        qdrant_client: Any | None = None,
+        qdrant_models: Any | None = None,
+    ) -> None:
         self.session = session
         self.root = root or DEFAULT_LLM_KB_ROOT
+        self.qdrant_url = qdrant_url
+        self.qdrant_collection = qdrant_collection
+        self.qdrant_client = qdrant_client
+        self.qdrant_models = qdrant_models
         self.repo = BookStateRepository(session)
 
     def rebuild(self, project_id: str, *, as_of_chapter: int = 0) -> LLMKBCompileResult:
@@ -125,7 +138,13 @@ class LLMKnowledgeBaseCompiler:
         (project_root / "retrieval_index.json").write_text(json.dumps(retrieval_index, ensure_ascii=False, indent=2), encoding="utf-8")
         files.append("retrieval_index.json")
         self._write_role_packs(project_id, as_of, project_root)
-        vector_index = LLMKBVectorIndex(self.root).rebuild_project(project_id, source_digest=source_digest)
+        vector_index = LLMKBVectorIndex(
+            self.root,
+            qdrant_url=self.qdrant_url,
+            collection_name=self.qdrant_collection,
+            qdrant_client=self.qdrant_client,
+            qdrant_models=self.qdrant_models,
+        ).rebuild_project(project_id, source_digest=source_digest)
         retrieval_index["vector_index"] = vector_index
         (project_root / "retrieval_index.json").write_text(json.dumps(retrieval_index, ensure_ascii=False, indent=2), encoding="utf-8")
         return LLMKBCompileResult(
@@ -259,7 +278,13 @@ class LLMKnowledgeBaseCompiler:
         return "\n".join(lines).rstrip() + "\n"
 
     def _write_role_packs(self, project_id: str, as_of: int, project_root: Path) -> None:
-        broker = RetrievalBroker(llm_kb_root=self.root)
+        broker = RetrievalBroker(
+            llm_kb_root=self.root,
+            llm_kb_qdrant_url=self.qdrant_url,
+            llm_kb_qdrant_collection=self.qdrant_collection,
+            llm_kb_qdrant_client=self.qdrant_client,
+            llm_kb_qdrant_models=self.qdrant_models,
+        )
         repo = StateRepository(self.session)
         role_map = {
             "writer": "writing",
@@ -343,3 +368,4 @@ def _delta_record(delta: GraphDelta, as_of: int, digest: str) -> dict[str, Any]:
 def _digest(value: Any) -> str:
     raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+

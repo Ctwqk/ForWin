@@ -31,7 +31,7 @@ from forwin.world_model_v4.repository import WorldModelRepository
 
 
 def test_role_specific_retrieval_packs_filter_hidden_truth_for_writer_only() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

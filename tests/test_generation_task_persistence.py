@@ -16,7 +16,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 class GenerationTaskPersistenceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = TemporaryDirectory()
-        self.engine = get_engine(str(Path(self.tmpdir.name) / "generation-tasks.db"))
+        self.engine = get_engine(postgres_test_url("generation-tasks"))
         init_db(self.engine)
         self.session_factory = get_session_factory(self.engine)
         self.old_session_factory = api_module._SessionFactory
@@ -133,7 +133,7 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
     def test_continue_generation_api_rejects_pending_review_chapters(self) -> None:
         old_config = api_module._config
         api_module._config = Config(
-            db_path=str(Path(self.tmpdir.name) / "generation-tasks.db"),
+            database_url=postgres_test_url("generation-tasks"),
             minimax_api_key="sk-test",
         )
         now = datetime.now(timezone.utc)

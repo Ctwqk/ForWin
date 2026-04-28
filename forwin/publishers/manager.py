@@ -57,9 +57,20 @@ def _as_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def _is_sqlite_lock_error(exc: OperationalError) -> bool:
+def _is_transient_db_error(exc: OperationalError) -> bool:
+    sqlstate = str(getattr(getattr(exc, "orig", None), "sqlstate", "") or "")
+    if sqlstate in {"40001", "40P01", "55P03"}:
+        return True
     message = str(exc).lower()
-    return "database is locked" in message or "database table is locked" in message
+    return any(
+        token in message
+        for token in (
+            "deadlock detected",
+            "could not serialize access",
+            "canceling statement due to lock timeout",
+            "lock not available",
+        )
+    )
 
 
 def _terminal_upload_event_type(status: str) -> str:
@@ -743,7 +754,7 @@ class PublisherManager:
                 )
                 session.commit()
         except OperationalError as exc:
-            if not _is_sqlite_lock_error(exc):
+            if not _is_transient_db_error(exc):
                 raise
             logger.warning("Publisher browser session sync skipped because database is busy: %s", exc)
             return {
@@ -1108,7 +1119,7 @@ class PublisherManager:
 
                 session.commit()
         except OperationalError as exc:
-            if not _is_sqlite_lock_error(exc):
+            if not _is_transient_db_error(exc):
                 raise
             logger.warning("Publisher extension heartbeat skipped because database is busy: %s", exc)
             return {
@@ -1554,6 +1565,119 @@ class PublisherManager:
 
     def backend_ready_payload(self) -> dict[str, Any]:
         return {"extension_api_key_configured": bool(self.extension_api_key)}
+
+    def preferred_client_heartbeat(
+        self,
+        *,
+        preferred_client_id: str = "",
+        stale_seconds: int = 90,
+        allow_latest_recent_fallback: bool = False,
+    ) -> dict[str, Any]:
+        resolved_client_id = str(preferred_client_id or "").strip()
+        cutoff = _utc_now() - timedelta(seconds=max(int(stale_seconds or 90), 1))
+        with self.session_factory() as session:
+            latest_recent = session.execute(
+                select(PublisherExtensionClient)
+                .where(PublisherExtensionClient.last_heartbeat_at >= cutoff)
+                .order_by(PublisherExtensionClient.last_heartbeat_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            latest_recent_client_id = (
+                str(latest_recent.client_id or "").strip() if latest_recent is not None else ""
+            )
+            client_id = resolved_client_id
+            if not client_id and allow_latest_recent_fallback:
+                client_id = latest_recent_client_id
+            client = session.get(PublisherExtensionClient, client_id) if client_id else None
+            recent_platforms = []
+            if client_id:
+                recent_platforms = list(
+                    session.execute(
+                        select(PublisherExtensionPlatformState.platform_id)
+                        .where(
+                            PublisherExtensionPlatformState.client_id == client_id,
+                            PublisherExtensionPlatformState.last_heartbeat_at >= cutoff,
+                        )
+                        .order_by(PublisherExtensionPlatformState.platform_id.asc())
+                    ).scalars()
+                )
+
+        latest_payload = {
+            "latest_recent_client_id": latest_recent_client_id,
+            "latest_recent_backend_base_url": (
+                str(latest_recent.backend_base_url or "").strip()
+                if latest_recent is not None
+                else ""
+            ),
+            "latest_recent_heartbeat_at": _isoformat(
+                latest_recent.last_heartbeat_at if latest_recent is not None else None
+            ),
+        }
+        using_latest_recent = bool(
+            allow_latest_recent_fallback
+            and client_id
+            and latest_recent_client_id
+            and client_id == latest_recent_client_id
+            and not resolved_client_id
+        )
+        if not client_id:
+            return {
+                "ok": False,
+                "client_id": "",
+                "backend_base_url": "",
+                "last_heartbeat_at": "",
+                "recent_platforms": [],
+                "message": "preferred publisher client id is empty and no recent publisher client heartbeat was found",
+                **latest_payload,
+            }
+        if client is None:
+            return {
+                "ok": False,
+                "client_id": client_id,
+                "backend_base_url": "",
+                "last_heartbeat_at": "",
+                "recent_platforms": [],
+                "message": "preferred publisher client heartbeat was not found",
+                **latest_payload,
+            }
+        heartbeat = _as_utc(client.last_heartbeat_at)
+        if heartbeat is None:
+            return {
+                "ok": False,
+                "client_id": client_id,
+                "backend_base_url": str(client.backend_base_url or ""),
+                "last_heartbeat_at": "",
+                "recent_platforms": [],
+                "message": "preferred publisher client heartbeat timestamp is missing or invalid",
+                **latest_payload,
+            }
+        if heartbeat < cutoff or not recent_platforms:
+            return {
+                "ok": False,
+                "client_id": client_id,
+                "backend_base_url": str(client.backend_base_url or ""),
+                "last_heartbeat_at": _isoformat(heartbeat),
+                "recent_platforms": recent_platforms,
+                "message": (
+                    "latest publisher client heartbeat is stale"
+                    if using_latest_recent
+                    else "preferred publisher client heartbeat is stale"
+                ),
+                **latest_payload,
+            }
+        return {
+            "ok": True,
+            "client_id": client_id,
+            "backend_base_url": str(client.backend_base_url or ""),
+            "last_heartbeat_at": _isoformat(heartbeat),
+            "recent_platforms": recent_platforms,
+            "message": (
+                "latest publisher client heartbeat is recent"
+                if using_latest_recent
+                else "preferred publisher client heartbeat is recent"
+            ),
+            **latest_payload,
+        }
 
     @staticmethod
     def _normalize_cookie(cookie: dict[str, Any]) -> dict[str, Any]:

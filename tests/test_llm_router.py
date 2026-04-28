@@ -133,7 +133,7 @@ class LLMRouterTests(unittest.TestCase):
         self.assertEqual(len(codex.calls), 1)
 
     def test_config_exposes_codex_bridge_defaults(self) -> None:
-        config = Config(db_path=":memory:")
+        config = Config(database_url=postgres_test_url())
 
         self.assertFalse(config.codex_enabled)
         self.assertEqual(config.codex_bridge_url, "http://host.docker.internal:8897")
@@ -147,7 +147,7 @@ class LLMRouterTests(unittest.TestCase):
         try:
             with TemporaryDirectory() as tmpdir:
                 api_module._config = Config(
-                    db_path=str(Path(tmpdir) / "forwin.db"),
+                    database_url=postgres_test_url("forwin"),
                     minimax_api_key="ordinary-key",
                     minimax_base_url="http://ordinary.invalid/v1",
                     minimax_model="ordinary-model",
@@ -171,7 +171,7 @@ class LLMRouterTests(unittest.TestCase):
     def test_orchestrator_uses_routed_adapter_when_codex_enabled(self) -> None:
         with TemporaryDirectory() as tmpdir:
             config = Config(
-                db_path=str(Path(tmpdir) / "forwin.db"),
+                database_url=postgres_test_url("forwin"),
                 minimax_api_key="ordinary-key",
                 minimax_base_url="http://ordinary.invalid/v1",
                 minimax_model="ordinary-model",

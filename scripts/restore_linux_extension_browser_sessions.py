@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
+import os
 import sys
 import time
 import urllib.error
@@ -13,7 +13,6 @@ from playwright.sync_api import sync_playwright
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB_PATH = REPO_ROOT / "data" / "novel.db"
 SUPPORTED_PLATFORMS = ("fanqie", "qidian")
 
 
@@ -27,9 +26,18 @@ def parse_args() -> argparse.Namespace:
         help="CDP endpoint for the running Chromium instance.",
     )
     parser.add_argument(
-        "--db-path",
-        default=str(DEFAULT_DB_PATH),
-        help="Path to the ForWin SQLite database.",
+        "--api-base-url",
+        default=(
+            os.environ.get("FORWIN_BACKEND_URL")
+            or os.environ.get("FORWIN_API_BASE_URL")
+            or "http://127.0.0.1:8899"
+        ),
+        help="ForWin backend API base URL.",
+    )
+    parser.add_argument(
+        "--api-key",
+        default=os.environ.get("FORWIN_PUBLISHER_EXTENSION_API_KEY", ""),
+        help="Publisher extension API key.",
     )
     parser.add_argument(
         "--wait-seconds",
@@ -58,30 +66,25 @@ def wait_for_cdp(cdp_url: str, timeout_seconds: float) -> None:
     raise RuntimeError(f"CDP endpoint not ready at {cdp_url}")
 
 
-def load_latest_sessions(db_path: Path) -> dict[str, list[dict]]:
-    if not db_path.exists():
-        return {}
-    conn = sqlite3.connect(str(db_path))
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT platform_id, cookies_json
-            FROM publisher_browser_sessions
-            WHERE platform_id IN (?, ?)
-            ORDER BY platform_id ASC
-            """,
-            SUPPORTED_PLATFORMS,
-        )
-        rows = cur.fetchall()
-    finally:
-        conn.close()
-
+def load_latest_sessions(api_base_url: str, api_key: str) -> dict[str, list[dict]]:
     sessions: dict[str, list[dict]] = {}
-    for platform_id, cookies_json in rows:
+    headers = {"x-forwin-extension-key": api_key} if api_key else {}
+    for platform_id in SUPPORTED_PLATFORMS:
         try:
-            cookies = json.loads(cookies_json or "[]")
-        except json.JSONDecodeError:
+            with urllib.request.urlopen(
+                urllib.request.Request(
+                    f"{api_base_url.rstrip('/')}/api/publishers/extension/browser-sessions/{platform_id}",
+                    headers=headers,
+                ),
+                timeout=10,
+            ) as response:
+                payload = json.loads(response.read().decode("utf-8") or "null")
+        except (OSError, urllib.error.URLError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        cookies = payload.get("cookies") or []
+        if not isinstance(cookies, list):
             continue
         sessions[str(platform_id)] = [
             item for item in cookies if isinstance(item, dict) and str(item.get("name", "")).strip()
@@ -116,8 +119,7 @@ def to_browser_cookie(cookie: dict) -> dict | None:
 
 def main() -> int:
     args = parse_args()
-    db_path = Path(args.db_path)
-    sessions = load_latest_sessions(db_path)
+    sessions = load_latest_sessions(args.api_base_url, args.api_key)
     cookies_to_add = [
         browser_cookie
         for platform in SUPPORTED_PLATFORMS

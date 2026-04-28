@@ -20,8 +20,12 @@ def parse_args() -> argparse.Namespace:
         description="Check whether the preferred Linux publisher browser client is heartbeating."
     )
     parser.add_argument(
-        "--db-path",
-        default=os.environ.get("FORWIN_DB_PATH", "data/novel.db"),
+        "--api-base-url",
+        default=(
+            os.environ.get("FORWIN_BACKEND_URL")
+            or os.environ.get("FORWIN_API_BASE_URL")
+            or "http://localhost:8899"
+        ),
     )
     parser.add_argument(
         "--profile-dir",
@@ -50,7 +54,7 @@ def main() -> int:
     last = None
     while True:
         last = get_preferred_client_heartbeat(
-            args.db_path,
+            args.api_base_url,
             preferred_client_id=args.client_id,
             profile_dir=args.profile_dir,
             stale_seconds=args.stale_seconds,

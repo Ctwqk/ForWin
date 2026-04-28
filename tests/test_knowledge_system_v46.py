@@ -32,10 +32,11 @@ from forwin.protocol.book_state import (
 from forwin.protocol.world_v4 import ApprovedWorldChangeSet, ReaderExperienceDelta
 from forwin.retrieval.broker import RetrievalBroker
 from forwin.state.repo import StateRepository
+from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
 
 def _session_factory():
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     return get_session_factory(engine), engine
 
@@ -207,6 +208,7 @@ def test_reader_experience_syncs_into_book_state_native_tables() -> None:
 
 def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
     Session, engine = _session_factory()
+    qdrant_client = FakeQdrantClient()
     try:
         with Session.begin() as session:
             project_id = _create_project(session)
@@ -247,7 +249,11 @@ def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
             )
 
         vault_root = tmp_path / "vault"
-        handlers = build_obsidian_handlers(get_session=Session)
+        handlers = build_obsidian_handlers(
+            get_session=Session,
+            qdrant_client=qdrant_client,
+            qdrant_models=FakeQdrantModels,
+        )
         export = handlers["export_obsidian"](project_id, WorldModelExportRequest(vault_root=str(vault_root)))
 
         assert export.exported_count >= 4
@@ -343,6 +349,7 @@ def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
 
 def test_llm_kb_rebuild_is_writer_safe_and_allowlisted(tmp_path: Path) -> None:
     Session, engine = _session_factory()
+    qdrant_client = FakeQdrantClient()
     try:
         with Session.begin() as session:
             project_id = _create_project(session)
@@ -377,7 +384,12 @@ def test_llm_kb_rebuild_is_writer_safe_and_allowlisted(tmp_path: Path) -> None:
                 )
             )
 
-            result = LLMKnowledgeBaseCompiler(session, root=tmp_path / "kb").rebuild(project_id, as_of_chapter=1)
+            result = LLMKnowledgeBaseCompiler(
+                session,
+                root=tmp_path / "kb",
+                qdrant_client=qdrant_client,
+                qdrant_models=FakeQdrantModels,
+            ).rebuild(project_id, as_of_chapter=1)
 
         root = Path(result.root)
         current_state = (root / "CURRENT_STATE.md").read_text(encoding="utf-8")
@@ -394,7 +406,11 @@ def test_llm_kb_rebuild_is_writer_safe_and_allowlisted(tmp_path: Path) -> None:
         assert '"source_digest"' in facts
         assert '"as_of_chapter": 1' in facts
         assert result.vector_index["section_count"] > 0
-        search_results = LLMKnowledgeBaseRetriever(root=tmp_path / "kb").search(
+        search_results = LLMKnowledgeBaseRetriever(
+            root=tmp_path / "kb",
+            qdrant_client=qdrant_client,
+            qdrant_models=FakeQdrantModels,
+        ).search(
             project_id,
             "矿门",
             role="writer",
@@ -402,7 +418,12 @@ def test_llm_kb_rebuild_is_writer_safe_and_allowlisted(tmp_path: Path) -> None:
         )
         assert search_results
         assert all(item["role_scope"] == "writer" for item in search_results)
-        api_search = build_llm_kb_handlers(get_session=Session, llm_kb_root=tmp_path / "kb")["search_llm_kb"](
+        api_search = build_llm_kb_handlers(
+            get_session=Session,
+            llm_kb_root=tmp_path / "kb",
+            qdrant_client=qdrant_client,
+            qdrant_models=FakeQdrantModels,
+        )["search_llm_kb"](
             project_id,
             query="矿门",
             role="writer",
@@ -420,6 +441,7 @@ def test_llm_kb_rebuild_is_writer_safe_and_allowlisted(tmp_path: Path) -> None:
 
 def test_retrieval_pack_merges_v46_sources_without_writer_hidden_leak(tmp_path: Path) -> None:
     Session, engine = _session_factory()
+    qdrant_client = FakeQdrantClient()
     try:
         with Session.begin() as session:
             project_id = _create_project(session)
@@ -465,10 +487,19 @@ def test_retrieval_pack_merges_v46_sources_without_writer_hidden_leak(tmp_path: 
                 )
             )
             ObsidianExporter(session).export_project(project_id, vault_root=tmp_path / "vault", as_of_chapter=1)
-            LLMKnowledgeBaseCompiler(session, root=tmp_path / "kb").rebuild(project_id, as_of_chapter=1)
+            LLMKnowledgeBaseCompiler(
+                session,
+                root=tmp_path / "kb",
+                qdrant_client=qdrant_client,
+                qdrant_models=FakeQdrantModels,
+            ).rebuild(project_id, as_of_chapter=1)
 
         with Session() as session:
-            broker = RetrievalBroker(llm_kb_root=tmp_path / "kb")
+            broker = RetrievalBroker(
+                llm_kb_root=tmp_path / "kb",
+                llm_kb_qdrant_client=qdrant_client,
+                llm_kb_qdrant_models=FakeQdrantModels,
+            )
             state_repo = StateRepository(session)
             writer_pack = broker.build_world_model_pack(state_repo, project_id, 1, "writing")
             review_pack = broker.build_world_model_pack(state_repo, project_id, 1, "review")

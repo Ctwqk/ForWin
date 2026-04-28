@@ -53,7 +53,7 @@ def _setup_reviewed_draft(session):
 
 
 def test_candidate_draft_record_tracks_review_and_canon_lifecycle() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -91,7 +91,7 @@ def test_candidate_draft_record_tracks_review_and_canon_lifecycle() -> None:
 
 
 def test_candidate_draft_api_reads_record_and_preserves_legacy_fallback() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

@@ -36,7 +36,7 @@ def _create_project(session, title: str = "BookState 测试") -> str:
 
 
 def test_repository_roundtrip_loads_runtime_with_map_and_cognition() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -102,7 +102,7 @@ def test_repository_roundtrip_loads_runtime_with_map_and_cognition() -> None:
 
 
 def test_projection_honors_created_at_chapter_for_world_and_map_rows() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -150,7 +150,7 @@ def test_projection_honors_created_at_chapter_for_world_and_map_rows() -> None:
 
 
 def test_context_assembly_prefers_book_state_runtime_overlay() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -228,7 +228,7 @@ def test_context_assembly_prefers_book_state_runtime_overlay() -> None:
 
 
 def test_compiler_commits_delta_patches_and_rebuilds_snapshots() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -332,7 +332,7 @@ def test_compiler_commits_delta_patches_and_rebuilds_snapshots() -> None:
 
 
 def test_projection_does_not_replay_persisted_cognition_overlay_evidence() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -374,7 +374,7 @@ def test_projection_does_not_replay_persisted_cognition_overlay_evidence() -> No
 
 
 def test_book_state_api_defaults_to_latest_but_keeps_explicit_chapter_zero() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -418,7 +418,7 @@ def test_book_state_api_defaults_to_latest_but_keeps_explicit_chapter_zero() -> 
 
 
 def test_compiler_blocks_stale_old_value_without_writing_delta() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

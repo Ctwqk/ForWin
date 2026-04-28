@@ -75,7 +75,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_ensure_registry_bootstraps_global_core_with_existing_characters(self) -> None:
         with TemporaryDirectory() as tmp:
-            engine = get_engine(str(Path(tmp) / "subworld.db"))
+            engine = get_engine(postgres_test_url("subworld"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:
@@ -165,7 +165,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_assemble_context_uses_allowed_entities_from_active_subworlds(self) -> None:
         with TemporaryDirectory() as tmp:
-            engine = get_engine(str(Path(tmp) / "context.db"))
+            engine = get_engine(postgres_test_url("context"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:
@@ -328,7 +328,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_continuity_checker_rejects_unknown_named_character(self) -> None:
         with TemporaryDirectory() as tmp:
-            engine = get_engine(str(Path(tmp) / "checker.db"))
+            engine = get_engine(postgres_test_url("checker"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:
@@ -437,7 +437,7 @@ class SubWorldControlTests(unittest.TestCase):
                 }
 
         with TemporaryDirectory() as tmp:
-            engine = get_engine(str(Path(tmp) / "rearc.db"))
+            engine = get_engine(postgres_test_url("rearc"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:
@@ -500,7 +500,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_phase24_persists_subworld_activation_into_band_and_chapter_plan(self) -> None:
         with TemporaryDirectory() as tmp:
-            engine = get_engine(str(Path(tmp) / "phase24.db"))
+            engine = get_engine(postgres_test_url("phase24"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:
@@ -587,7 +587,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_project_detail_exposes_subworld_summaries(self) -> None:
         with TemporaryDirectory() as tmp:
-            engine = get_engine(str(Path(tmp) / "detail.db"))
+            engine = get_engine(postgres_test_url("detail"))
             init_db(engine)
             session = get_session_factory(engine)()
             try:

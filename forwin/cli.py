@@ -21,7 +21,9 @@ def _get_config(args: argparse.Namespace) -> Config:
     """Build Config from CLI args + environment."""
     kwargs: dict = {}
     if hasattr(args, "db") and args.db:
-        kwargs["db_path"] = args.db
+        raise SystemExit("--db is no longer supported. Use --database-url.")
+    if hasattr(args, "database_url") and args.database_url:
+        kwargs["database_url"] = args.database_url
     if hasattr(args, "api_key") and args.api_key:
         kwargs["minimax_api_key"] = args.api_key
     elif os.environ.get("MINIMAX_API_KEY"):
@@ -74,7 +76,7 @@ def cmd_read(args: argparse.Namespace) -> None:
     from forwin.models.project import ChapterPlan
 
     config = _get_config(args)
-    engine = get_engine(config.db_path)
+    engine = get_engine(config.database_url)
     init_db(engine)
     Session = get_session_factory(engine)
     session = Session()
@@ -130,7 +132,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 
     config = _get_config(args)
-    engine = get_engine(config.db_path)
+    engine = get_engine(config.database_url)
     init_db(engine)
     Session = get_session_factory(engine)
     session = Session()
@@ -223,7 +225,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="forwin",
         description="ForWin – 长篇中文网文生成系统 (Phase 0.5)",
     )
-    parser.add_argument("--db", default=None, help="数据库路径 (默认: data/novel.db)")
+    parser.add_argument("--db", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--database-url", default=None, help="Postgres 数据库 URL")
     parser.add_argument("--api-key", default=None, help="LLM API Key")
     parser.add_argument("--model", default=None, help="LLM 模型名称")
     parser.add_argument("--base-url", default=None, help="LLM API Base URL")

@@ -169,7 +169,7 @@ def _gap_state(session, project_id: str) -> dict:
 
 
 def test_arc2_homeworld_crisis_runs_through_v4_ledgers_review_and_export() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

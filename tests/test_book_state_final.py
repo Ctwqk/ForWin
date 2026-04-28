@@ -32,7 +32,7 @@ from forwin.protocol.world_v4 import DeltaKind, DeltaSource, DeltaSourceType, Ex
 
 
 def _session():
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     return get_session_factory(engine)
 

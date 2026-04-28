@@ -16,14 +16,14 @@ from forwin.models.task import GenerationTask
 class BulkDeleteApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = TemporaryDirectory()
-        self.engine = get_engine(str(Path(self.tmpdir.name) / "bulk-delete.db"))
+        self.engine = get_engine(postgres_test_url("bulk-delete"))
         init_db(self.engine)
         self.session_factory = get_session_factory(self.engine)
         self.old_session_factory = api_module._SessionFactory
         self.old_config = api_module._config
         api_module._SessionFactory = self.session_factory
         api_module._config = api_module.Config(
-            db_path=str(Path(self.tmpdir.name) / "bulk-delete.db"),
+            database_url=postgres_test_url("bulk-delete"),
             artifact_root=str(Path(self.tmpdir.name) / "artifacts"),
             minimax_api_key="",
         )

@@ -69,7 +69,7 @@ class ProjectPublishBindingTests(unittest.TestCase):
 
     def test_create_project_supports_two_publish_bindings(self) -> None:
         tmpdir = TemporaryDirectory()
-        engine = get_engine(str(Path(tmpdir.name) / "projects.db"))
+        engine = get_engine(postgres_test_url("projects"))
         init_db(engine)
         session_factory = get_session_factory(engine)
         old_session_factory = api_module._SessionFactory
@@ -123,7 +123,7 @@ class ProjectPublishBindingTests(unittest.TestCase):
 
     def test_update_project_automation_supports_two_publish_bindings(self) -> None:
         tmpdir = TemporaryDirectory()
-        engine = get_engine(str(Path(tmpdir.name) / "project-automation.db"))
+        engine = get_engine(postgres_test_url("project-automation"))
         init_db(engine)
         session_factory = get_session_factory(engine)
         old_session_factory = api_module._SessionFactory

@@ -462,19 +462,18 @@ class LLMReliabilityRunner:
     def run_mini_real_for_profile(self, profile: EvalProfile) -> dict[str, Any]:
         if self.config.base_url:
             return self.run_remote_mini_real_for_profile(profile)
-        db_path = self.run_dir / f"mini_real_{profile.id}.db"
         artifact_root = self.run_dir / f"mini_real_{profile.id}_artifacts"
         started_at = time.perf_counter()
         payload: dict[str, Any] = {
             "run_id": self.config.run_id,
             "profile_id": profile.id,
             "status": "started",
-            "db_path": str(db_path),
+            "database_url": Config.from_env().database_url,
             "artifact_root": str(artifact_root),
         }
         orchestrator = WritingOrchestrator(
             Config(
-                db_path=str(db_path),
+                database_url=Config.from_env().database_url,
                 artifact_root=str(artifact_root),
                 minimax_api_key=profile.api_key,
                 minimax_base_url=profile.base_url,

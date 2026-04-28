@@ -332,7 +332,7 @@ def _resolve_runtime_profile(requested_profile_id: str = "") -> dict[str, str]:
 
 def _saved_runtime_config_or_default(model_profile_id: str = "") -> Config:
     if not _config:
-        return Config(db_path=":memory:", minimax_api_key="")
+        return Config(minimax_api_key="")
     if model_profile_id:
         return build_runtime_config(
             GenerateRequest(
@@ -615,9 +615,20 @@ def _augment_task_with_provisional_history(session, task: dict[str, Any]) -> dic
     )
 
 
-def _is_sqlite_locked_error(exc: Exception) -> bool:
+def _is_transient_db_error(exc: Exception) -> bool:
+    sqlstate = str(getattr(getattr(exc, "orig", None), "sqlstate", "") or "")
+    if sqlstate in {"40001", "40P01", "55P03"}:
+        return True
     message = str(exc).lower()
-    return "database is locked" in message or "database table is locked" in message
+    return any(
+        token in message
+        for token in (
+            "deadlock detected",
+            "could not serialize access",
+            "canceling statement due to lock timeout",
+            "lock not available",
+        )
+    )
 
 
 def _run_generation_task_db_write(operation, *, context: str, attempts: int = 5, delay: float = 0.25) -> bool:
@@ -626,7 +637,7 @@ def _run_generation_task_db_write(operation, *, context: str, attempts: int = 5,
             operation()
             return True
         except OperationalError as exc:
-            if not _is_sqlite_locked_error(exc):
+            if not _is_transient_db_error(exc):
                 raise
             if attempt == attempts:
                 logger.warning(
@@ -714,7 +725,7 @@ def _load_generation_task(task_id: str, *, include_deleted: bool = False) -> dic
             include_deleted=include_deleted,
         )
     except OperationalError as exc:
-        if not _is_sqlite_locked_error(exc):
+        if not _is_transient_db_error(exc):
             raise
         logger.warning("Generation task read fell back to cache due to DB lock for %s", task_id)
         return _apply_task_visibility_rules(
@@ -1849,10 +1860,14 @@ async def lifespan(app: FastAPI):
     if _config is None:
         _config = Config.from_env()
     if _engine is None:
-        db_path = os.environ.get("FORWIN_DB_PATH", _config.db_path)
-        _config = _config.model_copy(update={"db_path": db_path})
-        Path(_config.db_path).parent.mkdir(parents=True, exist_ok=True)
-        _engine = get_engine(_config.db_path)
+        legacy_database_path_env = "FORWIN_" + "DB_PATH"
+        if os.environ.get(legacy_database_path_env):
+            raise RuntimeError(
+                f"{legacy_database_path_env} is no longer supported. Set FORWIN_DATABASE_URL."
+            )
+        database_url = os.environ.get("FORWIN_DATABASE_URL", _config.database_url)
+        _config = _config.model_copy(update={"database_url": database_url})
+        _engine = get_engine(_config.database_url)
         init_db(_engine)
     if _SessionFactory is None:
         _SessionFactory = get_session_factory(_engine)
@@ -1903,7 +1918,7 @@ async def lifespan(app: FastAPI):
             env_llm_profiles=_config.llm_env_profiles,
         )
     _start_automation_scheduler()
-    logger.info("ForWin API started. DB: %s", _config.db_path)
+    logger.info("ForWin API started. DB: %s", _engine.url.render_as_string(hide_password=True))
     try:
         yield
     finally:

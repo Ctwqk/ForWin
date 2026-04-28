@@ -8,10 +8,10 @@ ForWin is built around a FastAPI application, a CLI entrypoint, persistent proje
 
 - FastAPI web API for project management, runtime control, and publisher-facing workflows
 - CLI entrypoint for local operations
-- Structured persistence with SQLAlchemy-backed state
+- Structured persistence with SQLAlchemy-backed Postgres state
 - Runtime generation pipeline with governance checks and checkpointing
 - Browser / publisher tooling powered by Playwright
-- Optional vector and object-storage integrations via Qdrant and MinIO
+- Qdrant-backed vector retrieval and optional object storage via MinIO
 - A substantial automated test suite covering generation flow, governance, payload handling, and publishing behavior
 
 ## Tech Stack
@@ -19,10 +19,11 @@ ForWin is built around a FastAPI application, a CLI entrypoint, persistent proje
 - Python 3.12
 - FastAPI
 - SQLAlchemy
+- PostgreSQL
+- Alembic
 - Pydantic
 - httpx
 - Playwright
-- Qdrant
 - MinIO
 - Docker Compose
 - pytest / pytest-asyncio
@@ -54,6 +55,8 @@ tests/                        # Automated test suite
 
 ```bash
 python -m pip install -e .[test]
+export FORWIN_DATABASE_URL=postgresql+psycopg://forwin:forwin@localhost:5432/forwin
+export FORWIN_QDRANT_URL=http://localhost:6333
 uvicorn forwin.api:app --reload --host 0.0.0.0 --port 8899
 ```
 
@@ -64,6 +67,7 @@ docker compose up --build
 ```
 
 By default the main web API is exposed on `http://localhost:8899`.
+The Compose stack includes `postgres:16-alpine` for runtime state, Qdrant for vector retrieval, and `postgres-test` on `127.0.0.1:55432` for tests.
 
 ## Testing
 

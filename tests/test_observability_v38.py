@@ -52,7 +52,7 @@ class ObservabilityCoreTests(unittest.TestCase):
 
     def test_log_recorder_persists_redacted_decision_event_with_context(self) -> None:
         with TemporaryDirectory() as tmp:
-            engine = get_engine(str(Path(tmp) / "obs.db"))
+            engine = get_engine(postgres_test_url("obs"))
             init_db(engine)
             session_factory = get_session_factory(engine)
             try:
@@ -108,7 +108,7 @@ class ObservabilityCoreTests(unittest.TestCase):
 
     def test_state_updater_redacts_direct_decision_event_payloads(self) -> None:
         with TemporaryDirectory() as tmp:
-            engine = get_engine(str(Path(tmp) / "direct-redaction.db"))
+            engine = get_engine(postgres_test_url("direct-redaction"))
             init_db(engine)
             session_factory = get_session_factory(engine)
             try:
@@ -154,17 +154,17 @@ class ObservabilityCoreTests(unittest.TestCase):
 class ObservabilityReadApiTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = TemporaryDirectory()
-        self.db_path = str(Path(self.tmpdir.name) / "read-api.db")
+        self.database_url = postgres_test_url("read-api")
         self.artifact_root = Path(self.tmpdir.name) / "artifacts"
         self.old_config = api_module._config
         self.old_engine = api_module._engine
         self.old_factory = api_module._SessionFactory
         api_module._config = api_module.Config(
-            db_path=self.db_path,
+            database_url=self.database_url,
             artifact_root=str(self.artifact_root),
             minimax_api_key="",
         )
-        api_module._engine = get_engine(self.db_path)
+        api_module._engine = get_engine(self.database_url)
         init_db(api_module._engine)
         api_module._SessionFactory = get_session_factory(api_module._engine)
 
@@ -330,7 +330,7 @@ class ObservabilityReadApiTests(unittest.TestCase):
 
         orchestrator = WritingOrchestrator(
             api_module.Config(
-                db_path=self.db_path,
+                database_url=self.database_url,
                 artifact_root=str(self.artifact_root),
                 minimax_api_key="",
                 minimax_model="fake-model",
@@ -391,7 +391,7 @@ class ObservabilityReadApiTests(unittest.TestCase):
 class ApiRuntimeObservabilityTests(unittest.TestCase):
     def test_run_orchestrator_task_records_success_and_cleanup_events(self) -> None:
         with TemporaryDirectory() as tmp:
-            engine = get_engine(str(Path(tmp) / "runtime-success.db"))
+            engine = get_engine(postgres_test_url("runtime-success"))
             init_db(engine)
             session_factory = get_session_factory(engine)
             project_id = new_id()
@@ -465,7 +465,7 @@ class ApiRuntimeObservabilityTests(unittest.TestCase):
 
     def test_run_orchestrator_task_records_failure_event_with_stack_hash(self) -> None:
         with TemporaryDirectory() as tmp:
-            engine = get_engine(str(Path(tmp) / "runtime-failure.db"))
+            engine = get_engine(postgres_test_url("runtime-failure"))
             init_db(engine)
             session_factory = get_session_factory(engine)
             try:

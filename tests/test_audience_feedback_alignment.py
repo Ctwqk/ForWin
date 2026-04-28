@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import json
 import unittest
-from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from sqlalchemy import select, text
+from sqlalchemy import inspect, select
 from tests_support import capture_select_statements
 
 from forwin.director.arc_director import ArcDirector
@@ -19,7 +18,7 @@ from forwin.models import (
     SignalWindowAggregate,
     new_id,
 )
-from forwin.models.base import get_engine, get_session_factory, init_db, upgrade_db
+from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.orchestrator.feedback_aggregator import (
     run_feedback_aggregation_pass,
     score_signal_aggregate_v1,
@@ -64,8 +63,8 @@ class _CapturingDirector:
 class AudienceFeedbackAlignmentTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmpdir = TemporaryDirectory()
-        self.db_path = Path(self.tmpdir.name) / "audience-feedback.db"
-        self.engine = get_engine(str(self.db_path))
+        self.database_url = postgres_test_url("audience-feedback")
+        self.engine = get_engine(self.database_url)
         init_db(self.engine)
         self.SessionFactory = get_session_factory(self.engine)
         self.session = self.SessionFactory()
@@ -147,101 +146,29 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         return row
 
     def test_init_db_exposes_audience_feedback_schema(self) -> None:
-        with self.engine.begin() as conn:
-            comment_columns = {
-                row[1]
-                for row in conn.execute(text("PRAGMA table_info(publisher_raw_comments)"))
-            }
-            self.assertIn("like_count", comment_columns)
-            self.assertIn("reply_count", comment_columns)
+        inspector = inspect(self.engine)
+        comment_columns = {
+            column["name"] for column in inspector.get_columns("publisher_raw_comments")
+        }
+        self.assertIn("like_count", comment_columns)
+        self.assertIn("reply_count", comment_columns)
 
-            table_names = {
-                row[0]
-                for row in conn.execute(
-                    text("SELECT name FROM sqlite_master WHERE type = 'table'")
-                )
-            }
-            self.assertIn("comment_signal_candidates", table_names)
-            self.assertIn("signal_window_aggregates", table_names)
-            self.assertIn("reader_scale_snapshots", table_names)
-            self.assertIn("feedback_action_records", table_names)
+        table_names = set(inspector.get_table_names())
+        self.assertIn("comment_signal_candidates", table_names)
+        self.assertIn("signal_window_aggregates", table_names)
+        self.assertIn("reader_scale_snapshots", table_names)
+        self.assertIn("feedback_action_records", table_names)
 
-    def test_upgrade_db_backfills_reader_scale_meta_columns_for_existing_audience_schema(self) -> None:
-        with self.engine.begin() as conn:
-            conn.execute(text("DROP TABLE IF EXISTS signal_window_aggregates"))
-            conn.execute(text("DROP TABLE IF EXISTS reader_scale_snapshots"))
-            conn.execute(
-                text(
-                    """
-                    CREATE TABLE signal_window_aggregates (
-                        id TEXT PRIMARY KEY,
-                        project_id TEXT NOT NULL,
-                        signal_key TEXT NOT NULL,
-                        signal_type TEXT NOT NULL DEFAULT '',
-                        target_type TEXT NOT NULL DEFAULT '',
-                        target_name TEXT NOT NULL DEFAULT '',
-                        window_type TEXT NOT NULL DEFAULT 'short',
-                        window_chapter_start INTEGER NOT NULL DEFAULT 0,
-                        window_chapter_end INTEGER NOT NULL DEFAULT 0,
-                        hit_comment_count INTEGER NOT NULL DEFAULT 0,
-                        unique_user_count INTEGER NOT NULL DEFAULT 0,
-                        total_comment_count INTEGER NOT NULL DEFAULT 0,
-                        reader_estimate INTEGER NOT NULL DEFAULT 0,
-                        reader_tier INTEGER NOT NULL DEFAULT 0,
-                        max_severity INTEGER NOT NULL DEFAULT 0,
-                        avg_confidence FLOAT NOT NULL DEFAULT 0,
-                        signal_level TEXT NOT NULL DEFAULT 'noise',
-                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """
-                )
-            )
-            conn.execute(
-                text(
-                    """
-                    CREATE TABLE reader_scale_snapshots (
-                        id TEXT PRIMARY KEY,
-                        project_id TEXT NOT NULL,
-                        chapter_number INTEGER NOT NULL DEFAULT 0,
-                        reader_estimate INTEGER NOT NULL DEFAULT 0,
-                        tier INTEGER NOT NULL DEFAULT 0,
-                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                    )
-                    """
-                )
-            )
-            conn.execute(
-                text(
-                    """
-                    INSERT OR IGNORE INTO schema_migrations(version)
-                    VALUES ('audience_feedback_v1')
-                    """
-                )
-            )
-            conn.execute(
-                text(
-                    """
-                    DELETE FROM schema_migrations
-                    WHERE version = 'audience_feedback_scale_meta_v1'
-                    """
-                )
-            )
+        aggregate_columns = {
+            column["name"] for column in inspector.get_columns("signal_window_aggregates")
+        }
+        self.assertIn("estimation_method", aggregate_columns)
+        self.assertIn("scale_confidence", aggregate_columns)
 
-        upgrade_db(self.engine)
-
-        with self.engine.begin() as conn:
-            aggregate_columns = {
-                row[1]
-                for row in conn.execute(text("PRAGMA table_info(signal_window_aggregates)"))
-            }
-            self.assertIn("estimation_method", aggregate_columns)
-            self.assertIn("scale_confidence", aggregate_columns)
-
-            snapshot_columns = {
-                row[1]
-                for row in conn.execute(text("PRAGMA table_info(reader_scale_snapshots)"))
-            }
-            self.assertIn("estimation_method", snapshot_columns)
+        snapshot_columns = {
+            column["name"] for column in inspector.get_columns("reader_scale_snapshots")
+        }
+        self.assertIn("estimation_method", snapshot_columns)
 
     def test_publisher_manager_ingest_comments_batch_persists_like_and_reply_counts(self) -> None:
         manager = PublisherManager(self.SessionFactory)

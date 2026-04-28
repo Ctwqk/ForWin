@@ -26,11 +26,39 @@ def _require_project(session, project_id: str) -> Project:
     return project
 
 
-def build_handlers(*, get_session: Callable[[], Any], llm_kb_root: Path | None = None) -> dict[str, Callable[..., Any]]:
+def build_handlers(
+    *,
+    get_session: Callable[[], Any],
+    llm_kb_root: Path | None = None,
+    get_config: Callable[[], Any] | None = None,
+    qdrant_url: str | None = None,
+    llm_kb_qdrant_collection: str | None = None,
+    qdrant_client: Any | None = None,
+    qdrant_models: Any | None = None,
+) -> dict[str, Callable[..., Any]]:
+    def _qdrant_url() -> str | None:
+        if qdrant_url is not None:
+            return qdrant_url
+        config = get_config() if get_config is not None else None
+        return getattr(config, "qdrant_url", None)
+
+    def _llm_kb_qdrant_collection() -> str | None:
+        if llm_kb_qdrant_collection is not None:
+            return llm_kb_qdrant_collection
+        config = get_config() if get_config is not None else None
+        return getattr(config, "llm_kb_qdrant_collection", None)
+
     def rebuild_llm_kb(project_id: str, as_of_chapter: int = 0) -> dict[str, Any]:
         with get_session() as session:
             _require_project(session, project_id)
-            result = LLMKnowledgeBaseCompiler(session, root=llm_kb_root).rebuild(project_id, as_of_chapter=as_of_chapter)
+            result = LLMKnowledgeBaseCompiler(
+                session,
+                root=llm_kb_root,
+                qdrant_url=_qdrant_url(),
+                qdrant_collection=_llm_kb_qdrant_collection(),
+                qdrant_client=qdrant_client,
+                qdrant_models=qdrant_models,
+            ).rebuild(project_id, as_of_chapter=as_of_chapter)
             session.commit()
             return {
                 "ok": True,
@@ -64,7 +92,13 @@ def build_handlers(*, get_session: Callable[[], Any], llm_kb_root: Path | None =
             raise HTTPException(status_code=404, detail="search role must be writer, reviewer, planner, or compiler")
         with get_session() as session:
             _require_project(session, project_id)
-            results = LLMKnowledgeBaseRetriever(root=llm_kb_root).search(project_id, query, role=role_key, limit=limit)
+            results = LLMKnowledgeBaseRetriever(
+                root=llm_kb_root,
+                qdrant_url=_qdrant_url(),
+                qdrant_collection=_llm_kb_qdrant_collection(),
+                qdrant_client=qdrant_client,
+                qdrant_models=qdrant_models,
+            ).search(project_id, query, role=role_key, limit=limit)
             return {"project_id": project_id, "role": role_key, "query": query, "results": results}
 
     def get_context_pack(project_id: str, role: str, chapter_number: int = 0, query: str = "") -> dict[str, Any]:
@@ -74,7 +108,13 @@ def build_handlers(*, get_session: Callable[[], Any], llm_kb_root: Path | None =
         with get_session() as session:
             _require_project(session, project_id)
             pack_kind = ROLE_PACK_KIND[role_key]
-            pack = RetrievalBroker(llm_kb_root=llm_kb_root).build_world_model_pack(
+            pack = RetrievalBroker(
+                llm_kb_root=llm_kb_root,
+                llm_kb_qdrant_url=_qdrant_url(),
+                llm_kb_qdrant_collection=_llm_kb_qdrant_collection(),
+                llm_kb_qdrant_client=qdrant_client,
+                llm_kb_qdrant_models=qdrant_models,
+            ).build_world_model_pack(
                 StateRepository(session),
                 project_id,
                 chapter_number,

@@ -14,7 +14,7 @@ from forwin.orchestrator.loop import RunResult, WritingOrchestrator
 class ContinueProjectOrphanReviewTests(unittest.TestCase):
     def test_continue_project_commits_arc_resolution_before_running_chapters(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "continue-project-commit.db")
+            db_path = postgres_test_url("continue-project-commit")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -57,7 +57,7 @@ class ContinueProjectOrphanReviewTests(unittest.TestCase):
 
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="copilot",
@@ -103,7 +103,7 @@ class ContinueProjectOrphanReviewTests(unittest.TestCase):
 
     def test_run_existing_project_delegates_to_continue_when_plans_exist(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "existing-project-continue.db")
+            db_path = postgres_test_url("existing-project-continue")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -146,7 +146,7 @@ class ContinueProjectOrphanReviewTests(unittest.TestCase):
 
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="copilot",
@@ -174,7 +174,7 @@ class ContinueProjectOrphanReviewTests(unittest.TestCase):
 
     def test_continue_project_resets_needs_review_without_draft(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "orphan-review.db")
+            db_path = postgres_test_url("orphan-review")
             engine = get_engine(db_path)
             init_db(engine)
             session_factory = get_session_factory(engine)
@@ -229,7 +229,7 @@ class ContinueProjectOrphanReviewTests(unittest.TestCase):
 
             orchestrator = WritingOrchestrator(
                 Config(
-                    db_path=db_path,
+                    database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
                     operation_mode="copilot",

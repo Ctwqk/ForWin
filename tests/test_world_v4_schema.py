@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect
 
 from forwin.models import Project
-from forwin.models.base import get_engine, get_session_factory, init_db, upgrade_db
+from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.world_v4 import (
     WorldDeltaRow,
     WorldLineRow,
@@ -13,7 +13,7 @@ from forwin.models.world_v4 import (
 
 
 def test_init_db_exposes_world_v4_tables() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
 
     init_db(engine)
 
@@ -34,17 +34,15 @@ def test_init_db_exposes_world_v4_tables() -> None:
         "chapter_world_delta_intents",
     }.issubset(table_names)
 
-    with engine.connect() as conn:
-        compile_run_columns = {
-            row[1]
-            for row in conn.execute(text("PRAGMA table_info(world_compile_runs_v4)"))
-        }
+    compile_run_columns = {
+        column["name"] for column in inspect(engine).get_columns("world_compile_runs_v4")
+    }
     assert "retrieval_pack_json" in compile_run_columns
     assert "projection_refresh_json" in compile_run_columns
 
 
 def test_world_v4_rows_persist_nested_json_defaults() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -97,66 +95,12 @@ def test_world_v4_rows_persist_nested_json_defaults() -> None:
     assert saved_delta.allowed_for_canon is True
 
 
-def test_world_v4_compile_audit_migration_adds_columns_without_dropping_runs() -> None:
-    engine = get_engine(":memory:")
+def test_world_v4_compile_audit_columns_are_in_baseline() -> None:
+    engine = get_engine(postgres_test_url())
     init_db(engine)
 
-    with engine.begin() as conn:
-        conn.execute(text("DROP TABLE world_compile_runs_v4"))
-        conn.execute(
-            text(
-                """
-                CREATE TABLE world_compile_runs_v4 (
-                    id TEXT PRIMARY KEY,
-                    project_id TEXT NOT NULL,
-                    compiler_run_id TEXT NOT NULL,
-                    chapter_number INTEGER NOT NULL,
-                    review_verdict_id TEXT NOT NULL DEFAULT '',
-                    committed INTEGER NOT NULL DEFAULT 0,
-                    forced_accept_reason TEXT NOT NULL DEFAULT '',
-                    input_json TEXT NOT NULL DEFAULT '{}',
-                    result_json TEXT NOT NULL DEFAULT '{}',
-                    blocked_reasons_json TEXT NOT NULL DEFAULT '[]',
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-        )
-        conn.execute(
-            text(
-                """
-                INSERT INTO world_compile_runs_v4 (
-                    id, project_id, compiler_run_id, chapter_number, committed
-                )
-                VALUES ('legacy-run-row', 'project-1', 'compile-legacy', 23, 1)
-                """
-            )
-        )
-        conn.execute(
-            text(
-                "DELETE FROM schema_migrations WHERE version = 'world_v4_compile_audit_v1'"
-            )
-        )
-
-    upgrade_db(engine)
-
-    with engine.connect() as conn:
-        columns = {
-            row[1]
-            for row in conn.execute(text("PRAGMA table_info(world_compile_runs_v4)"))
-        }
-        row = conn.execute(
-            text(
-                """
-                SELECT compiler_run_id, retrieval_pack_json, projection_refresh_json
-                FROM world_compile_runs_v4
-                WHERE id = 'legacy-run-row'
-                """
-            )
-        ).mappings().one()
-
+    columns = {
+        column["name"] for column in inspect(engine).get_columns("world_compile_runs_v4")
+    }
     assert "retrieval_pack_json" in columns
     assert "projection_refresh_json" in columns
-    assert row["compiler_run_id"] == "compile-legacy"
-    assert json.loads(row["retrieval_pack_json"]) == {}
-    assert json.loads(row["projection_refresh_json"]) == {}

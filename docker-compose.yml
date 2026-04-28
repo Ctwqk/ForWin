@@ -3,8 +3,12 @@ services:
     build: .
     container_name: forwin
     depends_on:
-      - qdrant
-      - minio
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_started
     env_file:
       - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
     ports:
@@ -27,9 +31,11 @@ services:
       - LLM_RETRY_INITIAL_DELAY_SECONDS=${LLM_RETRY_INITIAL_DELAY_SECONDS:-2}
       - LLM_RETRY_MAX_DELAY_SECONDS=${LLM_RETRY_MAX_DELAY_SECONDS:-15}
       - WRITER_MODE=${WRITER_MODE:-scene}
+      - FORWIN_DATABASE_URL=${FORWIN_DATABASE_URL:-postgresql+psycopg://forwin:forwin@postgres:5432/forwin}
       - FORWIN_RETRIEVAL_BACKEND=${FORWIN_RETRIEVAL_BACKEND:-qdrant}
       - FORWIN_QDRANT_URL=${FORWIN_QDRANT_URL:-http://qdrant:6333}
       - FORWIN_QDRANT_COLLECTION=${FORWIN_QDRANT_COLLECTION:-chapter_memories}
+      - FORWIN_LLM_KB_QDRANT_COLLECTION=${FORWIN_LLM_KB_QDRANT_COLLECTION:-llm_kb_vectors}
       - FORWIN_ARTIFACT_BACKEND=${FORWIN_ARTIFACT_BACKEND:-minio}
       - FORWIN_MINIO_ENDPOINT=${FORWIN_MINIO_ENDPOINT:-minio:9000}
       - FORWIN_MINIO_ACCESS_KEY=${FORWIN_MINIO_ACCESS_KEY:-forwinminio}
@@ -43,6 +49,57 @@ services:
       - FORWIN_CODEX_MAX_CONCURRENT=${FORWIN_CODEX_MAX_CONCURRENT:-1}
       - FORWIN_CODEX_SYNC_TIMEOUT_SECONDS=${FORWIN_CODEX_SYNC_TIMEOUT_SECONDS:-90}
       - FORWIN_CODEX_JOB_TIMEOUT_SECONDS=${FORWIN_CODEX_JOB_TIMEOUT_SECONDS:-900}
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: forwin-postgres
+    environment:
+      - POSTGRES_USER=${FORWIN_POSTGRES_USER:-forwin}
+      - POSTGRES_PASSWORD=${FORWIN_POSTGRES_PASSWORD:-forwin}
+      - POSTGRES_DB=${FORWIN_POSTGRES_DB:-forwin}
+    volumes:
+      - forwin-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: forwin-postgres-test
+    environment:
+      - POSTGRES_USER=${FORWIN_TEST_POSTGRES_USER:-forwin}
+      - POSTGRES_PASSWORD=${FORWIN_TEST_POSTGRES_PASSWORD:-forwin}
+      - POSTGRES_DB=${FORWIN_TEST_POSTGRES_DB:-forwin_test}
+    ports:
+      - "${FORWIN_TEST_POSTGRES_BIND:-127.0.0.1:55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: forwin-qdrant
+    volumes:
+      - forwin-qdrant:/qdrant/storage
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -ec '</dev/tcp/127.0.0.1/6333'",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
     restart: unless-stopped
 
   forwin-mcp:
@@ -59,7 +116,7 @@ services:
       - FORWIN_MCP_HOST=${FORWIN_MCP_HOST:-0.0.0.0}
       - FORWIN_MCP_PORT=${FORWIN_MCP_PORT:-8898}
     ports:
-      - "127.0.0.1:8898:8898"
+      - "127.0.0.1:${FORWIN_MCP_BIND_PORT:-8896}:8898"
     healthcheck:
       test:
         [
@@ -83,7 +140,6 @@ services:
       - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
     environment:
       - FORWIN_BACKEND_URL=${FORWIN_PUBLISHER_BROWSER_BACKEND_URL:-http://forwin:8899}
-      - FORWIN_PUBLISHER_EXTENSION_API_KEY=${FORWIN_PUBLISHER_EXTENSION_API_KEY:-}
       - FORWIN_PUBLISHER_PREFERRED_CLIENT_ID=${FORWIN_PUBLISHER_PREFERRED_CLIENT_ID:-}
       - FORWIN_EXTENSION_TEST_PROFILE=${FORWIN_EXTENSION_TEST_PROFILE:-/app/data/chrome_profiles/forwin-extension}
       - FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE=${FORWIN_EXTENSION_REQUIRE_QUALIFIED_PROFILE:-true}
@@ -112,13 +168,6 @@ services:
       start_period: 20s
     restart: unless-stopped
 
-  qdrant:
-    image: qdrant/qdrant:latest
-    container_name: forwin-qdrant
-    volumes:
-      - forwin-qdrant:/qdrant/storage
-    restart: unless-stopped
-
   minio:
     image: minio/minio:latest
     container_name: forwin-minio
@@ -132,5 +181,6 @@ services:
 
 volumes:
   forwin-data:
+  forwin-postgres:
   forwin-qdrant:
   forwin-minio:

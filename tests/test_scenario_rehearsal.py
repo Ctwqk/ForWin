@@ -89,7 +89,7 @@ def _seed_project_with_chapters(session, *, chapter_start: int = 1, chapter_end:
 
 
 def test_scenario_rehearsal_records_patch_when_visibility_plan_lacks_reveal_ladder() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -152,7 +152,7 @@ def test_scenario_rehearsal_records_patch_when_visibility_plan_lacks_reveal_ladd
 
 
 def test_scenario_rehearsal_low_risk_band_records_pass_skip() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -172,7 +172,7 @@ def test_scenario_rehearsal_low_risk_band_records_pass_skip() -> None:
 
 
 def test_arc_envelope_prefers_scenario_rehearsal_over_legacy_preview() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -198,7 +198,7 @@ def test_arc_envelope_prefers_scenario_rehearsal_over_legacy_preview() -> None:
 
 
 def test_legacy_provisional_failure_no_longer_blocks_by_default_but_switch_can_restore() -> None:
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
@@ -217,7 +217,7 @@ def test_legacy_provisional_failure_no_longer_blocks_by_default_but_switch_can_r
         project_id = project.id
 
     with Session() as session:
-        default_orchestrator = WritingOrchestrator(Config(db_path=":memory:"))
+        default_orchestrator = WritingOrchestrator(Config(database_url=postgres_test_url()))
         try:
             assert default_orchestrator._new_failed_provisional_gate(
                 session,
@@ -229,7 +229,7 @@ def test_legacy_provisional_failure_no_longer_blocks_by_default_but_switch_can_r
             default_orchestrator.engine.dispose()
 
         legacy_orchestrator = WritingOrchestrator(
-            Config(db_path=":memory:", legacy_provisional_blocking=True)
+            Config(database_url=postgres_test_url(), legacy_provisional_blocking=True)
         )
         try:
             gate = legacy_orchestrator._new_failed_provisional_gate(

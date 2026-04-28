@@ -44,7 +44,7 @@ class GovernanceDecisionApiTests(unittest.TestCase):
 
     def test_chapter_review_and_band_checkpoint_expose_decision_refs_and_replay(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "governance_decisions.db")
+            db_path = postgres_test_url("governance_decisions")
             self._prime_api(db_path)
 
             project_id = new_id()
@@ -404,9 +404,9 @@ class GovernanceDecisionApiTests(unittest.TestCase):
 
     def test_reason_is_required_for_governance_actions(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "governance_reason_required.db")
+            db_path = postgres_test_url("governance_reason_required")
             self._prime_api(db_path)
-            api_module._config = Config(db_path=db_path, minimax_api_key="", minimax_model="fake-model")
+            api_module._config = Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
             api_module._orchestrator = object()
 
             project_id = new_id()
@@ -502,7 +502,7 @@ class GovernanceDecisionApiTests(unittest.TestCase):
 
     def test_task_contract_api_updates_chapter_and_band_with_audit_event(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "task_contract_api.db")
+            db_path = postgres_test_url("task_contract_api")
             self._prime_api(db_path)
 
             project_id = new_id()
@@ -598,7 +598,7 @@ class GovernanceDecisionApiTests(unittest.TestCase):
 
     def test_constraint_api_rejects_unknown_type_level_and_status(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "constraint_validation.db")
+            db_path = postgres_test_url("constraint_validation")
             self._prime_api(db_path)
             project_id = new_id()
             with api_module._get_session() as session:
@@ -634,7 +634,7 @@ class GovernanceDecisionApiTests(unittest.TestCase):
 
     def test_constraint_lifecycle_requires_reason_and_arc_replay(self) -> None:
         with TemporaryDirectory() as tmp:
-            db_path = str(Path(tmp) / "governance_constraint_lifecycle.db")
+            db_path = postgres_test_url("governance_constraint_lifecycle")
             self._prime_api(db_path)
 
             project_id = new_id()

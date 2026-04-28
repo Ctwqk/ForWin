@@ -24,7 +24,7 @@ from forwin.world_model_v4.repository import WorldModelRepository
 
 
 def _build_client():
-    engine = get_engine(":memory:")
+    engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 

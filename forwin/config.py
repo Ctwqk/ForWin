@@ -4,6 +4,7 @@ import os
 
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_MINIMAX_MODEL = "MiniMax-M2.7"
+LEGACY_DATABASE_PATH_ENV = "FORWIN_" + "DB_PATH"
 DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_MOONSHOT_MODEL = "kimi-k2.5"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
@@ -101,8 +102,16 @@ def _env_llm_profiles(env: dict[str, str] | None = None) -> list[dict[str, str]]
 
 def _env_values() -> dict[str, object]:
     env = _merged_env_values()
+    if LEGACY_DATABASE_PATH_ENV in os.environ or LEGACY_DATABASE_PATH_ENV in env:
+        raise ValueError(
+            f"{LEGACY_DATABASE_PATH_ENV} is no longer supported. Set FORWIN_DATABASE_URL "
+            "to a postgresql+psycopg:// URL."
+        )
     return {
-        "db_path": os.environ.get("FORWIN_DB_PATH", "data/novel.db"),
+        "database_url": os.environ.get(
+            "FORWIN_DATABASE_URL",
+            "postgresql+psycopg://forwin:forwin@localhost:5432/forwin",
+        ),
         "artifact_root": os.environ.get("FORWIN_ARTIFACT_ROOT", "data/artifacts"),
         "artifact_backend": os.environ.get("FORWIN_ARTIFACT_BACKEND", "local"),
         "minio_endpoint": os.environ.get("FORWIN_MINIO_ENDPOINT", ""),
@@ -111,10 +120,11 @@ def _env_values() -> dict[str, object]:
         "minio_bucket": os.environ.get("FORWIN_MINIO_BUCKET", "forwin-artifacts"),
         "minio_prefix": os.environ.get("FORWIN_MINIO_PREFIX", "artifacts"),
         "minio_secure": os.environ.get("FORWIN_MINIO_SECURE", "false").strip().lower() in {"1", "true", "yes"},
-        "retrieval_backend": os.environ.get("FORWIN_RETRIEVAL_BACKEND", "local"),
+        "retrieval_backend": os.environ.get("FORWIN_RETRIEVAL_BACKEND", "qdrant"),
         "retrieval_root": os.environ.get("FORWIN_RETRIEVAL_ROOT", "data/retrieval"),
-        "qdrant_url": os.environ.get("FORWIN_QDRANT_URL", ""),
+        "qdrant_url": os.environ.get("FORWIN_QDRANT_URL", "http://localhost:6333"),
         "qdrant_collection": os.environ.get("FORWIN_QDRANT_COLLECTION", "chapter_memories"),
+        "llm_kb_qdrant_collection": os.environ.get("FORWIN_LLM_KB_QDRANT_COLLECTION", "llm_kb_vectors"),
         "embedding_backend": os.environ.get("FORWIN_EMBEDDING_BACKEND", "hash"),
         "embedding_base_url": os.environ.get(
             "FORWIN_EMBEDDING_BASE_URL",
@@ -222,7 +232,7 @@ def _env_values() -> dict[str, object]:
 
 
 class _ConfigFields:
-    db_path: str = "data/novel.db"
+    database_url: str = "postgresql+psycopg://forwin:forwin@localhost:5432/forwin"
     artifact_root: str = "data/artifacts"
     artifact_backend: str = "local"
     minio_endpoint: str = ""
@@ -231,10 +241,11 @@ class _ConfigFields:
     minio_bucket: str = "forwin-artifacts"
     minio_prefix: str = "artifacts"
     minio_secure: bool = False
-    retrieval_backend: str = "local"
+    retrieval_backend: str = "qdrant"
     retrieval_root: str = "data/retrieval"
-    qdrant_url: str = ""
+    qdrant_url: str = "http://localhost:6333"
     qdrant_collection: str = "chapter_memories"
+    llm_kb_qdrant_collection: str = "llm_kb_vectors"
     embedding_backend: str = "hash"
     embedding_base_url: str = DEFAULT_MINIMAX_BASE_URL
     embedding_api_key: str = ""
@@ -308,4 +319,6 @@ class _ConfigFields:
 
 class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
     if _USES_BASE_SETTINGS:
-        model_config = {"env_prefix": ""}
+        model_config = {"env_prefix": "", "extra": "forbid"}
+    else:
+        model_config = {"extra": "forbid"}

@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import json
 import logging
 import math
 import re
-import sqlite3
-from contextlib import closing
 from hashlib import sha1
-from pathlib import Path
+from typing import Any
 from uuid import UUID
 
 import httpx
@@ -100,6 +97,27 @@ def _point_id(project_id: str, chapter_number: int) -> str:
     return str(UUID(digest))
 
 
+def _create_qdrant_client(url: str) -> Any:
+    try:
+        from qdrant_client import QdrantClient
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("qdrant-client is not installed") from exc
+
+    if url == ":memory:":
+        return QdrantClient(location=":memory:")
+    if "://" not in url:
+        return QdrantClient(path=url)
+    return QdrantClient(url=url)
+
+
+def _qdrant_models() -> Any:
+    try:
+        from qdrant_client.http import models as rest
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("qdrant-client is not installed") from exc
+    return rest
+
+
 class ChapterMemoryIndex:
     def upsert_chapter(
         self,
@@ -122,261 +140,6 @@ class ChapterMemoryIndex:
         raise NotImplementedError
 
 
-class LocalChapterMemoryIndex(ChapterMemoryIndex):
-    def __init__(
-        self,
-        root_dir: str = "data/retrieval",
-        *,
-        embedder: TextEmbedder | None = None,
-    ) -> None:
-        self.root_dir = Path(root_dir)
-        self.root_dir.mkdir(parents=True, exist_ok=True)
-        self.legacy_index_path = self.root_dir / "chapter_memories.json"
-        self.index_dir = self.root_dir / "chapter_memories"
-        self.index_dir.mkdir(parents=True, exist_ok=True)
-        self.db_path = self.root_dir / "chapter_memories.sqlite3"
-        self.embedder = embedder or HashTextEmbedder()
-        self._fts_enabled = False
-        self._bootstrap_db()
-
-    def _bootstrap_db(self) -> None:
-        with closing(self._connect()) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS chapter_memories (
-                    project_id TEXT NOT NULL,
-                    chapter_number INTEGER NOT NULL,
-                    title TEXT NOT NULL DEFAULT '',
-                    summary TEXT NOT NULL DEFAULT '',
-                    excerpt TEXT NOT NULL DEFAULT '',
-                    embedding_json TEXT NOT NULL DEFAULT '[]',
-                    PRIMARY KEY(project_id, chapter_number)
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS ix_chapter_memories_project_chapter
-                ON chapter_memories(project_id, chapter_number DESC)
-                """
-            )
-            try:
-                conn.execute(
-                    """
-                    CREATE VIRTUAL TABLE IF NOT EXISTS chapter_memories_fts
-                    USING fts5(
-                        project_id UNINDEXED,
-                        chapter_number UNINDEXED,
-                        title,
-                        summary,
-                        excerpt
-                    )
-                    """
-                )
-                self._fts_enabled = True
-            except sqlite3.OperationalError:
-                logger.warning(
-                    "SQLite FTS5 unavailable for local memory index; falling back to SQL scan.",
-                    exc_info=True,
-                )
-                self._fts_enabled = False
-
-    def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _project_path(self, project_id: str) -> Path:
-        safe_project_id = re.sub(r"[^A-Za-z0-9_.-]", "_", project_id or "default")
-        return self.index_dir / f"{safe_project_id}.json"
-
-    def _load_legacy_rows(self, project_id: str) -> list[dict]:
-        rows: list[dict] = []
-        project_path = self._project_path(project_id)
-        if project_path.exists():
-            try:
-                return json.loads(project_path.read_text(encoding="utf-8")) or []
-            except (json.JSONDecodeError, OSError):
-                logger.warning("Failed to load project local chapter memory index.", exc_info=True)
-        if self.legacy_index_path.exists():
-            try:
-                rows = json.loads(self.legacy_index_path.read_text(encoding="utf-8")) or []
-            except (json.JSONDecodeError, OSError):
-                logger.warning("Failed to load legacy local chapter memory index.", exc_info=True)
-                return []
-        return [row for row in rows if row.get("project_id") == project_id]
-
-    def _ensure_project_imported(self, project_id: str) -> None:
-        with closing(self._connect()) as conn:
-            count = conn.execute(
-                "SELECT COUNT(1) FROM chapter_memories WHERE project_id = ?",
-                (project_id,),
-            ).fetchone()[0]
-            if count:
-                return
-        rows = self._load_legacy_rows(project_id)
-        if not rows:
-            return
-        with closing(self._connect()) as conn:
-            for row in rows:
-                chapter_number = int(row.get("chapter_number") or 0)
-                title = str(row.get("title") or "")
-                summary = str(row.get("summary") or "")
-                excerpt = str(row.get("excerpt") or "")
-                embedding_json = json.dumps(row.get("embedding") or [], ensure_ascii=False)
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO chapter_memories(
-                        project_id, chapter_number, title, summary, excerpt, embedding_json
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (project_id, chapter_number, title, summary, excerpt, embedding_json),
-                )
-                if self._fts_enabled:
-                    conn.execute(
-                        """
-                        DELETE FROM chapter_memories_fts
-                        WHERE project_id = ? AND chapter_number = ?
-                        """,
-                        (project_id, chapter_number),
-                    )
-                    conn.execute(
-                        """
-                        INSERT INTO chapter_memories_fts(
-                            project_id, chapter_number, title, summary, excerpt
-                        ) VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (project_id, chapter_number, title, summary, excerpt),
-                    )
-            conn.commit()
-
-    def _fts_query(self, query: str) -> str:
-        tokens = []
-        for token in _tokenize(query):
-            if len(token) == 1 and not ("\u4e00" <= token <= "\u9fff"):
-                continue
-            if token not in tokens:
-                tokens.append(token)
-            if len(tokens) >= 8:
-                break
-        if not tokens:
-            return ""
-        return " OR ".join(f'"{token}"' for token in tokens)
-
-    @staticmethod
-    def _decode_embedding(raw: str) -> list[float]:
-        try:
-            payload = json.loads(raw or "[]") or []
-        except (json.JSONDecodeError, TypeError):
-            return []
-        return [float(item) for item in payload]
-
-    def upsert_chapter(
-        self,
-        *,
-        project_id: str,
-        chapter_number: int,
-        title: str,
-        summary: str,
-        body: str,
-    ) -> None:
-        excerpt = (body or "")[:500]
-        embedding = self.embedder.embed([f"{title}\n{summary}\n{excerpt}"])[0]
-        embedding_json = json.dumps(embedding, ensure_ascii=False)
-        with closing(self._connect()) as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO chapter_memories(
-                    project_id, chapter_number, title, summary, excerpt, embedding_json
-                ) VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (project_id, chapter_number, title, summary, excerpt, embedding_json),
-            )
-            if self._fts_enabled:
-                conn.execute(
-                    """
-                    DELETE FROM chapter_memories_fts
-                    WHERE project_id = ? AND chapter_number = ?
-                    """,
-                    (project_id, chapter_number),
-                )
-                conn.execute(
-                    """
-                    INSERT INTO chapter_memories_fts(
-                        project_id, chapter_number, title, summary, excerpt
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (project_id, chapter_number, title, summary, excerpt),
-                )
-            conn.commit()
-
-    def search(
-        self,
-        *,
-        project_id: str,
-        query: str,
-        limit: int = 3,
-    ) -> list[MemorySnippet]:
-        self._ensure_project_imported(project_id)
-        query_embedding = self.embedder.embed([query])[0]
-        candidate_limit = max(limit * 8, 12)
-        rows: list[sqlite3.Row] = []
-        with closing(self._connect()) as conn:
-            fts_query = self._fts_query(query)
-            if self._fts_enabled and fts_query:
-                try:
-                    rows = list(
-                        conn.execute(
-                            """
-                            SELECT m.chapter_number, m.title, m.summary, m.excerpt, m.embedding_json
-                            FROM chapter_memories_fts f
-                            JOIN chapter_memories m
-                              ON m.project_id = f.project_id
-                             AND m.chapter_number = f.chapter_number
-                            WHERE f.project_id = ?
-                              AND chapter_memories_fts MATCH ?
-                            ORDER BY bm25(chapter_memories_fts)
-                            LIMIT ?
-                            """,
-                            (project_id, fts_query, candidate_limit),
-                        ).fetchall()
-                    )
-                except sqlite3.OperationalError:
-                    rows = []
-            if not rows:
-                rows = list(
-                    conn.execute(
-                        """
-                        SELECT chapter_number, title, summary, excerpt, embedding_json
-                        FROM chapter_memories
-                        WHERE project_id = ?
-                        ORDER BY chapter_number DESC
-                        LIMIT ?
-                        """,
-                        (project_id, candidate_limit),
-                    ).fetchall()
-                )
-        ranked: list[MemorySnippet] = []
-        for row in rows:
-            score = _cosine_similarity(
-                query_embedding,
-                self._decode_embedding(str(row["embedding_json"] or "[]")),
-            )
-            if score <= 0:
-                continue
-            ranked.append(
-                MemorySnippet(
-                    chapter_number=int(row["chapter_number"] or 0),
-                    title=str(row["title"] or ""),
-                    summary=str(row["summary"] or ""),
-                    excerpt=str(row["excerpt"] or ""),
-                    score=score,
-                )
-            )
-        ranked.sort(key=lambda item: (-item.score, -item.chapter_number))
-        return ranked[:limit]
-
-
 class QdrantChapterMemoryIndex(ChapterMemoryIndex):
     def __init__(
         self,
@@ -384,24 +147,20 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         url: str,
         collection_name: str,
         embedder: TextEmbedder | None = None,
+        client: Any | None = None,
+        qdrant_models: Any | None = None,
     ) -> None:
-        try:
-            from qdrant_client import QdrantClient
-            from qdrant_client.http import models as rest
-        except ImportError as exc:  # pragma: no cover
-            raise RuntimeError("qdrant-client is not installed") from exc
-
-        self._rest = rest
-        self.client = QdrantClient(url=url)
+        self._rest = qdrant_models or _qdrant_models()
+        self.client = client or _create_qdrant_client(url)
         self.collection_name = collection_name
         self.embedder = embedder or HashTextEmbedder()
         collections = {item.name for item in self.client.get_collections().collections}
         if collection_name not in collections:
             self.client.create_collection(
                 collection_name=collection_name,
-                vectors_config=rest.VectorParams(
+                vectors_config=self._rest.VectorParams(
                     size=self.embedder.dims,
-                    distance=rest.Distance.COSINE,
+                    distance=self._rest.Distance.COSINE,
                 ),
             )
 
@@ -454,7 +213,6 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
             ),
             limit=limit,
         )
-        hits = response.points
         return [
             MemorySnippet(
                 chapter_number=int(hit.payload.get("chapter_number") or 0),
@@ -463,14 +221,15 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
                 excerpt=str(hit.payload.get("excerpt") or ""),
                 score=float(hit.score or 0.0),
             )
-            for hit in hits
+            for hit in response.points
         ]
 
 
 def create_memory_index(
     *,
-    backend: str = "local",
-    root_dir: str = "data/retrieval",
+    backend: str = "qdrant",
+    root_dir: str = "data/retrieval",  # noqa: ARG001 - kept for config compatibility.
+    database_url: str | None = None,  # noqa: ARG001 - retained for legacy call compatibility.
     qdrant_url: str = "",
     qdrant_collection: str = "chapter_memories",
     embedding_backend: str = "hash",
@@ -478,9 +237,10 @@ def create_memory_index(
     embedding_api_key: str = "",
     embedding_model: str = "",
     embedding_dims: int = 64,
+    qdrant_client: Any | None = None,
+    qdrant_models: Any | None = None,
 ) -> ChapterMemoryIndex:
-    normalized = (backend or "local").strip().lower()
-    embedder: TextEmbedder
+    normalized = (backend or "qdrant").strip().lower()
     embedding_kind = (embedding_backend or "hash").strip().lower()
     if (
         embedding_kind in {"remote", "api", "openai"}
@@ -489,7 +249,7 @@ def create_memory_index(
         and embedding_base_url
     ):
         try:
-            embedder = RemoteTextEmbedder(
+            embedder: TextEmbedder = RemoteTextEmbedder(
                 api_key=embedding_api_key,
                 base_url=embedding_base_url,
                 model=embedding_model,
@@ -503,16 +263,14 @@ def create_memory_index(
             embedder = HashTextEmbedder(dims=embedding_dims)
     else:
         embedder = HashTextEmbedder(dims=embedding_dims)
-    if normalized == "qdrant" and qdrant_url:
-        try:
-            return QdrantChapterMemoryIndex(
-                url=qdrant_url,
-                collection_name=qdrant_collection,
-                embedder=embedder,
-            )
-        except Exception:
-            logger.warning(
-                "Qdrant memory index unavailable, falling back to local index.",
-                exc_info=True,
-            )
-    return LocalChapterMemoryIndex(root_dir=root_dir, embedder=embedder)
+    if normalized != "qdrant":
+        raise ValueError(f"Unsupported retrieval backend: {backend}. Use qdrant.")
+    if not qdrant_url:
+        raise ValueError("FORWIN_QDRANT_URL is required when retrieval backend is qdrant.")
+    return QdrantChapterMemoryIndex(
+        url=qdrant_url,
+        collection_name=qdrant_collection,
+        embedder=embedder,
+        client=qdrant_client,
+        qdrant_models=qdrant_models,
+    )

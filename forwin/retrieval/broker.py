@@ -58,6 +58,14 @@ class RetrievalBroker:
         max_world_pages: int = 6,
         memory_index: ChapterMemoryIndex | None = None,
         llm_kb_root: Path | None = None,
+        database_url: str | None = None,
+        retrieval_backend: str = "qdrant",
+        qdrant_url: str | None = None,
+        qdrant_collection: str = "chapter_memories",
+        llm_kb_qdrant_url: str | None = None,
+        llm_kb_qdrant_collection: str | None = None,
+        llm_kb_qdrant_client: object | None = None,
+        llm_kb_qdrant_models: object | None = None,
     ) -> None:
         self.context_budget_chars = context_budget_chars
         self.max_entities = max_entities
@@ -65,11 +73,20 @@ class RetrievalBroker:
         self.max_summaries = max_summaries
         self.max_memories = max_memories
         self.max_world_pages = max_world_pages
-        self.memory_index = memory_index or create_memory_index()
+        self.memory_index = memory_index
+        self.database_url = database_url
+        self.retrieval_backend = retrieval_backend
+        self.qdrant_url = qdrant_url
+        self.qdrant_collection = qdrant_collection
         self.llm_kb_root = llm_kb_root
+        self.llm_kb_qdrant_url = llm_kb_qdrant_url
+        self.llm_kb_qdrant_collection = llm_kb_qdrant_collection
+        self.llm_kb_qdrant_client = llm_kb_qdrant_client
+        self.llm_kb_qdrant_models = llm_kb_qdrant_models
         self.last_observability_summary: dict[str, object] = {}
 
     def build_chapter_context(self, repo, project_id: str, chapter_plan) -> ChapterContextPack:
+        self._ensure_memory_index(repo)
         base_pack = assemble_context(repo, project_id, chapter_plan)
         try:
             world_pack = self.build_world_model_pack(
@@ -198,6 +215,8 @@ class RetrievalBroker:
         compiler packs keep objective truth and planned reveal context so they can
         enforce information-asymmetry contracts.
         """
+        if self.database_url is None:
+            self.database_url = _database_url_from_repo(repo)
         pack_classes: dict[str, type[WorldModelRetrievalPack]] = {
             "planning": PlanningPack,
             "writing": WritingPack,
@@ -544,7 +563,13 @@ class RetrievalBroker:
                 "planning": "planner",
                 "compiler": "compiler",
             }.get(pack_kind, "writer")
-            search_results = LLMKnowledgeBaseRetriever(root=self.llm_kb_root).search(
+            search_results = LLMKnowledgeBaseRetriever(
+                root=self.llm_kb_root,
+                qdrant_url=self.llm_kb_qdrant_url,
+                qdrant_collection=self.llm_kb_qdrant_collection,
+                qdrant_client=self.llm_kb_qdrant_client,
+                qdrant_models=self.llm_kb_qdrant_models,
+            ).search(
                 project_id,
                 query,
                 role=role,
@@ -558,6 +583,17 @@ class RetrievalBroker:
             "excerpts": excerpts,
             "search_results": search_results,
         }
+
+    def _ensure_memory_index(self, repo=None) -> None:  # noqa: ANN001
+        if self.memory_index is not None:
+            return
+        database_url = self.database_url or _database_url_from_repo(repo)
+        self.memory_index = create_memory_index(
+            backend=self.retrieval_backend,
+            database_url=database_url,
+            qdrant_url=self.qdrant_url or "http://localhost:6333",
+            qdrant_collection=self.qdrant_collection,
+        )
 
     @staticmethod
     def _load_review_conflicts(session, project_id: str) -> list[dict[str, object]]:
@@ -971,3 +1007,17 @@ def _extract_source_digest(content: str) -> str:
         if line.startswith("source_digest:"):
             return line.split(":", 1)[1].strip()
     return ""
+
+
+def _database_url_from_repo(repo) -> str | None:  # noqa: ANN001
+    session = getattr(repo, "session", None)
+    if session is None:
+        return None
+    try:
+        bind = session.get_bind()
+    except Exception:  # noqa: BLE001
+        return None
+    url = getattr(bind, "url", None)
+    if url is None:
+        return None
+    return url.render_as_string(hide_password=False)

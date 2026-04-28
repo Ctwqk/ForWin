@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ForWin Operator">
+  <rect width="64" height="64" rx="14" fill="#2563eb"/>
+  <path d="M18 18h28v8H28v8h16v8H28v14H18V18z" fill="#ffffff"/>
+  <path d="M43 36l7 7-7 7-4-4 3-3-3-3 4-4z" fill="#bfdbfe"/>
+</svg>

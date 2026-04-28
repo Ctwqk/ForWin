@@ -1,0 +1,45 @@
+{
+  "name": "forwin-operator",
+  "version": "0.1.0",
+  "description": "Operate a running ForWin backend safely through MCP workflows.",
+  "author": {
+    "name": "ForWin",
+    "email": "maintainers@example.com",
+    "url": "https://github.com/forwin/forwin"
+  },
+  "homepage": "https://github.com/forwin/forwin",
+  "repository": "https://github.com/forwin/forwin",
+  "license": "MIT",
+  "keywords": [
+    "forwin",
+    "mcp",
+    "codex",
+    "writing"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "ForWin Operator",
+    "shortDescription": "Operate ForWin projects, Genesis, tasks, chapters, and WorldModel through MCP.",
+    "longDescription": "ForWin Operator teaches Codex to use the forwin MCP server as the authoritative interface for project discovery, Genesis progression, writing handoff, generation monitoring, chapter inspection, and WorldModel reads. It keeps operator actions on the governed MCP path instead of direct database access or ad hoc HTTP calls.",
+    "developerName": "ForWin",
+    "category": "Productivity",
+    "capabilities": [
+      "MCP",
+      "Workflow",
+      "Project Operations"
+    ],
+    "websiteURL": "https://github.com/forwin/forwin",
+    "privacyPolicyURL": "https://github.com/forwin/forwin",
+    "termsOfServiceURL": "https://github.com/forwin/forwin",
+    "defaultPrompt": [
+      "Use ForWin Operator to inspect my projects.",
+      "Use ForWin Operator to continue a project safely.",
+      "Use ForWin Operator to inspect the newest chapter."
+    ],
+    "brandColor": "#2563EB",
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/logo.svg",
+    "screenshots": []
+  }
+}

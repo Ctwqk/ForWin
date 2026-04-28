@@ -1,0 +1,20 @@
+{
+  "name": "forwin-local",
+  "interface": {
+    "displayName": "ForWin Local"
+  },
+  "plugins": [
+    {
+      "name": "forwin-operator",
+      "source": {
+        "source": "local",
+        "path": "./plugins/forwin-operator"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

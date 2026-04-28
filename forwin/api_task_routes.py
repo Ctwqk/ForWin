@@ -56,6 +56,7 @@ class TaskRouteDeps:
     latest_related_decision_event: Callable[..., Any]
     log_decision_event: Callable[..., Any]
     update_task: Callable[..., None]
+    active_generation_task_ids: Callable[[str], list[str]] | None = None
 
 
 def build_handlers(
@@ -70,17 +71,20 @@ def build_handlers(
 
     def active_generation_task_check(project_id: str = "") -> ActiveGenerationTaskCheckResponse:
         normalized_project_id = str(project_id or "").strip()
-        active_ids: list[str] = []
-        for task_id, task in deps.list_generation_tasks(200):
-            if str(task.get("task_kind", "generation")) != "generation":
-                continue
-            if task.get("deleted"):
-                continue
-            if normalized_project_id and str(task.get("project_id", "") or "").strip() != normalized_project_id:
-                continue
-            if deps.task_is_terminal(str(task.get("status", "")).strip()):
-                continue
-            active_ids.append(task_id)
+        if deps.active_generation_task_ids is not None:
+            active_ids = deps.active_generation_task_ids(normalized_project_id)
+        else:
+            active_ids = []
+            for task_id, task in deps.list_generation_tasks(200):
+                if str(task.get("task_kind", "generation")) != "generation":
+                    continue
+                if task.get("deleted"):
+                    continue
+                if normalized_project_id and str(task.get("project_id", "") or "").strip() != normalized_project_id:
+                    continue
+                if deps.task_is_terminal(str(task.get("status", "")).strip()):
+                    continue
+                active_ids.append(task_id)
         return ActiveGenerationTaskCheckResponse(
             has_active_generation_task=bool(active_ids),
             active_task_ids=active_ids,

@@ -110,6 +110,7 @@ class ApiRouteDeps:
     serialize_task: Callable[[str, dict[str, Any]], Any]
     get_generation_task_or_404: Callable[[str], dict[str, Any]]
     project_has_active_generation_task: Callable[..., bool]
+    active_generation_task_ids: Callable[[str], list[str]]
     generation_task_conflict_message: Callable[[str], str]
     resolve_project_governance: Callable[..., Any]
     governance_request_payload: Callable[[object], dict[str, object]]
@@ -177,6 +178,7 @@ def register_api_routes(
     serialize_task = deps.serialize_task
     get_generation_task_or_404 = deps.get_generation_task_or_404
     project_has_active_generation_task = deps.project_has_active_generation_task
+    active_generation_task_ids = deps.active_generation_task_ids
     generation_task_conflict_message = deps.generation_task_conflict_message
     resolve_project_governance = deps.resolve_project_governance
     governance_request_payload = deps.governance_request_payload
@@ -251,6 +253,7 @@ def register_api_routes(
             list_generation_tasks=list_generation_tasks,
             serialize_task=serialize_task,
             get_generation_task_or_404=get_generation_task_or_404,
+            active_generation_task_ids=active_generation_task_ids,
             serialize_generation_task_center_item=serialize_generation_task_center_item,
             serialize_upload_task_center_item=serialize_upload_task_center_item,
             list_project_backed_task_items=list_project_backed_task_items,
@@ -322,6 +325,7 @@ def register_api_routes(
     )
     world_model_handlers = api_world_model_routes.build_handlers(
         get_session=get_session,
+        get_config=get_config,
     )
     world_model_v4_handlers = api_world_model_v4_routes.build_handlers(
         get_session=get_session,

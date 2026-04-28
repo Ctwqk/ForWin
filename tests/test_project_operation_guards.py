@@ -4,10 +4,12 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
 import forwin.api as api_module
+from forwin import api_project_ops
 from forwin.api_schemas import (
     ChapterReviewApproveRequest,
     GenerateRequest,
@@ -127,11 +129,17 @@ class ProjectOperationGuardTests(unittest.TestCase):
             )
             session.commit()
 
-        api_module._orchestrator = SimpleNamespace(
-            accept_review=lambda *_args, **_kwargs: {
+        accept_calls = []
+
+        def accept_review(*_args, **_kwargs):
+            accept_calls.append("called")
+            return {
                 "message": "accepted",
                 "frozen_artifact": "",
             }
+
+        api_module._orchestrator = SimpleNamespace(
+            accept_review=accept_review
         )
 
         with self.assertRaises(HTTPException) as ctx:
@@ -143,6 +151,77 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertIn("运行中的生成任务", str(ctx.exception.detail))
+        self.assertEqual(accept_calls, [])
+
+    def test_start_writing_rolls_back_status_when_task_creation_fails(self) -> None:
+        project = self._create_project(project_id="proj-start-writing-task-fail")
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "genesis_ready"
+            session.commit()
+
+        class FakeGenesisService:
+            def materialize_book_arcs(self, *, session, project, **_kwargs):
+                arc = ArcPlanVersion(
+                    id="arc-start-writing-task-fail",
+                    project_id=project.id,
+                    version=1,
+                    arc_number=1,
+                    arc_synopsis="测试弧线",
+                    status="active",
+                )
+                session.add(arc)
+                session.flush()
+                return [arc]
+
+            def materialize_arc_chapter_plans(self, *, session, project, **_kwargs):
+                session.add(
+                    ChapterPlan(
+                        id="plan-start-writing-task-fail",
+                        project_id=project.id,
+                        arc_plan_id="arc-start-writing-task-fail",
+                        chapter_number=1,
+                        title="第一章",
+                        status="planned",
+                    )
+                )
+                session.flush()
+
+            def load_pack(self, _revision):
+                return {"world": {"world_bible": {"overview": "测试设定"}}}
+
+        def fail_task_creation(**_kwargs):
+            raise RuntimeError("task create failed")
+
+        with (
+            patch.object(api_project_ops, "_ensure_initial_book_map_from_genesis", lambda **_kwargs: None),
+            patch.object(
+                api_project_ops,
+                "WorldModelCompiler",
+                lambda _session: SimpleNamespace(bootstrap_from_genesis=lambda _project_id: None),
+            ),
+            self.assertRaises(RuntimeError),
+        ):
+            api_project_ops.start_project_writing(
+                project.id,
+                get_session=self.session_factory,
+                config=api_module._config,
+                saved_runtime_config_or_default=lambda: Config(
+                    database_url=api_module._config.database_url,
+                    minimax_api_key="saved-key",
+                ),
+                build_genesis_service=lambda _runtime_config: FakeGenesisService(),
+                close_genesis_service=lambda _service: None,
+                require_genesis_project=lambda _project: None,
+                active_genesis_revision=lambda _session, _project: SimpleNamespace(id="revision-start-writing"),
+                project_has_active_generation_task=lambda _project_id, *, session=None: False,
+                generation_task_conflict_message=lambda _project_id: "conflict",
+                create_continue_generation_task=fail_task_creation,
+            )
+
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            self.assertEqual(project_row.creation_status, "genesis_ready")
 
     def test_delete_project_rejects_running_generation_task(self) -> None:
         project = self._create_project(project_id="proj-delete-generation")

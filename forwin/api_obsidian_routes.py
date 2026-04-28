@@ -15,14 +15,10 @@ from forwin.api_schemas import (
     WorldModelImportRequest,
     WorldModelImportResponse,
 )
-from forwin.book_state.compiler import BookStateCompiler
-from forwin.book_state.reviewer import BookStateReviewGate
-from forwin.knowledge_system import KnowledgeProjectionRefresher
 from forwin.models.project import Project
 from forwin.models.world_model import WorldEditProposalRow
 from forwin.obsidian import ObsidianExporter, ObsidianImporter
-from forwin.obsidian.structured_patch import proposal_to_graph_delta
-from forwin.protocol.book_state import ApprovedGraphDeltaSet
+from forwin.obsidian.proposal_review import approve_world_edit_proposal
 from forwin.world_model.store import load_json
 
 
@@ -130,44 +126,19 @@ def build_handlers(
         with get_session() as session:
             _require_project(session, project_id)
             try:
-                row = _load_pending_proposal(session, project_id, proposal_id)
-                try:
-                    delta = proposal_to_graph_delta(session, row, reason=request.reason)
-                except ValueError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc)) from exc
-                changes = ApprovedGraphDeltaSet(
-                    project_id=project_id,
-                    chapter_number=_proposal_chapter(row),
-                    graph_deltas=[delta],
-                    approved_by=["obsidian_proposal_approval"],
-                    review_verdict_id=f"obsidian_proposal_review_{proposal_id}",
-                )
-                verdict = BookStateReviewGate(session).review(changes)
-                if not verdict.accepted or verdict.approved_changes is None:
-                    message = "; ".join(f"{issue.code}: {issue.message}" for issue in verdict.issues)
-                    raise HTTPException(status_code=409, detail=message or "proposal rejected by BookStateReviewGate")
-                result = BookStateCompiler(session).compile(verdict.approved_changes)
-                if not result.committed:
-                    raise HTTPException(status_code=409, detail="; ".join(result.blocked_reasons) or "BookState compile blocked")
-                row.status = "accepted"
-                row.reviewed_at = datetime.now(UTC)
-                row.review_reason = request.reason
-                row.graph_delta_id = delta.id
-                session.add(row)
-                session.flush()
-                projection_refresh = KnowledgeProjectionRefresher(
+                result = approve_world_edit_proposal(
                     session,
+                    project_id=project_id,
+                    proposal_id=proposal_id,
+                    reason=request.reason,
+                    trigger="obsidian_proposal_approve",
                     qdrant_url=_qdrant_url(),
                     qdrant_collection=_llm_kb_qdrant_collection(),
                     qdrant_client=qdrant_client,
                     qdrant_models=qdrant_models,
-                ).refresh(
-                    project_id,
-                    as_of_chapter=result.chapter_number,
-                    trigger="obsidian_proposal_approve",
                 )
                 session.commit()
-                return _proposal_info(row, projection_refresh=projection_refresh.as_dict())
+                return _proposal_info(result.row, projection_refresh=result.projection_refresh)
             except Exception:
                 session.rollback()
                 raise
@@ -197,21 +168,3 @@ def build_handlers(
         "approve_obsidian_proposal": approve_proposal,
         "reject_obsidian_proposal": reject_proposal,
     }
-
-
-def _load_pending_proposal(session, project_id: str, proposal_id: str) -> WorldEditProposalRow:
-    row = session.get(WorldEditProposalRow, proposal_id)
-    if row is None or row.project_id != project_id:
-        raise HTTPException(status_code=404, detail="proposal not found")
-    if row.status not in {"pending", "proposed"}:
-        raise HTTPException(status_code=409, detail=f"proposal is not pending: {row.status}")
-    return row
-
-
-def _proposal_chapter(row: WorldEditProposalRow) -> int:
-    payload = load_json(row.proposed_patch_json, {})
-    frontmatter = payload.get("frontmatter") if isinstance(payload.get("frontmatter"), dict) else {}
-    try:
-        return int(frontmatter.get("as_of_chapter") or 0)
-    except (TypeError, ValueError):
-        return 0

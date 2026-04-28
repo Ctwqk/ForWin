@@ -946,21 +946,25 @@ def start_project_writing(
         WorldModelCompiler(session).bootstrap_from_genesis(project.id)
         project.creation_status = "writing"
         session.add(project)
-        session.commit()
         active_chapter_count = int(
             session.execute(
                 select(func.count(ChapterPlan.id)).where(ChapterPlan.arc_plan_id == active_arc.id)
             ).scalar_one()
             or 0
         )
-        task_id = create_continue_generation_task(
-            project_id=project.id,
-            runtime_config=runtime_config,
-            requested_chapters=active_chapter_count,
-            title=project.title,
-            subtitle=f"启动写作 · {project.genre}",
-            message="Genesis 完成，准备进入写作主链。",
-        )
+        try:
+            task_id = create_continue_generation_task(
+                project_id=project.id,
+                runtime_config=runtime_config,
+                requested_chapters=active_chapter_count,
+                title=project.title,
+                subtitle=f"启动写作 · {project.genre}",
+                message="Genesis 完成，准备进入写作主链。",
+            )
+        except Exception:
+            session.rollback()
+            raise
+        session.commit()
         return StartWritingResponse(
             ok=True,
             project_id=project.id,
@@ -1520,19 +1524,8 @@ def approve_chapter_review(
         runtime_settings=runtime_settings,
     )
     reason = require_reason(req.reason, action="接受 review")
-    try:
-        accept_review_parameters = inspect.signature(orchestrator.accept_review).parameters
-        if "reason" in accept_review_parameters:
-            result = orchestrator.accept_review(project_id, chapter_number, reason=reason)
-        else:
-            result = orchestrator.accept_review(project_id, chapter_number)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(404, str(exc)) from exc
-
     task_id = ""
-    message = result["message"]
+    total_chapters = 0
     if req.continue_generation:
         session = get_session()
         try:
@@ -1580,6 +1573,20 @@ def approve_chapter_review(
             ).scalar_one()
         finally:
             session.close()
+
+    try:
+        accept_review_parameters = inspect.signature(orchestrator.accept_review).parameters
+        if "reason" in accept_review_parameters:
+            result = orchestrator.accept_review(project_id, chapter_number, reason=reason)
+        else:
+            result = orchestrator.accept_review(project_id, chapter_number)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    message = result["message"]
+    if req.continue_generation:
         try:
             task_id = create_continue_generation_task(
                 project_id=project_id,

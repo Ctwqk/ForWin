@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -16,6 +16,17 @@ class GenerationTask(Base):
         Index("ix_generation_tasks_status_updated", "status", "updated_at"),
         Index("ix_generation_tasks_project_updated", "project_id", "updated_at"),
         Index("ix_generation_tasks_deleted_updated", "deleted_at", "updated_at"),
+        Index(
+            "ux_generation_tasks_one_active_per_project",
+            "project_id",
+            unique=True,
+            postgresql_where=text(
+                "deleted_at IS NULL "
+                "AND task_kind = 'generation' "
+                "AND project_id <> '' "
+                "AND status NOT IN ('completed', 'partial_failed', 'failed', 'needs_review', 'cancelled', 'paused')"
+            ),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)

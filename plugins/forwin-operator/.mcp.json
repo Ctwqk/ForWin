@@ -2,7 +2,7 @@
   "mcpServers": {
     "forwin": {
       "transport": "streamable_http",
-      "url": "http://127.0.0.1:8898/mcp"
+      "url": "http://127.0.0.1:8896/mcp"
     }
   }
 }

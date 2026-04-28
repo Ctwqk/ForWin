@@ -88,7 +88,7 @@ services:
       - FORWIN_MCP_HOST=${FORWIN_MCP_HOST:-0.0.0.0}
       - FORWIN_MCP_PORT=${FORWIN_MCP_PORT:-8898}
     ports:
-      - "127.0.0.1:8898:8898"
+      - "${FORWIN_MCP_DEBUG_BIND:-127.0.0.1:8896}:8898"
     healthcheck:
       test:
         [

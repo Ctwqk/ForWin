@@ -54,16 +54,27 @@ tests/                        # Automated test suite
 
 ```bash
 python -m pip install -e .[test]
-uvicorn forwin.api:app --reload --host 0.0.0.0 --port 8899
+uvicorn forwin.api:app --reload --host 127.0.0.1 --port 8899
 ```
 
 ### Docker workflow
 
 ```bash
+cp .env.example .env
 docker compose up --build
 ```
 
-By default the main web API is exposed on `http://localhost:8899`.
+By default the main web API is bound to `127.0.0.1:8899`, so it is reachable only from the server itself.
+
+### Personal LAN deployment
+
+1. Copy `.env.example` to `.env`.
+2. Set `FORWIN_HTTP_BIND` to your server LAN IP, for example `192.168.1.10`.
+3. Set MinIO credentials and LLM API keys.
+4. Optionally set `FORWIN_HTTP_BASIC_USER` and `FORWIN_HTTP_BASIC_PASSWORD`.
+5. Run `docker compose up -d --build`.
+
+Keep `FORWIN_HTTP_BIND=127.0.0.1` for local-only access. LAN access requires an explicit server LAN IP; do not use `0.0.0.0` unless you mean to listen on every network interface. Basic Auth is lightweight single-user protection for a trusted LAN, not a multi-user permission system.
 
 ## Testing
 

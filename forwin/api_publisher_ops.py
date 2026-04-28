@@ -37,9 +37,14 @@ def _build_extension_package(extension_root: Path) -> bytes:
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for path in sorted(extension_root.rglob("*")):
-            if path.is_dir():
-                continue
+        paths = sorted(path for path in extension_root.rglob("*") if path.is_file())
+        paths.sort(
+            key=lambda path: (
+                path.name != "manifest.json",
+                str(path.relative_to(extension_root)),
+            )
+        )
+        for path in paths:
             archive.write(path, arcname=Path("forwin-publisher") / path.relative_to(extension_root))
     buffer.seek(0)
     return buffer.getvalue()

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy import case, delete, func, or_, select
@@ -56,6 +56,7 @@ from forwin.api_runtime import (
 )
 from forwin.api_task_history import augment_task_with_rehearsal_history
 from forwin.api_artifacts import build_artifact_store
+from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
 from forwin.api_schemas import (
     BandCheckpointApproveRequest,
     BandCheckpointDetail,
@@ -1848,6 +1849,11 @@ async def lifespan(app: FastAPI):
 
     if _config is None:
         _config = Config.from_env()
+    if str(_config.http_bind or "").strip() in {"0.0.0.0", "::"} and not basic_auth_enabled(_config):
+        logger.warning(
+            "ForWin is reachable beyond localhost and HTTP Basic Auth is disabled. "
+            "This is acceptable only on a trusted LAN."
+        )
     if _engine is None:
         db_path = os.environ.get("FORWIN_DB_PATH", _config.db_path)
         _config = _config.model_copy(update={"db_path": db_path})
@@ -1928,6 +1934,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def optional_basic_auth(request: Request, call_next):
+    config = _config
+    if config is None or not basic_auth_enabled(config):
+        return await call_next(request)
+    return await make_basic_auth_middleware(config)(request, call_next)
 
 
 # ---------------------------------------------------------------------------

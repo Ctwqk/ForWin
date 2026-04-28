@@ -6,9 +6,10 @@ services:
       - qdrant
       - minio
     env_file:
-      - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
+      - path: ${FORWIN_ENV_FILE:-.env}
+        required: false
     ports:
-      - "8899:8899"
+      - "${FORWIN_HTTP_BIND:-127.0.0.1}:${FORWIN_HTTP_PORT:-8899}:8899"
     volumes:
       - forwin-data:/app/data
     extra_hosts:
@@ -32,11 +33,15 @@ services:
       - FORWIN_QDRANT_COLLECTION=${FORWIN_QDRANT_COLLECTION:-chapter_memories}
       - FORWIN_ARTIFACT_BACKEND=${FORWIN_ARTIFACT_BACKEND:-minio}
       - FORWIN_MINIO_ENDPOINT=${FORWIN_MINIO_ENDPOINT:-minio:9000}
-      - FORWIN_MINIO_ACCESS_KEY=${FORWIN_MINIO_ACCESS_KEY:-forwinminio}
-      - FORWIN_MINIO_SECRET_KEY=${FORWIN_MINIO_SECRET_KEY:-forwinminio123}
+      - FORWIN_MINIO_ACCESS_KEY=${FORWIN_MINIO_ACCESS_KEY:?set FORWIN_MINIO_ACCESS_KEY in .env}
+      - FORWIN_MINIO_SECRET_KEY=${FORWIN_MINIO_SECRET_KEY:?set FORWIN_MINIO_SECRET_KEY in .env}
       - FORWIN_MINIO_BUCKET=${FORWIN_MINIO_BUCKET:-forwin-artifacts}
       - FORWIN_MINIO_PREFIX=${FORWIN_MINIO_PREFIX:-artifacts}
       - FORWIN_MINIO_SECURE=${FORWIN_MINIO_SECURE:-false}
+      - FORWIN_HTTP_BIND=${FORWIN_HTTP_BIND:-127.0.0.1}
+      - FORWIN_HTTP_PORT=${FORWIN_HTTP_PORT:-8899}
+      - FORWIN_HTTP_BASIC_USER=${FORWIN_HTTP_BASIC_USER:-}
+      - FORWIN_HTTP_BASIC_PASSWORD=${FORWIN_HTTP_BASIC_PASSWORD:-}
       - FORWIN_CODEX_ENABLED=${FORWIN_CODEX_ENABLED:-false}
       - FORWIN_CODEX_BRIDGE_URL=${FORWIN_CODEX_BRIDGE_URL:-http://host.docker.internal:8897}
       - FORWIN_CODEX_BRIDGE_TOKEN=${FORWIN_CODEX_BRIDGE_TOKEN:-}
@@ -53,7 +58,8 @@ services:
         condition: service_healthy
     command: ["python", "-m", "uvicorn", "forwin.mcp.http:app", "--host", "0.0.0.0", "--port", "8898"]
     env_file:
-      - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
+      - path: ${FORWIN_ENV_FILE:-.env}
+        required: false
     environment:
       - FORWIN_API_BASE_URL=${FORWIN_API_BASE_URL:-http://forwin:8899}
       - FORWIN_MCP_HOST=${FORWIN_MCP_HOST:-0.0.0.0}
@@ -80,7 +86,8 @@ services:
         condition: service_healthy
     command: ["bash", "-lc", "exec scripts/launch_linux_extension_browser.sh"]
     env_file:
-      - ${FORWIN_ENV_FILE:-/home/taiwei/ForWin/.env}
+      - path: ${FORWIN_ENV_FILE:-.env}
+        required: false
     environment:
       - FORWIN_BACKEND_URL=${FORWIN_PUBLISHER_BROWSER_BACKEND_URL:-http://forwin:8899}
       - FORWIN_PUBLISHER_EXTENSION_API_KEY=${FORWIN_PUBLISHER_EXTENSION_API_KEY:-}
@@ -113,19 +120,19 @@ services:
     restart: unless-stopped
 
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:${QDRANT_IMAGE_TAG:-v1.15.4}
     container_name: forwin-qdrant
     volumes:
       - forwin-qdrant:/qdrant/storage
     restart: unless-stopped
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:${MINIO_IMAGE_TAG:-RELEASE.2025-09-07T16-13-09Z}
     container_name: forwin-minio
     command: server /data --console-address ":9001"
     environment:
-      - MINIO_ROOT_USER=${FORWIN_MINIO_ACCESS_KEY:-forwinminio}
-      - MINIO_ROOT_PASSWORD=${FORWIN_MINIO_SECRET_KEY:-forwinminio123}
+      - MINIO_ROOT_USER=${FORWIN_MINIO_ACCESS_KEY:?set FORWIN_MINIO_ACCESS_KEY in .env}
+      - MINIO_ROOT_PASSWORD=${FORWIN_MINIO_SECRET_KEY:?set FORWIN_MINIO_SECRET_KEY in .env}
     volumes:
       - forwin-minio:/data
     restart: unless-stopped

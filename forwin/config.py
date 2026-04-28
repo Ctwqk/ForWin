@@ -8,6 +8,12 @@ DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_MOONSHOT_MODEL = "kimi-k2.5"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+DEFAULT_HTTP_BASIC_EXEMPT_PATHS = (
+    "/health",
+    "/api/extension/",
+    "/api/publisher/extension/",
+    "/api/publishers/extension/",
+)
 
 try:
     from pydantic_settings import BaseSettings as _ConfigBaseModel
@@ -136,6 +142,14 @@ def _env_values() -> dict[str, object]:
         "publisher_preferred_client_id": os.environ.get(
             "FORWIN_PUBLISHER_PREFERRED_CLIENT_ID", ""
         ),
+        "http_bind": env.get("FORWIN_HTTP_BIND", "127.0.0.1"),
+        "http_port": int(env.get("FORWIN_HTTP_PORT", "8899")),
+        "http_basic_user": env.get("FORWIN_HTTP_BASIC_USER", ""),
+        "http_basic_password": env.get("FORWIN_HTTP_BASIC_PASSWORD", ""),
+        "http_basic_exempt_paths": tuple(
+            _csv_list(env.get("FORWIN_HTTP_BASIC_EXEMPT_PATHS", ""))
+        )
+        or DEFAULT_HTTP_BASIC_EXEMPT_PATHS,
         "minimax_api_key": env.get("MINIMAX_API_KEY", ""),
         "minimax_base_url": env.get(
             "MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL
@@ -243,6 +257,11 @@ class _ConfigFields:
     runtime_settings_path: str = "data/runtime_settings.json"
     publisher_extension_api_key: str = ""
     publisher_preferred_client_id: str = ""
+    http_bind: str = "127.0.0.1"
+    http_port: int = 8899
+    http_basic_user: str = ""
+    http_basic_password: str = ""
+    http_basic_exempt_paths: tuple[str, ...] = DEFAULT_HTTP_BASIC_EXEMPT_PATHS
     minimax_api_key: str = ""
     minimax_base_url: str = DEFAULT_MINIMAX_BASE_URL
     minimax_model: str = DEFAULT_MINIMAX_MODEL
@@ -309,3 +328,12 @@ class _ConfigFields:
 class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
     if _USES_BASE_SETTINGS:
         model_config = {"env_prefix": ""}
+
+    def __init__(self, **data: object) -> None:
+        super().__init__(**data)
+        user = str(self.http_basic_user or "")
+        password = str(self.http_basic_password or "")
+        if bool(user) != bool(password):
+            raise ValueError(
+                "FORWIN_HTTP_BASIC_USER and FORWIN_HTTP_BASIC_PASSWORD must be set together"
+            )

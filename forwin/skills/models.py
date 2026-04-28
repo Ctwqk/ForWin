@@ -22,6 +22,7 @@ class SkillManifest:
     path: str = ""
     skill_hash: str = ""
     group: str = ""
+    metadata: dict[str, object] = field(default_factory=dict)
     capability: SkillCapability = field(default_factory=SkillCapability)
 
 

@@ -26,6 +26,7 @@ WORLD_NODE_FIELDS: dict[str, dict[str, set[str]]] = {
             "public_identity",
             "true_identity_ref",
             "personality_tags",
+            "personality_loadout",
             "talent_profile",
             "narrative_role",
             "first_appearance_chapter",

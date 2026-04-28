@@ -213,6 +213,46 @@ def _active_entities_section(context: ChapterContextPack, *, limit: int) -> str 
     )
 
 
+def _personality_context_section(context: ChapterContextPack, *, limit: int = 6) -> str | None:
+    raw_contexts = list(getattr(context, "active_personality_contexts", []) or [])
+    if not raw_contexts:
+        return None
+    lines = ["【人物性格运行时】"]
+    for raw in raw_contexts[:limit]:
+        item = raw.model_dump(mode="json") if hasattr(raw, "model_dump") else dict(raw or {})
+        character_name = str(item.get("character_name") or item.get("character_id") or "").strip()
+        active_skills = item.get("active_skills") if isinstance(item.get("active_skills"), dict) else {}
+        bias = item.get("current_behavior_bias") if isinstance(item.get("current_behavior_bias"), dict) else {}
+        constraints = [str(value) for value in (item.get("constraints") or []) if str(value).strip()]
+        skill_parts: list[str] = []
+        for key, label in (
+            ("dominant", "主"),
+            ("secondary", "副"),
+            ("social_mask", "面具"),
+            ("stress_mode", "压力"),
+            ("relationship_pattern", "关系"),
+        ):
+            values = [str(value) for value in (active_skills.get(key) or []) if str(value).strip()]
+            if values:
+                skill_parts.append(f"{label}={','.join(values[:3])}")
+        lines.append(f"  · {character_name}：" + ("；".join(skill_parts) if skill_parts else "无激活 skill"))
+        for key, label in (
+            ("perception", "感知"),
+            ("decision", "决策"),
+            ("dialogue", "对白"),
+            ("body_language", "动作"),
+            ("relationship_behavior", "关系"),
+            ("stress_behavior", "压力"),
+        ):
+            values = [str(value) for value in (bias.get(key) or []) if str(value).strip()]
+            if values:
+                lines.append(f"    · {label}：" + "；".join(values[:3]))
+        if constraints:
+            lines.append("    · 约束：" + "；".join(constraints[:3]))
+    lines.append("  · 人格 skill 只控制倾向，不覆盖 canon、当前剧情状态、scene 目标或关系状态。")
+    return "\n".join(lines)
+
+
 def _subworld_control_section(context: ChapterContextPack) -> str | None:
     if not any(
         (
@@ -477,6 +517,7 @@ def _scene_prompt_sections(
         _chapter_plan_section(context, plan_title),
         _previous_summaries_section(context, limit=previous_limit),
         _active_entities_section(context, limit=entity_limit),
+        _personality_context_section(context),
         _subworld_control_section(context),
         _map_runtime_section(context),
         _active_threads_section(context, limit=thread_limit),
@@ -517,6 +558,7 @@ def build_single_chapter_draft_prompt(
         _chapter_plan_section(context, "本章计划"),
         _previous_summaries_section(context, limit=3),
         _active_entities_section(context, limit=6),
+        _personality_context_section(context),
         _subworld_control_section(context),
         _map_runtime_section(context),
         _active_threads_section(context, limit=3),
@@ -571,6 +613,7 @@ def build_preview_chapter_prompt(
         _chapter_plan_section(context, "预演章节计划"),
         _previous_summaries_section(context, limit=2),
         _active_entities_section(context, limit=5),
+        _personality_context_section(context),
         _map_runtime_section(context),
         _active_threads_section(context, limit=3),
         _experience_overlay_section(context),

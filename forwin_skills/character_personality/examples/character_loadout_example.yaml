@@ -1,0 +1,21 @@
+character_id: char_example
+name: Example
+
+personality_loadout:
+  dominant:
+    skill: trait-suspicious-survivor
+    weight: 0.75
+  secondary:
+    - skill: trait-loyal-protector
+      weight: 0.55
+  social_mask:
+    - skill: mask-cold-professional
+      weight: 0.6
+      active_when:
+        - public_scene
+  stress_modes:
+    - skill: stress-paranoid-controller
+      trigger:
+        - betrayal_suspected
+  relationship_patterns: []
+  overrides: {}

@@ -228,6 +228,7 @@ class ChapterContextPack(BaseModel):
     must_not_reveal: list[str] = Field(default_factory=list)
     fair_misdirection_requirements: list[str] = Field(default_factory=list)
     chapter_world_delta_intent: ChapterWorldDeltaIntent | None = None
+    active_personality_contexts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class WorldModelRetrievalPack(BaseModel):
@@ -330,3 +331,4 @@ class ReviewContextPack(BaseModel):
     recent_rule_events: list[CanonEventEvidence] = Field(default_factory=list)
     recent_review_notes: list[ReviewNote] = Field(default_factory=list)
     lint_signals: list[LintSignal] = Field(default_factory=list)
+    active_personality_contexts: list[dict[str, Any]] = Field(default_factory=list)

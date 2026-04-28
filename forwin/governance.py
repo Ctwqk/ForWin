@@ -140,6 +140,7 @@ class DecisionEventType:
     BOOK_STATE_COMPILE_STARTED = "book_state_compile_started"
     BOOK_STATE_COMPILE_SUCCEEDED = "book_state_compile_succeeded"
     BOOK_STATE_COMPILE_FAILED = "book_state_compile_failed"
+    PERSONALITY_LOADOUT_UPDATED = "personality_loadout_updated"
     LEGACY_PROJECTION_FAILED = "legacy_projection_failed"
     LEGACY_REGION_PROMOTION_STARTED = "legacy_region_promotion_started"
     LEGACY_REGION_PROMOTION_SUCCEEDED = "legacy_region_promotion_succeeded"
@@ -260,6 +261,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.BOOK_STATE_COMPILE_STARTED,
     DecisionEventType.BOOK_STATE_COMPILE_SUCCEEDED,
     DecisionEventType.BOOK_STATE_COMPILE_FAILED,
+    DecisionEventType.PERSONALITY_LOADOUT_UPDATED,
     DecisionEventType.LEGACY_PROJECTION_FAILED,
     DecisionEventType.LEGACY_REGION_PROMOTION_STARTED,
     DecisionEventType.LEGACY_REGION_PROMOTION_SUCCEEDED,

@@ -5,10 +5,13 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy import select
 
+from forwin.api_schemas import PersonalityLoadoutUpdateRequest
 from forwin.book_state import BookStateProjection, BookStateRepository, LegacyBookStateImporter
 from forwin.governance import DecisionEventInfo, DecisionEventType
 from forwin.observability.payloads import audit_payload, event_error_payload
 from forwin.models.project import Project
+from forwin.personality.library import CharacterPersonalityLibrary
+from forwin.personality.models import PersonalityLoadout
 from forwin.state.updater import StateUpdater
 
 
@@ -19,7 +22,14 @@ def _require_project(session, project_id: str) -> Project:
     return project
 
 
-def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[..., Any]]:
+def build_handlers(
+    *,
+    get_session: Callable[[], Any],
+    personality_library_root: str | None = None,
+) -> dict[str, Callable[..., Any]]:
+    def _personality_library() -> CharacterPersonalityLibrary:
+        return CharacterPersonalityLibrary(personality_library_root)
+
     def _resolve_as_of_chapter(session, project_id: str, as_of_chapter: int | None = None) -> int:
         if as_of_chapter is not None and int(as_of_chapter or 0) > 0:
             return int(as_of_chapter)
@@ -252,7 +262,89 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
                 "migration_report": counts.get("migration_report", {}) if isinstance(counts, dict) else {},
             }
 
+    def list_personality_skills() -> dict[str, Any]:
+        return _personality_library().catalog_payload()
+
+    def list_character_personality_loadouts(project_id: str, as_of_chapter: int = 0) -> dict[str, Any]:
+        with get_session() as session:
+            _require_project(session, project_id)
+            as_of = _resolve_as_of_chapter(session, project_id, as_of_chapter)
+            characters = [
+                _character_personality_payload(node)
+                for node in BookStateRepository(session).list_world_nodes(project_id, as_of_chapter=as_of)
+                if str(node.node_type) == "character"
+            ]
+            return {
+                "schema_version": "book_state.character_personality.v1",
+                "project_id": project_id,
+                "as_of_chapter": as_of,
+                "characters": characters,
+            }
+
+    def get_character_personality_loadout(project_id: str, character_id: str, as_of_chapter: int = 0) -> dict[str, Any]:
+        with get_session() as session:
+            _require_project(session, project_id)
+            as_of = _resolve_as_of_chapter(session, project_id, as_of_chapter)
+            node = _get_character_node(
+                BookStateRepository(session),
+                project_id,
+                character_id,
+                as_of_chapter=as_of,
+            )
+            return {
+                "schema_version": "book_state.character_personality.v1",
+                "project_id": project_id,
+                "as_of_chapter": as_of,
+                **_character_personality_payload(node),
+            }
+
+    def set_character_personality_loadout(
+        project_id: str,
+        character_id: str,
+        req: PersonalityLoadoutUpdateRequest,
+    ) -> dict[str, Any]:
+        loadout = PersonalityLoadout.model_validate(req.personality_loadout)
+        loadout_payload = loadout.model_dump(mode="json", exclude_none=True)
+        missing = _personality_library().validate_skill_ids(loadout.active_skill_ids())
+        if missing:
+            raise HTTPException(status_code=400, detail=f"unknown personality skills: {', '.join(missing)}")
+        with get_session() as session:
+            _require_project(session, project_id)
+            repo = BookStateRepository(session)
+            node = _get_character_node(repo, project_id, character_id, as_of_chapter=None)
+            profile = dict(node.profile)
+            profile["personality_loadout"] = loadout_payload
+            updated = node.model_copy(update={"profile": profile})
+            repo.create_world_node(updated)
+            StateUpdater(session).save_decision_event(
+                DecisionEventInfo(
+                    project_id=project_id,
+                    scope="book_state",
+                    event_family="audit_action",
+                    event_type=DecisionEventType.PERSONALITY_LOADOUT_UPDATED,
+                    actor_type="api",
+                    summary=f"更新角色 {updated.name or updated.id} 的 personality_loadout。",
+                    reason=req.reason,
+                    payload=audit_payload(
+                        stage="personality_loadout",
+                        status="updated",
+                        project_id=project_id,
+                        character_id=updated.id,
+                        personality_loadout=loadout_payload,
+                    ),
+                    related_object_type="world_node",
+                    related_object_id=updated.id,
+                )
+            )
+            session.commit()
+            return {
+                "schema_version": "book_state.character_personality.v1",
+                "project_id": project_id,
+                **_character_personality_payload(updated),
+            }
+
     return {
+        "list_personality_skills": list_personality_skills,
         "get_book_state_runtime": get_book_state_runtime,
         "get_book_state_snapshot": get_book_state_snapshot,
         "list_book_state_nodes": list_book_state_nodes,
@@ -262,4 +354,29 @@ def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[...,
         "list_book_state_reader_promises": list_book_state_reader_promises,
         "get_book_state_path": get_book_state_path,
         "import_book_state_legacy": import_book_state_legacy,
+        "list_character_personality_loadouts": list_character_personality_loadouts,
+        "get_character_personality_loadout": get_character_personality_loadout,
+        "set_character_personality_loadout": set_character_personality_loadout,
+    }
+
+
+def _get_character_node(
+    repo: BookStateRepository,
+    project_id: str,
+    character_id: str,
+    *,
+    as_of_chapter: int | None,
+):
+    normalized = str(character_id or "").strip()
+    for node in repo.list_world_nodes(project_id, as_of_chapter=as_of_chapter):
+        if str(node.node_type) == "character" and node.id == normalized:
+            return node
+    raise HTTPException(status_code=404, detail="character not found")
+
+
+def _character_personality_payload(node) -> dict[str, Any]:
+    return {
+        "character_id": node.id,
+        "character_name": node.name,
+        "personality_loadout": dict(node.profile.get("personality_loadout") or {}),
     }

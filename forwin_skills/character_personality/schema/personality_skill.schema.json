@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ForWin Character Personality Skill v2",
+  "type": "object",
+  "required": ["frontmatter", "body"],
+  "properties": {
+    "frontmatter": {
+      "type": "object",
+      "required": [
+        "name",
+        "description",
+        "forwin_scope",
+        "category",
+        "skill_type",
+        "version",
+        "status",
+        "mode",
+        "reference_model_policy",
+        "tags"
+      ],
+      "properties": {
+        "name": { "type": "string", "pattern": "^(trait|mask|stress|rel|archetype)-[a-z0-9-]+$" },
+        "chinese_name": { "type": "string" },
+        "description": { "type": "string" },
+        "forwin_scope": { "const": "character_personality" },
+        "category": { "const": "character_personality_skill" },
+        "skill_type": {
+          "enum": ["trait", "social_mask", "stress_mode", "relationship_pattern", "archetype"]
+        },
+        "version": { "type": "string" },
+        "status": { "enum": ["draft", "stable", "deprecated"] },
+        "mapping_confidence": { "enum": ["low", "medium", "high"] },
+        "mode": { "const": "instruction_only" },
+        "use_when": { "type": "array", "items": { "type": "string" } },
+        "avoid_when": { "type": "array", "items": { "type": "string" } },
+        "compatible_with": { "type": "array", "items": { "type": "string" } },
+        "tension_with": { "type": "array", "items": { "type": "string" } },
+        "reference_model_policy": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 2
+        },
+        "reference_models": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": true
+    },
+    "body": {
+      "type": "object",
+      "required": ["trigger_rules", "expression", "stress_and_arc", "prompt_compression", "do_not"],
+      "properties": {
+        "trait_axes": { "type": "object", "additionalProperties": { "type": "string" } },
+        "core_drive": { "type": "object", "additionalProperties": { "type": "string" } },
+        "trigger_rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["trigger", "interpretation", "response", "cost", "possible_growth_response"],
+            "properties": {
+              "trigger": { "type": "string" },
+              "interpretation": { "type": "string" },
+              "response": { "type": "string" },
+              "cost": { "type": "string" },
+              "possible_growth_response": { "type": "string" }
+            }
+          }
+        },
+        "relationship_rules": {
+          "type": "object",
+          "required": ["stranger", "ally", "loved_one", "enemy"],
+          "additionalProperties": { "type": "string" }
+        },
+        "expression": {
+          "type": "object",
+          "required": ["dialogue_behavior", "body_language", "affection_style", "anger_style", "lie_style", "silence_style", "humor_style"],
+          "properties": {
+            "dialogue_behavior": { "type": "array", "items": { "type": "string" } },
+            "body_language": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+            "affection_style": { "type": "string" },
+            "anger_style": { "type": "string" },
+            "lie_style": { "type": "string" },
+            "silence_style": { "type": "string" },
+            "humor_style": { "type": "string" }
+          },
+          "additionalProperties": true
+        },
+        "stress_and_arc": {
+          "type": "object",
+          "required": ["stress_triggers", "mild_pressure", "medium_pressure", "extreme_pressure", "recovery_conditions", "healthy_growth", "negative_arc"],
+          "properties": {
+            "stress_triggers": { "type": "array", "items": { "type": "string" } },
+            "recovery_conditions": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+          },
+          "additionalProperties": true
+        },
+        "prompt_compression": {
+          "type": "object",
+          "required": ["one_line_summary"],
+          "properties": {
+            "one_line_summary": { "type": "string" },
+            "perception_bias": { "type": "array", "items": { "type": "string" } },
+            "decision_bias": { "type": "array", "items": { "type": "string" } },
+            "dialogue_bias": { "type": "array", "items": { "type": "string" } },
+            "body_language_bias": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+            "relationship_bias": { "type": "array", "items": { "type": "string" } },
+            "stress_bias": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": true
+        },
+        "do_not": { "type": "array", "items": { "type": "string" } },
+        "mask_profile": { "type": "object", "additionalProperties": true },
+        "stress_mode_specific": { "type": "object", "additionalProperties": true },
+        "relationship_pattern_specific": { "type": "object", "additionalProperties": true },
+        "archetype_specific": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "frontmatter": {
+            "properties": { "skill_type": { "const": "trait" } }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "body": { "required": ["trait_axes", "core_drive"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "frontmatter": {
+            "properties": { "skill_type": { "const": "social_mask" } }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "body": { "required": ["mask_profile"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "frontmatter": {
+            "properties": { "skill_type": { "const": "stress_mode" } }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "body": { "required": ["stress_mode_specific"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "frontmatter": {
+            "properties": { "skill_type": { "const": "relationship_pattern" } }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "body": { "required": ["relationship_pattern_specific"] }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "frontmatter": {
+            "properties": { "skill_type": { "const": "archetype" } }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "body": { "required": ["archetype_specific"] }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

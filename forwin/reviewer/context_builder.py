@@ -101,6 +101,7 @@ def build_review_context_pack(
         recent_rule_events=recent_rule_events,
         recent_review_notes=recent_review_notes,
         lint_signals=list(lint_signals or []),
+        active_personality_contexts=list(context.active_personality_contexts),
     )
 
 

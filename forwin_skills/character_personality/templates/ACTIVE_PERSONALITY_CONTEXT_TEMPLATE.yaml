@@ -1,0 +1,20 @@
+active_personality_context:
+  character_id: char_example
+  character_name: TBD
+  active_skills:
+    dominant: []
+    secondary: []
+    social_mask: []
+    stress_mode: []
+    relationship_pattern: []
+  current_behavior_bias:
+    perception: []
+    decision: []
+    dialogue: []
+    body_language: []
+    relationship_behavior: []
+    stress_behavior: []
+  constraints:
+    - Do not override canon.
+    - Do not make the character omniscient.
+    - Do not flatten the character into one repeated behavior.

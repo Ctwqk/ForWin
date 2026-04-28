@@ -32,7 +32,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.entity import EntityState
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.event import CanonEvent, EventEntityLink
-from forwin.models.governance import BandCheckpoint
+from forwin.models.governance import BandCheckpoint, DecisionEvent
 from forwin.models.phase import (
     ArcEnvelope,
     ArcEnvelopeAnalysis,
@@ -392,6 +392,16 @@ class Phase05RegressionTests(unittest.TestCase):
                             ),
                         ]
                     )
+                    for event_index in range(15):
+                        session.add(
+                            DecisionEvent(
+                                id=new_id(),
+                                project_id=project.id,
+                                event_type="test_event",
+                                summary=f"事件 {event_index}",
+                                created_at=datetime.now(timezone.utc) + timedelta(seconds=event_index),
+                            )
+                        )
                     session.commit()
 
             api_module._SessionFactory = session_factory
@@ -403,6 +413,10 @@ class Phase05RegressionTests(unittest.TestCase):
             self.assertEqual(
                 count_matching_statements(select_statements, " from chapter_plans"),
                 1,
+            )
+            self.assertTrue(
+                any("row_number()" in statement and "decision_events" in statement for statement in select_statements),
+                select_statements,
             )
         finally:
             api_module._SessionFactory = old_session_factory

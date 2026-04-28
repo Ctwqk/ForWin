@@ -11,6 +11,7 @@ from forwin.config import Config
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.phase import ProvisionalBandExecution
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.task import GenerationTask
 
 
 class GenerationTaskPersistenceTests(unittest.TestCase):
@@ -223,6 +224,70 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertTrue(response.has_active_generation_task)
         self.assertFalse(response.safe_to_restart)
         self.assertEqual(response.active_task_ids, ["task-active-check-1"])
+
+    def test_active_generation_check_finds_old_active_task_beyond_list_limit(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                GenerationTask(
+                    id="task-old-running",
+                    project_id="project-active-check-old",
+                    task_kind="generation",
+                    status="running",
+                    current_stage="writing_chapter",
+                    created_at=now - timedelta(days=2),
+                    updated_at=now - timedelta(days=2),
+                )
+            )
+            for index in range(105):
+                session.add(
+                    GenerationTask(
+                        id=f"task-new-complete-{index}",
+                        project_id=f"project-complete-{index}",
+                        task_kind="generation",
+                        status="completed",
+                        current_stage="completed",
+                        created_at=now + timedelta(seconds=index),
+                        updated_at=now + timedelta(seconds=index),
+                    )
+                )
+            session.commit()
+
+        response = api_module.active_generation_task_check("project-active-check-old")
+
+        self.assertTrue(response.has_active_generation_task)
+        self.assertFalse(response.safe_to_restart)
+        self.assertEqual(response.active_task_ids, ["task-old-running"])
+
+    def test_database_rejects_two_active_generation_tasks_for_same_project(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                GenerationTask(
+                    id="task-unique-running-1",
+                    project_id="project-unique-active",
+                    task_kind="generation",
+                    status="running",
+                    current_stage="writing_chapter",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+            session.add(
+                GenerationTask(
+                    id="task-unique-running-2",
+                    project_id="project-unique-active",
+                    task_kind="generation",
+                    status="starting",
+                    current_stage="queued",
+                    created_at=now + timedelta(seconds=1),
+                    updated_at=now + timedelta(seconds=1),
+                )
+            )
+
+            with self.assertRaises(Exception):
+                session.commit()
 
     def test_update_task_keeps_cache_when_db_write_is_locked(self) -> None:
         task = api_module._create_task_record(title="锁冲突测试", requested_chapters=1)

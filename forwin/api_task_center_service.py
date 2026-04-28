@@ -8,7 +8,7 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy import and_, or_, select
 
-from forwin.api_project_payloads import build_generation_control
+from forwin.api_project_payloads import build_generation_control, _recent_rows_by_project
 from forwin.api_schemas import TaskCenterItemResponse
 from forwin.models.governance import BandCheckpoint, DecisionEvent
 from forwin.models.phase import ProvisionalBandExecution
@@ -479,19 +479,15 @@ class TaskCenterService:
         ids = [str(project_id or "").strip() for project_id in project_ids if str(project_id or "").strip()]
         if not ids:
             return {}
-        rows = session.execute(
-            select(DecisionEvent)
-            .where(DecisionEvent.project_id.in_(ids))
-            .order_by(
-                DecisionEvent.project_id.asc(),
+        rows_by_project = _recent_rows_by_project(
+            session,
+            DecisionEvent,
+            DecisionEvent.project_id,
+            ids,
+            order_by=(
                 DecisionEvent.created_at.desc(),
                 DecisionEvent.id.desc(),
-            )
-        ).scalars().all()
-        grouped: dict[str, list[DecisionEvent]] = {}
-        for row in rows:
-            project_id = str(row.project_id or "")
-            bucket = grouped.setdefault(project_id, [])
-            if len(bucket) < limit:
-                bucket.append(row)
-        return grouped
+            ),
+            limit=limit,
+        )
+        return {project_id: list(rows) for project_id, rows in rows_by_project.items()}

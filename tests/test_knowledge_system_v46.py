@@ -9,6 +9,7 @@ from forwin.api_book_state_routes import build_handlers as build_book_state_hand
 from forwin.api_llm_kb_routes import build_handlers as build_llm_kb_handlers
 from forwin.api_obsidian_routes import build_handlers as build_obsidian_handlers
 from forwin.api_schemas import WorldEditProposalReviewRequest, WorldModelExportRequest, WorldModelImportRequest
+from forwin.api_world_model_routes import build_handlers as build_world_model_handlers
 from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStateRepository
 from forwin.book_state.reviewer import BookStateReviewGate
 from forwin.llm_kb import LLMKnowledgeBaseCompiler, LLMKnowledgeBaseRetriever
@@ -330,12 +331,14 @@ def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
             session.flush()
             structured_id = row.id
 
-        structured = handlers["approve_obsidian_proposal"](
+        world_model_handlers = build_world_model_handlers(get_session=Session)
+        structured = world_model_handlers["review_project_world_model_proposal"](
             project_id,
             structured_id,
             WorldEditProposalReviewRequest(status="accepted", reason="structured patch reviewed"),
         )
         assert structured.status == "accepted"
+        assert structured.graph_delta_id
         with Session() as session:
             nodes = {
                 node.id: node
@@ -343,6 +346,7 @@ def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
             }
             node = nodes["char_lin"]
             assert node.summary == "旧城线主角，开始怀疑旧档案室。"
+            assert session.query(GraphDeltaRow).filter_by(project_id=project_id).count() == 2
     finally:
         engine.dispose()
 

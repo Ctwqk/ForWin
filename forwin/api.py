@@ -21,7 +21,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from sqlalchemy import case, delete, func, or_, select
-from sqlalchemy.exc import DBAPIError, OperationalError
+from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 
 from forwin.api_pages import render_home_page, render_publishers_page
 from forwin import (
@@ -803,6 +803,16 @@ def _persist_generation_task(task_id: str, task: dict[str, Any]) -> None:
 
     try:
         _run_generation_task_db_write(_operation, context=f"persist_generation_task:{task_id}")
+    except IntegrityError as exc:
+        _sync_task_cache(task_id, None)
+        project_id = str(task.get("project_id", "") or "").strip()
+        if "ux_generation_tasks_one_active_per_project" in str(exc):
+            raise ActiveGenerationTaskError(
+                _generation_task_conflict_message(project_id)
+                if project_id
+                else "已有运行中的生成任务，请先终止或等待当前任务完成。"
+            ) from exc
+        raise
     except GenerationTaskPersistenceError as exc:
         if task.get("status") in _GENERATION_TERMINAL_STATUSES:
             raise
@@ -1421,58 +1431,80 @@ def _build_governance_insights(session, *, project_id: str) -> GovernanceInsight
     return api_governance_support.build_governance_insights(session, project_id=project_id)
 
 
-def _project_has_active_generation_task(project_id: str, *, session=None) -> bool:
+def _active_generation_task_ids(project_id: str = "", *, session=None) -> list[str]:
     normalized_project_id = str(project_id or "").strip()
-    if not normalized_project_id:
-        return False
     if _SessionFactory is None:
+        active_ids: list[str] = []
         with _tasks_lock:
-            for task in _tasks.values():
+            for task_id, task in _tasks.items():
                 if task.get("deleted"):
                     continue
                 if str(task.get("task_kind", "generation")) != "generation":
                     continue
-                if str(task.get("project_id", "")).strip() != normalized_project_id:
+                if normalized_project_id and str(task.get("project_id", "")).strip() != normalized_project_id:
                     continue
                 if _task_is_terminal(str(task.get("status", "")).strip()):
                     continue
-                return True
-        return False
+                active_ids.append(task_id)
+        return active_ids
 
-    if session is not None:
-        active_task_ids = session.execute(
-            select(GenerationTask.id).where(
-                GenerationTask.deleted_at.is_(None),
-                GenerationTask.project_id == normalized_project_id,
-                GenerationTask.status.notin_(tuple(_GENERATION_TERMINAL_STATUSES)),
+    def _cached_task_is_active(task: dict[str, Any] | None) -> bool | None:
+        if task is None:
+            return None
+        if task.get("deleted"):
+            return False
+        if str(task.get("task_kind", "generation")) != "generation":
+            return False
+        if normalized_project_id and str(task.get("project_id", "") or "").strip() != normalized_project_id:
+            return False
+        return not _task_is_terminal(str(task.get("status", "")).strip())
+
+    def _query_active_ids(active_session) -> list[str]:
+        criteria = [
+            GenerationTask.deleted_at.is_(None),
+            GenerationTask.task_kind == "generation",
+            GenerationTask.status.notin_(tuple(_GENERATION_TERMINAL_STATUSES)),
+        ]
+        if normalized_project_id:
+            criteria.append(GenerationTask.project_id == normalized_project_id)
+        rows = active_session.execute(
+            select(GenerationTask.id).where(*criteria).order_by(
+                GenerationTask.updated_at.desc(),
+                GenerationTask.id.desc(),
             )
         ).scalars().all()
-        for task_id in active_task_ids:
-            cached = _cached_generation_task(str(task_id))
-            if cached is not None:
-                if cached.get("deleted"):
-                    continue
-                if _task_is_terminal(str(cached.get("status", "")).strip()):
-                    continue
-            return True
+        active_ids: list[str] = []
+        seen: set[str] = set()
+        for task_id in rows:
+            normalized_task_id = str(task_id)
+            cached_active = _cached_task_is_active(_cached_generation_task(normalized_task_id))
+            if cached_active is False:
+                continue
+            active_ids.append(normalized_task_id)
+            seen.add(normalized_task_id)
         with _tasks_lock:
-            cached_tasks = list(_tasks.values())
-        for task in cached_tasks:
-            if task.get("deleted"):
+            cached_items = [(task_id, dict(task)) for task_id, task in _tasks.items()]
+        for task_id, task in cached_items:
+            if task_id in seen:
                 continue
-            if str(task.get("task_kind", "generation")) != "generation":
-                continue
-            if str(task.get("project_id", "") or "").strip() != normalized_project_id:
-                continue
-            if _task_is_terminal(str(task.get("status", "")).strip()):
-                continue
-            return True
-        return False
+            if _cached_task_is_active(task):
+                active_ids.append(task_id)
+        return active_ids
+
+    if session is not None:
+        return _query_active_ids(session)
     with _get_session() as managed_session:
-        return _project_has_active_generation_task(
+        return _active_generation_task_ids(
             normalized_project_id,
             session=managed_session,
         )
+
+
+def _project_has_active_generation_task(project_id: str, *, session=None) -> bool:
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_project_id:
+        return False
+    return bool(_active_generation_task_ids(normalized_project_id, session=session))
 
 
 def _project_has_active_upload_job(project_id: str, *, session=None) -> bool:
@@ -2066,6 +2098,7 @@ globals().update(
             serialize_task=lambda task_id, task: _serialize_task(task_id, task),
             get_generation_task_or_404=lambda task_id: _get_generation_task_or_404(task_id),
             project_has_active_generation_task=lambda project_id, *, session=None: _project_has_active_generation_task(project_id, session=session),
+            active_generation_task_ids=lambda project_id='': _active_generation_task_ids(project_id),
             generation_task_conflict_message=lambda project_id: _generation_task_conflict_message(project_id),
             resolve_project_governance=lambda project, *, overrides=None, base_config=None: _resolve_project_governance(project, overrides=overrides, base_config=base_config),
             governance_request_payload=lambda req: _governance_request_payload(req),

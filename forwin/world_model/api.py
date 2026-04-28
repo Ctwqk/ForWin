@@ -26,6 +26,7 @@ from forwin.models.world_model import (
     WorldModelPageRow,
     WorldModelSnapshotRow,
 )
+from forwin.obsidian.proposal_review import approve_world_edit_proposal
 
 from .compiler import WorldModelCompiler
 from .exporter_obsidian import ObsidianWorldExporter
@@ -93,7 +94,7 @@ def _conflict_info(row: WorldModelConflictRow) -> WorldModelConflictInfo:
     )
 
 
-def _proposal_info(row: WorldEditProposalRow) -> WorldEditProposalInfo:
+def _proposal_info(row: WorldEditProposalRow, *, projection_refresh: dict | None = None) -> WorldEditProposalInfo:
     return WorldEditProposalInfo(
         id=row.id,
         project_id=row.project_id,
@@ -111,6 +112,7 @@ def _proposal_info(row: WorldEditProposalRow) -> WorldEditProposalInfo:
         reviewed_at=_dt(row.reviewed_at),
         review_reason=getattr(row, "review_reason", "") or "",
         graph_delta_id=getattr(row, "graph_delta_id", "") or "",
+        projection_refresh=projection_refresh or {},
     )
 
 
@@ -276,6 +278,9 @@ def review_proposal(
     req: WorldEditProposalReviewRequest,
     *,
     get_session,
+    get_config=None,
+    qdrant_client=None,
+    qdrant_models=None,
 ) -> WorldEditProposalInfo:
     session = get_session()
     try:
@@ -286,6 +291,21 @@ def review_proposal(
         row = session.get(WorldEditProposalRow, proposal_id)
         if row is None or row.project_id != project_id:
             raise HTTPException(404, "WorldEditProposal 不存在")
+        if status == "accepted" and _has_book_state_canon(session, project_id):
+            config = get_config() if get_config is not None else None
+            result = approve_world_edit_proposal(
+                session,
+                project_id=project_id,
+                proposal_id=proposal_id,
+                reason=req.reason,
+                trigger="world_model_proposal_review",
+                qdrant_url=getattr(config, "qdrant_url", None),
+                qdrant_collection=getattr(config, "llm_kb_qdrant_collection", None),
+                qdrant_client=qdrant_client,
+                qdrant_models=qdrant_models,
+            )
+            session.commit()
+            return _proposal_info(result.row, projection_refresh=result.projection_refresh)
         row.status = status
         if req.reason:
             row.reason = req.reason
@@ -308,6 +328,15 @@ def review_proposal(
         raise
     finally:
         session.close()
+
+
+def _has_book_state_canon(session, project_id: str) -> bool:
+    repo = BookStateRepository(session)
+    return bool(
+        repo.list_world_nodes(project_id)
+        or repo.list_fact_nodes(project_id)
+        or repo.list_map_nodes(project_id)
+    )
 
 
 def _bootstrap_if_needed(session, project_id: str) -> WorldModelSnapshotRow | None:

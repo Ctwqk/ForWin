@@ -12,6 +12,9 @@ from forwin.world_model import api as world_model_api
 def build_handlers(
     *,
     get_session: Callable[[], Any],
+    get_config: Callable[[], Any] | None = None,
+    qdrant_client: Any | None = None,
+    qdrant_models: Any | None = None,
 ) -> dict[str, Callable[..., Any]]:
     def world_studio_page():
         return HTMLResponse(_world_studio_html())
@@ -58,6 +61,9 @@ def build_handlers(
             proposal_id,
             req,
             get_session=get_session,
+            get_config=get_config,
+            qdrant_client=qdrant_client,
+            qdrant_models=qdrant_models,
         )
 
     return {
@@ -102,7 +108,11 @@ def _world_studio_html() -> str:
 def _world_studio_asset(asset_path: str) -> tuple[bytes, str]:
     path = (_world_studio_root() / "dist" / "assets" / asset_path).resolve()
     asset_root = (_world_studio_root() / "dist" / "assets").resolve()
-    if not str(path).startswith(str(asset_root)) or not path.exists():
+    try:
+        path.relative_to(asset_root)
+    except ValueError:
+        raise HTTPException(404, "World Studio asset not found") from None
+    if not path.exists():
         raise HTTPException(404, "World Studio asset not found")
     suffix = path.suffix.lower()
     media_type = {

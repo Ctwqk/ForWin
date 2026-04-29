@@ -38,5 +38,29 @@ def test_compose_pins_external_service_images() -> None:
 
     assert "qdrant/qdrant:latest" not in compose
     assert "minio/minio:latest" not in compose
-    assert "qdrant/qdrant:${QDRANT_IMAGE_TAG:-v1.15.4}" in compose
+    assert "qdrant/qdrant:${QDRANT_IMAGE_TAG:-v1.17.1}" in compose
     assert "minio/minio:${MINIO_IMAGE_TAG:-RELEASE.2025-09-07T16-13-09Z}" in compose
+
+
+def test_compose_forwin_mcp_avoids_host_8898_collision() -> None:
+    compose = _compose_text()
+    mcp_block = compose.split("\n  forwin-mcp:\n", 1)[1].split("\n  publisher-browser:", 1)[0]
+
+    assert '"--port", "8896"' in mcp_block
+    assert "FORWIN_MCP_PORT=${FORWIN_MCP_PORT:-8896}" in mcp_block
+    assert '"${FORWIN_MCP_DEBUG_BIND:-127.0.0.1:8896}:8896"' in mcp_block
+    assert "http://localhost:8896/health" in mcp_block
+    assert "8898" not in mcp_block
+
+
+def test_browser_fixture_uses_host_reachable_qdrant_url() -> None:
+    fixture = (ROOT / "tests" / "browser" / "conftest.py").read_text(encoding="utf-8")
+
+    assert '"FORWIN_QDRANT_URL": "http://127.0.0.1:6335"' in fixture
+
+
+def test_compose_publishes_forwin_qdrant_on_dedicated_local_debug_port() -> None:
+    compose = _compose_text()
+    qdrant_block = compose.split("\n  qdrant:\n", 1)[1].split("\n  forwin-mcp:", 1)[0]
+
+    assert '"${FORWIN_QDRANT_DEBUG_BIND:-127.0.0.1:6335}:6333"' in qdrant_block

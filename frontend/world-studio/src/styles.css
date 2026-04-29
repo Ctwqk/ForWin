@@ -553,9 +553,83 @@ pre {
   max-height: 340px;
 }
 
-.personality-editor {
+.character-create-form,
+.personality-editor,
+.assignment-report,
+.active-context-preview {
   display: grid;
   gap: 16px;
+}
+
+.character-create-form,
+.assignment-report,
+.active-context-preview,
+.personality-preview-panel {
+  padding: 14px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.coverage-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #f7f9fb;
+}
+
+.coverage-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.coverage-panel header span,
+.coverage-stats span {
+  color: #607083;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.coverage-panel header strong {
+  color: #1d2430;
+  font-size: 22px;
+}
+
+.coverage-stats,
+.coverage-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.metrics-summary span {
+  color: #1d536e;
+}
+
+.coverage-filters button {
+  border: 1px solid #c9d3df;
+  border-radius: 8px;
+  background: #fff;
+  color: #3b4654;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.coverage-filters button.active {
+  border-color: #1d6f78;
+  background: #e9f7f7;
+  color: #0f5960;
 }
 
 .personality-grid {
@@ -570,6 +644,17 @@ pre {
   color: #607083;
   font-size: 12px;
   font-weight: 700;
+}
+
+.field-stack textarea {
+  min-height: 92px;
+  border: 1px solid #c9d3df;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1d2430;
+  padding: 10px;
+  font: inherit;
+  resize: vertical;
 }
 
 .skill-catalog {
@@ -612,6 +697,16 @@ pre {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.json-editor.small {
+  min-height: 180px;
+}
+
+.assignment-report pre,
+.active-context-preview pre,
+.personality-preview-panel pre {
+  max-height: 240px;
 }
 
 .inline-error {

@@ -5781,21 +5781,35 @@ class WritingOrchestrator:
                 )
 
         # Entities: characters
+        from forwin.characters.creation import CharacterCreationHelper
+        from forwin.characters.models import CharacterCreationRequest
+
+        character_helper = CharacterCreationHelper(updater.session)
         entity_map: dict[str, str] = {}  # name -> entity_id
         for char_data in arc_plan.get("characters", []):
-            entity = updater.create_entity(
-                project_id=project_id,
-                kind="character",
-                name=char_data.get("name", "未命名"),
-                description=char_data.get("description", ""),
-                aliases=char_data.get("aliases", []),
-                importance=char_data.get("importance", 5),
-                chapter=0,
-            )
-            entity_map[entity.name] = entity.id
             initial_state = char_data.get("initial_state", {})
-            if initial_state:
-                updater.create_entity_state(entity.id, 0, initial_state)
+            result = character_helper.create_character(
+                CharacterCreationRequest(
+                    project_id=project_id,
+                    source="arc_plan_seed",
+                    source_ref=str(char_data.get("source_ref") or ""),
+                    name=char_data.get("name", "未命名"),
+                    description=char_data.get("description", ""),
+                    aliases=char_data.get("aliases", []),
+                    importance=char_data.get("importance", 5),
+                    created_at_chapter=0,
+                    profile={
+                        "role_hint": str(char_data.get("role_hint") or ""),
+                        "role_archetype": str(char_data.get("role_archetype") or char_data.get("role_hint") or ""),
+                        "narrative_role": str(char_data.get("narrative_role") or ""),
+                        "public_identity": str(char_data.get("public_identity") or ""),
+                    },
+                    state=initial_state if isinstance(initial_state, dict) else {},
+                    personality_tags=list(char_data.get("personality_tags") or []),
+                    audit_reason="arc plan seed character",
+                )
+            )
+            entity_map[result.character_name] = result.legacy_entity_id or result.character_id
 
         # Entities: locations
         for loc_data in arc_plan.get("locations", []):

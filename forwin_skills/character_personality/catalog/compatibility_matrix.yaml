@@ -1,0 +1,23 @@
+version: character_personality_compatibility.v1
+
+rules:
+  - left: trait-loyal-protector
+    right: trait-ambitious-climber
+    relation: tension
+    allowed: true
+    preferred_slots:
+      left: dominant
+      right: secondary
+    note: 忠诚与上位欲可形成内在矛盾，但不应同时以高权重 dominant 出现。
+
+  - left: mask-cold-professional
+    right: trait-loyal-protector
+    relation: compatible
+    allowed: true
+    note: 职业面具可遮住保护欲，但不得覆盖本体。
+
+  - left: stress-paranoid-controller
+    right: mask-cold-professional
+    relation: crack_mask
+    allowed: true
+    note: 极压时 stress mode 可击穿职业面具。

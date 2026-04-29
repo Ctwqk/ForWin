@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from forwin.config import DEFAULT_QDRANT_URL
 from forwin.llm_kb.store import ROOT_FILE_KEYS
 from forwin.retrieval.memory_index import (
     HashTextEmbedder,
@@ -43,7 +44,7 @@ class LLMKBVectorRecord:
 
 
 def _default_qdrant_url() -> str:
-    return os.environ.get("FORWIN_QDRANT_URL", "http://localhost:6333")
+    return os.environ.get("FORWIN_QDRANT_URL", DEFAULT_QDRANT_URL)
 
 
 def _default_collection_name() -> str:

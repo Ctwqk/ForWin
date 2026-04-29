@@ -6,32 +6,32 @@ forwin_scope: character_personality
 category: character_personality_skill
 skill_type: relationship_pattern
 version: "1.0"
-status: draft
-mapping_confidence: low
+status: active
+mapping_confidence: medium
 mode: instruction_only
 use_when:
-  - TBD
+  - rivalry_with_recurring_target
+  - competitive_respect
 avoid_when:
-  - TBD
+  - one_sided_hostility_without_recognition
 compatible_with:
-  - TBD
+  - trait-ambitious-climber
+  - mask-cold-professional
 tension_with:
-  - TBD
+  - rel-mentor-protector
 reference_model_policy:
   - Reference models are explanatory anchors only.
   - Runtime behavior must follow trigger_rules and relationship_rules first.
   - Do not infer new behavior directly from model labels.
-reference_models:
-  flavor: TBD
 tags:
   - relationship-pattern
-  - placeholder
+  - rivalry
 ---
 # Skill: rel-rival-respect
 
 ## Core Function
 
-TBD: 通过较量、实力互认维持关系的关系模式。
+This relationship pattern makes the character measure the target through competence, restraint, and repeated comparison. It does not create canon rivalry by itself; it only constrains how an existing rival relationship is expressed.
 
 ## Runtime Priority
 
@@ -41,156 +41,31 @@ Behavior rules, trigger rules, relationship rules, expression rules, and stress 
 
 ```yaml
 relationship_pattern_specific:
-  attachment_logic: TBD
-  trust_logic: TBD
-  boundary_logic: TBD
-  dependency_logic: TBD
-  jealousy_logic: TBD
-  conflict_logic: TBD
-  reconciliation_logic: TBD
+  attachment_logic: connection through challenge and recognition
+  trust_logic: trust grows when the target proves skill under pressure
+  boundary_logic: avoids cheap humiliation because it devalues the contest
+  dependency_logic: may rely on the target as a benchmark
+  jealousy_logic: reacts sharply when the target is dismissed by outsiders
+  conflict_logic: prefers direct contest, evidence, and earned advantage
+  reconciliation_logic: accepts repair through demonstrated respect
 ```
 
-## Layer 1: Baseline Trait Axes
+## Expression
 
-```yaml
-trait_axes:
-  openness: TBD
-  conscientiousness: TBD
-  extraversion: TBD
-  agreeableness: TBD
-  emotional_volatility: TBD
-  honesty_humility: TBD
-  dominance: TBD
-  risk_tolerance: TBD
-  trust_baseline: TBD
-  intimacy_need: TBD
-  rule_respect: TBD
-  status_sensitivity: TBD
-```
-
-## Layer 2: Core Drive
-
-```yaml
-core_drive:
-  external_want: TBD
-  internal_need: TBD
-  core_fear: TBD
-  core_shame: TBD
-  core_lie: TBD
-  compensation_strategy: TBD
-```
-
-## Layer 3: Decision Mechanics
-
-### Trigger Rules
-
-| Trigger | Interpretation | Response | Cost | Possible Growth Response |
-|---|---|---|---|---|
-| TBD | TBD | TBD | TBD | TBD |
-
-## Layer 4: Relationship Pattern
-
-### With strangers
-
-TBD
-
-### With allies
-
-TBD
-
-### With loved ones
-
-TBD
-
-### With enemies
-
-TBD
-
-## Layer 5: Expression
-
-### Dialogue Behavior
-
-- TBD
-
-### Body Language
-
-- TBD
-
-### Affection Style
-
-TBD
-
-### Anger Style
-
-TBD
-
-### Lie Style
-
-TBD
-
-### Silence Style
-
-TBD
-
-### Humor Style
-
-TBD
-
-## Layer 6: Stress and Arc
-
-### Stress Triggers
-
-- TBD
-
-### Mild Pressure
-
-TBD
-
-### Medium Pressure
-
-TBD
-
-### Extreme Pressure
-
-TBD
-
-### Recovery Conditions
-
-- TBD
-
-### Healthy Growth
-
-- TBD
-
-### Negative Arc
-
-- TBD
-
-## Scene Uses
-
-- TBD
-
-## Do Not
-
-- Do not override canon.
-- Do not replace the character card.
-- Do not infer behavior directly from reference model labels.
+- Dialogue favors measured challenge, clipped praise, and pointed comparisons.
+- Body language stays alert, angled toward the target, with attention on competence cues.
+- When angered, the character escalates through tests or strategic pressure rather than random cruelty.
 
 ## Prompt Compression
 
 ```yaml
 prompt_compression:
-  one_line_summary: TBD
-  perception_bias:
-    - TBD
-  decision_bias:
-    - TBD
-  dialogue_bias:
-    - TBD
-  body_language_bias:
-    - TBD
+  one_line_summary: Treat this target as a rival whose competence matters.
   relationship_bias:
-    - TBD
-  stress_bias:
-    - TBD
+    - Challenge the target through standards, tests, and earned respect.
+    - Avoid petty dismissal; rivalry should recognize capability.
+  dialogue_bias:
+    - Use concise challenges, restrained praise, and comparative language.
+  body_language_bias:
+    - Track the target closely and react to signs of skill or weakness.
 ```

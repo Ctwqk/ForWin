@@ -1,0 +1,26 @@
+version: assignment_signal_taxonomy.v1
+
+hard_signals:
+  - personality_tags
+  - explicit_loadout
+  - role_archetype
+  - narrative_role
+
+strong_signals:
+  - role_hint
+  - public_identity
+  - description
+  - first_appearance_context
+
+medium_signals:
+  - faction_id
+  - origin_faction_id
+  - culture_tag
+  - long_term_goal
+  - relationship_summary
+
+weak_signals:
+  - name_style
+  - genre
+  - source
+  - existing_cast_diversity

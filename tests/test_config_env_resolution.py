@@ -167,6 +167,15 @@ def test_real_environment_overrides_env_file(
     assert config.qdrant_url == "http://real-qdrant:6333"
 
 
+def test_default_qdrant_url_uses_forwin_local_debug_port(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _set_env_file(monkeypatch, tmp_path, [])
+
+    assert Config.from_env().qdrant_url == "http://127.0.0.1:6335"
+    assert Config().qdrant_url == "http://127.0.0.1:6335"
+
+
 def test_publisher_extension_legacy_alias_still_works(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

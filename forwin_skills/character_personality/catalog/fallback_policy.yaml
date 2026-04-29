@@ -1,0 +1,20 @@
+version: character_personality_fallback.v1
+
+fallbacks:
+  named_supporting_character:
+    dominant:
+      skill: trait-quiet-observer
+      weight: 0.45
+    status: valid_needs_review
+
+  background_named_character:
+    dominant:
+      skill: trait-quiet-observer
+      weight: 0.35
+    status: fallback_used
+
+  unknown_core_character:
+    dominant:
+      skill: trait-quiet-observer
+      weight: 0.55
+    status: valid_needs_review

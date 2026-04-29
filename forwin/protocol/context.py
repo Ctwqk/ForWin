@@ -229,6 +229,7 @@ class ChapterContextPack(BaseModel):
     fair_misdirection_requirements: list[str] = Field(default_factory=list)
     chapter_world_delta_intent: ChapterWorldDeltaIntent | None = None
     active_personality_contexts: list[dict[str, Any]] = Field(default_factory=list)
+    personality_integrity_issues: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class WorldModelRetrievalPack(BaseModel):

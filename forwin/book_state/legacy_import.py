@@ -107,6 +107,7 @@ class LegacyBookStateImporter:
         }
         entity_counts = self._import_entities(project_id)
         counts["world_nodes"] += entity_counts["world_nodes"]
+        counts["world_node_states"] += entity_counts["world_node_states"]
         counts["map_nodes"] += entity_counts["map_nodes"]
         counts["site_state_bindings"] += entity_counts["site_state_bindings"]
         _merge_migration_report(counts["migration_report"], entity_counts["migration_report"])
@@ -123,6 +124,7 @@ class LegacyBookStateImporter:
 
     def _import_entities(self, project_id: str) -> dict[str, Any]:
         count = 0
+        initial_state_count = 0
         map_count = 0
         binding_count = 0
         report = _empty_migration_report()
@@ -176,6 +178,31 @@ class LegacyBookStateImporter:
                         "map_node_id": map_node_id,
                     }
                 )
+            if _node_type(row.kind) == "character":
+                from forwin.characters.creation import CharacterCreationHelper
+                from forwin.characters.models import CharacterCreationRequest
+
+                result = CharacterCreationHelper(self.session).import_legacy_character(
+                    CharacterCreationRequest(
+                        project_id=row.project_id,
+                        source="legacy_entity_import",
+                        source_ref=row.id,
+                        character_id=row.id,
+                        legacy_entity_id=row.id,
+                        name=row.name,
+                        aliases=_loads(row.aliases_json, []),
+                        description=row.description,
+                        importance=row.importance,
+                        created_at_chapter=row.created_at_chapter,
+                        profile=profile,
+                        create_legacy_entity=False,
+                        audit_reason="legacy entity import",
+                    )
+                )
+                count += 1
+                if result.created:
+                    initial_state_count += 1
+                continue
             node = WorldNode(
                 id=row.id,
                 project_id=row.project_id,
@@ -193,6 +220,7 @@ class LegacyBookStateImporter:
             count += 1
         return {
             "world_nodes": count,
+            "world_node_states": initial_state_count,
             "map_nodes": map_count,
             "site_state_bindings": binding_count,
             "migration_report": report,

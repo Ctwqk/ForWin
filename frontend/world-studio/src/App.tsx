@@ -97,6 +97,78 @@ type CharacterPersonalityResponse = {
   characters: CharacterPersonalityInfo[];
 };
 
+type PersonalityCoverageCharacter = {
+  character_id: string;
+  character_name: string;
+  assignment_mode: string;
+  assignment_status: string;
+  manual_override: boolean;
+  issues: string[];
+};
+
+type PersonalityCoverageResponse = {
+  character_count: number;
+  with_valid_loadout: number;
+  missing_loadout: number;
+  fallback_used: number;
+  manual_override: number;
+  needs_review: number;
+  coverage_ratio: number;
+  issue_counts: Record<string, number>;
+  characters: PersonalityCoverageCharacter[];
+};
+
+type PersonalityAssignmentReportResponse = {
+  character_id?: string;
+  character_name?: string;
+  personality_assignment: Record<string, unknown>;
+  decision_events?: Record<string, unknown>[];
+};
+
+type PersonalityPreviewResponse = {
+  personality_loadout: Record<string, unknown>;
+  personality_assignment: Record<string, unknown>;
+  validation?: Record<string, unknown>;
+};
+
+type ActiveContextPreviewResponse = {
+  active_personality_context: Record<string, unknown>;
+};
+
+type PersonalityMetricsResponse = {
+  character_creation_total: number;
+  character_creation_auto_personality_assigned_total: number;
+  character_creation_manual_override_total: number;
+  character_creation_fallback_used_total: number;
+  character_creation_low_confidence_total: number;
+  character_integrity_missing_loadout_total: number;
+  personality_assignment_confidence_avg: number;
+  personality_ooc_issue_total_by_assignment_mode: Record<string, number>;
+  most_used_dominant_skills: Array<{ skill: string; count: number }>;
+};
+
+type CharacterCreateDraft = {
+  name: string;
+  aliases: string;
+  description: string;
+  importance: number;
+  publicIdentity: string;
+  roleArchetype: string;
+  narrativeRole: string;
+  factionId: string;
+  goal: string;
+  personalityTags: string;
+};
+
+type PersonalityCoverageFilter =
+  | "all"
+  | "missing_loadout"
+  | "fallback_used"
+  | "valid_needs_review"
+  | "manual_override"
+  | "stress_mode_without_trigger"
+  | "social_mask_without_active_when";
+
 type ExportResponse = {
   ok: boolean;
   vault_root: string;
@@ -156,6 +228,21 @@ function defaultPersonalityLoadout(): Record<string, unknown> {
   };
 }
 
+function defaultCharacterCreateDraft(): CharacterCreateDraft {
+  return {
+    name: "",
+    aliases: "",
+    description: "",
+    importance: 5,
+    publicIdentity: "",
+    roleArchetype: "",
+    narrativeRole: "",
+    factionId: "",
+    goal: "",
+    personalityTags: ""
+  };
+}
+
 function snapshotTitle(snapshot: WorldModelSnapshotInfo | null): string {
   if (!snapshot) return "暂无快照";
   return `第 ${snapshot.as_of_chapter} 章后 · v${snapshot.version}`;
@@ -171,8 +258,16 @@ export default function App() {
   const [proposals, setProposals] = useState<WorldEditProposalInfo[]>([]);
   const [personalitySkills, setPersonalitySkills] = useState<PersonalitySkillInfo[]>([]);
   const [characterPersonalities, setCharacterPersonalities] = useState<CharacterPersonalityInfo[]>([]);
+  const [personalityCoverage, setPersonalityCoverage] = useState<PersonalityCoverageResponse | null>(null);
+  const [personalityMetrics, setPersonalityMetrics] = useState<PersonalityMetricsResponse | null>(null);
+  const [personalityCoverageFilter, setPersonalityCoverageFilter] = useState<PersonalityCoverageFilter>("all");
   const [selectedCharacterId, setSelectedCharacterId] = useState("");
   const [personalityDraft, setPersonalityDraft] = useState("");
+  const [characterCreateDraft, setCharacterCreateDraft] = useState<CharacterCreateDraft>(defaultCharacterCreateDraft);
+  const [personalityPreview, setPersonalityPreview] = useState<PersonalityPreviewResponse | null>(null);
+  const [createLoadoutDraft, setCreateLoadoutDraft] = useState("");
+  const [assignmentReport, setAssignmentReport] = useState<PersonalityAssignmentReportResponse | null>(null);
+  const [activeContextPreview, setActiveContextPreview] = useState<ActiveContextPreviewResponse | null>(null);
   const [selectedPageKey, setSelectedPageKey] = useState("");
   const [query, setQuery] = useState("");
   const [pageType, setPageType] = useState("all");
@@ -223,6 +318,16 @@ export default function App() {
     return pages.find((page) => page.page_key === selectedPageKey) ?? filteredPages[0] ?? null;
   }, [filteredPages, pages, selectedPageKey]);
 
+  const filteredCharacterPersonalities = useMemo(() => {
+    if (personalityCoverageFilter === "all" || !personalityCoverage) return characterPersonalities;
+    const visibleIds = new Set(
+      personalityCoverage.characters
+        .filter((character) => character.issues.some((issue) => issueMatchesFilter(issue, personalityCoverageFilter)))
+        .map((character) => character.character_id)
+    );
+    return characterPersonalities.filter((character) => visibleIds.has(character.character_id));
+  }, [characterPersonalities, personalityCoverage, personalityCoverageFilter]);
+
   const pendingProposals = proposals.filter((proposal) => proposal.status === "pending");
   const openConflicts = conflicts.filter((conflict) => conflict.status === "open");
 
@@ -243,12 +348,14 @@ export default function App() {
     setError("");
     try {
       const pageRows = await apiJson<WorldModelPageInfo[]>(`/api/projects/${nextProjectId}/world-model/pages`);
-      const [snapshotRows, conflictRows, proposalRows, skillRows, personalityRows] = await Promise.all([
+      const [snapshotRows, conflictRows, proposalRows, skillRows, personalityRows, coverageRows, metricsRows] = await Promise.all([
         apiJson<WorldModelSnapshotInfo[]>(`/api/projects/${nextProjectId}/world-model/snapshots`),
         apiJson<WorldModelConflictInfo[]>(`/api/projects/${nextProjectId}/world-model/conflicts`),
         apiJson<WorldEditProposalInfo[]>(`/api/projects/${nextProjectId}/world-model/proposals`),
         apiJson<PersonalityCatalogResponse>("/api/personality-skills"),
-        apiJson<CharacterPersonalityResponse>(`/api/projects/${nextProjectId}/book-state/characters/personality`)
+        apiJson<CharacterPersonalityResponse>(`/api/projects/${nextProjectId}/book-state/characters/personality`),
+        apiJson<PersonalityCoverageResponse>(`/api/projects/${nextProjectId}/characters/personality/coverage`),
+        apiJson<PersonalityMetricsResponse>(`/api/projects/${nextProjectId}/characters/personality/metrics`)
       ]);
       setSnapshots(snapshotRows);
       setLatest(snapshotRows[0] ?? null);
@@ -257,12 +364,16 @@ export default function App() {
       setProposals(proposalRows);
       setPersonalitySkills(skillRows.skills);
       setCharacterPersonalities(personalityRows.characters);
+      setPersonalityCoverage(coverageRows);
+      setPersonalityMetrics(metricsRows);
       const nextCharacter =
         personalityRows.characters.find((item) => item.character_id === selectedCharacterId) ??
         personalityRows.characters[0] ??
         null;
       setSelectedCharacterId(nextCharacter?.character_id ?? "");
       setPersonalityDraft(formatLoadout(nextCharacter?.personality_loadout ?? {}));
+      setAssignmentReport(null);
+      setActiveContextPreview(null);
       if (!selectedPageKey && pageRows.length > 0) {
         setSelectedPageKey(pageRows[0].page_key);
       }
@@ -356,6 +467,141 @@ export default function App() {
       setPersonalityDraft(formatLoadout(result.personality_loadout));
     } catch (err) {
       setError(err instanceof Error ? err.message : "人物性格保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function previewCharacterPersonality() {
+    if (!projectId) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await apiJson<PersonalityPreviewResponse>(
+        `/api/projects/${projectId}/characters/personality/preview`,
+        {
+          method: "POST",
+          body: JSON.stringify(characterCreatePayload(characterCreateDraft))
+        }
+      );
+      setPersonalityPreview(result);
+      setCreateLoadoutDraft(formatLoadout(result.personality_loadout));
+      setMessage("自动性格预览已更新。");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "自动性格预览失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createCharacterFromDraft() {
+    if (!projectId || !characterCreateDraft.name.trim()) return;
+    const parsed = parseLoadoutDraft(createLoadoutDraft);
+    setBusy(true);
+    setError("");
+    try {
+      await apiJson<Record<string, unknown>>(`/api/projects/${projectId}/characters`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...characterCreatePayload(characterCreateDraft),
+          personality_loadout: parsed.ok ? parsed.value : null,
+          personality_policy: parsed.ok && createLoadoutDraft.trim() ? "manual" : "auto",
+          audit_reason: "World Studio character creation."
+        })
+      });
+      setCharacterCreateDraft(defaultCharacterCreateDraft());
+      setPersonalityPreview(null);
+      setCreateLoadoutDraft("");
+      setMessage("人物已创建。");
+      await refreshWorldModel(projectId, { updateMessage: false });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "人物创建失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadAssignmentReport(characterId = selectedCharacterId) {
+    if (!projectId || !characterId) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await apiJson<PersonalityAssignmentReportResponse>(
+        `/api/projects/${projectId}/characters/${characterId}/personality/assignment-report`
+      );
+      setAssignmentReport(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "assignment report 加载失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reassignSelectedCharacter() {
+    if (!projectId || !selectedCharacterId) return;
+    setBusy(true);
+    setError("");
+    try {
+      await apiJson<Record<string, unknown>>(
+        `/api/projects/${projectId}/characters/${selectedCharacterId}/personality/reassign`,
+        {
+          method: "POST",
+          body: JSON.stringify({ mode: "auto_rule", respect_manual_override: true, reason: "World Studio reassign." })
+        }
+      );
+      setMessage("人物性格已重新分配。");
+      await refreshWorldModel(projectId, { updateMessage: false });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "重新分配失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function previewActiveContext() {
+    if (!projectId || !selectedCharacterId) return;
+    const parsed = parseLoadoutDraft(personalityDraft);
+    if (!parsed.ok) return;
+    const character = characterPersonalities.find((item) => item.character_id === selectedCharacterId);
+    setBusy(true);
+    setError("");
+    try {
+      const result = await apiJson<ActiveContextPreviewResponse>(
+        `/api/projects/${projectId}/characters/personality/active-context/preview`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            character_id: selectedCharacterId,
+            character_name: character?.character_name ?? "",
+            personality_loadout: parsed.value,
+            scene_flags: ["public_scene"]
+          })
+        }
+      );
+      setActiveContextPreview(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "active context preview 失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function enrichRelationships() {
+    if (!projectId) return;
+    setBusy(true);
+    setError("");
+    try {
+      await apiJson<Record<string, unknown>>(
+        `/api/projects/${projectId}/characters/personality/relationships/enrich`,
+        {
+          method: "POST",
+          body: JSON.stringify({ reason: "World Studio relationship enrichment." })
+        }
+      );
+      setMessage("关系人格 enrichment 已执行。");
+      await refreshWorldModel(projectId, { updateMessage: false });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "关系人格 enrichment 失败");
     } finally {
       setBusy(false);
     }
@@ -487,14 +733,26 @@ export default function App() {
           {tab === "conflicts" ? <ConflictList conflicts={conflicts} /> : null}
           {tab === "proposals" ? <ProposalList proposals={proposals} onReview={reviewProposal} busy={busy} /> : null}
           {tab === "personality" ? (
-            <PersonalityCharacterList
-              characters={characterPersonalities}
-              selectedCharacterId={selectedCharacterId}
-              onSelect={(character) => {
-                setSelectedCharacterId(character.character_id);
-                setPersonalityDraft(formatLoadout(character.personality_loadout));
-              }}
-            />
+            <>
+              <PersonalityCoveragePanel
+                coverage={personalityCoverage}
+                metrics={personalityMetrics}
+                filter={personalityCoverageFilter}
+                onFilterChange={setPersonalityCoverageFilter}
+              />
+              <PersonalityCharacterList
+                characters={filteredCharacterPersonalities}
+                coverage={personalityCoverage}
+                selectedCharacterId={selectedCharacterId}
+                onSelect={(character) => {
+                  setSelectedCharacterId(character.character_id);
+                  setPersonalityDraft(formatLoadout(character.personality_loadout));
+                  setAssignmentReport(null);
+                  setActiveContextPreview(null);
+                  void loadAssignmentReport(character.character_id);
+                }}
+              />
+            </>
           ) : null}
         </aside>
 
@@ -503,14 +761,32 @@ export default function App() {
           {tab === "conflicts" ? <ConflictDetail conflicts={conflicts} /> : null}
           {tab === "proposals" ? <ProposalDetail proposals={proposals} /> : null}
           {tab === "personality" ? (
-            <PersonalityEditor
-              character={characterPersonalities.find((item) => item.character_id === selectedCharacterId) ?? null}
-              skills={personalitySkills}
-              draft={personalityDraft}
-              setDraft={setPersonalityDraft}
-              onSave={savePersonalityLoadout}
-              busy={busy}
-            />
+            <>
+              <CharacterCreateForm
+                draft={characterCreateDraft}
+                setDraft={setCharacterCreateDraft}
+                preview={personalityPreview}
+                loadoutDraft={createLoadoutDraft}
+                setLoadoutDraft={setCreateLoadoutDraft}
+                onPreview={previewCharacterPersonality}
+                onCreate={createCharacterFromDraft}
+                busy={busy}
+              />
+              <PersonalityEditor
+                character={filteredCharacterPersonalities.find((item) => item.character_id === selectedCharacterId) ?? null}
+                skills={personalitySkills}
+                draft={personalityDraft}
+                setDraft={setPersonalityDraft}
+                onSave={savePersonalityLoadout}
+                onReport={() => loadAssignmentReport()}
+                onReassign={reassignSelectedCharacter}
+                onActivePreview={previewActiveContext}
+                onRelationshipEnrich={enrichRelationships}
+                busy={busy}
+              />
+              <AssignmentReportView report={assignmentReport} />
+              <ActiveContextPreview preview={activeContextPreview} />
+            </>
           ) : null}
         </section>
       </div>
@@ -699,12 +975,71 @@ function ProposalDetail({ proposals }: { proposals: WorldEditProposalInfo[] }) {
   );
 }
 
+const PERSONALITY_COVERAGE_FILTERS: PersonalityCoverageFilter[] = [
+  "all",
+  "missing_loadout",
+  "fallback_used",
+  "valid_needs_review",
+  "manual_override",
+  "stress_mode_without_trigger",
+  "social_mask_without_active_when"
+];
+
+function PersonalityCoveragePanel({
+  coverage,
+  metrics,
+  filter,
+  onFilterChange
+}: {
+  coverage: PersonalityCoverageResponse | null;
+  metrics: PersonalityMetricsResponse | null;
+  filter: PersonalityCoverageFilter;
+  onFilterChange: (filter: PersonalityCoverageFilter) => void;
+}) {
+  const ratio = coverage ? `${Math.round((coverage.coverage_ratio || 0) * 100)}%` : "0%";
+  return (
+    <section className="coverage-panel">
+      <header>
+        <span>Coverage</span>
+        <strong>{ratio}</strong>
+      </header>
+      <div className="coverage-stats">
+        <span>{coverage?.with_valid_loadout ?? 0} valid</span>
+        <span>{coverage?.missing_loadout ?? 0} missing</span>
+        <span>{coverage?.fallback_used ?? 0} fallback</span>
+        <span>{coverage?.needs_review ?? 0} review</span>
+      </div>
+      <div className="coverage-stats metrics-summary">
+        <span>{metrics?.character_creation_manual_override_total ?? 0} manual override</span>
+        <span>{metrics?.character_creation_low_confidence_total ?? 0} low confidence</span>
+        <span>{Object.values(metrics?.personality_ooc_issue_total_by_assignment_mode ?? {}).reduce((sum, value) => sum + value, 0)} OOC issue</span>
+        <span>{metrics?.most_used_dominant_skills?.[0]?.skill ?? "no dominant skill"}</span>
+      </div>
+      <div className="coverage-filters">
+        {PERSONALITY_COVERAGE_FILTERS.map((item) => (
+          <button
+            className={filter === item ? "active" : ""}
+            key={item}
+            type="button"
+            onClick={() => onFilterChange(item)}
+            title={item}
+          >
+            {coverageFilterLabel(item)}
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function PersonalityCharacterList({
   characters,
+  coverage,
   selectedCharacterId,
   onSelect
 }: {
   characters: CharacterPersonalityInfo[];
+  coverage: PersonalityCoverageResponse | null;
   selectedCharacterId: string;
   onSelect: (character: CharacterPersonalityInfo) => void;
 }) {
@@ -721,10 +1056,115 @@ function PersonalityCharacterList({
           onClick={() => onSelect(character)}
         >
           <span>{character.character_name || character.character_id}</span>
-          <small>{dominantSkillName(character.personality_loadout) || "未设置主性格"}</small>
+          <small>{dominantSkillName(character.personality_loadout) || coverageStatusLabel(coverage, character.character_id)}</small>
         </button>
       ))}
     </div>
+  );
+}
+
+function CharacterCreateForm({
+  draft,
+  setDraft,
+  preview,
+  loadoutDraft,
+  setLoadoutDraft,
+  onPreview,
+  onCreate,
+  busy
+}: {
+  draft: CharacterCreateDraft;
+  setDraft: (draft: CharacterCreateDraft) => void;
+  preview: PersonalityPreviewResponse | null;
+  loadoutDraft: string;
+  setLoadoutDraft: (value: string) => void;
+  onPreview: () => void;
+  onCreate: () => void;
+  busy: boolean;
+}) {
+  const update = (key: keyof CharacterCreateDraft, value: string | number) => setDraft({ ...draft, [key]: value });
+  return (
+    <section className="character-create-form">
+      <div className="panel-head">
+        <div>
+          <p className="eyebrow">Character Creation</p>
+          <h2>创建人物</h2>
+        </div>
+        <div className="inline-actions">
+          <button type="button" onClick={onPreview} disabled={busy || !draft.name.trim()}>
+            <RefreshCw size={16} />
+            预览
+          </button>
+          <button type="button" onClick={onCreate} disabled={busy || !draft.name.trim()}>
+            <Check size={16} />
+            创建
+          </button>
+        </div>
+      </div>
+      <div className="form-grid">
+        <label className="field-stack">
+          <span>姓名</span>
+          <input value={draft.name} onChange={(event) => update("name", event.target.value)} />
+        </label>
+        <label className="field-stack">
+          <span>别名</span>
+          <input value={draft.aliases} onChange={(event) => update("aliases", event.target.value)} />
+        </label>
+        <label className="field-stack">
+          <span>重要度</span>
+          <input type="number" min={1} max={10} value={draft.importance} onChange={(event) => update("importance", Number(event.target.value))} />
+        </label>
+        <label className="field-stack">
+          <span>public identity</span>
+          <input value={draft.publicIdentity} onChange={(event) => update("publicIdentity", event.target.value)} />
+        </label>
+        <label className="field-stack">
+          <span>role archetype</span>
+          <input value={draft.roleArchetype} onChange={(event) => update("roleArchetype", event.target.value)} />
+        </label>
+        <label className="field-stack">
+          <span>narrative role</span>
+          <input value={draft.narrativeRole} onChange={(event) => update("narrativeRole", event.target.value)} />
+        </label>
+        <label className="field-stack">
+          <span>faction</span>
+          <input value={draft.factionId} onChange={(event) => update("factionId", event.target.value)} />
+        </label>
+        <label className="field-stack">
+          <span>personality tags</span>
+          <input value={draft.personalityTags} onChange={(event) => update("personalityTags", event.target.value)} />
+        </label>
+      </div>
+      <label className="field-stack">
+        <span>描述</span>
+        <textarea value={draft.description} onChange={(event) => update("description", event.target.value)} />
+      </label>
+      <label className="field-stack">
+        <span>goal</span>
+        <input value={draft.goal} onChange={(event) => update("goal", event.target.value)} />
+      </label>
+      <PersonalityPreviewPanel preview={preview} />
+      <label className="field-stack">
+        <span>可编辑 loadout JSON</span>
+        <textarea className="json-editor small" value={loadoutDraft} onChange={(event) => setLoadoutDraft(event.target.value)} spellCheck={false} />
+      </label>
+    </section>
+  );
+}
+
+function PersonalityPreviewPanel({ preview }: { preview: PersonalityPreviewResponse | null }) {
+  if (!preview) return null;
+  const assignment = preview.personality_assignment;
+  return (
+    <section className="personality-preview-panel">
+      <h3>自动性格预览</h3>
+      <div className="coverage-stats">
+        <span>dominant: {dominantSkillName(preview.personality_loadout) || "none"}</span>
+        <span>confidence: {String(assignment.confidence ?? "")}</span>
+        <span>status: {String(assignment.status ?? "")}</span>
+      </div>
+      <pre>{JSON.stringify(assignment.reason_tags ?? [], null, 2)}</pre>
+    </section>
   );
 }
 
@@ -734,6 +1174,10 @@ function PersonalityEditor({
   draft,
   setDraft,
   onSave,
+  onReport,
+  onReassign,
+  onActivePreview,
+  onRelationshipEnrich,
   busy
 }: {
   character: CharacterPersonalityInfo | null;
@@ -741,6 +1185,10 @@ function PersonalityEditor({
   draft: string;
   setDraft: (value: string) => void;
   onSave: (loadout: Record<string, unknown>) => void;
+  onReport: () => void;
+  onReassign: () => void;
+  onActivePreview: () => void;
+  onRelationshipEnrich: () => void;
   busy: boolean;
 }) {
   if (!character) {
@@ -776,6 +1224,18 @@ function PersonalityEditor({
         >
           <Check size={16} />
           保存
+        </button>
+        <button type="button" disabled={busy} onClick={onReport}>
+          查看 report
+        </button>
+        <button type="button" disabled={busy} onClick={onReassign}>
+          重新分配
+        </button>
+        <button type="button" disabled={busy || !parsed.ok} onClick={onActivePreview}>
+          Active context
+        </button>
+        <button type="button" disabled={busy} onClick={onRelationshipEnrich}>
+          关系 enrichment
         </button>
       </div>
 
@@ -822,6 +1282,26 @@ function PersonalityEditor({
   );
 }
 
+function AssignmentReportView({ report }: { report: PersonalityAssignmentReportResponse | null }) {
+  if (!report) return null;
+  return (
+    <section className="assignment-report">
+      <h3>Assignment Report</h3>
+      <pre>{JSON.stringify(report.personality_assignment, null, 2)}</pre>
+    </section>
+  );
+}
+
+function ActiveContextPreview({ preview }: { preview: ActiveContextPreviewResponse | null }) {
+  if (!preview) return null;
+  return (
+    <section className="active-context-preview">
+      <h3>Active Context Preview</h3>
+      <pre>{JSON.stringify(preview.active_personality_context, null, 2)}</pre>
+    </section>
+  );
+}
+
 function parseLoadoutDraft(raw: string): { ok: true; value: Record<string, unknown> } | { ok: false; value: Record<string, unknown> } {
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -831,6 +1311,59 @@ function parseLoadoutDraft(raw: string): { ok: true; value: Record<string, unkno
   } catch {
     return { ok: false, value: {} };
   }
+}
+
+function characterCreatePayload(draft: CharacterCreateDraft): Record<string, unknown> {
+  const tags = draft.personalityTags
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return {
+    source: "world_studio_manual",
+    name: draft.name.trim(),
+    aliases: draft.aliases
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+    description: draft.description,
+    importance: draft.importance,
+    profile: {
+      public_identity: draft.publicIdentity,
+      role_archetype: draft.roleArchetype,
+      narrative_role: draft.narrativeRole,
+      personality_tags: tags
+    },
+    state: {
+      faction_id: draft.factionId,
+      goal: draft.goal
+    },
+    personality_tags: tags
+  };
+}
+
+function issueMatchesFilter(issue: string, filter: PersonalityCoverageFilter): boolean {
+  if (filter === "all") return true;
+  return issue === filter || issue.startsWith(`${filter}:`);
+}
+
+function coverageFilterLabel(filter: PersonalityCoverageFilter): string {
+  if (filter === "all") return "全部";
+  if (filter === "missing_loadout") return "缺失";
+  if (filter === "fallback_used") return "Fallback";
+  if (filter === "valid_needs_review") return "需复核";
+  if (filter === "manual_override") return "人工锁定";
+  if (filter === "stress_mode_without_trigger") return "Stress trigger";
+  if (filter === "social_mask_without_active_when") return "Mask active";
+  return filter;
+}
+
+function coverageStatusLabel(coverage: PersonalityCoverageResponse | null, characterId: string): string {
+  const item = coverage?.characters.find((character) => character.character_id === characterId);
+  if (!item) return "未设置主性格";
+  if (item.issues.includes("missing_loadout")) return "missing_loadout";
+  if (item.issues.includes("fallback_used")) return "fallback_used";
+  if (item.issues.includes("valid_needs_review")) return "valid_needs_review";
+  return item.assignment_status || "未设置主性格";
 }
 
 function dominantSkillName(loadout: Record<string, unknown>): string {

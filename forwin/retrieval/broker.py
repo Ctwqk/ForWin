@@ -7,6 +7,7 @@ from typing import Iterable
 from sqlalchemy import select
 
 from forwin.book_state.repository import BookStateRepository
+from forwin.config import DEFAULT_QDRANT_URL
 from forwin.context.assembler import assemble_context
 from forwin.llm_kb.retriever import LLMKnowledgeBaseRetriever
 from forwin.llm_kb.store import LLMKnowledgeBaseStore
@@ -591,7 +592,7 @@ class RetrievalBroker:
         self.memory_index = create_memory_index(
             backend=self.retrieval_backend,
             database_url=database_url,
-            qdrant_url=self.qdrant_url or "http://localhost:6333",
+            qdrant_url=self.qdrant_url or DEFAULT_QDRANT_URL,
             qdrant_collection=self.qdrant_collection,
         )
 

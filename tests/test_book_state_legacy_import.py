@@ -118,14 +118,44 @@ def test_legacy_import_maps_entities_relations_and_v4_narrative_nodes() -> None:
         }
 
     assert counts["world_nodes"] == 2
-    assert counts["world_node_states"] == 1
+    assert counts["world_node_states"] == 2
     assert counts["world_edges"] == 1
     assert counts["narrative_nodes"] == 3
     assert node_count == 2
-    assert state_count == 1
+    assert state_count == 2
     assert edge.edge_type == "ally_of"
     assert edge.edge_family == "social"
     assert {"world_line", "knowledge_gap", "reveal_plan"}.issubset(narrative_node_types)
+
+
+def test_legacy_character_import_assigns_personality_loadout() -> None:
+    engine = get_engine(postgres_test_url("legacy-character-personality"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project = Project(title="legacy personality", premise="p", genre="玄幻", setting_summary="s")
+        session.add(project)
+        session.flush()
+        legacy = Entity(
+            project_id=project.id,
+            kind="character",
+            name="沈临川",
+            description="冷静护卫，负责保护主角，对承诺极重。",
+            importance=7,
+            created_at_chapter=1,
+        )
+        session.add(legacy)
+        session.flush()
+
+        LegacyBookStateImporter(session).import_project(project.id)
+        node = session.execute(select(WorldNodeRow).where(WorldNodeRow.id == legacy.id)).scalar_one()
+        profile = json.loads(node.profile_json)
+        metadata = json.loads(node.metadata_json)
+
+    assert profile["personality_loadout"]["dominant"]["skill"] == "trait-loyal-protector"
+    assert metadata["legacy_entity_id"] == legacy.id
+    assert metadata["personality_assignment"]["assignment_mode"] in {"auto_rule", "fallback_minimal"}
 
 
 def test_legacy_import_reports_site_state_map_bindings_without_subworld_scope_leak() -> None:

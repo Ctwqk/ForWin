@@ -73,6 +73,24 @@ _SUBWORLD_NAME_GIVEN = (
 )
 
 
+def _json_dict(raw: str | None) -> dict:
+    try:
+        value = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _json_list(raw: str | None) -> list[str]:
+    try:
+        value = json.loads(raw or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
 class StateUpdater:
     """Writes state changes to the database.
 
@@ -421,43 +439,62 @@ class StateUpdater:
         if roster_item.entity_kind != "character":
             raise ValueError("Only character roster items can be materialized in v1.")
 
+        entity: Entity | None = None
         if roster_item.entity_id:
             entity = self.session.get(Entity, roster_item.entity_id)
             if entity is None:
                 raise ValueError(f"Roster item {roster_item_id} references missing entity.")
-            if roster_item.status == "planned_slot":
-                roster_item.status = "activated_named"
-            if not roster_item.activation_chapter:
-                roster_item.activation_chapter = int(chapter or 0)
-            self.session.add(roster_item)
-            self.session.flush()
-            return entity
-
-        display_name = str(roster_item.display_name or "").strip() or self._fallback_slot_name(
-            project_id=roster_item.project_id,
-            subworld_id=roster_item.subworld_id,
-            slot_key=roster_item.slot_key,
-            role_hint=roster_item.role_hint,
-        )
-        entity = self._repo.get_entities_by_names(
-            roster_item.project_id,
-            [display_name],
-        ).get(display_name)
-        if entity is not None and entity.kind != "character":
-            entity = None
-        if entity is None:
-            entity = self.create_entity(
+        else:
+            display_name = str(roster_item.display_name or "").strip() or self._fallback_slot_name(
                 project_id=roster_item.project_id,
-                kind="character",
-                name=display_name,
-                description=roster_item.description or roster_item.role_hint or "",
-                importance=7 if roster_item.is_core else 5,
-                chapter=int(chapter or 0),
+                subworld_id=roster_item.subworld_id,
+                slot_key=roster_item.slot_key,
+                role_hint=roster_item.role_hint,
             )
+            entity = self._repo.get_entities_by_names(
+                roster_item.project_id,
+                [display_name],
+            ).get(display_name)
+            if entity is not None and entity.kind != "character":
+                entity = None
+
+        from forwin.characters.creation import CharacterCreationHelper
+        from forwin.characters.models import CharacterCreationRequest
+
+        result = CharacterCreationHelper(self.session).materialize_roster_character(
+            CharacterCreationRequest(
+                project_id=roster_item.project_id,
+                source="subworld_planned_slot_materialization",
+                source_ref=roster_item.id,
+                legacy_entity_id=entity.id if entity is not None else "",
+                roster_item_id=roster_item.id,
+                name=entity.name if entity is not None else display_name,
+                aliases=_json_list(entity.aliases_json) if entity is not None else [],
+                description=roster_item.description
+                or (entity.description if entity is not None else "")
+                or roster_item.role_hint
+                or "",
+                importance=7 if roster_item.is_core else int((entity.importance if entity is not None else 5) or 5),
+                created_at_chapter=int(chapter or 0),
+                profile={
+                    "role_hint": roster_item.role_hint or "",
+                    "role_archetype": roster_item.role_hint or "",
+                },
+                create_legacy_entity=entity is None,
+                audit_reason="planned roster slot materialization",
+            )
+        )
+        entity = self.session.get(Entity, result.legacy_entity_id)
+        if entity is None:
+            raise ValueError(f"Roster materialization did not create a legacy entity for {roster_item_id}.")
         roster_item.entity_id = entity.id
         roster_item.display_name = entity.name
         roster_item.status = "activated_named" if not roster_item.is_core else "seeded_named"
-        roster_item.activation_chapter = int(chapter or 0)
+        if not roster_item.activation_chapter:
+            roster_item.activation_chapter = int(chapter or 0)
+        metadata = _json_dict(roster_item.metadata_json)
+        metadata["character_id"] = result.character_id
+        roster_item.metadata_json = json.dumps(metadata, ensure_ascii=False)
         self.session.add(roster_item)
         self.session.flush()
         return entity
@@ -489,6 +526,13 @@ class StateUpdater:
         )
         self.session.add(edge)
         self.session.flush()
+        try:
+            from forwin.personality.enrichment import RelationshipPersonalityEnricher
+
+            RelationshipPersonalityEnricher(self.session).enrich_relation(edge, reason="relation_created")
+        except Exception as exc:
+            # Relationship personality enrichment is a secondary projection; relation creation remains canonical.
+            logger.warning("relationship personality enrichment failed: %s", exc)
         return edge
 
     # ------------------------------------------------------------------

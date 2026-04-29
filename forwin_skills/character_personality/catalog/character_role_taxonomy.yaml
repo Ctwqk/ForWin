@@ -1,0 +1,9 @@
+version: character_role_taxonomy.v1
+
+classes:
+  - core_named_character
+  - supporting_named_character
+  - background_named_character
+  - generic_scene_actor
+  - crowd_or_group
+  - invalid_character_candidate

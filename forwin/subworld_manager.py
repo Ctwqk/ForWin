@@ -350,24 +350,40 @@ class SubWorldManager:
                     )
 
             for seed in item.core_named_characters:
-                entity = None
                 entity_id = entity_map.get(seed.name) or existing_names.get(seed.name)
-                if entity_id:
-                    entity = session.get(Entity, entity_id)
-                if entity is None:
-                    entity = updater.create_entity(
+                if entity_id and session.get(Entity, entity_id) is None:
+                    entity_id = ""
+                from forwin.characters.creation import CharacterCreationHelper
+                from forwin.characters.models import CharacterCreationRequest
+
+                result = CharacterCreationHelper(session).create_character(
+                    CharacterCreationRequest(
                         project_id=project_id,
-                        kind="character",
+                        source="subworld_core_named_character",
+                        source_ref=f"{target_row.id}:{seed.name}",
+                        legacy_entity_id=entity_id or "",
+                        roster_item_id="",
                         name=seed.name,
+                        aliases=list(seed.aliases),
                         description=seed.description,
-                        aliases=seed.aliases,
                         importance=max(1, int(seed.importance or 5)),
-                        chapter=max(0, int(chapter_number or 0)),
+                        created_at_chapter=max(0, int(chapter_number or 0)),
+                        profile={
+                            "role_hint": seed.role_hint,
+                            "role_archetype": seed.role_hint,
+                        },
+                        state=dict(seed.initial_state or {}),
+                        create_legacy_entity=not bool(entity_id),
+                        audit_reason="subworld core named character",
                     )
-                    if seed.initial_state:
-                        updater.create_entity_state(entity.id, max(0, int(chapter_number or 0)), seed.initial_state)
-                    entity_map[entity.name] = entity.id
-                    existing_names[entity.name] = entity.id
+                )
+                entity = session.get(Entity, result.legacy_entity_id or entity_id or "")
+                if entity is None:
+                    continue
+                if seed.initial_state:
+                    updater.create_entity_state(entity.id, max(0, int(chapter_number or 0)), seed.initial_state)
+                entity_map[entity.name] = entity.id
+                existing_names[entity.name] = entity.id
                 self._ensure_roster_item(
                     session=session,
                     project_id=project_id,
@@ -381,6 +397,7 @@ class SubWorldManager:
                     is_core=True,
                     status="seeded_named",
                     activation_chapter=max(0, int(chapter_number or 0)),
+                    metadata={"character_id": result.character_id},
                 )
 
             for slot in item.planned_slots:
@@ -655,6 +672,7 @@ class SubWorldManager:
         is_core: bool,
         status: str,
         activation_chapter: int,
+        metadata: dict | None = None,
     ) -> None:
         key = (
             (subworld_id, "entity", entity_id)
@@ -677,6 +695,12 @@ class SubWorldManager:
                 row.status = status if row.status == "planned_slot" else row.status
                 if activation_chapter and not row.activation_chapter:
                     row.activation_chapter = activation_chapter
+                if metadata:
+                    current_metadata = _load_json(row.metadata_json, {})
+                    if not isinstance(current_metadata, dict):
+                        current_metadata = {}
+                    current_metadata.update(metadata)
+                    row.metadata_json = json.dumps(current_metadata, ensure_ascii=False)
                 session.add(row)
             return
         row = SubWorldRosterItem(
@@ -692,7 +716,7 @@ class SubWorldManager:
             is_core=is_core,
             status=status,
             activation_chapter=activation_chapter,
-            metadata_json="{}",
+            metadata_json=json.dumps(metadata or {}, ensure_ascii=False),
         )
         session.add(row)
         session.flush()

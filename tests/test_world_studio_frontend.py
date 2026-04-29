@@ -30,6 +30,31 @@ class WorldStudioFrontendTests(unittest.TestCase):
         self.assertIn("PersonalityEditor", app_source)
         self.assertIn(".personality-editor", css_source)
 
+    def test_world_studio_exposes_personality_coverage_filters(self) -> None:
+        app_source = (REPO_ROOT / "frontend/world-studio/src/App.tsx").read_text(encoding="utf-8")
+        css_source = (REPO_ROOT / "frontend/world-studio/src/styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("characters/personality/coverage", app_source)
+        self.assertIn("PersonalityCoveragePanel", app_source)
+        self.assertIn("missing_loadout", app_source)
+        self.assertIn("stress_mode_without_trigger", app_source)
+        self.assertIn(".coverage-panel", css_source)
+
+    def test_world_studio_exposes_final_gap_closure_personality_workflow(self) -> None:
+        app_source = (REPO_ROOT / "frontend/world-studio/src/App.tsx").read_text(encoding="utf-8")
+        css_source = (REPO_ROOT / "frontend/world-studio/src/styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("CharacterCreateForm", app_source)
+        self.assertIn("PersonalityPreviewPanel", app_source)
+        self.assertIn("AssignmentReportView", app_source)
+        self.assertIn("ActiveContextPreview", app_source)
+        self.assertIn("characters/personality/active-context/preview", app_source)
+        self.assertIn("characters/personality/relationships/enrich", app_source)
+        self.assertIn("characters/personality/metrics", app_source)
+        self.assertIn("personality/reassign", app_source)
+        self.assertIn(".character-create-form", css_source)
+        self.assertIn(".assignment-report", css_source)
+
 
 if __name__ == "__main__":
     unittest.main()

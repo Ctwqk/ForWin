@@ -18,6 +18,7 @@ from forwin.protocol.writer import WriterOutput
 from forwin.skills import serialize_prompt_layers
 from .context_builder import build_review_context_pack
 from .lint import LintSignalCollector
+from .personality import PersonalityConsistencyReviewer
 from .webnovel import WebNovelExperienceReviewer
 
 
@@ -36,6 +37,7 @@ class HistoricalReviewHub:
             llm_enabled=llm_enabled,
         )
         self.lint_collector = LintSignalCollector(enabled=lint_review_enabled)
+        self.personality_reviewer = PersonalityConsistencyReviewer()
 
     def review(
         self,
@@ -48,7 +50,10 @@ class HistoricalReviewHub:
         reviewer_skill_layers: list[object] | None = None,
     ) -> ReviewVerdict:
         continuity = continuity_checker.check(project_id, writer_output)
-        lint_signals = self.lint_collector.collect(writer_output)
+        lint_signals = [
+            *self.lint_collector.collect(writer_output),
+            *self.personality_reviewer.collect(context, writer_output),
+        ]
         review_context = build_review_context_pack(
             repo=repo,
             context=context,

@@ -9,6 +9,35 @@
 - 如果改动尚未部署到 `8899`，必须明确写“未部署原因”和“切换条件”。
 - 旧的专项日志可保留，但关键结论需要汇总到这里。
 
+## 2026-04-29
+
+### V4.8 Character Creation 与自动性格分配 Final Gap Closure
+
+完成 V4.8 人物创建 helper 与自动 personality assignment 的最终缺口闭环，并新增专项维护文档。V4.8 现在把命名人物创建收口到 `CharacterCreationHelper`，创建后写入 BookState character、legacy Entity 投影、personality_loadout、personality_assignment report、DecisionEvent，并能进入 writer/reviewer runtime。
+
+关键变化：
+
+- 新增 [V4.8_character_creation_personality_maintenance.md](/home/taiwei/ForWin/Design-docs/V4.8_character_creation_personality_maintenance.md)，记录人物创建入口、assignment catalog、project policy、manual override、relationship enrichment、API、World Studio、reviewer、metrics、troubleshooting 和最低回归命令。
+- 更新 [V4.7_character_personality_maintenance.md](/home/taiwei/ForWin/Design-docs/V4.7_character_personality_maintenance.md)，明确 V4.7 继续维护 skill 内容，V4.8 维护创建、分配、审计工作流。
+- `PersonalityLoadoutAssigner` 补齐 secondary trait、compatibility/tension warning、hard conflict reject、cast diversity adjustment、seeded tie-break 与 report lookup。
+- 新增 `RelationshipPersonalityEnricher`，支持 rival/mentor 关系自动补 target-specific `relationship_patterns`，不覆盖 manual override，并写 `PERSONALITY_RELATIONSHIP_ENRICHED`。
+- World Studio 人物性格页补齐创建表单、自动预览、loadout JSON、assignment report、reassign、active context preview、relationship enrichment 与 metrics summary。
+- 新增 deterministic personality reviewer signals 与项目级 personality metrics API。
+
+验证：
+
+- `uv run --extra test python -m pytest tests/test_personality_assignment.py tests/test_character_creation_helper.py tests/test_character_relationship_enrichment.py tests/test_character_personality_integration.py -q`
+- 结果：`25 passed`
+- `uv run --extra test python -m pytest tests/test_reviewer_personality_consistency.py tests/test_personality_runtime.py tests/test_world_studio_frontend.py -q`
+- 结果：`14 passed`
+- `uv run --extra test python -m pytest tests/test_no_bare_character_creation.py tests/test_subworld_control.py tests/test_book_state_legacy_import.py tests/test_book_state_repository_projection_compiler.py -q`
+- 结果：`27 passed`
+- `uv run --extra test python -m compileall -q forwin/characters forwin/personality forwin/context forwin/reviewer forwin/state`
+- `cd frontend/world-studio && npm run build`
+- `git diff --check`
+
+部署状态：未部署到 `8899`。原因：本轮是代码、前端与文档更新，当前会话未执行服务重建/重启。切换条件：确认无 active generation 后，重建并重启 ForWin 服务，再对测试项目执行 coverage、metrics、preview、active context preview 和 backfill dry-run。
+
 ## 2026-04-27
 
 ### V4.7 Character Personality Skill 设计与维护文档落档

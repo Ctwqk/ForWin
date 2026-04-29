@@ -113,6 +113,10 @@ class BookStateRepository:
         self.session.flush()
         return row
 
+    def get_world_node(self, node_id: str) -> WorldNode | None:
+        row = self.session.get(WorldNodeRow, node_id)
+        return _world_node_from_row(row) if row is not None else None
+
     def append_world_node_state(
         self,
         *,

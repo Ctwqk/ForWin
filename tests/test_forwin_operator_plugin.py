@@ -28,7 +28,7 @@ def test_forwin_operator_plugin_declares_forwin_mcp_server() -> None:
 
     assert mcp["mcpServers"]["forwin"] == {
         "transport": "streamable_http",
-        "url": "http://127.0.0.1:8898/mcp",
+        "url": "http://127.0.0.1:8896/mcp",
     }
 
 
@@ -48,4 +48,3 @@ def test_forwin_operator_plugin_skill_keeps_mcp_safety_rules() -> None:
     assert "Use the `forwin` MCP server as the authoritative interface" in skill
     assert "Do not inspect SQLite directly" in skill
     assert "task_active_generation_check" in skill
-

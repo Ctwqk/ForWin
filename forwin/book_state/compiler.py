@@ -19,6 +19,7 @@ from forwin.protocol.book_state import (
     NodePatch,
     ReaderExperienceDeltaRecord,
     ReaderPromise,
+    WorldNode,
 )
 
 
@@ -199,6 +200,33 @@ class BookStateCompiler:
             node = runtime.world.nodes_by_id.get(patch.node_id)
             if node is None:
                 continue
+            if str(patch.op) == "create" and str(node.node_type) == "character":
+                profile = dict(node.profile) if isinstance(node.profile, dict) else {}
+                if not profile.get("personality_loadout"):
+                    from forwin.characters.creation import CharacterCreationHelper
+                    from forwin.characters.models import CharacterCreationRequest
+
+                    result = CharacterCreationHelper(self.session).apply_book_state_character_patch(
+                        CharacterCreationRequest(
+                            project_id=delta.project_id,
+                            source="book_state_graph_delta",
+                            source_ref=delta.id,
+                            character_id=patch.node_id,
+                            name=node.name or patch.node_id,
+                            aliases=list(node.aliases),
+                            summary=node.summary,
+                            description=node.description,
+                            importance=node.importance,
+                            created_at_chapter=delta.chapter_number,
+                            profile=profile,
+                            state=runtime.world.get_state(patch.node_id),
+                            create_legacy_entity=True,
+                            audit_reason=patch.reason or "BookState GraphDelta create character",
+                        )
+                    )
+                    if result.world_node:
+                        node = WorldNode.model_validate(result.world_node)
+                        runtime.world.nodes_by_id[patch.node_id] = node
             self.repo.create_world_node(node)
             if str(patch.op) == "create" or patch.field_path.startswith("state."):
                 self.repo.append_world_node_state(

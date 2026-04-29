@@ -1,0 +1,78 @@
+version: character_personality_assignment.v1
+
+skills:
+  trait-loyal-protector:
+    skill_type: trait
+    eligible_slots: [dominant, secondary]
+    default_weight:
+      dominant: 0.72
+      secondary: 0.55
+    signals:
+      personality_tags: [protector, loyal, guardian]
+      role_hint: [护卫, 守护者, 保镖, 追随者, 师兄, protector, guardian]
+      narrative_role: [protector, loyal_companion, supporting_ally]
+      description_keywords: [保护, 忠诚, 承诺, 誓言, 代价]
+      relationship_keywords: [欠命, 誓言, 守约]
+    avoid_when:
+      description_keywords: [背叛成性, 只为上位]
+
+  trait-ambitious-climber:
+    skill_type: trait
+    eligible_slots: [dominant, secondary]
+    default_weight:
+      dominant: 0.70
+      secondary: 0.52
+    signals:
+      personality_tags: [ambitious, climber, power_player]
+      role_hint: [继承人, 政客, 对手, 掌权者, rival]
+      narrative_role: [rival, climber, power_player]
+      description_keywords: [野心, 上位, 权力, 晋升, 夺位]
+
+  trait-suspicious-survivor:
+    skill_type: trait
+    eligible_slots: [dominant, secondary]
+    default_weight:
+      dominant: 0.74
+      secondary: 0.56
+    signals:
+      personality_tags: [suspicious, survivor]
+      role_hint: [流亡者, 卧底, 幸存者, 间谍, survivor]
+      narrative_role: [survivor, fugitive, spy]
+      description_keywords: [背叛, 逃亡, 追杀, 疑心, 失去信任]
+
+  trait-quiet-observer:
+    skill_type: trait
+    eligible_slots: [dominant, secondary]
+    default_weight:
+      dominant: 0.45
+      secondary: 0.35
+    signals:
+      personality_tags: [observer, civilian, background]
+      role_hint: [旁观者, 镇民, 平民]
+      description_keywords: [观察, 安静, 普通, 镇民, 平民]
+
+  mask-cold-professional:
+    skill_type: social_mask
+    eligible_slots: [social_mask]
+    default_weight:
+      social_mask: 0.58
+    default_active_when:
+      - public_scene
+      - professional_context
+      - superior_present
+    signals:
+      personality_tags: [professional, restrained]
+      public_identity: [执法者, 军官, 秘书, 医师, 审判官, 执事, officer]
+      description_keywords: [冷静, 职业化, 不露情绪, 克制]
+
+  stress-paranoid-controller:
+    skill_type: stress_mode
+    eligible_slots: [stress_modes]
+    default_weight:
+      stress_modes: 0.50
+    default_trigger:
+      - betrayal_suspected
+      - information_control_lost
+    signals:
+      description_keywords: [背叛, 监视, 阴谋, 信息失控]
+      state_keywords: [被追杀, 被通缉]

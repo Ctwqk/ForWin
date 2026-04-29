@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import logging
+from typing import Any
 
 from forwin.protocol.context import (
     ArcEnvelopeView,
@@ -12,13 +13,16 @@ from forwin.protocol.context import (
     WorldPressureView,
 )
 from forwin.book_state import BookStateProjection, BookStateRepository
+from forwin.characters.events import CHARACTER_INTEGRITY_CHECK_FAILED
+from forwin.governance import DecisionEventInfo
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.map.pathfinding import MapGraph
 from forwin.map.repository import MapRepository
 from forwin.map.visibility import is_writer_visible_map_edge
-from forwin.personality import CharacterPersonalityLibrary, build_active_personality_contexts
+from forwin.personality import CharacterPersonalityLibrary, PersonalityLoadoutAssigner, build_active_personality_contexts
 from forwin.protocol.book_state import MapNode, WorldNode
 from forwin.protocol.world_model import WorldContextPack
+from forwin.state.updater import StateUpdater
 from forwin.world_model.retriever import WorldModelRetriever
 
 logger = logging.getLogger(__name__)
@@ -428,11 +432,24 @@ def _book_state_context_overlay(
     node_id_by_name = {node.name: node.id for node in map_nodes_by_id.values() if node.name}
     active_locations: list[dict] = []
     personality_characters: list[dict] = []
+    character_nodes: list[dict] = []
     site_states: list[dict] = []
     for node in runtime.world.nodes_by_id.values():
         node_type = str(getattr(node, "node_type", "") or "")
         if node_type == "character":
             loadout = node.profile.get("personality_loadout") if isinstance(node.profile, dict) else None
+            metadata = dict(node.metadata) if isinstance(node.metadata, dict) else {}
+            character_nodes.append(
+                {
+                    "character_id": node.id,
+                    "character_name": node.name,
+                    "legacy_entity_id": str(metadata.get("legacy_entity_id") or ""),
+                    "personality_loadout": loadout if isinstance(loadout, dict) else {},
+                    "personality_assignment": metadata.get("personality_assignment")
+                    if isinstance(metadata.get("personality_assignment"), dict)
+                    else {},
+                }
+            )
             if isinstance(loadout, dict) and loadout:
                 personality_characters.append(
                     {
@@ -490,6 +507,7 @@ def _book_state_context_overlay(
         "active_knowledge_gaps": runtime.narrative.open_gap_ids(),
         "active_locations": active_locations,
         "personality_characters": personality_characters,
+        "character_nodes": character_nodes,
         "site_states": site_states,
     }
 
@@ -573,6 +591,101 @@ def _merge_book_state_map_overlay(map_context: dict, overlay: dict) -> dict:
     if "as_of_chapter" in overlay:
         merged["book_state_as_of_chapter"] = overlay["as_of_chapter"]
     return merged
+
+
+def _project_personality_integrity_strict(project) -> bool:
+    try:
+        automation = json.loads(getattr(project, "automation_json", "{}") or "{}") or {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        automation = {}
+    personality_policy = automation.get("character_personality") if isinstance(automation, dict) else {}
+    if isinstance(personality_policy, dict) and "strict_integrity" in personality_policy:
+        return bool(personality_policy.get("strict_integrity"))
+    return str(getattr(project, "creation_status", "") or "legacy") != "legacy"
+
+
+def _personality_integrity_issues(
+    *,
+    book_state_overlay: dict,
+    allowed_entities: list[str],
+    active_entities: list,
+    library: CharacterPersonalityLibrary,
+) -> list[dict[str, Any]]:
+    allowed_names = {str(item or "").strip() for item in allowed_entities if str(item or "").strip()}
+    allowed_ids = {
+        str(getattr(item, "entity_id", "") or "").strip()
+        for item in active_entities
+        if str(getattr(item, "kind", "") or "") == "character" and str(getattr(item, "entity_id", "") or "").strip()
+    }
+    assigner = PersonalityLoadoutAssigner(library)
+    issues: list[dict[str, Any]] = []
+    for character in book_state_overlay.get("character_nodes", []):
+        if not isinstance(character, dict):
+            continue
+        character_id = str(character.get("character_id") or "").strip()
+        character_name = str(character.get("character_name") or "").strip()
+        legacy_entity_id = str(character.get("legacy_entity_id") or "").strip()
+        if not (
+            character_id in allowed_ids
+            or legacy_entity_id in allowed_ids
+            or character_name in allowed_names
+            or character_id in allowed_names
+        ):
+            continue
+        loadout = character.get("personality_loadout") if isinstance(character.get("personality_loadout"), dict) else {}
+        if not loadout:
+            issues.append(
+                {
+                    "code": "personality_missing_loadout",
+                    "severity": "error",
+                    "character_id": character_id,
+                    "character_name": character_name,
+                    "message": "named character is missing personality_loadout",
+                }
+            )
+            continue
+        validation = assigner.validate(loadout)
+        for error in validation.errors:
+            issues.append(
+                {
+                    "code": error,
+                    "severity": "error",
+                    "character_id": character_id,
+                    "character_name": character_name,
+                    "message": error,
+                }
+            )
+        for warning in validation.warnings:
+            issues.append(
+                {
+                    "code": warning,
+                    "severity": "warning",
+                    "character_id": character_id,
+                    "character_name": character_name,
+                    "message": warning,
+                }
+            )
+    return issues
+
+
+def _save_personality_integrity_failure(repo_session, project_id: str, chapter_number: int, issues: list[dict[str, Any]]) -> None:
+    if repo_session is None:
+        return
+    StateUpdater(repo_session).save_decision_event(
+        DecisionEventInfo(
+            project_id=project_id,
+            chapter_number=int(chapter_number or 0),
+            scope="character_creation",
+            event_family="audit_action",
+            event_type=CHARACTER_INTEGRITY_CHECK_FAILED,
+            actor_type="system",
+            summary="人物 personality_loadout integrity gate failed before writer context assembly.",
+            reason="writer context assembly",
+            payload={"issues": issues},
+            related_object_type="project",
+            related_object_id=project_id,
+        )
+    )
 
 
 def assemble_context(
@@ -804,6 +917,27 @@ def assemble_context(
         project_id,
         chapter_plan.chapter_number,
     )
+    personality_library = CharacterPersonalityLibrary()
+    personality_integrity_issues = _personality_integrity_issues(
+        book_state_overlay=book_state_overlay,
+        allowed_entities=allowed_entities,
+        active_entities=entities,
+        library=personality_library,
+    )
+    if personality_integrity_issues and _project_personality_integrity_strict(project):
+        _save_personality_integrity_failure(
+            repo_session,
+            project_id,
+            chapter_plan.chapter_number,
+            personality_integrity_issues,
+        )
+        error_codes = ", ".join(
+            str(item.get("code") or "")
+            for item in personality_integrity_issues
+            if str(item.get("severity") or "") == "error"
+        )
+        if error_codes:
+            raise ValueError(error_codes)
     map_context = _merge_book_state_map_overlay(map_context, book_state_overlay)
     book_state_world_lines = [
         str(item)
@@ -835,7 +969,7 @@ def assemble_context(
                     if str(item.get("character_name") or "") in allowed_entities
                     or str(item.get("character_id") or "") in allowed_entities
                 ],
-                library=CharacterPersonalityLibrary(),
+                library=personality_library,
                 scene_flags=["chapter_generation"],
                 pressure_triggers=pressure_triggers,
             )
@@ -971,4 +1105,5 @@ def assemble_context(
         ),
         chapter_world_delta_intent=chapter_world_delta_intent,
         active_personality_contexts=active_personality_contexts,
+        personality_integrity_issues=personality_integrity_issues,
     )

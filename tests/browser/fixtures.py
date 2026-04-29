@@ -84,6 +84,10 @@ class MockForWinBackend:
     world_snapshots: list[dict[str, Any]] = field(default_factory=list)
     world_conflicts: list[dict[str, Any]] = field(default_factory=list)
     world_proposals: list[dict[str, Any]] = field(default_factory=list)
+    personality_skills: list[dict[str, Any]] = field(default_factory=list)
+    character_personalities: list[dict[str, Any]] = field(default_factory=list)
+    personality_coverage: dict[str, Any] = field(default_factory=dict)
+    personality_metrics: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.settings = self.settings or sample_settings()
@@ -96,6 +100,10 @@ class MockForWinBackend:
         self.world_snapshots = self.world_snapshots or sample_world_snapshots(self.projects[0]["id"])
         self.world_conflicts = self.world_conflicts or sample_world_conflicts()
         self.world_proposals = self.world_proposals or sample_world_proposals()
+        self.personality_skills = self.personality_skills or sample_personality_skills()
+        self.character_personalities = self.character_personalities or sample_character_personalities()
+        self.personality_coverage = self.personality_coverage or sample_personality_coverage(self.projects[0]["id"], self.character_personalities)
+        self.personality_metrics = self.personality_metrics or sample_personality_metrics(self.projects[0]["id"])
 
     def install(self, page: Page) -> None:
         page.route("**/api/**", self.handle)
@@ -168,6 +176,138 @@ class MockForWinBackend:
             profile_id = profile_delete.group(1)
             self.settings["profiles"] = [item for item in self.settings["profiles"] if item["id"] != profile_id]
             json_reply(route, {**self.settings, "message": "模型配置已删除"})
+            return
+
+        if path == "/api/personality-skills" and method == "GET":
+            json_reply(route, {"skills": self.personality_skills})
+            return
+        character_personality_list = re.fullmatch(r"/api/projects/([^/]+)/book-state/characters/personality", path)
+        if character_personality_list and method == "GET":
+            project_id = character_personality_list.group(1)
+            json_reply(
+                route,
+                {
+                    "schema_version": "book_state.character_personality.v1",
+                    "project_id": project_id,
+                    "as_of_chapter": 0,
+                    "characters": self.character_personalities,
+                },
+            )
+            return
+        character_personality_loadout = re.fullmatch(r"/api/projects/([^/]+)/book-state/characters/([^/]+)/personality-loadout", path)
+        if character_personality_loadout and method in {"GET", "PUT"}:
+            project_id, character_id = character_personality_loadout.groups()
+            character = self._character_personality(character_id)
+            if method == "PUT":
+                payload = read_json(route)
+                self.capture(route, payload)
+                character["personality_loadout"] = payload.get("personality_loadout") or character.get("personality_loadout") or {}
+            json_reply(route, {"schema_version": "book_state.character_personality.v1", "project_id": project_id, **character})
+            return
+        personality_coverage = re.fullmatch(r"/api/projects/([^/]+)/characters/personality/coverage", path)
+        if personality_coverage and method == "GET":
+            json_reply(route, {**self.personality_coverage, "project_id": personality_coverage.group(1)})
+            return
+        personality_metrics = re.fullmatch(r"/api/projects/([^/]+)/characters/personality/metrics", path)
+        if personality_metrics and method == "GET":
+            json_reply(route, {**self.personality_metrics, "project_id": personality_metrics.group(1)})
+            return
+        personality_preview = re.fullmatch(r"/api/projects/([^/]+)/characters/personality/preview", path)
+        if personality_preview and method == "POST":
+            payload = read_json(route)
+            self.capture(route, payload)
+            json_reply(route, sample_personality_preview(personality_preview.group(1), payload))
+            return
+        character_create = re.fullmatch(r"/api/projects/([^/]+)/characters", path)
+        if character_create and method == "POST":
+            payload = read_json(route)
+            self.capture(route, payload)
+            character_id = f"char-{len(self.character_personalities) + 1}"
+            created = {
+                "character_id": character_id,
+                "character_name": payload.get("name") or "新角色",
+                "personality_loadout": payload.get("personality_loadout") or sample_personality_loadout(),
+            }
+            self.character_personalities.append(created)
+            json_reply(
+                route,
+                {
+                    "schema_version": "character.creation.v1",
+                    "character_id": character_id,
+                    "personality_loadout": created["personality_loadout"],
+                    "personality_assignment": sample_personality_assignment(),
+                },
+            )
+            return
+        personality_assignment_report = re.fullmatch(r"/api/projects/([^/]+)/characters/([^/]+)/personality/assignment-report", path)
+        if personality_assignment_report and method == "GET":
+            project_id, character_id = personality_assignment_report.groups()
+            character = self._character_personality(character_id)
+            json_reply(
+                route,
+                {
+                    "schema_version": "character.personality_assignment_report.v1",
+                    "project_id": project_id,
+                    "character_id": character_id,
+                    "character_name": character.get("character_name") or "",
+                    "personality_assignment": sample_personality_assignment(),
+                    "decision_events": [],
+                },
+            )
+            return
+        personality_reassign = re.fullmatch(r"/api/projects/([^/]+)/characters/([^/]+)/personality/reassign", path)
+        if personality_reassign and method == "POST":
+            project_id, character_id = personality_reassign.groups()
+            payload = read_json(route)
+            self.capture(route, payload)
+            character = self._character_personality(character_id)
+            character["personality_loadout"] = sample_personality_loadout("trait-cautious-strategist")
+            json_reply(
+                route,
+                {
+                    "schema_version": "character.personality_reassign.v1",
+                    "project_id": project_id,
+                    "character_id": character_id,
+                    "preserved": False,
+                    "personality_loadout": character["personality_loadout"],
+                    "personality_assignment": sample_personality_assignment("auto_rule"),
+                    "diff": {"reason": payload.get("reason") or ""},
+                },
+            )
+            return
+        active_context_preview = re.fullmatch(r"/api/projects/([^/]+)/characters/personality/active-context/preview", path)
+        if active_context_preview and method == "POST":
+            payload = read_json(route)
+            self.capture(route, payload)
+            json_reply(
+                route,
+                {
+                    "schema_version": "character.active_personality_context_preview.v1",
+                    "project_id": active_context_preview.group(1),
+                    "active_personality_context": {
+                        "character_id": payload.get("character_id") or "",
+                        "character_name": payload.get("character_name") or "",
+                        "dominant": "trait-loyal-protector",
+                        "scene_flags": payload.get("scene_flags") or [],
+                    },
+                    "validation": {"ok": True, "errors": [], "warnings": []},
+                },
+            )
+            return
+        relationship_enrichment = re.fullmatch(r"/api/projects/([^/]+)/characters/personality/relationships/enrich", path)
+        if relationship_enrichment and method == "POST":
+            payload = read_json(route)
+            self.capture(route, payload)
+            json_reply(
+                route,
+                {
+                    "schema_version": "character.relationship_personality_enrichment.v1",
+                    "project_id": relationship_enrichment.group(1),
+                    "updated": 1,
+                    "preserved": 0,
+                    "skipped": 0,
+                },
+            )
             return
 
         if path == "/api/publishers/platforms":
@@ -422,6 +562,18 @@ class MockForWinBackend:
             json_reply(route, next((item for item in self.world_proposals if item["id"] == proposal_id), sample_world_proposals()[0]))
             return
         api_error(route, f"Unhandled mock API route: {method} {path}", 501)
+
+    def _character_personality(self, character_id: str) -> dict[str, Any]:
+        for character in self.character_personalities:
+            if character.get("character_id") == character_id:
+                return character
+        fallback = {
+            "character_id": character_id,
+            "character_name": character_id,
+            "personality_loadout": sample_personality_loadout(),
+        }
+        self.character_personalities.append(fallback)
+        return fallback
 
     def task_center_items(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -901,6 +1053,113 @@ def sample_world_proposals() -> list[dict[str, Any]]:
             "reviewed_at": "",
         }
     ]
+
+
+def sample_personality_loadout(skill: str = "trait-loyal-protector") -> dict[str, Any]:
+    return {
+        "dominant": {"skill": skill, "weight": 0.82},
+        "secondary": [],
+        "social_mask": [],
+        "stress_modes": [],
+        "relationship_patterns": [],
+        "overrides": {},
+    }
+
+
+def sample_personality_assignment(mode: str = "auto_rule") -> dict[str, Any]:
+    return {
+        "assignment_id": "assignment-1",
+        "policy_version": "character_personality_assignment.v1",
+        "assignment_mode": mode,
+        "confidence": 0.86,
+        "status": "valid",
+        "manual_override": False,
+        "selected_skill_ids": ["trait-loyal-protector"],
+        "reason_tags": ["browser-test-fixture"],
+    }
+
+
+def sample_personality_skills() -> list[dict[str, Any]]:
+    return [
+        {
+            "name": "trait-loyal-protector",
+            "version": "1.0",
+            "description": "保护重要关系并承担风险。",
+            "skill_type": "trait",
+            "path": "forwin_skills/character_personality/skills/traits/trait-loyal-protector/SKILL.md",
+        },
+        {
+            "name": "trait-cautious-strategist",
+            "version": "1.0",
+            "description": "先观察，再行动。",
+            "skill_type": "trait",
+            "path": "forwin_skills/character_personality/skills/traits/trait-cautious-strategist/SKILL.md",
+        },
+    ]
+
+
+def sample_character_personalities() -> list[dict[str, Any]]:
+    return [
+        {
+            "character_id": "char-1",
+            "character_name": "林夜",
+            "personality_loadout": sample_personality_loadout(),
+        }
+    ]
+
+
+def sample_personality_coverage(project_id: str, characters: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "schema_version": "character.personality_coverage.v1",
+        "project_id": project_id,
+        "character_count": len(characters),
+        "with_valid_loadout": len(characters),
+        "missing_loadout": 0,
+        "fallback_used": 0,
+        "manual_override": 0,
+        "needs_review": 0,
+        "coverage_ratio": 1.0 if characters else 0.0,
+        "issue_counts": {},
+        "characters": [
+            {
+                "character_id": character["character_id"],
+                "character_name": character["character_name"],
+                "assignment_mode": "auto_rule",
+                "assignment_status": "valid",
+                "manual_override": False,
+                "issues": [],
+            }
+            for character in characters
+        ],
+    }
+
+
+def sample_personality_metrics(project_id: str) -> dict[str, Any]:
+    return {
+        "schema_version": "character.personality_metrics.v1",
+        "project_id": project_id,
+        "character_creation_total": 1,
+        "character_creation_auto_personality_assigned_total": 1,
+        "character_creation_manual_override_total": 0,
+        "character_creation_fallback_used_total": 0,
+        "character_creation_low_confidence_total": 0,
+        "character_integrity_missing_loadout_total": 0,
+        "personality_assignment_confidence_avg": 0.86,
+        "personality_ooc_issue_total_by_assignment_mode": {},
+        "most_used_dominant_skills": [{"skill": "trait-loyal-protector", "count": 1}],
+    }
+
+
+def sample_personality_preview(project_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    name = str(payload.get("name") or "").strip() or "新角色"
+    return {
+        "schema_version": "character.personality_preview.v1",
+        "project_id": project_id,
+        "character_name": name,
+        "personality_loadout": sample_personality_loadout(),
+        "personality_assignment": sample_personality_assignment(),
+        "validation": {"ok": True, "errors": [], "warnings": []},
+    }
 
 
 def goto_home(page: Page, base_url: str, backend: MockForWinBackend) -> None:

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ForWin Character Creation Metadata v1",
+  "type": "object",
+  "required": ["source", "helper_version", "dedupe_resolution"],
+  "properties": {
+    "source": { "type": "string" },
+    "source_ref": { "type": "string" },
+    "helper_version": { "type": "string" },
+    "dedupe_resolution": { "type": "string" },
+    "created_by": { "type": "string" },
+    "created_at_chapter": { "type": "integer" }
+  },
+  "additionalProperties": true
+}

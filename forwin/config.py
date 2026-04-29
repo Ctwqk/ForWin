@@ -10,6 +10,7 @@ DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_MOONSHOT_MODEL = "kimi-k2.5"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+DEFAULT_QDRANT_URL = "http://127.0.0.1:6335"
 DEFAULT_HTTP_BASIC_EXEMPT_PATHS = (
     "/health",
     "/api/extension/",
@@ -175,7 +176,7 @@ def _env_values() -> dict[str, object]:
         "minio_secure": _env_bool(env, "FORWIN_MINIO_SECURE", False),
         "retrieval_backend": _env_str(env, "FORWIN_RETRIEVAL_BACKEND", "qdrant"),
         "retrieval_root": _env_str(env, "FORWIN_RETRIEVAL_ROOT", "data/retrieval"),
-        "qdrant_url": _env_str(env, "FORWIN_QDRANT_URL", "http://localhost:6333"),
+        "qdrant_url": _env_str(env, "FORWIN_QDRANT_URL", DEFAULT_QDRANT_URL),
         "qdrant_collection": _env_str(
             env, "FORWIN_QDRANT_COLLECTION", "chapter_memories"
         ),
@@ -327,7 +328,7 @@ class _ConfigFields:
     minio_secure: bool = False
     retrieval_backend: str = "qdrant"
     retrieval_root: str = "data/retrieval"
-    qdrant_url: str = "http://localhost:6333"
+    qdrant_url: str = DEFAULT_QDRANT_URL
     qdrant_collection: str = "chapter_memories"
     llm_kb_qdrant_collection: str = "llm_kb_vectors"
     embedding_backend: str = "hash"

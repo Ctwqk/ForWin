@@ -350,6 +350,55 @@ class PersonalityLoadoutUpdateRequest(BaseModel):
     reason: str = ""
 
 
+class CharacterCreateRequest(BaseModel):
+    source: str = "api_manual"
+    source_ref: str = ""
+    character_id: str = ""
+    legacy_entity_id: str = ""
+    roster_item_id: str = ""
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    description: str = ""
+    summary: str = ""
+    importance: int = 5
+    created_at_chapter: int = 0
+    profile: dict[str, Any] = Field(default_factory=dict)
+    state: dict[str, Any] = Field(default_factory=dict)
+    personality_loadout: dict[str, Any] | None = None
+    personality_tags: list[str] = Field(default_factory=list)
+    personality_policy: str = "auto"
+    existing_resolution: str = "get_or_create"
+    generic_character_policy: str = "reject_or_group"
+    audit_reason: str = ""
+
+
+class CharacterPersonalityPreviewRequest(BaseModel):
+    name: str = ""
+    description: str = ""
+    summary: str = ""
+    profile: dict[str, Any] = Field(default_factory=dict)
+    state: dict[str, Any] = Field(default_factory=dict)
+    personality_tags: list[str] = Field(default_factory=list)
+    source: str = "api_manual"
+    source_ref: str = ""
+
+
+class CharacterPersonalityReassignRequest(BaseModel):
+    mode: str = "auto_rule"
+    respect_manual_override: bool = True
+    force: bool = False
+    reason: str = ""
+
+
+class CharacterPersonalityActiveContextPreviewRequest(BaseModel):
+    character_id: str = ""
+    character_name: str = ""
+    personality_loadout: dict[str, Any] = Field(default_factory=dict)
+    scene_flags: list[str] = Field(default_factory=list)
+    pressure_triggers: list[str] = Field(default_factory=list)
+    relationship_targets: list[str] = Field(default_factory=list)
+
+
 class MapRuntimeResponse(BaseModel):
     schema_version: str = "map.runtime.v1"
     project_id: str

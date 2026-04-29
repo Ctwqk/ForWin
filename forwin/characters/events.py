@@ -1,0 +1,13 @@
+from __future__ import annotations
+
+
+CHARACTER_CREATED = "character_created"
+CHARACTER_MERGED_EXISTING = "character_merged_existing"
+CHARACTER_ROSTER_MATERIALIZED = "character_roster_materialized"
+CHARACTER_IMPORTED_FROM_LEGACY = "character_imported_from_legacy"
+PERSONALITY_LOADOUT_AUTO_ASSIGNED = "personality_loadout_auto_assigned"
+PERSONALITY_LOADOUT_REASSIGNED = "personality_loadout_reassigned"
+PERSONALITY_LOADOUT_MANUAL_OVERRIDE = "personality_loadout_manual_override"
+PERSONALITY_ASSIGNMENT_BACKFILL_COMPLETED = "personality_assignment_backfill_completed"
+PERSONALITY_RELATIONSHIP_ENRICHED = "personality_relationship_enriched"
+CHARACTER_INTEGRITY_CHECK_FAILED = "character_integrity_check_failed"

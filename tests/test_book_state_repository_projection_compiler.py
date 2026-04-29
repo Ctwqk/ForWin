@@ -328,6 +328,50 @@ def test_compiler_commits_delta_patches_and_rebuilds_snapshots() -> None:
     assert "fact:road_blockade" in runtime.cognition_by_observer[("character", "char_mc")].suspected_refs
     assert delta_count == 1
     assert patch_count == 3
+
+
+def test_compiler_create_character_patch_assigns_personality_loadout() -> None:
+    engine = get_engine(postgres_test_url("compiler-character-personality"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project_id = _create_project(session)
+        result = BookStateCompiler(session).compile(
+            ApprovedGraphDeltaSet(
+                project_id=project_id,
+                chapter_number=1,
+                graph_deltas=[
+                    GraphDelta(
+                        id="delta_create_character",
+                        project_id=project_id,
+                        chapter_number=1,
+                        node_patches=[
+                            NodePatch(
+                                node_id="char_shen",
+                                node_type="character",
+                                op="create",
+                                new_value={
+                                    "id": "char_shen",
+                                    "project_id": project_id,
+                                    "node_type": "character",
+                                    "name": "沈临川",
+                                    "description": "冷静护卫，负责保护主角。",
+                                    "profile": {"role_archetype": "护卫"},
+                                },
+                            )
+                        ],
+                    )
+                ],
+            )
+        )
+        node = BookStateRepository(session).list_world_nodes(project_id)[0]
+        state_count = session.scalar(select(func.count()).select_from(WorldNodeStateRow))
+
+    assert result.committed is True
+    assert node.id == "char_shen"
+    assert node.profile["personality_loadout"]["dominant"]["skill"] == "trait-loyal-protector"
+    assert node.metadata["personality_assignment"]["assignment_mode"] in {"auto_rule", "fallback_minimal"}
     assert state_count == 2
 
 

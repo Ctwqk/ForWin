@@ -57,6 +57,7 @@ def browser_test_base_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[
             "FORWIN_ARTIFACT_ROOT": str(run_root / "artifacts"),
             "FORWIN_RUNTIME_SETTINGS_PATH": str(run_root / "runtime_settings.json"),
             "FORWIN_RETRIEVAL_ROOT": str(run_root / "retrieval"),
+            "FORWIN_QDRANT_URL": "http://127.0.0.1:6335",
             "FORWIN_PUBLISHER_EXTENSION_API_KEY": "browser-test-extension-key",
             "FORWIN_CODEX_ENABLED": "false",
             "MINIMAX_API_KEY": env.get("MINIMAX_API_KEY", "browser-test-key"),

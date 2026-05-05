@@ -1,8 +1,23 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from forwin.protocol.experience import RewardTag
+
+
+def _normalize_reward_tag(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"power", "social", "justice", "mystery", "emotion"}:
+        return normalized
+    if any(token in normalized for token in ("item", "acquisition", "ability", "resource", "breakthrough", "power")):
+        return "power"
+    if any(token in normalized for token in ("social", "relationship", "alliance", "status")):
+        return "social"
+    if any(token in normalized for token in ("justice", "revenge", "punishment", "fair")):
+        return "justice"
+    if any(token in normalized for token in ("emotion", "bond", "heart", "affection")):
+        return "emotion"
+    return "mystery"
 
 
 class SceneContinuation(BaseModel):
@@ -28,6 +43,11 @@ class ScenePlan(BaseModel):
     immersion_anchor: str = ""
     progress_marker: str = ""
 
+    @field_validator("reward_beat_tag", mode="before")
+    @classmethod
+    def _coerce_reward_beat_tag(cls, value: object) -> str:
+        return _normalize_reward_tag(value)
+
 
 class SceneOutput(BaseModel):
     scene_no: int
@@ -42,3 +62,8 @@ class SceneOutput(BaseModel):
     immersion_anchor: str = ""
     progress_marker: str = ""
     continuation: SceneContinuation = Field(default_factory=SceneContinuation)
+
+    @field_validator("reward_beat_tag", mode="before")
+    @classmethod
+    def _coerce_reward_beat_tag(cls, value: object) -> str:
+        return _normalize_reward_tag(value)

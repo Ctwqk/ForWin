@@ -61,6 +61,23 @@ class GenerationControlPayloadTests(unittest.TestCase):
         self.assertEqual(control.next_chapter, 3)
         self.assertEqual(control.chapters_until_review, 2)
 
+    def test_drafted_chapter_waits_for_acceptance_not_rewrite(self) -> None:
+        control = build_generation_control(
+            plans=[
+                _plan(1, "accepted"),
+                _plan(2, "drafted"),
+                _plan(3, "planned"),
+            ],
+            latest_replan=None,
+            review_interval_chapters=0,
+        )
+
+        self.assertEqual(control.plan_state, "pending_acceptance")
+        self.assertEqual(control.review_state, "pending_acceptance")
+        self.assertEqual(control.drafted_chapters, [2])
+        self.assertEqual(control.next_gate, "chapter_2_accept")
+        self.assertFalse(control.can_resume)
+
     def test_band_checkpoint_warning_exposes_blocking_reason(self) -> None:
         control = build_generation_control(
             plans=[

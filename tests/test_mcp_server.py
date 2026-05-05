@@ -10,7 +10,6 @@ from unittest.mock import patch
 import httpx
 from fastmcp import Client
 from fastmcp.exceptions import ToolError
-from pydantic import TypeAdapter
 
 import forwin.api as api_module
 from forwin.api_schemas import BookGenesisPatchRequest, ProjectCreateRequest
@@ -19,10 +18,12 @@ from forwin.mcp.client import ForWinAPIClient
 from forwin.mcp.http import build_asgi_app, build_mcp_server
 from forwin.mcp.models import (
     ChapterDetailView,
-    ChapterSummaryView,
+    ChapterListView,
     GenesisView,
     MutationResult,
+    ProjectListView,
     ProjectView,
+    TaskListView,
     TaskView,
     WorldModelConflictListView,
     WorldModelConflictView,
@@ -31,7 +32,7 @@ from forwin.mcp.models import (
     WorldModelSnapshotView,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.draft import ChapterDraft
+from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.updater import StateUpdater
 
@@ -69,6 +70,11 @@ class ForWinAPIClientUnitTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "backend unavailable"):
             asyncio.run(client.project_get("project-1"))
+
+    def test_default_timeout_covers_long_genesis_operations(self) -> None:
+        client = ForWinAPIClient(base_url="http://forwin.invalid")
+
+        self.assertGreaterEqual(client.timeout, 300.0)
 
 
 class ForWinMCPIntegrationTests(unittest.TestCase):
@@ -240,17 +246,18 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 one_line="主角在雨夜撞上禁术代价。",
                 goals=["建立危机"],
             )
-            session.add(
-                ChapterDraft(
-                    chapter_plan_id=plan.id,
-                    version=1,
-                    body_text="雨夜里，他第一次看见那面会说话的镜子。",
-                    summary="主角在雨夜得到了危险线索。",
-                    char_count=20,
-                    llm_model="fake-model",
-                    llm_raw_response="{}",
-                )
+            draft = ChapterDraft(
+                chapter_plan_id=plan.id,
+                version=1,
+                body_text="雨夜里，他第一次看见那面会说话的镜子。",
+                summary="主角在雨夜得到了危险线索。",
+                char_count=20,
+                llm_model="fake-model",
+                llm_raw_response="{}",
             )
+            session.add(draft)
+            session.flush()
+            session.add(ChapterReview(draft_id=draft.id, verdict="warn", issues_json="[]"))
             session.commit()
             return project.id, 1
 
@@ -284,6 +291,33 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
             ),
         )
         self.assertTrue(all("Use this when" in (tool.description or "") for tool in tools))
+
+    def test_list_tools_return_object_wrappers_for_remote_mcp_clients(self) -> None:
+        project_id, _chapter_number = self._create_project_with_draft()
+
+        projects = self._load_model(ProjectListView, self._call_tool("project_list"))
+        self.assertTrue(any(project.id == project_id for project in projects.projects))
+
+        tasks = self._load_model(TaskListView, self._call_tool("task_list", {"limit": 5}))
+        self.assertIsInstance(tasks.tasks, list)
+
+        chapters = self._load_model(ChapterListView, self._call_tool("chapter_list", {"project_id": project_id}))
+        self.assertEqual([item.chapter_number for item in chapters.chapters], [1])
+
+    def test_task_get_includes_task_timestamps(self) -> None:
+        task_id = "task-with-time"
+        task = api_module._create_task_record(
+            "timestamp regression",
+            title="Timestamp Regression",
+            subtitle="MCP task_get",
+            requested_chapters=1,
+        )
+        api_module._persist_generation_task(task_id, task)
+
+        result = self._load_model(TaskView, self._call_tool("task_get", {"task_id": task_id}))
+
+        self.assertTrue(result.created_at)
+        self.assertTrue(result.updated_at)
 
     def test_health_endpoint_reports_upstream_ok(self) -> None:
         async def run():
@@ -494,9 +528,10 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         project_id, chapter_number = self._create_project_with_draft()
 
         chapter_list_result = self._call_tool("chapter_list", {"project_id": project_id})
-        chapters = self._load_list(TypeAdapter(list[ChapterSummaryView]), chapter_list_result)
+        chapters = self._load_model(ChapterListView, chapter_list_result).chapters
         self.assertEqual([item.chapter_number for item in chapters], [1])
         self.assertTrue(chapters[0].has_draft)
+        self.assertTrue(chapters[0].has_review)
 
         chapter_result = self._call_tool(
             "chapter_get",
@@ -504,6 +539,8 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         )
         chapter = self._load_model(ChapterDetailView, chapter_result)
         self.assertEqual(chapter.chapter_number, 1)
+        self.assertTrue(chapter.has_draft)
+        self.assertTrue(chapter.has_review)
         self.assertIn("会说话的镜子", chapter.body)
         self.assertEqual(chapter.summary, "主角在雨夜得到了危险线索。")
 

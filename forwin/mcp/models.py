@@ -78,6 +78,10 @@ class ChapterDetailView(ChapterSummaryView):
     residual_review_issues: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ChapterListView(BaseModel):
+    chapters: list[ChapterSummaryView] = Field(default_factory=list)
+
+
 class ProjectView(BaseModel):
     id: str
     title: str
@@ -97,6 +101,10 @@ class ProjectView(BaseModel):
     generation_control: GenerationControlView = Field(default_factory=GenerationControlView)
     blocking_reason: BlockingReasonView = Field(default_factory=BlockingReasonView)
     chapters: list[ChapterSummaryView] = Field(default_factory=list)
+
+
+class ProjectListView(BaseModel):
+    projects: list[ProjectView] = Field(default_factory=list)
 
 
 class PromptTraceSummaryView(BaseModel):
@@ -142,6 +150,10 @@ class TaskView(BaseModel):
     generation_control: GenerationControlView = Field(default_factory=GenerationControlView)
     created_at: str = ""
     updated_at: str = ""
+
+
+class TaskListView(BaseModel):
+    tasks: list[TaskView] = Field(default_factory=list)
 
 
 class ActiveTaskCheckView(BaseModel):

@@ -1033,6 +1033,9 @@ def continue_project_generation(
         waiting_review = [plan.chapter_number for plan in plans if plan.status == "needs_review"]
         if waiting_review:
             raise HTTPException(409, f"仍有章节等待 review：{', '.join(str(item) for item in waiting_review)}")
+        waiting_acceptance = [plan.chapter_number for plan in plans if plan.status == "drafted"]
+        if waiting_acceptance:
+            raise HTTPException(409, f"仍有章节等待接受：{', '.join(str(item) for item in waiting_acceptance)}")
         remaining = [plan.chapter_number for plan in plans if plan.status in {"planned", "failed"}]
         planned_future_arc = session.execute(
             select(ArcPlanVersion.id)
@@ -1201,6 +1204,9 @@ def get_chapter(
         ).scalar_one_or_none()
         if draft is None:
             raise HTTPException(404, f"第{chapter_number}章尚未生成")
+        has_review = session.execute(
+            select(ChapterReview.id).where(ChapterReview.draft_id == draft.id).limit(1)
+        ).scalar_one_or_none() is not None
 
         return ChapterDetail(
             chapter_number=chapter_number,
@@ -1209,6 +1215,8 @@ def get_chapter(
             char_count=draft.char_count,
             summary=draft.summary,
             status=plan.status,
+            has_draft=True,
+            has_review=has_review,
             version=draft.version,
             acceptance_mode=str(getattr(plan, "acceptance_mode", "") or ""),
             repair_attempt_count=int(getattr(plan, "repair_attempt_count", 0) or 0),
@@ -1585,8 +1593,9 @@ def approve_chapter_review(
     except FileNotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
 
+    accepted_status = str(result.get("status") or "accepted")
     message = result["message"]
-    if req.continue_generation:
+    if req.continue_generation and accepted_status == "accepted":
         try:
             task_id = create_continue_generation_task(
                 project_id=project_id,
@@ -1601,12 +1610,14 @@ def approve_chapter_review(
             frozen_artifacts=[result["frozen_artifact"]] if result["frozen_artifact"] else [],
         )
         message = f"{message} 已启动后续章节继续执行。"
+    elif req.continue_generation:
+        message = f"{message} 未启动后续章节。"
 
     return ChapterReviewApproveResponse(
         ok=True,
         project_id=project_id,
         chapter_number=chapter_number,
-        status="accepted",
+        status=accepted_status,
         message=message,
         task_id=task_id,
         frozen_artifact=result.get("frozen_artifact") or "",

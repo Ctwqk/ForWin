@@ -1,0 +1,784 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - navigation "ForWin primary navigation" [ref=e3]:
+      - link "创作台" [ref=e4] [cursor=pointer]:
+        - /url: /
+      - link "World Studio" [ref=e5] [cursor=pointer]:
+        - /url: /world-studio
+    - generic [ref=e6]:
+      - generic [ref=e7]:
+        - generic [ref=e8]: ForWin Workspace
+        - heading "配置归配置，任务归任务。" [level=1] [ref=e9]
+        - paragraph [ref=e10]: 首页现在拆成书本、任务、配置三个视角。书本先进入 Genesis 创世，再启动写作；任务中心继续承接生成与上传执行流，配置页只保留模型与平台登录。
+      - generic [ref=e11]:
+        - link "高级发布页" [ref=e12] [cursor=pointer]:
+          - /url: /publishers
+        - button "扩展设置" [ref=e13] [cursor=pointer]
+    - generic [ref=e14]:
+      - generic [ref=e15]:
+        - generic [ref=e16]:
+          - strong [ref=e17]: 系统状态
+          - generic [ref=e18]: 首页已加载。先看书本，再按需要进入任务中心。
+        - generic [ref=e19]:
+          - generic [ref=e20]: API Key：已保存
+          - generic [ref=e21]: Codex：未启用
+          - generic [ref=e22]: 扩展回写：已配置
+      - generic [ref=e23]:
+        - button "书本" [ref=e24] [cursor=pointer]
+        - button "任务" [ref=e25] [cursor=pointer]
+        - button "V4 世界" [ref=e26] [cursor=pointer]
+        - button "配置" [ref=e27] [cursor=pointer]
+      - generic [ref=e28]:
+        - generic [ref=e29]:
+          - generic [ref=e32]:
+            - heading "书本管理" [level=2] [ref=e33]
+            - paragraph [ref=e34]: 这里看每本书的章节规划、已生成章节和已上传章节。建书和后续生成从这里发起。
+          - generic [ref=e35]:
+            - button "刷新" [ref=e36] [cursor=pointer]
+            - button "全选" [ref=e37] [cursor=pointer]
+            - button "批量删除" [disabled] [ref=e38]
+            - button "新建书本" [ref=e39] [cursor=pointer]
+        - article [ref=e41]:
+          - generic [ref=e42]:
+            - generic [ref=e43]: 书本 · ce512d0e6af44280b6d52864d872ea37
+            - generic [ref=e44]:
+              - checkbox "选择" [ref=e45]
+              - text: 选择
+          - generic [ref=e46]:
+            - generic [ref=e47]:
+              - strong [ref=e48]: 三十日回响压力测试
+              - generic [ref=e49]: 都市悬疑科幻 | 创建于 2026-05-05 11:32:54 PDT
+            - generic [ref=e50]:
+              - generic [ref=e51]: Genesis · writing
+              - generic [ref=e52]: 目标 30 章
+              - generic [ref=e53]: 已规划 7
+              - generic [ref=e54]: 已生成 1
+              - generic [ref=e55]: 已上传 0
+              - generic [ref=e56]: 待处理 1
+          - generic [ref=e57]: Premise：失业档案修复师林澈在第零日收到母亲十年前留下的空白遗书，随后发现整座城市每过一天就会抹去一段公共记忆。为了在三十日内找回真相，他必须联合前调查记者许安、企业继承人沈砚、地下算法师阿棠和失忆警员周岚，逐...\n计划总章数：30\nGenesis：6/6 已锁定 · 当前 执行契约与启动交接\n自动化：关闭
+          - generic [ref=e58]: 第5章 待生成正文 · 第四日·叛逃者\n第6章 待生成正文 · 第五日·第一次抹除测试\n第7章 待生成正文 · 第六日·沉箱第三层
+          - generic [ref=e59]:
+            - button "查看书本" [ref=e60] [cursor=pointer]
+            - button "发布到平台" [ref=e61] [cursor=pointer]
+            - button "处理 Review" [ref=e62] [cursor=pointer]
+            - button "删除书本" [ref=e63] [cursor=pointer]
+  - complementary [ref=e65]:
+    - generic [ref=e66]:
+      - generic [ref=e67]:
+        - generic [ref=e68]: 生成 · project-ce512d0e6af44280b6d52864d872ea37
+        - heading "三十日回响压力测试" [level=3] [ref=e69]
+        - generic [ref=e70]: 书本入口 · 都市悬疑科幻 | 书本 ce512d0e6af44280b6d52864d872ea37 | 阶段：等待人工检查
+      - button "关闭" [ref=e71] [cursor=pointer]
+    - generic [ref=e72]:
+      - generic [ref=e73]:
+        - generic [ref=e74]:
+          - generic [ref=e75]:
+            - generic [ref=e76]: 人工检查阻塞
+            - heading "第 1 章 需要处理" [level=3] [ref=e77]
+            - generic [ref=e78]: 状态机要求先处理 needs_review。继续生成会被拒绝，直到人工查看 review、接受或修复该章。
+            - generic [ref=e79]:
+              - button "处理第一个 Review" [ref=e80] [cursor=pointer]
+              - button "发布最近章节" [ref=e81] [cursor=pointer]
+          - generic [ref=e82]:
+            - generic [ref=e83]:
+              - generic [ref=e84]: 当前阶段
+              - strong [ref=e85]: 等待人工检查
+            - generic [ref=e86]:
+              - generic [ref=e87]: 当前章
+              - strong [ref=e88]: "1"
+            - generic [ref=e89]:
+              - generic [ref=e90]: 下一步
+              - strong [ref=e91]: 查看 Review 并决定是否接受
+            - generic [ref=e92]:
+              - generic [ref=e93]: 计划状态
+              - strong [ref=e94]: needs_review
+            - generic [ref=e95]:
+              - generic [ref=e96]: 写作状态
+              - strong [ref=e97]: started
+            - generic [ref=e98]:
+              - generic [ref=e99]: Review
+              - strong [ref=e100]: pending
+            - generic [ref=e101]:
+              - generic [ref=e102]: 阻断原因
+              - strong [ref=e103]: 无
+            - generic [ref=e104]:
+              - generic [ref=e105]: Next Gate
+              - strong [ref=e106]: chapter_1_write
+            - generic [ref=e107]:
+              - generic [ref=e108]: 下次人工检查
+              - strong [ref=e109]: 未设置
+            - generic [ref=e110]:
+              - generic [ref=e111]: Replan 可触发
+              - strong [ref=e112]: 0 章后
+        - generic [ref=e114]:
+          - generic [ref=e115]:
+            - strong [ref=e116]: 第1章 · 待人工检查
+            - generic [ref=e117]: 《第零日·空白遗书》
+          - generic [ref=e118]:
+            - button "查看 Review" [ref=e119] [cursor=pointer]
+            - button "Review 决策链" [ref=e120] [cursor=pointer]
+            - button "接受" [ref=e121] [cursor=pointer]
+            - button "接受并继续" [ref=e122] [cursor=pointer]
+      - generic [ref=e123]:
+        - generic [ref=e124]: 治理设置
+        - generic [ref=e125]:
+          - generic [ref=e126]: blackbox
+          - generic [ref=e127]: serial_canon_band_guard
+          - generic [ref=e128]: auto band checkpoint
+          - generic [ref=e129]: future constraints 参与判定
+        - generic [ref=e130]: 当前策略：serial_canon_band_guard | auto-band-checkpoint | future-constraints:on 下一 gate：chapter_1_write 人工检查间隔：0
+        - generic [ref=e131]:
+          - generic [ref=e132]:
+            - generic [ref=e133]: 默认运行模式
+            - combobox [ref=e134]:
+              - option "blackbox" [selected]
+              - option "copilot"
+              - option "checkpoint"
+          - generic [ref=e135]:
+            - generic [ref=e136]: 推进策略
+            - combobox [ref=e137]:
+              - option "legacy_relaxed"
+              - option "serial_canon"
+              - option "serial_canon_band_guard" [selected]
+          - generic [ref=e138]:
+            - generic [ref=e139]: 每 N 章人工检查
+            - spinbutton [ref=e140]: "0"
+          - generic [ref=e141]:
+            - checkbox "自动 band checkpoint" [checked] [ref=e142]
+            - text: 自动 band checkpoint
+          - generic [ref=e143]:
+            - checkbox "允许 manual checkpoint" [checked] [ref=e144]
+            - text: 允许 manual checkpoint
+          - generic [ref=e145]:
+            - checkbox "启用 future constraints" [checked] [ref=e146]
+            - text: 启用 future constraints
+        - generic [ref=e147]:
+          - button "保存治理设置" [ref=e148] [cursor=pointer]
+          - button "插入 Manual Checkpoint" [ref=e149] [cursor=pointer]
+          - button "编辑本章 Task Contract" [ref=e150] [cursor=pointer]
+          - button "新增 Constraint" [ref=e151] [cursor=pointer]
+      - generic [ref=e152]:
+        - generic [ref=e153]: 因果回放
+        - generic [ref=e154]:
+          - combobox [ref=e155]:
+            - option "arc" [selected]
+            - option "project"
+            - option "band"
+            - option "chapter"
+            - option "task"
+          - button "刷新回放" [ref=e156] [cursor=pointer]
+        - generic [ref=e157]:
+          - generic [ref=e158]: Root：Scenario rehearsal skipped。\n当前结果：阶段 assembling_context 已结束。\n关联 Review：1
+          - generic [ref=e159]:
+            - generic [ref=e160]:
+              - strong [ref=e161]: scenario_rehearsal_evaluated · Scenario rehearsal skipped。
+              - generic [ref=e162]: scope=band | chapter=1 | band=band:1:4
+              - button "跳到时间线" [ref=e164] [cursor=pointer]
+            - generic [ref=e165]:
+              - strong [ref=e166]: llm_request_succeeded · 第1章 writer 第 1/3 次调用成功。
+              - generic [ref=e167]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e169] [cursor=pointer]
+            - generic [ref=e170]:
+              - strong [ref=e171]: llm_request_succeeded · LLM request succeeded for thread_time_extraction on kimi-k2.5.
+              - generic [ref=e172]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e174] [cursor=pointer]
+            - generic [ref=e175]:
+              - strong [ref=e176]: llm_request_failed · LLM request failed for lore_timeline_notes_extraction on kimi-k2.5.
+              - generic [ref=e177]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e179] [cursor=pointer]
+            - generic [ref=e180]:
+              - strong [ref=e181]: llm_request_succeeded · LLM request succeeded for state_event_extraction on kimi-k2.5.
+              - generic [ref=e182]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e184] [cursor=pointer]
+            - generic [ref=e185]:
+              - strong [ref=e186]: llm_request_succeeded · LLM request succeeded for arc_envelope_analysis on kimi-k2.5.
+              - generic [ref=e187]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e189] [cursor=pointer]
+            - generic [ref=e190]:
+              - strong [ref=e191]: context_assembled · 第1章 context 已组装。
+              - generic [ref=e192]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e194] [cursor=pointer]
+            - generic [ref=e195]:
+              - strong [ref=e196]: writer_output_artifact_saved · 第1章 writer output artifact 已保存。
+              - generic [ref=e197]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e199] [cursor=pointer]
+            - generic [ref=e200]:
+              - strong [ref=e201]: llm_request_succeeded · LLM request succeeded for scene_generation on kimi-k2.5.
+              - generic [ref=e202]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e204] [cursor=pointer]
+            - generic [ref=e205]:
+              - strong [ref=e206]: llm_request_succeeded · LLM request succeeded for scene_stitch on kimi-k2.5.
+              - generic [ref=e207]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e209] [cursor=pointer]
+            - generic [ref=e210]:
+              - strong [ref=e211]: "review_verdict_recorded · 第1章 review verdict: warn"
+              - generic [ref=e212]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e214] [cursor=pointer]
+            - generic [ref=e215]:
+              - strong [ref=e216]: llm_request_failed · LLM request failed for lore_timeline_notes_extraction on kimi-k2.5.
+              - generic [ref=e217]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e219] [cursor=pointer]
+            - generic [ref=e220]:
+              - strong [ref=e221]: llm_response_parse_failed · LLM response parse failed for lore_timeline_notes_extraction on kimi-k2.5.
+              - generic [ref=e222]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e224] [cursor=pointer]
+            - generic [ref=e225]:
+              - strong [ref=e226]: llm_request_succeeded · LLM request succeeded for arc_plan on kimi-k2.5.
+              - generic [ref=e227]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e229] [cursor=pointer]
+            - generic [ref=e230]:
+              - strong [ref=e231]: llm_request_started · 第1章 writer 第 1/3 次调用开始。
+              - generic [ref=e232]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e234] [cursor=pointer]
+            - generic [ref=e235]:
+              - strong [ref=e236]: llm_request_succeeded · LLM request succeeded for lore_timeline_notes_extraction on kimi-k2.5.
+              - generic [ref=e237]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e239] [cursor=pointer]
+            - generic [ref=e240]:
+              - strong [ref=e241]: llm_response_parse_failed · LLM response parse failed for lore_timeline_notes_extraction on kimi-k2.5.
+              - generic [ref=e242]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e244] [cursor=pointer]
+            - generic [ref=e245]:
+              - strong [ref=e246]: writer_output_built · 第1章 writer output 已生成。
+              - generic [ref=e247]: scope=chapter | chapter=1
+              - button "跳到时间线" [ref=e249] [cursor=pointer]
+      - generic [ref=e250]:
+        - generic [ref=e251]: 治理洞察
+        - generic [ref=e253]: 高频阻断：暂无\n高频 override：暂无\nforced accept：0
+      - generic [ref=e254]:
+        - generic [ref=e255]:
+          - generic [ref=e256]: needs_review
+          - generic [ref=e257]: Project ce512d0e6af44280b6d52864d872ea37
+        - generic [ref=e258]:
+          - generic [ref=e259]:
+            - generic [ref=e260]:
+              - strong [ref=e261]: 任务主线
+              - generic [ref=e262]: 这里展示一次性 gate；逐章循环见下方章节流水线。
+            - generic [ref=e263]: needs_review
+          - generic [ref=e264]:
+            - generic [ref=e265]:
+              - generic [ref=e266]: 排队
+              - generic [ref=e267]: 等待开始
+            - generic [ref=e268]:
+              - generic [ref=e269]: 大纲
+              - generic [ref=e270]: 未记录
+            - generic [ref=e271]:
+              - generic [ref=e272]: Arc
+              - generic [ref=e273]: 未解析
+            - generic [ref=e274]:
+              - generic [ref=e275]: Scenario Rehearsal
+              - generic [ref=e276]: 低风险跳过或已通过
+            - generic [ref=e277]:
+              - generic [ref=e278]: Legacy Preview
+              - generic [ref=e279]: 默认关闭
+            - generic [ref=e280]:
+              - generic [ref=e281]: 逐章生成
+              - generic [ref=e282]: 1/7 已生成 · 0 accepted · 0 失败 · 1 待 review
+            - generic [ref=e283]:
+              - generic [ref=e284]: 结果
+              - generic [ref=e285]: 等待人工检查
+      - generic [ref=e286]:
+        - generic [ref=e287]:
+          - strong [ref=e288]: "1"
+          - text: 已生成
+        - generic [ref=e289]:
+          - strong [ref=e290]: "0"
+          - text: 已接受
+        - generic [ref=e291]:
+          - strong [ref=e292]: "0"
+          - text: 失败
+        - generic [ref=e293]:
+          - strong [ref=e294]: "1"
+          - text: 待 Review
+        - generic [ref=e295]:
+          - strong [ref=e296]: "1"
+          - text: 当前章
+      - generic [ref=e297]:
+        - generic [ref=e298]: 请求章节数：7
+        - generic [ref=e299]: 消息：项目入口（当前没有活跃生成任务）
+        - generic [ref=e300]: 暂停章节：1
+        - generic [ref=e301]: 计划状态：needs_review\n写作状态：started\nReview：pending\n下一章：2\n距人工检查：未设置\n距 replan 可触发：0
+      - generic [ref=e302]:
+        - generic [ref=e303]:
+          - generic [ref=e304]:
+            - strong [ref=e305]: 章节流水线
+            - generic [ref=e306]: 每一行是一章；横向从组装、写作、审查到写入 Canon，不再混用不同章节的 stage。
+          - generic [ref=e307]: 7 章
+        - generic [ref=e308]:
+          - generic [ref=e309]:
+            - generic [ref=e310]:
+              - strong [ref=e311]: 第1章
+              - generic [ref=e312]: 待人工检查
+              - generic [ref=e313]: 《第零日·空白遗书》 · 2859 字 · 有正文 · 有审查
+              - generic [ref=e314]:
+                - button "开始前 checkpoint" [ref=e315] [cursor=pointer]
+                - button "accepted 后 checkpoint" [ref=e316] [cursor=pointer]
+            - generic [ref=e317]:
+              - generic [ref=e318]:
+                - strong [ref=e319]: 组装
+                - generic [ref=e320]: 未到达
+              - generic [ref=e321]:
+                - strong [ref=e322]: 写作
+                - generic [ref=e323]: 未到达
+              - generic [ref=e324]:
+                - strong [ref=e325]: Candidate Draft Review
+                - generic [ref=e326]: 未到达
+              - generic [ref=e327]:
+                - strong [ref=e328]: Canon
+                - generic [ref=e329]: 未到达
+              - generic [ref=e330]:
+                - strong [ref=e331]: 后置
+                - generic [ref=e332]: 未到达
+              - button "人工检查 2026-05-05 11:42:47 PDT" [ref=e333] [cursor=pointer]:
+                - strong [ref=e334]: 人工检查
+                - generic [ref=e335]: 2026-05-05 11:42:47 PDT
+              - generic [ref=e336]:
+                - strong [ref=e337]: 失败
+                - generic [ref=e338]: 未到达
+          - generic [ref=e339]:
+            - generic [ref=e340]:
+              - strong [ref=e341]: 第2章
+              - generic [ref=e342]: 待生成正文
+              - generic [ref=e343]: 《第一日·锚定医师》
+              - generic [ref=e344]:
+                - button "开始前 checkpoint" [ref=e345] [cursor=pointer]
+                - button "accepted 后 checkpoint" [ref=e346] [cursor=pointer]
+            - generic [ref=e347]:
+              - generic [ref=e348]:
+                - strong [ref=e349]: 组装
+                - generic [ref=e350]: 未到达
+              - generic [ref=e351]:
+                - strong [ref=e352]: 写作
+                - generic [ref=e353]: 未到达
+              - generic [ref=e354]:
+                - strong [ref=e355]: Candidate Draft Review
+                - generic [ref=e356]: 未到达
+              - generic [ref=e357]:
+                - strong [ref=e358]: Canon
+                - generic [ref=e359]: 未到达
+              - generic [ref=e360]:
+                - strong [ref=e361]: 后置
+                - generic [ref=e362]: 未到达
+              - generic [ref=e363]:
+                - strong [ref=e364]: 人工检查
+                - generic [ref=e365]: 未到达
+              - generic [ref=e366]:
+                - strong [ref=e367]: 失败
+                - generic [ref=e368]: 未到达
+          - generic [ref=e369]:
+            - generic [ref=e370]:
+              - strong [ref=e371]: 第3章
+              - generic [ref=e372]: 待生成正文
+              - generic [ref=e373]: 《第二日·民间档案员》
+              - generic [ref=e374]:
+                - button "开始前 checkpoint" [ref=e375] [cursor=pointer]
+                - button "accepted 后 checkpoint" [ref=e376] [cursor=pointer]
+            - generic [ref=e377]:
+              - generic [ref=e378]:
+                - strong [ref=e379]: 组装
+                - generic [ref=e380]: 未到达
+              - generic [ref=e381]:
+                - strong [ref=e382]: 写作
+                - generic [ref=e383]: 未到达
+              - generic [ref=e384]:
+                - strong [ref=e385]: Candidate Draft Review
+                - generic [ref=e386]: 未到达
+              - generic [ref=e387]:
+                - strong [ref=e388]: Canon
+                - generic [ref=e389]: 未到达
+              - generic [ref=e390]:
+                - strong [ref=e391]: 后置
+                - generic [ref=e392]: 未到达
+              - generic [ref=e393]:
+                - strong [ref=e394]: 人工检查
+                - generic [ref=e395]: 未到达
+              - generic [ref=e396]:
+                - strong [ref=e397]: 失败
+                - generic [ref=e398]: 未到达
+          - generic [ref=e399]:
+            - generic [ref=e400]:
+              - strong [ref=e401]: 第4章
+              - generic [ref=e402]: 待生成正文
+              - generic [ref=e403]: 《第三日·沉箱信使》
+              - generic [ref=e404]:
+                - button "开始前 checkpoint" [ref=e405] [cursor=pointer]
+                - button "accepted 后 checkpoint" [ref=e406] [cursor=pointer]
+            - generic [ref=e407]:
+              - generic [ref=e408]:
+                - strong [ref=e409]: 组装
+                - generic [ref=e410]: 未到达
+              - generic [ref=e411]:
+                - strong [ref=e412]: 写作
+                - generic [ref=e413]: 未到达
+              - generic [ref=e414]:
+                - strong [ref=e415]: Candidate Draft Review
+                - generic [ref=e416]: 未到达
+              - generic [ref=e417]:
+                - strong [ref=e418]: Canon
+                - generic [ref=e419]: 未到达
+              - generic [ref=e420]:
+                - strong [ref=e421]: 后置
+                - generic [ref=e422]: 未到达
+              - generic [ref=e423]:
+                - strong [ref=e424]: 人工检查
+                - generic [ref=e425]: 未到达
+              - generic [ref=e426]:
+                - strong [ref=e427]: 失败
+                - generic [ref=e428]: 未到达
+          - generic [ref=e429]:
+            - generic [ref=e430]:
+              - strong [ref=e431]: 第5章
+              - generic [ref=e432]: 待生成正文
+              - generic [ref=e433]: 《第四日·叛逃者》
+              - generic [ref=e434]:
+                - button "开始前 checkpoint" [ref=e435] [cursor=pointer]
+                - button "accepted 后 checkpoint" [ref=e436] [cursor=pointer]
+            - generic [ref=e437]:
+              - generic [ref=e438]:
+                - strong [ref=e439]: 组装
+                - generic [ref=e440]: 未到达
+              - generic [ref=e441]:
+                - strong [ref=e442]: 写作
+                - generic [ref=e443]: 未到达
+              - generic [ref=e444]:
+                - strong [ref=e445]: Candidate Draft Review
+                - generic [ref=e446]: 未到达
+              - generic [ref=e447]:
+                - strong [ref=e448]: Canon
+                - generic [ref=e449]: 未到达
+              - generic [ref=e450]:
+                - strong [ref=e451]: 后置
+                - generic [ref=e452]: 未到达
+              - generic [ref=e453]:
+                - strong [ref=e454]: 人工检查
+                - generic [ref=e455]: 未到达
+              - generic [ref=e456]:
+                - strong [ref=e457]: 失败
+                - generic [ref=e458]: 未到达
+          - generic [ref=e459]:
+            - generic [ref=e460]:
+              - strong [ref=e461]: 第6章
+              - generic [ref=e462]: 待生成正文
+              - generic [ref=e463]: 《第五日·第一次抹除测试》
+              - generic [ref=e464]:
+                - button "开始前 checkpoint" [ref=e465] [cursor=pointer]
+                - button "accepted 后 checkpoint" [ref=e466] [cursor=pointer]
+            - generic [ref=e467]:
+              - generic [ref=e468]:
+                - strong [ref=e469]: 组装
+                - generic [ref=e470]: 未到达
+              - generic [ref=e471]:
+                - strong [ref=e472]: 写作
+                - generic [ref=e473]: 未到达
+              - generic [ref=e474]:
+                - strong [ref=e475]: Candidate Draft Review
+                - generic [ref=e476]: 未到达
+              - generic [ref=e477]:
+                - strong [ref=e478]: Canon
+                - generic [ref=e479]: 未到达
+              - generic [ref=e480]:
+                - strong [ref=e481]: 后置
+                - generic [ref=e482]: 未到达
+              - generic [ref=e483]:
+                - strong [ref=e484]: 人工检查
+                - generic [ref=e485]: 未到达
+              - generic [ref=e486]:
+                - strong [ref=e487]: 失败
+                - generic [ref=e488]: 未到达
+          - generic [ref=e489]:
+            - generic [ref=e490]:
+              - strong [ref=e491]: 第7章
+              - generic [ref=e492]: 待生成正文
+              - generic [ref=e493]: 《第六日·沉箱第三层》
+              - generic [ref=e494]:
+                - button "开始前 checkpoint" [ref=e495] [cursor=pointer]
+                - button "accepted 后 checkpoint" [ref=e496] [cursor=pointer]
+            - generic [ref=e497]:
+              - generic [ref=e498]:
+                - strong [ref=e499]: 组装
+                - generic [ref=e500]: 未到达
+              - generic [ref=e501]:
+                - strong [ref=e502]: 写作
+                - generic [ref=e503]: 未到达
+              - generic [ref=e504]:
+                - strong [ref=e505]: Candidate Draft Review
+                - generic [ref=e506]: 未到达
+              - generic [ref=e507]:
+                - strong [ref=e508]: Canon
+                - generic [ref=e509]: 未到达
+              - generic [ref=e510]:
+                - strong [ref=e511]: 后置
+                - generic [ref=e512]: 未到达
+              - generic [ref=e513]:
+                - strong [ref=e514]: 人工检查
+                - generic [ref=e515]: 未到达
+              - generic [ref=e516]:
+                - strong [ref=e517]: 失败
+                - generic [ref=e518]: 未到达
+      - generic [ref=e519]:
+        - generic [ref=e520]: 每日自动化
+        - generic [ref=e521]:
+          - generic [ref=e522]: 已关闭
+          - generic [ref=e523]: 每日 1 章
+          - generic [ref=e524]: 09:00 开始
+        - generic [ref=e525]:
+          - generic [ref=e526]:
+            - checkbox "到点后自动处理这个书本的生成任务" [ref=e527]
+            - text: 到点后自动处理这个书本的生成任务
+          - generic [ref=e528]:
+            - checkbox "生成完成后自动创建发布任务" [ref=e529]
+            - text: 生成完成后自动创建发布任务
+          - generic [ref=e530]:
+            - generic [ref=e531]: 每日开始时间
+            - textbox [ref=e532]: 09:00
+          - generic [ref=e533]:
+            - generic [ref=e534]: 每天最多生成几章
+            - spinbutton [ref=e535]: "1"
+          - generic [ref=e536]:
+            - generic [ref=e537]: 自动发布平台
+            - combobox [ref=e538]:
+              - option "选择发布平台" [selected]
+              - option "番茄小说"
+              - option "起点小说"
+          - generic [ref=e539]:
+            - generic [ref=e540]: 发布时作品名
+            - textbox [ref=e541]: 三十日回响压力测试
+          - generic [ref=e542]:
+            - generic [ref=e543]: 固定上传页 URL
+            - textbox [ref=e544]
+          - generic [ref=e545]:
+            - checkbox "若作品不存在则自动新建" [ref=e546]
+            - text: 若作品不存在则自动新建
+          - generic [ref=e547]:
+            - generic [ref=e548]: 目标读者
+            - textbox [ref=e549]
+          - generic [ref=e550]:
+            - generic [ref=e551]: 主分类
+            - textbox [ref=e552]
+          - generic [ref=e553]:
+            - generic [ref=e554]: 主角名（逗号分隔）
+            - textbox [ref=e555]
+          - generic [ref=e556]:
+            - generic [ref=e557]: 作品简介
+            - textbox [ref=e558]
+        - generic [ref=e559]: 说明：系统每天只会在设定时间之后检查一次；如果仍有章节待 review，当天会跳过自动生成。
+        - button "保存自动化设置" [ref=e560] [cursor=pointer]
+      - generic [ref=e561]:
+        - generic [ref=e562]: 项目章节
+        - generic [ref=e564]:
+          - strong [ref=e565]: 第1章《第零日·空白遗书》
+          - generic [ref=e566]: 状态：待人工检查 | 字数：2859
+          - generic [ref=e567]: 林澈在母亲葬礼上收到带有声学水印的空白遗书，当夜于旧港火灾纪念碑广场目击持续4分17秒的范围性记忆抹除，发现自己是唯一免疫者，并目睹神秘人喊出母亲隐秘名字"昭雎"；抹除结束后，他成为唯一记得"被抹除者"存在的人，而遗书与二十年前火灾及回声账本测试的关联，指向一个他必须独自揭开的真相。
+          - generic [ref=e568]:
+            - button "查看正文" [ref=e569] [cursor=pointer]
+            - button "发布到平台" [ref=e570] [cursor=pointer]
+            - button "查看 Review" [ref=e571] [cursor=pointer]
+            - button "Review 决策链" [ref=e572] [cursor=pointer]
+            - button "接受" [ref=e573] [cursor=pointer]
+            - button "接受并继续" [ref=e574] [cursor=pointer]
+      - generic [ref=e575]:
+        - generic [ref=e576]: 决策时间线
+        - generic [ref=e578]:
+          - generic [ref=e579]: 范围筛选
+          - combobox [ref=e580]:
+            - option "全部" [selected]
+            - option "arc"
+            - option "project"
+            - option "band"
+            - option "chapter"
+            - option "task"
+        - generic [ref=e581]:
+          - generic [ref=e582]:
+            - strong [ref=e583]: runtime_observation · task_cleanup_finished
+            - generic [ref=e584]: "2026-05-05T18:57:01.470991 | task | generation_task | #22c4e784e121"
+            - generic [ref=e585]: 生成任务 cleanup 已结束。
+            - generic [ref=e586]: parent：- | root：85b83fadce29401983a56181b0a362dd
+            - button "定位" [ref=e588] [cursor=pointer]
+          - generic [ref=e589]:
+            - strong [ref=e590]: runtime_observation · task_cleanup_started
+            - generic [ref=e591]: "2026-05-05T18:57:01.462550 | task | generation_task | #22c4e784e121"
+            - generic [ref=e592]: 生成任务 cleanup 已开始。
+            - generic [ref=e593]: parent：- | root：81355bf72c1246169c3a926fcc64f3b4
+            - button "定位" [ref=e595] [cursor=pointer]
+          - generic [ref=e596]:
+            - strong [ref=e597]: runtime_observation · task_operation_failed
+            - generic [ref=e598]: "2026-05-05T18:57:01.456149 | task | generation_task | #22c4e784e121"
+            - generic [ref=e599]: 继续生成失败
+            - generic [ref=e600]: parent：- | root：e73405c09a6740d481f897902f355cb0
+            - button "定位" [ref=e602] [cursor=pointer]
+          - generic [ref=e603]:
+            - strong [ref=e604]: runtime_observation · task_operation_started
+            - generic [ref=e605]: "2026-05-05T18:57:01.442330 | task | generation_task | #22c4e784e121"
+            - generic [ref=e606]: 生成任务 operation 已开始。
+            - generic [ref=e607]: parent：- | root：64afb0e8173144be934f55572bf17646
+            - button "定位" [ref=e609] [cursor=pointer]
+          - generic [ref=e610]:
+            - strong [ref=e611]: audit_action · continue_requested
+            - generic [ref=e612]: "2026-05-05T18:57:01.357535 | task | generation_task | #22c4e784e121"
+            - generic [ref=e613]: 继续生成任务已创建。
+            - generic [ref=e614]: parent：- | root：194753d429c14497989c08f35bc38c11
+            - button "定位" [ref=e616] [cursor=pointer]
+          - generic [ref=e617]:
+            - strong [ref=e618]: runtime_observation · task_cleanup_finished
+            - generic [ref=e619]: "2026-05-05T18:53:33.544087 | task | generation_task | #a2f0364fe1df"
+            - generic [ref=e620]: 生成任务 cleanup 已结束。
+            - generic [ref=e621]: parent：- | root：fd76c073169a4d70a53a43d07835488d
+            - button "定位" [ref=e623] [cursor=pointer]
+          - generic [ref=e624]:
+            - strong [ref=e625]: runtime_observation · task_cleanup_started
+            - generic [ref=e626]: "2026-05-05T18:53:33.532428 | task | generation_task | #a2f0364fe1df"
+            - generic [ref=e627]: 生成任务 cleanup 已开始。
+            - generic [ref=e628]: parent：- | root：67ce3fe70d0a455085d0b217aed467f5
+            - button "定位" [ref=e630] [cursor=pointer]
+          - generic [ref=e631]:
+            - strong [ref=e632]: business_event · run_completed
+            - generic [ref=e633]: "2026-05-05T18:53:33.530960 | task | generation_task | #a2f0364fe1df"
+            - generic [ref=e634]: 生成任务已完成。
+            - generic [ref=e635]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e637] [cursor=pointer]
+          - generic [ref=e638]:
+            - strong [ref=e639]: runtime_observation · task_operation_succeeded
+            - generic [ref=e640]: "2026-05-05T18:53:33.525331 | task | generation_task | #a2f0364fe1df"
+            - generic [ref=e641]: 生成任务 operation 已完成。
+            - generic [ref=e642]: parent：- | root：fb850f9282a54b94bf45b32092809ea0
+            - button "定位" [ref=e644] [cursor=pointer]
+          - generic [ref=e645]:
+            - strong [ref=e646]: runtime_observation · llm_request_succeeded
+            - generic [ref=e647]: "2026-05-05T18:44:56.607791 | chapter | chapter 1 | prompt_trace | #2fc34260156e4305a54ba46e2bac3004"
+            - generic [ref=e648]: LLM request succeeded for scene_generation on kimi-k2.5.
+            - generic [ref=e649]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e651] [cursor=pointer]
+          - generic [ref=e652]:
+            - strong [ref=e653]: runtime_observation · stage_duration_summary
+            - generic [ref=e654]: 2026-05-05T18:44:56.607791 | chapter | chapter 1
+            - generic [ref=e655]: 第1章 writer 调用耗时 434296ms。
+            - generic [ref=e656]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e658] [cursor=pointer]
+          - generic [ref=e659]:
+            - strong [ref=e660]: runtime_observation · llm_request_succeeded
+            - generic [ref=e661]: "2026-05-05T18:44:56.607791 | chapter | chapter 1 | prompt_trace | #2fc34260156e4305a54ba46e2bac3004"
+            - generic [ref=e662]: LLM request succeeded for scene_breakdown on kimi-k2.5.
+            - generic [ref=e663]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e665] [cursor=pointer]
+          - generic [ref=e666]:
+            - strong [ref=e667]: runtime_observation · writer_output_built
+            - generic [ref=e668]: 2026-05-05T18:44:56.607791 | chapter | chapter 1
+            - generic [ref=e669]: 第1章 writer output 已生成。
+            - generic [ref=e670]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e672] [cursor=pointer]
+          - generic [ref=e673]:
+            - strong [ref=e674]: runtime_observation · llm_response_parse_failed
+            - generic [ref=e675]: "2026-05-05T18:44:56.607791 | chapter | chapter 1 | prompt_trace | #2fc34260156e4305a54ba46e2bac3004"
+            - generic [ref=e676]: LLM response parse failed for lore_timeline_notes_extraction on kimi-k2.5.
+            - generic [ref=e677]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e679] [cursor=pointer]
+          - generic [ref=e680]:
+            - strong [ref=e681]: runtime_observation · llm_request_succeeded
+            - generic [ref=e682]: "2026-05-05T18:44:56.607791 | chapter | chapter 1 | prompt_trace | #2fc34260156e4305a54ba46e2bac3004"
+            - generic [ref=e683]: LLM request succeeded for lore_timeline_notes_extraction on kimi-k2.5.
+            - generic [ref=e684]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e686] [cursor=pointer]
+          - generic [ref=e687]:
+            - strong [ref=e688]: runtime_observation · llm_request_started
+            - generic [ref=e689]: 2026-05-05T18:44:56.607791 | chapter | chapter 1
+            - generic [ref=e690]: 第1章 writer 第 1/3 次调用开始。
+            - generic [ref=e691]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e693] [cursor=pointer]
+          - generic [ref=e694]:
+            - strong [ref=e695]: runtime_observation · llm_request_succeeded
+            - generic [ref=e696]: "2026-05-05T18:44:56.607791 | chapter | chapter 1 | prompt_trace | #2fc34260156e4305a54ba46e2bac3004"
+            - generic [ref=e697]: LLM request succeeded for arc_plan on kimi-k2.5.
+            - generic [ref=e698]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e700] [cursor=pointer]
+          - generic [ref=e701]:
+            - strong [ref=e702]: runtime_observation · llm_response_parse_failed
+            - generic [ref=e703]: "2026-05-05T18:44:56.607791 | chapter | chapter 1 | prompt_trace | #2fc34260156e4305a54ba46e2bac3004"
+            - generic [ref=e704]: LLM response parse failed for lore_timeline_notes_extraction on kimi-k2.5.
+            - generic [ref=e705]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e707] [cursor=pointer]
+          - generic [ref=e708]:
+            - strong [ref=e709]: runtime_observation · llm_request_failed
+            - generic [ref=e710]: "2026-05-05T18:44:56.607791 | chapter | chapter 1 | prompt_trace | #2fc34260156e4305a54ba46e2bac3004"
+            - generic [ref=e711]: LLM request failed for lore_timeline_notes_extraction on kimi-k2.5.
+            - generic [ref=e712]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e714] [cursor=pointer]
+          - generic [ref=e715]:
+            - strong [ref=e716]: evaluation_verdict · review_verdict_recorded
+            - generic [ref=e717]: "2026-05-05T18:44:56.607791 | chapter | chapter 1 | chapter_review | #00f19a7a2f2b4b04a10a41cc1c78ea5a"
+            - generic [ref=e718]: "第1章 review verdict: warn"
+            - generic [ref=e719]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e721] [cursor=pointer]
+          - generic [ref=e722]:
+            - strong [ref=e723]: runtime_observation · llm_request_succeeded
+            - generic [ref=e724]: "2026-05-05T18:44:56.607791 | chapter | chapter 1 | prompt_trace | #2fc34260156e4305a54ba46e2bac3004"
+            - generic [ref=e725]: LLM request succeeded for scene_stitch on kimi-k2.5.
+            - generic [ref=e726]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e728] [cursor=pointer]
+          - generic [ref=e729]:
+            - strong [ref=e730]: runtime_observation · stage_exited
+            - generic [ref=e731]: 2026-05-05T18:44:56.607791 | task | chapter 1
+            - generic [ref=e732]: 阶段 assembling_context 已结束。
+            - generic [ref=e733]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e735] [cursor=pointer]
+          - generic [ref=e736]:
+            - strong [ref=e737]: runtime_observation · llm_request_succeeded
+            - generic [ref=e738]: "2026-05-05T18:44:56.607791 | chapter | chapter 1 | prompt_trace | #2fc34260156e4305a54ba46e2bac3004"
+            - generic [ref=e739]: LLM request succeeded for scene_generation on kimi-k2.5.
+            - generic [ref=e740]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e742] [cursor=pointer]
+          - generic [ref=e743]:
+            - strong [ref=e744]: runtime_observation · stage_entered
+            - generic [ref=e745]: 2026-05-05T18:44:56.607791 | task | chapter 1
+            - generic [ref=e746]: 阶段 continuity_review 已开始。
+            - generic [ref=e747]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e749] [cursor=pointer]
+          - generic [ref=e750]:
+            - strong [ref=e751]: runtime_observation · writer_output_artifact_saved
+            - generic [ref=e752]: 2026-05-05T18:44:56.607791 | chapter | chapter 1
+            - generic [ref=e753]: 第1章 writer output artifact 已保存。
+            - generic [ref=e754]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e756] [cursor=pointer]
+          - generic [ref=e757]:
+            - strong [ref=e758]: runtime_observation · context_assembled
+            - generic [ref=e759]: 2026-05-05T18:44:56.607791 | chapter | chapter 1
+            - generic [ref=e760]: 第1章 context 已组装。
+            - generic [ref=e761]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e763] [cursor=pointer]
+          - generic [ref=e764]:
+            - strong [ref=e765]: runtime_observation · stage_exited
+            - generic [ref=e766]: 2026-05-05T18:44:56.607791 | task | chapter 1
+            - generic [ref=e767]: 阶段 running_scenario_rehearsal 已结束。
+            - generic [ref=e768]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e770] [cursor=pointer]
+          - generic [ref=e771]:
+            - strong [ref=e772]: runtime_observation · llm_request_succeeded
+            - generic [ref=e773]: "2026-05-05T18:44:56.607791 | chapter | chapter 1 | prompt_trace | #2fc34260156e4305a54ba46e2bac3004"
+            - generic [ref=e774]: LLM request succeeded for arc_envelope_analysis on kimi-k2.5.
+            - generic [ref=e775]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e777] [cursor=pointer]
+          - generic [ref=e778]:
+            - strong [ref=e779]: runtime_observation · stage_duration_summary
+            - generic [ref=e780]: 2026-05-05T18:44:56.607791 | task | chapter 1
+            - generic [ref=e781]: 阶段 running_scenario_rehearsal 用时 20105ms。
+            - generic [ref=e782]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e784] [cursor=pointer]
+          - generic [ref=e785]:
+            - strong [ref=e786]: runtime_observation · stage_duration_summary
+            - generic [ref=e787]: 2026-05-05T18:44:56.607791 | task | chapter 1
+            - generic [ref=e788]: 阶段 assembling_context 用时 136ms。
+            - generic [ref=e789]: parent：- | root：340e3fd9e57c4e849637bbf36b28984f
+            - button "定位" [ref=e791] [cursor=pointer]
+  - generic [ref=e793]:
+    - generic [ref=e794]:
+      - generic [ref=e795]:
+        - heading "接受并继续 · 第1章" [level=3] [ref=e796]
+        - paragraph [ref=e797]: 本次会先接受当前 review，再尝试继续生成；如果仍命中治理 gate，会保留阻断。
+      - button "关闭" [ref=e798] [cursor=pointer]
+    - generic [ref=e799]:
+      - generic [ref=e800]: Reason
+      - textbox "Reason" [ref=e801]:
+        - /placeholder: 写清为什么要执行这次治理动作。
+        - text: 压力测试：验证镜像技能目录与 personality fallback 修复后继续生成第2章。
+    - generic [ref=e802]:
+      - button "取消" [ref=e803] [cursor=pointer]
+      - button "接受并继续" [active] [ref=e804] [cursor=pointer]

@@ -1,0 +1,5 @@
+[   30571ms] [ERROR] Failed to load resource: the server responded with a status of 500 (Internal Server Error) @ http://127.0.0.1:8899/api/projects/ce512d0e6af44280b6d52864d872ea37/chapters/1/review/approve:0
+[  287731ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8899/api/task-center/items?limit=80:0
+[  287732ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_REFUSED @ http://127.0.0.1:8899/api/task-center/items/generation/project-ce512d0e6af44280b6d52864d872ea37:0
+[  290231ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:8899/api/task-center/items?limit=80:0
+[  290232ms] [ERROR] Failed to load resource: net::ERR_CONNECTION_RESET @ http://127.0.0.1:8899/api/task-center/items/generation/project-ce512d0e6af44280b6d52864d872ea37:0

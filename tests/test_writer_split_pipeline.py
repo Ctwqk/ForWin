@@ -3,10 +3,27 @@ from __future__ import annotations
 import unittest
 
 from forwin.protocol.context import ChapterContextPack
+from forwin.protocol.scene import ScenePlan, SceneOutput
 from forwin.writer.chapter_writer import ChapterWriter
 
 
 class SplitWriterPipelineTests(unittest.TestCase):
+    def test_scene_reward_tags_from_llm_are_normalized_before_validation(self) -> None:
+        plan = ScenePlan(
+            scene_no=1,
+            objective="推进调查",
+            reward_beat_tag="progress",
+        )
+        output = SceneOutput(
+            scene_no=1,
+            scene_objective="推进调查",
+            text="林夜继续调查。",
+            reward_beat_tag="relationship",
+        )
+
+        self.assertEqual(plan.reward_beat_tag, "mystery")
+        self.assertEqual(output.reward_beat_tag, "social")
+
     def test_single_writer_uses_tagged_body_and_split_structured_extraction(self) -> None:
         class FakeClient:
             def __init__(self) -> None:

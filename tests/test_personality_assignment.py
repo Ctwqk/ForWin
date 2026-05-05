@@ -246,6 +246,28 @@ def test_low_signal_named_character_gets_reviewable_fallback(tmp_path: Path) -> 
     assert result.report.confidence < 0.4
 
 
+def test_missing_fallback_policy_uses_builtin_minimal_fallback(tmp_path: Path) -> None:
+    root = _library_root(tmp_path)
+    (root / "catalog" / "fallback_policy.yaml").unlink()
+
+    result = PersonalityLoadoutAssigner(CharacterPersonalityLibrary(root)).assign(
+        PersonalityAssignmentRequest(
+            project_id="proj",
+            character_id="char_missing_policy",
+            character_name="临时角色",
+            source="subworld_planned_slot_materialization",
+            description="短暂出现的线索提供者。",
+            policy=CharacterPersonalityPolicy(),
+        )
+    )
+
+    assert result.loadout.dominant is not None
+    assert result.loadout.dominant.skill == "trait-quiet-observer"
+    assert result.loadout.dominant.weight == 0.45
+    assert result.report.assignment_mode == "fallback_minimal"
+    assert result.report.status == "valid_needs_review"
+
+
 def test_validation_rejects_unknown_skill_and_stress_without_trigger(tmp_path: Path) -> None:
     root = _library_root(tmp_path)
     report = PersonalityLoadoutAssigner(CharacterPersonalityLibrary(root)).validate(

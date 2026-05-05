@@ -30,7 +30,7 @@ class ForWinAPIClient:
         self,
         *,
         base_url: str,
-        timeout: float = 30.0,
+        timeout: float = 300.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = str(base_url).rstrip("/")
@@ -433,6 +433,8 @@ class ForWinAPIClient:
             body=str(raw.get("body", "")),
             char_count=int(raw.get("char_count", 0) or 0),
             summary=str(raw.get("summary", "")),
+            has_draft=bool(raw.get("has_draft", bool(raw.get("body", "")))),
+            has_review=bool(raw.get("has_review", False)),
             version=int(raw.get("version", 1) or 1),
             acceptance_mode=str(raw.get("acceptance_mode", "")),
             repair_attempt_count=int(raw.get("repair_attempt_count", 0) or 0),

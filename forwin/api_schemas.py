@@ -164,11 +164,12 @@ class TaskResponse(BaseModel):
     recovery_suggestion: str = ""
     persistence_degraded: bool = False
     persistence_error: str | None = None
+    created_at: str = ""
+    updated_at: str = ""
 
 
 class TaskSummaryResponse(TaskResponse):
-    created_at: str = ""
-    updated_at: str = ""
+    pass
 
 
 class TaskCenterItemResponse(BaseModel):
@@ -1024,6 +1025,8 @@ class ChapterDetail(BaseModel):
     char_count: int
     summary: str
     status: str
+    has_draft: bool = False
+    has_review: bool = False
     version: int = 1
     acceptance_mode: str = ""
     repair_attempt_count: int = 0

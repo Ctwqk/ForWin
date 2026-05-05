@@ -34,6 +34,8 @@ GENERIC_CHARACTER_REFERENCES = {
     "人群",
     "旁人",
 }
+BODY_TERMINAL_PUNCTUATION = set("。！？!?…")
+BODY_TRAILING_CLOSERS = set("”’」』）)]》】")
 
 
 class ContinuityChecker:
@@ -51,6 +53,7 @@ class ContinuityChecker:
         # Run all checks
         issues.extend(self._check_char_count(writer_output))
         issues.extend(self._check_empty_body(writer_output))
+        issues.extend(self._check_body_completion(writer_output))
         issues.extend(self._check_dead_characters(project_id, writer_output))
         issues.extend(self._check_thread_status(project_id, writer_output))
         issues.extend(self._check_state_change_validity(writer_output))
@@ -114,6 +117,34 @@ class ContinuityChecker:
                 evidence_refs=[f"body_chars={len(output.body.strip())}"],
             )]
         return []
+
+    def _check_body_completion(self, output: WriterOutput) -> list[ContinuityIssue]:
+        """Detect drafts that appear to end in the middle of a sentence."""
+        body = output.body.strip()
+        if len(body) < 100:
+            return []
+        normalized_tail = body
+        while normalized_tail and normalized_tail[-1] in BODY_TRAILING_CLOSERS:
+            normalized_tail = normalized_tail[:-1].rstrip()
+        if normalized_tail and normalized_tail[-1] in BODY_TERMINAL_PUNCTUATION:
+            return []
+        tail = body[-40:]
+        return [
+            ContinuityIssue(
+                rule_name="body_incomplete_ending",
+                severity="error",
+                description="章节正文结尾缺少完整句末标点，疑似在句中被截断。",
+                reviewer="continuity",
+                issue_type="continuity",
+                target_scope="chapter",
+                issue_group=issue_group_for_issue(
+                    issue_type="continuity",
+                    rule_name="body_incomplete_ending",
+                ),
+                evidence_refs=[f"ending={tail}"],
+                suggested_fix="补完整本章最后一句或重写收束段，确保正文以完整句子结束。",
+            )
+        ]
 
     def _check_dead_characters(self, project_id: str, output: WriterOutput) -> list[ContinuityIssue]:
         """Check if dead characters are being used as active participants."""

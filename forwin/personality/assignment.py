@@ -303,6 +303,8 @@ class PersonalityLoadoutAssigner:
     ) -> PersonalityAssignmentResult:
         fallback = self._fallback_config(request)
         dominant = fallback.get("dominant") if isinstance(fallback, dict) else {}
+        if not isinstance(dominant, dict):
+            dominant = {}
         loadout = PersonalityLoadout(
             dominant=PersonalitySkillRef(
                 skill=str(dominant.get("skill") or "trait-quiet-observer"),
@@ -453,6 +455,8 @@ class PersonalityLoadoutAssigner:
     def _fallback_config(self, request: PersonalityAssignmentRequest) -> dict[str, Any]:
         payload = _load_yaml(self.library.root / "catalog" / "fallback_policy.yaml")
         fallbacks = payload.get("fallbacks") if isinstance(payload, dict) else {}
+        if not isinstance(fallbacks, dict):
+            fallbacks = {}
         key = "background_named_character" if request.character_class == "background_named_character" else request.policy.fallback_character_class
         fallback = fallbacks.get(key) or fallbacks.get("named_supporting_character") or {}
         return fallback if isinstance(fallback, dict) else {}

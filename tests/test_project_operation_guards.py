@@ -153,6 +153,52 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertIn("运行中的生成任务", str(ctx.exception.detail))
         self.assertEqual(accept_calls, [])
 
+    def test_approve_review_does_not_continue_when_canon_gate_keeps_review_pending(self) -> None:
+        project = self._create_project(project_id="proj-review-gate-block")
+        with self.session_factory() as session:
+            arc = ArcPlanVersion(
+                id="arc-review-gate-block",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+            )
+            session.add(arc)
+            session.add(
+                ChapterPlan(
+                    id="plan-review-gate-block",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=1,
+                    title="第一章",
+                    status="needs_review",
+                )
+            )
+            session.commit()
+
+        def accept_review(*_args, **_kwargs):
+            return {
+                "status": "needs_review",
+                "message": "第1章 canon gate 阻止接受，已转为 needs_review。",
+                "frozen_artifact": "artifact.json",
+            }
+
+        api_module._orchestrator = SimpleNamespace(accept_review=accept_review)
+
+        payload = api_module.approve_chapter_review(
+            project.id,
+            1,
+            ChapterReviewApproveRequest(continue_generation=True, reason="guard regression"),
+        )
+
+        self.assertEqual(payload.status, "needs_review")
+        self.assertEqual(payload.task_id, "")
+        self.assertIn("未启动后续章节", payload.message)
+        with self.session_factory() as session:
+            task_count = session.query(GenerationTask).filter(
+                GenerationTask.project_id == project.id
+            ).count()
+        self.assertEqual(task_count, 0)
+
     def test_start_writing_rolls_back_status_when_task_creation_fails(self) -> None:
         project = self._create_project(project_id="proj-start-writing-task-fail")
         with self.session_factory() as session:
@@ -366,6 +412,120 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertIn("checkpoint", str(ctx.exception.detail))
+
+    def test_continue_generation_rejects_drafted_chapter_waiting_for_acceptance(self) -> None:
+        project = self._create_project(project_id="proj-drafted-waits")
+        with self.session_factory() as session:
+            arc = ArcPlanVersion(
+                id="arc-drafted-waits",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+            )
+            session.add(arc)
+            session.flush()
+            session.add(
+                ChapterPlan(
+                    id="plan-drafted-1",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=1,
+                    title="第一章",
+                    status="accepted",
+                )
+            )
+            session.add(
+                ChapterPlan(
+                    id="plan-drafted-2",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=2,
+                    title="第二章",
+                    status="drafted",
+                )
+            )
+            session.add(
+                ChapterPlan(
+                    id="plan-drafted-3",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=3,
+                    title="第三章",
+                    status="planned",
+                )
+            )
+            session.commit()
+
+        with self.assertRaises(HTTPException) as ctx:
+            api_module.continue_project_generation(project.id)
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("章节等待接受", str(ctx.exception.detail))
+        self.assertIn("2", str(ctx.exception.detail))
+
+    def test_generation_control_drafted_chapter_blocks_future_arc_resume(self) -> None:
+        project = self._create_project(project_id="proj-drafted-future-arc")
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "writing"
+            active_arc = ArcPlanVersion(
+                id="arc-drafted-future-current",
+                project_id=project.id,
+                arc_synopsis="当前弧线",
+                status="active",
+                arc_number=1,
+                chapter_start=1,
+                chapter_end=3,
+            )
+            future_arc = ArcPlanVersion(
+                id="arc-drafted-future-next",
+                project_id=project.id,
+                arc_synopsis="后续弧线",
+                status="planned",
+                arc_number=2,
+                chapter_start=4,
+                chapter_end=6,
+            )
+            session.add_all([active_arc, future_arc])
+            session.flush()
+            session.add_all(
+                [
+                    ChapterPlan(
+                        id="plan-drafted-future-1",
+                        project_id=project.id,
+                        arc_plan_id=active_arc.id,
+                        chapter_number=1,
+                        title="第一章",
+                        status="accepted",
+                    ),
+                    ChapterPlan(
+                        id="plan-drafted-future-2",
+                        project_id=project.id,
+                        arc_plan_id=active_arc.id,
+                        chapter_number=2,
+                        title="第二章",
+                        status="drafted",
+                    ),
+                    ChapterPlan(
+                        id="plan-drafted-future-3",
+                        project_id=project.id,
+                        arc_plan_id=active_arc.id,
+                        chapter_number=3,
+                        title="第三章",
+                        status="planned",
+                    ),
+                ]
+            )
+            session.commit()
+
+        detail = api_module.get_project(project.id)
+        summary = next(item for item in api_module.list_projects() if item.id == project.id)
+
+        self.assertEqual(detail.generation_control.plan_state, "pending_acceptance")
+        self.assertEqual(detail.generation_control.review_state, "pending_acceptance")
+        self.assertEqual(detail.generation_control.next_gate, "chapter_2_accept")
+        self.assertFalse(detail.generation_control.can_resume)
+        self.assertFalse(summary.generation_control.can_resume)
 
     def test_update_governance_writes_decision_event(self) -> None:
         project = self._create_project(project_id="proj-governance-event")

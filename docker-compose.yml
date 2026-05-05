@@ -87,6 +87,7 @@ services:
         required: false
     environment:
       - FORWIN_API_BASE_URL=${FORWIN_API_BASE_URL:-http://forwin:8899}
+      - FORWIN_MCP_API_TIMEOUT_SECONDS=${FORWIN_MCP_API_TIMEOUT_SECONDS:-300}
       - FORWIN_MCP_HOST=${FORWIN_MCP_HOST:-0.0.0.0}
       - FORWIN_MCP_PORT=${FORWIN_MCP_PORT:-8896}
     ports:

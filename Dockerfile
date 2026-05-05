@@ -15,6 +15,7 @@ WORKDIR /app
 COPY pyproject.toml .
 COPY alembic.ini .
 COPY forwin/ forwin/
+COPY forwin_skills/ forwin_skills/
 
 RUN pip install --no-cache-dir .
 RUN apt-get update \

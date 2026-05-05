@@ -10,12 +10,20 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount, Route
 
 from .client import ForWinAPIClient
-from .models import MutationResult, StageKey, WorldModelConflictListView
+from .models import (
+    ChapterListView,
+    MutationResult,
+    ProjectListView,
+    StageKey,
+    TaskListView,
+    WorldModelConflictListView,
+)
 
 
 def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
     client = api_client or ForWinAPIClient(
         base_url=os.environ.get("FORWIN_API_BASE_URL", "http://127.0.0.1:8899"),
+        timeout=_env_api_timeout_seconds(),
     )
     mcp = FastMCP(
         name="ForWin",
@@ -64,7 +72,7 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
         "List ForWin projects. Use this when you need the authoritative project roster before choosing a project_id. Do not inspect the database directly for this.",
     )
     async def project_list():
-        return await client.project_list()
+        return ProjectListView(projects=await client.project_list())
 
     @register_read_tool(
         "project_get",
@@ -151,7 +159,7 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
         "List recent ForWin generation tasks. Use this when you need to inspect queued, running, paused, or failed generation work across projects.",
     )
     async def task_list(limit: int = 20):
-        return await client.task_list(limit=limit)
+        return TaskListView(tasks=await client.task_list(limit=limit))
 
     @register_read_tool(
         "task_get",
@@ -179,7 +187,7 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
         "List chapters for a project. Use this when you need chapter numbers, statuses, summaries, or to choose a chapter_number for inspection.",
     )
     async def chapter_list(project_id: str):
-        return await client.chapter_list(project_id=project_id)
+        return ChapterListView(chapters=await client.chapter_list(project_id=project_id))
 
     @register_read_tool(
         "chapter_get",
@@ -226,6 +234,7 @@ def build_asgi_app(
 ) -> Starlette:
     client = api_client or ForWinAPIClient(
         base_url=os.environ.get("FORWIN_API_BASE_URL", "http://127.0.0.1:8899"),
+        timeout=_env_api_timeout_seconds(),
     )
     server = mcp_server or build_mcp_server(api_client=client)
     mcp_app = server.http_app(path="/mcp")
@@ -258,6 +267,15 @@ def _env_port() -> int:
         return int(os.environ.get("FORWIN_MCP_PORT", "8898"))
     except ValueError:
         return 8898
+
+
+def _env_api_timeout_seconds() -> float:
+    raw = os.environ.get("FORWIN_MCP_API_TIMEOUT_SECONDS", "300")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 300.0
+    return max(30.0, value)
 
 
 def main() -> None:

@@ -10,6 +10,16 @@ def _compose_text() -> str:
     return (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
 
+def _dockerfile_text() -> str:
+    return (ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+
+def test_dockerfile_includes_runtime_skill_registry() -> None:
+    dockerfile = _dockerfile_text()
+
+    assert "COPY forwin_skills/ forwin_skills/" in dockerfile
+
+
 def test_compose_env_file_does_not_reference_personal_path() -> None:
     compose = _compose_text()
 

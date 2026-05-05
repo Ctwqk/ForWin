@@ -34,7 +34,7 @@ from forwin.governance import (
     chapter_blocking_message,
     normalize_project_governance,
 )
-from forwin.models.draft import ChapterDraft
+from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.entity import Entity
 from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
 from forwin.models.phase import (
@@ -426,12 +426,17 @@ def _derive_next_gate(
 ) -> str:
     if blocking_reason.code:
         return blocking_reason.code
-    next_planned = next(
-        (plan.chapter_number for plan in sorted(plans, key=lambda item: item.chapter_number) if plan.status != "accepted"),
-        0,
-    )
-    if next_planned:
-        return f"chapter_{next_planned}_write"
+    for plan in sorted(plans, key=lambda item: item.chapter_number):
+        if plan.status == "accepted":
+            continue
+        chapter_number = int(plan.chapter_number or 0)
+        if plan.status == "drafted":
+            return f"chapter_{chapter_number}_accept"
+        if plan.status == "needs_review":
+            return f"chapter_{chapter_number}_review"
+        if plan.status == "failed":
+            return f"chapter_{chapter_number}_rewrite"
+        return f"chapter_{chapter_number}_write"
     return "completed"
 
 
@@ -468,6 +473,8 @@ def build_generation_control(
         plan_state = "none"
     elif pending_review:
         plan_state = "needs_review"
+    elif drafted:
+        plan_state = "pending_acceptance"
     elif len(accepted) == len(plans):
         plan_state = "completed"
     elif failed and not planned:
@@ -477,7 +484,12 @@ def build_generation_control(
     writing_state = "not_started"
     if generated:
         writing_state = "completed" if len(accepted) == len(plans) else "started"
-    review_state = "pending" if pending_review else "none"
+    if pending_review:
+        review_state = "pending"
+    elif drafted:
+        review_state = "pending_acceptance"
+    else:
+        review_state = "none"
     review_interval = max(0, int(review_interval_chapters or 0))
     chapters_until_review = 0
     if review_interval and not pending_review:
@@ -508,7 +520,7 @@ def build_generation_control(
         failed_chapters=failed,
         pending_review_chapters=pending_review,
         can_pause=can_pause,
-        can_resume=bool(next_candidates and not pending_review),
+        can_resume=bool(next_candidates and not pending_review and not drafted),
         pause_requested=bool(pause_requested),
         review_interval_chapters=review_interval,
         chapters_until_review=chapters_until_review,
@@ -1073,6 +1085,14 @@ def build_project_summaries(
         else []
     )
     draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
+    review_draft_ids = {
+        draft_id
+        for draft_id in session.execute(
+            select(ChapterReview.draft_id)
+            .where(ChapterReview.draft_id.in_([draft.id for draft in draft_map.values()]))
+            .distinct()
+        ).scalars().all()
+    } if draft_map else set()
     runtime_maps = load_project_runtime_maps(session, project_ids)
     upload_stats = load_project_upload_stats(session, project_ids)
     genesis_revision_map = _load_latest_genesis_revision_by_project(session, project_ids)
@@ -1127,6 +1147,8 @@ def build_project_summaries(
                 "status": plan.status,
                 "char_count": draft.char_count if draft else 0,
                 "summary": draft.summary if draft else "",
+                "has_draft": draft is not None,
+                "has_review": bool(draft and draft.id in review_draft_ids),
             }
         )
 
@@ -1158,6 +1180,7 @@ def build_project_summaries(
             str(getattr(project, "creation_status", "") or "").strip() == "writing"
             and project.id in planned_future_projects
             and not generation_control.pending_review_chapters
+            and not generation_control.drafted_chapters
         ):
             generation_control.can_resume = True
             if generation_control.plan_state == "completed":
@@ -1263,6 +1286,14 @@ def build_project_detail(
         select(ChapterPlan).where(ChapterPlan.project_id == project_id).order_by(ChapterPlan.chapter_number)
     ).scalars().all()
     draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
+    review_draft_ids = {
+        draft_id
+        for draft_id in session.execute(
+            select(ChapterReview.draft_id)
+            .where(ChapterReview.draft_id.in_([draft.id for draft in draft_map.values()]))
+            .distinct()
+        ).scalars().all()
+    } if draft_map else set()
     latest_attempt_map: dict[int, ChapterRewriteAttempt] = {}
     for attempt in session.execute(
         select(ChapterRewriteAttempt)
@@ -1282,6 +1313,8 @@ def build_project_detail(
             status=plan.status,
             char_count=draft_map.get(plan.id).char_count if draft_map.get(plan.id) else 0,
             summary=draft_map.get(plan.id).summary if draft_map.get(plan.id) else "",
+            has_draft=draft_map.get(plan.id) is not None,
+            has_review=bool(draft_map.get(plan.id) and draft_map.get(plan.id).id in review_draft_ids),
             acceptance_mode=str(getattr(plan, "acceptance_mode", "") or ""),
             repair_attempt_count=int(getattr(plan, "repair_attempt_count", 0) or 0),
             canon_risk_level=str(getattr(plan, "canon_risk_level", "") or ""),
@@ -1361,6 +1394,7 @@ def build_project_detail(
         str(getattr(project, "creation_status", "") or "").strip() == "writing"
         and has_planned_future_arc
         and not generation_control.pending_review_chapters
+        and not generation_control.drafted_chapters
     ):
         generation_control.can_resume = True
         if generation_control.plan_state == "completed":

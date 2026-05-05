@@ -50,7 +50,7 @@ from forwin.governance_checks import (
     evaluate_resource_closure_risk,
     evaluate_task_contract,
 )
-from forwin.models import ProvisionalBandExecution, ProvisionalChapterLedger, new_id
+from forwin.models import BookGenesisRevision, ProvisionalBandExecution, ProvisionalChapterLedger, new_id
 from forwin.models.governance import BandCheckpoint
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -1185,6 +1185,7 @@ class WritingOrchestrator:
                 )
                 session.commit()
                 return {
+                    "status": "needs_review",
                     "message": f"第{chapter_number}章 canon gate 阻止接受，已转为 needs_review。",
                     "frozen_artifact": frozen_path,
                 }
@@ -1250,6 +1251,7 @@ class WritingOrchestrator:
             )
             session.commit()
             return {
+                "status": "accepted",
                 "message": f"第{chapter_number}章已接受并写入 canon。",
                 "frozen_artifact": frozen_path,
             }
@@ -4396,8 +4398,20 @@ class WritingOrchestrator:
                 chapter_number=chapter_number,
                 writer_output=writer_output,
             )
+            self._ensure_genesis_canon_seed_entities(
+                session=session,
+                repo=repo,
+                updater=updater,
+                project_id=project_id,
+            )
             filtered_state_changes = self._filter_supported_state_changes(
                 writer_output.state_changes
+            )
+            filtered_state_changes = self._filter_resolvable_state_changes(
+                repo,
+                project_id,
+                chapter_number,
+                filtered_state_changes,
             )
             updater.apply_state_changes(
                 project_id, chapter_number, filtered_state_changes
@@ -4929,6 +4943,109 @@ class WritingOrchestrator:
                 continue
             filtered.append(event)
         return filtered
+
+    @staticmethod
+    def _filter_resolvable_state_changes(
+        repo: StateRepository,
+        project_id: str,
+        chapter_number: int,
+        changes: list,
+    ) -> list:
+        character_names = [
+            str(change.entity_name or "").strip()
+            for change in changes
+            if str(getattr(change, "entity_kind", "") or "") == "character"
+            and str(change.entity_name or "").strip()
+        ]
+        entity_lookup = repo.get_entities_by_names(project_id, character_names)
+        filtered: list = []
+        for change in changes:
+            entity_name = str(change.entity_name or "").strip()
+            if str(getattr(change, "entity_kind", "") or "") == "character" and entity_name:
+                if entity_lookup.get(entity_name) is None:
+                    logger.warning(
+                        "Dropping state change for unknown character %r in chapter %d.",
+                        entity_name,
+                        chapter_number,
+                    )
+                    continue
+            filtered.append(change)
+        return filtered
+
+    @staticmethod
+    def _ensure_genesis_canon_seed_entities(
+        *,
+        session: Session,
+        repo: StateRepository,
+        updater: StateUpdater,
+        project_id: str,
+    ) -> None:
+        project = session.get(Project, project_id)
+        if project is None:
+            return
+        revision_id = str(getattr(project, "active_genesis_revision_id", "") or "").strip()
+        revision = session.get(BookGenesisRevision, revision_id) if revision_id else None
+        if revision is None:
+            return
+        try:
+            pack = json.loads(str(getattr(revision, "pack_json", "") or "{}"))
+        except (TypeError, json.JSONDecodeError):
+            return
+        if not isinstance(pack, dict):
+            return
+        world = pack.get("world") if isinstance(pack.get("world"), dict) else {}
+        story_engine = world.get("story_engine") if isinstance(world.get("story_engine"), dict) else {}
+        seed_specs: list[tuple[str, str, dict]] = []
+        for collection_key, entity_kind in (
+            ("core_cast", "character"),
+            ("characters", "character"),
+            ("factions", "faction"),
+            ("opposition", "character"),
+        ):
+            for item in story_engine.get(collection_key) or []:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or item.get("id") or "").strip()
+                if not name or len(name) > 40:
+                    continue
+                seed_specs.append((entity_kind, name, item))
+        if not seed_specs:
+            return
+
+        changed = False
+        seen: set[tuple[str, str]] = set()
+        for entity_kind, name, payload in seed_specs:
+            key = (entity_kind, name)
+            if key in seen:
+                continue
+            seen.add(key)
+            existing = repo.get_entities_by_names(project_id, [name]).get(name)
+            if existing is not None:
+                continue
+            aliases = [
+                str(alias).strip()
+                for alias in (payload.get("aliases") or [])
+                if str(alias).strip()
+            ]
+            if "/" in name:
+                aliases.extend(part.strip() for part in name.split("/") if part.strip() and part.strip() != name)
+            description_parts = [
+                str(payload.get(key_name) or "").strip()
+                for key_name in ("role", "desire", "fear", "secret", "goal", "leverage")
+                if str(payload.get(key_name) or "").strip()
+            ]
+            updater.create_entity(
+                project_id=project_id,
+                kind=entity_kind,
+                name=name,
+                description="；".join(description_parts),
+                aliases=list(dict.fromkeys(aliases)),
+                importance=8 if entity_kind == "character" else 7,
+                chapter=0,
+            )
+            changed = True
+        if changed:
+            SubWorldManager().ensure_registry(session, project_id)
 
     @staticmethod
     def _collect_subworld_candidate_names(

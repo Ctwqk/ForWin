@@ -11,6 +11,7 @@ from forwin.api_schemas import (
     ArtifactManifestItem,
     ArtifactReadResponse,
     ChapterLedgerResponse,
+    PerformanceSpanInfo,
     PromptTraceDetailResponse,
     StageDurationAggregate,
     TaskTimelineResponse,
@@ -21,6 +22,7 @@ from forwin.models.genesis import PromptTrace
 from forwin.models.governance import DecisionEvent
 from forwin.models.project import ChapterPlan
 from forwin.models.task import GenerationTask
+from forwin.observability.query_service import ObservabilityQueryService
 
 
 def build_handlers(
@@ -33,6 +35,12 @@ def build_handlers(
     json_load_object: Callable[[str | None], dict[str, Any]],
     json_load_list: Callable[[str | None], list[Any]],
 ) -> dict[str, Callable[..., Any]]:
+    def query_service() -> ObservabilityQueryService:
+        return ObservabilityQueryService(
+            session_factory=get_session,
+            display_datetime=display_datetime,
+        )
+
     def serialize_prompt_trace_detail(row: PromptTrace) -> PromptTraceDetailResponse:
         return PromptTraceDetailResponse(
             id=row.id,
@@ -348,9 +356,61 @@ def build_handlers(
             truncated=len(text) > len(preview),
         )
 
+    def get_task_performance_report(task_id: str):
+        normalized_task_id = str(task_id or "").strip()
+        if not normalized_task_id:
+            raise HTTPException(404, "任务不存在")
+        return query_service().task_performance_report(normalized_task_id)
+
+    def get_project_performance_report(project_id: str, limit: int = 1000):
+        normalized_project_id = str(project_id or "").strip()
+        if not normalized_project_id:
+            raise HTTPException(404, "项目不存在")
+        return query_service().project_performance_report(normalized_project_id, limit=limit)
+
+    def get_chapter_performance_report(project_id: str, chapter_number: int, limit: int = 1000):
+        normalized_project_id = str(project_id or "").strip()
+        normalized_chapter = int(chapter_number or 0)
+        if not normalized_project_id or normalized_chapter <= 0:
+            raise HTTPException(404, "章节不存在")
+        return query_service().chapter_performance_report(
+            normalized_project_id,
+            normalized_chapter,
+            limit=limit,
+        )
+
+    def get_slow_performance_spans(
+        project_id: str = "",
+        task_id: str = "",
+        limit: int = 50,
+    ) -> list[PerformanceSpanInfo]:
+        return query_service().slow_spans(
+            project_id=str(project_id or "").strip(),
+            task_id=str(task_id or "").strip(),
+            limit=max(1, min(200, int(limit or 50))),
+        )
+
+    def get_llm_performance_report(project_id: str = "", days: int = 7):
+        return query_service().llm_performance_report(
+            project_id=str(project_id or "").strip(),
+            days=max(1, int(days or 7)),
+        )
+
+    def get_db_performance_report(project_id: str = "", days: int = 7):
+        return query_service().db_performance_report(
+            project_id=str(project_id or "").strip(),
+            days=max(1, int(days or 7)),
+        )
+
     return {
         "get_task_timeline": get_task_timeline,
         "get_chapter_observability_ledger": get_chapter_observability_ledger,
         "get_prompt_trace_detail": get_prompt_trace_detail,
         "read_artifact_preview": read_artifact_preview,
+        "get_task_performance_report": get_task_performance_report,
+        "get_project_performance_report": get_project_performance_report,
+        "get_chapter_performance_report": get_chapter_performance_report,
+        "get_slow_performance_spans": get_slow_performance_spans,
+        "get_llm_performance_report": get_llm_performance_report,
+        "get_db_performance_report": get_db_performance_report,
     }

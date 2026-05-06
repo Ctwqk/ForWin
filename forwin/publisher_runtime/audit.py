@@ -8,6 +8,8 @@ from sqlalchemy import select
 from forwin.governance import DecisionEventInfo, DecisionEventType
 from forwin.models.governance import DecisionEvent
 from forwin.models.publisher import PublisherCommentSyncJob, PublisherUploadJob
+from forwin.observability.context import OperationContext
+from forwin.observability.ports import NullObservability
 from forwin.state.updater import StateUpdater
 
 
@@ -30,8 +32,9 @@ def comment_sync_event_type(status: str) -> str:
 
 
 class PublisherAuditService:
-    def __init__(self, *, session_factory) -> None:
+    def __init__(self, *, session_factory, observability=None) -> None:
         self.session_factory = session_factory
+        self.observability = observability or NullObservability()
 
     def record_project_event(
         self,
@@ -65,21 +68,35 @@ class PublisherAuditService:
             if parent is not None and parent.causal_root_id
             else parent_id
         )
-        return StateUpdater(session).save_decision_event(
-            DecisionEventInfo(
-                project_id=normalized_project_id,
-                scope="publisher",
-                event_family=event_family,
-                event_type=event_type,
-                actor_type=actor_type,
-                summary=summary,
-                payload=payload,
-                related_object_type=related_object_type,
-                related_object_id=related_object_id,
-                parent_event_id=parent_id,
-                causal_root_id=causal_root_id,
-            )
+        obs_context = OperationContext(
+            project_id=normalized_project_id,
+            stage=f"publisher.{event_type}",
         )
+        with self.observability.span(
+            obs_context,
+            f"publisher.{event_type}",
+            span_kind="publisher",
+            component="publisher",
+            tags={
+                "related_object_type": related_object_type,
+                "related_object_id": related_object_id,
+            },
+        ):
+            return StateUpdater(session).save_decision_event(
+                DecisionEventInfo(
+                    project_id=normalized_project_id,
+                    scope="publisher",
+                    event_family=event_family,
+                    event_type=event_type,
+                    actor_type=actor_type,
+                    summary=summary,
+                    payload=payload,
+                    related_object_type=related_object_type,
+                    related_object_id=related_object_id,
+                    parent_event_id=parent_id,
+                    causal_root_id=causal_root_id,
+                )
+            )
 
     def record_upload_job_event(
         self,

@@ -200,6 +200,22 @@ def _env_values() -> dict[str, object]:
             env,
             "FORWIN_RUNTIME_SETTINGS_PATH", "data/runtime_settings.json"
         ),
+        "observability_enabled": _env_bool(env, "FORWIN_OBSERVABILITY_ENABLED", True),
+        "observability_performance_enabled": _env_bool(
+            env, "FORWIN_OBSERVABILITY_PERFORMANCE_ENABLED", True
+        ),
+        "observability_span_sample_rate": _env_float(
+            env, "FORWIN_OBSERVABILITY_SPAN_SAMPLE_RATE", 1.0
+        ),
+        "observability_slow_span_threshold_ms": _env_int(
+            env, "FORWIN_OBSERVABILITY_SLOW_SPAN_THRESHOLD_MS", 1000
+        ),
+        "observability_record_db_spans": _env_bool(
+            env, "FORWIN_OBSERVABILITY_RECORD_DB_SPANS", False
+        ),
+        "observability_record_payload_sizes": _env_bool(
+            env, "FORWIN_OBSERVABILITY_RECORD_PAYLOAD_SIZES", True
+        ),
         "publisher_extension_api_key": _env_str(
             env,
             "FORWIN_PUBLISHER_EXTENSION_API_KEY",
@@ -337,6 +353,12 @@ class _ConfigFields:
     embedding_model: str = ""
     embedding_dims: int = 64
     runtime_settings_path: str = "data/runtime_settings.json"
+    observability_enabled: bool = True
+    observability_performance_enabled: bool = True
+    observability_span_sample_rate: float = 1.0
+    observability_slow_span_threshold_ms: int = 1000
+    observability_record_db_spans: bool = False
+    observability_record_payload_sizes: bool = True
     publisher_extension_api_key: str = ""
     publisher_session_secret: str = ""
     publisher_session_encryption_required: bool = False

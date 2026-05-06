@@ -14,6 +14,8 @@ from forwin.protocol.context import (
 )
 from forwin.characters.events import CHARACTER_INTEGRITY_CHECK_FAILED
 from forwin.governance import DecisionEventInfo
+from forwin.observability.context import OperationContext
+from forwin.observability.ports import NullObservability
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.state.updater import StateUpdater
 
@@ -690,9 +692,10 @@ def _save_personality_integrity_failure(repo_session, project_id: str, chapter_n
 
 
 class ChapterContextAssembler:
-    def __init__(self, *, providers: list | None = None, gates: list | None = None) -> None:
+    def __init__(self, *, providers: list | None = None, gates: list | None = None, observability=None) -> None:
         self.providers = providers or self._default_providers()
         self.gates = gates or self._default_gates()
+        self.observability = observability or NullObservability()
 
     @property
     def provider_names(self) -> list[str]:
@@ -713,11 +716,38 @@ class ChapterContextAssembler:
             session=getattr(repo, "session", None),
         )
         draft = ContextDraft(data={}, issues=[])
+        base_context = OperationContext(
+            project_id=project_id,
+            chapter_number=int(getattr(chapter_plan, "chapter_number", 0) or 0),
+            stage="chapter.assemble_context",
+        )
         for provider in self.providers:
-            provider.contribute(request, draft)
+            provider_name = str(getattr(provider, "name", provider.__class__.__name__))
+            with self.observability.span(
+                base_context,
+                f"context.provider.{provider_name}",
+                span_kind="context",
+                component="context",
+                tags={"provider": provider_name},
+            ) as span:
+                before_issue_count = len(draft.issues)
+                before_key_count = len(draft.data)
+                provider.contribute(request, draft)
+                span.metric("data_key_count", len(draft.data))
+                span.metric("added_data_keys", max(0, len(draft.data) - before_key_count))
+                span.metric("provider_issue_count", max(0, len(draft.issues) - before_issue_count))
         for gate in self.gates:
-            issues = gate.validate(request, draft)
-            draft.issues.extend(issues)
+            gate_name = str(getattr(gate, "name", gate.__class__.__name__))
+            with self.observability.span(
+                base_context,
+                f"context.gate.{gate_name}",
+                span_kind="context",
+                component="context",
+                tags={"gate": gate_name},
+            ) as span:
+                issues = gate.validate(request, draft)
+                draft.issues.extend(issues)
+                span.metric("issue_count", len(issues))
         return self._build_pack(project_id=project_id, chapter_plan=chapter_plan, draft=draft)
 
     def _build_pack(self, *, project_id: str, chapter_plan, draft) -> ChapterContextPack:

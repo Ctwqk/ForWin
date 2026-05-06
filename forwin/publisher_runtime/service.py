@@ -19,11 +19,13 @@ class PublisherRuntimeService:
         preferred_client_id: str,
         publisher_session_secret: str,
         publisher_session_encryption_required: bool,
+        observability=None,
     ) -> None:
         self.session_factory = session_factory
+        self.observability = observability
         self.platform_catalog = PlatformCatalog()
         self.auth = ExtensionAuthService(extension_api_key=extension_api_key)
-        self.audit = PublisherAuditService(session_factory=session_factory)
+        self.audit = PublisherAuditService(session_factory=session_factory, observability=observability)
         self.browser_cookie_codec = BrowserCookieCodec(
             publisher_session_secret=publisher_session_secret,
             publisher_session_encryption_required=publisher_session_encryption_required,

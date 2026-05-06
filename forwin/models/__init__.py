@@ -6,6 +6,7 @@ from .entity import Entity, EntityAlias, EntityState, RelationEdge
 from .event import CanonEvent, EventEntityLink
 from .genesis import BookGenesisRevision, PromptTrace
 from .governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
+from .observability import PerformanceSpan
 from .phase import (
     ArcEnvelope,
     ArcEnvelopeAnalysis,
@@ -111,6 +112,7 @@ __all__ = [
     "BandCheckpoint",
     "NarrativeConstraint",
     "DecisionEvent",
+    "PerformanceSpan",
     "ProjectStageAnalysis",
     "ProjectReplanEvent",
     "ArcEnvelope",

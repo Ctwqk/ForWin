@@ -816,6 +816,11 @@ class BookGenesisFlowTests(unittest.TestCase):
         with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_fallback_call):
             api_module.generate_project_genesis_stage(
                 created.project_id,
+                "brief",
+                BookGenesisStageRunRequest.model_validate({}),
+            )
+            api_module.generate_project_genesis_stage(
+                created.project_id,
                 "world",
                 BookGenesisStageRunRequest.model_validate({}),
             )
@@ -876,6 +881,81 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(opposition["backing_faction"], faction["id"])
         self.assertEqual(opposition["base_region"], child_region["id"])
         self.assertEqual(opposition["backing_factions"], [faction["id"]])
+
+    def test_fallback_genesis_preserves_named_entities_from_project_input(self) -> None:
+        created = api_module.create_project(
+            ProjectCreateRequest.model_validate(
+                {
+                    "title": "三十日回响压力测试",
+                    "premise": (
+                        "失业档案修复师林澈在第零日收到母亲十年前留下的空白遗书，随后发现整座城市"
+                        "每过一天就会抹去一段公共记忆。为了在三十日内找回真相，他必须联合前调查记者许安、"
+                        "企业继承人沈砚、地下算法师阿棠和失忆警员周岚，逐步揭开回声账本、临潮集团、"
+                        "旧港火灾、母亲失踪和城市记忆循环之间的关系。"
+                    ),
+                    "setting_summary": (
+                        "近未来海港城市「临潮」，旧城区、跨海企业、民间记忆馆、地下数据市场并存。"
+                        "城市有一套名为回声账本的记忆审计系统，会把重大谎言记录为可追踪的回响。"
+                    ),
+                    "genre": "都市悬疑科幻",
+                    "target_total_chapters": 30,
+                }
+            )
+        )
+
+        def fake_fallback_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
+            return (
+                fallback,
+                {
+                    "effective_system_prompt": f"genesis {stage_key}",
+                    "prompt_layers": [{"role": "system", "content": f"genesis {stage_key}"}],
+                    "input_snapshot": {"stage_key": stage_key},
+                    "model_profile": {"model": "fallback-model"},
+                    "attempts": [{"attempt": 1, "status": "fallback"}],
+                    "output_summary": {"mode": "fallback"},
+                },
+            )
+
+        with patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_fallback_call):
+            api_module.generate_project_genesis_stage(
+                created.project_id,
+                "brief",
+                BookGenesisStageRunRequest.model_validate({}),
+            )
+            api_module.generate_project_genesis_stage(
+                created.project_id,
+                "world",
+                BookGenesisStageRunRequest.model_validate({}),
+            )
+            api_module.generate_project_genesis_stage(
+                created.project_id,
+                "map",
+                BookGenesisStageRunRequest.model_validate({}),
+            )
+            detail = api_module.generate_project_genesis_stage(
+                created.project_id,
+                "story_engine",
+                BookGenesisStageRunRequest.model_validate({}),
+            )
+
+        world = detail.pack.world
+        cast_names = {item["name"] for item in world["story_engine"]["core_cast"]}
+        faction_names = {item["name"] for item in world["story_engine"]["factions"]}
+        opposition_names = {item["name"] for item in world["story_engine"]["opposition"]}
+        map_names = {
+            *(item["name"] for item in world["map_atlas"]["submaps"]),
+            *(item["name"] for item in world["map_atlas"]["regions"]),
+            *(item["name"] for item in world["map_atlas"]["nodes"]),
+        }
+
+        self.assertIn("林澈", cast_names)
+        self.assertTrue({"许安", "沈砚", "阿棠", "周岚"}.issubset(cast_names))
+        self.assertIn("临潮集团", faction_names | opposition_names)
+        self.assertIn("临潮", map_names)
+        self.assertIn("旧城区", map_names)
+        self.assertIn("民间记忆馆", map_names)
+        self.assertNotIn("守仓阙微阑", cast_names)
+        self.assertNotIn("礼川诸州", faction_names)
 
     def test_refine_stage_target_path_only_updates_selected_item(self) -> None:
         created = api_module.create_project(

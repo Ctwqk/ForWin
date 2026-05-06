@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import inspect
+from forwin.observability.context import OperationContext
+from forwin.observability.ports import NullObservability
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import (
     ContinuityIssue,
@@ -33,6 +35,7 @@ class HistoricalReviewHub:
         personality_reviewer=None,
         lint_collector=None,
         llm_webnovel_reviewer=None,
+        observability=None,
     ) -> None:
         self.continuity_reviewer = continuity_reviewer
         self.governance_reviewer = governance_reviewer or GovernanceReviewer()
@@ -45,6 +48,7 @@ class HistoricalReviewHub:
         self.personality_reviewer = personality_reviewer or PersonalityConsistencyReviewer()
         self.lint_collector = lint_collector or LintSignalCollector(enabled=lint_review_enabled)
         self.llm_webnovel_reviewer = llm_webnovel_reviewer
+        self.observability = observability or NullObservability()
 
     def review(
         self,
@@ -56,40 +60,95 @@ class HistoricalReviewHub:
         continuity_checker,
         reviewer_skill_layers: list[object] | None = None,
     ) -> ReviewVerdict:
-        continuity = continuity_checker.check(project_id, writer_output)
-        lint_signals = [*self.lint_collector.collect(writer_output)]
+        obs_context = OperationContext(
+            project_id=project_id,
+            chapter_number=int(getattr(context, "chapter_number", 0) or 0),
+            stage="chapter.review",
+        )
+        with self.observability.span(
+            obs_context,
+            "review.continuity",
+            span_kind="reviewer",
+            component="reviewer",
+        ) as span:
+            continuity = continuity_checker.check(project_id, writer_output)
+            span.metric("issue_count", len(getattr(continuity, "issues", []) or []))
+        with self.observability.span(
+            obs_context,
+            "review.lint",
+            span_kind="reviewer",
+            component="reviewer",
+        ) as span:
+            lint_signals = [*self.lint_collector.collect(writer_output)]
+            span.metric("issue_count", len(lint_signals))
         personality_collect = getattr(self.personality_reviewer, "collect", None)
         if callable(personality_collect):
-            lint_signals.extend(personality_collect(context, writer_output))
+            with self.observability.span(
+                obs_context,
+                "review.personality.collect",
+                span_kind="reviewer",
+                component="reviewer",
+            ) as span:
+                personality_signals = personality_collect(context, writer_output)
+                lint_signals.extend(personality_signals)
+                span.metric("issue_count", len(personality_signals))
         review_context = build_review_context_pack(
             repo=repo,
             context=context,
             lint_signals=lint_signals,
         )
-        webnovel = self._call_with_compatible_kwargs(
-            self.experience_reviewer.review,
-            review_context,
-            writer_output,
-            reviewer_skill_layers=reviewer_skill_layers,
-        )
-        governance = self._call_with_compatible_kwargs(
-            self.governance_reviewer.review,
-            review_context,
-            writer_output,
-        )
-        map_movement = self._call_with_compatible_kwargs(
-            self.map_movement_reviewer.review,
-            review_context,
-            writer_output,
-        )
-        personality_review = ReviewVerdict(verdict="pass", issues=[])
-        personality_review_call = getattr(self.personality_reviewer, "review", None)
-        if callable(personality_review_call) and not callable(personality_collect):
-            personality_review = self._call_with_compatible_kwargs(
-                personality_review_call,
+        with self.observability.span(
+            obs_context,
+            "review.webnovel_experience",
+            span_kind="reviewer",
+            component="reviewer",
+        ) as span:
+            webnovel = self._call_with_compatible_kwargs(
+                self.experience_reviewer.review,
+                review_context,
+                writer_output,
+                reviewer_skill_layers=reviewer_skill_layers,
+            )
+            span.metric("issue_count", len(getattr(webnovel, "issues", []) or []))
+        with self.observability.span(
+            obs_context,
+            "review.governance",
+            span_kind="reviewer",
+            component="reviewer",
+        ) as span:
+            governance = self._call_with_compatible_kwargs(
+                self.governance_reviewer.review,
                 review_context,
                 writer_output,
             )
+            span.metric("issue_count", len(getattr(governance, "issues", []) or []))
+        with self.observability.span(
+            obs_context,
+            "review.map_movement",
+            span_kind="reviewer",
+            component="reviewer",
+        ) as span:
+            map_movement = self._call_with_compatible_kwargs(
+                self.map_movement_reviewer.review,
+                review_context,
+                writer_output,
+            )
+            span.metric("issue_count", len(getattr(map_movement, "issues", []) or []))
+        personality_review = ReviewVerdict(verdict="pass", issues=[])
+        personality_review_call = getattr(self.personality_reviewer, "review", None)
+        if callable(personality_review_call) and not callable(personality_collect):
+            with self.observability.span(
+                obs_context,
+                "review.personality",
+                span_kind="reviewer",
+                component="reviewer",
+            ) as span:
+                personality_review = self._call_with_compatible_kwargs(
+                    personality_review_call,
+                    review_context,
+                    writer_output,
+                )
+                span.metric("issue_count", len(getattr(personality_review, "issues", []) or []))
         issues = [
             *self._normalize_issues(continuity.issues, reviewer="continuity"),
             *self._normalize_issues(governance.issues, reviewer="governance"),

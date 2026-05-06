@@ -12,16 +12,18 @@ from forwin.writer.chapter_writer import ChapterWriter
 class ProductionSchedulerFactory:
     session_factory: Any
     config: Config
+    observability: Any = None
 
     def build(self, **callbacks) -> ProductionScheduler:
         return ProductionScheduler(
             session_factory=self.session_factory,
             config=self.config,
+            observability=self.observability,
             **callbacks,
         )
 
 
-def build_writer(config: Config, llm_client) -> ChapterWriter:
+def build_writer(config: Config, llm_client, observability=None) -> ChapterWriter:
     return ChapterWriter(
         llm_client=llm_client,
         temperature=config.temperature,
@@ -34,10 +36,11 @@ def build_writer(config: Config, llm_client) -> ChapterWriter:
         target_chapter_chars=config.target_chapter_chars,
         single_call_timeout_seconds=config.llm_timeout_seconds,
         scene_call_timeout_seconds=config.scene_call_timeout_seconds,
+        observability=observability,
     )
 
 
-def build_provisional_writer(config: Config, llm_client) -> ChapterWriter:
+def build_provisional_writer(config: Config, llm_client, observability=None) -> ChapterWriter:
     provisional_target_chars = max(700, min(config.target_chapter_chars, 900))
     provisional_min_chars = max(500, min(config.min_chapter_chars, provisional_target_chars))
     provisional_max_chars = max(
@@ -64,4 +67,5 @@ def build_provisional_writer(config: Config, llm_client) -> ChapterWriter:
         target_chapter_chars=provisional_target_chars,
         single_call_timeout_seconds=provisional_timeout_seconds,
         scene_call_timeout_seconds=provisional_timeout_seconds,
+        observability=observability,
     )

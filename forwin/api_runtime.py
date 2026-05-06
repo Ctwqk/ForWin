@@ -8,6 +8,7 @@ from forwin.api_schemas import GenerateRequest
 from forwin.config import Config, DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
 from forwin.governance import DecisionEventType
 from forwin.observability import LogRecorder, OperationContext
+from forwin.observability.ports import NullObservability
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime_settings import RuntimeSettingsStore
@@ -390,6 +391,12 @@ def _record_task_observability_event(
         session.close()
 
 
+def _task_observability(orchestrator: WritingOrchestrator):
+    services = getattr(orchestrator, "services", None)
+    observability = getattr(services, "observability", None)
+    return observability if observability is not None else NullObservability()
+
+
 def _build_writing_orchestrator_for_task(
     config: Config,
     *,
@@ -427,40 +434,58 @@ def run_orchestrator_task(
 ) -> None:
     started_at = time.perf_counter()
     observed_project_id = default_project_id
+    observability = _task_observability(orchestrator)
     try:
-        if not (should_abort and should_abort()):
-            update_task(task_id, status="running")
-        _record_task_observability_event(
-            orchestrator,
+        operation_ctx = OperationContext(
+            project_id=str(observed_project_id or "").strip(),
             task_id=task_id,
-            project_id=observed_project_id,
-            event_type=DecisionEventType.TASK_OPERATION_STARTED,
-            summary="生成任务 operation 已开始。",
-            payload={"status_after": "running"},
+            stage="task.operation",
+            operation_id=task_id,
         )
-        result = operation()
-        observed_project_id = str(getattr(result, "project_id", "") or observed_project_id or "").strip()
-        update_task(
-            task_id,
-            status=result.status,
-            project_id=result.project_id,
-            failed_chapters=result.failed_chapters,
-            paused_chapters=result.paused_chapters,
-            frozen_artifacts=result.frozen_artifacts,
-        )
-        _record_task_observability_event(
-            orchestrator,
-            task_id=task_id,
-            project_id=observed_project_id,
-            event_type=DecisionEventType.TASK_OPERATION_SUCCEEDED,
-            summary="生成任务 operation 已完成。",
-            payload={
-                "status_after": result.status,
-                "duration_ms": max(0, int((time.perf_counter() - started_at) * 1000)),
-                "failed_chapters": list(getattr(result, "failed_chapters", []) or []),
-                "paused_chapters": list(getattr(result, "paused_chapters", []) or []),
-            },
-        )
+        with observability.span(operation_ctx, "task.operation", span_kind="task", component="api") as span:
+            if not (should_abort and should_abort()):
+                update_task(task_id, status="running")
+            _record_task_observability_event(
+                orchestrator,
+                task_id=task_id,
+                project_id=observed_project_id,
+                event_type=DecisionEventType.TASK_OPERATION_STARTED,
+                summary="生成任务 operation 已开始。",
+                payload={"status_after": "running"},
+            )
+            result = operation()
+            observed_project_id = str(getattr(result, "project_id", "") or observed_project_id or "").strip()
+            if observed_project_id and hasattr(span, "context"):
+                span.context = OperationContext(
+                    project_id=observed_project_id,
+                    task_id=task_id,
+                    stage="task.operation",
+                    operation_id=task_id,
+                )
+            span.tag("status_after", str(result.status or ""))
+            span.metric("failed_chapters", len(getattr(result, "failed_chapters", []) or []))
+            span.metric("paused_chapters", len(getattr(result, "paused_chapters", []) or []))
+            update_task(
+                task_id,
+                status=result.status,
+                project_id=result.project_id,
+                failed_chapters=result.failed_chapters,
+                paused_chapters=result.paused_chapters,
+                frozen_artifacts=result.frozen_artifacts,
+            )
+            _record_task_observability_event(
+                orchestrator,
+                task_id=task_id,
+                project_id=observed_project_id,
+                event_type=DecisionEventType.TASK_OPERATION_SUCCEEDED,
+                summary="生成任务 operation 已完成。",
+                payload={
+                    "status_after": result.status,
+                    "duration_ms": max(0, int((time.perf_counter() - started_at) * 1000)),
+                    "failed_chapters": list(getattr(result, "failed_chapters", []) or []),
+                    "paused_chapters": list(getattr(result, "paused_chapters", []) or []),
+                },
+            )
         if progress_handler is not None:
             progress_handler(result)
         if completion_handler is not None:
@@ -491,6 +516,12 @@ def run_orchestrator_task(
             message=error_message,
         )
     finally:
+        cleanup_ctx = OperationContext(
+            project_id=str(observed_project_id or "").strip(),
+            task_id=task_id,
+            stage="task.cleanup",
+            operation_id=task_id,
+        )
         _record_task_observability_event(
             orchestrator,
             task_id=task_id,
@@ -499,8 +530,9 @@ def run_orchestrator_task(
             summary="生成任务 cleanup 已开始。",
         )
         try:
-            orchestrator.llm_client.close()
-            orchestrator.engine.dispose()
+            with observability.span(cleanup_ctx, "task.cleanup", span_kind="task", component="api"):
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
         finally:
             _record_task_observability_event(
                 orchestrator,

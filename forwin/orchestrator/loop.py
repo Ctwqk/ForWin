@@ -53,7 +53,11 @@ from forwin.models.governance import BandCheckpoint
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.phase import ArcStructureDraft, BandExperiencePlan, ChapterRewriteAttempt
+from forwin.observability.context import OperationContext
 from forwin.observability.payloads import attempt_group_ids, audit_payload, event_error_payload, safe_error_summary
+from forwin.observability.ports import NullObservability
+from forwin.observability.redaction import redact_payload
+from forwin.observability.spans import SpanRecord
 from forwin.extractor.world_v4 import WorldDeltaExtractor
 from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStateReviewGate
 from forwin.knowledge_system import KnowledgeProjectionRefresher
@@ -70,7 +74,6 @@ from forwin.planning.scenario_rehearsal_resolution import latest_blocking_scenar
 from forwin.orchestrator.phase24 import ProvisionalBandPreview
 from forwin.retrieval import RetrievalBroker
 from forwin.reviewer_v4 import V4ReviewGate
-from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.services import RuntimeServices
 from forwin.state.repo import StateRepository
 from forwin.state.schema import KNOWN_STATE_FIELDS
@@ -86,6 +89,8 @@ from forwin.writer.chapter_writer import ChapterWriter
 from forwin.world_model.compiler import WorldModelCompiler as LegacyWorldModelCompiler
 
 logger = logging.getLogger(__name__)
+
+RuntimeContainer: Any = None
 
 
 @dataclass(slots=True)
@@ -148,7 +153,11 @@ class WritingOrchestrator:
         services: RuntimeServices | None = None,
     ) -> None:
         if services is None:
-            services = RuntimeContainer.from_config(config or Config.from_env()).services()
+            container_cls = RuntimeContainer
+            if container_cls is None:
+                from forwin.runtime.container import RuntimeContainer as container_cls
+
+            services = container_cls.from_config(config or Config.from_env()).services()
         self.services = services
         self.config = services.config
         self.progress_callback = progress_callback
@@ -162,6 +171,7 @@ class WritingOrchestrator:
         self._governance_runtime_updater: StateUpdater | None = None
         self._governance_stage_name = ""
         self._governance_stage_started_at = 0.0
+        self._governance_stage_span: Any | None = None
 
         self.engine = services.engine
         self._SessionFactory = services.session_factory
@@ -174,6 +184,7 @@ class WritingOrchestrator:
         self.subworld_manager = services.subworld_manager
         self.retrieval_broker = services.retrieval_broker
         self.artifact_store = services.artifact_store
+        self.observability = getattr(services, "observability", NullObservability())
         self.writer = services.writer
         self.provisional_writer = services.provisional_writer
         self.stage_analyzer = services.stage_analyzer
@@ -602,12 +613,49 @@ class WritingOrchestrator:
         self._governance_runtime_updater = updater
         self._governance_stage_name = ""
         self._governance_stage_started_at = 0.0
+        self._governance_stage_span = None
 
     def _clear_governance_runtime(self) -> None:
+        self._finish_governance_stage_span(next_stage="", chapter_number=0)
         self._governance_runtime_project_id = ""
         self._governance_runtime_updater = None
         self._governance_stage_name = ""
         self._governance_stage_started_at = 0.0
+        self._governance_stage_span = None
+
+    def _start_governance_stage_span(self, *, project_id: str, stage: str, chapter_number: int) -> None:
+        if self._governance_stage_span is not None:
+            return
+        context = OperationContext(
+            project_id=project_id,
+            task_id=self._governance_task_id,
+            chapter_number=int(chapter_number or 0),
+            stage=stage,
+            operation_id=self._audit_operation_id(),
+        )
+        span = self.observability.span(
+            context,
+            f"stage.{stage}",
+            span_kind="stage",
+            component="orchestrator",
+            tags={"stage": stage},
+        )
+        span.__enter__()
+        self._governance_stage_span = span
+
+    def _finish_governance_stage_span(self, *, next_stage: str, chapter_number: int) -> None:
+        span = self._governance_stage_span
+        if span is None:
+            return
+        try:
+            span.tag("next_stage", str(next_stage or ""))
+            if chapter_number:
+                span.metric("chapter_number", int(chapter_number or 0))
+            span.__exit__(None, None, None)
+        except Exception:  # noqa: BLE001
+            logger.debug("Ignoring governance stage span close failure.", exc_info=True)
+        finally:
+            self._governance_stage_span = None
 
     def _record_stage_transition(self, payload: dict[str, Any]) -> None:
         updater = self._governance_runtime_updater
@@ -644,6 +692,7 @@ class WritingOrchestrator:
                 summary=f"阶段 {self._governance_stage_name} 用时 {duration_ms}ms。",
                 payload=stage_payload,
             )
+            self._finish_governance_stage_span(next_stage=stage, chapter_number=chapter_number)
         if self._governance_stage_name != stage:
             self._record_decision_event(
                 updater=updater,
@@ -657,6 +706,11 @@ class WritingOrchestrator:
             )
             self._governance_stage_name = stage
             self._governance_stage_started_at = now
+            self._start_governance_stage_span(
+                project_id=project_id,
+                stage=stage,
+                chapter_number=chapter_number,
+            )
 
     @staticmethod
     def _latest_provisional_gate_snapshot(
@@ -1708,7 +1762,105 @@ class WritingOrchestrator:
                 related_object_id=row.id,
                 parent_event_id=str(decision_event_id or "").strip(),
             )
+        self._record_prompt_trace_performance_spans(
+            project_id=project_id,
+            chapter_number=trace_chapter_number,
+            prompt_trace_id=row.id,
+            trace_payload=payload,
+        )
         return row.id
+
+    def _record_prompt_trace_performance_spans(
+        self,
+        *,
+        project_id: str,
+        chapter_number: int,
+        prompt_trace_id: str,
+        trace_payload: dict[str, object],
+    ) -> None:
+        attempts = trace_payload.get("attempts") if isinstance(trace_payload, dict) else []
+        if not isinstance(attempts, list):
+            return
+        trace_scope = str(trace_payload.get("trace_scope") or "llm").strip() or "llm"
+        fallback_stage = str(trace_payload.get("stage_key") or "").strip()
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            stage_key = str(attempt.get("stage_key") or fallback_stage or "").strip()
+            try:
+                duration_ms = max(0, int(attempt.get("duration_ms") or 0))
+            except (TypeError, ValueError):
+                duration_ms = 0
+            tags = redact_payload(
+                {
+                    "prompt_trace_id": prompt_trace_id,
+                    "trace_scope": trace_scope,
+                    "stage_key": stage_key,
+                    "profile_id": str(attempt.get("profile_id") or ""),
+                    "profile_name": str(attempt.get("profile_name") or ""),
+                    "model": str(attempt.get("model") or ""),
+                    "llm_task_route": str(attempt.get("llm_task_route") or ""),
+                    "http_status": int(attempt.get("http_status") or 0),
+                    "attempt_no": int(attempt.get("attempt_no") or 0),
+                    "attempt_group_id": str(attempt.get("attempt_group_id") or ""),
+                    "retryable": bool(attempt.get("retryable", False)),
+                    "fallback_eligible": bool(attempt.get("fallback_eligible", False)),
+                    "final_failure": bool(attempt.get("final_failure", False)),
+                    "parse_ok": bool(attempt.get("parse_ok", True)),
+                    "schema_ok": bool(attempt.get("schema_ok", True)),
+                }
+            )
+            metrics = {
+                "input_chars": int(attempt.get("input_chars") or 0),
+                "output_chars": int(attempt.get("output_chars") or 0),
+                "sleep_ms": int(attempt.get("sleep_ms") or 0),
+            }
+            failed = bool(
+                attempt.get("error_class")
+                or attempt.get("final_failure")
+                or attempt.get("parse_error")
+            )
+            error = {}
+            if failed:
+                error = redact_payload(
+                    {
+                        "error_class": str(attempt.get("error_class") or ""),
+                        "error_message": str(
+                            attempt.get("error_message")
+                            or attempt.get("parse_error")
+                            or attempt.get("error_category")
+                            or ""
+                        ),
+                        "error_category": str(attempt.get("error_category") or ""),
+                    }
+                )
+            context = OperationContext(
+                project_id=project_id,
+                task_id=self._governance_task_id,
+                chapter_number=int(chapter_number or 0),
+                stage=stage_key,
+                operation_id=self._audit_operation_id(),
+            )
+            record = SpanRecord(
+                context=context,
+                span_name="llm.request",
+                span_kind="llm",
+                component=trace_scope,
+                tags=tags,
+                metrics=metrics,
+                status="failed" if failed else "ok",
+                error=error,
+                trace_id=prompt_trace_id,
+                span_id=new_id(),
+                parent_span_id="",
+                start_time_unix_ms=int(time.time() * 1000),
+                duration_ms=duration_ms,
+                self_duration_ms=duration_ms,
+            )
+            try:
+                self.observability._record_span(record)
+            except Exception:  # noqa: BLE001
+                logger.debug("Ignoring prompt trace performance span failure.", exc_info=True)
 
     def _persist_draft_and_review(
         self,
@@ -2202,6 +2354,12 @@ class WritingOrchestrator:
                 continue
 
             try:
+                self._emit_progress(
+                    "stage_changed",
+                    stage="repairing_chapter",
+                    project_id=project_id,
+                    current_chapter=chapter_plan.chapter_number,
+                )
                 rewritten_output = self._write_chapter_with_attention_fallback(
                     context=updated_context,
                     project_id=project_id,
@@ -2296,6 +2454,12 @@ class WritingOrchestrator:
                     else {}
                 ),
                 parent_trace_id=current_review_trace_id,
+            )
+            self._emit_progress(
+                "stage_changed",
+                stage="repair_review",
+                project_id=project_id,
+                current_chapter=chapter_plan.chapter_number,
             )
             rewritten_review = self._review_current_output(
                 repo=repo,

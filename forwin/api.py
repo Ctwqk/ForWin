@@ -245,6 +245,8 @@ _GENERATION_STAGE_ORDER = [
     "writing_chapter",
     "chapter_failed",
     "continuity_review",
+    "repairing_chapter",
+    "repair_review",
     "applying_canon",
     "running_post_acceptance",
     "paused_for_review",
@@ -2084,6 +2086,12 @@ get_task_timeline = _observability_handlers["get_task_timeline"]
 get_chapter_observability_ledger = _observability_handlers["get_chapter_observability_ledger"]
 get_prompt_trace_detail = _observability_handlers["get_prompt_trace_detail"]
 read_artifact_preview = _observability_handlers["read_artifact_preview"]
+get_task_performance_report = _observability_handlers["get_task_performance_report"]
+get_project_performance_report = _observability_handlers["get_project_performance_report"]
+get_chapter_performance_report = _observability_handlers["get_chapter_performance_report"]
+get_slow_performance_spans = _observability_handlers["get_slow_performance_spans"]
+get_llm_performance_report = _observability_handlers["get_llm_performance_report"]
+get_db_performance_report = _observability_handlers["get_db_performance_report"]
 
 globals().update(
     api_route_registry.register_api_routes(
@@ -2150,6 +2158,12 @@ globals().update(
             get_chapter_observability_ledger=get_chapter_observability_ledger,
             get_prompt_trace_detail=get_prompt_trace_detail,
             read_artifact_preview=read_artifact_preview,
+            get_task_performance_report=get_task_performance_report,
+            get_project_performance_report=get_project_performance_report,
+            get_chapter_performance_report=get_chapter_performance_report,
+            get_slow_performance_spans=get_slow_performance_spans,
+            get_llm_performance_report=get_llm_performance_report,
+            get_db_performance_report=get_db_performance_report,
         ),
     )
 )

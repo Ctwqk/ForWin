@@ -4,9 +4,9 @@ import logging
 import time
 from typing import Any
 
-from forwin.governance import DecisionEventInfo, ensure_decision_event_type
 from .context import OperationContext
-from .redaction import redact_payload, stack_hash
+from .redaction import stack_hash
+from .sinks import DecisionEventSink
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 class LogRecorder:
     def __init__(self, *, updater) -> None:
         self.updater = updater
+        self.sink = DecisionEventSink(updater=updater)
 
     def record_event(
         self,
@@ -34,33 +35,23 @@ class LogRecorder:
         band_id: str = "",
         chapter_number: int | None = None,
     ):
-        normalized_payload: dict[str, Any] = {
-            **context.payload_fields(),
-            **(payload or {}),
-        }
-        row = self.updater.save_decision_event(
-            DecisionEventInfo(
-                project_id=context.project_id,
-                task_id=context.task_id,
-                band_id=band_id or context.band_id,
-                chapter_number=(
-                    int(chapter_number)
-                    if chapter_number is not None
-                    else int(context.chapter_number or 0)
-                ),
-                scope=scope,
-                event_family=event_family,
-                event_type=ensure_decision_event_type(event_type),
-                actor_type=actor_type or context.actor_type,
-                actor_id=actor_id or context.actor_id,
-                summary=summary,
-                reason=reason,
-                payload=redact_payload(normalized_payload),
-                related_object_type=related_object_type,
-                related_object_id=related_object_id,
-                parent_event_id=parent_event_id or context.parent_event_id,
-                causal_root_id=causal_root_id or context.causal_root_id,
-            )
+        row = self.sink.record_event(
+            context,
+            event_family=event_family,
+            event_type=event_type,
+            summary=summary,
+            reason=reason,
+            scope=scope,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            payload=payload,
+            related_object_type=related_object_type,
+            related_object_id=related_object_id,
+            parent_event_id=parent_event_id,
+            causal_root_id=causal_root_id,
+            band_id=band_id,
+            chapter_number=chapter_number,
+            commit=False,
         )
         logger.info(
             "observability_event event_type=%s project_id=%s task_id=%s chapter=%s",

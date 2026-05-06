@@ -64,12 +64,83 @@ from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
 
 
+_GENERATION_TASK_TERMINAL_STATUSES = {
+    "completed",
+    "partial_failed",
+    "failed",
+    "needs_review",
+    "cancelled",
+    "paused",
+}
+
+
 def _load_json_object(raw: str, default):
     try:
         value = json.loads(raw or "")
     except (json.JSONDecodeError, TypeError):
         return default
     return value if isinstance(value, type(default)) else default
+
+
+def _load_json_int_list(raw: str | None) -> list[int]:
+    try:
+        value = json.loads(raw or "")
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(value, list):
+        return []
+    result: list[int] = []
+    for item in value:
+        try:
+            result.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def _latest_active_generation_task(session, project_id: str) -> GenerationTask | None:
+    return session.execute(
+        select(GenerationTask)
+        .where(
+            GenerationTask.deleted_at.is_(None),
+            GenerationTask.task_kind == "generation",
+            GenerationTask.project_id == project_id,
+            GenerationTask.status.notin_(tuple(_GENERATION_TASK_TERMINAL_STATUSES)),
+        )
+        .order_by(GenerationTask.updated_at.desc(), GenerationTask.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _overlay_active_generation_task(detail: ProjectDetail, task: GenerationTask | None) -> ProjectDetail:
+    if task is None:
+        return detail
+    stage = str(task.current_stage or "queued").strip() or "queued"
+    current_chapter = int(task.current_chapter or 0)
+    accepted = _load_json_int_list(task.completed_chapters_json)
+    failed = _load_json_int_list(task.failed_chapters_json)
+    pending_review = _load_json_int_list(task.paused_chapters_json)
+    generated = list(dict.fromkeys([*accepted, *pending_review]))
+    pause_requested = bool(getattr(task, "pause_requested", False))
+    status = str(task.status or "").strip()
+    detail.latest_stage = stage
+    detail.next_gate = ""
+    detail.generation_control = detail.generation_control.model_copy(
+        update={
+            "current_stage": stage,
+            "current_chapter": current_chapter,
+            "accepted_chapters": accepted,
+            "drafted_chapters": pending_review,
+            "generated_chapters": generated,
+            "failed_chapters": failed,
+            "pending_review_chapters": pending_review,
+            "can_pause": status in {"starting", "running"} and not pause_requested,
+            "can_resume": status == "paused",
+            "pause_requested": pause_requested,
+            "next_gate": "",
+        }
+    )
+    return detail
 
 
 def _new_operation_id(value: str = "") -> str:
@@ -519,11 +590,15 @@ def get_project(
         project = session.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "项目不存在")
-        return build_project_detail(
+        detail = build_project_detail(
             session=session,
             project=project,
             display_datetime=display_datetime,
             review_interval_chapters=max(0, int(config.review_interval_chapters if config else 0)),
+        )
+        return _overlay_active_generation_task(
+            detail,
+            _latest_active_generation_task(session, project_id),
         )
     finally:
         session.close()

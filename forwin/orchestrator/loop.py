@@ -24,11 +24,9 @@ from typing import Any, Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.book_genesis import BookGenesisService
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.checker.rules import ContinuityChecker
 from forwin.config import Config
-from forwin.director import ArcDirector
 from forwin.governance import (
     BandCheckpointDetail,
     BandCheckpointIssueInfo,
@@ -53,7 +51,6 @@ from forwin.governance_checks import (
 from forwin.models import BookGenesisRevision, ProvisionalBandExecution, ProvisionalChapterLedger, new_id
 from forwin.models.governance import BandCheckpoint
 from forwin.models.draft import ChapterDraft, ChapterReview
-from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.phase import ArcStructureDraft, BandExperiencePlan, ChapterRewriteAttempt
 from forwin.observability.payloads import attempt_group_ids, audit_payload, event_error_payload, safe_error_summary
@@ -63,30 +60,21 @@ from forwin.knowledge_system import KnowledgeProjectionRefresher
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.experience import ArcPayoffMap, BandDelightSchedule, ChapterExperiencePlan
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
-from forwin.orchestrator.phase3 import (
-    PacingStrategist,
-    ReplanGovernor,
-    StageAnalyzer,
-    save_stage_analysis,
-)
+from forwin.orchestrator.phase3 import save_stage_analysis
 from forwin.orchestrator.feedback_aggregator import run_feedback_aggregation_pass
 from forwin.orchestrator.phase4 import (
-    NPCIntentGenerator,
-    WorldSimulator,
     save_npc_intents,
     save_world_turn,
 )
 from forwin.planning.scenario_rehearsal_resolution import latest_blocking_scenario_rehearsal
-from forwin.orchestrator.phase24 import ArcEnvelopeManager, ProvisionalBandPreview
-from forwin.retrieval import RetrievalBroker, create_memory_index
-from forwin.reviser import FinalAcceptanceGate, RepairPolicy, RepairVerifier
-from forwin.reviewer import HistoricalReviewHub
+from forwin.orchestrator.phase24 import ProvisionalBandPreview
+from forwin.retrieval import RetrievalBroker
 from forwin.reviewer_v4 import V4ReviewGate
-from forwin.skills import build_skill_runtime_components
+from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.services import RuntimeServices
 from forwin.state.repo import StateRepository
 from forwin.state.schema import KNOWN_STATE_FIELDS
 from forwin.state.updater import StateUpdater
-from forwin.storage import ArtifactStore
 from forwin.observability.llm_trace import (
     build_llm_decision_event_payloads,
     prepare_prompt_trace_payload,
@@ -95,8 +83,6 @@ from forwin.subworld_manager import SubWorldManager
 from forwin.protocol.writer import WriterOutput
 from forwin.world_model_v4.compiler import WorldModelCompiler as WorldModelCompilerV4
 from forwin.writer.chapter_writer import ChapterWriter
-from forwin.writer.llm_client import LLMClient
-from forwin.llm.factory import maybe_wrap_with_codex_router
 from forwin.world_model.compiler import WorldModelCompiler as LegacyWorldModelCompiler
 
 logger = logging.getLogger(__name__)
@@ -158,8 +144,13 @@ class WritingOrchestrator:
         progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
         should_abort: Callable[[], bool] | None = None,
         should_pause: Callable[[], bool] | None = None,
+        *,
+        services: RuntimeServices | None = None,
     ) -> None:
-        self.config = config or Config.from_env()
+        if services is None:
+            services = RuntimeContainer.from_config(config or Config.from_env()).services()
+        self.services = services
+        self.config = services.config
         self.progress_callback = progress_callback
         self.should_abort = should_abort
         self.should_pause = should_pause
@@ -172,167 +163,45 @@ class WritingOrchestrator:
         self._governance_stage_name = ""
         self._governance_stage_started_at = 0.0
 
-        # Database setup.
-        self.engine = get_engine(self.config.database_url)
-        init_db(self.engine)
-        self._SessionFactory = get_session_factory(self.engine)
+        self.engine = services.engine
+        self._SessionFactory = services.session_factory
+        self.llm_client = services.llm_client
+        self.skill_registry = services.skill_runtime.registry
+        self.skill_router = services.skill_runtime.router
+        self.skill_prompt_layer_builder = services.skill_runtime.prompt_layer_builder
+        self.arc_director = services.arc_director
+        self.book_genesis = services.book_genesis
+        self.subworld_manager = services.subworld_manager
+        self.retrieval_broker = services.retrieval_broker
+        self.artifact_store = services.artifact_store
+        self.writer = services.writer
+        self.provisional_writer = services.provisional_writer
+        self.stage_analyzer = services.stage_analyzer
+        self.pacing_strategist = services.pacing_strategist
+        self.replan_governor = services.replan_governor
+        self.npc_intent_generator = services.npc_intent_generator
+        self.world_simulator = services.world_simulator
+        self.arc_envelope_manager = services.arc_envelope_manager
+        self.review_hub = services.review_hub
+        self.repair_policy = services.repair_policy
+        self.repair_verifier = services.repair_verifier
+        self.final_acceptance_gate = services.final_acceptance_gate
+        self._bind_orchestrator_runtime_hooks()
 
-        # LLM client + writer.
-        self.llm_client = LLMClient(
-            api_key=self.config.minimax_api_key,
-            base_url=self.config.minimax_base_url,
-            model=self.config.minimax_model,
-            timeout_seconds=self.config.llm_timeout_seconds,
-            retry_attempts=self.config.llm_retry_attempts,
-            retry_initial_delay_seconds=self.config.llm_retry_initial_delay_seconds,
-            retry_max_delay_seconds=self.config.llm_retry_max_delay_seconds,
-            fallback_profiles=self.config.llm_fallback_profiles,
+    def _bind_orchestrator_runtime_hooks(self) -> None:
+        self.arc_envelope_manager.provisional_executor = self._run_provisional_band_preview
+        self.arc_envelope_manager.scenario_progress_callback = (
+            lambda **payload: self._emit_progress("stage_changed", **payload)
         )
-        self.llm_client = maybe_wrap_with_codex_router(self.llm_client, self.config)
-        (
-            self.skill_registry,
-            self.skill_router,
-            self.skill_prompt_layer_builder,
-        ) = build_skill_runtime_components(
-            root=self.config.skill_registry_path,
-            enabled=self.config.skill_runtime_enabled,
-            strictness=self.config.skill_strictness,
-            enabled_skill_groups=self.config.enabled_skill_groups,
-            disabled_skill_ids=self.config.disabled_skill_ids,
-        )
-        self.arc_director = ArcDirector(
-            llm_client=self.llm_client,
-            max_tokens=self.config.max_tokens,
-        )
-        self.book_genesis = BookGenesisService(
-            llm_client=self.llm_client,
-            max_tokens=min(self.config.max_tokens, 1600),
-            skill_router=self.skill_router,
-            skill_prompt_layer_builder=self.skill_prompt_layer_builder,
-        )
-        self.subworld_manager = SubWorldManager(director=self.arc_director)
-        self.retrieval_broker = RetrievalBroker(
-            context_budget_chars=self.config.context_budget_chars,
-            max_entities=self.config.retrieval_max_entities,
-            max_threads=self.config.retrieval_max_threads,
-            max_summaries=self.config.retrieval_max_summaries,
-            database_url=self.config.database_url,
-            retrieval_backend=self.config.retrieval_backend,
-            qdrant_url=self.config.qdrant_url,
-            qdrant_collection=self.config.qdrant_collection,
-            llm_kb_qdrant_url=self.config.qdrant_url,
-            llm_kb_qdrant_collection=self.config.llm_kb_qdrant_collection,
-            memory_index=create_memory_index(
-                backend=self.config.retrieval_backend,
-                root_dir=self.config.retrieval_root,
-                database_url=self.config.database_url,
-                qdrant_url=self.config.qdrant_url,
-                qdrant_collection=self.config.qdrant_collection,
-                embedding_backend=self.config.embedding_backend,
-                embedding_base_url=self.config.embedding_base_url,
-                embedding_api_key=self.config.embedding_api_key,
-                embedding_model=self.config.embedding_model,
-                embedding_dims=self.config.embedding_dims,
-            ),
-        )
-        self.artifact_store = ArtifactStore(
-            self.config.artifact_root,
-            backend=self.config.artifact_backend,
-            minio_endpoint=self.config.minio_endpoint,
-            minio_access_key=self.config.minio_access_key,
-            minio_secret_key=self.config.minio_secret_key,
-            minio_bucket=self.config.minio_bucket,
-            minio_prefix=self.config.minio_prefix,
-            minio_secure=self.config.minio_secure,
-        )
-        setattr(self.book_genesis, "artifact_store", self.artifact_store)
-        self.writer = ChapterWriter(
-            llm_client=self.llm_client,
-            temperature=self.config.temperature,
-            max_tokens=self.config.max_tokens,
-            writer_mode=self.config.writer_mode,
-            default_scene_count=self.config.default_scene_count,
-            max_scene_count=self.config.max_scene_count,
-            min_chapter_chars=self.config.min_chapter_chars,
-            max_chapter_chars=self.config.max_chapter_chars,
-            target_chapter_chars=self.config.target_chapter_chars,
-            single_call_timeout_seconds=self.config.llm_timeout_seconds,
-            scene_call_timeout_seconds=self.config.scene_call_timeout_seconds,
-        )
-        provisional_target_chars = max(
-            700,
-            min(self.config.target_chapter_chars, 900),
-        )
-        provisional_min_chars = max(500, min(self.config.min_chapter_chars, provisional_target_chars))
-        provisional_max_chars = max(
-            provisional_target_chars,
-            min(self.config.max_chapter_chars, 1000),
-        )
-        provisional_timeout_seconds = min(
-            max(
-                self.config.llm_timeout_seconds,
-                self.config.scene_call_timeout_seconds,
-                90.0,
-            ),
-            180.0,
-        )
-        self.provisional_writer = ChapterWriter(
-            llm_client=self.llm_client,
-            temperature=min(self.config.temperature, 0.7),
-            max_tokens=min(self.config.max_tokens, 2400),
-            writer_mode="single",
-            default_scene_count=1,
-            max_scene_count=1,
-            min_chapter_chars=provisional_min_chars,
-            max_chapter_chars=provisional_max_chars,
-            target_chapter_chars=provisional_target_chars,
-            single_call_timeout_seconds=provisional_timeout_seconds,
-            scene_call_timeout_seconds=provisional_timeout_seconds,
-        )
-        self.stage_analyzer = StageAnalyzer()
-        self.pacing_strategist = PacingStrategist(
-            window_size=self.config.pacing_window_size,
-            stale_thread_window=self.config.stale_thread_window,
-            min_avg_chars=self.config.pacing_min_avg_chars,
-            max_avg_chars=self.config.pacing_max_avg_chars,
-            active_thread_limit=self.config.phase_active_thread_limit,
-        )
-        self.replan_governor = ReplanGovernor(
-            cooldown_chapters=self.config.replan_cooldown_chapters,
-            director=self.arc_director,
-            subworld_manager=self.subworld_manager,
-        )
-        llm_available = bool(self.config.minimax_api_key) or bool(getattr(self.config, "codex_enabled", False))
-        phase4_llm = self.llm_client if self.config.phase4_use_llm and llm_available else None
-        self.npc_intent_generator = NPCIntentGenerator(
-            llm_client=phase4_llm,
-            active_thread_limit=self.config.phase_active_thread_limit,
-        )
-        self.world_simulator = WorldSimulator(
-            llm_client=phase4_llm,
-            active_thread_limit=self.config.phase_active_thread_limit,
-        )
-        self.arc_envelope_manager = ArcEnvelopeManager(
-            director=self.arc_director,
-            provisional_executor=self._run_provisional_band_preview,
-            subworld_manager=self.subworld_manager,
-            legacy_preview_enabled=self.config.legacy_provisional_blocking,
-            scenario_progress_callback=lambda **payload: self._emit_progress("stage_changed", **payload),
-        )
-        self.review_hub = HistoricalReviewHub(
-            experience_review_enabled=self.config.experience_review_enabled,
-            lint_review_enabled=self.config.lint_review_enabled,
-            llm_client=self.llm_client if llm_available else None,
-            llm_enabled=llm_available,
-        )
-        self.repair_policy = RepairPolicy(
-            max_attempts=max(1, min(3, int(self.config.review_fail_max_rewrites or 3)))
-        )
-        self.repair_verifier = RepairVerifier(
-            llm_client=self.llm_client if llm_available else None,
-            llm_enabled=llm_available,
-        )
-        self.final_acceptance_gate = FinalAcceptanceGate()
+        planning_services = getattr(self.arc_envelope_manager, "services", None)
+        provisional_preview = getattr(planning_services, "provisional_preview", None)
+        if provisional_preview is not None:
+            provisional_preview.provisional_executor = self._run_provisional_band_preview
+        scenario_rehearsal = getattr(planning_services, "scenario_rehearsal", None)
+        if scenario_rehearsal is not None:
+            scenario_rehearsal.progress_callback = (
+                lambda **payload: self._emit_progress("stage_changed", **payload)
+            )
 
     # ------------------------------------------------------------------
     # Public API

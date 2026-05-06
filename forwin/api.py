@@ -55,7 +55,6 @@ from forwin.api_runtime import (
     run_generation_with_config,
 )
 from forwin.api_task_history import augment_task_with_rehearsal_history
-from forwin.api_artifacts import build_artifact_store
 from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
 from forwin.api_schemas import (
     BandCheckpointApproveRequest,
@@ -159,7 +158,7 @@ from forwin.governance import (
     normalize_project_governance,
     plan_task_contract_to_json,
 )
-from forwin.models.base import Base, get_engine, get_session_factory, init_db
+from forwin.models.base import Base, get_session_factory
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import Project, ChapterPlan, ArcPlanVersion
 from forwin.models.entity import Entity
@@ -168,7 +167,7 @@ from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeCon
 from forwin.models.publisher import PublisherCommentSyncJob, PublisherConnectionState, PublisherExtensionClient, PublisherRawComment, PublisherUploadJob
 from forwin.models.thread import PlotThread
 from forwin.models.task import GenerationTask
-from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.phase import (
     BandExperiencePlan,
     ChapterRewriteAttempt,
@@ -186,12 +185,10 @@ from forwin.state.repo import StateRepository
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
 from forwin.publishers import PublisherManager
+from forwin.runtime.container import RuntimeContainer
 from forwin.runtime_settings import RuntimeSettingsStore
-from forwin.skills import build_skill_runtime_components
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
-from forwin.writer.llm_client import LLMClient
-from forwin.llm.factory import maybe_wrap_with_codex_router
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +206,7 @@ _config: Config | None = None
 _engine = None
 _SessionFactory = None
 _orchestrator: WritingOrchestrator | None = None
+_runtime_container: RuntimeContainer | None = None
 _publisher_manager: PublisherManager | None = None
 _runtime_settings: RuntimeSettingsStore | None = None
 _task_center_service: TaskCenterService | None = None
@@ -356,39 +354,33 @@ def _build_genesis_service(
 ) -> BookGenesisService:
     resolved_profile = _resolve_runtime_profile(model_profile_id)
     resolved = runtime_config or _saved_runtime_config_or_default(model_profile_id)
-    llm_client = LLMClient(
-        api_key=str(resolved.minimax_api_key or ""),
-        base_url=str(resolved.minimax_base_url or ""),
-        model=str(resolved.minimax_model or ""),
-        fallback_profiles=getattr(resolved, "llm_fallback_profiles", None),
-    )
-    setattr(llm_client, "profile_id", resolved_profile.get("id", ""))
-    setattr(llm_client, "profile_name", resolved_profile.get("name", ""))
-    llm_client = maybe_wrap_with_codex_router(llm_client, resolved)
-    _registry, router, prompt_layer_builder = build_skill_runtime_components(
-        root=resolved.skill_registry_path,
-        enabled=resolved.skill_runtime_enabled,
-        strictness=resolved.skill_strictness,
-        enabled_skill_groups=resolved.enabled_skill_groups,
-        disabled_skill_ids=resolved.disabled_skill_ids,
-    )
-    return BookGenesisService(
-        llm_client=llm_client,
-        skill_router=router,
-        skill_prompt_layer_builder=prompt_layer_builder,
-        artifact_store=build_artifact_store(resolved),
-    )
+    shared_container = runtime_config is None and not model_profile_id and _runtime_container is not None
+    container = _runtime_container if shared_container else RuntimeContainer.from_config(resolved)
+    service = container.services().book_genesis if shared_container else container.build_book_genesis_service()
+    setattr(service, "_forwin_runtime_owned", True)
+    setattr(service, "_forwin_runtime_container", container if shared_container else None)
+    setattr(service, "_forwin_runtime_shared", bool(shared_container))
+    setattr(service.llm_client, "profile_id", resolved_profile.get("id", ""))
+    setattr(service.llm_client, "profile_name", resolved_profile.get("name", ""))
+    return service
 
 
 def _close_genesis_service(service: BookGenesisService | None) -> None:
+    if getattr(service, "_forwin_runtime_shared", False):
+        return
     client = getattr(service, "llm_client", None)
     close = getattr(client, "client", None)
-    if close is None:
-        return
-    try:
-        close.close()
-    except Exception:  # noqa: BLE001
-        logger.debug("BookGenesisService client close failed", exc_info=True)
+    if close is not None:
+        try:
+            close.close()
+        except Exception:  # noqa: BLE001
+            logger.debug("BookGenesisService client close failed", exc_info=True)
+    container = getattr(service, "_forwin_runtime_container", None)
+    if container is not None and container is not _runtime_container:
+        try:
+            container.services().engine.dispose()
+        except Exception:  # noqa: BLE001
+            logger.debug("BookGenesisService runtime engine dispose failed", exc_info=True)
 
 
 def _active_genesis_revision(session: Session, project: Project) -> BookGenesisRevision | None:
@@ -1137,6 +1129,12 @@ def _delete_project(session, project_id: str) -> None:
         draft_ids = session.execute(
             select(ChapterDraft.id).where(ChapterDraft.chapter_plan_id.in_(chapter_plan_ids))
         ).scalars().all()
+        session.execute(
+            delete(CandidateDraftRecord).where(CandidateDraftRecord.project_id == project_id)
+        )
+        session.execute(
+            delete(ChapterRewriteAttempt).where(ChapterRewriteAttempt.project_id == project_id)
+        )
         if draft_ids:
             session.execute(
                 delete(ChapterReview).where(ChapterReview.draft_id.in_(draft_ids))
@@ -1835,6 +1833,9 @@ def _load_automation_scheduler_metrics(
 
 
 def _run_automation_scheduler_pass() -> None:
+    production_scheduler_factory = None
+    if _runtime_container is not None:
+        production_scheduler_factory = _runtime_container.services().production_scheduler
     return api_automation.run_automation_scheduler_pass(
         session_factory=_SessionFactory,
         config=_config,
@@ -1848,6 +1849,7 @@ def _run_automation_scheduler_pass() -> None:
         create_continue_generation_task=_create_continue_generation_task,
         active_generation_task_error_cls=ActiveGenerationTaskError,
         terminal_statuses=_GENERATION_TERMINAL_STATUSES,
+        production_scheduler_factory=production_scheduler_factory,
     )
 
 
@@ -1929,7 +1931,7 @@ def _list_generation_tasks(limit: int) -> list[tuple[str, dict[str, Any]]]:
 
 
 def _shutdown_runtime_state() -> None:
-    global _engine, _SessionFactory, _orchestrator, _publisher_manager, _runtime_settings, _task_center_service
+    global _engine, _SessionFactory, _orchestrator, _runtime_container, _publisher_manager, _runtime_settings, _task_center_service
 
     _stop_automation_scheduler()
     if _orchestrator is not None:
@@ -1949,6 +1951,7 @@ def _shutdown_runtime_state() -> None:
             logger.debug("Ignoring API engine shutdown error.", exc_info=True)
 
     _orchestrator = None
+    _runtime_container = None
     _publisher_manager = None
     _runtime_settings = None
     _task_center_service = None
@@ -1962,7 +1965,7 @@ def _shutdown_runtime_state() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _config, _engine, _SessionFactory, _orchestrator, _publisher_manager, _runtime_settings
+    global _config, _engine, _SessionFactory, _orchestrator, _runtime_container, _publisher_manager, _runtime_settings
 
     if _config is None:
         _config = Config.from_env()
@@ -1971,15 +1974,17 @@ async def lifespan(app: FastAPI):
             "ForWin is reachable beyond localhost and HTTP Basic Auth is disabled. "
             "This is acceptable only on a trusted LAN."
         )
-    if _engine is None:
+    if _runtime_container is None:
         database_url = os.environ.get("FORWIN_DATABASE_URL", _config.database_url)
         _config = _config.model_copy(update={"database_url": database_url, "db_path": database_url})
-        _engine = get_engine(_config.database_url)
-        init_db(_engine)
+        _runtime_container = RuntimeContainer.from_config(_config)
+        runtime_services = _runtime_container.services()
+        _engine = runtime_services.engine
+        _SessionFactory = runtime_services.session_factory
     if _SessionFactory is None:
         _SessionFactory = get_session_factory(_engine)
     if _orchestrator is None:
-        _orchestrator = WritingOrchestrator(_config)
+        _orchestrator = _runtime_container.build_writing_orchestrator() if _runtime_container is not None else WritingOrchestrator(_config)
         with _SessionFactory() as bootstrap_session:
             created_envelopes = _orchestrator.arc_envelope_manager.backfill_missing_resolutions(
                 session=bootstrap_session

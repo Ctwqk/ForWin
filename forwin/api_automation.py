@@ -109,13 +109,12 @@ def run_automation_scheduler_pass(
     create_continue_generation_task: Callable[..., str],
     active_generation_task_error_cls: type[Exception],
     terminal_statuses: set[str],
+    production_scheduler_factory: Any = None,
 ) -> None:
     if session_factory is None or config is None:
         return
     try:
-        ProductionScheduler(
-            session_factory=session_factory,
-            config=config,
+        scheduler_kwargs = dict(
             runtime_config_provider=saved_runtime_config_or_503,
             display_datetime=display_datetime,
             persist_project_automation=persist_project_automation,
@@ -126,6 +125,16 @@ def run_automation_scheduler_pass(
             upload_terminal_statuses={"succeeded", "failed", "cancelled"},
             display_tz=display_tz,
             get_session=get_session,
-        ).run_due_projects(now=utcnow())
+        )
+        scheduler = (
+            production_scheduler_factory.build(**scheduler_kwargs)
+            if production_scheduler_factory is not None
+            else ProductionScheduler(
+                session_factory=session_factory,
+                config=config,
+                **scheduler_kwargs,
+            )
+        )
+        scheduler.run_due_projects(now=utcnow())
     except HTTPException:
         return

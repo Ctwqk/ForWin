@@ -1,12 +1,6 @@
 from __future__ import annotations
 
 import inspect
-
-from forwin.governance_checks import (
-    chapter_combined_text,
-    evaluate_constraint_issues,
-    evaluate_task_contract,
-)
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import (
     ContinuityIssue,
@@ -17,9 +11,11 @@ from forwin.protocol.review import (
 from forwin.protocol.writer import WriterOutput
 from forwin.skills import serialize_prompt_layers
 from .context_builder import build_review_context_pack
+from .experience import ExperienceReviewer
+from .governance import GovernanceReviewer
 from .lint import LintSignalCollector
+from .map_movement import MapMovementReviewer
 from .personality import PersonalityConsistencyReviewer
-from .webnovel import WebNovelExperienceReviewer
 
 
 class HistoricalReviewHub:
@@ -30,14 +26,25 @@ class HistoricalReviewHub:
         lint_review_enabled: bool = True,
         llm_client=None,
         llm_enabled: bool | None = None,
+        continuity_reviewer=None,
+        governance_reviewer=None,
+        experience_reviewer=None,
+        map_movement_reviewer=None,
+        personality_reviewer=None,
+        lint_collector=None,
+        llm_webnovel_reviewer=None,
     ) -> None:
-        self.experience_reviewer = WebNovelExperienceReviewer(
+        self.continuity_reviewer = continuity_reviewer
+        self.governance_reviewer = governance_reviewer or GovernanceReviewer()
+        self.experience_reviewer = experience_reviewer or ExperienceReviewer(
             enabled=experience_review_enabled,
             llm_client=llm_client,
             llm_enabled=llm_enabled,
         )
-        self.lint_collector = LintSignalCollector(enabled=lint_review_enabled)
-        self.personality_reviewer = PersonalityConsistencyReviewer()
+        self.map_movement_reviewer = map_movement_reviewer or MapMovementReviewer()
+        self.personality_reviewer = personality_reviewer or PersonalityConsistencyReviewer()
+        self.lint_collector = lint_collector or LintSignalCollector(enabled=lint_review_enabled)
+        self.llm_webnovel_reviewer = llm_webnovel_reviewer
 
     def review(
         self,
@@ -50,10 +57,10 @@ class HistoricalReviewHub:
         reviewer_skill_layers: list[object] | None = None,
     ) -> ReviewVerdict:
         continuity = continuity_checker.check(project_id, writer_output)
-        lint_signals = [
-            *self.lint_collector.collect(writer_output),
-            *self.personality_reviewer.collect(context, writer_output),
-        ]
+        lint_signals = [*self.lint_collector.collect(writer_output)]
+        personality_collect = getattr(self.personality_reviewer, "collect", None)
+        if callable(personality_collect):
+            lint_signals.extend(personality_collect(context, writer_output))
         review_context = build_review_context_pack(
             repo=repo,
             context=context,
@@ -65,17 +72,38 @@ class HistoricalReviewHub:
             writer_output,
             reviewer_skill_layers=reviewer_skill_layers,
         )
-        governance_issues = self._governance_issues(
-            context=review_context,
-            writer_output=writer_output,
+        governance = self._call_with_compatible_kwargs(
+            self.governance_reviewer.review,
+            review_context,
+            writer_output,
         )
+        map_movement = self._call_with_compatible_kwargs(
+            self.map_movement_reviewer.review,
+            review_context,
+            writer_output,
+        )
+        personality_review = ReviewVerdict(verdict="pass", issues=[])
+        personality_review_call = getattr(self.personality_reviewer, "review", None)
+        if callable(personality_review_call) and not callable(personality_collect):
+            personality_review = self._call_with_compatible_kwargs(
+                personality_review_call,
+                review_context,
+                writer_output,
+            )
         issues = [
             *self._normalize_issues(continuity.issues, reviewer="continuity"),
-            *self._normalize_issues(governance_issues, reviewer="governance"),
+            *self._normalize_issues(governance.issues, reviewer="governance"),
             *self._normalize_issues(webnovel.issues, reviewer="webnovel_experience"),
+            *self._normalize_issues(map_movement.issues, reviewer="map_movement"),
+            *self._normalize_issues(personality_review.issues, reviewer="personality"),
         ]
-        governance_verdict = self._issues_verdict(governance_issues)
-        verdict = self._merge_verdicts(continuity.verdict, governance_verdict, webnovel.verdict)
+        verdict = self._merge_verdicts(
+            continuity.verdict,
+            governance.verdict,
+            webnovel.verdict,
+            map_movement.verdict,
+            personality_review.verdict,
+        )
         repair_instruction = None
         if verdict == "fail":
             repair_instruction = self._merge_repair_instructions(
@@ -92,7 +120,7 @@ class HistoricalReviewHub:
                         governance_issues=[issue for issue in issues if issue.reviewer == "governance" and issue.severity == "error"],
                         context=context,
                     )
-                    if governance_verdict == "fail"
+                    if governance.verdict == "fail"
                     else None
                 ),
                 webnovel_instruction=webnovel.repair_instruction,
@@ -245,44 +273,6 @@ class HistoricalReviewHub:
             review=review,
             repair_attempts=repair_attempts or [],
         )
-
-    @staticmethod
-    def _issues_verdict(issues: list[ContinuityIssue]) -> str:
-        if any(issue.severity == "error" for issue in issues):
-            return "fail"
-        if any(issue.severity == "warning" for issue in issues):
-            return "warn"
-        return "pass"
-
-    @staticmethod
-    def _governance_issues(
-        *,
-        context,
-        writer_output: WriterOutput,
-    ) -> list[ContinuityIssue]:
-        combined_text = chapter_combined_text(writer_output)
-        task_issues = evaluate_task_contract(
-            context.chapter_task_contract,
-            combined_text=combined_text,
-            reviewer="governance",
-            issue_type="plan_task_fulfillment",
-            target_scope="chapter",
-        )
-        constraint_issues = evaluate_constraint_issues(
-            [
-                constraint
-                for constraint in context.active_future_constraints
-                if str(constraint.level or "") in {"hard", "soft", "hint"}
-            ],
-            combined_text=combined_text,
-            state_changes=writer_output.state_changes,
-            events=writer_output.new_events,
-            thread_beats=writer_output.thread_beats,
-            reviewer="governance",
-            issue_type="future_constraint",
-            target_scope="chapter",
-        )
-        return [*task_issues, *constraint_issues]
 
     @staticmethod
     def _normalize_issues(

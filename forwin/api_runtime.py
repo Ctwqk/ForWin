@@ -9,6 +9,7 @@ from forwin.config import Config, DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODE
 from forwin.governance import DecisionEventType
 from forwin.observability import LogRecorder, OperationContext
 from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.runtime.container import RuntimeContainer
 from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.updater import StateUpdater
 
@@ -389,6 +390,27 @@ def _record_task_observability_event(
         session.close()
 
 
+def _build_writing_orchestrator_for_task(
+    config: Config,
+    *,
+    progress_callback=None,
+    should_abort=None,
+    should_pause=None,
+) -> WritingOrchestrator:
+    if getattr(WritingOrchestrator, "__module__", "") != "forwin.orchestrator.loop":
+        return WritingOrchestrator(
+            config,
+            progress_callback=progress_callback,
+            should_abort=should_abort,
+            should_pause=should_pause,
+        )
+    return RuntimeContainer.from_config(config).build_writing_orchestrator(
+        progress_callback=progress_callback,
+        should_abort=should_abort,
+        should_pause=should_pause,
+    )
+
+
 def run_orchestrator_task(
     task_id: str,
     orchestrator: WritingOrchestrator,
@@ -513,7 +535,7 @@ def run_generation_with_config(
         if changes:
             update_task(task_id, **changes)
 
-    orchestrator = WritingOrchestrator(
+    orchestrator = _build_writing_orchestrator_for_task(
         config,
         progress_callback=_handle_progress,
         should_abort=should_abort,
@@ -601,7 +623,7 @@ def run_continue_project_with_config(
         if changes:
             update_task(task_id, **changes)
 
-    orchestrator = WritingOrchestrator(
+    orchestrator = _build_writing_orchestrator_for_task(
         config,
         progress_callback=_handle_progress,
         should_abort=should_abort,

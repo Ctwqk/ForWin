@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from forwin.protocol.context import ChapterContextPack, LintSignal
+from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 
 
@@ -11,6 +12,29 @@ UNTRIGGERED_STRESS_MARKERS = ("信息失控", "失控", "监视", "控制")
 
 
 class PersonalityConsistencyReviewer:
+    name = "personality"
+
+    def review(self, context: ChapterContextPack, writer_output: WriterOutput, **_kwargs) -> ReviewVerdict:
+        signals = self.collect(context, writer_output)
+        issues = [
+            ContinuityIssue(
+                rule_name=signal.code or "personality_consistency",
+                severity="error" if signal.severity == "error" else "warning",
+                description=signal.message,
+                reviewer=self.name,
+                issue_type="personality",
+                target_scope="chapter",
+                evidence_refs=list(signal.evidence_refs),
+                suggested_fix="保持人物行为与 active personality context 对齐。",
+            )
+            for signal in signals
+            if signal.severity in {"error", "warning"}
+        ]
+        verdict = "fail" if any(issue.severity == "error" for issue in issues) else (
+            "warn" if issues else "pass"
+        )
+        return ReviewVerdict(verdict=verdict, issues=issues)
+
     def collect(self, context: ChapterContextPack, writer_output: WriterOutput) -> list[LintSignal]:
         signals: list[LintSignal] = []
         signals.extend(self._integrity_signals(context))

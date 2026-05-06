@@ -47,6 +47,7 @@ from forwin.api_schemas import (
     TaskResponse,
 )
 from forwin.book_genesis import GENESIS_STAGE_ORDER, StaleGenesisRevisionError
+from forwin.genesis_handoff import StartWritingCommand
 from forwin.governance import DecisionEventInfo, DecisionEventType, new_project_governance
 from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis
 from forwin.map.models import MapNodeRow
@@ -54,14 +55,13 @@ from forwin.map.service import build_interconnections_from_genesis_atlas, create
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.genesis import PromptTrace
 from forwin.models.governance import DecisionEvent
-from forwin.observability.payloads import audit_payload, event_error_payload
+from forwin.observability.payloads import audit_payload
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
-from forwin.world_model.compiler import WorldModelCompiler
 
 
 def _load_json_object(raw: str, default):
@@ -874,89 +874,28 @@ def start_project_writing(
             raise HTTPException(409, "Genesis revision 不存在。")
         genesis_service = build_genesis_service(runtime_config)
         updater = StateUpdater(session)
-        decision = updater.save_decision_event(
-            DecisionEventInfo(
-                project_id=project.id,
-                scope="project",
-                event_family="business_event",
-                event_type=DecisionEventType.START_WRITING_REQUESTED,
-                actor_type="manual_ui",
-                summary="Genesis 已交接到写作流程。",
-                related_object_type="book_genesis_revision",
-                related_object_id=revision.id,
-            )
-        )
-        arcs = genesis_service.materialize_book_arcs(
-            session=session,
-            updater=updater,
-            project=project,
-            revision=revision,
-        )
-        active_arc = next((row for row in arcs if row.status == "active"), None)
-        if active_arc is None:
-            raise HTTPException(409, "Genesis blueprint 缺少 active arc。")
-        genesis_service.materialize_arc_chapter_plans(
-            session=session,
-            updater=updater,
-            project=project,
-            revision=revision,
-            arc_number=active_arc.arc_number,
-            decision_event_id=decision.id,
-            ensure_arc_map=False,
-        )
-        pack = genesis_service.load_pack(revision)
-        world = pack.get("world") if isinstance(pack.get("world"), dict) else {}
-        world_bible = world.get("world_bible") if isinstance(world.get("world_bible"), dict) else {}
-        if not str(project.setting_summary or "").strip():
-            project.setting_summary = str(world_bible.get("overview", "") or "").strip()
-        project_id_for_failure = project.id
-        revision_id_for_failure = revision.id
         try:
-            _ensure_initial_book_map_from_genesis(
+            handoff_result = genesis_service.handoff.start_writing(
                 session=session,
                 updater=updater,
-                project=project,
-                revision=revision,
-                pack=pack,
-                decision_event_id=decision.id,
+                command=StartWritingCommand(
+                    project_id=project.id,
+                    actor_type="manual_ui",
+                    runtime_config=runtime_config,
+                ),
             )
         except ValueError as exc:
             failure_summary = str(exc) or "Genesis map_atlas 无法生成 BookMap。"
+            if "map" in failure_summary.lower() or "地图" in failure_summary or "BookMap" in failure_summary:
+                session.commit()
+                raise HTTPException(409, f"地图生成失败，不能启动写作：{failure_summary}") from exc
             session.rollback()
-            StateUpdater(session).save_decision_event(
-                DecisionEventInfo(
-                    project_id=project_id_for_failure,
-                    scope="project",
-                    event_family="runtime_observation",
-                    event_type=DecisionEventType.MAP_GENERATION_FAILED,
-                    actor_type="system",
-                    summary="Genesis map_atlas 生成 Scheme C BookMap 失败。",
-                    reason=failure_summary,
-                    payload=event_error_payload(
-                        exc,
-                        stage="map_generation",
-                        failure_summary=failure_summary,
-                    ),
-                    related_object_type="book_genesis_revision",
-                    related_object_id=revision_id_for_failure,
-                )
-            )
-            session.commit()
-            raise HTTPException(409, f"地图生成失败，不能启动写作：{failure_summary}") from exc
-        WorldModelCompiler(session).bootstrap_from_genesis(project.id)
-        project.creation_status = "writing"
-        session.add(project)
-        active_chapter_count = int(
-            session.execute(
-                select(func.count(ChapterPlan.id)).where(ChapterPlan.arc_plan_id == active_arc.id)
-            ).scalar_one()
-            or 0
-        )
+            raise HTTPException(409, failure_summary) from exc
         try:
             task_id = create_continue_generation_task(
                 project_id=project.id,
                 runtime_config=runtime_config,
-                requested_chapters=active_chapter_count,
+                requested_chapters=handoff_result.active_chapter_plan_count,
                 title=project.title,
                 subtitle=f"启动写作 · {project.genre}",
                 message="Genesis 完成，准备进入写作主链。",
@@ -968,7 +907,7 @@ def start_project_writing(
         return StartWritingResponse(
             ok=True,
             project_id=project.id,
-            creation_status="writing",
+            creation_status=handoff_result.project_status,
             task_id=task_id,
             message="Genesis 已完成交接，开始写作。",
         )

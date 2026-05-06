@@ -13,6 +13,9 @@ from sqlalchemy.orm import Session
 
 from forwin.arc_sizing import allocate_arc_chapter_sizes
 from forwin.governance import DecisionEventInfo, DecisionEventType, normalize_project_governance
+from forwin.genesis_handoff import GenesisHandoffService
+from forwin.genesis_workspace import GenesisWorkspaceService
+from forwin.genesis_workspace.trace_service import GenesisTraceService
 from forwin.map.service import ensure_book_map_from_genesis_atlas
 from forwin.model_adapter import ModelAdapter
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
@@ -1018,6 +1021,9 @@ class BookGenesisService:
         self.skill_router = skill_router
         self.skill_prompt_layer_builder = skill_prompt_layer_builder
         self.artifact_store = artifact_store
+        self.trace_service = GenesisTraceService(self)
+        self.workspace = GenesisWorkspaceService(self)
+        self.handoff = GenesisHandoffService(self)
 
     def _build_stage_generation_messages(
         self,
@@ -1189,6 +1195,12 @@ class BookGenesisService:
         project: Project,
         brief_seed: dict[str, Any] | None = None,
     ):
+        return self.workspace.create_initial_revision(
+            session=session,
+            updater=updater,
+            project=project,
+            brief_seed=brief_seed,
+        )
         pack = _initial_pack(project, brief_seed)
         row = updater.create_book_genesis_revision(
             project_id=project.id,
@@ -1216,12 +1228,14 @@ class BookGenesisService:
         return row
 
     def active_revision(self, session: Session, project: Project) -> BookGenesisRevision | None:
+        return self.workspace.active_revision(session, project)
         revision_id = str(getattr(project, "active_genesis_revision_id", "") or "").strip()
         if not revision_id:
             return None
         return session.get(BookGenesisRevision, revision_id)
 
     def load_pack(self, revision) -> dict[str, Any]:
+        return self.workspace.load_pack(revision)
         return _initial_pack_dummy_merge(_json_load_object(getattr(revision, "pack_json", "{}")))
 
     def patch_pack(
@@ -1234,6 +1248,14 @@ class BookGenesisService:
         patch: dict[str, Any],
         reason: str = "",
     ):
+        return self.workspace.patch_pack(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+            patch=patch,
+            reason=reason,
+        )
         _ensure_revision_is_current(session, project, revision)
         current = self.load_pack(revision)
         previous_stage_payloads = {
@@ -1323,6 +1345,14 @@ class BookGenesisService:
         stage_key: str,
         event_type: str = DecisionEventType.GENESIS_STAGE_GENERATED,
     ):
+        return self.workspace.generate_stage(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+            stage_key=stage_key,
+            event_type=event_type,
+        )
         if stage_key not in GENESIS_STAGE_ORDER:
             raise ValueError(f"未知 Genesis stage: {stage_key}")
         pack = self.load_pack(revision)
@@ -1410,6 +1440,16 @@ class BookGenesisService:
         target_path: str = "",
         reason: str = "",
     ):
+        return self.workspace.refine_stage(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+            stage_key=stage_key,
+            instruction=instruction,
+            target_path=target_path,
+            reason=reason,
+        )
         normalized_instruction = str(instruction or "").strip()
         normalized_path = str(target_path or "").strip()
         if stage_key not in GENESIS_STAGE_ORDER:
@@ -1505,6 +1545,13 @@ class BookGenesisService:
         revision,
         stage_key: str,
     ):
+        return self.workspace.lock_stage(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+            stage_key=stage_key,
+        )
         if stage_key not in GENESIS_STAGE_ORDER:
             raise ValueError(f"未知 Genesis stage: {stage_key}")
         _ensure_revision_is_current(session, project, revision)
@@ -1549,6 +1596,7 @@ class BookGenesisService:
         return new_row
 
     def build_detail(self, *, session: Session, project: Project) -> dict[str, Any]:
+        return self.workspace.build_detail(session=session, project=project)
         revision = self.active_revision(session, project)
         pack = self.load_pack(revision) if revision is not None else _initial_pack(project)
         prompt_traces = session.execute(
@@ -1601,6 +1649,17 @@ class BookGenesisService:
         nonce: str = "",
         stage_payload_override: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        return self.workspace.generate_name_suggestions(
+            project=project,
+            revision=revision,
+            stage_key=stage_key,
+            target_path=target_path,
+            field_path=field_path,
+            kind=kind,
+            count=count,
+            nonce=nonce,
+            stage_payload_override=stage_payload_override,
+        )
         normalized_stage = str(stage_key or "").strip()
         if normalized_stage not in GENESIS_STAGE_ORDER:
             raise ValueError("未知 Genesis stage。")
@@ -1714,6 +1773,12 @@ class BookGenesisService:
         project: Project,
         revision,
     ) -> list[ArcPlanVersion]:
+        return self.handoff.arc_materializer.materialize_book_arcs(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+        )
         pack = self.load_pack(revision)
         blueprint = pack.get("book_arc_blueprint") if isinstance(pack.get("book_arc_blueprint"), dict) else {}
         arc_items = [item for item in (blueprint.get("arcs") or []) if isinstance(item, dict)]
@@ -1756,6 +1821,15 @@ class BookGenesisService:
         decision_event_id: str = "",
         ensure_arc_map: bool = True,
     ) -> ArcPlanVersion:
+        return self.handoff.chapter_materializer.materialize_arc_chapter_plans(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+            arc_number=arc_number,
+            decision_event_id=decision_event_id,
+            ensure_arc_map=ensure_arc_map,
+        )
         pack = self.load_pack(revision)
         blueprint = pack.get("book_arc_blueprint") if isinstance(pack.get("book_arc_blueprint"), dict) else {}
         arc_payload = next(
@@ -2178,6 +2252,23 @@ class BookGenesisService:
         return next_payload, trace
 
     def _call_json_with_trace(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        fallback: dict[str, Any],
+        stage_key: str,
+        temperature: float = 0.45,
+        max_tokens: int | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        return self.trace_service.call_json_with_trace(
+            messages=messages,
+            fallback=fallback,
+            stage_key=stage_key,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    def _call_json_with_trace_impl(
         self,
         *,
         messages: list[dict[str, str]],

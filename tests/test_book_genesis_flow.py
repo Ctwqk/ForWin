@@ -438,7 +438,7 @@ class BookGenesisFlowTests(unittest.TestCase):
         )
         with (
             patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_genesis_call),
-            patch("forwin.api_project_ops.create_or_update_book_map", return_value=invalid_map),
+            patch("forwin.genesis_handoff.map_bootstrap.create_or_update_book_map", return_value=invalid_map),
             patch("forwin.api._create_continue_generation_task") as task_mock,
         ):
             with self.assertRaises(HTTPException) as raised:

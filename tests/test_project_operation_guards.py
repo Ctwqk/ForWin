@@ -207,45 +207,43 @@ class ProjectOperationGuardTests(unittest.TestCase):
             session.commit()
 
         class FakeGenesisService:
-            def materialize_book_arcs(self, *, session, project, **_kwargs):
-                arc = ArcPlanVersion(
-                    id="arc-start-writing-task-fail",
-                    project_id=project.id,
-                    version=1,
-                    arc_number=1,
-                    arc_synopsis="测试弧线",
-                    status="active",
-                )
-                session.add(arc)
-                session.flush()
-                return [arc]
-
-            def materialize_arc_chapter_plans(self, *, session, project, **_kwargs):
-                session.add(
-                    ChapterPlan(
-                        id="plan-start-writing-task-fail",
+            class Handoff:
+                def start_writing(self, *, session, updater, command):
+                    project = session.get(Project, command.project_id)
+                    arc = ArcPlanVersion(
+                        id="arc-start-writing-task-fail",
                         project_id=project.id,
-                        arc_plan_id="arc-start-writing-task-fail",
-                        chapter_number=1,
-                        title="第一章",
-                        status="planned",
+                        version=1,
+                        arc_number=1,
+                        arc_synopsis="测试弧线",
+                        status="active",
                     )
-                )
-                session.flush()
+                    session.add(arc)
+                    session.add(
+                        ChapterPlan(
+                            id="plan-start-writing-task-fail",
+                            project_id=project.id,
+                            arc_plan_id="arc-start-writing-task-fail",
+                            chapter_number=1,
+                            title="第一章",
+                            status="planned",
+                        )
+                    )
+                    project.creation_status = "writing"
+                    session.add(project)
+                    session.flush()
+                    return SimpleNamespace(
+                        active_chapter_plan_count=1,
+                        project_status="writing",
+                    )
 
-            def load_pack(self, _revision):
-                return {"world": {"world_bible": {"overview": "测试设定"}}}
+            def __init__(self):
+                self.handoff = self.Handoff()
 
         def fail_task_creation(**_kwargs):
             raise RuntimeError("task create failed")
 
         with (
-            patch.object(api_project_ops, "_ensure_initial_book_map_from_genesis", lambda **_kwargs: None),
-            patch.object(
-                api_project_ops,
-                "WorldModelCompiler",
-                lambda _session: SimpleNamespace(bootstrap_from_genesis=lambda _project_id: None),
-            ),
             self.assertRaises(RuntimeError),
         ):
             api_project_ops.start_project_writing(

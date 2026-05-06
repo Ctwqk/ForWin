@@ -745,8 +745,15 @@
         const automationCard = createNode('section', '', 'detail-card');
         automationCard.appendChild(createNode('div', '每日自动化', 'task-id'));
         const automationBadges = createNode('div', '', 'badge-row');
+        const writeQuota = automation.daily_write_quota || automation.daily_chapter_quota || 1;
+        const planQuota = automation.daily_plan_quota || 0;
+        const reviewQuota = automation.daily_review_quota || 0;
+        const publishQuota = automation.daily_publish_quota || 0;
         automationBadges.appendChild(createNode('span', automation.enabled ? '已开启' : '已关闭', `badge ${automation.enabled ? 'ok' : 'warn'}`));
-        automationBadges.appendChild(createNode('span', `每日 ${automation.daily_chapter_quota || 1} 章`, 'badge'));
+        automationBadges.appendChild(createNode('span', `写 ${writeQuota} 章`, 'badge'));
+        if (planQuota) automationBadges.appendChild(createNode('span', `规划 ${planQuota}`, 'badge'));
+        if (reviewQuota) automationBadges.appendChild(createNode('span', `提醒 review ${reviewQuota}`, 'badge'));
+        if (publishQuota) automationBadges.appendChild(createNode('span', `发布 ${publishQuota}`, 'badge'));
         automationBadges.appendChild(createNode('span', `${automation.daily_start_time || '09:00'} 开始`, 'badge'));
         if (automation.auto_publish) automationBadges.appendChild(createNode('span', '完成后自动发布', 'badge ok'));
         automationCard.appendChild(automationBadges);
@@ -780,18 +787,51 @@
         autoPublishWrap.appendChild(document.createTextNode('生成完成后自动创建发布任务'));
         automationForm.appendChild(autoPublishWrap);
 
+        const stopReviewInput = document.createElement('input');
+        stopReviewInput.type = 'checkbox';
+        stopReviewInput.checked = automation.stop_when_review_pending !== false;
+        const stopReviewWrap = document.createElement('label');
+        stopReviewWrap.className = 'checkbox';
+        stopReviewWrap.appendChild(stopReviewInput);
+        stopReviewWrap.appendChild(document.createTextNode('存在待 review 章节时暂停自动生成'));
+        automationForm.appendChild(stopReviewWrap);
+
         const timeInput = document.createElement('input');
         timeInput.type = 'time';
         timeInput.value = automation.daily_start_time || '09:00';
         automationForm.appendChild(createLabeledField('每日开始时间', timeInput));
+
+        const planQuotaInput = document.createElement('input');
+        planQuotaInput.type = 'number';
+        planQuotaInput.min = '0';
+        planQuotaInput.max = '20';
+        planQuotaInput.step = '1';
+        planQuotaInput.value = String(planQuota);
+        automationForm.appendChild(createLabeledField('每日规划额度', planQuotaInput));
 
         const quotaInput = document.createElement('input');
         quotaInput.type = 'number';
         quotaInput.min = '1';
         quotaInput.max = '20';
         quotaInput.step = '1';
-        quotaInput.value = String(automation.daily_chapter_quota || 1);
-        automationForm.appendChild(createLabeledField('每天最多生成几章', quotaInput));
+        quotaInput.value = String(writeQuota);
+        automationForm.appendChild(createLabeledField('每天最多写几章', quotaInput));
+
+        const reviewQuotaInput = document.createElement('input');
+        reviewQuotaInput.type = 'number';
+        reviewQuotaInput.min = '0';
+        reviewQuotaInput.max = '20';
+        reviewQuotaInput.step = '1';
+        reviewQuotaInput.value = String(reviewQuota);
+        automationForm.appendChild(createLabeledField('每日 review 提醒额度', reviewQuotaInput));
+
+        const publishQuotaInput = document.createElement('input');
+        publishQuotaInput.type = 'number';
+        publishQuotaInput.min = '0';
+        publishQuotaInput.max = '20';
+        publishQuotaInput.step = '1';
+        publishQuotaInput.value = String(publishQuota);
+        automationForm.appendChild(createLabeledField('每日发布额度', publishQuotaInput));
 
         const platformSelect = document.createElement('select');
         const selectedPlatform = automation.publish?.platform || '';
@@ -874,6 +914,11 @@
               enabled: enabledInput.checked,
               daily_start_time: timeInput.value || '09:00',
               daily_chapter_quota: Number(quotaInput.value || 1),
+              daily_plan_quota: Number(planQuotaInput.value || 0),
+              daily_write_quota: Number(quotaInput.value || 1),
+              daily_review_quota: Number(reviewQuotaInput.value || 0),
+              daily_publish_quota: Number(publishQuotaInput.value || 0),
+              stop_when_review_pending: stopReviewInput.checked,
               auto_publish: autoPublishInput.checked,
               publish: {
                 platform: platformSelect.value || '',

@@ -743,7 +743,7 @@
             : '',
           genesisProgressSummary(book),
           book.automation?.enabled
-            ? `自动化：${book.automation.daily_start_time || '09:00'} 开始，每日 ${book.automation.daily_chapter_quota || 1} 章${book.automation.auto_publish ? '，完成后自动发布' : ''}`
+            ? `自动化：${book.automation.daily_start_time || '09:00'} 开始，写 ${book.automation.daily_write_quota || book.automation.daily_chapter_quota || 1} 章${book.automation.daily_publish_quota ? `，发布 ${book.automation.daily_publish_quota}` : ''}${book.automation.auto_publish ? '，完成后自动发布' : ''}`
             : '自动化：关闭',
         ].filter(Boolean).join('\\n');
         if (meta) {

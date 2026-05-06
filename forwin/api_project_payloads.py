@@ -825,19 +825,33 @@ def normalize_project_automation(raw: str | dict[str, Any] | None) -> ProjectAut
         minute = min(59, max(0, int(parts[1])))
         time_text = f"{hour:02d}:{minute:02d}"
 
-    quota_raw = payload.get("daily_chapter_quota", 1)
-    try:
-        quota = int(quota_raw)
-    except (TypeError, ValueError):
-        quota = 1
-    quota = min(20, max(1, quota))
+    def _normalize_quota(value: Any, *, default: int = 0, minimum: int = 0) -> int:
+        try:
+            quota_value = int(value)
+        except (TypeError, ValueError):
+            quota_value = default
+        return min(20, max(minimum, quota_value))
+
+    quota = _normalize_quota(payload.get("daily_chapter_quota", 1), default=1, minimum=1)
+    daily_plan_quota = _normalize_quota(payload.get("daily_plan_quota", 0), default=0, minimum=0)
+    daily_write_raw = _normalize_quota(payload.get("daily_write_quota", 0), default=0, minimum=0)
+    daily_write_quota = quota if daily_write_raw <= 0 else daily_write_raw
+    daily_review_quota = _normalize_quota(payload.get("daily_review_quota", 0), default=0, minimum=0)
+    auto_publish = bool(payload.get("auto_publish", False))
+    daily_publish_raw = _normalize_quota(payload.get("daily_publish_quota", 0), default=0, minimum=0)
+    daily_publish_quota = 1 if auto_publish and daily_publish_raw <= 0 else daily_publish_raw
 
     return ProjectAutomationSettings.model_validate(
         {
             "enabled": bool(payload.get("enabled", False)),
             "daily_start_time": time_text,
             "daily_chapter_quota": quota,
-            "auto_publish": bool(payload.get("auto_publish", False)),
+            "daily_plan_quota": daily_plan_quota,
+            "daily_write_quota": daily_write_quota,
+            "daily_review_quota": daily_review_quota,
+            "daily_publish_quota": daily_publish_quota,
+            "stop_when_review_pending": bool(payload.get("stop_when_review_pending", True)),
+            "auto_publish": auto_publish,
             "publish": publish_payload,
             "publish_bindings": publish_bindings,
             "last_scheduler_date": str(payload.get("last_scheduler_date", "")).strip(),

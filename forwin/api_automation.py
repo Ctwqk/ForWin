@@ -6,18 +6,14 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy import case, func, select
 
-from forwin.api_project_payloads import normalize_project_automation
 from forwin.api_schemas import ProjectAutomationSettings
-from forwin.models.project import ChapterPlan, Project
+from forwin.models.project import ChapterPlan
 from forwin.models.task import GenerationTask
+from forwin.production.scheduler import ProductionScheduler, daily_start_minutes
 
 
 def automation_daily_start_minutes(automation: ProjectAutomationSettings) -> int:
-    try:
-        hour_text, minute_text = automation.daily_start_time.split(":", 1)
-        return int(hour_text) * 60 + int(minute_text)
-    except (TypeError, ValueError):
-        return 9 * 60
+    return daily_start_minutes(automation.daily_start_time)
 
 
 def load_automation_scheduler_metrics(
@@ -117,139 +113,19 @@ def run_automation_scheduler_pass(
     if session_factory is None or config is None:
         return
     try:
-        runtime_config = saved_runtime_config_or_503()
+        ProductionScheduler(
+            session_factory=session_factory,
+            config=config,
+            runtime_config_provider=saved_runtime_config_or_503,
+            display_datetime=display_datetime,
+            persist_project_automation=persist_project_automation,
+            create_generation_task=create_generation_task,
+            create_continue_generation_task=create_continue_generation_task,
+            active_generation_task_error_cls=active_generation_task_error_cls,
+            generation_terminal_statuses=terminal_statuses,
+            upload_terminal_statuses={"succeeded", "failed", "cancelled"},
+            display_tz=display_tz,
+            get_session=get_session,
+        ).run_due_projects(now=utcnow())
     except HTTPException:
         return
-
-    now = utcnow()
-    now_local = now.astimezone(display_tz)
-    today = now_local.strftime("%Y-%m-%d")
-    current_minutes = now_local.hour * 60 + now_local.minute
-
-    session = get_session()
-    try:
-        ready_projects: list[tuple[Project, ProjectAutomationSettings]] = []
-        projects = session.execute(select(Project).order_by(Project.updated_at.desc())).scalars().all()
-        for project in projects:
-            automation = normalize_project_automation(project.automation_json)
-            if not automation.enabled:
-                continue
-            if automation.last_scheduler_date == today:
-                continue
-            if current_minutes < automation_daily_start_minutes(automation):
-                continue
-            ready_projects.append((project, automation))
-
-        (
-            pending_review_counts,
-            total_plan_counts,
-            pending_numbers_by_project,
-            active_generation_project_ids,
-        ) = load_automation_scheduler_metrics(
-            session,
-            [project.id for project, _automation in ready_projects],
-            terminal_statuses=terminal_statuses,
-        )
-
-        for project, automation in ready_projects:
-            pending_review = int(pending_review_counts.get(project.id, 0) or 0)
-            total_plans = int(total_plan_counts.get(project.id, 0) or 0)
-            pending_numbers = list(pending_numbers_by_project.get(project.id, []))
-
-            updated = automation.model_copy(
-                update={
-                    "last_scheduler_date": today,
-                    "last_scheduler_at": display_datetime(now),
-                }
-            )
-            if project.id in active_generation_project_ids:
-                updated = updated.model_copy(
-                    update={
-                        "last_scheduler_action": "active_task",
-                        "last_scheduler_message": "已有运行中的生成任务，今日不重复调度。",
-                        "last_scheduler_task_id": "",
-                    }
-                )
-                persist_project_automation(session, project, updated)
-                continue
-            if pending_review:
-                updated = updated.model_copy(
-                    update={
-                        "last_scheduler_action": "waiting_review",
-                        "last_scheduler_message": "仍有章节等待人工 review，今日暂停自动生成。",
-                        "last_scheduler_task_id": "",
-                    }
-                )
-                persist_project_automation(session, project, updated)
-                continue
-
-            quota = min(20, max(1, int(automation.daily_chapter_quota or 1)))
-            task_id = ""
-            if total_plans == 0:
-                try:
-                    task_id = create_generation_task(
-                        premise=project.premise,
-                        genre=project.genre,
-                        num_chapters=quota,
-                        runtime_config=runtime_config,
-                        project_id=project.id,
-                        title=project.title,
-                        subtitle=f"自动调度 · 首批 {quota} 章",
-                    )
-                    updated = updated.model_copy(
-                        update={
-                            "last_scheduler_action": "started_initial_generation",
-                            "last_scheduler_message": f"已按计划启动首批 {quota} 章生成。",
-                            "last_scheduler_task_id": task_id,
-                        }
-                    )
-                except active_generation_task_error_cls:
-                    updated = updated.model_copy(
-                        update={
-                            "last_scheduler_action": "active_task",
-                            "last_scheduler_message": "已有运行中的生成任务，今日不重复调度。",
-                            "last_scheduler_task_id": "",
-                        }
-                    )
-            elif pending_numbers:
-                try:
-                    task_id = create_continue_generation_task(
-                        project_id=project.id,
-                        runtime_config=runtime_config,
-                        requested_chapters=total_plans,
-                        max_chapters=quota,
-                        title=project.title,
-                        subtitle=f"自动调度 · 今日上限 {quota} 章",
-                        message=f"按计划继续生成，今日最多处理 {quota} 章。",
-                    )
-                    updated = updated.model_copy(
-                        update={
-                            "last_scheduler_action": "started_continue_generation",
-                            "last_scheduler_message": f"已按计划继续生成，今日最多处理 {quota} 章。",
-                            "last_scheduler_task_id": task_id,
-                        }
-                    )
-                except active_generation_task_error_cls:
-                    updated = updated.model_copy(
-                        update={
-                            "last_scheduler_action": "active_task",
-                            "last_scheduler_message": "已有运行中的生成任务，今日不重复调度。",
-                            "last_scheduler_task_id": "",
-                        }
-                    )
-            else:
-                updated = updated.model_copy(
-                    update={
-                        "last_scheduler_action": "idle",
-                        "last_scheduler_message": "没有待生成章节，今日无需调度。",
-                        "last_scheduler_task_id": "",
-                    }
-                )
-
-            persist_project_automation(session, project, updated)
-        session.commit()
-    except Exception:  # noqa: BLE001
-        session.rollback()
-        raise
-    finally:
-        session.close()

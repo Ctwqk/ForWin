@@ -2,19 +2,71 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from fastapi import HTTPException
+
 from forwin import api_project_ops
+from forwin.api_project_payloads import normalize_project_automation
 from forwin.api_schemas import (
     BookGenesisPatchRequest,
     BookGenesisNameGenerateRequest,
     BookGenesisRefineRequest,
     BookGenesisStageRunRequest,
     ChapterReviewApproveRequest,
+    ProjectAutomationUpdateResponse,
     ProjectAutomationUpdateRequest,
     ProjectBulkDeleteRequest,
     ProjectChapterPublishRequest,
     ProjectContinueGenerationRequest,
     ProjectCreateRequest,
 )
+from forwin.models.project import Project
+
+
+def _update_project_automation(
+    project_id: str,
+    req: ProjectAutomationUpdateRequest,
+    *,
+    get_session: Callable[[], Any],
+    persist_project_automation: Callable[..., Any],
+) -> ProjectAutomationUpdateResponse:
+    session = get_session()
+    try:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        current = normalize_project_automation(project.automation_json)
+        payload = current.model_dump(mode="json")
+        payload.update(
+            {
+                "enabled": bool(req.enabled),
+                "daily_start_time": req.daily_start_time,
+                "daily_chapter_quota": req.daily_chapter_quota,
+                "daily_plan_quota": req.daily_plan_quota,
+                "daily_write_quota": req.daily_write_quota,
+                "daily_review_quota": req.daily_review_quota,
+                "daily_publish_quota": req.daily_publish_quota,
+                "stop_when_review_pending": bool(req.stop_when_review_pending),
+                "auto_publish": bool(req.auto_publish),
+            }
+        )
+        if req.publish is not None:
+            payload["publish"] = req.publish.model_dump(mode="json")
+        if req.publish_bindings is not None:
+            payload["publish_bindings"] = [
+                binding.model_dump(mode="json")
+                for binding in req.publish_bindings
+            ]
+        updated = normalize_project_automation(payload)
+        stored = persist_project_automation(session, project, updated)
+        session.commit()
+        return ProjectAutomationUpdateResponse(
+            ok=True,
+            project_id=project_id,
+            automation=stored,
+            message="书本自动化设置已保存。",
+        )
+    finally:
+        session.close()
 
 
 def build_handlers(
@@ -217,7 +269,7 @@ def build_handlers(
         )
 
     def update_project_automation(project_id: str, req: ProjectAutomationUpdateRequest):
-        return api_project_ops.update_project_automation(
+        return _update_project_automation(
             project_id,
             req,
             get_session=get_session,

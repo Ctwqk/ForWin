@@ -17,6 +17,8 @@ from forwin.protocol.state_change import (
 from forwin.protocol.writer import EntityMention, LoreCandidate, TimelineHint, WriterNote, WriterOutput
 from forwin.skills import serialize_prompt_layers
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
+from forwin.observability.context import OperationContext
+from forwin.observability.ports import NullObservability
 from .prompts import (
     build_preview_chapter_prompt,
     build_lore_timeline_notes_extraction_prompt,
@@ -59,6 +61,7 @@ class ChapterWriter:
         target_chapter_chars: int = 2800,
         single_call_timeout_seconds: float = 90.0,
         scene_call_timeout_seconds: float = 90.0,
+        observability=None,
     ) -> None:
         self.llm_client = llm_client
         self.temperature = temperature
@@ -76,6 +79,7 @@ class ChapterWriter:
         self.scene_call_timeout_seconds = max(10.0, float(scene_call_timeout_seconds))
         self._chat_signature = inspect.signature(self.llm_client.chat)
         self._business_retry_events: list[dict[str, object]] = []
+        self.observability = observability or NullObservability()
 
     # ------------------------------------------------------------------
     # Public API
@@ -93,17 +97,33 @@ class ChapterWriter:
         Returns a fully-populated WriterOutput.  The char_count field is
         computed from the body after parsing.
         """
-        if self.writer_mode == "single":
-            return self._write_single_chapter(
-                context,
-                skill_layers=skill_layers,
-                trace_stage_key=trace_stage_key,
-            )
-        return self._write_scene_chapter(
-            context,
-            skill_layers=skill_layers,
-            trace_stage_key=trace_stage_key,
+        obs_context = OperationContext(
+            project_id=getattr(context, "project_id", ""),
+            chapter_number=int(getattr(context, "chapter_number", 0) or 0),
+            stage=trace_stage_key,
         )
+        with self.observability.span(
+            obs_context,
+            "writer.write_chapter",
+            span_kind="writer",
+            component="writer",
+            tags={"writer_mode": self.writer_mode},
+        ) as span:
+            if self.writer_mode == "single":
+                output = self._write_single_chapter(
+                    context,
+                    skill_layers=skill_layers,
+                    trace_stage_key=trace_stage_key,
+                )
+            else:
+                output = self._write_scene_chapter(
+                    context,
+                    skill_layers=skill_layers,
+                    trace_stage_key=trace_stage_key,
+                )
+            span.metric("char_count", int(getattr(output, "char_count", 0) or 0))
+            span.metric("scene_count", len(getattr(output, "scene_outputs", []) or []))
+            return output
 
     def write_preview_chapter(
         self,
@@ -127,6 +147,40 @@ class ChapterWriter:
             context.chapter_number,
             context.chapter_plan_title,
         )
+        obs_context = OperationContext(
+            project_id=getattr(context, "project_id", ""),
+            chapter_number=int(getattr(context, "chapter_number", 0) or 0),
+            stage=trace_stage_key,
+        )
+        with self.observability.span(
+            obs_context,
+            "writer.preview_chapter",
+            span_kind="writer",
+            component="writer",
+            tags={"writer_mode": "preview"},
+        ) as span:
+            output = self._write_preview_chapter_inner(
+                context,
+                skill_layers=skill_layers,
+                trace_stage_key=trace_stage_key,
+                timeout_seconds=timeout_seconds,
+                max_attempts=max_attempts,
+                retry_on_timeout=retry_on_timeout,
+            )
+            span.metric("char_count", int(getattr(output, "char_count", 0) or 0))
+            return output
+
+    def _write_preview_chapter_inner(
+        self,
+        context: ChapterContextPack,
+        *,
+        skill_layers: list[object] | None,
+        trace_stage_key: str,
+        timeout_seconds: float | None,
+        max_attempts: int,
+        retry_on_timeout: bool,
+    ) -> WriterOutput:
+        """Implementation body for preview writing so the public method can wrap a span."""
         target_chars = max(
             self.min_chapter_chars,
             min(self.target_chapter_chars, self.max_chapter_chars),

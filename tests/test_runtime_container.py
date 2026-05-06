@@ -1,8 +1,26 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from types import SimpleNamespace
 
 from forwin.config import Config
+
+
+def test_runtime_container_imports_in_fresh_process() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from forwin.runtime.container import RuntimeContainer; print(RuntimeContainer.__name__)",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "RuntimeContainer"
 
 
 class _FakeURL:

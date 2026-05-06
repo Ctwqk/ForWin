@@ -13,6 +13,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.orchestrator.phase24 import ArcEnvelopeManager
 from forwin.orchestrator.phase3 import PacingStrategist, ReplanGovernor, StageAnalyzer
 from forwin.orchestrator.phase4 import NPCIntentGenerator, WorldSimulator
+from forwin.observability.service import ObservabilityService
 from forwin.planning.band_plan_service import BandPlanService
 from forwin.planning.world_contract_service import WorldContractPlanningService
 from forwin.publisher_runtime.service import PublisherRuntimeService
@@ -90,12 +91,22 @@ class RuntimeContainer:
         llm_client = self._build_llm_client(config)
         skill_runtime = self._build_skill_runtime(config)
         artifact_store = self._build_artifact_store(config)
+        observability = ObservabilityService(
+            session_factory=session_factory,
+            artifact_store=artifact_store,
+            config=config,
+        )
+        if bool(getattr(config, "observability_record_db_spans", False)):
+            from forwin.observability.sqlalchemy_probe import install_sqlalchemy_query_probe
+
+            install_sqlalchemy_query_probe(engine)
         book_genesis = self._build_book_genesis_service(
             config=config,
             llm_client=llm_client,
             skill_runtime=skill_runtime,
             artifact_store=artifact_store,
         )
+        book_genesis.observability = observability
 
         arc_director = ArcDirector(
             llm_client=llm_client,
@@ -127,8 +138,8 @@ class RuntimeContainer:
             ),
         )
 
-        writer = build_writer(config, llm_client)
-        provisional_writer = build_provisional_writer(config, llm_client)
+        writer = build_writer(config, llm_client, observability)
+        provisional_writer = build_provisional_writer(config, llm_client, observability)
         stage_analyzer = StageAnalyzer()
         pacing_strategist = PacingStrategist(
             window_size=config.pacing_window_size,
@@ -173,6 +184,7 @@ class RuntimeContainer:
             lint_review_enabled=config.lint_review_enabled,
             llm_client=llm_client if llm_available else None,
             llm_enabled=llm_available,
+            observability=observability,
         )
         publisher_runtime = PublisherRuntimeService(
             session_factory=session_factory,
@@ -181,6 +193,7 @@ class RuntimeContainer:
             preferred_client_id=config.publisher_preferred_client_id,
             publisher_session_secret=config.publisher_session_secret,
             publisher_session_encryption_required=config.publisher_session_encryption_required,
+            observability=observability,
         )
         return RuntimeServices(
             config=config,
@@ -193,6 +206,7 @@ class RuntimeContainer:
             subworld_manager=subworld_manager,
             retrieval_broker=retrieval_broker,
             artifact_store=artifact_store,
+            observability=observability,
             stage_analyzer=stage_analyzer,
             pacing_strategist=pacing_strategist,
             replan_governor=replan_governor,
@@ -207,9 +221,10 @@ class RuntimeContainer:
             production_scheduler=ProductionSchedulerFactory(
                 session_factory=session_factory,
                 config=config,
+                observability=observability,
             ),
             publisher_runtime=publisher_runtime,
-            context_assembler=ChapterContextAssembler(),
+            context_assembler=ChapterContextAssembler(observability=observability),
             review_hub=review_hub,
             writer=writer,
             provisional_writer=provisional_writer,

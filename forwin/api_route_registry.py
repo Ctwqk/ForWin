@@ -54,6 +54,8 @@ from forwin.api_schemas import (
     MapRuntimeResponse,
     NarrativeConstraintInfo,
     NarrativeConstraintsResponse,
+    PerformanceReportResponse,
+    PerformanceSpanInfo,
     ProjectAutomationUpdateResponse,
     ProjectCreateResponse,
     ProjectDeleteResponse,
@@ -157,6 +159,12 @@ class ApiRouteDeps:
     get_chapter_observability_ledger: Callable[..., Any]
     get_prompt_trace_detail: Callable[..., Any]
     read_artifact_preview: Callable[..., Any]
+    get_task_performance_report: Callable[..., Any]
+    get_project_performance_report: Callable[..., Any]
+    get_chapter_performance_report: Callable[..., Any]
+    get_slow_performance_spans: Callable[..., Any]
+    get_llm_performance_report: Callable[..., Any]
+    get_db_performance_report: Callable[..., Any]
 
 
 def register_api_routes(
@@ -225,6 +233,12 @@ def register_api_routes(
     get_chapter_observability_ledger = deps.get_chapter_observability_ledger
     get_prompt_trace_detail = deps.get_prompt_trace_detail
     read_artifact_preview = deps.read_artifact_preview
+    get_task_performance_report = deps.get_task_performance_report
+    get_project_performance_report = deps.get_project_performance_report
+    get_chapter_performance_report = deps.get_chapter_performance_report
+    get_slow_performance_spans = deps.get_slow_performance_spans
+    get_llm_performance_report = deps.get_llm_performance_report
+    get_db_performance_report = deps.get_db_performance_report
 
     system_handlers = api_system_routes.build_handlers(
         get_config=get_config,
@@ -488,6 +502,12 @@ def register_api_routes(
         ("/api/projects/{project_id}/chapters", ["GET"], handlers["list_chapters"], {"response_model": list[ChapterInfo]}),
         ("/api/projects/{project_id}/chapters/{chapter_number}", ["GET"], handlers["get_chapter"], {"response_model": ChapterDetail}),
         ("/api/projects/{project_id}/chapters/{chapter_number}/ledger", ["GET"], get_chapter_observability_ledger, {"response_model": ChapterLedgerResponse}),
+        ("/api/observability/performance/tasks/{task_id}", ["GET"], get_task_performance_report, {"response_model": PerformanceReportResponse}),
+        ("/api/observability/performance/projects/{project_id}", ["GET"], get_project_performance_report, {"response_model": PerformanceReportResponse}),
+        ("/api/observability/performance/projects/{project_id}/chapters/{chapter_number}", ["GET"], get_chapter_performance_report, {"response_model": PerformanceReportResponse}),
+        ("/api/observability/performance/slow-spans", ["GET"], get_slow_performance_spans, {"response_model": list[PerformanceSpanInfo]}),
+        ("/api/observability/performance/llm", ["GET"], get_llm_performance_report, {"response_model": PerformanceReportResponse}),
+        ("/api/observability/performance/db", ["GET"], get_db_performance_report, {"response_model": PerformanceReportResponse}),
         ("/api/projects/{project_id}/chapters/{chapter_number}/candidate-draft", ["GET"], handlers["get_candidate_draft"], {"response_model": CandidateDraftDetail}),
         ("/api/projects/{project_id}/publishers/upload-jobs", ["POST"], handlers["create_project_chapter_upload_job"], {"response_model": PublisherUploadJobResponse}),
         ("/api/projects/{project_id}/chapters/{chapter_number}/review", ["GET"], handlers["get_chapter_review"], {"response_model": ChapterReviewDetail}),

@@ -98,6 +98,49 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertIn("运行中的生成任务", str(ctx.exception.detail))
 
+    def test_project_detail_overlays_active_generation_task_stage(self) -> None:
+        project = self._create_project(project_id="proj-active-detail")
+        with self.session_factory() as session:
+            arc = ArcPlanVersion(
+                id="arc-active-detail",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+            )
+            session.add(arc)
+            session.add(
+                ChapterPlan(
+                    id="plan-active-detail-1",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=1,
+                    title="第一章",
+                    status="planned",
+                )
+            )
+            session.add(
+                GenerationTask(
+                    id="task-active-detail",
+                    project_id=project.id,
+                    task_kind="generation",
+                    status="running",
+                    requested_chapters=12,
+                    current_stage="repairing_chapter",
+                    current_chapter=1,
+                    message="repairing",
+                    pause_requested=True,
+                )
+            )
+            session.commit()
+
+        detail = api_module.get_project(project.id)
+
+        self.assertEqual(detail.latest_stage, "repairing_chapter")
+        self.assertEqual(detail.generation_control.current_stage, "repairing_chapter")
+        self.assertEqual(detail.generation_control.current_chapter, 1)
+        self.assertTrue(detail.generation_control.pause_requested)
+        self.assertFalse(detail.generation_control.can_resume)
+
     def test_approve_review_rejects_continue_when_active_generation_task_exists(self) -> None:
         project = self._create_project(project_id="proj-active-continue")
         with self.session_factory() as session:

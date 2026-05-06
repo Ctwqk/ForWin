@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 from forwin.config import Config
 from forwin.model_adapter import ModelAdapter
+from forwin.observability.ports import ObservabilityPort
 from forwin.skills import SkillPromptLayerBuilder, SkillRegistry, SkillRouter
 
 
@@ -31,6 +32,7 @@ class RuntimeServices:
     subworld_manager: Any
     retrieval_broker: Any
     artifact_store: Any
+    observability: ObservabilityPort
 
     stage_analyzer: Any
     pacing_strategist: Any

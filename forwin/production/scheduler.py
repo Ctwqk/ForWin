@@ -10,6 +10,8 @@ from sqlalchemy import select
 from forwin.api_project_payloads import normalize_project_automation
 from forwin.api_schemas import ProjectAutomationSettings
 from forwin.models.project import Project
+from forwin.observability.context import OperationContext
+from forwin.observability.ports import NullObservability
 
 from .events import action_for_blocked_reason, message_for_action
 from .executor import ProductionExecutionResult, ProductionExecutor
@@ -52,6 +54,7 @@ class ProductionScheduler:
         display_tz: Any = None,
         get_session: Callable[[], Any] | None = None,
         publisher_manager_factory: Callable[[], Any] | None = None,
+        observability: Any | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.config = config
@@ -67,6 +70,7 @@ class ProductionScheduler:
         self.get_session = get_session
         self.publisher_manager_factory = publisher_manager_factory
         self.planner = ProductionPlanner()
+        self.observability = observability or NullObservability()
 
     def run_due_projects(self, *, now: datetime) -> list[ProductionRunResult]:
         if self.session_factory is None or self.config is None:
@@ -104,62 +108,75 @@ class ProductionScheduler:
             )
             results: list[ProductionRunResult] = []
             for project, automation in ready_projects:
-                policy = policy_from_automation(automation)
-                backlog = backlogs.get(project.id)
-                if backlog is None:
-                    continue
-                plan = self.planner.plan(policy=policy, backlog=backlog, now=now_local)
-                updated = automation.model_copy(
-                    update={
-                        "last_scheduler_date": today,
-                        "last_scheduler_at": self.display_datetime(now),
-                    }
+                obs_context = OperationContext(
+                    project_id=project.id,
+                    stage="production.scheduler.run_due_projects",
                 )
-                if plan.blocked_reason:
-                    action = action_for_blocked_reason(plan.blocked_reason)
-                    message = message_for_action(action, blocked_reason=plan.blocked_reason)
+                with self.observability.span(
+                    obs_context,
+                    "production.scheduler.project",
+                    span_kind="scheduler",
+                    component="production",
+                ) as span:
+                    policy = policy_from_automation(automation)
+                    backlog = backlogs.get(project.id)
+                    if backlog is None:
+                        span.set_status("skipped")
+                        continue
+                    plan = self.planner.plan(policy=policy, backlog=backlog, now=now_local)
+                    updated = automation.model_copy(
+                        update={
+                            "last_scheduler_date": today,
+                            "last_scheduler_at": self.display_datetime(now),
+                        }
+                    )
+                    if plan.blocked_reason:
+                        action = action_for_blocked_reason(plan.blocked_reason)
+                        message = message_for_action(action, blocked_reason=plan.blocked_reason)
+                        span.tag("action", action)
+                        updated = updated.model_copy(
+                            update={
+                                "last_scheduler_action": action,
+                                "last_scheduler_message": message,
+                                "last_scheduler_task_id": "",
+                            }
+                        )
+                        self.persist_project_automation(session, project, updated)
+                        results.append(
+                            ProductionRunResult(
+                                project_id=project.id,
+                                action=action,
+                                message=message,
+                                plan=plan,
+                            )
+                        )
+                        continue
+
+                    execution = executor.execute(
+                        plan=plan,
+                        project=project,
+                        policy=policy,
+                        runtime_config=runtime_config,
+                    )
+                    span.tag("action", execution.action)
                     updated = updated.model_copy(
                         update={
-                            "last_scheduler_action": action,
-                            "last_scheduler_message": message,
-                            "last_scheduler_task_id": "",
+                            "last_scheduler_action": execution.action,
+                            "last_scheduler_message": execution.message,
+                            "last_scheduler_task_id": execution.task_id,
                         }
                     )
                     self.persist_project_automation(session, project, updated)
                     results.append(
                         ProductionRunResult(
                             project_id=project.id,
-                            action=action,
-                            message=message,
+                            action=execution.action,
+                            message=execution.message,
+                            task_id=execution.task_id,
                             plan=plan,
+                            execution=execution,
                         )
                     )
-                    continue
-
-                execution = executor.execute(
-                    plan=plan,
-                    project=project,
-                    policy=policy,
-                    runtime_config=runtime_config,
-                )
-                updated = updated.model_copy(
-                    update={
-                        "last_scheduler_action": execution.action,
-                        "last_scheduler_message": execution.message,
-                        "last_scheduler_task_id": execution.task_id,
-                    }
-                )
-                self.persist_project_automation(session, project, updated)
-                results.append(
-                    ProductionRunResult(
-                        project_id=project.id,
-                        action=execution.action,
-                        message=execution.message,
-                        task_id=execution.task_id,
-                        plan=plan,
-                        execution=execution,
-                    )
-                )
             session.commit()
             return results
         except Exception:

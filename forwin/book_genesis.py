@@ -5,8 +5,10 @@ import inspect
 import json
 import logging
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -19,7 +21,11 @@ from forwin.genesis_workspace.trace_service import GenesisTraceService
 from forwin.map.service import ensure_book_map_from_genesis_atlas
 from forwin.model_adapter import ModelAdapter
 from forwin.models.genesis import BookGenesisRevision, PromptTrace
+from forwin.observability.context import OperationContext
 from forwin.observability.payloads import audit_payload, event_error_payload
+from forwin.observability.ports import NullObservability
+from forwin.observability.redaction import redact_payload
+from forwin.observability.spans import SpanRecord
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.naming import CULTURE_ALIAS_TO_KEY, CULTURES, CultureNameGenerator
 from forwin.observability.llm_trace import (
@@ -428,12 +434,96 @@ def _initial_pack(project: Project, brief_seed: dict[str, Any] | None = None) ->
 def _fallback_brief(project: Project, book_brief: dict[str, Any]) -> dict[str, Any]:
     return {
         "title": project.title,
+        "premise": book_brief.get("premise") or project.premise,
+        "genre": book_brief.get("genre") or project.genre,
+        "target_total_chapters": int(
+            book_brief.get("target_total_chapters") or project.target_total_chapters or 1
+        ),
+        "setting_seed": book_brief.get("setting_seed") or project.setting_summary,
         "one_line": f"{project.genre}长篇，围绕“{project.premise[:48]}”展开。",
         "audience": book_brief.get("audience_hint") or "网文读者",
         "core_emotion": book_brief.get("core_emotion") or "紧张与上升",
         "core_delight": book_brief.get("core_delight") or "危机升级、线索反转、主角成长",
         "promise": book_brief.get("narrative_promise") or "持续升级、逐步揭示世界真相。",
         "guardrails": book_brief.get("content_guardrails") or [],
+    }
+
+
+_FALLBACK_PERSON_ROLE_PREFIXES = (
+    "失业档案修复师",
+    "前调查记者",
+    "企业继承人",
+    "地下算法师",
+    "失忆警员",
+    "档案修复师",
+    "调查记者",
+    "继承人",
+    "算法师",
+    "警员",
+    "记者",
+    "修复师",
+)
+
+
+def _dedupe_preserve_order(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        text = str(item or "").strip(" 　，。；、,.《》「」“”")
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
+def _fallback_seed_text(pack: dict[str, Any]) -> str:
+    book_brief = pack.get("book_brief") if isinstance(pack.get("book_brief"), dict) else {}
+    return "\n".join(
+        str(part or "").strip()
+        for part in (
+            book_brief.get("premise"),
+            book_brief.get("setting_seed"),
+            book_brief.get("one_line"),
+            book_brief.get("promise"),
+        )
+        if str(part or "").strip()
+    )
+
+
+def _fallback_named_entity_seed(pack: dict[str, Any]) -> dict[str, list[str]]:
+    text = _fallback_seed_text(pack)
+    character_names: list[str] = []
+    for prefix in _FALLBACK_PERSON_ROLE_PREFIXES:
+        pattern = re.compile(rf"{re.escape(prefix)}([\u4e00-\u9fff]{{2,3}}?)(?=在|，|、|和|与|。|$)")
+        character_names.extend(match.group(1) for match in pattern.finditer(text))
+
+    quoted_terms = re.findall(r"[「“《]([^」”》]{2,16})[」”》]", text)
+    organizations = re.findall(
+        r"([\u4e00-\u9fff]{2,12}(?:集团|公司|财团|企业|组织|协会|联盟|管理局|审计局|委员会|机构))(?=，|、|。|；|,|;|和|与|$)",
+        text,
+    )
+    location_terms = list(quoted_terms)
+    location_terms.extend(
+        term
+        for term in ("旧城区", "旧港", "民间记忆馆", "地下数据市场")
+        if term in text
+    )
+    location_terms.extend(
+        re.findall(
+            r"([\u4e00-\u9fff]{2,12}(?:旧城区|新区|港区|港口|旧港|记忆馆|数据市场|市场|街区|码头|城区))(?=，|、|。|；|,|;|并|和|与|$)",
+            text,
+        )
+    )
+    story_terms = re.findall(
+        r"([\u4e00-\u9fff]{2,12}(?:账本|系统|火灾|遗书|循环|记忆))(?=，|、|。|；|,|;|和|与|$)",
+        text,
+    )
+    return {
+        "characters": _dedupe_preserve_order(character_names),
+        "locations": _dedupe_preserve_order(location_terms),
+        "organizations": _dedupe_preserve_order(organizations),
+        "story_terms": _dedupe_preserve_order(story_terms + quoted_terms),
     }
 
 
@@ -489,6 +579,9 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
     culture_profiles = [item for item in (world.get("culture_profiles") or []) if isinstance(item, dict)]
     primary_profile = (culture_profiles[0] if culture_profiles else {}) or {}
     primary_culture_id = str(primary_profile.get("id", "") or "culture-main-stage") if culture_profiles else "culture-main-stage"
+    seed_entities = _fallback_named_entity_seed(pack)
+    locations = seed_entities["locations"]
+    organizations = seed_entities["organizations"]
     primary_subworld_name = "主舞台总图"
     primary_region_name = "主舞台核心区"
     power_region_name = "权力中心区"
@@ -496,7 +589,15 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
     power_node_name = "权力中心"
     danger_node_name = "危险边缘"
     civilization = _culture_profile_generator_civilization(primary_profile)
-    if civilization:
+    if locations:
+        primary_subworld_name = locations[0]
+        primary_region_name = next((item for item in locations[1:] if "区" in item), f"{locations[0]}旧城区")
+        primary_node_name = next((item for item in locations[1:] if "馆" in item), locations[0])
+        danger_node_name = next((item for item in locations[1:] if "市场" in item or "港" in item), "危险边缘")
+        if organizations:
+            power_region_name = organizations[0]
+            power_node_name = organizations[0]
+    elif civilization:
         try:
             primary_subworld_name = _generate_culture_names(
                 civilization=civilization,
@@ -668,12 +769,20 @@ def _fallback_story_engine(pack: dict[str, Any]) -> dict[str, Any]:
     primary_location = str((nodes[0] or {}).get("id", "") or (nodes[0] or {}).get("name", "") or "node-main-stage") if nodes else "node-main-stage"
     power_location = str((nodes[1] or {}).get("id", "") or (nodes[1] or {}).get("name", "") or primary_location or "node-power-core") if len(nodes) > 1 else (primary_location or "node-power-core")
     primary_profile = (culture_profiles[0] if culture_profiles else {}) or {}
+    seed_entities = _fallback_named_entity_seed(pack)
+    character_names = seed_entities["characters"]
+    organizations = seed_entities["organizations"]
     protagonist_name = "主角"
     primary_faction = "主舞台权力中枢"
     primary_faction_id = "faction-main-stage"
     opposition_name = "对手盘"
     civilization = _culture_profile_generator_civilization(primary_profile)
-    if civilization:
+    if character_names:
+        protagonist_name = character_names[0]
+    if organizations:
+        primary_faction = organizations[0]
+        opposition_name = organizations[0]
+    elif civilization:
         try:
             protagonist_name = _generate_culture_names(
                 civilization=civilization,
@@ -695,14 +804,16 @@ def _fallback_story_engine(pack: dict[str, Any]) -> dict[str, Any]:
             )[0]
         except Exception:  # noqa: BLE001
             logger.debug("Fallback story naming generation failed for profile %s", primary_culture_id, exc_info=True)
-    return {
-        "core_cast": [
+    cast_names = character_names or [protagonist_name]
+    core_cast = []
+    for index, name in enumerate(cast_names[:6]):
+        core_cast.append(
             {
-                "name": protagonist_name,
-                "role": "主视角",
-                "desire": "摆脱被动处境并掌握真相",
+                "name": name,
+                "role": "主视角" if index == 0 else "关键盟友",
+                "desire": "摆脱被动处境并掌握真相" if index == 0 else "协助主角补全真相并守住自身动机",
                 "fear": "在升级过程中失去最重要的人或自我",
-                "secret": "与旧时代规则存在未公开的深层关联。",
+                "secret": "与旧时代规则存在未公开的深层关联。" if index == 0 else "掌握一段尚未公开的线索或利益牵连。",
                 "culture_profile_id": primary_culture_id,
                 "home_subworld": primary_subworld,
                 "home_region": primary_region_id,
@@ -710,17 +821,19 @@ def _fallback_story_engine(pack: dict[str, Any]) -> dict[str, Any]:
                 "current_region": primary_region_id,
                 "current_base": primary_location,
                 "affiliated_faction": primary_faction_id,
-                "affiliated_family": "主角原生家庭",
+                "affiliated_family": "主角原生家庭" if index == 0 else "",
                 "faction_memberships": [
                     {
                         "faction_name": primary_faction,
-                        "relation": "member",
-                        "rank": "外围关联者",
+                        "relation": "member" if index == 0 else "ally",
+                        "rank": "外围关联者" if index == 0 else "协作对象",
                         "is_primary": True,
                     }
                 ],
             }
-        ],
+        )
+    return {
+        "core_cast": core_cast,
         "factions": [
             {
                 "id": primary_faction_id,
@@ -1021,6 +1134,7 @@ class BookGenesisService:
         self.skill_router = skill_router
         self.skill_prompt_layer_builder = skill_prompt_layer_builder
         self.artifact_store = artifact_store
+        self.observability = NullObservability()
         self.trace_service = GenesisTraceService(self)
         self.workspace = GenesisWorkspaceService(self)
         self.handoff = GenesisHandoffService(self)
@@ -2497,6 +2611,77 @@ class BookGenesisService:
                     parent_event_id=str(decision_event_id or ""),
                 )
             )
+        self._record_trace_performance_spans(
+            project_id=project_id,
+            trace_id=trace_id,
+            trace_payload=trace_payload,
+        )
+
+    def _record_trace_performance_spans(
+        self,
+        *,
+        project_id: str,
+        trace_id: str,
+        trace_payload: dict[str, Any],
+    ) -> None:
+        attempts = trace_payload.get("attempts") if isinstance(trace_payload, dict) else []
+        if not isinstance(attempts, list):
+            return
+        trace_scope = str(trace_payload.get("trace_scope") or "genesis").strip() or "genesis"
+        fallback_stage = str(trace_payload.get("stage_key") or "").strip()
+        for attempt in attempts:
+            if not isinstance(attempt, dict):
+                continue
+            stage_key = str(attempt.get("stage_key") or fallback_stage or "").strip()
+            duration_ms = max(0, int(attempt.get("duration_ms") or 0))
+            failed = bool(attempt.get("error_class") or attempt.get("final_failure") or attempt.get("parse_error"))
+            record = SpanRecord(
+                context=OperationContext(
+                    project_id=project_id,
+                    stage=stage_key,
+                    operation_id=trace_id,
+                ),
+                span_name="llm.request",
+                span_kind="llm",
+                component=trace_scope,
+                tags=redact_payload(
+                    {
+                        "prompt_trace_id": trace_id,
+                        "trace_scope": trace_scope,
+                        "stage_key": stage_key,
+                        "profile_id": str(attempt.get("profile_id") or ""),
+                        "model": str(attempt.get("model") or ""),
+                        "llm_task_route": str(attempt.get("llm_task_route") or ""),
+                        "attempt_no": int(attempt.get("attempt_no") or 0),
+                        "attempt_group_id": str(attempt.get("attempt_group_id") or ""),
+                    }
+                ),
+                metrics={
+                    "input_chars": int(attempt.get("input_chars") or 0),
+                    "output_chars": int(attempt.get("output_chars") or 0),
+                    "sleep_ms": int(attempt.get("sleep_ms") or 0),
+                },
+                status="failed" if failed else "ok",
+                error=redact_payload(
+                    {
+                        "error_class": str(attempt.get("error_class") or ""),
+                        "error_message": str(attempt.get("error_message") or attempt.get("parse_error") or ""),
+                        "error_category": str(attempt.get("error_category") or ""),
+                    }
+                )
+                if failed
+                else {},
+                trace_id=trace_id,
+                span_id=uuid4().hex,
+                parent_span_id="",
+                start_time_unix_ms=int(time.time() * 1000),
+                duration_ms=duration_ms,
+                self_duration_ms=duration_ms,
+            )
+            try:
+                self.observability._record_span(record)
+            except Exception:  # noqa: BLE001
+                logger.debug("Ignoring Genesis LLM performance span failure.", exc_info=True)
 
     def _normalize_world_payload(self, *, payload: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
         normalized = payload if isinstance(payload, dict) else {}

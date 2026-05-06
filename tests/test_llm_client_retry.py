@@ -12,6 +12,45 @@ from forwin.writer.llm_client import LLMClient
 
 
 class LLMClientRetryTests(unittest.TestCase):
+    def test_wall_timeout_interrupts_hung_http_post(self) -> None:
+        class HangingHTTPClient:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def post(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+                time.sleep(5)
+                return httpx.Response(
+                    200,
+                    json={"choices": [{"message": {"content": "too-late"}}]},
+                )
+
+            def close(self) -> None:
+                self.closed = True
+
+        client = LLMClient(
+            api_key="test-key",
+            base_url="https://primary.example/v1",
+            model="primary-model",
+        )
+        hanging_client = HangingHTTPClient()
+        client.client = hanging_client  # type: ignore[assignment]
+
+        try:
+            started_at = time.perf_counter()
+            with self.assertRaises(httpx.ReadTimeout):
+                client._post_with_wall_timeout(  # noqa: SLF001
+                    "https://primary.example/v1/chat/completions",
+                    json={"model": "primary-model", "messages": []},
+                    headers={},
+                    timeout=httpx.Timeout(0.2, connect=0.2),
+                )
+            elapsed = time.perf_counter() - started_at
+        finally:
+            client.close()
+
+        self.assertLess(elapsed, 1.5)
+        self.assertTrue(hanging_client.closed)
+
     def test_reader_promise_coerces_unknown_ambiguity_mode_to_managed(self) -> None:
         promise = ReaderPromise.model_validate({"ambiguity_mode": "suggestive_opaque"})
 

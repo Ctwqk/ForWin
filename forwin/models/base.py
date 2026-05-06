@@ -53,6 +53,7 @@ POSTGRES_BASELINE_MIGRATIONS = (
     "book_reader_experience_v46",
     "map_graph_schema_v1",
     "map_graph_schema_v2",
+    "performance_spans_v1",
 )
 
 

@@ -937,6 +937,54 @@ class ArtifactReadResponse(BaseModel):
     truncated: bool = False
 
 
+class PerformanceSpanInfo(BaseModel):
+    span_id: str = ""
+    parent_span_id: str = ""
+    trace_id: str = ""
+    span_name: str = ""
+    span_kind: str = ""
+    component: str = ""
+    stage: str = ""
+    status: str = "ok"
+    project_id: str = ""
+    task_id: str = ""
+    operation_id: str = ""
+    chapter_number: int = 0
+    duration_ms: int = 0
+    self_duration_ms: int = 0
+    tags: dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    error: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+
+
+class PerformanceBreakdownItem(BaseModel):
+    key: str
+    count: int = 0
+    total_duration_ms: int = 0
+    avg_duration_ms: float = 0.0
+    p50_ms: int = 0
+    p95_ms: int = 0
+    p99_ms: int = 0
+    max_ms: int = 0
+    error_count: int = 0
+    error_rate: float = 0.0
+
+
+class PerformanceReportResponse(BaseModel):
+    project_id: str = ""
+    task_id: str = ""
+    chapter_number: int = 0
+    total_duration_ms: int = 0
+    top_slow_spans: list[PerformanceSpanInfo] = Field(default_factory=list)
+    critical_path: list[PerformanceSpanInfo] = Field(default_factory=list)
+    component_breakdown: list[PerformanceBreakdownItem] = Field(default_factory=list)
+    stage_breakdown: list[PerformanceBreakdownItem] = Field(default_factory=list)
+    llm_breakdown: list[PerformanceBreakdownItem] = Field(default_factory=list)
+    db_breakdown: list[PerformanceBreakdownItem] = Field(default_factory=list)
+    recommendations: list[str] = Field(default_factory=list)
+
+
 class CausalReplayResponse(BaseModel):
     root_event: DecisionEventInfo | None = None
     timeline: list[DecisionEventInfo] = Field(default_factory=list)

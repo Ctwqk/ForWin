@@ -14,9 +14,11 @@ from fastmcp.exceptions import ToolError
 import forwin.api as api_module
 from forwin.api_schemas import BookGenesisPatchRequest, ProjectCreateRequest
 from forwin.config import Config
+from forwin.governance import BandCheckpointDetail, BandCheckpointIssueInfo
 from forwin.mcp.client import ForWinAPIClient
 from forwin.mcp.http import build_asgi_app, build_mcp_server
 from forwin.mcp.models import (
+    BandCheckpointView,
     ChapterDetailView,
     ChapterListView,
     GenesisView,
@@ -286,6 +288,8 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     "chapter_get",
                     "chapter_review_approve",
                     "chapter_review_retry",
+                    "band_checkpoint_get",
+                    "band_checkpoint_approve",
                     "world_model_get",
                     "world_page_get",
                     "world_conflict_list",
@@ -613,6 +617,65 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
             self.assertEqual(plan.status, "planned")
             self.assertEqual(plan.residual_review_issues_json, "[]")
             self.assertEqual(plan.canon_risk_level, "")
+
+    def test_band_checkpoint_get_and_approve_via_mcp(self) -> None:
+        with self.session_factory() as session:
+            updater = StateUpdater(session)
+            project = updater.create_project(
+                title="Checkpoint MCP Book",
+                premise="用来测试 band checkpoint MCP 工具。",
+                genre="玄幻",
+                creation_status="writing",
+            )
+            arc = updater.create_arc_plan(project_id=project.id, arc_synopsis="checkpoint arc")
+            checkpoint = updater.save_band_checkpoint(
+                BandCheckpointDetail(
+                    project_id=project.id,
+                    arc_id=arc.id,
+                    band_id="band-1",
+                    chapter_start=1,
+                    chapter_end=1,
+                    trigger_source="auto_band_end",
+                    boundary_kind="band_end",
+                    boundary_chapter=1,
+                    status="warn",
+                    summary="band checkpoint 需要人工处理。",
+                    issues=[
+                        BandCheckpointIssueInfo(
+                            code="next_band_compatibility",
+                            severity="warning",
+                            description="下一 band 前提存在风险。",
+                        )
+                    ],
+                )
+            )
+            session.commit()
+            checkpoint_id = checkpoint.id
+            project_id = project.id
+
+        fetched = self._load_model(
+            BandCheckpointView,
+            self._call_tool("band_checkpoint_get", {"project_id": project_id, "band_id": "band-1"}),
+        )
+        self.assertEqual(fetched.id, checkpoint_id)
+        self.assertEqual(fetched.status, "warn")
+        self.assertEqual(fetched.issues[0]["code"], "next_band_compatibility")
+
+        approved = self._load_model(
+            BandCheckpointView,
+            self._call_tool(
+                "band_checkpoint_approve",
+                {
+                    "project_id": project_id,
+                    "band_id": "band-1",
+                    "status": "overridden",
+                    "reason": "MCP operator inspected checkpoint warning and proceeds with stress test.",
+                },
+            ),
+        )
+        self.assertEqual(approved.id, checkpoint_id)
+        self.assertEqual(approved.status, "overridden")
+        self.assertIn("stress test", approved.reason)
 
     def test_world_model_read_tools_and_export_via_mcp(self) -> None:
         project_id = self._create_ready_project()

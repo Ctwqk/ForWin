@@ -203,6 +203,48 @@ class SubWorldControlTests(unittest.TestCase):
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
         self.assertEqual(unknown, [])
 
+    def test_subworld_admission_ignores_generic_technician_role_mentions(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林澈", "许安"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=20,
+                title="第二十章 地下交易",
+                body="林澈和许安在地下市场与技术员交易旧港监控加密包，技术员提示他们从通风井撤离。" * 60,
+                end_of_chapter_summary="林澈与许安从技术员处拿到旧港监控线索。",
+                entity_mentions=[
+                    EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="许安", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="技术员", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="技术员（灰衣男）", entity_kind="character", is_named=True),
+                ],
+                scene_outputs=[
+                    {
+                        "scene_no": 1,
+                        "scene_objective": "地下交易",
+                        "text": "林澈和许安与技术员交易。",
+                        "involved_entities": ["林澈", "许安", "技术员", "技术员（灰衣男）"],
+                    }
+                ],
+            ),
+        )
+
+        unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
+        self.assertEqual(unknown, [])
+
     def test_subworld_admission_allows_canon_name_anchor(self) -> None:
         class FakeRepo:
             def get_active_entities(self, _project_id: str) -> list[object]:
@@ -459,6 +501,27 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertTrue(plan["subworld_delta"]["new_subworlds"])
         self.assertTrue(any(item["region_seeds"] for item in plan["subworld_delta"]["new_subworlds"] if item.get("scope") == "arc_local"))
         self.assertTrue(plan["characters"])
+
+    def test_arc_director_normalize_chapters_rejects_single_character_goals(self) -> None:
+        director = ArcDirector(SimpleNamespace(chat=lambda *args, **kwargs: "{}"), max_tokens=2048)
+
+        chapters = director._normalize_chapters(
+            [
+                {
+                    "chapter_number": 1,
+                    "title": "第一章",
+                    "one_line": "周岚找到旧港火灾记录。",
+                    "goals": ["揭", "示", "周"],
+                }
+            ],
+            1,
+            "周岚调查旧港火灾。",
+        )
+
+        self.assertEqual(
+            chapters[0]["goals"],
+            ["推进本章主线冲突", "提供新的线索、代价或反转"],
+        )
 
     def test_arc_director_tolerates_non_numeric_subworld_seed_fields(self) -> None:
         director = ArcDirector(SimpleNamespace(chat=lambda *args, **kwargs: "{}"), max_tokens=2048)
@@ -909,6 +972,54 @@ class SubWorldControlTests(unittest.TestCase):
 
         self.assertEqual(violations, [])
 
+    def test_canon_name_observation_ignores_canonical_name_followed_by_disappear_verb(self) -> None:
+        violations = find_canon_name_violations(
+            "十年前，旧港火灾，母亲失踪，林若消失，所有线索被拧在一起。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_canonical_name_followed_by_time_preposition(self) -> None:
+        violations = find_canon_name_violations(
+            "他记得林澈的遗书提到母亲林若在十年前失踪。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_canonical_name_followed_by_metadata_nouns(self) -> None:
+        violations = find_canon_name_violations(
+            "实验对象为林若本人。五人决定前往旧港三号码头寻找林若备份。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_canonical_name_followed_by_match_verb(self) -> None:
+        violations = find_canon_name_violations(
+            "旧港火灾目击记录显示，一名女性目击者的描述与林若吻合。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_canonical_name_followed_by_sit_verb(self) -> None:
+        violations = find_canon_name_violations(
+            "屏幕转为一段视频，母亲林若坐在实验室里，背景是一排服务器机架。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_canonical_name_followed_by_role_relation(self) -> None:
+        violations = find_canon_name_violations(
+            "审查元数据写道：灰衣男声称自己是林若下属，提供旧港火灾前监控和录音。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
     def test_canon_name_observation_allows_canonical_name_in_normal_sentence(self) -> None:
         violations = find_canon_name_violations(
             "林澈确认母亲林若是回声账本原型设计者之一，也找到了林若的签名。",
@@ -1182,6 +1293,149 @@ class SubWorldControlTests(unittest.TestCase):
         fixed = WritingOrchestrator._apply_canon_name_drift_autofix(output, review)
 
         self.assertIsNone(fixed)
+
+    def test_subworld_admission_autofix_genericizes_unknown_named_executives(self) -> None:
+        output = WriterOutput(
+            chapter_number=15,
+            title="沈砚的立场",
+            body=(
+                "首席运营官赵衍坐在长桌远端。财务总监陈维盯着平板。"
+                "赵总要求陈维在午夜前清理旧港档案。"
+            ),
+            end_of_chapter_summary="沈砚发现集团高管启动档案清理。",
+            entity_mentions=[
+                EntityMention(
+                    entity_name="赵衍",
+                    entity_kind="character",
+                    is_named=True,
+                    is_on_stage=True,
+                    evidence_refs=["body:赵衍"],
+                ),
+                EntityMention(
+                    entity_name="陈维",
+                    entity_kind="character",
+                    is_named=True,
+                    is_on_stage=True,
+                    evidence_refs=["body:陈维"],
+                ),
+            ],
+            new_events=[
+                EventCandidate(
+                    summary="赵衍要求陈维清理旧港档案",
+                    significance="major",
+                    involved_entity_names=["沈砚", "赵衍", "陈维"],
+                    roles=["protagonist", "antagonist", "witness"],
+                )
+            ],
+        )
+        review = ReviewVerdict(
+            verdict="fail",
+            issues=[
+                ContinuityIssue(
+                    rule_name="sub_world_unknown_named_entity",
+                    severity="error",
+                    description="命名角色「赵衍」未在当前 chapter 的 subworld 准入名单中。",
+                    entity_names=["赵衍"],
+                    issue_type="subworld_admission",
+                ),
+                ContinuityIssue(
+                    rule_name="sub_world_unknown_named_entity",
+                    severity="error",
+                    description="命名角色「陈维」未在当前 chapter 的 subworld 准入名单中。",
+                    entity_names=["陈维"],
+                    issue_type="subworld_admission",
+                ),
+            ],
+        )
+
+        fixed = WritingOrchestrator._apply_subworld_admission_autofix(output, review)
+
+        assert fixed is not None
+        serialized_content = fixed.model_dump_json(exclude={"generation_meta"})
+        self.assertNotIn("赵衍", serialized_content)
+        self.assertNotIn("赵总", serialized_content)
+        self.assertNotIn("陈维", serialized_content)
+        self.assertIn("集团高管", fixed.body)
+        self.assertEqual(fixed.char_count, len(fixed.body))
+        autofix_meta = fixed.generation_meta["subworld_admission_autofix"]
+        self.assertEqual(autofix_meta["赵衍"], "集团高管")
+        self.assertEqual(autofix_meta["赵总"], "集团高管")
+        self.assertEqual(autofix_meta["陈维"], "集团高管")
+
+    def test_subworld_admission_autofix_does_not_mask_known_canon_characters(self) -> None:
+        output = WriterOutput(
+            chapter_number=15,
+            title="沈砚的立场",
+            body="沈砚在会议室看见父亲沈崇山签下旧港档案销毁命令。",
+            end_of_chapter_summary="沈崇山在集团会议上现身。",
+            entity_mentions=[
+                EntityMention(
+                    entity_name="沈崇山",
+                    entity_kind="character",
+                    is_named=True,
+                    is_on_stage=True,
+                    evidence_refs=["body:沈崇山"],
+                )
+            ],
+        )
+        review = ReviewVerdict(
+            verdict="fail",
+            issues=[
+                ContinuityIssue(
+                    rule_name="sub_world_unknown_named_entity",
+                    severity="error",
+                    description="命名角色「沈崇山」未在当前 chapter 的 subworld 准入名单中。",
+                    entity_names=["沈崇山"],
+                    issue_type="subworld_admission",
+                )
+            ],
+        )
+
+        fixed = WritingOrchestrator._apply_subworld_admission_autofix(
+            output,
+            review,
+            protected_names={"沈崇山"},
+        )
+
+        self.assertIsNone(fixed)
+
+    def test_subworld_admission_autofix_genericizes_old_surname_nickname(self) -> None:
+        output = WriterOutput(
+            chapter_number=20,
+            title="地下交易",
+            body="老孙站在门后，要求林澈三天后再带灰盒过来。老孙没有留下真名。",
+            end_of_chapter_summary="林澈发现老孙的交易有问题。",
+            entity_mentions=[
+                EntityMention(
+                    entity_name="老孙",
+                    entity_kind="character",
+                    is_named=True,
+                    is_on_stage=True,
+                    evidence_refs=["body:老孙"],
+                )
+            ],
+        )
+        review = ReviewVerdict(
+            verdict="fail",
+            issues=[
+                ContinuityIssue(
+                    rule_name="sub_world_unknown_named_entity",
+                    severity="error",
+                    description="命名角色「老孙」未在当前 chapter 的 subworld 准入名单中。",
+                    entity_names=["老孙"],
+                    issue_type="subworld_admission",
+                )
+            ],
+        )
+
+        fixed = WritingOrchestrator._apply_subworld_admission_autofix(output, review)
+
+        self.assertIsNotNone(fixed)
+        assert fixed is not None
+        serialized_content = fixed.model_dump_json(exclude={"generation_meta"})
+        self.assertNotIn("老孙", serialized_content)
+        self.assertIn("相关人员", fixed.body)
+        self.assertEqual(fixed.generation_meta["subworld_admission_autofix"]["老孙"], "相关人员")
 
     def test_continuity_repair_instruction_preserves_suggested_fix(self) -> None:
         instruction = HistoricalReviewHub._continuity_repair_instruction(

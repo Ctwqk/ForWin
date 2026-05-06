@@ -1871,6 +1871,119 @@ class WritingOrchestrator:
         return WriterOutput.model_validate(payload)
 
     @staticmethod
+    def _apply_subworld_admission_autofix(
+        writer_output: WriterOutput,
+        review: ReviewVerdict,
+        *,
+        protected_names: set[str] | None = None,
+    ) -> WriterOutput | None:
+        replacements: dict[str, str] = {}
+        body = str(writer_output.body or "")
+        protected = {
+            ContinuityChecker._normalize_character_reference(name)
+            for name in (protected_names or set())
+            if str(name or "").strip()
+        }
+        for issue in review.issues:
+            if str(issue.rule_name or "") != "sub_world_unknown_named_entity":
+                continue
+            if str(issue.severity or "") != "error":
+                continue
+            entity_names = list(issue.entity_names or [])
+            if not entity_names:
+                continue
+            observed = str(entity_names[0] or "").strip()
+            normalized_observed = ContinuityChecker._normalize_character_reference(observed)
+            if not observed or not WritingOrchestrator._looks_like_genericizable_unknown_reference(normalized_observed):
+                continue
+            if normalized_observed in protected:
+                continue
+            generic = WritingOrchestrator._generic_subworld_reference(body, observed)
+            replacements[observed] = generic
+            if len(observed) >= 2:
+                replacements[f"{observed[0]}总"] = generic
+            for title in WritingOrchestrator._subworld_role_titles():
+                phrase = f"{title}{observed}"
+                if phrase in body:
+                    replacements[phrase] = title
+
+        if not replacements:
+            return None
+
+        payload = WritingOrchestrator._replace_canon_name_strings(
+            writer_output.model_dump(mode="python"),
+            replacements,
+        )
+        payload["char_count"] = len(str(payload.get("body") or ""))
+        generation_meta = dict(payload.get("generation_meta") or {})
+        previous_autofix = generation_meta.get("subworld_admission_autofix")
+        if isinstance(previous_autofix, dict):
+            autofix_meta = {str(key): str(value) for key, value in previous_autofix.items()}
+            autofix_meta.update(replacements)
+        else:
+            autofix_meta = replacements
+        generation_meta["subworld_admission_autofix"] = autofix_meta
+        payload["generation_meta"] = generation_meta
+        return WriterOutput.model_validate(payload)
+
+    @staticmethod
+    def _looks_like_genericizable_unknown_reference(name: str) -> bool:
+        text = ContinuityChecker._normalize_character_reference(name)
+        if not text:
+            return False
+        if is_plausible_person_name(text):
+            return True
+        if 2 <= len(text) <= 3 and text[0] in {"老", "小", "阿"}:
+            return all("\u4e00" <= char <= "\u9fff" for char in text[1:])
+        return False
+
+    @staticmethod
+    def _project_character_names(repo: StateRepository, project_id: str) -> set[str]:
+        names: set[str] = set()
+        try:
+            entities = repo.get_active_entities(project_id)
+        except Exception:  # noqa: BLE001
+            return names
+        for entity in entities or []:
+            if str(getattr(entity, "kind", "") or "") != "character":
+                continue
+            raw_names = [getattr(entity, "name", "") or "", *(getattr(entity, "aliases", []) or [])]
+            for raw_name in raw_names:
+                name = ContinuityChecker._normalize_character_reference(str(raw_name or ""))
+                if name:
+                    names.add(name)
+        return names
+
+    @staticmethod
+    def _generic_subworld_reference(body: str, observed: str) -> str:
+        if observed in body:
+            index = body.find(observed)
+            marker_window = body[max(0, index - 30) : index + len(observed) + 30]
+        else:
+            marker_window = body
+        if any(marker in marker_window for marker in ("集团", "董事", "会议", "总监", "高管", "部门")):
+            return "集团高管"
+        return "相关人员"
+
+    @staticmethod
+    def _subworld_role_titles() -> tuple[str, ...]:
+        return (
+            "首席运营官",
+            "运营负责人",
+            "财务总监",
+            "财务负责人",
+            "法务部负责人",
+            "法务负责人",
+            "部门总监",
+            "部门负责人",
+            "集团董事",
+            "董事会成员",
+            "安全主管",
+            "安保主管",
+            "项目负责人",
+        )
+
+    @staticmethod
     def _replace_canon_name_strings(value: Any, replacements: dict[str, str]) -> Any:
         if isinstance(value, str):
             result = value
@@ -2135,6 +2248,21 @@ class WritingOrchestrator:
             writer_output=current_output,
         )
         autofixed_output = self._apply_canon_name_drift_autofix(current_output, current_review)
+        if autofixed_output is not None:
+            current_output = autofixed_output
+            current_review = self._review_current_output(
+                repo=repo,
+                checker=checker,
+                project_id=project_id,
+                context=context,
+                writer_output=current_output,
+            )
+        protected_subworld_names = self._project_character_names(repo, project_id)
+        autofixed_output = self._apply_subworld_admission_autofix(
+            current_output,
+            current_review,
+            protected_names=protected_subworld_names,
+        )
         if autofixed_output is not None:
             current_output = autofixed_output
             current_review = self._review_current_output(
@@ -2432,6 +2560,20 @@ class WritingOrchestrator:
             autofixed_rewritten_output = self._apply_canon_name_drift_autofix(
                 rewritten_output,
                 rewritten_review,
+            )
+            if autofixed_rewritten_output is not None:
+                rewritten_output = autofixed_rewritten_output
+                rewritten_review = self._review_current_output(
+                    repo=repo,
+                    checker=checker,
+                    project_id=project_id,
+                    context=updated_context,
+                    writer_output=rewritten_output,
+                )
+            autofixed_rewritten_output = self._apply_subworld_admission_autofix(
+                rewritten_output,
+                rewritten_review,
+                protected_names=self._project_character_names(repo, project_id),
             )
             if autofixed_rewritten_output is not None:
                 rewritten_output = autofixed_rewritten_output

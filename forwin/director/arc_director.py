@@ -895,7 +895,7 @@ class ArcDirector:
             goals = [
                 str(item).strip()
                 for item in (raw_goals if isinstance(raw_goals, list) else [])
-                if str(item).strip()
+                if len(str(item).strip()) >= 2
             ][:3]
             if len(goals) < 2:
                 goals = [

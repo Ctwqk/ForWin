@@ -49,7 +49,13 @@ from forwin.api_schemas import (
 )
 from forwin.book_genesis import GENESIS_STAGE_ORDER, StaleGenesisRevisionError
 from forwin.genesis_handoff import StartWritingCommand
-from forwin.governance import DecisionEventInfo, DecisionEventType, new_project_governance
+from forwin.governance import (
+    DecisionEventInfo,
+    DecisionEventType,
+    derive_chapter_task_contract,
+    new_project_governance,
+    plan_task_contract_to_json,
+)
 from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis
 from forwin.map.models import MapNodeRow
 from forwin.map.service import build_interconnections_from_genesis_atlas, create_or_update_book_map
@@ -1630,6 +1636,18 @@ def retry_chapter_review(
         plan.repair_attempt_count = 0
         plan.residual_review_issues_json = "[]"
         plan.canon_risk_level = ""
+        goals_payload = _load_json_object(plan.goals_json, [])
+        if isinstance(goals_payload, list):
+            cleaned_goals = [
+                str(item).strip()
+                for item in goals_payload
+                if len(str(item).strip()) >= 2
+            ]
+            if cleaned_goals != goals_payload:
+                plan.goals_json = json.dumps(cleaned_goals, ensure_ascii=False)
+                plan.task_contract_json = plan_task_contract_to_json(
+                    derive_chapter_task_contract(cleaned_goals)
+                )
         session.add(plan)
         log_decision_event(
             session,

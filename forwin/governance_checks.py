@@ -63,6 +63,8 @@ def evaluate_task_contract(
 ) -> list[ContinuityIssue]:
     issues: list[ContinuityIssue] = []
     for task in tasks:
+        if _is_low_signal_derived_task(task):
+            continue
         if not _task_is_satisfied(task, combined_text):
             issues.append(
                 ContinuityIssue(
@@ -82,6 +84,12 @@ def evaluate_task_contract(
                 )
             )
     return issues
+
+
+def _is_low_signal_derived_task(task: PlanTaskItem) -> bool:
+    if str(task.source or "") != "derived_from_goals":
+        return False
+    return len(str(task.description or "").strip()) < 2
 
 
 def evaluate_constraint_issues(

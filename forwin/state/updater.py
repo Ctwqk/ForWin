@@ -94,10 +94,10 @@ def _json_list(raw: str | None) -> list[str]:
 def _normalize_goals_payload(payload: object) -> list[str]:
     if isinstance(payload, str):
         goal = payload.strip()
-        return [goal] if goal else []
+        return [goal] if len(goal) >= 2 else []
     if not isinstance(payload, list):
         return []
-    return [str(item).strip() for item in payload if str(item).strip()]
+    return [str(item).strip() for item in payload if len(str(item).strip()) >= 2]
 
 
 class StateUpdater:

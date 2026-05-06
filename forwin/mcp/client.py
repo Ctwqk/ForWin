@@ -6,6 +6,7 @@ import httpx
 
 from .models import (
     ActiveTaskCheckView,
+    BandCheckpointView,
     BlockingReasonView,
     ChapterDetailView,
     ChapterReviewApproveView,
@@ -275,6 +276,45 @@ class ForWinAPIClient:
                 "task": task,
             }
         )
+
+    async def band_checkpoint_get(self, *, project_id: str, band_id: str) -> BandCheckpointView:
+        normalized_band_id = str(band_id or "").strip()
+        if not normalized_band_id:
+            raise ValueError("band_id is required")
+        payload = await self._request_json(
+            "GET",
+            f"/api/projects/{project_id}/bands/{normalized_band_id}/checkpoint",
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Expected band checkpoint payload from ForWin API.")
+        return BandCheckpointView.model_validate(payload)
+
+    async def band_checkpoint_approve(
+        self,
+        *,
+        project_id: str,
+        band_id: str,
+        reason: str,
+        status: str = "overridden",
+    ) -> BandCheckpointView:
+        normalized_band_id = str(band_id or "").strip()
+        if not normalized_band_id:
+            raise ValueError("band_id is required")
+        normalized_reason = str(reason or "").strip()
+        if not normalized_reason:
+            raise ValueError("reason is required")
+        normalized_status = str(status or "overridden").strip() or "overridden"
+        payload = await self._request_json(
+            "POST",
+            f"/api/projects/{project_id}/bands/{normalized_band_id}/checkpoint/approve",
+            json={
+                "status": normalized_status,
+                "reason": normalized_reason,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Expected band checkpoint payload from ForWin API.")
+        return BandCheckpointView.model_validate(payload)
 
     async def world_model_get(
         self,

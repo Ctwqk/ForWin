@@ -8,6 +8,13 @@ from forwin.utils import parse_llm_json
 from forwin.llm.compat import call_chat_compat
 
 
+def _meaningful_preserve_constraint(value: object) -> str:
+    normalized = str(value or "").strip()
+    if len(normalized) < 2:
+        return ""
+    return normalized
+
+
 class RepairVerifier:
     def __init__(
         self,
@@ -83,11 +90,22 @@ class RepairVerifier:
         )
 
     @staticmethod
-    def _issue_signature(issue) -> tuple[str, str, str]:
+    def _issue_signature(issue) -> tuple[str, str, str, str]:
+        entity_names = tuple(
+            sorted(
+                str(name or "").strip()
+                for name in (getattr(issue, "entity_names", None) or [])
+                if str(name or "").strip()
+            )
+        )
+        identity = "\x1f".join(entity_names)
+        if not identity:
+            identity = str(getattr(issue, "description", "") or "").strip()
         return (
             str(getattr(issue, "rule_name", "") or "").strip(),
             str(getattr(issue, "issue_type", "") or "").strip(),
             str(getattr(issue, "target_scope", "") or "").strip(),
+            identity,
         )
 
     def _rule_verify(
@@ -135,7 +153,7 @@ class RepairVerifier:
             ]
         )
         for item in repair_instruction.must_preserve:
-            normalized = str(item or "").strip()
+            normalized = _meaningful_preserve_constraint(item)
             if normalized and normalized in original_text and normalized not in repaired_text:
                 broken_preserve_constraints.append(f"修复后丢失保留内容：{normalized}")
         return RepairVerification(

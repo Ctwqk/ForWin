@@ -532,7 +532,7 @@ def derive_chapter_task_contract(goals: list[str]) -> list[PlanTaskItem]:
     tasks: list[PlanTaskItem] = []
     for goal in goals[:4]:
         text = str(goal or "").strip()
-        if not text:
+        if len(text) < 2:
             continue
         tasks.append(
             PlanTaskItem(

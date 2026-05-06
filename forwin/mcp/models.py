@@ -168,6 +168,27 @@ class ChapterReviewApproveView(BaseModel):
     task: TaskView | None = None
 
 
+class BandCheckpointView(BaseModel):
+    id: str
+    project_id: str
+    arc_id: str = ""
+    band_id: str = ""
+    chapter_start: int = 0
+    chapter_end: int = 0
+    trigger_source: str = ""
+    boundary_kind: str = ""
+    boundary_chapter: int = 0
+    status: str = ""
+    summary: str = ""
+    reason: str = ""
+    issues: list[dict[str, Any]] = Field(default_factory=list)
+    decision_refs: list[dict[str, Any]] = Field(default_factory=list)
+    related_task_id: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    resolved_at: str = ""
+
+
 class ActiveTaskCheckView(BaseModel):
     has_active_generation_task: bool = False
     active_task_ids: list[str] = Field(default_factory=list)

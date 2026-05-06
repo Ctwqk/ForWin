@@ -11,6 +11,7 @@ from starlette.routing import Mount, Route
 
 from .client import ForWinAPIClient
 from .models import (
+    BandCheckpointView,
     ChapterListView,
     ChapterReviewApproveView,
     MutationResult,
@@ -231,6 +232,30 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
             reason=reason,
             continue_generation=continue_generation,
             allow_accepted=allow_accepted,
+        )
+
+    @register_read_tool(
+        "band_checkpoint_get",
+        "Get the latest band checkpoint for a project band. Use this when project_get reports a band_checkpoint_* gate before deciding whether to fix, pass, or override it.",
+    )
+    async def band_checkpoint_get(project_id: str, band_id: str) -> BandCheckpointView:
+        return await client.band_checkpoint_get(project_id=project_id, band_id=band_id)
+
+    @register_write_tool(
+        "band_checkpoint_approve",
+        "Approve or override a band checkpoint after inspecting its issues. Use this when a band checkpoint warning or failure has been reviewed and there is no active generation task.",
+    )
+    async def band_checkpoint_approve(
+        project_id: str,
+        band_id: str,
+        reason: str,
+        status: str = "overridden",
+    ) -> BandCheckpointView:
+        return await client.band_checkpoint_approve(
+            project_id=project_id,
+            band_id=band_id,
+            reason=reason,
+            status=status,
         )
 
     @register_read_tool(

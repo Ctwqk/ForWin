@@ -31,6 +31,16 @@ GENERIC_CHARACTER_REFERENCES = {
     "师兄",
     "师姐",
     "弟子",
+    "首席运营官",
+    "运营负责人",
+    "财务总监",
+    "财务负责人",
+    "法务负责人",
+    "部门总监",
+    "部门负责人",
+    "集团高管",
+    "相关人员",
+    "一名相关人员",
     "同学",
     "众人",
     "人群",
@@ -40,6 +50,22 @@ GENERIC_CHARACTER_REFERENCES = {
     "工作人员",
     "服务员",
 }
+GENERIC_CHARACTER_ROLE_SUFFIXES = (
+    "技术员",
+    "工程师",
+    "程序员",
+    "黑客",
+    "线人",
+    "中间人",
+    "摊主",
+    "追兵",
+    "安保",
+    "保镖",
+    "警员",
+    "警察",
+    "员工",
+    "主管",
+)
 NON_CHARACTER_NAME_KEYWORDS = (
     "集团",
     "公司",
@@ -447,7 +473,7 @@ class ContinuityChecker:
     @staticmethod
     def _looks_like_named_character(name: str) -> bool:
         text = ContinuityChecker._normalize_character_reference(name)
-        if not text or text in GENERIC_CHARACTER_REFERENCES:
+        if not text or ContinuityChecker._looks_like_generic_character_reference(text):
             return False
         if ContinuityChecker._looks_like_non_character_reference(text):
             return False
@@ -459,6 +485,15 @@ class ContinuityChecker:
         return text if ContinuityChecker._looks_like_named_character(text) else ""
 
     @staticmethod
+    def _looks_like_generic_character_reference(name: str) -> bool:
+        text = str(name or "").strip()
+        if not text:
+            return False
+        if text in GENERIC_CHARACTER_REFERENCES:
+            return True
+        return len(text) <= 8 and any(text.endswith(suffix) for suffix in GENERIC_CHARACTER_ROLE_SUFFIXES)
+
+    @staticmethod
     def _normalize_character_reference(name: str) -> str:
         text = str(name or "").strip()
         for opener, closer in (("（", "）"), ("(", ")")):
@@ -466,8 +501,11 @@ class ContinuityChecker:
                 continue
             prefix, suffix = text.rsplit(opener, 1)
             suffix = suffix[: -len(closer)].strip()
-            if suffix in {"提及", "无名", "记录", "旁白"} and prefix.strip():
-                text = prefix.strip()
+            prefix = prefix.strip()
+            if suffix in {"提及", "无名", "记录", "旁白"} and prefix:
+                text = prefix
+            elif prefix and ContinuityChecker._looks_like_generic_character_reference(prefix):
+                text = prefix
         return text
 
     @staticmethod

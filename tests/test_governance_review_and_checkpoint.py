@@ -7,7 +7,12 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 from forwin.config import Config
-from forwin.governance import PlanTaskItem, ProjectGovernanceSettings, governance_to_json
+from forwin.governance import (
+    PlanTaskItem,
+    ProjectGovernanceSettings,
+    derive_chapter_task_contract,
+    governance_to_json,
+)
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.governance import BandCheckpoint, NarrativeConstraint
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
@@ -19,7 +24,11 @@ from forwin.protocol.experience import BandDelightSchedule, ChapterExperiencePla
 from forwin.reviewer import HistoricalReviewHub
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
-from forwin.governance_checks import evaluate_director_imbalance, evaluate_resource_closure_risk
+from forwin.governance_checks import (
+    evaluate_director_imbalance,
+    evaluate_resource_closure_risk,
+    evaluate_task_contract,
+)
 
 
 def _fake_checker(verdict: str = "pass"):
@@ -143,6 +152,28 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_derived_chapter_tasks_skip_single_character_goal_fragments(self) -> None:
+        tasks = derive_chapter_task_contract(["揭", "拿到玉佩"])
+
+        self.assertEqual([task.description for task in tasks], ["拿到玉佩"])
+
+    def test_task_contract_review_skips_stale_single_character_derived_goal(self) -> None:
+        issues = evaluate_task_contract(
+            [
+                PlanTaskItem(
+                    task_type="plot_advance",
+                    description="揭",
+                    source="derived_from_goals",
+                )
+            ],
+            combined_text="本章推进了调查，但没有逐字复述坏掉的单字目标。",
+            reviewer="governance",
+            issue_type="plan_task_fulfillment",
+            target_scope="chapter",
+        )
+
+        self.assertEqual(issues, [])
 
     def test_historical_review_fails_on_hard_future_constraint(self) -> None:
         hub = HistoricalReviewHub(

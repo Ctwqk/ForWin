@@ -495,6 +495,11 @@ class ProjectAutomationSettings(BaseModel):
     enabled: bool = False
     daily_start_time: str = "09:00"
     daily_chapter_quota: int = 1
+    daily_plan_quota: int = 0
+    daily_write_quota: int = 0
+    daily_review_quota: int = 0
+    daily_publish_quota: int = 0
+    stop_when_review_pending: bool = True
     auto_publish: bool = False
     publish: ProjectAutomationPublishSettings = Field(default_factory=ProjectAutomationPublishSettings)
     publish_bindings: list[ProjectAutomationPublishSettings] = Field(default_factory=list)
@@ -1006,6 +1011,11 @@ class ProjectAutomationUpdateRequest(BaseModel):
     enabled: bool = False
     daily_start_time: str = "09:00"
     daily_chapter_quota: int = 1
+    daily_plan_quota: int = 0
+    daily_write_quota: int = 0
+    daily_review_quota: int = 0
+    daily_publish_quota: int = 0
+    stop_when_review_pending: bool = True
     auto_publish: bool = False
     publish: ProjectAutomationPublishSettings | None = None
     publish_bindings: list[ProjectAutomationPublishSettings] | None = None

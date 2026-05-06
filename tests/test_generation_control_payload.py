@@ -118,6 +118,30 @@ class GenerationControlPayloadTests(unittest.TestCase):
         self.assertEqual(control.latest_band_checkpoint.status, "warn")
         self.assertEqual(control.next_gate, "band_checkpoint_warn")
 
+    def test_completed_project_ignores_stale_band_checkpoint_warning(self) -> None:
+        control = build_generation_control(
+            plans=[
+                _plan(1, "accepted"),
+                _plan(2, "accepted"),
+            ],
+            latest_replan=None,
+            review_interval_chapters=0,
+            latest_band_checkpoint=BandCheckpoint(
+                id="cp-completed-1",
+                project_id="project-control-1",
+                arc_id="arc-control-1",
+                band_id="band-completed",
+                boundary_chapter=2,
+                status="warn",
+                summary="final band warning",
+            ),
+        )
+
+        self.assertEqual(control.plan_state, "completed")
+        self.assertEqual(control.writing_state, "completed")
+        self.assertEqual(control.next_gate, "completed")
+        self.assertEqual(control.blocking_reason.code, "")
+
     def test_future_constraint_failure_exposes_blocking_reason_and_event_id(self) -> None:
         control = build_generation_control(
             plans=[

@@ -405,7 +405,7 @@ def _derive_blocking_reason(
                 decision_event_id=_latest_event_id_for_chapter(previous_plan.chapter_number),
                 detail=f"章节 {previous_plan.chapter_number} 当前状态为 {previous_plan.status}。",
             )
-    if latest_band_checkpoint is None:
+    if blocking_plan is None or latest_band_checkpoint is None:
         return BlockingReasonInfo()
     code_map = {
         "pending": "band_checkpoint_pending",

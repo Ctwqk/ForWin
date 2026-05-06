@@ -124,10 +124,6 @@ def _overlay_active_generation_task(detail: ProjectDetail, task: GenerationTask 
         return detail
     stage = str(task.current_stage or "queued").strip() or "queued"
     current_chapter = int(task.current_chapter or 0)
-    accepted = _load_json_int_list(task.completed_chapters_json)
-    failed = _load_json_int_list(task.failed_chapters_json)
-    pending_review = _load_json_int_list(task.paused_chapters_json)
-    generated = list(dict.fromkeys([*accepted, *pending_review]))
     pause_requested = bool(getattr(task, "pause_requested", False))
     status = str(task.status or "").strip()
     detail.latest_stage = stage
@@ -136,11 +132,6 @@ def _overlay_active_generation_task(detail: ProjectDetail, task: GenerationTask 
         update={
             "current_stage": stage,
             "current_chapter": current_chapter,
-            "accepted_chapters": accepted,
-            "drafted_chapters": pending_review,
-            "generated_chapters": generated,
-            "failed_chapters": failed,
-            "pending_review_chapters": pending_review,
             "can_pause": status in {"starting", "running"} and not pause_requested,
             "can_resume": status == "paused",
             "pause_requested": pause_requested,

@@ -58,7 +58,7 @@ from forwin.observability.context import OperationContext
 from forwin.observability.payloads import attempt_group_ids, audit_payload, event_error_payload, safe_error_summary
 from forwin.observability.ports import NullObservability
 from forwin.observability.redaction import redact_payload
-from forwin.observability.spans import SpanRecord
+from forwin.observability.spans import SpanRecord, current_span
 from forwin.extractor.world_v4 import WorldDeltaExtractor
 from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStateReviewGate
 from forwin.knowledge_system import KnowledgeProjectionRefresher
@@ -172,6 +172,7 @@ class WritingOrchestrator:
         self._governance_runtime_updater: StateUpdater | None = None
         self._governance_stage_name = ""
         self._governance_stage_started_at = 0.0
+        self._governance_stage_chapter_number = 0
         self._governance_stage_span: Any | None = None
 
         self.engine = services.engine
@@ -614,6 +615,7 @@ class WritingOrchestrator:
         self._governance_runtime_updater = updater
         self._governance_stage_name = ""
         self._governance_stage_started_at = 0.0
+        self._governance_stage_chapter_number = 0
         self._governance_stage_span = None
 
     def _clear_governance_runtime(self) -> None:
@@ -622,6 +624,7 @@ class WritingOrchestrator:
         self._governance_runtime_updater = None
         self._governance_stage_name = ""
         self._governance_stage_started_at = 0.0
+        self._governance_stage_chapter_number = 0
         self._governance_stage_span = None
 
     def _start_governance_stage_span(self, *, project_id: str, stage: str, chapter_number: int) -> None:
@@ -650,8 +653,13 @@ class WritingOrchestrator:
             return
         try:
             span.tag("next_stage", str(next_stage or ""))
-            if chapter_number:
-                span.metric("chapter_number", int(chapter_number or 0))
+            stage_chapter_number = int(
+                getattr(self, "_governance_stage_chapter_number", 0)
+                or chapter_number
+                or 0
+            )
+            if stage_chapter_number:
+                span.metric("chapter_number", stage_chapter_number)
             span.__exit__(None, None, None)
         except Exception:  # noqa: BLE001
             logger.debug("Ignoring governance stage span close failure.", exc_info=True)
@@ -667,6 +675,11 @@ class WritingOrchestrator:
         now = time.perf_counter()
         chapter_number = int(payload.get("current_chapter") or 0)
         if self._governance_stage_name and self._governance_stage_name != stage:
+            stage_chapter_number = int(
+                getattr(self, "_governance_stage_chapter_number", 0)
+                or chapter_number
+                or 0
+            )
             duration_ms = max(0, int((now - self._governance_stage_started_at) * 1000))
             stage_payload = {
                 "stage": self._governance_stage_name,
@@ -676,7 +689,7 @@ class WritingOrchestrator:
             self._record_decision_event(
                 updater=updater,
                 project_id=project_id,
-                chapter_number=chapter_number,
+                chapter_number=stage_chapter_number,
                 event_family="runtime_observation",
                 event_type=DecisionEventType.STAGE_EXITED,
                 scope="task",
@@ -686,14 +699,14 @@ class WritingOrchestrator:
             self._record_decision_event(
                 updater=updater,
                 project_id=project_id,
-                chapter_number=chapter_number,
+                chapter_number=stage_chapter_number,
                 event_family="runtime_observation",
                 event_type=DecisionEventType.STAGE_DURATION_SUMMARY,
                 scope="task",
                 summary=f"阶段 {self._governance_stage_name} 用时 {duration_ms}ms。",
                 payload=stage_payload,
             )
-            self._finish_governance_stage_span(next_stage=stage, chapter_number=chapter_number)
+            self._finish_governance_stage_span(next_stage=stage, chapter_number=stage_chapter_number)
         if self._governance_stage_name != stage:
             self._record_decision_event(
                 updater=updater,
@@ -707,6 +720,7 @@ class WritingOrchestrator:
             )
             self._governance_stage_name = stage
             self._governance_stage_started_at = now
+            self._governance_stage_chapter_number = chapter_number
             self._start_governance_stage_span(
                 project_id=project_id,
                 stage=stage,
@@ -1873,6 +1887,7 @@ class WritingOrchestrator:
                 stage=stage_key,
                 operation_id=self._audit_operation_id(),
             )
+            parent_span = current_span()
             record = SpanRecord(
                 context=context,
                 span_name="llm.request",
@@ -1882,9 +1897,9 @@ class WritingOrchestrator:
                 metrics=metrics,
                 status="failed" if failed else "ok",
                 error=error,
-                trace_id=prompt_trace_id,
+                trace_id=str(getattr(parent_span, "trace_id", "") or prompt_trace_id),
                 span_id=new_id(),
-                parent_span_id="",
+                parent_span_id=str(getattr(parent_span, "span_id", "") or ""),
                 start_time_unix_ms=int(time.time() * 1000),
                 duration_ms=duration_ms,
                 self_duration_ms=duration_ms,

@@ -3,10 +3,13 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
+from forwin.api_project_ops import _overlay_active_generation_task
 from forwin.api_project_payloads import build_generation_control
+from forwin.api_schemas import GenerationControlInfo, ProjectDetail
 from forwin.governance import DecisionEventInfo
 from forwin.models.governance import BandCheckpoint
 from forwin.models.project import ChapterPlan
+from forwin.models.task import GenerationTask
 
 
 def _plan(chapter_number: int, status: str) -> ChapterPlan:
@@ -165,6 +168,45 @@ class GenerationControlPayloadTests(unittest.TestCase):
 
         self.assertEqual(control.blocking_reason.code, "future_constraint_block")
         self.assertEqual(control.blocking_reason.decision_event_id, "evt-row-future-constraint-1")
+
+    def test_active_task_overlay_does_not_replace_project_chapter_sets(self) -> None:
+        detail = ProjectDetail(
+            id="project-control-1",
+            title="Project Control",
+            premise="premise",
+            genre="genre",
+            setting_summary="",
+            generation_control=GenerationControlInfo(
+                accepted_chapters=[1, 2, 3],
+                generated_chapters=[1, 2, 3],
+                planned_chapters=[4, 5],
+                failed_chapters=[],
+                pending_review_chapters=[],
+                current_stage="",
+                current_chapter=3,
+                can_resume=True,
+            ),
+        )
+        task = GenerationTask(
+            id="task-control-1",
+            project_id="project-control-1",
+            status="running",
+            current_stage="writing_chapter",
+            current_chapter=4,
+            completed_chapters_json="[4]",
+            failed_chapters_json="[]",
+            paused_chapters_json="[]",
+        )
+
+        updated = _overlay_active_generation_task(detail, task)
+
+        self.assertEqual(updated.generation_control.accepted_chapters, [1, 2, 3])
+        self.assertEqual(updated.generation_control.generated_chapters, [1, 2, 3])
+        self.assertEqual(updated.generation_control.planned_chapters, [4, 5])
+        self.assertEqual(updated.generation_control.current_stage, "writing_chapter")
+        self.assertEqual(updated.generation_control.current_chapter, 4)
+        self.assertTrue(updated.generation_control.can_pause)
+        self.assertFalse(updated.generation_control.can_resume)
 
 
 if __name__ == "__main__":

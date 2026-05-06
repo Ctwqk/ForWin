@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from sqlalchemy import select, text
 
@@ -13,6 +14,7 @@ from forwin.observability.ports import NullObservability
 from forwin.observability.query_service import ObservabilityQueryService
 from forwin.observability.service import ObservabilityService
 from forwin.observability.sqlalchemy_probe import install_sqlalchemy_query_probe
+from forwin.orchestrator.loop import WritingOrchestrator
 
 
 def _seed_project(session, project_id: str) -> None:
@@ -137,6 +139,123 @@ def test_query_service_builds_task_critical_path_and_breakdowns() -> None:
         assert report.critical_path[0].span_name == "task.operation"
         assert {item.key for item in report.component_breakdown} >= {"api", "context", "writer"}
         assert report.llm_breakdown[0].key == "chapter_draft:fake-model"
+    finally:
+        engine.dispose()
+
+
+def test_prompt_trace_llm_spans_attach_to_active_stage_span() -> None:
+    engine = get_engine(postgres_test_url("phase-f-prompt-parent"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    project_id = new_id()
+    try:
+        with Session() as session:
+            _seed_project(session, project_id)
+
+        obs = ObservabilityService(
+            session_factory=Session,
+            artifact_store=None,
+            config=Config(database_url=postgres_test_url("phase-f-prompt-parent"), minimax_api_key=""),
+        )
+        orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
+        orchestrator.observability = obs
+        orchestrator._governance_task_id = "task-prompt-parent"
+        orchestrator._governance_root_event_id = ""
+
+        ctx = OperationContext(
+            project_id=project_id,
+            task_id="task-prompt-parent",
+            chapter_number=3,
+            stage="writing_chapter",
+            operation_id="task-prompt-parent",
+        )
+        with obs.span(ctx, "stage.writing_chapter", span_kind="stage", component="orchestrator") as stage_span:
+            orchestrator._record_prompt_trace_performance_spans(
+                project_id=project_id,
+                chapter_number=3,
+                prompt_trace_id="prompt-trace-parent",
+                trace_payload={
+                    "trace_scope": "writer",
+                    "stage_key": "scene_generation",
+                    "attempts": [
+                        {
+                            "stage_key": "scene_generation",
+                            "duration_ms": 123,
+                            "model": "deepseek-chat",
+                            "http_status": 200,
+                            "attempt_no": 1,
+                        }
+                    ],
+                },
+            )
+            parent_span_id = stage_span.span_id
+            trace_id = stage_span.trace_id
+
+        with Session() as session:
+            llm_row = session.execute(
+                select(PerformanceSpan).where(PerformanceSpan.span_name == "llm.request")
+            ).scalar_one()
+
+        assert llm_row.parent_span_id == parent_span_id
+        assert llm_row.trace_id == trace_id
+    finally:
+        engine.dispose()
+
+
+def test_stage_transition_span_uses_stage_entry_chapter_when_next_stage_moves_on() -> None:
+    engine = get_engine(postgres_test_url("phase-f-stage-chapter"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    project_id = new_id()
+    try:
+        with Session() as session:
+            _seed_project(session, project_id)
+
+        obs = ObservabilityService(
+            session_factory=Session,
+            artifact_store=None,
+            config=Config(database_url=postgres_test_url("phase-f-stage-chapter"), minimax_api_key=""),
+        )
+        orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
+        orchestrator.observability = obs
+        orchestrator._governance_task_id = "task-stage-chapter"
+        orchestrator._governance_root_event_id = ""
+        orchestrator._governance_runtime_project_id = project_id
+        orchestrator._governance_runtime_updater = object()
+        orchestrator._governance_stage_name = ""
+        orchestrator._governance_stage_started_at = 0.0
+        orchestrator._governance_stage_span = None
+        recorded_events = []
+
+        def record_event(**kwargs):
+            recorded_events.append(kwargs)
+            return SimpleNamespace(id=f"event-{len(recorded_events)}")
+
+        orchestrator._record_decision_event = record_event
+        orchestrator._record_stage_transition(
+            {
+                "project_id": project_id,
+                "stage": "running_post_acceptance",
+                "current_chapter": 28,
+            }
+        )
+        orchestrator._record_stage_transition(
+            {
+                "project_id": project_id,
+                "stage": "running_scenario_rehearsal",
+                "current_chapter": 29,
+            }
+        )
+
+        with Session() as session:
+            row = session.execute(
+                select(PerformanceSpan).where(PerformanceSpan.span_name == "stage.running_post_acceptance")
+            ).scalar_one()
+
+        assert row.chapter_number == 28
+        assert json.loads(row.metrics_json)["chapter_number"] == 28
+        exited_event = next(item for item in recorded_events if item["event_type"] == "stage_exited")
+        assert exited_event["chapter_number"] == 28
     finally:
         engine.dispose()
 

@@ -954,6 +954,15 @@
         const booksImpactChanged = nextBookImpactSignature !== taskCenterBookImpactSignature;
         taskCenterState = nextTaskCenterState;
         taskCenterBookImpactSignature = nextBookImpactSignature;
+        if (currentDrawerTask) {
+          const drawerStillListed = taskCenterState.some((item) => (
+            item.task_kind === currentDrawerTask.task_kind && item.task_id === currentDrawerTask.task_id
+          ));
+          if (!drawerStillListed) {
+            closeTaskDrawer();
+            setGlobalStatus('当前任务已从任务中心移除，已关闭右侧详情。', '任务详情');
+          }
+        }
         if (booksImpactChanged) booksRefreshPending = true;
         const validSelectionKeys = new Set(
           taskCenterState

@@ -245,6 +245,8 @@ _GENERATION_STAGE_ORDER = [
     "writing_chapter",
     "chapter_failed",
     "continuity_review",
+    "repairing_chapter",
+    "repair_review",
     "applying_canon",
     "running_post_acceptance",
     "paused_for_review",
@@ -1222,7 +1224,8 @@ def _update_task(task_id: str, **changes: Any) -> None:
             normalized["current_chapter"] = 0
     now = _utcnow()
     if normalized.get("status") == "paused":
-        normalized["pause_requested"] = True
+        if bool(task.get("pause_requested")) or bool(normalized.get("pause_requested")):
+            normalized["pause_requested"] = True
         normalized["paused_at"] = now
     next_stage = str(normalized.get("current_stage", "")).strip()
     if next_stage and next_stage != str(task.get("current_stage", "")).strip():

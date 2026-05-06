@@ -99,7 +99,7 @@ class RuntimeSettingsStore:
     @staticmethod
     def _normalize_band_warn_action(value: object) -> str:
         normalized = str(value or "").strip()
-        return "pause" if normalized != "pause" else normalized
+        return normalized if normalized in {"pause", "continue"} else "pause"
 
     @staticmethod
     def _normalize_string_list(value: object) -> list[str]:
@@ -250,7 +250,7 @@ class RuntimeSettingsStore:
             )
             profiles.append(legacy_profile)
         default_profile_id = str(raw.get("default_profile_id", "")).strip()
-        if not default_profile_id or default_profile_id not in {profile["id"] for profile in profiles}:
+        if not default_profile_id:
             default_profile_id = profiles[0]["id"]
         profiles, default_profile_id = self._merge_env_profiles(profiles, default_profile_id)
         return profiles, default_profile_id

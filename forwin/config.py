@@ -239,7 +239,7 @@ def _env_values() -> dict[str, object]:
             env, "LLM_RETRY_MAX_DELAY_SECONDS", 15.0
         ),
         "scene_call_timeout_seconds": _env_float(
-            env, "SCENE_CALL_TIMEOUT_SECONDS", 45.0
+            env, "SCENE_CALL_TIMEOUT_SECONDS", 90.0
         ),
         "max_chapter_chars": _env_int(env, "MAX_CHAPTER_CHARS", 3200),
         "min_chapter_chars": _env_int(env, "MIN_CHAPTER_CHARS", 2500),
@@ -354,7 +354,7 @@ class _ConfigFields:
     llm_retry_attempts: int = 2
     llm_retry_initial_delay_seconds: float = 2.0
     llm_retry_max_delay_seconds: float = 15.0
-    scene_call_timeout_seconds: float = 45.0
+    scene_call_timeout_seconds: float = 90.0
     max_chapter_chars: int = 3200
     min_chapter_chars: int = 2500
     target_chapter_chars: int = 2800

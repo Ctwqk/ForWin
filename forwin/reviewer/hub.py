@@ -302,6 +302,14 @@ class HistoricalReviewHub:
         return "pass"
 
     @staticmethod
+    def _issue_repair_text(issue: ContinuityIssue) -> str:
+        description = str(issue.description or issue.rule_name or "").strip()
+        suggested_fix = str(issue.suggested_fix or "").strip()
+        if suggested_fix:
+            return f"{description} 修复要求：{suggested_fix}"
+        return description
+
+    @staticmethod
     def _continuity_repair_instruction(
         *,
         continuity_issues: list[ContinuityIssue],
@@ -310,7 +318,11 @@ class HistoricalReviewHub:
         return RepairInstruction(
             repair_scope="draft",
             failure_type="continuity",
-            must_fix=[issue.description for issue in continuity_issues if issue.severity == "error"],
+            must_fix=[
+                HistoricalReviewHub._issue_repair_text(issue)
+                for issue in continuity_issues
+                if issue.severity == "error"
+            ],
             must_preserve=[
                 context.chapter_plan_title,
                 context.chapter_plan_one_line,

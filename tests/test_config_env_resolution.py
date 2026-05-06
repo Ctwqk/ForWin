@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from forwin.config import Config
+from forwin.config import Config, DEFAULT_MINIMAX_BASE_URL
 
 
 CONFIG_ENV_KEYS = {
@@ -174,6 +174,22 @@ def test_default_qdrant_url_uses_forwin_local_debug_port(
 
     assert Config.from_env().qdrant_url == "http://127.0.0.1:6335"
     assert Config().qdrant_url == "http://127.0.0.1:6335"
+
+
+def test_default_minimax_base_url_uses_configured_cn_openai_endpoint() -> None:
+    assert DEFAULT_MINIMAX_BASE_URL == "https://api.minimaxi.com/v1"
+    assert Config().minimax_base_url == "https://api.minimaxi.com/v1"
+
+
+def test_default_scene_call_timeout_matches_default_llm_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _set_env_file(monkeypatch, tmp_path, [])
+
+    config = Config.from_env()
+
+    assert config.scene_call_timeout_seconds == config.llm_timeout_seconds == 90.0
+    assert Config().scene_call_timeout_seconds == Config().llm_timeout_seconds == 90.0
 
 
 def test_publisher_extension_legacy_alias_still_works(

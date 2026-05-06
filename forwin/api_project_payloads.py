@@ -290,12 +290,22 @@ def _derive_blocking_reason(
     future_constraints_enabled: bool = True,
 ) -> BlockingReasonInfo:
     ordered_events = list(decision_events or [])
-    fallback_event_id = str(ordered_events[0].id or "") if ordered_events else ""
+    fallback_event_id = str(getattr(ordered_events[0], "id", "") or "") if ordered_events else ""
+
+    def _event_payload(event) -> dict[str, Any]:  # noqa: ANN001
+        payload = getattr(event, "payload", None)
+        if isinstance(payload, dict):
+            return payload
+        try:
+            parsed = json.loads(getattr(event, "payload_json", "") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            parsed = {}
+        return parsed if isinstance(parsed, dict) else {}
 
     def _latest_event_id_for_chapter(chapter_number: int) -> str:
         for event in ordered_events:
-            if int(event.chapter_number or 0) == int(chapter_number or 0):
-                return str(event.id or "")
+            if int(getattr(event, "chapter_number", 0) or 0) == int(chapter_number or 0):
+                return str(getattr(event, "id", "") or "")
         return fallback_event_id
 
     def _latest_event_id_for_related_object(related_object_type: str, related_object_id: str) -> str:
@@ -303,36 +313,37 @@ def _derive_blocking_reason(
             return fallback_event_id
         for event in ordered_events:
             if (
-                str(event.related_object_type or "") == related_object_type
-                and str(event.related_object_id or "") == related_object_id
+                str(getattr(event, "related_object_type", "") or "") == related_object_type
+                and str(getattr(event, "related_object_id", "") or "") == related_object_id
             ):
-                return str(event.id or "")
+                return str(getattr(event, "id", "") or "")
         return fallback_event_id
 
     def _latest_event_id_for_band(band_id: str) -> str:
         if not band_id:
             return fallback_event_id
         for event in ordered_events:
-            if str(event.band_id or "") == band_id:
-                return str(event.id or "")
+            if str(getattr(event, "band_id", "") or "") == band_id:
+                return str(getattr(event, "id", "") or "")
         return fallback_event_id
 
     def _latest_future_constraint_event(chapter_number: int) -> DecisionEventInfo | None:
         for event in ordered_events:
-            if int(event.chapter_number or 0) != int(chapter_number or 0):
+            if int(getattr(event, "chapter_number", 0) or 0) != int(chapter_number or 0):
                 continue
-            if str(event.event_type or "") == DecisionEventType.HARD_GATE_HIT and str(
-                event.payload.get("blocking_reason") or ""
+            payload = _event_payload(event)
+            if str(getattr(event, "event_type", "") or "") == DecisionEventType.HARD_GATE_HIT and str(
+                payload.get("blocking_reason") or ""
             ) == "future_constraint_block":
                 return event
-            if str(event.event_type or "") != DecisionEventType.REVIEW_VERDICT_RECORDED:
+            if str(getattr(event, "event_type", "") or "") != DecisionEventType.REVIEW_VERDICT_RECORDED:
                 continue
-            issue_types = event.payload.get("issue_types") or []
+            issue_types = payload.get("issue_types") or []
             if not isinstance(issue_types, list):
                 continue
             if "future_constraint" not in {str(item or "") for item in issue_types}:
                 continue
-            if str(event.payload.get("verdict") or "").strip() != "fail":
+            if str(payload.get("verdict") or "").strip() != "fail":
                 continue
             return event
         return None
@@ -354,14 +365,18 @@ def _derive_blocking_reason(
         event = _latest_future_constraint_event(constraint_block_plan.chapter_number)
         detail = ""
         if event is not None:
-            detail = str(event.summary or "").strip()
+            detail = str(getattr(event, "summary", "") or "").strip()
             if not detail:
-                detail = str(event.payload.get("error_summary") or "").strip()
+                detail = str(_event_payload(event).get("error_summary") or "").strip()
         return BlockingReasonInfo(
             code="future_constraint_block",
             message=chapter_blocking_message("future_constraint_block"),
             chapter_number=constraint_block_plan.chapter_number,
-            decision_event_id=str(event.id if event is not None else _latest_event_id_for_chapter(constraint_block_plan.chapter_number)),
+            decision_event_id=str(
+                getattr(event, "id", "")
+                if event is not None
+                else _latest_event_id_for_chapter(constraint_block_plan.chapter_number)
+            ),
             detail=detail or f"第 {constraint_block_plan.chapter_number} 章命中了 hard future constraint。",
         )
 

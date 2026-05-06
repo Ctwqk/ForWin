@@ -4322,6 +4322,29 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(plan["chapters"][0]["title"], "第一章")
         self.assertEqual(len(client.last_messages), 2)
 
+    def test_arc_director_json_retry_keeps_token_budget_after_parse_failure(self) -> None:
+        class FakeLLMClient:
+            def __init__(self) -> None:
+                self.max_tokens_seen: list[int] = []
+
+            def chat(self, _messages, temperature: float, max_tokens: int) -> str:
+                self.max_tokens_seen.append(max_tokens)
+                return '{"phase_layout": {"phase_1":'
+
+        client = FakeLLMClient()
+        director = ArcDirector(client, max_tokens=4096)
+
+        payload = director._call_json(
+            [{"role": "user", "content": "只输出 JSON"}],
+            temperature=0.4,
+            max_tokens=1800,
+            fallback={"fallback": True},
+            stage_key="arc_plan",
+        )
+
+        self.assertEqual(payload, {"fallback": True})
+        self.assertEqual(client.max_tokens_seen, [1800, 1800, 1800])
+
     def test_single_chapter_prompt_uses_configurable_char_bounds(self) -> None:
         context = ChapterContextPack(
             project_id="p1",

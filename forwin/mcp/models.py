@@ -156,6 +156,18 @@ class TaskListView(BaseModel):
     tasks: list[TaskView] = Field(default_factory=list)
 
 
+class ChapterReviewApproveView(BaseModel):
+    ok: bool = True
+    project_id: str
+    chapter_number: int
+    status: str
+    message: str = ""
+    task_id: str = ""
+    frozen_artifact: str = ""
+    project: ProjectView | None = None
+    task: TaskView | None = None
+
+
 class ActiveTaskCheckView(BaseModel):
     has_active_generation_task: bool = False
     active_task_ids: list[str] = Field(default_factory=list)

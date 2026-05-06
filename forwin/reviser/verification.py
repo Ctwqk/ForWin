@@ -45,6 +45,22 @@ class RepairVerifier:
         )
         if llm_result is None:
             return rule_result.model_copy(update={"verifier_mode": "rule_fallback"})
+        if (
+            rule_result.fixed_all_must_fix
+            and rule_result.preserved_all_must_preserve
+            and (
+                not llm_result.fixed_all_must_fix
+                or not llm_result.preserved_all_must_preserve
+            )
+        ):
+            return rule_result.model_copy(
+                update={
+                    "new_risks": list(
+                        dict.fromkeys([*rule_result.new_risks, *llm_result.new_risks])
+                    ),
+                    "verifier_mode": "rule_preferred_llm_disagreed",
+                }
+            )
         return RepairVerification(
             fixed_all_must_fix=(
                 rule_result.fixed_all_must_fix and llm_result.fixed_all_must_fix

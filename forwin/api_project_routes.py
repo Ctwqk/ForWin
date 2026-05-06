@@ -12,6 +12,7 @@ from forwin.api_schemas import (
     BookGenesisRefineRequest,
     BookGenesisStageRunRequest,
     ChapterReviewApproveRequest,
+    ChapterReviewRetryRequest,
     ProjectAutomationUpdateResponse,
     ProjectAutomationUpdateRequest,
     ProjectBulkDeleteRequest,
@@ -337,6 +338,27 @@ def build_handlers(
             update_task=update_task,
         )
 
+    def retry_chapter_review(
+        project_id: str,
+        chapter_number: int,
+        req: ChapterReviewRetryRequest,
+    ):
+        return api_project_ops.retry_chapter_review(
+            project_id,
+            chapter_number,
+            req,
+            config=get_config(),
+            runtime_settings=get_runtime_settings(),
+            get_session=get_session,
+            active_generation_task_error_cls=active_generation_task_error_cls,
+            require_reason=require_reason,
+            resolve_project_governance=resolve_project_governance,
+            project_has_active_generation_task=project_has_active_generation_task,
+            generation_task_conflict_message=generation_task_conflict_message,
+            log_decision_event=log_decision_event,
+            create_continue_generation_task=create_continue_generation_task,
+        )
+
     return {
         "list_projects": list_projects,
         "create_project": create_project,
@@ -359,4 +381,5 @@ def build_handlers(
         "get_chapter_review": get_chapter_review,
         "get_candidate_draft": get_candidate_draft,
         "approve_chapter_review": approve_chapter_review,
+        "retry_chapter_review": retry_chapter_review,
     }

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 
+from forwin.canon_names import canon_name_anchor_lines, extract_canon_name_anchors
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import SceneOutput, ScenePlan
 
@@ -287,6 +288,7 @@ def _subworld_control_section(context: ChapterContextPack) -> str | None:
             "  · 规则1：命名人物只能使用允许名单里的名字。",
             "  · 规则2：若要引入新命名人物，只能使用上面的 chapter_entry_targets。",
             "  · 规则3：可以写无名泛称路人，但不要把无名角色写成新的专名人物。",
+            "  · 规则4：不得把前情中已经出现的姓名扩写、替换或另造别名，必须逐字沿用上下文中的写法。",
         ]
     )
     return "\n".join(lines)
@@ -338,9 +340,40 @@ def _map_runtime_section(context: ChapterContextPack) -> str | None:
 def _active_threads_section(context: ChapterContextPack, *, limit: int) -> str | None:
     if not context.active_threads:
         return None
-    return "【当前剧情线】\n" + "\n".join(
-        f"  · {item.name}：{item.description}"
-        for item in context.active_threads[:limit]
+    lines = ["【当前剧情线】"]
+    indexed_threads = list(enumerate(context.active_threads))
+
+    def sort_key(pair: tuple[int, object]) -> tuple[int, int]:
+        index, item = pair
+        status = str(getattr(item, "status", "") or "").strip().lower()
+        if status == "active":
+            status_rank = 0
+        elif status in {"resolved", "abandoned"}:
+            status_rank = 2
+        else:
+            status_rank = 1
+        return status_rank, index
+
+    for _, item in sorted(indexed_threads, key=sort_key)[:limit]:
+        lines.append(f"  · {item.name}：{item.description}")
+        for beat in list(getattr(item, "recent_beats", []) or [])[:3]:
+            beat_text = str(beat or "").strip()
+            if beat_text:
+                lines.append(f"    · 最近推进：{beat_text}")
+    return "\n".join(lines)
+
+
+def _canon_name_anchor_section(context: ChapterContextPack) -> str | None:
+    texts: list[str] = []
+    for thread in list(getattr(context, "active_threads", []) or []):
+        texts.append(str(getattr(thread, "description", "") or ""))
+        texts.extend(str(beat or "") for beat in (getattr(thread, "recent_beats", []) or []))
+    lines = canon_name_anchor_lines(extract_canon_name_anchors(texts))
+    if not lines:
+        return None
+    return (
+        "【Canon 命名锚点】\n"
+        + "\n".join(f"  · {line}；必须逐字沿用，不得扩写、替换或另造别名。" for line in lines)
     )
 
 
@@ -521,6 +554,7 @@ def _scene_prompt_sections(
         _subworld_control_section(context),
         _map_runtime_section(context),
         _active_threads_section(context, limit=thread_limit),
+        _canon_name_anchor_section(context),
         _experience_overlay_section(context),
         _world_model_v4_section(context),
         _arc_envelope_section(context, compact=envelope_compact),
@@ -561,7 +595,8 @@ def build_single_chapter_draft_prompt(
         _personality_context_section(context),
         _subworld_control_section(context),
         _map_runtime_section(context),
-        _active_threads_section(context, limit=3),
+        _active_threads_section(context, limit=8),
+        _canon_name_anchor_section(context),
         _experience_overlay_section(context),
         _world_model_v4_section(context),
         _arc_envelope_section(context, compact=False),
@@ -615,7 +650,8 @@ def build_preview_chapter_prompt(
         _active_entities_section(context, limit=5),
         _personality_context_section(context),
         _map_runtime_section(context),
-        _active_threads_section(context, limit=3),
+        _active_threads_section(context, limit=6),
+        _canon_name_anchor_section(context),
         _experience_overlay_section(context),
         _world_model_v4_section(context),
         _arc_envelope_section(context, compact=True),
@@ -682,7 +718,7 @@ def build_scene_breakdown_prompt(
         plan_title="本章计划",
         previous_limit=3,
         entity_limit=6,
-        thread_limit=3,
+        thread_limit=6,
         memory_limit=3,
         npc_limit=4,
         feedback_detailed=True,
@@ -716,7 +752,7 @@ def build_scene_generation_prompt(
         plan_title="本章计划",
         previous_limit=2,
         entity_limit=5,
-        thread_limit=3,
+        thread_limit=6,
         memory_limit=2,
         npc_limit=3,
         feedback_detailed=False,
@@ -739,7 +775,7 @@ def build_scene_generation_prompt(
         "<<FORWIN_LOCATION>>\n"
         "这里写 scene 地点，没有就写沿用当前地点\n"
         "<<FORWIN_ENTITIES>>\n"
-        "这里写本 scene 直接出场或被明确提及的实体，使用顿号或逗号分隔\n"
+        "这里只写本 scene 直接出场的命名人物；不要填写档案、录音、历史记录、组织、地点、物品或未直接到场的提及对象\n"
         "<<FORWIN_REWARD>>\n"
         "这里写 reward tag，必须从 power、social、justice、mystery、emotion 中选一个；拿不准就写 scene_plan 里的 reward tag\n"
         "<<FORWIN_IMMERSION>>\n"
@@ -789,7 +825,7 @@ def build_scene_stitch_prompt(
         plan_title="本章计划",
         previous_limit=2,
         entity_limit=5,
-        thread_limit=3,
+        thread_limit=6,
         memory_limit=2,
         npc_limit=3,
         feedback_detailed=False,
@@ -856,8 +892,11 @@ def build_state_event_extraction_prompt(
         "1. 只抽取正文真实发生的内容。\n"
         "2. state_changes.entity_kind 只能是 character、location、faction、item、rule 之一。\n"
         "3. new_events.significance 只能是 major、minor、background 之一。\n"
-        "4. 没有对应内容就返回空数组。\n"
-        "5. 只输出 JSON。\n\n"
+        "4. state_changes 最多 8 条，只保留会影响后续章节连续性的变化。\n"
+        "5. new_events 最多 4 条，只保留本章关键事件。\n"
+        "6. 字段值必须短句，不要展开分析。\n"
+        "7. 没有对应内容就返回空数组。\n"
+        "8. 只输出 JSON。\n\n"
         f"正文：\n{chapter_body}\n\n{schema}"
     )
     return [
@@ -959,8 +998,10 @@ def build_lore_timeline_notes_extraction_prompt(
         "4. writer_notes 是给下一章 writer 的短提示，不能改 canon。\n"
         "5. entity_mentions 只记录正文中出现的命名实体，尤其是命名角色；泛称路人不要记为 is_named=true。\n"
         "6. evidence_refs 使用 body:短语 格式指向正文证据。\n"
-        "7. 没有对应内容就返回空数组。\n"
-        "8. 只输出 JSON。\n\n"
+        "7. lore_candidates 最多 6 条，timeline_hints 最多 3 条，writer_notes 最多 5 条，entity_mentions 最多 8 条。\n"
+        "8. 每个 description、note 和 evidence_refs 项都必须短，不要复述整段正文。\n"
+        "9. 没有对应内容就返回空数组。\n"
+        "10. 只输出 JSON。\n\n"
         f"正文：\n{chapter_body}\n\n{schema}"
     )
     return [

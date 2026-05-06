@@ -498,6 +498,7 @@ def register_api_routes(
         ("/api/tropes/templates/validate", ["POST"], handlers["validate_trope_templates"], {"response_model": TropeTemplateValidationResponse}),
         ("/api/projects/{project_id}/bands/{band_id}/experience", ["POST"], handlers["override_band_experience"], {"response_model": BandExperienceOverrideResponse}),
         ("/api/projects/{project_id}/chapters/{chapter_number}/review/approve", ["POST"], handlers["approve_chapter_review"], {"response_model": ChapterReviewApproveResponse}),
+        ("/api/projects/{project_id}/chapters/{chapter_number}/review/retry", ["POST"], handlers["retry_chapter_review"], {"response_model": ChapterReviewApproveResponse}),
     ]
 
     for path, methods, endpoint, options in route_definitions:

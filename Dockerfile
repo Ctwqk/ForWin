@@ -17,7 +17,7 @@ COPY alembic.ini .
 COPY forwin/ forwin/
 COPY forwin_skills/ forwin_skills/
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir . py-spy
 RUN apt-get update \
     && apt-get install -y --no-install-recommends chromium xvfb xauth ca-certificates postgresql-client \
     && rm -rf /var/lib/apt/lists/*

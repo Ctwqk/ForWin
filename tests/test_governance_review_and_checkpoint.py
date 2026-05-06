@@ -366,6 +366,441 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
                 orchestrator.engine.dispose()
                 engine.dispose()
 
+    def test_auto_band_checkpoint_uses_band_ending_at_boundary_when_bands_overlap(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = postgres_test_url("governance-overlap-band-checkpoint")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session_factory = get_session_factory(engine)
+
+            project_id = new_id()
+            arc_id = new_id()
+            with session_factory() as session:
+                session.add(
+                    Project(
+                        id=project_id,
+                        title="overlap band checkpoint",
+                        premise="premise",
+                        genre="玄幻",
+                        setting_summary="",
+                        governance_json=governance_to_json(
+                            ProjectGovernanceSettings(
+                                progression_mode="serial_canon_band_guard",
+                                auto_band_checkpoint=True,
+                            )
+                        ),
+                    )
+                )
+                session.flush()
+                session.add(
+                    ArcPlanVersion(
+                        id=arc_id,
+                        project_id=project_id,
+                        version=1,
+                        arc_synopsis="测试弧线",
+                        status="active",
+                    )
+                )
+                updater = StateUpdater(session)
+                chapter_plan = updater.create_chapter_plan(
+                    project_id,
+                    arc_id,
+                    1,
+                    "第一章",
+                    "开局推进",
+                    ["推进主线"],
+                )
+                updater.save_draft(
+                    chapter_plan_id=chapter_plan.id,
+                    writer_output=WriterOutput(
+                        chapter_number=1,
+                        title="第一章",
+                        body="主角按计划推进主线，完成本段目标。",
+                        end_of_chapter_summary="本段目标完成。",
+                    ),
+                    raw_response="artifact://draft-meta",
+                    model_name="fake-model",
+                )
+                updater.mark_chapter_status(project_id, 1, "accepted")
+                updater.save_band_experience_plan(
+                    project_id=project_id,
+                    arc_id=arc_id,
+                    schedule=BandDelightSchedule(
+                        band_id="band-ending-1",
+                        chapter_start=1,
+                        chapter_end=1,
+                    ),
+                    task_contract=[],
+                )
+                session.commit()
+                updater.save_band_experience_plan(
+                    project_id=project_id,
+                    arc_id=arc_id,
+                    schedule=BandDelightSchedule(
+                        band_id="band-overlap",
+                        chapter_start=1,
+                        chapter_end=2,
+                    ),
+                    task_contract=[],
+                )
+                session.commit()
+
+            orchestrator = WritingOrchestrator(
+                Config(
+                    database_url=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="blackbox",
+                    auto_band_checkpoint=True,
+                    progression_mode="serial_canon_band_guard",
+                )
+            )
+            try:
+                with session_factory() as session:
+                    repo, updater, _checker = orchestrator._make_state_helpers(session)
+                    row = orchestrator._create_auto_band_checkpoint(
+                        session=session,
+                        repo=repo,
+                        updater=updater,
+                        project_id=project_id,
+                        chapter_number=1,
+                    )
+                    self.assertIsNotNone(row)
+                    self.assertEqual(row.band_id, "band-ending-1")
+                    self.assertEqual(row.boundary_chapter, 1)
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+                engine.dispose()
+
+    def test_band_warn_action_continue_allows_next_band_after_warn_checkpoint(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = postgres_test_url("governance-band-warn-continue")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session_factory = get_session_factory(engine)
+
+            project_id = new_id()
+            arc_id = new_id()
+            with session_factory() as session:
+                session.add(
+                    Project(
+                        id=project_id,
+                        title="band warn continue",
+                        premise="premise",
+                        genre="玄幻",
+                        setting_summary="",
+                        governance_json=governance_to_json(
+                            ProjectGovernanceSettings(
+                                progression_mode="serial_canon_band_guard",
+                                auto_band_checkpoint=True,
+                                band_warn_action="continue",
+                            )
+                        ),
+                    )
+                )
+                session.flush()
+                session.add(
+                    ArcPlanVersion(
+                        id=arc_id,
+                        project_id=project_id,
+                        version=1,
+                        arc_synopsis="测试弧线",
+                        status="active",
+                    )
+                )
+                updater = StateUpdater(session)
+                for chapter_number in (1, 2):
+                    updater.create_chapter_plan(
+                        project_id,
+                        arc_id,
+                        chapter_number,
+                        f"第{chapter_number}章",
+                        "推进",
+                        ["推进主线"],
+                    )
+                    if chapter_number == 1:
+                        updater.mark_chapter_status(project_id, 1, "accepted")
+                updater.save_band_experience_plan(
+                    project_id=project_id,
+                    arc_id=arc_id,
+                    schedule=BandDelightSchedule(
+                        band_id="band-1",
+                        chapter_start=1,
+                        chapter_end=1,
+                    ),
+                    task_contract=[],
+                )
+                updater.save_band_experience_plan(
+                    project_id=project_id,
+                    arc_id=arc_id,
+                    schedule=BandDelightSchedule(
+                        band_id="band-2",
+                        chapter_start=2,
+                        chapter_end=2,
+                    ),
+                    task_contract=[],
+                )
+                session.add(
+                    BandCheckpoint(
+                        project_id=project_id,
+                        arc_id=arc_id,
+                        band_id="band-1",
+                        chapter_start=1,
+                        chapter_end=1,
+                        trigger_source="auto_band_end",
+                        boundary_kind="band_end",
+                        boundary_chapter=1,
+                        status="warn",
+                        summary="band checkpoint 需要人工处理。",
+                    )
+                )
+                session.commit()
+
+            orchestrator = WritingOrchestrator(
+                Config(
+                    database_url=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="blackbox",
+                    auto_band_checkpoint=True,
+                    progression_mode="serial_canon_band_guard",
+                )
+            )
+            try:
+                with session_factory() as session:
+                    repo, _updater, _checker = orchestrator._make_state_helpers(session)
+                    project = repo.get_project(project_id)
+                    self.assertEqual(
+                        orchestrator._strict_progression_block(
+                            session=session,
+                            repo=repo,
+                            project=project,
+                            chapter_number=2,
+                        ),
+                        ("", "", ""),
+                    )
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+                engine.dispose()
+
+    def test_strict_progression_materializes_missing_auto_band_checkpoint(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = postgres_test_url("governance-missing-auto-checkpoint")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session_factory = get_session_factory(engine)
+
+            project_id = new_id()
+            arc_id = new_id()
+            with session_factory() as session:
+                session.add(
+                    Project(
+                        id=project_id,
+                        title="missing checkpoint",
+                        premise="premise",
+                        genre="玄幻",
+                        setting_summary="",
+                        governance_json=governance_to_json(
+                            ProjectGovernanceSettings(
+                                progression_mode="serial_canon_band_guard",
+                                auto_band_checkpoint=True,
+                                band_warn_action="continue",
+                            )
+                        ),
+                    )
+                )
+                session.flush()
+                session.add(
+                    ArcPlanVersion(
+                        id=arc_id,
+                        project_id=project_id,
+                        version=1,
+                        arc_synopsis="测试弧线",
+                        status="active",
+                    )
+                )
+                updater = StateUpdater(session)
+                for chapter_number in (1, 2):
+                    updater.create_chapter_plan(
+                        project_id,
+                        arc_id,
+                        chapter_number,
+                        f"第{chapter_number}章",
+                        "推进",
+                        ["推进主线"],
+                    )
+                    if chapter_number == 1:
+                        updater.mark_chapter_status(project_id, 1, "accepted")
+                updater.save_band_experience_plan(
+                    project_id=project_id,
+                    arc_id=arc_id,
+                    schedule=BandDelightSchedule(
+                        band_id="band-1",
+                        chapter_start=1,
+                        chapter_end=1,
+                    ),
+                    task_contract=[],
+                )
+                updater.save_band_experience_plan(
+                    project_id=project_id,
+                    arc_id=arc_id,
+                    schedule=BandDelightSchedule(
+                        band_id="band-2",
+                        chapter_start=2,
+                        chapter_end=2,
+                    ),
+                    task_contract=[],
+                )
+                session.commit()
+
+            orchestrator = WritingOrchestrator(
+                Config(
+                    database_url=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="blackbox",
+                    auto_band_checkpoint=True,
+                    progression_mode="serial_canon_band_guard",
+                )
+            )
+            try:
+                with session_factory() as session:
+                    repo, updater, _checker = orchestrator._make_state_helpers(session)
+                    project = repo.get_project(project_id)
+                    self.assertEqual(
+                        orchestrator._strict_progression_block(
+                            session=session,
+                            repo=repo,
+                            updater=updater,
+                            project=project,
+                            chapter_number=2,
+                        ),
+                        ("", "", ""),
+                    )
+                    checkpoint = repo.get_latest_band_checkpoint(project_id, band_id="band-1")
+                    self.assertIsNotNone(checkpoint)
+                    self.assertEqual(checkpoint.status, "pass")
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+                engine.dispose()
+
+    def test_strict_progression_ignores_superseded_arc_previous_band(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = postgres_test_url("governance-superseded-previous-band")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session_factory = get_session_factory(engine)
+
+            project_id = new_id()
+            old_arc_id = new_id()
+            active_arc_id = new_id()
+            with session_factory() as session:
+                session.add(
+                    Project(
+                        id=project_id,
+                        title="superseded previous band",
+                        premise="premise",
+                        genre="玄幻",
+                        setting_summary="",
+                        governance_json=governance_to_json(
+                            ProjectGovernanceSettings(
+                                progression_mode="serial_canon_band_guard",
+                                auto_band_checkpoint=True,
+                            )
+                        ),
+                    )
+                )
+                session.flush()
+                session.add_all(
+                    [
+                        ArcPlanVersion(
+                            id=old_arc_id,
+                            project_id=project_id,
+                            version=1,
+                            arc_synopsis="旧弧线",
+                            status="superseded",
+                        ),
+                        ArcPlanVersion(
+                            id=active_arc_id,
+                            project_id=project_id,
+                            version=2,
+                            arc_synopsis="当前弧线",
+                            status="active",
+                        ),
+                    ]
+                )
+                updater = StateUpdater(session)
+                old_plan = updater.create_chapter_plan(
+                    project_id,
+                    old_arc_id,
+                    1,
+                    "第一章",
+                    "旧 arc 章节",
+                    ["旧 arc"],
+                )
+                updater.mark_chapter_status(project_id, 1, "accepted")
+                active_plan = updater.create_chapter_plan(
+                    project_id,
+                    active_arc_id,
+                    2,
+                    "第二章",
+                    "当前 arc 起点",
+                    ["当前 arc"],
+                )
+                updater.save_band_experience_plan(
+                    project_id=project_id,
+                    arc_id=old_arc_id,
+                    schedule=BandDelightSchedule(
+                        band_id="old-band",
+                        chapter_start=1,
+                        chapter_end=1,
+                    ),
+                    task_contract=[],
+                )
+                updater.save_band_experience_plan(
+                    project_id=project_id,
+                    arc_id=active_arc_id,
+                    schedule=BandDelightSchedule(
+                        band_id="active-band",
+                        chapter_start=2,
+                        chapter_end=3,
+                    ),
+                    task_contract=[],
+                )
+                session.commit()
+
+            orchestrator = WritingOrchestrator(
+                Config(
+                    database_url=db_path,
+                    minimax_api_key="",
+                    minimax_model="fake-model",
+                    operation_mode="blackbox",
+                    auto_band_checkpoint=True,
+                    progression_mode="serial_canon_band_guard",
+                )
+            )
+            try:
+                with session_factory() as session:
+                    repo, updater, _checker = orchestrator._make_state_helpers(session)
+                    project = repo.get_project(project_id)
+                    self.assertEqual(
+                        orchestrator._strict_progression_block(
+                            session=session,
+                            repo=repo,
+                            updater=updater,
+                            project=project,
+                            chapter_number=2,
+                        ),
+                        ("", "", ""),
+                    )
+            finally:
+                orchestrator.llm_client.close()
+                orchestrator.engine.dispose()
+                engine.dispose()
+
     def test_future_resource_preservation_risks_are_categorized(self) -> None:
         samples = {
             "character_locked_out": "小明彻底解决旧案后阵亡，后续再也无法登场。",

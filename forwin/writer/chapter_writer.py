@@ -31,6 +31,8 @@ from forwin.utils import parse_llm_json
 
 logger = logging.getLogger(__name__)
 _VALID_REWARD_TAGS = {"power", "social", "justice", "mystery", "emotion"}
+_BODY_TERMINAL_PUNCTUATION = set("。！？!?…")
+_BODY_TRAILING_CLOSERS = set("”’」』）)]》】")
 
 
 class ChapterWriter:
@@ -56,7 +58,7 @@ class ChapterWriter:
         max_chapter_chars: int = 3200,
         target_chapter_chars: int = 2800,
         single_call_timeout_seconds: float = 90.0,
-        scene_call_timeout_seconds: float = 45.0,
+        scene_call_timeout_seconds: float = 90.0,
     ) -> None:
         self.llm_client = llm_client
         self.temperature = temperature
@@ -491,7 +493,7 @@ class ChapterWriter:
             temperature=self.temperature,
             max_tokens=max_output_tokens,
             timeout_seconds=self.scene_call_timeout_seconds,
-            max_attempts=2,
+            max_attempts=1,
             retry_on_timeout=False,
             stage_key="scene_generation",
         )
@@ -577,9 +579,12 @@ class ChapterWriter:
         raw_stitched = self._chat_preview_text(
             build_scene_stitch_prompt(context, scene_outputs, skill_layers=skill_layers),
             temperature=0.5,
-            max_tokens=min(self.max_tokens, 2400),
+            max_tokens=min(
+                self.max_tokens,
+                max(5200, int(self.target_chapter_chars * 2.0)),
+            ),
             timeout_seconds=self.scene_call_timeout_seconds,
-            max_attempts=2,
+            max_attempts=1,
             retry_on_timeout=False,
             stage_key="scene_stitch",
         )
@@ -615,9 +620,9 @@ class ChapterWriter:
             chapter_title=chapter_title,
             chapter_body=chapter_body,
             primary_temperature=0.25,
-            primary_max_tokens=min(self.max_tokens, 1000),
+            primary_max_tokens=min(self.max_tokens, 2200),
             retry_temperature=0.2,
-            retry_max_tokens=min(self.max_tokens, 700),
+            retry_max_tokens=min(self.max_tokens, 1400),
         )
         thread_time = self._extract_structured_part(
             label="thread_time_extraction",
@@ -637,9 +642,9 @@ class ChapterWriter:
             chapter_title=chapter_title,
             chapter_body=chapter_body,
             primary_temperature=0.2,
-            primary_max_tokens=min(self.max_tokens, 900),
+            primary_max_tokens=min(self.max_tokens, 2400),
             retry_temperature=0.15,
-            retry_max_tokens=min(self.max_tokens, 560),
+            retry_max_tokens=min(self.max_tokens, 1500),
         )
 
         metadata.update(state_event)
@@ -883,9 +888,9 @@ class ChapterWriter:
             {"temperature": temperature, "max_tokens": max_tokens},
             {
                 "temperature": max(0.2, temperature - 0.15),
-                "max_tokens": max(600, min(max_tokens, 1400)),
+                "max_tokens": max_tokens,
             },
-            {"temperature": 0.2, "max_tokens": max(520, min(max_tokens, 1100))},
+            {"temperature": 0.2, "max_tokens": max_tokens},
         ][: max(1, int(max_attempts))]
         last_error: Exception | None = None
         for index, attempt in enumerate(attempts, start=1):
@@ -900,8 +905,11 @@ class ChapterWriter:
                     stage_key=stage_key,
                 )
                 parsed = self._parse_preview_text(raw, fallback_title="")
-                if str(parsed.get("body", "") or "").strip():
+                body = str(parsed.get("body", "") or "").strip()
+                if body and self._body_looks_complete(body):
                     return raw
+                if body:
+                    raise ValueError("preview response body appears incomplete")
                 raise ValueError("preview response body is empty")
             except Exception as exc:  # noqa: BLE001
                 if raw:
@@ -927,6 +935,15 @@ class ChapterWriter:
                     exc,
                 )
         raise ValueError(f"ChapterWriter preview generation failed after retries: {last_error}")
+
+    @staticmethod
+    def _body_looks_complete(body: str) -> bool:
+        text = str(body or "").strip()
+        if not text:
+            return False
+        while text and text[-1] in _BODY_TRAILING_CLOSERS:
+            text = text[:-1].rstrip()
+        return bool(text and text[-1] in _BODY_TERMINAL_PUNCTUATION)
 
     def _call_chat(
         self,

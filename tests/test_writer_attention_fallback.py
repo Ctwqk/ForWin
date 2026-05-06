@@ -91,6 +91,12 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                     "The read operation timed out",
                 )
                 mocked_preview.assert_called_once()
+                preview_kwargs = mocked_preview.call_args.kwargs
+                self.assertEqual(
+                    preview_kwargs["timeout_seconds"],
+                    orchestrator.writer.single_call_timeout_seconds,
+                )
+                self.assertFalse(preview_kwargs["retry_on_timeout"])
                 updater.mark_chapter_status.assert_not_called()
                 self.assertEqual(paused_chapters, [])
                 self.assertEqual(frozen_artifacts, [])

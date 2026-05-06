@@ -25,6 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.canon_names import is_plausible_person_name
 from forwin.checker.rules import ContinuityChecker
 from forwin.config import Config
 from forwin.governance import (
@@ -1188,10 +1189,14 @@ class WritingOrchestrator:
         project_id: str,
         current_start: int,
     ) -> BandExperiencePlan | None:
+        active_arc = StateRepository(session).get_active_arc_plan(project_id)
+        if active_arc is None:
+            return None
         return (
             session.query(BandExperiencePlan)
             .filter(
                 BandExperiencePlan.project_id == project_id,
+                BandExperiencePlan.arc_id == active_arc.id,
                 BandExperiencePlan.chapter_end < current_start,
             )
             .order_by(BandExperiencePlan.chapter_end.desc(), BandExperiencePlan.created_at.desc())
@@ -1224,6 +1229,7 @@ class WritingOrchestrator:
         *,
         session: Session,
         repo: StateRepository,
+        updater: StateUpdater | None = None,
         project: Project,
         chapter_number: int,
     ) -> tuple[str, str, str]:
@@ -1246,26 +1252,37 @@ class WritingOrchestrator:
             return "", "", ""
         previous_band = self._previous_band_row(
             session,
-            project_id=project.id,
-            current_start=int(band_row.chapter_start or 0),
-        )
+                project_id=project.id,
+                current_start=int(band_row.chapter_start or 0),
+            )
         if previous_band is None:
             return "", "", ""
         latest_checkpoint = repo.get_latest_band_checkpoint(project.id, band_id=previous_band.band_id)
+        if latest_checkpoint is None and bool(governance.auto_band_checkpoint) and updater is not None:
+            latest_checkpoint = self._create_auto_band_checkpoint(
+                session=session,
+                repo=repo,
+                updater=updater,
+                project_id=project.id,
+                chapter_number=int(previous_band.chapter_end or 0),
+            )
         if latest_checkpoint is None:
             return (
                 "band_checkpoint_pending",
                 previous_band.band_id,
                 chapter_blocking_message("band_checkpoint_pending", band_id=previous_band.band_id),
             )
-        if latest_checkpoint.status in {"pass", "overridden"}:
+        checkpoint_status = str(latest_checkpoint.status or "")
+        if checkpoint_status in {"pass", "overridden"}:
+            return "", "", ""
+        if checkpoint_status == "warn" and str(governance.band_warn_action or "") == "continue":
             return "", "", ""
         code = {
             "pending": "band_checkpoint_pending",
             "warn": "band_checkpoint_warn",
             "fail": "band_checkpoint_fail",
             "error": "band_checkpoint_fail",
-        }.get(str(latest_checkpoint.status or ""), "band_checkpoint_pending")
+        }.get(checkpoint_status, "band_checkpoint_pending")
         return (
             code,
             previous_band.band_id,
@@ -1281,7 +1298,22 @@ class WritingOrchestrator:
         project_id: str,
         chapter_number: int,
     ) -> BandCheckpoint | None:
-        band_row = repo.get_band_row_for_chapter(project_id, chapter_number)
+        active_arc = repo.get_active_arc_plan(project_id)
+        band_row = None
+        if active_arc is not None:
+            band_row = (
+                session.query(BandExperiencePlan)
+                .filter(
+                    BandExperiencePlan.project_id == project_id,
+                    BandExperiencePlan.arc_id == active_arc.id,
+                    BandExperiencePlan.chapter_start <= chapter_number,
+                    BandExperiencePlan.chapter_end == chapter_number,
+                )
+                .order_by(BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc())
+                .first()
+            )
+        if band_row is None:
+            band_row = repo.get_band_row_for_chapter(project_id, chapter_number)
         if band_row is None or int(band_row.chapter_end or 0) != chapter_number:
             return None
         existing_boundary_checkpoint = (
@@ -1796,6 +1828,77 @@ class WritingOrchestrator:
         )
 
     @staticmethod
+    def _apply_canon_name_drift_autofix(
+        writer_output: WriterOutput,
+        review: ReviewVerdict,
+    ) -> WriterOutput | None:
+        replacements: dict[str, str] = {}
+        for issue in review.issues:
+            if str(issue.rule_name or "") != "canon_name_drift":
+                continue
+            if str(issue.severity or "") != "error":
+                continue
+            entity_names = list(issue.entity_names or [])
+            if len(entity_names) < 2:
+                continue
+            observed = str(entity_names[0] or "").strip()
+            canonical = str(entity_names[1] or "").strip()
+            if not observed or not canonical or observed == canonical:
+                continue
+            if observed.startswith(canonical):
+                continue
+            if not is_plausible_person_name(observed) or not is_plausible_person_name(canonical):
+                continue
+            replacements[observed] = canonical
+
+        if not replacements:
+            return None
+
+        payload = WritingOrchestrator._replace_canon_name_strings(
+            writer_output.model_dump(mode="python"),
+            replacements,
+        )
+        payload["char_count"] = len(str(payload.get("body") or ""))
+        generation_meta = dict(payload.get("generation_meta") or {})
+        previous_autofix = generation_meta.get("canon_name_autofix")
+        if isinstance(previous_autofix, dict):
+            autofix_meta = {str(key): str(value) for key, value in previous_autofix.items()}
+            autofix_meta.update(replacements)
+        else:
+            autofix_meta = replacements
+        generation_meta["canon_name_autofix"] = autofix_meta
+        payload["generation_meta"] = generation_meta
+        return WriterOutput.model_validate(payload)
+
+    @staticmethod
+    def _replace_canon_name_strings(value: Any, replacements: dict[str, str]) -> Any:
+        if isinstance(value, str):
+            result = value
+            for observed, canonical in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
+                result = result.replace(observed, canonical)
+            return result
+        if isinstance(value, list):
+            return [
+                WritingOrchestrator._replace_canon_name_strings(item, replacements)
+                for item in value
+            ]
+        if isinstance(value, tuple):
+            return tuple(
+                WritingOrchestrator._replace_canon_name_strings(item, replacements)
+                for item in value
+            )
+        if isinstance(value, dict):
+            return {
+                (
+                    WritingOrchestrator._replace_canon_name_strings(key, replacements)
+                    if isinstance(key, str)
+                    else key
+                ): WritingOrchestrator._replace_canon_name_strings(item, replacements)
+                for key, item in value.items()
+            }
+        return value
+
+    @staticmethod
     def _review_event_payload(review: ReviewVerdict) -> dict[str, object]:
         return {
             "verdict": review.verdict,
@@ -2029,8 +2132,18 @@ class WritingOrchestrator:
             checker=checker,
             project_id=project_id,
             context=context,
-            writer_output=writer_output,
+            writer_output=current_output,
         )
+        autofixed_output = self._apply_canon_name_drift_autofix(current_output, current_review)
+        if autofixed_output is not None:
+            current_output = autofixed_output
+            current_review = self._review_current_output(
+                repo=repo,
+                checker=checker,
+                project_id=project_id,
+                context=context,
+                writer_output=current_output,
+            )
         current_output, current_draft, current_review_row = self._persist_draft_and_review(
             session=session,
             updater=updater,
@@ -2201,6 +2314,12 @@ class WritingOrchestrator:
                 )
                 continue
 
+            self._emit_progress(
+                "stage_changed",
+                stage="repairing_chapter",
+                project_id=project_id,
+                current_chapter=chapter_plan.chapter_number,
+            )
             try:
                 rewritten_output = self._write_chapter_with_attention_fallback(
                     context=updated_context,
@@ -2297,6 +2416,12 @@ class WritingOrchestrator:
                 ),
                 parent_trace_id=current_review_trace_id,
             )
+            self._emit_progress(
+                "stage_changed",
+                stage="repair_review",
+                project_id=project_id,
+                current_chapter=chapter_plan.chapter_number,
+            )
             rewritten_review = self._review_current_output(
                 repo=repo,
                 checker=checker,
@@ -2304,6 +2429,19 @@ class WritingOrchestrator:
                 context=updated_context,
                 writer_output=rewritten_output,
             )
+            autofixed_rewritten_output = self._apply_canon_name_drift_autofix(
+                rewritten_output,
+                rewritten_review,
+            )
+            if autofixed_rewritten_output is not None:
+                rewritten_output = autofixed_rewritten_output
+                rewritten_review = self._review_current_output(
+                    repo=repo,
+                    checker=checker,
+                    project_id=project_id,
+                    context=updated_context,
+                    writer_output=rewritten_output,
+                )
             rewritten_review = self._review_with_repair_verification(
                 original_output=current_output,
                 repaired_output=rewritten_output,
@@ -2858,6 +2996,7 @@ class WritingOrchestrator:
             block_code, block_band_id, block_message = self._strict_progression_block(
                 session=session,
                 repo=repo,
+                updater=updater,
                 project=project,
                 chapter_number=chapter_num,
             )
@@ -3380,7 +3519,13 @@ class WritingOrchestrator:
                                 "error_summary": str(exc),
                             },
                         )
-                    if checkpoint_row is not None and checkpoint_row.status in {"warn", "fail", "error"}:
+                    if checkpoint_row is not None and checkpoint_row.status in {"fail", "error"}:
+                        checkpoint_pause = True
+                    if (
+                        checkpoint_row is not None
+                        and checkpoint_row.status == "warn"
+                        and str(governance.band_warn_action or "") == "pause"
+                    ):
                         checkpoint_pause = True
                 manual_after_accept = self._manual_boundary_checkpoint(
                     session,
@@ -3771,6 +3916,7 @@ class WritingOrchestrator:
         if last_error is not None:
             preview_started_at = time.perf_counter()
             preview_max_attempts = 3 if saw_transient_error else 2
+            preview_timeout_seconds = self.writer.single_call_timeout_seconds
             preview_started_event = self._record_decision_event(
                 updater=updater,
                 project_id=project_id,
@@ -3788,7 +3934,7 @@ class WritingOrchestrator:
                     source_error_message=safe_error_summary(last_error),
                     source_attempt_no=last_failed_attempt,
                     max_attempts=preview_max_attempts,
-                    timeout_seconds=self.writer.scene_call_timeout_seconds,
+                    timeout_seconds=preview_timeout_seconds,
                 ),
             )
             try:
@@ -3797,9 +3943,9 @@ class WritingOrchestrator:
                     context,
                     skill_layers=writer_skill_layers,
                     trace_stage_key="writer_preview_fallback",
-                    timeout_seconds=self.writer.scene_call_timeout_seconds,
+                    timeout_seconds=preview_timeout_seconds,
                     max_attempts=preview_max_attempts,
-                    retry_on_timeout=True,
+                    retry_on_timeout=False,
                 )
                 preview_output.generation_meta.update(
                     {
@@ -3826,7 +3972,7 @@ class WritingOrchestrator:
                         source_attempt_no=last_failed_attempt,
                         fallback_attempt_no=fallback_summary.get("successful_attempt_no", 0),
                         max_attempts=preview_max_attempts,
-                        timeout_seconds=self.writer.scene_call_timeout_seconds,
+                        timeout_seconds=preview_timeout_seconds,
                         duration_ms=max(0, int((time.perf_counter() - preview_started_at) * 1000)),
                         char_count=int(getattr(preview_output, "char_count", 0) or 0),
                         **fallback_summary,
@@ -3866,7 +4012,7 @@ class WritingOrchestrator:
                         source_error_message=safe_error_summary(last_error),
                         source_attempt_no=last_failed_attempt,
                         max_attempts=preview_max_attempts,
-                        timeout_seconds=self.writer.scene_call_timeout_seconds,
+                        timeout_seconds=preview_timeout_seconds,
                         attempt_count=len(preview_attempts),
                         attempt_group_ids=attempt_group_ids(preview_attempts),
                     ),
@@ -4878,6 +5024,21 @@ class WritingOrchestrator:
                 if not name or len(name) > 40:
                     continue
                 seed_specs.append((entity_kind, name, item))
+        for anchor in ContinuityChecker(repo)._canon_name_anchors(project_id):
+            name = str(getattr(anchor, "canonical_name", "") or "").strip()
+            role_label = str(getattr(anchor, "role_label", "") or "").strip()
+            if not name or len(name) > 40:
+                continue
+            seed_specs.append(
+                (
+                    "character",
+                    name,
+                    {
+                        "role": f"{role_label} canon name anchor" if role_label else "canon name anchor",
+                        "aliases": [role_label] if role_label else [],
+                    },
+                )
+            )
         if not seed_specs:
             return
 
@@ -4922,33 +5083,45 @@ class WritingOrchestrator:
         project_id: str,
         writer_output: WriterOutput,
     ) -> set[str]:
-        generic_names = {
-            "路人", "守卫", "老板", "店小二", "师兄", "师姐", "弟子", "同学", "众人", "人群", "旁人",
-        }
         names: set[str] = set()
         maybe_event_names: set[str] = set()
+        absence_only_names = {
+            name
+            for change in writer_output.state_changes
+            if change.entity_kind == "character"
+            and ContinuityChecker._is_absence_only_state_change(change)
+            for name in [ContinuityChecker._candidate_character_name(change.entity_name)]
+            if name
+        }
         for mention in getattr(writer_output, "entity_mentions", []):
-            entity_name = str(getattr(mention, "entity_name", "")).strip()
             if (
-                entity_name
-                and getattr(mention, "entity_kind", "") == "character"
+                getattr(mention, "entity_kind", "") == "character"
                 and bool(getattr(mention, "is_named", False))
-                and entity_name not in generic_names
+                and bool(getattr(mention, "is_on_stage", True))
             ):
-                names.add(entity_name)
+                entity_name = ContinuityChecker._candidate_character_name(
+                    getattr(mention, "entity_name", "")
+                )
+                if entity_name and entity_name not in absence_only_names:
+                    names.add(entity_name)
         for change in writer_output.state_changes:
-            entity_name = str(change.entity_name or "").strip()
-            if change.entity_kind == "character" and entity_name and entity_name not in generic_names:
+            if (
+                change.entity_kind == "character"
+                and not ContinuityChecker._is_absence_only_state_change(change)
+            ):
+                entity_name = ContinuityChecker._candidate_character_name(change.entity_name)
+                if not entity_name:
+                    continue
                 names.add(entity_name)
         for event in writer_output.new_events:
             for entity_name in event.involved_entity_names:
-                normalized = str(entity_name or "").strip()
-                if normalized and normalized not in generic_names:
+                normalized = ContinuityChecker._candidate_character_name(entity_name)
+                if normalized and normalized not in absence_only_names:
                     maybe_event_names.add(normalized)
         for scene in writer_output.scene_outputs:
             for entity_name in scene.involved_entities:
-                normalized = str(entity_name or "").strip()
-                if normalized and normalized not in generic_names:
+                normalized = ContinuityChecker._candidate_character_name(entity_name)
+                if normalized and normalized not in absence_only_names:
                     names.add(normalized)
         if maybe_event_names:
             resolved = repo.get_entities_by_names(project_id, sorted(maybe_event_names))
@@ -4966,7 +5139,14 @@ class WritingOrchestrator:
         chapter_number: int,
         writer_output: WriterOutput,
     ) -> None:
-        allowed_names = repo.get_allowed_entity_names(project_id, chapter_number)
+        allowed_names = {
+            ContinuityChecker._normalize_character_reference(name)
+            for name in repo.get_allowed_entity_names(project_id, chapter_number)
+        }
+        allowed_names.update(
+            ContinuityChecker._normalize_character_reference(anchor.canonical_name)
+            for anchor in ContinuityChecker(repo)._canon_name_anchors(project_id)
+        )
         if not allowed_names:
             return
         unknown = sorted(

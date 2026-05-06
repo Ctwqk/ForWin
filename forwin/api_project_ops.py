@@ -26,6 +26,7 @@ from forwin.api_schemas import (
     ChapterReviewApproveRequest,
     ChapterReviewApproveResponse,
     ChapterReviewDetail,
+    ChapterReviewRetryRequest,
     ChapterRewriteAttemptInfo,
     ChapterReviewIssueInfo,
     ChapterInfo,
@@ -1560,4 +1561,116 @@ def approve_chapter_review(
         message=message,
         task_id=task_id,
         frozen_artifact=result.get("frozen_artifact") or "",
+    )
+
+
+def retry_chapter_review(
+    project_id: str,
+    chapter_number: int,
+    req: ChapterReviewRetryRequest,
+    *,
+    config,
+    runtime_settings,
+    get_session,
+    active_generation_task_error_cls,
+    require_reason,
+    resolve_project_governance,
+    project_has_active_generation_task,
+    generation_task_conflict_message,
+    log_decision_event,
+    create_continue_generation_task,
+) -> ChapterReviewApproveResponse:
+    if config is None:
+        raise HTTPException(500, "服务尚未完成初始化")
+
+    reason = require_reason(req.reason, action="重试 review 章节")
+    runtime_config = build_saved_runtime_config(
+        base_config=config,
+        runtime_settings=runtime_settings,
+    )
+    task_id = ""
+    total_chapters = 0
+    session = get_session()
+    try:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        if project_has_active_generation_task(project_id, session=session):
+            raise HTTPException(409, generation_task_conflict_message(project_id))
+        governance = resolve_project_governance(project, base_config=config)
+        runtime_config = copy_config(
+            runtime_config,
+            operation_mode=governance.default_operation_mode,
+            review_interval_chapters=governance.review_interval_chapters,
+            progression_mode=governance.progression_mode,
+            auto_band_checkpoint=governance.auto_band_checkpoint,
+            band_warn_action=governance.band_warn_action,
+            manual_checkpoints_enabled=governance.manual_checkpoints_enabled,
+            future_constraints_enabled=governance.future_constraints_enabled,
+        )
+        plan = session.execute(
+            select(ChapterPlan).where(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number == chapter_number,
+            )
+        ).scalar_one_or_none()
+        if plan is None:
+            raise HTTPException(404, f"第{chapter_number}章不存在")
+        previous_status = str(plan.status or "")
+        allowed_statuses = {"needs_review", "drafted"}
+        if bool(getattr(req, "allow_accepted", False)):
+            allowed_statuses.add("accepted")
+        if previous_status not in allowed_statuses:
+            raise HTTPException(
+                400,
+                f"第{chapter_number}章不是可 retry 状态（当前 {previous_status or 'unknown'}）",
+            )
+        plan.status = "planned"
+        plan.acceptance_mode = ""
+        plan.repair_attempt_count = 0
+        plan.residual_review_issues_json = "[]"
+        plan.canon_risk_level = ""
+        session.add(plan)
+        log_decision_event(
+            session,
+            project_id=project_id,
+            event_family="audit_action",
+            event_type=DecisionEventType.RETRY_ATTEMPT,
+            actor_type="api",
+            scope="chapter",
+            summary=f"第{chapter_number}章 review 候选已重置为 planned，等待重写。",
+            reason=reason,
+            payload={"chapter_number": chapter_number, "previous_status": previous_status},
+            chapter_number=chapter_number,
+            related_object_type="chapter",
+            related_object_id=str(plan.id),
+        )
+        total_chapters = session.execute(
+            select(func.count(ChapterPlan.id)).where(ChapterPlan.project_id == project_id)
+        ).scalar_one()
+        session.commit()
+    finally:
+        session.close()
+
+    message = f"第{chapter_number}章已重置为 planned。"
+    if req.continue_generation:
+        try:
+            task_id = create_continue_generation_task(
+                project_id=project_id,
+                runtime_config=runtime_config,
+                requested_chapters=int(total_chapters or 0),
+                message=f"已重置第{chapter_number}章，准备重新生成。",
+            )
+        except active_generation_task_error_cls as exc:
+            raise HTTPException(409, str(exc)) from exc
+        message = f"{message} 已启动后续章节继续执行。"
+
+    return ChapterReviewApproveResponse(
+        ok=True,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        status="planned",
+        message=message,
+        task_id=task_id,
+        frozen_artifact="",
     )

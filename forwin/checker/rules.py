@@ -1,5 +1,6 @@
 """Rule-based continuity checker for Phase 0.5."""
 from __future__ import annotations
+import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -9,6 +10,7 @@ if TYPE_CHECKING:
 from forwin.protocol.writer import WriterOutput
 from forwin.protocol.review import ReviewVerdict, ContinuityIssue
 from forwin.governance import issue_group_for_issue
+from forwin.canon_names import extract_canon_name_anchors, find_canon_name_violations
 
 logger = logging.getLogger(__name__)
 DEAD_STATUS_KEYWORDS = {
@@ -33,7 +35,65 @@ GENERIC_CHARACTER_REFERENCES = {
     "众人",
     "人群",
     "旁人",
+    "馆员",
+    "管理员",
+    "工作人员",
+    "服务员",
 }
+NON_CHARACTER_NAME_KEYWORDS = (
+    "集团",
+    "公司",
+    "机构",
+    "报社",
+    "系统",
+    "账本",
+    "记忆馆",
+    "旧港",
+    "火灾",
+    "事故",
+    "码头",
+    "咖啡馆",
+    "档案",
+    "论坛",
+    "市场",
+    "大楼",
+    "实验室",
+    "实验区",
+)
+RELATIONAL_REFERENCE_SUFFIXES = (
+    "母亲",
+    "父亲",
+    "妈妈",
+    "爸爸",
+    "姐姐",
+    "妹妹",
+    "哥哥",
+    "弟弟",
+    "的母亲",
+    "的父亲",
+    "的妈妈",
+    "的爸爸",
+    "的姐姐",
+    "的妹妹",
+    "的哥哥",
+    "的弟弟",
+)
+ABSENCE_ONLY_CHANGE_KEYWORDS = (
+    "不存在",
+    "消失",
+    "抹除",
+    "删除",
+    "讣告",
+    "记录",
+    "死亡",
+    "已死",
+    "遇难",
+    "遇难者",
+    "死者",
+    "遗体",
+    "死因",
+    "死亡证明",
+)
 BODY_TERMINAL_PUNCTUATION = set("。！？!?…")
 BODY_TRAILING_CLOSERS = set("”’」』）)]》】")
 
@@ -54,6 +114,7 @@ class ContinuityChecker:
         issues.extend(self._check_char_count(writer_output))
         issues.extend(self._check_empty_body(writer_output))
         issues.extend(self._check_body_completion(writer_output))
+        issues.extend(self._check_canon_name_anchors(project_id, writer_output))
         issues.extend(self._check_dead_characters(project_id, writer_output))
         issues.extend(self._check_thread_status(project_id, writer_output))
         issues.extend(self._check_state_change_validity(writer_output))
@@ -103,6 +164,67 @@ class ContinuityChecker:
             ))
 
         return issues
+
+    def _check_canon_name_anchors(self, project_id: str, output: WriterOutput) -> list[ContinuityIssue]:
+        anchors = self._canon_name_anchors(project_id)
+        if not anchors:
+            return []
+        violations = find_canon_name_violations(
+            self._canon_name_scan_text(output),
+            anchors,
+        )
+        issues: list[ContinuityIssue] = []
+        for violation in violations:
+            issues.append(
+                ContinuityIssue(
+                    rule_name="canon_name_drift",
+                    severity="error",
+                    description=(
+                        f"{violation.role_label}的 canon 姓名是「{violation.canonical_name}」，"
+                        f"本章写成了「{violation.observed_name}」。"
+                    ),
+                    entity_names=[violation.observed_name, violation.canonical_name],
+                    reviewer="continuity",
+                    issue_type="continuity",
+                    target_scope="chapter",
+                    issue_group=issue_group_for_issue(
+                        issue_type="continuity",
+                        rule_name="canon_name_drift",
+                    ),
+                    evidence_refs=[f"body:{violation.evidence}", f"reason={violation.reason}"],
+                    suggested_fix=(
+                        f"凡指代{violation.role_label}姓名时必须逐字沿用「{violation.canonical_name}」，"
+                        f"删除或替换「{violation.observed_name}」等变体。"
+                    ),
+                )
+            )
+        return issues
+
+    def _canon_name_anchors(self, project_id: str):
+        get_active_threads = getattr(self.repo, "get_active_threads", None)
+        if not callable(get_active_threads):
+            return []
+        try:
+            threads = list(get_active_threads(project_id) or [])
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("canon name anchor check skipped: %s", exc)
+            return []
+        texts: list[str] = []
+        for thread in threads:
+            texts.append(str(getattr(thread, "description", "") or ""))
+            texts.extend(str(beat or "") for beat in (getattr(thread, "recent_beats", []) or []))
+        return extract_canon_name_anchors(texts)
+
+    @staticmethod
+    def _canon_name_scan_text(output: WriterOutput) -> str:
+        payload = output.model_dump(mode="json", exclude={"generation_meta"})
+        return "\n".join(
+            [
+                str(output.body or ""),
+                str(output.end_of_chapter_summary or ""),
+                json.dumps(payload, ensure_ascii=False, sort_keys=True),
+            ]
+        )
 
     def _check_empty_body(self, output: WriterOutput) -> list[ContinuityIssue]:
         """Check if body is empty or trivially short."""
@@ -251,7 +373,14 @@ class ContinuityChecker:
         return issues
 
     def _check_subworld_admission(self, project_id: str, output: WriterOutput) -> list[ContinuityIssue]:
-        allowed_names = self.repo.get_allowed_entity_names(project_id, output.chapter_number)
+        allowed_names = {
+            self._normalize_character_reference(name)
+            for name in self.repo.get_allowed_entity_names(project_id, output.chapter_number)
+        }
+        allowed_names.update(
+            self._normalize_character_reference(anchor.canonical_name)
+            for anchor in self._canon_name_anchors(project_id)
+        )
         if not allowed_names:
             return []
         candidate_names: set[str] = set()
@@ -261,23 +390,32 @@ class ContinuityChecker:
             if (
                 getattr(mention, "entity_kind", "") == "character"
                 and bool(getattr(mention, "is_named", False))
-                and self._looks_like_named_character(getattr(mention, "entity_name", ""))
+                and bool(getattr(mention, "is_on_stage", True))
             ):
-                candidate_names.add(str(getattr(mention, "entity_name", "")).strip())
+                name = self._candidate_character_name(getattr(mention, "entity_name", ""))
+                if name:
+                    candidate_names.add(name)
 
         for change in output.state_changes:
-            if change.entity_kind == "character" and self._looks_like_named_character(change.entity_name):
-                candidate_names.add(change.entity_name.strip())
+            if (
+                change.entity_kind == "character"
+                and not self._is_absence_only_state_change(change)
+            ):
+                name = self._candidate_character_name(change.entity_name)
+                if name:
+                    candidate_names.add(name)
 
         for event in output.new_events:
             for name in event.involved_entity_names:
-                if self._looks_like_named_character(name):
-                    maybe_event_names.add(str(name).strip())
+                candidate = self._candidate_character_name(name)
+                if candidate:
+                    maybe_event_names.add(candidate)
 
         for scene in output.scene_outputs:
             for name in scene.involved_entities:
-                if self._looks_like_named_character(name):
-                    candidate_names.add(str(name).strip())
+                candidate = self._candidate_character_name(name)
+                if candidate:
+                    candidate_names.add(candidate)
 
         if maybe_event_names:
             resolved = self.repo.get_entities_by_names(project_id, sorted(maybe_event_names))
@@ -308,7 +446,47 @@ class ContinuityChecker:
 
     @staticmethod
     def _looks_like_named_character(name: str) -> bool:
-        text = str(name or "").strip()
+        text = ContinuityChecker._normalize_character_reference(name)
         if not text or text in GENERIC_CHARACTER_REFERENCES:
             return False
+        if ContinuityChecker._looks_like_non_character_reference(text):
+            return False
         return len(text) <= 12
+
+    @staticmethod
+    def _candidate_character_name(name: str) -> str:
+        text = ContinuityChecker._normalize_character_reference(name)
+        return text if ContinuityChecker._looks_like_named_character(text) else ""
+
+    @staticmethod
+    def _normalize_character_reference(name: str) -> str:
+        text = str(name or "").strip()
+        for opener, closer in (("（", "）"), ("(", ")")):
+            if opener not in text or not text.endswith(closer):
+                continue
+            prefix, suffix = text.rsplit(opener, 1)
+            suffix = suffix[: -len(closer)].strip()
+            if suffix in {"提及", "无名", "记录", "旁白"} and prefix.strip():
+                text = prefix.strip()
+        return text
+
+    @staticmethod
+    def _looks_like_non_character_reference(name: str) -> bool:
+        text = str(name or "").strip()
+        if any(text.endswith(suffix) for suffix in RELATIONAL_REFERENCE_SUFFIXES):
+            return True
+        return any(keyword in text for keyword in NON_CHARACTER_NAME_KEYWORDS)
+
+    @staticmethod
+    def _is_absence_only_state_change(change) -> bool:  # noqa: ANN001
+        if str(getattr(change, "field", "") or "").strip().lower() not in {
+            "existence",
+            "status",
+            "availability",
+        }:
+            return False
+        text = " ".join(
+            str(getattr(change, attr, "") or "")
+            for attr in ("old_value", "new_value", "reason")
+        )
+        return any(keyword in text for keyword in ABSENCE_ONLY_CHANGE_KEYWORDS)

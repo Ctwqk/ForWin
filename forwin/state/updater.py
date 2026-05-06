@@ -91,6 +91,15 @@ def _json_list(raw: str | None) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _normalize_goals_payload(payload: object) -> list[str]:
+    if isinstance(payload, str):
+        goal = payload.strip()
+        return [goal] if goal else []
+    if not isinstance(payload, list):
+        return []
+    return [str(item).strip() for item in payload if str(item).strip()]
+
+
 class StateUpdater:
     """Writes state changes to the database.
 
@@ -192,7 +201,8 @@ class StateUpdater:
         task_contract=None,
     ) -> ChapterPlan:
         """Create a chapter plan."""
-        resolved_task_contract = task_contract or derive_chapter_task_contract(goals)
+        normalized_goals = _normalize_goals_payload(goals)
+        resolved_task_contract = task_contract or derive_chapter_task_contract(normalized_goals)
         plan = ChapterPlan(
             id=new_id(),
             project_id=project_id,
@@ -200,7 +210,7 @@ class StateUpdater:
             chapter_number=chapter_number,
             title=title,
             one_line=one_line,
-            goals_json=json.dumps(goals, ensure_ascii=False),
+            goals_json=json.dumps(normalized_goals, ensure_ascii=False),
             experience_plan_json=json.dumps(
                 (experience_plan or ChapterExperiencePlan()).model_dump(mode="json"),
                 ensure_ascii=False,

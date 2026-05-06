@@ -36,6 +36,42 @@ class JsonRepairFallbackTests(unittest.TestCase):
         self.assertEqual(parsed["scenes"][0]["scene_no"], 1)
         self.assertEqual(parsed["scenes"][0]["objective"], "建立异象")
 
+    def test_parse_llm_json_salvages_complete_array_items_from_truncated_object(self) -> None:
+        raw = """{
+  "state_changes": [
+    {
+      "entity_name": "沈砚",
+      "entity_kind": "character",
+      "field": "status",
+      "old_value": "未知",
+      "new_value": "告密者",
+      "reason": "被阿棠发现告密"
+    },
+    {
+      "entity_name": "周岚",
+      "entity_kind": "character",
+      "field": "location",
+      "old_value": "未知",
+      "new_value": "旧港"""
+
+        parsed = parse_llm_json(raw, error_prefix="test")
+
+        self.assertEqual(
+            parsed,
+            {
+                "state_changes": [
+                    {
+                        "entity_name": "沈砚",
+                        "entity_kind": "character",
+                        "field": "status",
+                        "old_value": "未知",
+                        "new_value": "告密者",
+                        "reason": "被阿棠发现告密",
+                    }
+                ]
+            },
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

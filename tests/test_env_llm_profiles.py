@@ -112,3 +112,33 @@ def test_runtime_settings_uses_env_profiles_without_persisting_env_keys(tmp_path
     assert "secret-kimi-env" not in persisted_text
     assert "secret-deepseek-env" not in persisted_text
     assert "old-kimi" not in persisted_text
+
+
+def test_runtime_settings_preserves_env_default_profile_across_reload(tmp_path: Path) -> None:
+    settings_path = tmp_path / "runtime_settings.json"
+    env_profiles = [
+        {
+            "id": "env-kimi",
+            "name": "Kimi (.env)",
+            "api_key": "secret-kimi-env",
+            "base_url": "https://api.moonshot.cn/v1",
+            "model": "kimi-k2.5",
+        },
+        {
+            "id": "env-deepseek",
+            "name": "DeepSeek (.env)",
+            "api_key": "secret-deepseek-env",
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-chat",
+        },
+    ]
+    store = RuntimeSettingsStore(str(settings_path), env_llm_profiles=env_profiles)
+
+    saved = store.set_default_profile("env-deepseek")
+    reloaded = RuntimeSettingsStore(str(settings_path), env_llm_profiles=env_profiles).get()
+    persisted_text = settings_path.read_text(encoding="utf-8")
+
+    assert saved["default_profile_id"] == "env-deepseek"
+    assert reloaded["default_profile_id"] == "env-deepseek"
+    assert reloaded["api_key"] == "secret-deepseek-env"
+    assert "secret-deepseek-env" not in persisted_text

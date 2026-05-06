@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from forwin.api_project_payloads import build_project_detail
 from forwin.book_state import BookStateRepository
+from forwin.canon_names import CanonNameAnchor, extract_canon_name_anchors, find_canon_name_violations
 from forwin.checker.rules import ContinuityChecker
 from forwin.context.assembler import assemble_context
 from forwin.director.arc_director import ArcDirector
@@ -18,8 +19,10 @@ from forwin.models.genesis import BookGenesisRevision
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
+from forwin.models.thread import PlotThreadBeat
 from forwin.orchestrator.phase24 import ArcEnvelopeManager, ArcStructureDraftData
 from forwin.orchestrator.phase3 import ReplanGovernor, StageAssessment
+from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.protocol import (
     ArcPayoffMap,
     ChapterEntryTarget,
@@ -31,9 +34,11 @@ from forwin.protocol import (
     SubWorldSummary,
     WriterOutput,
 )
-from forwin.protocol.state_change import EventCandidate
+from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
+from forwin.protocol.review import ContinuityIssue
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
+from forwin.reviewer.hub import HistoricalReviewHub
 from forwin.subworld_manager import SubWorldManager
 from forwin.writer.chapter_writer import ChapterWriter
 from forwin.writer.prompts import build_single_chapter_draft_prompt
@@ -74,6 +79,334 @@ class SubWorldControlTests(unittest.TestCase):
         )
 
         self.assertFalse(any(issue.rule_name == "sub_world_unknown_named_entity" for issue in verdict.issues))
+
+    def test_subworld_admission_ignores_non_cast_entities_and_offstage_record_names(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林澈", "许安"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=2,
+                title="第一日·消失的讣告",
+                body="林澈和许安查到临潮集团收购民间记忆馆，旧港火灾档案里陈伯伦的讣告消失。" * 50,
+                end_of_chapter_summary="林澈与许安确认线索。",
+                entity_mentions=[
+                    EntityMention(entity_name="临潮集团", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="民间记忆馆", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="旧港火灾", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="林澈的母亲", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="许安（提及）", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="馆员", entity_kind="character", is_named=True),
+                    EntityMention(
+                        entity_name="陈伯伦",
+                        entity_kind="character",
+                        is_named=True,
+                        is_on_stage=False,
+                        evidence_refs=["body:陈伯伦的讣告消失"],
+                    ),
+                ],
+                state_changes=[
+                    StateChangeCandidate(
+                        entity_name="陈伯伦",
+                        entity_kind="character",
+                        field="existence",
+                        old_value="存在",
+                        new_value="不存在",
+                        reason="公共记录与讣告被抹除",
+                    )
+                ],
+            ),
+        )
+
+        self.assertFalse(any(issue.rule_name == "sub_world_unknown_named_entity" for issue in verdict.issues))
+
+    def test_subworld_admission_ignores_deceased_record_state_change_names(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林澈", "许安", "沈砚"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=7,
+                title="第六日",
+                body="协议记录显示陈屿安是旧港火灾遇难者，继承权因此被转移。" * 80,
+                end_of_chapter_summary="林澈确认陈屿安已在旧港火灾中死亡。",
+                state_changes=[
+                    StateChangeCandidate(
+                        entity_name="陈屿安",
+                        entity_kind="character",
+                        field="status",
+                        old_value="被标注为资料归档错误",
+                        new_value="确认为旧港火灾遇难者，原继承权持有人",
+                        reason="许安查证三年，阿棠扫描协议发现继承权转移自陈屿安",
+                    )
+                ],
+            ),
+        )
+
+        self.assertFalse(any(issue.rule_name == "sub_world_unknown_named_entity" for issue in verdict.issues))
+
+    def test_subworld_admission_ignores_relational_names_without_de_and_labs(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林澈", "许安"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=3,
+                title="第二日",
+                body="林澈和许安查到林澈母亲曾在空腔实验室留下线索。" * 80,
+                end_of_chapter_summary="林澈确认母亲线索。",
+                entity_mentions=[
+                    EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="许安", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="林澈母亲", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="空腔实验室", entity_kind="character", is_named=True),
+                ],
+            ),
+        )
+
+        unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
+        self.assertEqual(unknown, [])
+
+    def test_subworld_admission_allows_canon_name_anchor(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_active_threads(self, _project_id: str) -> list[object]:
+                return [
+                    SimpleNamespace(
+                        description="",
+                        recent_beats=["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"],
+                    )
+                ]
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林澈", "许安"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=3,
+                title="第二日",
+                body="林澈确认母亲林若是回声账本原型设计者之一。" * 80,
+                end_of_chapter_summary="林澈确认母亲林若的身份。",
+                entity_mentions=[
+                    EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="林若", entity_kind="character", is_named=True),
+                ],
+            ),
+        )
+
+        unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
+        self.assertEqual(unknown, [])
+
+    def test_canon_subworld_gate_uses_same_cast_filter_as_checker(self) -> None:
+        class FakeRepo:
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        output = WriterOutput(
+            chapter_number=2,
+            title="第一日·消失的讣告",
+            body="正文内容" * 80,
+            end_of_chapter_summary="总结",
+            scene_outputs=[
+                {
+                    "scene_no": 1,
+                    "scene_objective": "检索讣告",
+                    "text": "正文内容" * 80,
+                    "involved_entities": [
+                        "林澈",
+                        "馆员",
+                        "陈伯伦",
+                        "许安（提及）",
+                        "临潮集团",
+                        "民间记忆馆",
+                    ],
+                }
+            ],
+            state_changes=[
+                StateChangeCandidate(
+                    entity_name="陈伯伦",
+                    entity_kind="character",
+                    field="existence",
+                    old_value="存在",
+                    new_value="被抹除",
+                    reason="公共记录和讣告被删除",
+                )
+            ],
+        )
+
+        names = WritingOrchestrator._collect_subworld_candidate_names(FakeRepo(), "p1", output)
+
+        self.assertEqual(names, {"林澈", "许安"})
+
+    def test_canon_commit_subworld_gate_allows_canon_name_anchor(self) -> None:
+        class FakeRepo:
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林澈", "许安"}
+
+            def get_active_threads(self, _project_id: str) -> list[object]:
+                return [
+                    SimpleNamespace(
+                        description="",
+                        recent_beats=["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"],
+                    )
+                ]
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        output = WriterOutput(
+            chapter_number=7,
+            title="第六日·协议真相",
+            body="林澈确认母亲林若留下了协议覆写线索。" * 80,
+            end_of_chapter_summary="林澈确认母亲林若与协议真相有关。",
+            entity_mentions=[
+                EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
+                EntityMention(entity_name="林若", entity_kind="character", is_named=True),
+            ],
+            state_changes=[
+                StateChangeCandidate(
+                    entity_name="林若",
+                    entity_kind="character",
+                    field="involvement",
+                    old_value="未知",
+                    new_value="可能与协议签名相关",
+                    reason="协议元数据使用林若遗留密钥",
+                )
+            ],
+        )
+
+        orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
+
+        orchestrator._validate_subworld_admission(
+            repo=FakeRepo(),
+            project_id="p1",
+            chapter_number=7,
+            writer_output=output,
+        )
+
+    def test_canon_commit_subworld_gate_ignores_deceased_record_state_change_names(self) -> None:
+        class FakeRepo:
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林澈", "许安", "沈砚"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        output = WriterOutput(
+            chapter_number=7,
+            title="第六日",
+            body="协议记录显示陈屿安是旧港火灾遇难者，继承权因此被转移。" * 80,
+            end_of_chapter_summary="林澈确认陈屿安已在旧港火灾中死亡。",
+            state_changes=[
+                StateChangeCandidate(
+                    entity_name="陈屿安",
+                    entity_kind="character",
+                    field="status",
+                    old_value="被标注为资料归档错误",
+                    new_value="确认为旧港火灾遇难者，原继承权持有人",
+                    reason="许安查证三年，阿棠扫描协议发现继承权转移自陈屿安",
+                )
+            ],
+        )
+
+        orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
+
+        orchestrator._validate_subworld_admission(
+            repo=FakeRepo(),
+            project_id="p1",
+            chapter_number=7,
+            writer_output=output,
+        )
+
+    def test_genesis_canon_seed_entities_includes_canon_name_anchors(self) -> None:
+        with TemporaryDirectory() as tmp:
+            engine = get_engine(postgres_test_url("canon-seed-anchor"))
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="书", premise="p", genre="g")
+                revision = BookGenesisRevision(
+                    project_id=project.id,
+                    revision=1,
+                    status="locked",
+                    pack_json='{"world":{"story_engine":{"core_cast":[]}}}',
+                )
+                session.add(revision)
+                session.flush()
+                project.active_genesis_revision_id = revision.id
+                thread = updater.create_thread(project.id, "母亲线索", "", priority=3, chapter=1)
+                session.add(
+                    PlotThreadBeat(
+                        thread_id=thread.id,
+                        chapter_number=3,
+                        beat_type="clue",
+                        description="终端显示条目标题为“原型设计者：林若”，即母亲的名字。",
+                    )
+                )
+                session.commit()
+
+                repo = StateRepository(session)
+                WritingOrchestrator._ensure_genesis_canon_seed_entities(
+                    session=session,
+                    repo=repo,
+                    updater=updater,
+                    project_id=project.id,
+                )
+
+                entity = repo.get_entities_by_names(project.id, ["林若"]).get("林若")
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertIsNotNone(entity)
+        self.assertEqual(entity.kind, "character")
 
     def test_ensure_registry_bootstraps_global_core_with_existing_characters(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -327,6 +660,551 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertIn("当前允许直接使用的命名人物：阿青", content)
         self.assertIn("沈知遥", content)
         self.assertIn("命名人物只能使用允许名单里的名字", content)
+
+    def test_writer_prompt_includes_recent_thread_beats_for_canon_names(self) -> None:
+        context = SimpleNamespace(
+            project_title="测试书",
+            genre="都市悬疑",
+            premise="林澈追查母亲留下的空白遗书。",
+            setting_summary="临潮有回声账本。",
+            chapter_number=3,
+            chapter_plan_title="第二日",
+            chapter_plan_one_line="提取回声残片",
+            chapter_goals=["揭示母亲与回声账本有关"],
+            previous_chapter_summaries=["林澈发现母亲留下的空白遗书。"],
+            active_entities=[SimpleNamespace(name="林澈", description="主角")],
+            active_threads=[
+                SimpleNamespace(
+                    name="空白遗书",
+                    description="母亲线索",
+                    recent_beats=["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"],
+                )
+            ],
+            active_relations=[],
+            timeline=None,
+            npc_intents=[],
+            world_pressure=None,
+            audience_hints=None,
+            reader_promise=None,
+            arc_payoff_map=None,
+            band_delight_schedule=None,
+            chapter_experience_plan=None,
+            active_subworlds=[],
+            allowed_entities=["林澈"],
+            chapter_entry_targets=[],
+            entity_admission_rule="strict_named_character",
+            chapter_task_contract=[],
+            band_task_contract=[],
+            active_future_constraints=[],
+            next_band_summary=None,
+            retrieved_memories=[],
+        )
+
+        prompt = build_single_chapter_draft_prompt(context)
+        content = prompt[1]["content"]
+
+        self.assertIn("原型设计者：林若", content)
+        self.assertIn("母亲姓名：林若", content)
+        self.assertIn("不得把前情中已经出现的姓名扩写、替换或另造别名", content)
+
+    def test_writer_prompt_does_not_drop_canon_name_thread_after_three_threads(self) -> None:
+        context = SimpleNamespace(
+            project_title="测试书",
+            genre="都市悬疑",
+            premise="林澈追查母亲留下的空白遗书。",
+            setting_summary="临潮有回声账本。",
+            chapter_number=3,
+            chapter_plan_title="第二日",
+            chapter_plan_one_line="提取回声残片",
+            chapter_goals=["揭示母亲与回声账本有关"],
+            previous_chapter_summaries=["林澈发现母亲留下的空白遗书。"],
+            active_entities=[SimpleNamespace(name="林澈", description="主角")],
+            active_threads=[
+                SimpleNamespace(name="合作与危机", description="", status="resolved", priority=2, recent_beats=["合作线已暂时收束。"]),
+                SimpleNamespace(name="母亲线索", description="", status="active", priority=2, recent_beats=["火灾录音确认是母亲的声音。"]),
+                SimpleNamespace(name="神秘短信", description="", status="active", priority=2, recent_beats=["短信要求下午三点到旧港。"]),
+                SimpleNamespace(name="空白遗书", description="", status="active", priority=2, recent_beats=["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"]),
+                SimpleNamespace(name="记忆删除", description="", status="active", priority=2, recent_beats=["公共记忆正在被系统性抹除。"]),
+                SimpleNamespace(name="许安出现", description="", status="active", priority=2, recent_beats=["许安提供旧港火灾档案。"]),
+                SimpleNamespace(name="陈伯伦消失", description="", status="active", priority=2, recent_beats=["林澈检索陈伯伦，发现记录消失。"]),
+            ],
+            active_relations=[],
+            timeline=None,
+            npc_intents=[],
+            world_pressure=None,
+            audience_hints=None,
+            reader_promise=None,
+            arc_payoff_map=None,
+            band_delight_schedule=None,
+            chapter_experience_plan=None,
+            active_subworlds=[],
+            allowed_entities=["林澈"],
+            chapter_entry_targets=[],
+            entity_admission_rule="strict_named_character",
+            chapter_task_contract=[],
+            band_task_contract=[],
+            active_future_constraints=[],
+            next_band_summary=None,
+            retrieved_memories=[],
+        )
+
+        prompt = build_single_chapter_draft_prompt(context)
+        content = prompt[1]["content"]
+
+        self.assertIn("原型设计者：林若", content)
+        self.assertIn("母亲姓名：林若", content)
+        self.assertIn("陈伯伦", content)
+        self.assertLess(content.index("母亲线索"), content.index("合作与危机"))
+
+    def test_continuity_checker_rejects_canon_mother_name_drift(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_active_threads(self, _project_id: str) -> list[object]:
+                return [
+                    SimpleNamespace(
+                        description="",
+                        recent_beats=["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"],
+                    )
+                ]
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林澈", "许安"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=3,
+                title="第二日",
+                body=(
+                    "沈砚说：“你母亲叫林静安，十年前是临潮集团算法部的核心成员。”"
+                    "残片里又有人称她为林若水。"
+                )
+                * 30,
+                end_of_chapter_summary="林澈确认母亲林静安是回声账本设计者。",
+            ),
+        )
+
+        issues = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
+        observed = {issue.entity_names[0] for issue in issues}
+        self.assertEqual(verdict.verdict, "fail")
+        self.assertIn("林静安", observed)
+        self.assertIn("林若水", observed)
+        self.assertTrue(all("林若" in issue.suggested_fix for issue in issues))
+
+    def test_continuity_checker_rejects_canon_mother_name_drift_in_state_metadata(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_active_threads(self, _project_id: str) -> list[object]:
+                return [
+                    SimpleNamespace(
+                        description="",
+                        recent_beats=["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"],
+                    )
+                ]
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林澈", "许安", "沈砚", "阿棠", "林若"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=7,
+                title="第六日",
+                body=("林澈确认母亲林若留下了协议覆写线索。") * 80,
+                end_of_chapter_summary="林澈确认母亲林若与协议真相有关。",
+                state_changes=[
+                    StateChangeCandidate(
+                        entity_name="林澈",
+                        entity_kind="character",
+                        field="knowledge",
+                        old_value="未知母亲参与协议修改",
+                        new_value="得知母亲林清和在旧港火灾当晚登录集团系统并启动继承协议覆写",
+                        reason="阿棠修复协议数据后发现母亲林清和的授权时间戳",
+                    )
+                ],
+            ),
+        )
+
+        issues = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
+        self.assertEqual(verdict.verdict, "fail")
+        self.assertEqual([issue.entity_names[0] for issue in issues], ["林清和"])
+
+    def test_canon_name_anchor_ignores_role_title_as_mother_name(self) -> None:
+        anchors = extract_canon_name_anchors(
+            [
+                "污染过的线程摘要写成：首席架构，即母亲。",
+                "终端显示条目标题为“原型设计者：林若”，即母亲的名字。",
+            ]
+        )
+
+        self.assertEqual([anchor.canonical_name for anchor in anchors], ["林若"])
+
+    def test_canon_name_observation_ignores_mother_possessive_noun(self) -> None:
+        violations = find_canon_name_violations(
+            "许安说：“你母亲的遗书是空白的。但如果她留下了其他线索——”",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_mother_event_phrase(self) -> None:
+        violations = find_canon_name_violations(
+            "他不知道自己为什么会有这个能力，只知道十年前母亲失踪后，他就开始能看到残片。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_mother_last_appearance_phrase(self) -> None:
+        violations = find_canon_name_violations(
+            "旧港是旧港火灾发生的地方，也是母亲最后出现的地方。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_mother_negative_description(self) -> None:
+        violations = find_canon_name_violations(
+            "沈砚说：“你母亲不是普通的档案管理员。”",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_mother_ordinary_verb_phrases(self) -> None:
+        violations = find_canon_name_violations(
+            (
+                "许安说：“因为是我帮你母亲申请的工位。”"
+                "档案显示，你母亲是外包的档案修复师。"
+                "这是他和母亲之间的暗号。"
+            ),
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_canonical_name_followed_by_verb_phrase(self) -> None:
+        violations = find_canon_name_violations(
+            "这块设备的核心数据林若还在，但需要专业设备才能读取。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_allows_canonical_name_in_normal_sentence(self) -> None:
+        violations = find_canon_name_violations(
+            "林澈确认母亲林若是回声账本原型设计者之一，也找到了林若的签名。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_reports_wrong_name_before_possessive_fact(self) -> None:
+        violations = find_canon_name_violations(
+            "林澈从残片中提取到母亲林清漪的声音残片，确认她是回声账本原型设计者。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual([violation.observed_name for violation in violations], ["林清漪"])
+
+    def test_canon_name_observation_reports_wrong_name_before_dash_clause(self) -> None:
+        violations = find_canon_name_violations(
+            "沈砚说：“你母亲苏晚晴——不是普通的档案管理员。”",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual([violation.observed_name for violation in violations], ["苏晚晴"])
+
+    def test_canon_name_observation_reports_wrong_name_after_qi_mother_prefix(self) -> None:
+        violations = find_canon_name_violations(
+            "沈砚告知林澈其母亲苏晚晴是回声系统原型设计者之一。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual([violation.observed_name for violation in violations], ["苏晚晴"])
+
+    def test_canon_name_observation_reports_wrong_name_before_parenthetical_alias(self) -> None:
+        violations = find_canon_name_violations(
+            "档案残片显示母亲苏敏（林若溪）曾参与原型设计。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(
+            [violation.observed_name for violation in violations],
+            ["林若溪", "苏敏"],
+        )
+
+    def test_canon_name_observation_reports_document_name_in_mother_context(self) -> None:
+        violations = find_canon_name_violations(
+            (
+                "沈砚说：“你母亲留下的不只是遗书，还有一份她亲手签名的协议。”"
+                "林澈看到纸上的内容——一个签名栏，签名栏上方是打印体的名字：林清漪。"
+            ),
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual([violation.observed_name for violation in violations], ["林清漪"])
+
+    def test_canon_name_observation_reports_name_followed_by_mother_apposition(self) -> None:
+        violations = find_canon_name_violations(
+            (
+                "算法签名。\n\n"
+                "一个名字出现在解析结果的末尾：叶知秋。\n\n"
+                "林澈的母亲。"
+            ),
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual([violation.observed_name for violation in violations], ["叶知秋"])
+
+    def test_canon_name_observation_reports_name_followed_by_mother_signature(self) -> None:
+        violations = find_canon_name_violations(
+            (
+                "林澈看到家属签字栏里那个名字时，胸腔里的空气像是被抽走了。\n\n"
+                "林婉清。\n\n"
+                "母亲的签名。他认得这笔字。"
+            ),
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual([violation.observed_name for violation in violations], ["林婉清"])
+
+    def test_canon_name_observation_reports_dash_appositive_mother_name(self) -> None:
+        violations = find_canon_name_violations(
+            "档案上印着一个人名：苏瑾——林澈母亲的名字，标注为主架构师。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual([violation.observed_name for violation in violations], ["苏瑾"])
+
+    def test_canon_name_observation_reports_mother_name_after_separator(self) -> None:
+        violations = find_canon_name_violations(
+            "手术同意书的家属签字栏——林若母亲的名字，林薇。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual([violation.observed_name for violation in violations], ["林薇"])
+
+    def test_canon_name_observation_ignores_breath_before_canonical_name_apposition(self) -> None:
+        violations = find_canon_name_violations(
+            "林澈的呼吸林若。母亲的名字像一根针，精准地刺进他不敢触碰的区域。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_canonical_name_followed_by_name_noun(self) -> None:
+        violations = find_canon_name_violations(
+            "音频残片中断前，母亲叫林若名字卡在噪音里。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_canonical_name_followed_by_speech_noun(self) -> None:
+        violations = find_canon_name_violations(
+            "他想起母亲教他修复档案时林若话：“每一条痕迹都有代价。”",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_verb_pronoun_before_canonical_name(self) -> None:
+        violations = find_canon_name_violations(
+            "项目立项书，署林若你母亲的名字——林若。",
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_canon_name_observation_ignores_signature_followed_by_verb_phrase(self) -> None:
+        violations = find_canon_name_violations(
+            (
+                "林澈反复回放着母亲最后的口型。"
+                "周岚把医疗记录摊开在台面上，指着手术同意书上的签名：“林若下这份同意书的时间，是旧港火灾发生后的第二天。”"
+            ),
+            [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
+        )
+
+        self.assertEqual(violations, [])
+
+    def test_continuity_checker_reports_only_real_canon_name_drift_from_polluted_thread(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_active_threads(self, _project_id: str) -> list[object]:
+                return [
+                    SimpleNamespace(
+                        description="",
+                        recent_beats=[
+                            "污染过的线程摘要写成：首席架构，即母亲。",
+                            "终端显示条目标题为“原型设计者：林若”，即母亲的名字。",
+                        ],
+                    )
+                ]
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林澈", "许安"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=3,
+                title="第二日",
+                body=("许安说：“你母亲的遗书是空白的。”周岚说：“你母亲叫林婉清。”") * 30,
+                end_of_chapter_summary="林澈发现母亲林婉清是回声账本设计者。",
+            ),
+        )
+
+        issues = [issue for issue in verdict.issues if issue.rule_name == "canon_name_drift"]
+        observed = {issue.entity_names[0] for issue in issues}
+        canonical = {issue.entity_names[1] for issue in issues}
+        self.assertEqual(observed, {"林婉清"})
+        self.assertEqual(canonical, {"林若"})
+
+    def test_canon_name_drift_autofix_replaces_observed_name_across_writer_output(self) -> None:
+        output = WriterOutput(
+            chapter_number=3,
+            title="第二日",
+            body="旧港是母亲最后出现的地方。林澈发现母亲林婉是原型设计者，报告撰写人是林婉。",
+            end_of_chapter_summary="林澈在记忆馆发现母亲林婉是回声账本原型设计者之一。",
+            new_events=[
+                EventCandidate(
+                    summary="林澈发现林婉留下技术报告",
+                    significance="major",
+                    involved_entity_names=["林澈", "林婉"],
+                )
+            ],
+        )
+        review = ReviewVerdict(
+            verdict="fail",
+            issues=[
+                ContinuityIssue(
+                    rule_name="canon_name_drift",
+                    severity="error",
+                    description="母亲姓名漂移。",
+                    entity_names=["林婉", "林若"],
+                )
+            ],
+        )
+
+        fixed = WritingOrchestrator._apply_canon_name_drift_autofix(output, review)
+
+        self.assertIsNotNone(fixed)
+        assert fixed is not None
+        serialized_content = fixed.model_dump_json(exclude={"generation_meta"})
+        self.assertNotIn("林婉", serialized_content)
+        self.assertIn("林若", fixed.body)
+        self.assertIn("母亲最后出现的地方", fixed.body)
+        self.assertEqual(fixed.char_count, len(fixed.body))
+        self.assertEqual(fixed.generation_meta["canon_name_autofix"]["林婉"], "林若")
+
+    def test_canon_name_drift_autofix_ignores_non_name_observed_terms(self) -> None:
+        output = WriterOutput(
+            chapter_number=13,
+            title="旧港的余烬",
+            body="许安说：“因为是我帮你母亲申请的工位。”这是他和母亲之间的暗号。录音结束。",
+            end_of_chapter_summary="林澈和许安发现旧港线索。",
+        )
+        review = ReviewVerdict(
+            verdict="fail",
+            issues=[
+                ContinuityIssue(
+                    rule_name="canon_name_drift",
+                    severity="error",
+                    description="误报的母亲姓名漂移。",
+                    entity_names=["申请", "林若"],
+                ),
+                ContinuityIssue(
+                    rule_name="canon_name_drift",
+                    severity="error",
+                    description="误报的母亲姓名漂移。",
+                    entity_names=["之间", "林若"],
+                ),
+                ContinuityIssue(
+                    rule_name="canon_name_drift",
+                    severity="error",
+                    description="误报的母亲姓名漂移。",
+                    entity_names=["录音", "林若"],
+                ),
+            ],
+        )
+
+        fixed = WritingOrchestrator._apply_canon_name_drift_autofix(output, review)
+
+        self.assertIsNone(fixed)
+
+    def test_canon_name_drift_autofix_ignores_expanded_canonical_phrase(self) -> None:
+        output = WriterOutput(
+            chapter_number=13,
+            title="旧港的余烬",
+            body="母亲林若警告他不要相信回声账本。",
+            end_of_chapter_summary="林澈发现母亲留下警告。",
+        )
+        review = ReviewVerdict(
+            verdict="fail",
+            issues=[
+                ContinuityIssue(
+                    rule_name="canon_name_drift",
+                    severity="error",
+                    description="误报的母亲姓名扩展。",
+                    entity_names=["林若警告", "林若"],
+                )
+            ],
+        )
+
+        fixed = WritingOrchestrator._apply_canon_name_drift_autofix(output, review)
+
+        self.assertIsNone(fixed)
+
+    def test_continuity_repair_instruction_preserves_suggested_fix(self) -> None:
+        instruction = HistoricalReviewHub._continuity_repair_instruction(
+            continuity_issues=[
+                ContinuityIssue(
+                    rule_name="sub_world_unknown_named_entity",
+                    severity="error",
+                    description="命名角色「林若筠」未在当前 chapter 的 subworld 准入名单中。",
+                    reviewer="continuity",
+                    issue_type="subworld_admission",
+                    target_scope="chapter",
+                    evidence_refs=["entity=林若筠"],
+                    suggested_fix="沿用前情中的精确原名「林若」，不得另造别名。",
+                )
+            ],
+            context=SimpleNamespace(
+                chapter_plan_title="第二日",
+                chapter_plan_one_line="提取回声残片",
+                chapter_goals=["揭示母亲与回声账本有关"],
+            ),
+        )
+
+        self.assertIn("沿用前情中的精确原名「林若」", "\n".join(instruction.must_fix))
 
     def test_continuity_checker_rejects_unknown_named_character(self) -> None:
         with TemporaryDirectory() as tmp:

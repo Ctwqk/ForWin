@@ -151,7 +151,7 @@ class ArcDirector:
         payload = self._call_json(
             prompt,
             temperature=0.35,
-            max_tokens=min(self.max_tokens, 1300),
+            max_tokens=min(self.max_tokens, 1800),
             fallback=fallback,
             stage_key="subworld_delta",
         )
@@ -710,6 +710,9 @@ class ArcDirector:
                     "macro_payoffs 中每项必须有 payoff_id/category/template_id/"
                     "target_chapter_hint/setup_requirement/success_signal。\n\n"
                     "revelation_layers 中每项必须有 layer_id、layer_type、summary、chapter_window。\n\n"
+                    "长度约束：phase_layout 最多 5 项，key_beats 最多 8 项，thread_priorities 最多 5 项，"
+                    "hotspot_candidates 和 compression_candidates 各最多 5 项，macro_payoffs 最多 6 项，"
+                    "revelation_layers 最多 5 项。所有 reason/purpose/summary 使用短句。\n\n"
                     f"类型：{genre}\n"
                     f"全书目标章节数：{total_chapters}\n"
                     f"当前 policy tier：{policy_tier}\n"
@@ -723,7 +726,7 @@ class ArcDirector:
         return self._call_json(
             prompt,
             temperature=0.4,
-            max_tokens=min(self.max_tokens, 1000),
+            max_tokens=min(self.max_tokens, 2400),
             fallback=fallback,
             stage_key="arc_plan",
         )
@@ -826,8 +829,8 @@ class ArcDirector:
             return fallback
         attempts = [
             {"temperature": temperature, "max_tokens": max_tokens},
-            {"temperature": max(0.2, temperature - 0.15), "max_tokens": max(480, min(max_tokens, 900))},
-            {"temperature": 0.2, "max_tokens": max(420, min(max_tokens, 700))},
+            {"temperature": max(0.2, temperature - 0.15), "max_tokens": max_tokens},
+            {"temperature": 0.2, "max_tokens": max_tokens},
         ]
         last_error: Exception | None = None
         for index, attempt in enumerate(attempts, start=1):

@@ -12,6 +12,7 @@ from starlette.routing import Mount, Route
 from .client import ForWinAPIClient
 from .models import (
     ChapterListView,
+    ChapterReviewApproveView,
     MutationResult,
     ProjectListView,
     StageKey,
@@ -195,6 +196,42 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
     )
     async def chapter_get(project_id: str, chapter_number: int):
         return await client.chapter_get(project_id=project_id, chapter_number=chapter_number)
+
+    @register_write_tool(
+        "chapter_review_approve",
+        "Accept one drafted chapter review into canon. Use this when project_get next_gate is chapter_N_accept and there is no active generation task; set continue_generation to also start the next generation task.",
+    )
+    async def chapter_review_approve(
+        project_id: str,
+        chapter_number: int,
+        reason: str,
+        continue_generation: bool = False,
+    ) -> ChapterReviewApproveView:
+        return await client.chapter_review_approve(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            reason=reason,
+            continue_generation=continue_generation,
+        )
+
+    @register_write_tool(
+        "chapter_review_retry",
+        "Reset one drafted or needs_review chapter back to planned for regeneration. Use this when a chapter review gate is stale or must be rerun and there is no active generation task; set continue_generation to start the retry task.",
+    )
+    async def chapter_review_retry(
+        project_id: str,
+        chapter_number: int,
+        reason: str,
+        continue_generation: bool = False,
+        allow_accepted: bool = False,
+    ) -> ChapterReviewApproveView:
+        return await client.chapter_review_retry(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            reason=reason,
+            continue_generation=continue_generation,
+            allow_accepted=allow_accepted,
+        )
 
     @register_read_tool(
         "world_model_get",

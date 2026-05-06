@@ -2,6 +2,8 @@
       ['assembling_context', '组装'],
       ['writing_chapter', '写作'],
       ['continuity_review', 'Candidate Draft Review'],
+      ['repairing_chapter', '修复写作'],
+      ['repair_review', '修复复核'],
       ['applying_canon', 'Canon'],
       ['running_post_acceptance', '后置'],
       ['paused_for_review', '人工检查'],

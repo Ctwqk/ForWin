@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import unittest
 
+import httpx
+
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import ScenePlan, SceneOutput
 from forwin.writer.chapter_writer import ChapterWriter
@@ -129,6 +131,162 @@ class SplitWriterPipelineTests(unittest.TestCase):
         self.assertEqual(retry_events[0]["stage"], "preview_generation")
         self.assertEqual(retry_events[0]["attempt_no"], 1)
         self.assertIn("preview response body is empty", retry_events[0]["reason"])
+
+    def test_preview_text_retries_incomplete_body_without_shrinking_budget(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.max_tokens: list[int] = []
+                self.responses = [
+                    "<<FORWIN_TITLE>>\n断章\n<<FORWIN_BODY>>\n林夜抬头看见门后站着",
+                    "<<FORWIN_TITLE>>\n完整章\n<<FORWIN_BODY>>\n林夜抬头看见门后站着另一个自己。",
+                ]
+
+            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+                self.max_tokens.append(max_tokens)
+                return self.responses.pop(0)
+
+        client = FakeClient()
+        writer = ChapterWriter(client, writer_mode="single")
+
+        raw = writer._chat_preview_text(
+            [{"role": "user", "content": "写一章"}],
+            temperature=0.6,
+            max_tokens=2400,
+            max_attempts=2,
+        )
+
+        parsed = writer._parse_preview_text(raw, fallback_title="")
+        self.assertEqual(parsed["title"], "完整章")
+        self.assertEqual(client.max_tokens, [2400, 2400])
+        self.assertIn("appears incomplete", writer._business_retry_events[0]["reason"])
+
+    def test_scene_stitch_uses_full_chapter_token_budget(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.max_tokens: list[int] = []
+
+            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+                self.max_tokens.append(max_tokens)
+                return (
+                    "<<FORWIN_TITLE>>\n旧站来声\n"
+                    "<<FORWIN_BODY>>\n"
+                    + "林夜走进旧站台，雨声和陌生报站声纠缠在一起。" * 80
+                    + "\n<<FORWIN_SUMMARY>>\n林夜确认旧站广播异常。"
+                )
+
+        client = FakeClient()
+        writer = ChapterWriter(
+            client,
+            writer_mode="scene",
+            max_tokens=10000,
+            target_chapter_chars=2800,
+            max_chapter_chars=3200,
+        )
+        context = ChapterContextPack(
+            project_id="p1",
+            project_title="测试书",
+            premise="前提",
+            genre="悬疑",
+            setting_summary="旧城站台",
+            chapter_number=4,
+            chapter_plan_title="第四章",
+            chapter_plan_one_line="主角进入旧站",
+            chapter_goals=["进入旧站", "确认广播异常"],
+        )
+
+        writer._stitch_scenes(
+            context,
+            [SceneOutput(scene_no=1, scene_objective="进入旧站", text="林夜进入旧站。")],
+        )
+
+        self.assertGreaterEqual(client.max_tokens[0], 5000)
+
+    def test_scene_stitch_timeout_uses_single_attempt_before_outer_fallback(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def chat(self, _messages, **_kwargs) -> str:
+                self.calls += 1
+                raise httpx.ReadTimeout("stitch timed out")
+
+        client = FakeClient()
+        writer = ChapterWriter(client, writer_mode="scene", max_tokens=10000)
+        context = ChapterContextPack(
+            project_id="p1",
+            project_title="测试书",
+            premise="前提",
+            genre="悬疑",
+            setting_summary="旧城站台",
+            chapter_number=4,
+            chapter_plan_title="第四章",
+            chapter_plan_one_line="主角进入旧站",
+            chapter_goals=["进入旧站", "确认广播异常"],
+        )
+
+        with self.assertRaises(ValueError):
+            writer._stitch_scenes(
+                context,
+                [SceneOutput(scene_no=1, scene_objective="进入旧站", text="林夜进入旧站。")],
+            )
+
+        self.assertEqual(client.calls, 1)
+
+    def test_scene_generation_timeout_uses_single_attempt_before_outer_fallback(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.scene_generation_calls = 0
+                self.json_calls = 0
+
+            def chat(
+                self,
+                _messages,
+                temperature: float,
+                max_tokens: int,
+                *,
+                stage_key: str = "",
+                **_kwargs,
+            ) -> str:
+                if stage_key == "scene_breakdown":
+                    return '{"scenes":[{"scene_no":1,"objective":"进入旧站","must_progress_points":["进入旧站"],"target_chars":500}]}'
+                if stage_key == "scene_generation":
+                    self.scene_generation_calls += 1
+                    raise httpx.ReadTimeout("scene generation timed out")
+                if stage_key in {"chapter_draft", "writer_preview"}:
+                    return (
+                        "<<FORWIN_TITLE>>\n"
+                        "单章回退\n"
+                        "<<FORWIN_BODY>>\n"
+                        + "林夜踩着积水穿过旧站台，听见广播里多出了一段不属于这个时代的报站声。" * 20
+                        + "\n<<FORWIN_SUMMARY>>\n"
+                        "林夜确认旧站台里还藏着第二条线索。"
+                    )
+                self.json_calls += 1
+                return [
+                    '{"state_changes":[],"new_events":[]}',
+                    '{"thread_beats":[],"time_advance":null}',
+                    '{"lore_candidates":[],"timeline_hints":[],"writer_notes":[]}',
+                ][self.json_calls - 1]
+
+        client = FakeClient()
+        writer = ChapterWriter(client, writer_mode="scene")
+        context = ChapterContextPack(
+            project_id="p1",
+            project_title="测试书",
+            premise="前提",
+            genre="悬疑",
+            setting_summary="旧城站台",
+            chapter_number=4,
+            chapter_plan_title="第四章",
+            chapter_plan_one_line="主角进入旧站",
+            chapter_goals=["进入旧站", "确认广播异常"],
+        )
+
+        output = writer.write_chapter(context)
+
+        self.assertEqual(client.scene_generation_calls, 1)
+        self.assertEqual(output.generation_meta["mode"], "single")
+        self.assertTrue(output.generation_meta["fallback_from_scene"])
 
     def test_scene_writer_outputs_continuation_contract(self) -> None:
         class FakeClient:

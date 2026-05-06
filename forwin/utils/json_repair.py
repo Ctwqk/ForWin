@@ -148,6 +148,88 @@ def _try_parse_dict(text: str) -> dict | None:
     return None
 
 
+def _skip_json_ws_and_commas(text: str, index: int) -> int:
+    while index < len(text) and (text[index].isspace() or text[index] == ","):
+        index += 1
+    return index
+
+
+def _salvage_complete_top_level_arrays(text: str) -> dict | None:
+    """Return completed top-level array items from a truncated object.
+
+    Closing an unfinished JSON object can fabricate the last partial item. For
+    LLM responses truncated by max_tokens, preserve only values that the JSON
+    decoder can read completely from the original text.
+    """
+    source = text.strip()
+    if not source.startswith("{"):
+        return None
+
+    decoder = json.JSONDecoder()
+    result: dict[str, object] = {}
+    index = 1
+    saw_array = False
+
+    while index < len(source):
+        index = _skip_json_ws_and_commas(source, index)
+        if index >= len(source) or source[index] == "}":
+            break
+        try:
+            key, index = decoder.raw_decode(source, index)
+        except json.JSONDecodeError:
+            break
+        if not isinstance(key, str):
+            break
+        index = _skip_json_ws_and_commas(source, index)
+        if index >= len(source) or source[index] != ":":
+            break
+        index = _skip_json_ws_and_commas(source, index + 1)
+        if index >= len(source):
+            break
+
+        if source[index] != "[":
+            try:
+                value, index = decoder.raw_decode(source, index)
+            except json.JSONDecodeError:
+                break
+            result[key] = value
+            continue
+
+        saw_array = True
+        items: list[object] = []
+        index += 1
+        array_complete = False
+        while index < len(source):
+            index = _skip_json_ws_and_commas(source, index)
+            if index >= len(source):
+                break
+            if source[index] == "]":
+                index += 1
+                array_complete = True
+                break
+            try:
+                item, next_index = decoder.raw_decode(source, index)
+            except json.JSONDecodeError:
+                break
+            items.append(item)
+            index = _skip_json_ws_and_commas(source, next_index)
+            if index < len(source) and source[index] == "]":
+                index += 1
+                array_complete = True
+                break
+            if index < len(source) and source[index] == ",":
+                index += 1
+
+        if items or array_complete:
+            result[key] = items
+        if not array_complete:
+            break
+
+    if saw_array and result:
+        return result
+    return None
+
+
 def _decode_jsonish_string(text: str) -> str:
     return (
         text.replace("\\r\\n", "\n")
@@ -260,6 +342,9 @@ def parse_llm_json(raw: str, *, error_prefix: str = "LLM JSON parser") -> dict:
                 continue
             seen.add(normalized)
             parsed = _try_parse_dict(normalized)
+            if parsed is not None:
+                return parsed
+            parsed = _salvage_complete_top_level_arrays(normalized)
             if parsed is not None:
                 return parsed
 

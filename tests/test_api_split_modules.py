@@ -59,6 +59,7 @@ class ApiSplitModuleTests(unittest.TestCase):
                     "continue_project_generation",
                     "get_chapter_review",
                     "approve_chapter_review",
+                    "retry_chapter_review",
                 ),
             ),
             (

@@ -131,6 +131,27 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertEqual(paused["current_stage"], "paused")
         self.assertTrue(paused["pause_requested"])
 
+    def test_checkpoint_pause_does_not_become_user_pause_request(self) -> None:
+        task = api_module._create_task_record(title="检查点暂停语义", requested_chapters=2)
+        task["status"] = "running"
+        task["current_stage"] = "paused_for_review"
+        task["paused_chapters"] = [2]
+        api_module._persist_generation_task("task-checkpoint-pause-1", task)
+
+        api_module._update_task(
+            "task-checkpoint-pause-1",
+            status="paused",
+            current_stage="paused",
+            paused_chapters=[2],
+            message="进入 band checkpoint，等待处理。",
+        )
+
+        paused = api_module._get_generation_task_or_404("task-checkpoint-pause-1")
+        self.assertEqual(paused["status"], "paused")
+        self.assertEqual(paused["current_stage"], "paused")
+        self.assertFalse(paused["pause_requested"])
+        self.assertEqual(paused["paused_chapters"], [2])
+
     def test_continue_generation_api_rejects_pending_review_chapters(self) -> None:
         old_config = api_module._config
         api_module._config = Config(

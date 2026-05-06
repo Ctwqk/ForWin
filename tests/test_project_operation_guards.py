@@ -12,6 +12,7 @@ import forwin.api as api_module
 from forwin import api_project_ops
 from forwin.api_schemas import (
     ChapterReviewApproveRequest,
+    ChapterReviewRetryRequest,
     GenerateRequest,
     ProjectBulkDeleteRequest,
     ProjectCreateRequest,
@@ -198,6 +199,128 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 GenerationTask.project_id == project.id
             ).count()
         self.assertEqual(task_count, 0)
+
+    def test_retry_chapter_review_resets_needs_review_to_planned(self) -> None:
+        project = self._create_project(project_id="proj-review-retry")
+        with self.session_factory() as session:
+            arc = ArcPlanVersion(
+                id="arc-review-retry",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+            )
+            session.add(arc)
+            session.add(
+                ChapterPlan(
+                    id="plan-review-retry",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=3,
+                    title="第三章",
+                    status="needs_review",
+                    repair_attempt_count=3,
+                    residual_review_issues_json='[{"rule_name":"sub_world_unknown_named_entity"}]',
+                    canon_risk_level="high",
+                )
+            )
+            session.commit()
+
+        payload = api_module.retry_chapter_review(
+            project.id,
+            3,
+            ChapterReviewRetryRequest(reason="regenerate after root cause fix"),
+        )
+
+        self.assertTrue(payload.ok)
+        self.assertEqual(payload.status, "planned")
+        with self.session_factory() as session:
+            plan = session.get(ChapterPlan, "plan-review-retry")
+            self.assertEqual(plan.status, "planned")
+            self.assertEqual(plan.repair_attempt_count, 0)
+            self.assertEqual(plan.residual_review_issues_json, "[]")
+            self.assertEqual(plan.canon_risk_level, "")
+
+    def test_retry_chapter_review_can_reset_accepted_when_explicitly_allowed(self) -> None:
+        project = self._create_project(project_id="proj-review-retry-accepted")
+        with self.session_factory() as session:
+            arc = ArcPlanVersion(
+                id="arc-review-retry-accepted",
+                project_id=project.id,
+                arc_synopsis="arc",
+                status="active",
+            )
+            session.add(arc)
+            session.add(
+                ChapterPlan(
+                    id="plan-review-retry-accepted",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=3,
+                    title="第三章",
+                    status="accepted",
+                    acceptance_mode="normal",
+                    repair_attempt_count=3,
+                    residual_review_issues_json="[]",
+                    canon_risk_level="",
+                )
+            )
+            session.commit()
+
+        payload = api_module.retry_chapter_review(
+            project.id,
+            3,
+            ChapterReviewRetryRequest(
+                reason="regenerate accepted chapter after deterministic canon drift fix",
+                allow_accepted=True,
+            ),
+        )
+
+        self.assertTrue(payload.ok)
+        with self.session_factory() as session:
+            plan = session.get(ChapterPlan, "plan-review-retry-accepted")
+            self.assertEqual(plan.status, "planned")
+            self.assertEqual(plan.acceptance_mode, "")
+            self.assertEqual(plan.repair_attempt_count, 0)
+
+    def test_retry_chapter_review_resets_drafted_candidate_to_planned(self) -> None:
+        project = self._create_project(project_id="proj-review-retry-drafted")
+        with self.session_factory() as session:
+            arc = ArcPlanVersion(
+                id="arc-review-retry-drafted",
+                project_id=project.id,
+                arc_synopsis="arc",
+                status="active",
+            )
+            session.add(arc)
+            session.add(
+                ChapterPlan(
+                    id="plan-review-retry-drafted",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=4,
+                    title="第四章",
+                    status="drafted",
+                    repair_attempt_count=1,
+                    residual_review_issues_json='[{"rule_name":"canon_name_drift"}]',
+                    canon_risk_level="medium",
+                )
+            )
+            session.commit()
+
+        payload = api_module.retry_chapter_review(
+            project.id,
+            4,
+            ChapterReviewRetryRequest(reason="regenerate drafted chapter after prior chapter rewrite"),
+        )
+
+        self.assertTrue(payload.ok)
+        self.assertEqual(payload.status, "planned")
+        with self.session_factory() as session:
+            plan = session.get(ChapterPlan, "plan-review-retry-drafted")
+            self.assertEqual(plan.status, "planned")
+            self.assertEqual(plan.repair_attempt_count, 0)
+            self.assertEqual(plan.residual_review_issues_json, "[]")
+            self.assertEqual(plan.canon_risk_level, "")
 
     def test_start_writing_rolls_back_status_when_task_creation_fails(self) -> None:
         project = self._create_project(project_id="proj-start-writing-task-fail")

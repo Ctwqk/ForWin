@@ -8,6 +8,7 @@ from .models import (
     ActiveTaskCheckView,
     BlockingReasonView,
     ChapterDetailView,
+    ChapterReviewApproveView,
     ChapterSummaryView,
     GenerationControlView,
     GenesisView,
@@ -208,6 +209,72 @@ class ForWinAPIClient:
     async def chapter_get(self, *, project_id: str, chapter_number: int) -> ChapterDetailView:
         payload = await self._request_json("GET", f"/api/projects/{project_id}/chapters/{chapter_number}")
         return self._chapter_detail_view(payload)
+
+    async def chapter_review_approve(
+        self,
+        *,
+        project_id: str,
+        chapter_number: int,
+        reason: str,
+        continue_generation: bool = False,
+    ) -> ChapterReviewApproveView:
+        if chapter_number < 1:
+            raise ValueError("chapter_number must be positive")
+        normalized_reason = str(reason or "").strip()
+        if not normalized_reason:
+            raise ValueError("reason is required")
+        payload = await self._request_json(
+            "POST",
+            f"/api/projects/{project_id}/chapters/{chapter_number}/review/approve",
+            json={
+                "continue_generation": bool(continue_generation),
+                "reason": normalized_reason,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Expected chapter review approve payload from ForWin API.")
+        view = ChapterReviewApproveView.model_validate(payload)
+        task = await self._safe_task_get(view.task_id, fallback_payload=payload) if view.task_id else None
+        return view.model_copy(
+            update={
+                "project": await self.project_get(project_id),
+                "task": task,
+            }
+        )
+
+    async def chapter_review_retry(
+        self,
+        *,
+        project_id: str,
+        chapter_number: int,
+        reason: str,
+        continue_generation: bool = False,
+        allow_accepted: bool = False,
+    ) -> ChapterReviewApproveView:
+        if chapter_number < 1:
+            raise ValueError("chapter_number must be positive")
+        normalized_reason = str(reason or "").strip()
+        if not normalized_reason:
+            raise ValueError("reason is required")
+        payload = await self._request_json(
+            "POST",
+            f"/api/projects/{project_id}/chapters/{chapter_number}/review/retry",
+            json={
+                "continue_generation": bool(continue_generation),
+                "reason": normalized_reason,
+                "allow_accepted": bool(allow_accepted),
+            },
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Expected chapter review retry payload from ForWin API.")
+        view = ChapterReviewApproveView.model_validate(payload)
+        task = await self._safe_task_get(view.task_id, fallback_payload=payload) if view.task_id else None
+        return view.model_copy(
+            update={
+                "project": await self.project_get(project_id),
+                "task": task,
+            }
+        )
 
     async def world_model_get(
         self,

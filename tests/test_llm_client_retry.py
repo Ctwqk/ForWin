@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +16,21 @@ class LLMClientRetryTests(unittest.TestCase):
         promise = ReaderPromise.model_validate({"ambiguity_mode": "suggestive_opaque"})
 
         self.assertEqual(promise.ambiguity_mode, "managed")
+
+    def test_reader_promise_coerces_numeric_tuning_fields_to_strings(self) -> None:
+        promise = ReaderPromise.model_validate(
+            {
+                "acceptable_drag_level": 0.2,
+                "acceptable_exposition_density": 0.3,
+                "cliffhanger_aggressiveness": 0.8,
+                "world_legibility_target": 0.7,
+            }
+        )
+
+        self.assertEqual(promise.acceptable_drag_level, "0.2")
+        self.assertEqual(promise.acceptable_exposition_density, "0.3")
+        self.assertEqual(promise.cliffhanger_aggressiveness, "0.8")
+        self.assertEqual(promise.world_legibility_target, "0.7")
 
     def test_arc_payoff_map_coerces_llm_flexible_shapes(self) -> None:
         payoff_map = ArcPayoffMap.model_validate(
@@ -220,6 +236,83 @@ class LLMClientRetryTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_does_not_fallback_after_timeout_when_retry_disabled(self) -> None:
+        client = LLMClient(
+            api_key="primary-key",
+            base_url="https://primary.example/v1",
+            model="primary-model",
+            retry_attempts=2,
+            retry_initial_delay_seconds=0,
+            retry_max_delay_seconds=0,
+            fallback_profiles=[
+                {
+                    "api_key": "backup-key",
+                    "base_url": "https://backup.example/v1",
+                    "model": "backup-model",
+                }
+            ],
+        )
+        calls: list[str] = []
+
+        def fake_post(url, **kwargs):  # noqa: ANN001
+            calls.append(kwargs["json"]["model"])
+            if kwargs["json"]["model"] == "primary-model":
+                raise httpx.ReadTimeout("read timed out")
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "backup-ok"}}]},
+                request=request,
+            )
+
+        try:
+            with patch.object(client.client, "post", side_effect=fake_post):
+                with self.assertRaises(httpx.ReadTimeout):
+                    client.chat(
+                        [{"role": "user", "content": "hello"}],
+                        retry_on_timeout=False,
+                    )
+        finally:
+            client.close()
+
+        self.assertEqual(calls, ["primary-model"])
+        self.assertEqual(client.drain_model_fallback_events(), [])
+
+    def test_wall_timeout_interrupts_hung_http_post(self) -> None:
+        client = LLMClient(
+            api_key="test-key",
+            base_url="https://primary.example/v1",
+            model="primary-model",
+            retry_attempts=1,
+        )
+        original_client = client.client
+
+        def hung_post(url, **_kwargs):  # noqa: ANN001
+            time.sleep(0.2)
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "late"}}]},
+                request=request,
+            )
+
+        try:
+            with patch.object(client.client, "post", side_effect=hung_post):
+                started = time.monotonic()
+                with self.assertRaises(httpx.ReadTimeout):
+                    client._post_with_wall_timeout(
+                        "https://primary.example/v1/chat/completions",
+                        json={},
+                        headers={},
+                        timeout=httpx.Timeout(0.05),
+                    )
+                elapsed = time.monotonic() - started
+        finally:
+            client.close()
+
+        self.assertLess(elapsed, 0.15)
+        self.assertIsNot(client.client, original_client)
+
     def test_falls_back_to_next_profile_after_retryable_failures(self) -> None:
         client = LLMClient(
             api_key="primary-key",
@@ -406,7 +499,7 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertEqual(payloads[0]["max_tokens"], 1800)
         self.assertEqual(attempts[0]["max_tokens"], 1800)
 
-    def test_kimi_k25_raises_short_stage_timeout(self) -> None:
+    def test_kimi_k25_respects_explicit_stage_timeout(self) -> None:
         client = LLMClient(
             api_key="kimi-key",
             base_url="https://api.moonshot.cn/v1",
@@ -434,8 +527,47 @@ class LLMClientRetryTests(unittest.TestCase):
         finally:
             client.close()
 
-        self.assertEqual(timeouts[0], 120.0)
-        self.assertEqual(attempts[0]["timeout_seconds"], 120.0)
+        self.assertEqual(timeouts[0], 45.0)
+        self.assertEqual(attempts[0]["timeout_seconds"], 45.0)
+
+    def test_minimax_payload_uses_current_openai_compatible_parameters(self) -> None:
+        client = LLMClient(
+            api_key="minimax-key",
+            base_url="https://api.minimaxi.com/v1",
+            model="MiniMax-M2.7",
+            retry_attempts=1,
+        )
+        payloads: list[dict] = []
+
+        def fake_post(url, **kwargs):  # noqa: ANN001
+            payloads.append(kwargs["json"])
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "{\"ok\":true}"}}]},
+                request=request,
+            )
+
+        try:
+            with patch.object(client.client, "post", side_effect=fake_post):
+                result = client.chat(
+                    [{"role": "user", "content": "只输出 JSON"}],
+                    max_tokens=5000,
+                    response_format={"type": "json_object"},
+                    task_family="writer",
+                    stage_key="scene_breakdown",
+                )
+            attempts = client.drain_llm_attempt_events()
+        finally:
+            client.close()
+
+        self.assertEqual(result, "{\"ok\":true}")
+        self.assertNotIn("max_tokens", payloads[0])
+        self.assertEqual(payloads[0]["max_completion_tokens"], 2048)
+        self.assertNotIn("response_format", payloads[0])
+        self.assertEqual(attempts[0]["max_tokens"], 2048)
+        self.assertEqual(attempts[0]["requested_max_tokens"], 5000)
+        self.assertEqual(attempts[0]["response_format"], {})
 
     def test_non_retryable_http_error_records_provider_body_preview(self) -> None:
         client = LLMClient(
@@ -633,6 +765,66 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertEqual(calls, ["gpt-5.3-codex-spark", "kimi-k2.5"])
         self.assertEqual(attempts[0]["llm_task_route"], "prose_generation")
 
+    def test_chapter_prose_keeps_deepseek_as_fallback_when_kimi_is_rate_limited(self) -> None:
+        client = LLMClient(
+            api_key="minimax-key",
+            base_url="https://api.minimaxi.com/v1",
+            model="MiniMax-M2.7",
+            retry_attempts=1,
+            retry_initial_delay_seconds=0,
+            retry_max_delay_seconds=0,
+            fallback_profiles=[
+                {
+                    "id": "kimi",
+                    "name": "Kimi",
+                    "api_key": "kimi-key",
+                    "base_url": "https://api.moonshot.cn/v1",
+                    "model": "kimi-k2.5",
+                },
+                {
+                    "id": "deepseek",
+                    "name": "DeepSeek",
+                    "api_key": "deepseek-key",
+                    "base_url": "https://api.deepseek.com/v1",
+                    "model": "deepseek-chat",
+                },
+            ],
+        )
+        calls: list[str] = []
+
+        def fake_post(url, **kwargs):  # noqa: ANN001
+            calls.append(kwargs["json"]["model"])
+            request = httpx.Request("POST", url)
+            if kwargs["json"]["model"] == "kimi-k2.5":
+                return httpx.Response(429, json={"error": "rate limited"}, request=request)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "DeepSeek 正文"}}]},
+                request=request,
+            )
+
+        try:
+            with patch.object(client.client, "post", side_effect=fake_post):
+                result = client.chat(
+                    [{"role": "user", "content": "写第 1 章"}],
+                    task_family="writer",
+                    stage_key="chapter_draft",
+                )
+            attempts = client.drain_llm_attempt_events()
+        finally:
+            client.close()
+
+        self.assertEqual(result, "DeepSeek 正文")
+        self.assertEqual(calls, ["kimi-k2.5", "deepseek-chat"])
+        self.assertEqual(attempts[0]["error_category"], "rate_limit")
+        self.assertEqual(attempts[1]["profile_id"], "deepseek")
+        skipped_reasons = [
+            item["reason"]
+            for attempt in attempts
+            for item in attempt["skipped_profiles"]
+        ]
+        self.assertNotIn("replaced_by_kimi", skipped_reasons)
+
     def test_writer_preview_allows_minimax_as_low_risk_fallback(self) -> None:
         client = LLMClient(
             api_key="minimax-key",
@@ -713,7 +905,7 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertEqual(attempts[0]["error_category"], "no_usable_profile")
         self.assertEqual(attempts[0]["skipped_profiles"][0]["reason"], "route_not_allowed")
 
-    def test_deepseek_and_gemini_hard_replacement_records_skipped_profiles(self) -> None:
+    def test_primary_deepseek_is_honored_even_when_kimi_fallback_exists(self) -> None:
         client = LLMClient(
             api_key="deepseek-key",
             base_url="https://api.deepseek.com/v1",
@@ -759,10 +951,145 @@ class LLMClientRetryTests(unittest.TestCase):
         finally:
             client.close()
 
+        self.assertEqual(calls, ["deepseek-chat"])
+        skipped = attempts[0]["skipped_profiles"]
+        self.assertIn("replaced_by_deepseek", [item["reason"] for item in skipped])
+
+    def test_primary_deepseek_excludes_kimi_fallback(self) -> None:
+        client = LLMClient(
+            api_key="deepseek-key",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-chat",
+            retry_attempts=1,
+            fallback_profiles=[
+                {
+                    "id": "kimi",
+                    "name": "Kimi",
+                    "api_key": "kimi-key",
+                    "base_url": "https://api.moonshot.cn/v1",
+                    "model": "kimi-k2.5",
+                },
+            ],
+        )
+        try:
+            route_result = client._route_profiles_with_metadata(
+                client._request_profiles(),
+                response_format={"type": "json_object"},
+                task_family="planning",
+                stage_key="chapter_plan",
+            )
+        finally:
+            client.close()
+
+        self.assertEqual([profile["model"] for profile in route_result["profiles"]], ["deepseek-chat"])
+        self.assertEqual(route_result["skipped_profiles"][0]["reason"], "primary_deepseek_no_kimi_fallback")
+
+    def test_deepseek_timeout_is_long_enough_for_generation_calls(self) -> None:
+        client = LLMClient(
+            api_key="deepseek-key",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-chat",
+            retry_attempts=1,
+        )
+        try:
+            timeout = client._effective_timeout_for_profile(
+                client._request_profiles()[0],
+                httpx.Timeout(45.0, connect=10.0),
+            )
+        finally:
+            client.close()
+
+        self.assertGreaterEqual(timeout.read or 0.0, 120.0)
+
+    def test_deepseek_generation_respects_explicit_scene_timeout(self) -> None:
+        client = LLMClient(
+            api_key="deepseek-key",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-chat",
+            retry_attempts=1,
+        )
+        try:
+            timeout = client._effective_timeout_for_profile(
+                client._request_profiles()[0],
+                httpx.Timeout(45.0, connect=10.0),
+                llm_task_route="prose_generation",
+                explicit_timeout=True,
+            )
+        finally:
+            client.close()
+
+        self.assertEqual(timeout.read, 45.0)
+
+    def test_deepseek_review_json_respects_explicit_short_timeout(self) -> None:
+        client = LLMClient(
+            api_key="deepseek-key",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-chat",
+            retry_attempts=1,
+        )
+        try:
+            timeout = client._effective_timeout_for_profile(
+                client._request_profiles()[0],
+                httpx.Timeout(30.0, connect=10.0),
+                llm_task_route="review_json",
+                explicit_timeout=True,
+            )
+        finally:
+            client.close()
+
+        self.assertEqual(timeout.read, 30.0)
+
+    def test_kimi_primary_still_replaces_deepseek_fallback(self) -> None:
+        client = LLMClient(
+            api_key="kimi-key",
+            base_url="https://api.moonshot.cn/v1",
+            model="kimi-k2.5",
+            retry_attempts=1,
+            fallback_profiles=[
+                {
+                    "id": "deepseek",
+                    "name": "DeepSeek",
+                    "api_key": "deepseek-key",
+                    "base_url": "https://api.deepseek.com/v1",
+                    "model": "deepseek-chat",
+                },
+                {
+                    "id": "gemini",
+                    "name": "Gemini",
+                    "api_key": "gemini-key",
+                    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+                    "model": "gemini-2.5-pro",
+                },
+            ],
+        )
+        calls: list[str] = []
+
+        def fake_post(url, **kwargs):  # noqa: ANN001
+            calls.append(kwargs["json"]["model"])
+            request = httpx.Request("POST", url)
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "{\"ok\": true}"}}]},
+                request=request,
+            )
+
+        try:
+            with patch.object(client.client, "post", side_effect=fake_post):
+                client.chat(
+                    [{"role": "user", "content": "规划"}],
+                    response_format={"type": "json_object"},
+                    task_family="planning",
+                    stage_key="chapter_plan",
+                )
+            attempts = client.drain_llm_attempt_events()
+        finally:
+            client.close()
+
         self.assertEqual(calls, ["kimi-k2.5"])
         skipped = attempts[0]["skipped_profiles"]
-        self.assertIn("replaced_by_kimi", [item["reason"] for item in skipped])
-        self.assertIn("replaced_by_deepseek", [item["reason"] for item in skipped])
+        skipped_reasons = [item["reason"] for item in skipped]
+        self.assertIn("replaced_by_kimi", skipped_reasons)
+        self.assertIn("replaced_by_deepseek", skipped_reasons)
 
 
 def jsonable(value):  # noqa: ANN001

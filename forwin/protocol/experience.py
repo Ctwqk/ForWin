@@ -67,6 +67,19 @@ class ReaderPromise(BaseModel):
             return "managed"
         return "stable"
 
+    @field_validator(
+        "genre_promise",
+        "pleasure_promise",
+        "acceptable_drag_level",
+        "acceptable_exposition_density",
+        "cliffhanger_aggressiveness",
+        "world_legibility_target",
+        mode="before",
+    )
+    @classmethod
+    def _stringify_reader_promise_field(cls, value: object) -> str:
+        return _stringify_llm_item(value)
+
 
 class MacroPayoff(BaseModel):
     payoff_id: str

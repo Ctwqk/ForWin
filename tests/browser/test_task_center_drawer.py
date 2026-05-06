@@ -94,3 +94,17 @@ def test_stale_drawer_closes_when_task_detail_404s(page, browser_test_base_url: 
     page.evaluate("() => window.refreshCurrentDrawerIfChanged()")
     expect(page.locator("#task_drawer_overlay")).not_to_have_class(re.compile(r".*\bopen\b.*"))
     expect(page.locator("#global_status")).to_contain_text("当前任务已不存在")
+
+
+def test_stale_drawer_closes_when_task_disappears_from_list(page, browser_test_base_url: str) -> None:
+    backend = MockForWinBackend()
+    goto_home(page, browser_test_base_url, backend)
+    page.locator("#tab_task").click()
+    page.get_by_role("button", name="查看详情").first.click()
+    expect(page.locator("#task_drawer_overlay")).to_have_class(re.compile(r".*\bopen\b.*"))
+
+    del backend.tasks["task-1"]
+    page.evaluate("() => window.loadTaskCenter()")
+
+    expect(page.locator("#task_drawer_overlay")).not_to_have_class(re.compile(r".*\bopen\b.*"))
+    expect(page.locator("#global_status")).to_contain_text("已从任务中心移除")

@@ -144,6 +144,28 @@ class GenerationControlPayloadTests(unittest.TestCase):
         self.assertEqual(control.blocking_reason.decision_event_id, "evt-future-constraint-1")
         self.assertEqual(control.next_gate, "future_constraint_block")
 
+    def test_future_constraint_blocking_reason_accepts_raw_decision_event_rows(self) -> None:
+        control = build_generation_control(
+            plans=[
+                _plan(1, "failed"),
+                _plan(2, "planned"),
+            ],
+            latest_replan=None,
+            review_interval_chapters=0,
+            decision_events=[
+                SimpleNamespace(
+                    id="evt-row-future-constraint-1",
+                    chapter_number=1,
+                    event_type="review_verdict_recorded",
+                    payload_json='{"verdict":"fail","issue_types":["future_constraint"]}',
+                    summary="future constraint failed",
+                )
+            ],
+        )
+
+        self.assertEqual(control.blocking_reason.code, "future_constraint_block")
+        self.assertEqual(control.blocking_reason.decision_event_id, "evt-row-future-constraint-1")
+
 
 if __name__ == "__main__":
     unittest.main()

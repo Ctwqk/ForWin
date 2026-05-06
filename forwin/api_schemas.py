@@ -1142,6 +1142,12 @@ class ChapterReviewApproveRequest(BaseModel):
     reason: str = ""
 
 
+class ChapterReviewRetryRequest(BaseModel):
+    continue_generation: bool = False
+    reason: str = ""
+    allow_accepted: bool = False
+
+
 class ChapterReviewApproveResponse(BaseModel):
     ok: bool
     project_id: str

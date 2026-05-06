@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 
 ProgressionMode = Literal["legacy_relaxed", "serial_canon", "serial_canon_band_guard"]
-BandWarnAction = Literal["pause"]
+BandWarnAction = Literal["pause", "continue"]
 PlanTaskType = Literal[
     "plot_advance",
     "relationship_shift",

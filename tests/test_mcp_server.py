@@ -33,6 +33,7 @@ from forwin.mcp.models import (
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.models.project import ChapterPlan
 from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.updater import StateUpdater
 
@@ -283,6 +284,8 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     "task_pause",
                     "chapter_list",
                     "chapter_get",
+                    "chapter_review_approve",
+                    "chapter_review_retry",
                     "world_model_get",
                     "world_page_get",
                     "world_conflict_list",
@@ -543,6 +546,73 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.assertTrue(chapter.has_review)
         self.assertIn("会说话的镜子", chapter.body)
         self.assertEqual(chapter.summary, "主角在雨夜得到了危险线索。")
+
+    def test_chapter_review_approve_via_mcp(self) -> None:
+        project_id, chapter_number = self._create_project_with_draft()
+        with self.session_factory() as session:
+            plan = session.query(ChapterPlan).filter_by(project_id=project_id, chapter_number=chapter_number).one()
+            plan.status = "drafted"
+            session.commit()
+
+        accepted_calls = []
+
+        def accept_review(project_id_arg, chapter_number_arg, *, reason=""):
+            args = (project_id_arg, chapter_number_arg)
+            kwargs = {"reason": reason}
+            accepted_calls.append((args, kwargs))
+            return {
+                "status": "accepted",
+                "message": "第1章已接受并写入 canon。",
+                "frozen_artifact": "artifact.json",
+            }
+
+        old_orchestrator = api_module._orchestrator
+        api_module._orchestrator = type("FakeOrchestrator", (), {"accept_review": staticmethod(accept_review)})()
+        try:
+            result = self._call_tool(
+                "chapter_review_approve",
+                {
+                    "project_id": project_id,
+                    "chapter_number": chapter_number,
+                    "reason": "MCP operator accepted clean review",
+                },
+            )
+        finally:
+            api_module._orchestrator = old_orchestrator
+
+        payload = self._result_payload(result)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "accepted")
+        self.assertEqual(payload["frozen_artifact"], "artifact.json")
+        self.assertEqual(accepted_calls[0][0], (project_id, chapter_number))
+        self.assertEqual(accepted_calls[0][1]["reason"], "MCP operator accepted clean review")
+
+    def test_chapter_review_retry_via_mcp(self) -> None:
+        project_id, chapter_number = self._create_project_with_draft()
+        with self.session_factory() as session:
+            plan = session.query(ChapterPlan).filter_by(project_id=project_id, chapter_number=chapter_number).one()
+            plan.status = "needs_review"
+            plan.residual_review_issues_json = '[{"rule_name":"stale_error"}]'
+            plan.canon_risk_level = "high"
+            session.commit()
+
+        result = self._call_tool(
+            "chapter_review_retry",
+            {
+                "project_id": project_id,
+                "chapter_number": chapter_number,
+                "reason": "MCP operator retries stale review gate",
+            },
+        )
+
+        payload = self._result_payload(result)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["status"], "planned")
+        with self.session_factory() as session:
+            plan = session.query(ChapterPlan).filter_by(project_id=project_id, chapter_number=chapter_number).one()
+            self.assertEqual(plan.status, "planned")
+            self.assertEqual(plan.residual_review_issues_json, "[]")
+            self.assertEqual(plan.canon_risk_level, "")
 
     def test_world_model_read_tools_and_export_via_mcp(self) -> None:
         project_id = self._create_ready_project()

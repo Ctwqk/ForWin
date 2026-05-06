@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import queue
+import threading
 import time
 import uuid
 import hashlib
@@ -55,7 +57,11 @@ class OpenAICompatibleAdapter:
         self.fallback_profiles = list(fallback_profiles or [])
         self.model_fallback_events: list[dict[str, str]] = []
         self.llm_attempt_events: list[dict[str, object]] = []
-        self.client = httpx.Client(
+        self._client_lock = threading.Lock()
+        self.client = self._build_http_client()
+
+    def _build_http_client(self) -> httpx.Client:
+        return httpx.Client(
             timeout=httpx.Timeout(self.timeout_seconds, connect=min(10.0, self.timeout_seconds))
         )
 
@@ -149,12 +155,15 @@ class OpenAICompatibleAdapter:
                     task_family=task_family,
                     stage_key=stage_key,
                     llm_task_route=llm_task_route,
+                    explicit_timeout=timeout_seconds is not None,
                     fallback_eligible_on_profile_failure=profile_index < len(profiles) - 1,
                     candidate_chain=candidate_chain,
                     skipped_profiles=skipped_profiles,
                 )
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
+                if isinstance(exc, (httpx.ReadTimeout, httpx.TimeoutException)) and not retry_on_timeout:
+                    raise
                 if profile_index >= len(profiles) - 1 or not self._is_fallback_retryable(exc):
                     raise
                 next_profile = profiles[profile_index + 1]
@@ -200,6 +209,7 @@ class OpenAICompatibleAdapter:
         task_family: str,
         stage_key: str,
         llm_task_route: str,
+        explicit_timeout: bool,
         fallback_eligible_on_profile_failure: bool,
         candidate_chain: list[dict[str, str]],
         skipped_profiles: list[dict[str, str]],
@@ -218,19 +228,28 @@ class OpenAICompatibleAdapter:
         effective_request_timeout = self._effective_timeout_for_profile(
             profile,
             request_timeout,
+            llm_task_route=llm_task_route,
+            explicit_timeout=explicit_timeout,
+        )
+        effective_response_format = self._effective_response_format_for_profile(
+            profile,
+            response_format,
         )
         payload = {
             "model": profile["model"],
             "messages": messages,
-            "max_tokens": effective_max_tokens,
         }
+        if self._is_minimax_profile(profile):
+            payload["max_completion_tokens"] = effective_max_tokens
+        else:
+            payload["max_tokens"] = effective_max_tokens
         if send_temperature:
             payload["temperature"] = effective_temperature
         thinking = self._thinking_payload_for_profile(profile)
         if thinking is not None:
             payload["thinking"] = thinking
-        if response_format:
-            payload["response_format"] = response_format
+        if effective_response_format:
+            payload["response_format"] = effective_response_format
         headers = {
             "Authorization": f"Bearer {profile['api_key']}",
             "Content-Type": "application/json",
@@ -249,7 +268,7 @@ class OpenAICompatibleAdapter:
                     len(messages),
                     effective_max_tokens,
                 )
-                response = self.client.post(
+                response = self._post_with_wall_timeout(
                     url,
                     json=payload,
                     headers=headers,
@@ -264,7 +283,7 @@ class OpenAICompatibleAdapter:
                         messages=messages,
                         temperature=effective_temperature,
                         max_tokens=effective_max_tokens,
-                        response_format=response_format,
+                        response_format=effective_response_format,
                         request_timeout=effective_request_timeout,
                         attempt_no=attempt_no,
                         http_status=response.status_code,
@@ -321,7 +340,7 @@ class OpenAICompatibleAdapter:
                         messages=messages,
                         temperature=effective_temperature,
                         max_tokens=effective_max_tokens,
-                        response_format=response_format,
+                        response_format=effective_response_format,
                         request_timeout=effective_request_timeout,
                         attempt_no=attempt_no,
                         http_status=response.status_code,
@@ -351,7 +370,7 @@ class OpenAICompatibleAdapter:
                     messages=messages,
                     temperature=effective_temperature,
                     max_tokens=effective_max_tokens,
-                    response_format=response_format,
+                        response_format=effective_response_format,
                     request_timeout=effective_request_timeout,
                     attempt_no=attempt_no,
                     http_status=response.status_code,
@@ -383,7 +402,7 @@ class OpenAICompatibleAdapter:
                     messages=messages,
                     temperature=effective_temperature,
                     max_tokens=effective_max_tokens,
-                    response_format=response_format,
+                        response_format=effective_response_format,
                     request_timeout=effective_request_timeout,
                     attempt_no=attempt_no,
                     duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
@@ -430,7 +449,7 @@ class OpenAICompatibleAdapter:
                     messages=messages,
                     temperature=effective_temperature,
                     max_tokens=effective_max_tokens,
-                    response_format=response_format,
+                        response_format=effective_response_format,
                     request_timeout=effective_request_timeout,
                     attempt_no=attempt_no,
                     http_status=status_code,
@@ -471,6 +490,60 @@ class OpenAICompatibleAdapter:
 
         # Should never reach here, but make the type-checker happy.
         raise RuntimeError("OpenAICompatibleAdapter.chat: unexpected exit from retry loop")
+
+    def _post_with_wall_timeout(
+        self,
+        url: str,
+        *,
+        json: dict[str, object],
+        headers: dict[str, str],
+        timeout: httpx.Timeout,
+    ) -> httpx.Response:
+        result_queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
+        with self._client_lock:
+            client = self.client
+
+        def _worker() -> None:
+            try:
+                result_queue.put(
+                    (
+                        "response",
+                        client.post(url, json=json, headers=headers, timeout=timeout),
+                    )
+                )
+            except BaseException as exc:  # noqa: BLE001
+                result_queue.put(("exception", exc))
+
+        wall_timeout = max(0.1, self._timeout_seconds_value(timeout))
+        thread = threading.Thread(
+            target=_worker,
+            name="forwin-llm-http-post",
+            daemon=True,
+        )
+        thread.start()
+        thread.join(wall_timeout)
+        if thread.is_alive():
+            self._replace_timed_out_client(client)
+            raise httpx.ReadTimeout(
+                f"LLM HTTP request exceeded wall timeout ({wall_timeout:.1f}s)"
+            )
+        kind, value = result_queue.get_nowait()
+        if kind == "exception":
+            raise value  # type: ignore[misc]
+        return value  # type: ignore[return-value]
+
+    def _replace_timed_out_client(self, timed_out_client: object) -> None:
+        close = getattr(timed_out_client, "close", None)
+        with self._client_lock:
+            if self.client is timed_out_client:
+                try:
+                    if callable(close):
+                        close()
+                finally:
+                    self.client = self._build_http_client()
+                return
+        if callable(close):
+            close()
 
     def _request_profiles(self) -> list[dict[str, str]]:
         candidates = [
@@ -647,14 +720,22 @@ class OpenAICompatibleAdapter:
         skipped_profiles: list[dict[str, str]] = []
         kinds = {cls._profile_kind(profile) for profile in profiles}
         has_kimi = "kimi" in kinds
+        primary_kind = cls._profile_kind(profiles[0]) if profiles else ""
         has_deepseek_or_kimi = has_kimi or "deepseek" in kinds
         indexed = list(enumerate(profiles))
         replacement_filtered: list[tuple[int, dict[str, str]]] = []
         for index, profile in indexed:
             kind = cls._profile_kind(profile)
             reason = ""
-            if kind == "deepseek" and has_kimi:
+            if (
+                kind == "deepseek"
+                and has_kimi
+                and primary_kind != "deepseek"
+                and route not in {"prose_generation", "repair_generation"}
+            ):
                 reason = "replaced_by_kimi"
+            elif kind == "kimi" and primary_kind == "deepseek":
+                reason = "primary_deepseek_no_kimi_fallback"
             elif kind == "gemini" and has_deepseek_or_kimi:
                 reason = "replaced_by_deepseek" if "deepseek" in kinds else "replaced_by_kimi"
             if reason:
@@ -682,12 +763,27 @@ class OpenAICompatibleAdapter:
                     }
                 )
         routed = suitable
-        routed.sort(
-            key=lambda item: (
-                cls._profile_route_priority(item[1], route),
-                item[0],
-            )
+        primary = (
+            next((item for item in routed if item[0] == 0), None)
+            if primary_kind == "deepseek"
+            else None
         )
+        if primary is not None:
+            rest = [item for item in routed if item[0] != 0]
+            rest.sort(
+                key=lambda item: (
+                    cls._profile_route_priority(item[1], route),
+                    item[0],
+                )
+            )
+            routed = [primary, *rest]
+        else:
+            routed.sort(
+                key=lambda item: (
+                    cls._profile_route_priority(item[1], route),
+                    item[0],
+                )
+            )
         return {
             "profiles": [profile for _index, profile in routed],
             "candidate_chain": candidate_chain,
@@ -917,15 +1013,35 @@ class OpenAICompatibleAdapter:
     ) -> int:
         if cls._is_kimi_k25_profile(profile):
             return max(int(requested_max_tokens), 1800)
+        if cls._is_minimax_profile(profile):
+            return max(1, min(int(requested_max_tokens), 2048))
         return int(requested_max_tokens)
+
+    @classmethod
+    def _effective_response_format_for_profile(
+        cls,
+        profile: dict[str, str],
+        response_format: dict | None,
+    ) -> dict | None:
+        if cls._is_minimax_profile(profile):
+            return None
+        return response_format
 
     @classmethod
     def _effective_timeout_for_profile(
         cls,
         profile: dict[str, str],
         request_timeout: httpx.Timeout,
+        *,
+        llm_task_route: str = "",
+        explicit_timeout: bool = False,
     ) -> httpx.Timeout:
-        if not cls._is_kimi_k25_profile(profile):
+        is_kimi = cls._is_kimi_k25_profile(profile)
+        is_deepseek = cls._is_deepseek_profile(profile)
+        if not (is_kimi or is_deepseek):
+            return request_timeout
+        route = str(llm_task_route or "").strip().lower()
+        if explicit_timeout:
             return request_timeout
         read_timeout = max(
             120.0,
@@ -942,6 +1058,18 @@ class OpenAICompatibleAdapter:
         base_url = str(profile.get("base_url") or "").lower()
         model = str(profile.get("model") or "").strip().lower()
         return ("moonshot" in base_url or "kimi" in base_url) and model.startswith("kimi-k2.5")
+
+    @staticmethod
+    def _is_deepseek_profile(profile: dict[str, str]) -> bool:
+        text = " ".join(
+            str(profile.get(key) or "").strip().lower()
+            for key in ("id", "name", "base_url", "model")
+        )
+        return "deepseek" in text
+
+    @classmethod
+    def _is_minimax_profile(cls, profile: dict[str, str]) -> bool:
+        return cls._profile_kind(profile) == "minimax"
 
     @classmethod
     def _http_error_message(
@@ -1122,7 +1250,8 @@ class OpenAICompatibleAdapter:
 
     def close(self) -> None:
         """Close the underlying httpx client."""
-        self.client.close()
+        with self._client_lock:
+            self.client.close()
 
     def __enter__(self) -> "OpenAICompatibleAdapter":
         return self

@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 from forwin.models import Project
 from forwin.models.world_v4 import CognitionSnapshotRow, WorldLineRow
 from forwin.protocol.world_v4 import WorldLine, WorldModelSnapshot
-from forwin.world_model_v4.projection import WorldModelProjection
-from forwin.world_model_v4.repository import WorldModelRepository
+from forwin.world_v4_compat.projection import WorldModelProjection
+from forwin.world_v4_compat.repository import WorldModelRepository
 
 
 def _initial_objective_summary(project: Project) -> str:

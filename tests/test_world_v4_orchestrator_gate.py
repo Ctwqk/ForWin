@@ -130,15 +130,14 @@ def test_apply_canon_candidate_blocks_v4_review_failure() -> None:
             )
 
         with Session() as session:
-            compile_run = session.execute(select(WorldCompileRunV4Row)).scalar_one()
+            compile_runs = session.scalar(select(func.count()).select_from(WorldCompileRunV4Row))
             delta_count = session.scalar(select(func.count()).select_from(WorldDeltaRow))
+            graph_deltas = session.scalar(select(func.count()).select_from(GraphDeltaRow))
 
         assert frozen
-        assert compile_run.committed is False
-        retrieval_packs = json.loads(compile_run.retrieval_pack_json)
-        assert retrieval_packs["writing"]["must_not_reveal"] == ["father_sieged"]
-        assert retrieval_packs["compiler"]["metadata"]["hidden_truth_included"] is True
+        assert compile_runs == 0
         assert delta_count == 0
+        assert graph_deltas == 0
 
 
 def test_apply_canon_candidate_drops_unregistered_character_state_changes() -> None:
@@ -220,7 +219,7 @@ def test_book_state_compile_failure_rolls_back_v4_rows(monkeypatch) -> None:
             blocked_reasons=["forced test failure"],
         )
 
-    monkeypatch.setattr("forwin.orchestrator.loop.BookStateCompiler.compile", fail_compile)
+    monkeypatch.setattr("forwin.book_state.review_gate_ext.BookStateCompiler.compile", fail_compile)
     with TemporaryDirectory() as tmp:
         db_path = postgres_test_url("orchestrator-v4-bookstate-rollback")
         engine = get_engine(db_path)
@@ -257,6 +256,50 @@ def test_book_state_compile_failure_rolls_back_v4_rows(monkeypatch) -> None:
         assert compile_runs == 0
         assert world_deltas == 0
         assert graph_deltas == 0
+
+
+def test_book_state_direct_path_can_skip_world_v4_compat_projection() -> None:
+    with TemporaryDirectory() as tmp:
+        db_path = postgres_test_url("orchestrator-bookstate-direct-no-v4")
+        engine = get_engine(db_path)
+        init_db(engine)
+        Session = get_session_factory(engine)
+        orchestrator = WritingOrchestrator(
+            Config(
+                database_url=db_path,
+                minimax_api_key="",
+                minimax_model="fake-model",
+                world_v4_compat_write_enabled=False,
+            )
+        )
+        with Session.begin() as session:
+            repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
+            project, _chapter = _setup_project(session)
+            result = orchestrator._apply_canon_candidate(  # noqa: SLF001
+                session=session,
+                repo=repo,
+                updater=updater,
+                project_id=project.id,
+                chapter_number=23,
+                writer_output=WriterOutput(
+                    project_id=project.id,
+                    chapter_number=23,
+                    title="乱码呼号",
+                    body="防线修复后，通讯台传出乱码和父亲旧部呼号。",
+                    end_of_chapter_summary="收到异常通讯。",
+                ),
+                verdict=ReviewVerdict(verdict="pass", issues=[]),
+            )
+
+        with Session() as session:
+            compile_runs = session.scalar(select(func.count()).select_from(WorldCompileRunV4Row))
+            world_deltas = session.scalar(select(func.count()).select_from(WorldDeltaRow))
+            graph_deltas = session.scalar(select(func.count()).select_from(GraphDeltaRow))
+
+        assert result is None
+        assert compile_runs == 0
+        assert world_deltas == 0
+        assert graph_deltas > 0
 
 
 def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:

@@ -1,3 +1,5 @@
+"""LEGACY world model projection/export layer; not a new canon source."""
+
 from __future__ import annotations
 
 from .compiler import WorldModelCompiler

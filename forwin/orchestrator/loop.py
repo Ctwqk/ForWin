@@ -59,8 +59,9 @@ from forwin.observability.payloads import attempt_group_ids, audit_payload, even
 from forwin.observability.ports import NullObservability
 from forwin.observability.redaction import redact_payload
 from forwin.observability.spans import SpanRecord, current_span
-from forwin.extractor.world_v4 import WorldDeltaExtractor
-from forwin.book_state import BookStateCompiler, BookStateDeltaAdapter, BookStateReviewGate
+from forwin.book_state.extraction_contract import BookStateExtractionRequest
+from forwin.book_state.review_gate_ext import BookStateDirectCommitService
+from forwin.extractor.book_state_graph_delta import BookStateGraphDeltaExtractor
 from forwin.knowledge_system import KnowledgeProjectionRefresher
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.experience import ArcPayoffMap, BandDelightSchedule, ChapterExperiencePlan
@@ -74,7 +75,6 @@ from forwin.orchestrator.phase4 import (
 from forwin.planning.scenario_rehearsal_resolution import latest_blocking_scenario_rehearsal
 from forwin.orchestrator.phase24 import ProvisionalBandPreview
 from forwin.retrieval import RetrievalBroker
-from forwin.reviewer_v4 import V4ReviewGate
 from forwin.runtime.services import RuntimeServices
 from forwin.state.repo import StateRepository
 from forwin.state.schema import KNOWN_STATE_FIELDS
@@ -85,7 +85,7 @@ from forwin.observability.llm_trace import (
 )
 from forwin.subworld_manager import SubWorldManager
 from forwin.protocol.writer import WriterOutput
-from forwin.world_model_v4.compiler import WorldModelCompiler as WorldModelCompilerV4
+from forwin.world_v4_compat.compiler import WorldModelCompiler as WorldModelCompilerV4
 from forwin.writer.chapter_writer import ChapterWriter
 from forwin.world_model.compiler import WorldModelCompiler as LegacyWorldModelCompiler
 
@@ -3779,7 +3779,9 @@ class WritingOrchestrator:
                         frozen_artifacts=frozen_artifacts,
                         current_chapter=chapter_num,
                     )
+                checkpoint_row = None
                 checkpoint_pause = False
+                checkpoint_warn_pause = False
                 if bool(governance.auto_band_checkpoint):
                     try:
                         checkpoint_row = self._create_auto_band_checkpoint(
@@ -3841,7 +3843,7 @@ class WritingOrchestrator:
                         and checkpoint_row.status == "warn"
                         and str(governance.band_warn_action or "") == "pause"
                     ):
-                        checkpoint_pause = True
+                        checkpoint_warn_pause = True
                 manual_after_accept = self._manual_boundary_checkpoint(
                     session,
                     project_id=project_id,
@@ -3855,8 +3857,11 @@ class WritingOrchestrator:
                     boundary_kind="band_end",
                 )
                 session.commit()
-                if checkpoint_pause or manual_after_accept is not None or manual_band_end is not None:
-                    if checkpoint_pause and checkpoint_row is not None:
+                should_pause_for_checkpoint = checkpoint_pause or (
+                    checkpoint_warn_pause and chapter_num != last_requested_chapter
+                )
+                if should_pause_for_checkpoint or manual_after_accept is not None or manual_band_end is not None:
+                    if should_pause_for_checkpoint and checkpoint_row is not None:
                         self._record_decision_event(
                             updater=updater,
                             project_id=project_id,
@@ -4863,7 +4868,7 @@ class WritingOrchestrator:
             project_id,
             chapter_number,
         )
-        writer_output_for_v4 = writer_output.model_copy(update={"project_id": project_id})
+        writer_output_for_direct = writer_output.model_copy(update={"project_id": project_id})
         broker = RetrievalBroker()
         writer_pack = broker.build_world_model_pack(
             repo,
@@ -4888,200 +4893,223 @@ class WritingOrchestrator:
             "review": review_pack.model_dump(mode="json"),
             "compiler": compiler_pack.model_dump(mode="json"),
         }
-        extracted = WorldDeltaExtractor().extract(
-            writer_output_for_v4,
-            chapter_intent=chapter_intent,
-        )
-        gate_verdict = V4ReviewGate().review(
-            extracted,
-            chapter_intent=chapter_intent,
-            chapter_body=writer_output.body,
-        )
-        book_state_result = None
-        book_state_verdict = None
-        compiler_result = None
-        if gate_verdict.passed and gate_verdict.approved_changes is not None:
-            book_state_changes = BookStateDeltaAdapter().from_world_change_set(
-                gate_verdict.approved_changes,
-                approved_by=["v4_review_gate"],
-                review_verdict_id=f"v4_review_{project_id}_{chapter_number}",
-            )
-            self._record_decision_event(
-                updater=updater,
+        extraction = BookStateGraphDeltaExtractor().extract(
+            BookStateExtractionRequest(
                 project_id=project_id,
                 chapter_number=chapter_number,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.BOOK_STATE_REVIEW_STARTED,
-                scope="chapter",
-                summary=f"第{chapter_number}章 BookState review gate 开始。",
-                payload=audit_payload(
-                    stage="book_state_review",
-                    status="started",
-                    operation_id=self._audit_operation_id(),
-                    graph_delta_count=len(book_state_changes.graph_deltas),
-                ),
+                writer_output=writer_output_for_direct,
+                chapter_intent=chapter_intent,
+                review_verdict_id=f"book_state_direct_review_{project_id}_{chapter_number}",
             )
-            book_state_verdict = BookStateReviewGate(session).review(book_state_changes)
-            if not book_state_verdict.accepted or book_state_verdict.approved_changes is None:
-                self._record_decision_event(
-                    updater=updater,
+        )
+        gate_verdict = extraction.compatibility_gate_verdict
+        if not extraction.accepted or extraction.changes is None:
+            frozen_path = ""
+            if self.config.freeze_failed_candidates:
+                frozen_path = self.artifact_store.save_frozen_candidate(
                     project_id=project_id,
                     chapter_number=chapter_number,
-                    event_family="runtime_observation",
-                    event_type=DecisionEventType.BOOK_STATE_REVIEW_FAILED,
-                    scope="chapter",
-                    summary=f"第{chapter_number}章 BookState review gate 未通过。",
-                    payload=audit_payload(
-                        stage="book_state_review",
-                        status="failed",
-                        operation_id=self._audit_operation_id(),
-                        issue_count=len(book_state_verdict.issues),
-                        issues=[issue.model_dump(mode="json") for issue in book_state_verdict.issues],
-                    ),
-                )
-                frozen_path = ""
-                if self.config.freeze_failed_candidates:
-                    frozen_path = self.artifact_store.save_frozen_candidate(
-                        project_id=project_id,
-                        chapter_number=chapter_number,
-                        payload={
-                            "reason": "book-state-review-gate-blocked",
-                            "chapter_number": chapter_number,
-                            "writer_output": writer_output.model_dump(mode="json"),
-                            "book_state_review": book_state_verdict.model_dump(mode="json"),
-                            "v4_gate_verdict": gate_verdict.model_dump(mode="json"),
-                        },
-                    )
-                self._record_decision_event(
-                    updater=updater,
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    event_family="runtime_observation",
-                    event_type=DecisionEventType.CANON_COMMIT_FAILED,
-                    scope="chapter",
-                    summary=f"第{chapter_number}章 BookState review gate 阻止 canon 写入。",
                     payload={
-                        "book_state_review_issues": [
-                            issue.model_dump(mode="json") for issue in book_state_verdict.issues
-                        ],
+                        "reason": "book-state-direct-extraction-blocked",
+                        "chapter_number": chapter_number,
+                        "writer_output": writer_output.model_dump(mode="json"),
+                        "review_verdict": verdict.model_dump(mode="json"),
+                        "book_state_extraction": extraction.model_dump(mode="json"),
+                        "v4_retrieval_packs": retrieval_pack_payload,
                     },
                 )
-                return frozen_path or "book-state-review-gate-blocked"
             self._record_decision_event(
                 updater=updater,
                 project_id=project_id,
                 chapter_number=chapter_number,
                 event_family="runtime_observation",
-                event_type=DecisionEventType.BOOK_STATE_REVIEW_SUCCEEDED,
+                event_type=DecisionEventType.CANON_COMMIT_FAILED,
                 scope="chapter",
-                summary=f"第{chapter_number}章 BookState review gate 通过。",
+                summary=f"第{chapter_number}章 BookState direct extraction 阻止 canon 写入。",
+                payload={
+                    "book_state_extraction_issues": [
+                        issue.model_dump(mode="json") for issue in extraction.issues
+                    ],
+                    "extraction_path": "book_state_direct",
+                },
+            )
+            return frozen_path or "book-state-direct-extraction-blocked"
+
+        book_state_changes = extraction.changes
+        if not book_state_changes.graph_deltas:
+            return None
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.BOOK_STATE_REVIEW_STARTED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 BookState review gate 开始。",
+            payload=audit_payload(
+                stage="book_state_review",
+                status="started",
+                operation_id=self._audit_operation_id(),
+                graph_delta_count=len(book_state_changes.graph_deltas),
+                extraction_path="book_state_direct",
+            ),
+        )
+        commit_service = BookStateDirectCommitService(session)
+        book_state_verdict = commit_service.review(book_state_changes)
+        if not book_state_verdict.accepted or book_state_verdict.approved_changes is None:
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.BOOK_STATE_REVIEW_FAILED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 BookState review gate 未通过。",
                 payload=audit_payload(
                     stage="book_state_review",
-                    status="succeeded",
+                    status="failed",
                     operation_id=self._audit_operation_id(),
                     issue_count=len(book_state_verdict.issues),
+                    issues=[issue.model_dump(mode="json") for issue in book_state_verdict.issues],
+                    extraction_path="book_state_direct",
                 ),
             )
-
-            nested = session.begin_nested()
-            try:
-                self._record_decision_event(
-                    updater=updater,
+            frozen_path = ""
+            if self.config.freeze_failed_candidates:
+                frozen_path = self.artifact_store.save_frozen_candidate(
                     project_id=project_id,
                     chapter_number=chapter_number,
-                    event_family="runtime_observation",
-                    event_type=DecisionEventType.BOOK_STATE_COMPILE_STARTED,
-                    scope="chapter",
-                    summary=f"第{chapter_number}章 BookState compile 开始。",
-                    payload=audit_payload(
-                        stage="book_state_compile",
-                        status="started",
-                        operation_id=self._audit_operation_id(),
-                        graph_delta_count=len(book_state_verdict.approved_changes.graph_deltas),
-                    ),
-                )
-                book_state_result = BookStateCompiler(session).compile(
-                    book_state_verdict.approved_changes,
-                    compiler_run_id=f"book_state_compile_{project_id}_{chapter_number}",
-                )
-                self._record_decision_event(
-                    updater=updater,
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    event_family="runtime_observation",
-                    event_type=(
-                        DecisionEventType.BOOK_STATE_COMPILE_SUCCEEDED
-                        if book_state_result.committed
-                        else DecisionEventType.BOOK_STATE_COMPILE_FAILED
-                    ),
-                    scope="chapter",
-                    summary=(
-                        f"第{chapter_number}章 BookState compile 完成。"
-                        if book_state_result.committed
-                        else f"第{chapter_number}章 BookState compile 未提交。"
-                    ),
-                    payload=audit_payload(
-                        stage="book_state_compile",
-                        status="succeeded" if book_state_result.committed else "failed",
-                        operation_id=self._audit_operation_id(),
-                        result=book_state_result.model_dump(mode="json"),
-                    ),
-                )
-                if not book_state_result.committed:
-                    nested.rollback()
-                else:
-                    nested.commit()
-            except Exception as exc:
-                nested.rollback()
-                self._record_decision_event(
-                    updater=updater,
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    event_family="runtime_observation",
-                    event_type=DecisionEventType.BOOK_STATE_COMPILE_FAILED,
-                    scope="chapter",
-                    summary=f"第{chapter_number}章 BookState compile 异常失败。",
-                    reason=str(exc),
-                    payload=event_error_payload(
-                        exc,
-                        stage="book_state_compile",
-                        operation_id=self._audit_operation_id(),
-                    ),
-                )
-                raise
-            if book_state_result is None or not book_state_result.committed:
-                frozen_path = ""
-                if self.config.freeze_failed_candidates:
-                    frozen_path = self.artifact_store.save_frozen_candidate(
-                        project_id=project_id,
-                        chapter_number=chapter_number,
-                        payload={
-                            "reason": "book-state-compile-blocked",
-                            "chapter_number": chapter_number,
-                            "writer_output": writer_output.model_dump(mode="json"),
-                            "book_state_review": book_state_verdict.model_dump(mode="json"),
-                            "book_state_result": (
-                                book_state_result.model_dump(mode="json") if book_state_result else None
-                            ),
-                            "v4_gate_verdict": gate_verdict.model_dump(mode="json"),
-                        },
-                    )
-                self._record_decision_event(
-                    updater=updater,
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    event_family="runtime_observation",
-                    event_type=DecisionEventType.CANON_COMMIT_FAILED,
-                    scope="chapter",
-                    summary=f"第{chapter_number}章 BookState compile 阻止 canon 写入。",
                     payload={
-                        "book_state_blocked_reasons": (
-                            list(book_state_result.blocked_reasons) if book_state_result else []
-                        ),
+                        "reason": "book-state-review-gate-blocked",
+                        "chapter_number": chapter_number,
+                        "writer_output": writer_output.model_dump(mode="json"),
+                        "book_state_review": book_state_verdict.model_dump(mode="json"),
+                        "book_state_extraction": extraction.model_dump(mode="json"),
                     },
                 )
-                return frozen_path or "book-state-compile-blocked"
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.CANON_COMMIT_FAILED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 BookState review gate 阻止 canon 写入。",
+                payload={
+                    "book_state_review_issues": [
+                        issue.model_dump(mode="json") for issue in book_state_verdict.issues
+                    ],
+                },
+            )
+            return frozen_path or "book-state-review-gate-blocked"
 
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.BOOK_STATE_REVIEW_SUCCEEDED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 BookState review gate 通过。",
+            payload=audit_payload(
+                stage="book_state_review",
+                status="succeeded",
+                operation_id=self._audit_operation_id(),
+                issue_count=len(book_state_verdict.issues),
+                extraction_path="book_state_direct",
+            ),
+        )
+
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.BOOK_STATE_COMPILE_STARTED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 BookState compile 开始。",
+            payload=audit_payload(
+                stage="book_state_compile",
+                status="started",
+                operation_id=self._audit_operation_id(),
+                graph_delta_count=len(book_state_verdict.approved_changes.graph_deltas),
+                extraction_path="book_state_direct",
+            ),
+        )
+        try:
+            book_state_result = commit_service.compile_approved(
+                book_state_verdict.approved_changes,
+                compiler_run_id=f"book_state_compile_{project_id}_{chapter_number}",
+            )
+        except Exception as exc:
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.BOOK_STATE_COMPILE_FAILED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 BookState compile 异常失败。",
+                reason=str(exc),
+                payload=event_error_payload(
+                    exc,
+                    stage="book_state_compile",
+                    operation_id=self._audit_operation_id(),
+                ),
+            )
+            raise
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=(
+                DecisionEventType.BOOK_STATE_COMPILE_SUCCEEDED
+                if book_state_result.committed
+                else DecisionEventType.BOOK_STATE_COMPILE_FAILED
+            ),
+            scope="chapter",
+            summary=(
+                f"第{chapter_number}章 BookState compile 完成。"
+                if book_state_result.committed
+                else f"第{chapter_number}章 BookState compile 未提交。"
+            ),
+            payload=audit_payload(
+                stage="book_state_compile",
+                status="succeeded" if book_state_result.committed else "failed",
+                operation_id=self._audit_operation_id(),
+                result=book_state_result.model_dump(mode="json"),
+                extraction_path="book_state_direct",
+            ),
+        )
+        if not book_state_result.committed:
+            frozen_path = ""
+            if self.config.freeze_failed_candidates:
+                frozen_path = self.artifact_store.save_frozen_candidate(
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    payload={
+                        "reason": "book-state-compile-blocked",
+                        "chapter_number": chapter_number,
+                        "writer_output": writer_output.model_dump(mode="json"),
+                        "book_state_review": book_state_verdict.model_dump(mode="json"),
+                        "book_state_result": book_state_result.model_dump(mode="json"),
+                        "book_state_extraction": extraction.model_dump(mode="json"),
+                    },
+                )
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.CANON_COMMIT_FAILED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 BookState compile 阻止 canon 写入。",
+                payload={"book_state_blocked_reasons": list(book_state_result.blocked_reasons)},
+            )
+            return frozen_path or "book-state-compile-blocked"
+
+        if self.config.world_v4_compat_write_enabled and gate_verdict is not None:
             legacy_nested = session.begin_nested()
             try:
                 compiler_result = WorldModelCompilerV4(session).compile_gate_verdict(
@@ -5127,119 +5155,27 @@ class WritingOrchestrator:
                         operation_id=self._audit_operation_id(),
                     ),
                 )
-            projection_refresh = KnowledgeProjectionRefresher(
-                session,
-                qdrant_url=self.config.qdrant_url,
-                qdrant_collection=self.config.llm_kb_qdrant_collection,
-            ).refresh(
-                project_id,
-                as_of_chapter=chapter_number,
-                trigger="chapter_accepted",
-            )
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                chapter_number=chapter_number,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.KNOWLEDGE_PROJECTION_REFRESHED,
-                scope="chapter",
-                summary=f"第{chapter_number}章 BookState projection refresh 完成。",
-                payload=projection_refresh.as_dict(),
-            )
-            return None
-        else:
-            compiler_result = WorldModelCompilerV4(session).compile_gate_verdict(
-                project_id=project_id,
-                chapter_number=chapter_number,
-                verdict=gate_verdict,
-                compiler_run_id=f"compile_{project_id}_{chapter_number}",
-                retrieval_pack_payload=retrieval_pack_payload,
-            )
-        if compiler_result is not None and compiler_result.committed and (
-            book_state_result is None
-            or not book_state_result.committed
-        ):
-            frozen_path = ""
-            if self.config.freeze_failed_candidates:
-                frozen_path = self.artifact_store.save_frozen_candidate(
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    payload={
-                        "reason": "book-state-review-gate-blocked",
-                        "chapter_number": chapter_number,
-                        "writer_output": writer_output.model_dump(mode="json"),
-                        "book_state_review": book_state_verdict.model_dump(mode="json") if book_state_verdict else None,
-                        "book_state_result": book_state_result.model_dump(mode="json") if book_state_result else None,
-                        "v4_compiler_result": compiler_result.model_dump(mode="json"),
-                    },
-                )
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                chapter_number=chapter_number,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.CANON_COMMIT_FAILED,
-                scope="chapter",
-                summary=f"第{chapter_number}章 BookState review gate 阻止 canon 写入。",
-                payload={
-                    "book_state_review_issues": [
-                        issue.model_dump(mode="json")
-                        for issue in (book_state_verdict.issues if book_state_verdict else [])
-                    ],
-                    "book_state_blocked_reasons": list(book_state_result.blocked_reasons) if book_state_result else [],
-                },
-            )
-            return frozen_path or "book-state-review-gate-blocked"
-        if compiler_result is not None and compiler_result.committed:
-            projection_refresh = KnowledgeProjectionRefresher(
-                session,
-                qdrant_url=self.config.qdrant_url,
-                qdrant_collection=self.config.llm_kb_qdrant_collection,
-            ).refresh(
-                project_id,
-                as_of_chapter=chapter_number,
-                trigger="chapter_accepted",
-            )
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                chapter_number=chapter_number,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.KNOWLEDGE_PROJECTION_REFRESHED,
-                scope="chapter",
-                summary=f"第{chapter_number}章 BookState projection refresh 完成。",
-                payload=projection_refresh.as_dict(),
-            )
-            return None
 
-        frozen_path = ""
-        if self.config.freeze_failed_candidates:
-            frozen_path = self.artifact_store.save_frozen_candidate(
-                project_id=project_id,
-                chapter_number=chapter_number,
-                payload={
-                    "reason": "v4-review-gate-blocked",
-                    "chapter_number": chapter_number,
-                    "writer_output": writer_output.model_dump(mode="json"),
-                    "review_verdict": verdict.model_dump(mode="json"),
-                    "v4_review_issues": [
-                        issue.model_dump(mode="json") for issue in gate_verdict.issues
-                    ],
-                    "v4_retrieval_packs": retrieval_pack_payload,
-                    "compiler_result": compiler_result.model_dump(mode="json"),
-                },
-            )
+        projection_refresh = KnowledgeProjectionRefresher(
+            session,
+            qdrant_url=self.config.qdrant_url,
+            qdrant_collection=self.config.llm_kb_qdrant_collection,
+        ).refresh(
+            project_id,
+            as_of_chapter=chapter_number,
+            trigger="chapter_accepted",
+        )
         self._record_decision_event(
             updater=updater,
             project_id=project_id,
             chapter_number=chapter_number,
             event_family="runtime_observation",
-            event_type=DecisionEventType.CANON_COMMIT_FAILED,
+            event_type=DecisionEventType.KNOWLEDGE_PROJECTION_REFRESHED,
             scope="chapter",
-            summary=f"第{chapter_number}章 v4 review gate 阻止 canon 写入。",
-            payload={"blocked_reasons": list(compiler_result.blocked_reasons)},
+            summary=f"第{chapter_number}章 BookState projection refresh 完成。",
+            payload=projection_refresh.as_dict(),
         )
-        return frozen_path or "v4-review-gate-blocked"
+        return None
 
     @staticmethod
     def _filter_resolvable_events(
@@ -5642,7 +5578,7 @@ class WritingOrchestrator:
                 event_family="runtime_observation",
                 event_type=DecisionEventType.WORLD_MODEL_COMPILE_FAILED,
                 scope="chapter",
-                summary=f"第{chapter_number}章 WorldModel compile 失败，运行将暂停。",
+                summary=f"第{chapter_number}章 legacy WorldModel projection 失败，BookState canon 已保留。",
                 reason=str(exc),
                 payload=event_error_payload(
                     exc,
@@ -5665,7 +5601,7 @@ class WritingOrchestrator:
                     operation_id=self._audit_operation_id(),
                 ),
             )
-            return False
+            return True
         self._record_decision_event(
             updater=updater,
             project_id=project_id,

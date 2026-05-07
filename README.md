@@ -133,4 +133,4 @@ Backups include a `pg_dump` custom-format database dump, runtime settings, local
 ## Notes
 
 - The project is optimized for Chinese-language long-form fiction workflows, but the codebase is broadly interesting as an example of stateful AI orchestration with publishing controls.
-- The `Design-docs/` directory is worth reading if you want the higher-level product and architecture context behind the modules.
+- Start with `Design-docs/CURRENT_ARCHITECTURE.md` for the current architecture contract and `Design-docs/DESIGN_STATUS.md` for design document status. Older V2/V3/V4 side-by-side plans remain useful history, but BookState DB Canon and Scheme C BookMap are the current source-of-truth baseline.

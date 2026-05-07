@@ -15,9 +15,9 @@ from forwin.protocol.world_v4 import (
     WorldCompileRequest,
     WorldCompileResult,
 )
-from forwin.reviewer_v4.types import V4ReviewGateVerdict
-from forwin.world_model_v4.projection import WorldModelProjection
-from forwin.world_model_v4.repository import WorldModelRepository
+from forwin.world_v4_review_gate.types import V4ReviewGateVerdict
+from forwin.world_v4_compat.projection import WorldModelProjection
+from forwin.world_v4_compat.repository import WorldModelRepository
 
 
 def _dump(value: object) -> str:
@@ -29,7 +29,7 @@ def _dump(value: object) -> str:
 
 
 class WorldModelCompiler:
-    """The sole v4 canon writer."""
+    """Write world_v4 compatibility projection rows after BookState canon succeeds."""
 
     def __init__(self, session: Session) -> None:
         self.session = session

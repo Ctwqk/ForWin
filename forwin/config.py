@@ -280,6 +280,9 @@ def _env_values() -> dict[str, object]:
         "legacy_provisional_blocking": _env_bool(
             env, "FORWIN_LEGACY_PROVISIONAL_BLOCKING", False
         ),
+        "world_v4_compat_write_enabled": _env_bool(
+            env, "FORWIN_WORLD_V4_COMPAT_WRITE", True
+        ),
         "skill_runtime_enabled": _env_bool(
             env, "FORWIN_SKILL_RUNTIME_ENABLED", True
         ),
@@ -390,6 +393,7 @@ class _ConfigFields:
     manual_checkpoints_enabled: bool = True
     future_constraints_enabled: bool = True
     legacy_provisional_blocking: bool = False
+    world_v4_compat_write_enabled: bool = True
     skill_runtime_enabled: bool = True
     skill_registry_path: str = "forwin_skills"
     skill_strictness: str = "normal"

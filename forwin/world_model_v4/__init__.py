@@ -1,3 +1,5 @@
+"""COMPATIBILITY world_v4 projection and migration bridge; final canon belongs to book_state."""
+
 from __future__ import annotations
 
 from .projection import WorldModelProjection

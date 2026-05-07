@@ -1,3 +1,5 @@
+"""CANON Scheme C BookMap runtime: SubWorld -> Region -> MapNode -> MapEdge."""
+
 from __future__ import annotations
 
 from typing import Any

@@ -1,5 +1,7 @@
 # ForWin 4.0 World Model Implementation Plan
 
+> Status: historical implementation plan. This document explains why `world_model_v4` and `reviewer_v4` were created side-by-side. Current architecture is `BookState DB Canon + BookMap / Scheme C`; see `Design-docs/CURRENT_ARCHITECTURE.md` and `Design-docs/DESIGN_STATUS.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build ForWin 4.0 as a multi-layer information-asymmetry world model system while allowing unfinished 3.0 work to continue in parallel.

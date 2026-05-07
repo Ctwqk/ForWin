@@ -15,7 +15,7 @@ from forwin.protocol.world_v4 import (
     WorldCompileResult,
     WorldDelta,
 )
-from forwin.world_model_v4.compiler import WorldModelCompiler
+from forwin.world_v4_compat.compiler import WorldModelCompiler
 
 
 class ProjectionLayer(str, Enum):
@@ -35,8 +35,8 @@ class WorldProjectionSnapshot(BaseModel):
 class WorldModelProvisionalStore:
     """Shadow-layer storage for planned/provisional v4 deltas.
 
-    This store never writes actual canon. Promotion delegates to
-    `WorldModelCompiler`, preserving the compiler as the only canon writer.
+    This store never writes final BookState canon. Promotion delegates to the
+    world_v4 compatibility compiler, which can only write compatibility rows.
     """
 
     def __init__(self, session: Session) -> None:
@@ -52,7 +52,7 @@ class WorldModelProvisionalStore:
         metadata: dict[str, object] | None = None,
     ) -> WorldProjectionDeltaRow:
         if layer == ProjectionLayer.ACTUAL_STATE:
-            raise ValueError("actual_state deltas must be written by WorldModelCompiler")
+            raise ValueError("actual_state deltas must be written through the world_v4 compatibility compiler")
         world_delta = world_delta.model_copy(update={"project_id": project_id})
         row = WorldProjectionDeltaRow(
             project_id=project_id,

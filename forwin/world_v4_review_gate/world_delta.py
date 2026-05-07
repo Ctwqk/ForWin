@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent
 from forwin.protocol.world_v4 import ExtractedWorldChangeSet
-from forwin.reviewer_v4.types import V4ReviewIssue
+from forwin.world_v4_review_gate.types import V4ReviewIssue
 
 
 def _source_type_value(source_type) -> str:

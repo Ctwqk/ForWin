@@ -3,11 +3,11 @@ from __future__ import annotations
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent
 from forwin.protocol.review import RepairInstruction
 from forwin.protocol.world_v4 import ApprovedWorldChangeSet, ExtractedWorldChangeSet
-from forwin.reviewer_v4.cognitive import CognitiveConsistencyReviewer
-from forwin.reviewer_v4.reader_cognition import ReaderCognitionReviewer
-from forwin.reviewer_v4.reveal import RevealReviewer
-from forwin.reviewer_v4.types import V4ReviewGateVerdict, V4ReviewIssue
-from forwin.reviewer_v4.world_delta import WorldDeltaReviewer
+from forwin.world_v4_review_gate.cognitive import CognitiveConsistencyReviewer
+from forwin.world_v4_review_gate.reader_cognition import ReaderCognitionReviewer
+from forwin.world_v4_review_gate.reveal import RevealReviewer
+from forwin.world_v4_review_gate.types import V4ReviewGateVerdict, V4ReviewIssue
+from forwin.world_v4_review_gate.world_delta import WorldDeltaReviewer
 
 
 class V4ReviewGate:

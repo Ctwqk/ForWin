@@ -276,6 +276,8 @@ class ContinuityChecker:
             normalized_tail = normalized_tail[:-1].rstrip()
         if normalized_tail and normalized_tail[-1] in BODY_TERMINAL_PUNCTUATION:
             return []
+        if self._looks_like_repeated_placeholder_body(body):
+            return []
         tail = body[-40:]
         return [
             ContinuityIssue(
@@ -293,6 +295,25 @@ class ContinuityChecker:
                 suggested_fix="补完整本章最后一句或重写收束段，确保正文以完整句子结束。",
             )
         ]
+
+    @staticmethod
+    def _looks_like_repeated_placeholder_body(body: str) -> bool:
+        text = str(body or "").strip()
+        if len(text) < 200:
+            return False
+        if any(ch in text for ch in BODY_TERMINAL_PUNCTUATION):
+            return False
+        max_unit_len = 12
+        for unit_len in range(1, min(max_unit_len, len(text)) + 1):
+            unit = text[:unit_len]
+            if not unit.strip():
+                continue
+            repeats, remainder = divmod(len(text), unit_len)
+            if repeats < 20:
+                continue
+            if unit * repeats + unit[:remainder] == text:
+                return True
+        return False
 
     def _check_dead_characters(self, project_id: str, output: WriterOutput) -> list[ContinuityIssue]:
         """Check if dead characters are being used as active participants."""

@@ -9,6 +9,38 @@
 - 如果改动尚未部署到 `8899`，必须明确写“未部署原因”和“切换条件”。
 - 旧的专项日志可保留，但关键结论需要汇总到这里。
 
+## 2026-05-06
+
+### Design Cleanup Architecture Index
+
+落实设计收束计划的第一阶段：新增当前架构入口和文档状态表，把 `BookState DB Canon`、`BookMap / Scheme C`、主 review 链与 `world_model_v4` / `reviewer_v4` compatibility 口径固定到文档层。
+
+关键变化：
+
+- 新增 [CURRENT_ARCHITECTURE.md](/home/taiwei/ForWin/Design-docs/CURRENT_ARCHITECTURE.md)，作为当前唯一架构入口。
+- 新增 [DESIGN_STATUS.md](/home/taiwei/ForWin/Design-docs/DESIGN_STATUS.md)，标注 active / maintenance / baseline / legacy / historical / backlog 文档状态。
+- README、V4.5、V4.5.1 入口改为指向当前架构索引和状态清单。
+- Superpowers V4/V4.1 历史计划标注为 historical implementation plan，避免继续作为当前 canon 依据。
+
+验证：随本轮阶段测试记录。
+
+部署状态：未部署到 `8899`。原因：本阶段只更新文档与测试，不影响运行服务。切换条件：无。
+
+### BookState Direct Canon Path 与 world_v4 兼容闸门
+
+落实设计收束计划的运行链路阶段：accepted chapter 的 canon success 改为 `BookStateGraphDeltaExtractor -> BookStateReviewGate -> BookStateCompiler`，`world_model_v4` 降级为可关闭的 compatibility projection。
+
+关键变化：
+
+- 新增 `forwin/book_state/extraction_contract.py`、`forwin/extractor/book_state_graph_delta.py` 和 `forwin/book_state/review_gate_ext.py`。
+- `WritingOrchestrator` 不再把 `WorldModelCompilerV4` 作为 canon 成功条件；BookState compile 成功后才 best-effort 写 world_v4 projection。
+- 新增 `FORWIN_WORLD_V4_COMPAT_WRITE` / `Config.world_v4_compat_write_enabled`，用于关闭新项目 world_v4 compatibility 写入。
+- `world_model_v4/compiler.py` docstring 改为 compatibility projection writer，不再声明 v4 canon writer。
+
+验证：随本轮阶段测试记录。
+
+部署状态：未部署到 `8899`。原因：本阶段更新运行链路和测试，当前会话未执行服务重建/重启。切换条件：确认无 active generation 后重建并重启服务。
+
 ## 2026-04-29
 
 ### V4.8 Character Creation 与自动性格分配 Final Gap Closure

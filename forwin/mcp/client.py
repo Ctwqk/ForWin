@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -25,6 +25,8 @@ from .models import (
     WorldModelPageView,
     WorldModelSnapshotView,
 )
+
+BandCheckpointApprovalStatus = Literal["pass", "overridden"]
 
 
 class ForWinAPIClient:
@@ -295,7 +297,7 @@ class ForWinAPIClient:
         project_id: str,
         band_id: str,
         reason: str,
-        status: str = "overridden",
+        status: BandCheckpointApprovalStatus = "overridden",
     ) -> BandCheckpointView:
         normalized_band_id = str(band_id or "").strip()
         if not normalized_band_id:
@@ -304,6 +306,8 @@ class ForWinAPIClient:
         if not normalized_reason:
             raise ValueError("reason is required")
         normalized_status = str(status or "overridden").strip() or "overridden"
+        if normalized_status not in {"pass", "overridden"}:
+            raise ValueError("status must be 'pass' or 'overridden'")
         payload = await self._request_json(
             "POST",
             f"/api/projects/{project_id}/bands/{normalized_band_id}/checkpoint/approve",

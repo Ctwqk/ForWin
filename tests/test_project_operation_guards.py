@@ -15,6 +15,7 @@ from forwin.api_schemas import (
     ChapterReviewRetryRequest,
     GenerateRequest,
     ProjectBulkDeleteRequest,
+    ProjectContinueGenerationRequest,
     ProjectCreateRequest,
     ProjectGovernanceUpdateRequest,
 )
@@ -626,6 +627,57 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 409)
         self.assertIn("章节等待接受", str(ctx.exception.detail))
         self.assertIn("2", str(ctx.exception.detail))
+
+    def test_continue_generation_task_requested_chapters_honors_max_chapters(self) -> None:
+        project = self._create_project(project_id="proj-continue-sized-task")
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "writing"
+            arc = ArcPlanVersion(
+                id="arc-continue-sized-task",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+            )
+            session.add(arc)
+            session.flush()
+            for chapter_number in range(1, 37):
+                session.add(
+                    ChapterPlan(
+                        id=f"plan-continue-sized-{chapter_number}",
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=chapter_number,
+                        title=f"第{chapter_number}章",
+                        status="accepted" if chapter_number <= 30 else "planned",
+                    )
+                )
+            session.commit()
+
+        captured: dict[str, object] = {}
+
+        def capture_task_creation(**kwargs):
+            captured.update(kwargs)
+            task_id = "task-continue-sized"
+            task = api_module._create_task_record(
+                title=str(kwargs.get("title") or ""),
+                subtitle=str(kwargs.get("subtitle") or ""),
+                message=str(kwargs.get("message") or ""),
+                requested_chapters=int(kwargs.get("requested_chapters") or 0),
+            )
+            task["project_id"] = project.id
+            api_module._persist_generation_task(task_id, task)
+            return task_id
+
+        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+            response = api_module.continue_project_generation(
+                project.id,
+                ProjectContinueGenerationRequest(max_chapters=2),
+            )
+
+        self.assertEqual(response.requested_chapters, 2)
+        self.assertEqual(captured["requested_chapters"], 2)
+        self.assertEqual(captured["max_chapters"], 2)
 
     def test_generation_control_drafted_chapter_blocks_future_arc_resume(self) -> None:
         project = self._create_project(project_id="proj-drafted-future-arc")

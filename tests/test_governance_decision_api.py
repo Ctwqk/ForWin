@@ -6,6 +6,7 @@ from tempfile import TemporaryDirectory
 
 import forwin.api as api_module
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from forwin.config import Config
 from forwin.governance import (
@@ -41,6 +42,13 @@ class GovernanceDecisionApiTests(unittest.TestCase):
         api_module._engine = get_engine(db_path)
         init_db(api_module._engine)
         api_module._SessionFactory = get_session_factory(api_module._engine)
+
+    def test_band_checkpoint_approve_request_rejects_unknown_status(self) -> None:
+        with self.assertRaises(ValidationError):
+            api_module.BandCheckpointApproveRequest(
+                status="approved",
+                reason="operator typo should not persist an invalid checkpoint status",
+            )
 
     def test_chapter_review_and_band_checkpoint_expose_decision_refs_and_replay(self) -> None:
         with TemporaryDirectory() as tmp:

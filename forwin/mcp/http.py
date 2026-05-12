@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Callable
+from typing import Callable, Literal
 
 import uvicorn
 from fastmcp import FastMCP
@@ -249,7 +249,7 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
         project_id: str,
         band_id: str,
         reason: str,
-        status: str = "overridden",
+        status: Literal["pass", "overridden"] = "overridden",
     ) -> BandCheckpointView:
         return await client.band_checkpoint_approve(
             project_id=project_id,

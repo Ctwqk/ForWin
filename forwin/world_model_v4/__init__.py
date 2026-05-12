@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from .projection import WorldModelProjection
-from .repository import WorldModelRepository
-from .compiler import WorldModelCompiler
+from forwin.world_v4_compat import WorldModelCompiler, WorldModelProjection, WorldModelRepository
 
 __all__ = ["WorldModelCompiler", "WorldModelProjection", "WorldModelRepository"]

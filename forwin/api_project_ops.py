@@ -1084,10 +1084,15 @@ def continue_project_generation(
             session.commit()
             raise HTTPException(409, project_detail.blocking_reason.message)
         max_chapters = req.max_chapters if req is not None else None
+        requested_chapters = len(remaining)
+        if max_chapters is not None:
+            max_chapters = max(1, int(max_chapters or 1))
+            requested_chapters = min(requested_chapters or max_chapters, max_chapters)
+        requested_chapters = max(1, int(requested_chapters or 0))
         task_id = create_continue_generation_task(
             project_id=project_id,
             runtime_config=runtime_config,
-            requested_chapters=max(len(remaining), len(plans), 1),
+            requested_chapters=requested_chapters,
             max_chapters=max_chapters,
             title=project.title,
             subtitle=f"继续生成 · {project.genre}",

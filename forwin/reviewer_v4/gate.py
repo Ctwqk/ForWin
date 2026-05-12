@@ -1,5 +1,3 @@
-"""COMPATIBILITY world_v4 extraction review gate; not the main chapter reviewer."""
-
 from __future__ import annotations
 
 from forwin.world_v4_review_gate import V4ReviewGate, V4ReviewGateVerdict, V4ReviewIssue

@@ -14,10 +14,15 @@ class WorldStudioFrontendTests(unittest.TestCase):
 
         self.assertIn('aria-label="ForWin primary navigation"', app_source)
         self.assertIn('href="/"', app_source)
-        self.assertIn('创作台', app_source)
-        self.assertIn('World Studio', app_source)
-        self.assertIn("studio-nav", app_source)
-        self.assertIn(".studio-nav", css_source)
+        self.assertIn('书本', app_source)
+        self.assertIn('任务', app_source)
+        self.assertIn('世界档案', app_source)
+        self.assertIn('发布', app_source)
+        self.assertIn('配置', app_source)
+        self.assertIn("main-menu", app_source)
+        self.assertIn(".main-menu", css_source)
+        self.assertNotIn("studio-nav", app_source)
+        self.assertNotIn(".studio-nav", css_source)
 
     def test_world_studio_exposes_personality_loadout_editor(self) -> None:
         app_source = (REPO_ROOT / "frontend/world-studio/src/App.tsx").read_text(encoding="utf-8")

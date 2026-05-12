@@ -390,14 +390,15 @@
         return;
       }
       platformsState.forEach((item) => {
+        const loggedIn = item.connected && !['login-required', 'platform-login-required'].includes(String(item.last_error || '').trim());
         const card = createNode('article', '', 'list-item');
         const top = createNode('div', '', 'list-top');
         const titleWrap = document.createElement('div');
         titleWrap.appendChild(createNode('strong', item.display_name));
-        titleWrap.appendChild(createNode('div', `登录状态：${item.connected ? '已登录' : '未登录'} | 扩展：${item.extension_online ? '在线' : '离线'}`, 'meta-line'));
+        titleWrap.appendChild(createNode('div', `登录状态：${loggedIn ? '已登录' : '未登录'} | 扩展：${item.extension_online ? '在线' : '离线'}`, 'meta-line'));
         top.appendChild(titleWrap);
         const badges = createNode('div', '', 'badge-row');
-        badges.appendChild(createNode('span', item.connected ? '已登录' : '待登录', `badge ${item.connected ? 'ok' : 'warn'}`));
+        badges.appendChild(createNode('span', loggedIn ? '已登录' : '待登录', `badge ${loggedIn ? 'ok' : 'warn'}`));
         badges.appendChild(createNode('span', item.extension_online ? '扩展在线' : '扩展离线', `badge ${item.extension_online ? 'ok' : 'warn'}`));
         top.appendChild(badges);
         card.appendChild(top);
@@ -405,7 +406,7 @@
         card.appendChild(createNode('div', `最近心跳：${item.last_heartbeat_at || '无'}`, 'meta-line'));
         if (item.last_error) card.appendChild(createNode('div', `最近错误：${item.last_error}`, 'meta-line'));
         const actions = createNode('div', '', 'action-row');
-        actions.appendChild(createButton(item.connected ? '重新登录' : '登录', () => connectPlatform(item.platform_id), 'secondary'));
+        actions.appendChild(createButton(loggedIn ? '重新登录' : '登录', () => connectPlatform(item.platform_id), 'secondary'));
         actions.appendChild(createButton('打开官网', () => window.open(item.login_url, '_blank', 'noopener,noreferrer'), 'ghost'));
         card.appendChild(actions);
         list.appendChild(card);

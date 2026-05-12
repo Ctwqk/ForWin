@@ -14,7 +14,7 @@ VIEWPORTS = [
 
 
 @pytest.mark.parametrize("label,viewport", VIEWPORTS)
-@pytest.mark.parametrize("path,marker", [("/", "ForWin Workspace"), ("/publishers", "平台发布管理"), ("/world-studio", "World Studio")])
+@pytest.mark.parametrize("path,marker", [("/", "ForWin Workspace"), ("/publishers", "平台发布管理"), ("/world-studio", "世界档案")])
 def test_primary_pages_render_without_console_errors_or_horizontal_overflow(
     browser,
     browser_test_base_url: str,
@@ -29,6 +29,11 @@ def test_primary_pages_render_without_console_errors_or_horizontal_overflow(
     backend.install(page)
     page.goto(f"{browser_test_base_url}{path}", wait_until="domcontentloaded")
     expect(page.get_by_text(marker).first).to_be_visible()
+    expect(page.get_by_role("navigation", name="ForWin primary navigation")).to_contain_text("书本")
+    expect(page.get_by_role("navigation", name="ForWin primary navigation")).to_contain_text("任务")
+    expect(page.get_by_role("navigation", name="ForWin primary navigation")).to_contain_text("世界档案")
+    expect(page.get_by_role("navigation", name="ForWin primary navigation")).to_contain_text("发布")
+    expect(page.get_by_role("navigation", name="ForWin primary navigation")).to_contain_text("配置")
     page.wait_for_timeout(250)
     overflow = page.evaluate(
         """

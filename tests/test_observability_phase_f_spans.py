@@ -293,3 +293,9 @@ def test_sqlalchemy_probe_records_db_metrics_on_active_span() -> None:
         assert "SELECT 1" in tags["db.slowest_query_preview"]
     finally:
         engine.dispose()
+
+
+def test_db_probe_is_enabled_by_default_for_runtime_configs() -> None:
+    config = Config(database_url=postgres_test_url("phase-f-db-probe-default"), minimax_api_key="")
+
+    assert config.observability_record_db_spans is True

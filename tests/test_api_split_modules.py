@@ -48,6 +48,7 @@ class ApiSplitModuleTests(unittest.TestCase):
                 publisher_ops,
                 (
                     "download_publisher_extension_package",
+                    "download_publisher_firefox_extension_package",
                     "create_publisher_upload_job",
                     "publisher_extension_heartbeat",
                 ),

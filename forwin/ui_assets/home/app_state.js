@@ -1030,17 +1030,14 @@
     }
 
     function switchTab(tab) {
-      currentHomeTab = ['book', 'task', 'world_v4', 'config'].includes(tab) ? tab : 'book';
+      currentHomeTab = ['book', 'task', 'config'].includes(tab) ? tab : 'book';
       const bookActive = currentHomeTab === 'book';
       const taskActive = currentHomeTab === 'task';
-      const worldV4Active = currentHomeTab === 'world_v4';
       document.getElementById('tab_book').classList.toggle('active', bookActive);
       document.getElementById('tab_task').classList.toggle('active', taskActive);
-      document.getElementById('tab_world_v4').classList.toggle('active', worldV4Active);
       document.getElementById('tab_config').classList.toggle('active', currentHomeTab === 'config');
       document.getElementById('panel_book').classList.toggle('active', bookActive);
       document.getElementById('panel_task').classList.toggle('active', taskActive);
-      document.getElementById('panel_world_v4').classList.toggle('active', worldV4Active);
       document.getElementById('panel_config').classList.toggle('active', currentHomeTab === 'config');
       if (bookActive && booksRefreshPending) {
         booksRefreshPending = false;
@@ -1054,21 +1051,12 @@
       }
     }
 
-    async function loadWorldModelV4Debug(view = 'debug') {
-      const projectId = String(document.getElementById('world_v4_project_id')?.value || '').trim();
-      const output = document.getElementById('world_v4_debug_output');
-      if (!projectId) {
-        if (output) output.textContent = '需要 project_id。';
-        return;
+    function initialHomeTabFromLocation() {
+      const fragment = String(window.location.hash || '').replace(/^#/, '');
+      if (['book', 'task', 'config'].includes(fragment)) {
+        return fragment;
       }
-      const safeView = ['debug', 'lines', 'gaps', 'reveals', 'export'].includes(view) ? view : 'debug';
-      if (output) output.textContent = '加载中...';
-      try {
-        const payload = await requestJson(`/api/projects/${projectId}/world-model/v4/${safeView}`);
-        if (output) output.textContent = JSON.stringify(payload, null, 2);
-      } catch (error) {
-        if (output) output.textContent = error?.message || String(error);
-      }
+      return 'book';
     }
 
     function badgeKindByStatus(status) {

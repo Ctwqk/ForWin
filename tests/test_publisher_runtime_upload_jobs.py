@@ -115,3 +115,104 @@ def test_upload_job_service_available_through_manager_runtime_facade() -> None:
         assert facade["message"] == "番茄小说 上传任务已创建，等待浏览器扩展执行。"
     finally:
         engine.dispose()
+
+
+def test_non_login_upload_failure_requeues_until_codex_intervention() -> None:
+    engine, runtime = _runtime("publisher-runtime-upload-retry")
+    try:
+        codex_calls = []
+
+        def submit_codex_intervention(intervention: dict) -> dict:
+            codex_calls.append(dict(intervention))
+            return {"ok": True, "job_id": "codex-job-1", "status": "queued"}
+
+        runtime.upload_jobs.codex_intervention_handler = submit_codex_intervention
+        created = runtime.upload_jobs.create_upload_job(
+            platform="fanqie",
+            book_name="测试书",
+            chapter_title="第一章",
+            body="正文",
+            upload_url=None,
+            publish=False,
+        )
+
+        first = runtime.upload_jobs.update_upload_job_result(
+            job_id=created["job_id"],
+            client_id="client-1",
+            status="failed",
+            message="上传失败。",
+            current_url="https://fanqienovel.com/main/writer/",
+            error="番茄章节管理页未找到新草稿。",
+            result_payload={"error_code": "publish-not-confirmed"},
+        )
+        second = runtime.upload_jobs.update_upload_job_result(
+            job_id=created["job_id"],
+            client_id="client-1",
+            status="failed",
+            message="上传失败。",
+            current_url="https://fanqienovel.com/main/writer/",
+            error="番茄章节管理页未找到新草稿。",
+            result_payload={"error_code": "publish-not-confirmed"},
+        )
+        third = runtime.upload_jobs.update_upload_job_result(
+            job_id=created["job_id"],
+            client_id="client-1",
+            status="failed",
+            message="上传失败。",
+            current_url="https://fanqienovel.com/main/writer/",
+            error="番茄章节管理页未找到新草稿。",
+            result_payload={"error_code": "publish-not-confirmed"},
+        )
+
+        assert first["status"] == "pending"
+        assert first["deletable"] is False
+        assert first["result_payload"]["auto_retry"]["failure_count"] == 1
+        assert first["result_payload"]["auto_retry"]["next_attempt"] == 2
+        assert second["status"] == "pending"
+        assert second["result_payload"]["auto_retry"]["failure_count"] == 2
+        assert second["result_payload"]["auto_retry"]["next_attempt"] == 3
+        assert third["status"] == "failed"
+        assert third["deletable"] is True
+        assert third["result_payload"]["auto_retry"]["failure_count"] == 3
+        assert third["result_payload"]["auto_retry"]["exhausted"] is True
+        assert third["result_payload"]["codex_intervention_required"] is True
+        prompt = third["result_payload"]["codex_intervention"]["prompt"]
+        assert "ForWin 上传任务需要 Codex 介入" in prompt
+        assert len(codex_calls) == 1
+        assert third["result_payload"]["codex_intervention"]["status"] == "submitted"
+        assert (
+            third["result_payload"]["codex_intervention"]["call"]["job_id"]
+            == "codex-job-1"
+        )
+    finally:
+        engine.dispose()
+
+
+def test_login_upload_failure_does_not_retry() -> None:
+    engine, runtime = _runtime("publisher-runtime-upload-login-failure")
+    try:
+        created = runtime.upload_jobs.create_upload_job(
+            platform="qidian",
+            book_name="测试书",
+            chapter_title="第一章",
+            body="正文",
+            upload_url=None,
+            publish=False,
+        )
+
+        updated = runtime.upload_jobs.update_upload_job_result(
+            job_id=created["job_id"],
+            client_id="client-1",
+            status="failed",
+            message="上传失败。",
+            current_url="https://write.qq.com/portal/login",
+            error="平台当前仍在登录页，请先完成扫码登录。",
+            result_payload={"error_code": "platform-login-required"},
+        )
+
+        assert updated["status"] == "failed"
+        assert updated["result_payload"]["auto_retry"]["failure_count"] == 1
+        assert updated["result_payload"]["auto_retry"]["login_failure"] is True
+        assert updated["result_payload"].get("codex_intervention_required") is not True
+    finally:
+        engine.dispose()

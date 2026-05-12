@@ -30,6 +30,11 @@ def build_handlers(
             extension_root=extension_root,
         )
 
+    def download_publisher_firefox_extension_package():
+        return api_publisher_ops.download_publisher_firefox_extension_package(
+            extension_root=extension_root,
+        )
+
     def list_publisher_platforms():
         return api_publisher_ops.list_publisher_platforms(
             publisher_manager=get_publisher_manager(),
@@ -176,6 +181,7 @@ def build_handlers(
 
     return {
         "download_publisher_extension_package": download_publisher_extension_package,
+        "download_publisher_firefox_extension_package": download_publisher_firefox_extension_package,
         "list_publisher_platforms": list_publisher_platforms,
         "create_publisher_upload_job": create_publisher_upload_job,
         "get_publisher_upload_job": get_publisher_upload_job,

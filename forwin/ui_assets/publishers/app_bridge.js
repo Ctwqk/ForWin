@@ -27,11 +27,11 @@
       const currentOrigin = window.location.origin;
       const lines = [
         '首次安装请手动完成这几步：',
-        '1. 点击页面里的“下载扩展包”，把 zip 下载到你当前这台浏览器所在的电脑。',
-        '2. 解压 zip，得到 forwin-publisher 文件夹。',
-        '3. 打开 chrome://extensions 或 edge://extensions。',
-        '4. 开启“开发者模式”，点击“加载已解压的扩展程序”，选择解压后的 forwin-publisher 文件夹。',
-        '5. 打开扩展卡片的“详情”，进入“扩展程序选项”。',
+        '1. Chrome/Edge 点击“下载扩展包（Chrome/Edge）”；Firefox 点击“下载 Firefox 扩展包”。',
+        '2. Chrome/Edge 解压后得到 forwin-publisher；Firefox 解压后得到 forwin-publisher-firefox。',
+        '3. Chrome/Edge 打开 chrome://extensions 或 edge://extensions，开启开发者模式，加载解压后的 forwin-publisher 文件夹。',
+        '4. Firefox 打开 about:debugging#/runtime/this-firefox，点击“临时载入附加组件”，选择 forwin-publisher-firefox/manifest.json。',
+        '5. 打开扩展的设置/选项页面。',
         `6. 在扩展里把 ForWin Backend URL 填成：${currentOrigin}`,
         '7. Extension API Key 填你服务器 .env 里的 FORWIN_PUBLISHER_EXTENSION_API_KEY。',
         '8. 保存后刷新当前 /publishers 页面。',
@@ -116,6 +116,7 @@
       clearNode(grid);
       clearNode(select);
       data.forEach((item) => {
+        const loggedIn = item.connected && !['login-required', 'platform-login-required'].includes(String(item.last_error || '').trim());
         const option = document.createElement('option');
         option.value = item.platform_id;
         option.textContent = item.display_name;
@@ -144,13 +145,13 @@
         card.appendChild(createNode('p', `支持登录：${item.supported_login_methods.join(' / ') || 'scan'}`, 'muted'));
         card.appendChild(createNode('p', `支持动作：${item.supported_actions.join(' / ')}`, 'muted'));
         const actions = createNode('div', '', 'actions');
-        actions.appendChild(createButton(item.connected ? '重新连接' : '连接平台', () => connectPlatform(item.platform_id)));
+        actions.appendChild(createButton(loggedIn ? '重新连接' : '连接平台', () => connectPlatform(item.platform_id)));
         actions.appendChild(createButton('仅打开官网', () => openOfficialSite(item.login_url, item.platform_id), 'secondary'));
         card.appendChild(actions);
         const status = createNode(
           'div',
-          `${item.connected ? '已连接' : '未连接'} | ${online}\\n${heartbeat}`,
-          `status ${item.connected ? 'ok' : 'warn'}`,
+          `${loggedIn ? '已连接' : '未连接'} | ${online}\\n${heartbeat}`,
+          `status ${loggedIn ? 'ok' : 'warn'}`,
         );
         status.id = `status_${item.platform_id}`;
         card.appendChild(status);

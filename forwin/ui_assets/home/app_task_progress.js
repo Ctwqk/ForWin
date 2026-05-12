@@ -10,6 +10,7 @@
       ['chapter_failed', '失败'],
     ];
     const CHAPTER_RUNTIME_STAGES = new Set(CHAPTER_PIPELINE_STAGES.map(([stage]) => stage));
+    const CHAPTER_TIMELINE_RENDER_BATCH_SIZE = 60;
 
     function taskHistory(item) {
       return Array.isArray(item.stage_history) ? item.stage_history.filter((entry) => entry && entry.stage) : [];
@@ -280,10 +281,16 @@
       section.appendChild(head);
 
       const list = createNode('div', '', 'chapter-timeline');
-      if (!numbers.length) {
-        list.appendChild(createNode('div', '暂无章节进度。', 'empty'));
-      }
-      numbers.forEach((number) => {
+      const pagingStatus = createNode('div', '', 'meta-line');
+      let renderedNumberCount = Math.min(CHAPTER_TIMELINE_RENDER_BATCH_SIZE, numbers.length);
+      const loadMoreButton = createButton('加载更多章节', () => {
+        renderedNumberCount = Math.min(
+          renderedNumberCount + CHAPTER_TIMELINE_RENDER_BATCH_SIZE,
+          numbers.length,
+        );
+        renderVisibleTimelineRows();
+      }, 'ghost');
+      const renderTimelineRow = (number) => {
         const chapter = chapterByNumber.get(number) || { chapter_number: number };
         const status = chapterStatusFromTask(item, chapter);
         const badgeStatus = status || 'planned';
@@ -346,13 +353,58 @@
         });
         row.appendChild(steps);
         list.appendChild(row);
-      });
+      };
+      const renderVisibleTimelineRows = () => {
+        clearNode(list);
+        if (!numbers.length) {
+          list.appendChild(createNode('div', '暂无章节进度。', 'empty'));
+          return;
+        }
+        numbers.slice(0, renderedNumberCount).forEach(renderTimelineRow);
+        pagingStatus.textContent = `已显示 ${renderedNumberCount} / ${numbers.length} 章`;
+        loadMoreButton.style.display = renderedNumberCount < numbers.length ? '' : 'none';
+      };
+      renderVisibleTimelineRows();
       section.appendChild(list);
+      if (numbers.length > CHAPTER_TIMELINE_RENDER_BATCH_SIZE) {
+        section.appendChild(pagingStatus);
+        const pagingActions = createNode('div', '', 'action-row');
+        pagingActions.appendChild(loadMoreButton);
+        section.appendChild(pagingActions);
+      }
       return section;
     }
 
+    async function loadProjectChapterPage(projectId, offset = 0, limit = 60) {
+      const query = new URLSearchParams({
+        offset: String(Math.max(0, Number(offset || 0))),
+        limit: String(Math.max(1, Number(limit || 60))),
+      });
+      const payload = await requestJson(`/api/projects/${projectId}/chapters/page?${query.toString()}`);
+      if (Array.isArray(payload)) {
+        return {
+          project_id: projectId,
+          total: payload.length,
+          offset: 0,
+          limit: payload.length,
+          has_more: false,
+          chapters: payload,
+        };
+      }
+      const chapters = Array.isArray(payload?.chapters) ? payload.chapters : [];
+      return {
+        project_id: payload?.project_id || projectId,
+        total: Number(payload?.total || chapters.length),
+        offset: Number(payload?.offset || 0),
+        limit: Number(payload?.limit || limit || 60),
+        has_more: Boolean(payload?.has_more),
+        chapters,
+      };
+    }
+
     async function loadProjectChapters(projectId) {
-      return requestJson(`/api/projects/${projectId}/chapters`);
+      const page = await loadProjectChapterPage(projectId, 0, 60);
+      return page.chapters;
     }
 
     async function loadProjectDetail(projectId) {

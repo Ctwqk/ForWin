@@ -96,6 +96,43 @@ test('qidian heartbeat auto-connects when auth cookies are present', () => {
   assert.equal(state.raw_state.cookie_signal, true);
 });
 
+test('qidian heartbeat reports logged out when inspected page is the login screen', () => {
+  const state = buildHeartbeatState('qidian', [
+    { name: 'AppAuthToken' },
+    { name: 'pubtoken' },
+  ], {
+    connected: false,
+    loginMethod: 'scan',
+    lastError: '',
+  }, {
+    ok: true,
+    currentUrl: 'https://write.qq.com/portal/login',
+    platform: 'qidian',
+    authenticated: false,
+    loginVisible: true,
+  });
+
+  assert.equal(state.connected, false);
+  assert.equal(state.last_error, 'login-required');
+  assert.equal(state.raw_state.cookie_signal, true);
+  assert.equal(state.raw_state.page_login_visible, true);
+});
+
+test('qidian heartbeat does not display connected from unverified auth cookies', () => {
+  const state = buildHeartbeatState('qidian', [
+    { name: 'AppAuthToken' },
+    { name: 'pubtoken' },
+  ], {
+    connected: false,
+    loginMethod: 'scan',
+    lastError: '',
+  }, null);
+
+  assert.equal(state.connected, false);
+  assert.equal(state.raw_state.cookie_signal, true);
+  assert.equal(state.raw_state.page_evidence_required, true);
+});
+
 test('qidian heartbeat does not keep sticky connected=true without current auth cookies', () => {
   const state = buildHeartbeatState('qidian', [], {
     connected: true,

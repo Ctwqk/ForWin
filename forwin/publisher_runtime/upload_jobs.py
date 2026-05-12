@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from sqlalchemy import select, update
@@ -14,6 +15,134 @@ from .connection_state import ExtensionConnectionService
 from .platform_catalog import PlatformCatalog, PlatformSpec
 
 
+AUTO_UPLOAD_MAX_ATTEMPTS = 3
+
+LOGIN_FAILURE_ERROR_CODES = {
+    "login-required",
+    "login_required",
+    "platform-login-required",
+    "platform_login_required",
+    "auth-required",
+    "auth_required",
+    "not-authenticated",
+    "not_authenticated",
+}
+
+LOGIN_FAILURE_FRAGMENTS = (
+    "login",
+    "/login",
+    "signin",
+    "sign-in",
+    "登录",
+    "扫码",
+    "未登录",
+    "登录页",
+    "登录过期",
+    "请先完成扫码",
+)
+
+CodexInterventionHandler = Callable[[dict[str, Any]], dict[str, Any] | None]
+
+
+def _load_json_object(raw: str | None) -> dict[str, Any]:
+    try:
+        payload = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _upload_failure_is_login_failure(
+    *,
+    current_url: str,
+    error: str,
+    message: str,
+    result_payload: dict[str, Any],
+) -> bool:
+    error_code = str(
+        result_payload.get("error_code")
+        or result_payload.get("code")
+        or result_payload.get("reason")
+        or ""
+    ).strip().lower()
+    if error_code in LOGIN_FAILURE_ERROR_CODES:
+        return True
+    haystack = "\n".join(
+        str(part or "")
+        for part in (
+            current_url,
+            error,
+            message,
+            result_payload.get("phase", ""),
+            result_payload.get("status", ""),
+        )
+    ).lower()
+    return any(fragment.lower() in haystack for fragment in LOGIN_FAILURE_FRAGMENTS)
+
+
+def _upload_retry_history(
+    history: Any,
+    *,
+    failure_count: int,
+    failed_at: str,
+    current_url: str,
+    error: str,
+    message: str,
+) -> list[dict[str, Any]]:
+    rows = history if isinstance(history, list) else []
+    normalized = [row for row in rows if isinstance(row, dict)][-7:]
+    normalized.append(
+        {
+            "attempt": failure_count,
+            "failed_at": failed_at,
+            "current_url": current_url,
+            "message": message,
+            "error": error,
+        }
+    )
+    return normalized
+
+
+def _build_codex_intervention_payload(
+    job: PublisherUploadJob,
+    *,
+    failure_count: int,
+    max_attempts: int,
+    current_url: str,
+    error: str,
+    message: str,
+) -> dict[str, Any]:
+    prompt = "\n".join(
+        [
+            "ForWin 上传任务需要 Codex 介入。",
+            f"job_id: {job.id}",
+            f"platform: {job.platform_id}",
+            f"book_name: {job.book_name}",
+            f"chapter_title: {job.chapter_title}",
+            f"publish: {bool(job.publish)}",
+            f"attempts: {failure_count}/{max_attempts}",
+            f"current_url: {current_url}",
+            f"message: {message}",
+            f"error: {error}",
+            "",
+            "请连接 Linux 发布浏览器 CDP，检查平台页面状态，确认章节是否已经保存为草稿或需要手动继续上传。",
+            "不要绕过登录；除非 publish=true，不要执行正式发布。",
+        ]
+    )
+    return {
+        "status": "requested",
+        "runner": "codex",
+        "prompt": prompt,
+    }
+
+
 class UploadJobService:
     def __init__(
         self,
@@ -22,11 +151,27 @@ class UploadJobService:
         platform_catalog: PlatformCatalog,
         connection_state: ExtensionConnectionService,
         audit: PublisherAuditService,
+        codex_intervention_handler: CodexInterventionHandler | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.platform_catalog = platform_catalog
         self.connection_state = connection_state
         self.audit = audit
+        self.codex_intervention_handler = codex_intervention_handler
+
+    def request_codex_intervention(self, intervention: dict[str, Any]) -> None:
+        handler = self.codex_intervention_handler
+        if handler is None:
+            return
+        try:
+            result = handler(intervention)
+        except Exception as exc:  # noqa: BLE001
+            intervention["status"] = "request_failed"
+            intervention["error"] = f"{exc.__class__.__name__}: {exc}"
+            return
+        intervention["status"] = "submitted"
+        if isinstance(result, dict):
+            intervention["call"] = result
 
     def list_upload_jobs(
         self,
@@ -385,13 +530,82 @@ class UploadJobService:
             elif job.abort_requested and status == "running":
                 effective_status = "terminating"
 
+            merged_payload = _load_json_object(job.result_payload_json)
+            if result_payload:
+                merged_payload.update(result_payload)
+
+            requeued_after_failure = False
+            if effective_status == "failed":
+                failed_at = isoformat(now)
+                existing_retry = merged_payload.get("auto_retry", {})
+                if not isinstance(existing_retry, dict):
+                    existing_retry = {}
+                failure_count = _as_int(existing_retry.get("failure_count"), 0) + 1
+                login_failure = _upload_failure_is_login_failure(
+                    current_url=current_url,
+                    error=error,
+                    message=message,
+                    result_payload=merged_payload,
+                )
+                exhausted = failure_count >= AUTO_UPLOAD_MAX_ATTEMPTS
+                requeued_after_failure = (
+                    not login_failure and not exhausted and not job.abort_requested
+                )
+                merged_payload["auto_retry"] = {
+                    "failure_count": failure_count,
+                    "max_attempts": AUTO_UPLOAD_MAX_ATTEMPTS,
+                    "next_attempt": (
+                        failure_count + 1 if requeued_after_failure else 0
+                    ),
+                    "login_failure": login_failure,
+                    "exhausted": bool(not login_failure and exhausted),
+                    "last_failed_at": failed_at,
+                    "last_current_url": current_url,
+                    "last_message": message,
+                    "last_error": error,
+                    "history": _upload_retry_history(
+                        existing_retry.get("history", []),
+                        failure_count=failure_count,
+                        failed_at=failed_at,
+                        current_url=current_url,
+                        error=error,
+                        message=message,
+                    ),
+                }
+                if requeued_after_failure:
+                    effective_status = "pending"
+                    message = (
+                        "上传失败，已自动重新排队"
+                        f"（第 {failure_count + 1}/{AUTO_UPLOAD_MAX_ATTEMPTS} 次尝试）。"
+                    )
+                    error = ""
+                    current_url = ""
+                elif not login_failure and exhausted:
+                    merged_payload["codex_intervention_required"] = True
+                    intervention = _build_codex_intervention_payload(
+                        job,
+                        failure_count=failure_count,
+                        max_attempts=AUTO_UPLOAD_MAX_ATTEMPTS,
+                        current_url=current_url,
+                        error=error,
+                        message=message,
+                    )
+                    self.request_codex_intervention(intervention)
+                    merged_payload["codex_intervention"] = intervention
+
             if effective_status == "running":
                 job.claimed_at = job.claimed_at or now
                 job.started_at = job.started_at or now
+                job.finished_at = None
                 job.error_message = ""
             elif effective_status in {"succeeded", "failed", "cancelled"}:
                 job.started_at = job.started_at or now
                 job.finished_at = now
+            elif effective_status == "pending":
+                job.claimed_at = None
+                job.started_at = None
+                job.finished_at = None
+                job.extension_client_id = ""
 
             job.status = effective_status
             job.current_url = current_url
@@ -400,15 +614,11 @@ class UploadJobService:
                 if effective_status == "cancelled"
                 else message
             )
-            job.error_message = "" if effective_status == "cancelled" else error
-            try:
-                merged_payload = json.loads(job.result_payload_json or "{}")
-            except json.JSONDecodeError:
-                merged_payload = {}
-            if not isinstance(merged_payload, dict):
-                merged_payload = {}
-            if result_payload:
-                merged_payload.update(result_payload)
+            job.error_message = (
+                ""
+                if effective_status in {"cancelled", "pending"}
+                else error
+            )
             job.result_payload_json = json.dumps(merged_payload, ensure_ascii=False)
 
             if self.platform_catalog.has(job.platform_id):
@@ -422,7 +632,15 @@ class UploadJobService:
                 if effective_status == "succeeded":
                     state.connected = True
                     state.last_error = ""
-                elif effective_status == "failed" and current_url and "login" in current_url:
+                elif (
+                    effective_status == "failed"
+                    and _upload_failure_is_login_failure(
+                        current_url=current_url,
+                        error=error,
+                        message=message,
+                        result_payload=merged_payload,
+                    )
+                ):
                     state.connected = False
                     state.last_error = error or message
                 self.connection_state.upsert_extension_platform_state(
@@ -453,6 +671,7 @@ class UploadJobService:
                     "effective_status": effective_status,
                     "error_class": "publisher_upload_error" if job.error_message else "",
                     "error_message": job.error_message,
+                    "requeued_after_failure": requeued_after_failure,
                     "remote_chapter_id": (
                         str(merged_payload.get("remote_chapter_id") or "")
                         if isinstance(merged_payload, dict)

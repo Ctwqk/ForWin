@@ -14,6 +14,7 @@ from forwin.models.publisher import (
     PublisherBrowserSessionEntry,
     PublisherConnectionState,
 )
+from .login_evidence import platform_login_evidence
 from forwin.secret_store import (
     SecretStoreError,
     decrypt_json_with_secret,
@@ -303,6 +304,7 @@ class BrowserSessionService:
         client_id: str,
         platform: str,
         cookies: list[dict[str, Any]],
+        raw_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         spec = self.platform_catalog.get(platform)
         now = utc_now()
@@ -339,10 +341,24 @@ class BrowserSessionService:
                 stored.cookies_json = encoded_cookies
                 stored.synced_at = now
                 stored.last_error = ""
-                connected = self.codec.is_browser_session_connected(
+                cookie_connected = self.codec.is_browser_session_connected(
                     platform,
                     stored.cookies_json,
                     "",
+                )
+                evidence_payload = dict(raw_state or {})
+                cookie_signal = bool(evidence_payload.get("cookie_signal", cookie_connected))
+                page_authenticated = bool(evidence_payload.get("page_authenticated"))
+                login_evidence = platform_login_evidence(platform, evidence_payload)
+                unverified_cookie_signal = bool(
+                    evidence_payload.get("page_evidence_required")
+                    and cookie_signal
+                    and not page_authenticated
+                )
+                connected = bool(
+                    (cookie_signal or page_authenticated)
+                    and not login_evidence
+                    and not unverified_cookie_signal
                 )
 
                 state = session.get(PublisherConnectionState, platform)
@@ -360,8 +376,9 @@ class BrowserSessionService:
                     "login_method": state.login_method,
                     "last_error": state.last_error,
                     "cookie_names": self.codec.cookie_names_from_json(stored.cookies_json),
-                    "cookie_signal": connected,
                     "session_synced": True,
+                    **evidence_payload,
+                    "cookie_signal": cookie_signal,
                 }
                 state.status_json = json.dumps(state_payload, ensure_ascii=False)
                 state.last_heartbeat_at = now

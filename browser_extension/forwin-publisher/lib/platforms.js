@@ -84,6 +84,87 @@ function fanqieCookieConnected(cookieNames) {
   return hasSession && hasWriterSignal;
 }
 
+function isKnownLoginUrl(platformId, url = '') {
+  const value = String(url || '');
+  if (platformId === 'qidian') {
+    return value.includes('write.qq.com') && value.includes('/portal/login');
+  }
+  if (platformId === 'fanqie') {
+    return value.includes('fanqienovel.com') && value.includes('/main/writer/login');
+  }
+  return false;
+}
+
+function pageInspectionState(platformId, inspection) {
+  if (inspection === undefined) {
+    return {
+      provided: false,
+      inspected: false,
+      authenticated: false,
+      loginVisible: false,
+      currentUrl: '',
+    };
+  }
+  if (!inspection || !inspection.ok) {
+    return {
+      provided: true,
+      inspected: false,
+      authenticated: false,
+      loginVisible: false,
+      currentUrl: '',
+    };
+  }
+  const currentUrl = String(inspection.currentUrl || inspection.url || '');
+  const platformMatches = !inspection.platform || inspection.platform === platformId;
+  if (!platformMatches) {
+    return {
+      provided: true,
+      inspected: false,
+      authenticated: false,
+      loginVisible: false,
+      currentUrl: '',
+    };
+  }
+  return {
+    provided: true,
+    inspected: true,
+    authenticated: Boolean(inspection.authenticated),
+    loginVisible: Boolean(inspection.loginVisible) || isKnownLoginUrl(platformId, currentUrl),
+    currentUrl,
+  };
+}
+
+function heartbeatPayload(platformId, cookieNames, savedState, cookieSignal, inspection) {
+  const loginMethod = savedState.loginMethod || 'scan';
+  const page = pageInspectionState(platformId, inspection);
+  const savedError = String(savedState.lastError || '').trim();
+  const savedLoginRequired = ['login-required', 'platform-login-required'].includes(
+    savedError.toLowerCase(),
+  );
+  const loggedOutByPage = page.inspected && page.loginVisible && !page.authenticated;
+  const loggedOutBySavedError = savedLoginRequired && !page.authenticated;
+  const waitingForPageEvidence = page.provided && !page.inspected && cookieSignal;
+  const connected = (loggedOutByPage || loggedOutBySavedError)
+    ? false
+    : (page.authenticated || (!waitingForPageEvidence && cookieSignal));
+  const lastError = (loggedOutByPage || loggedOutBySavedError) ? 'login-required' : savedError;
+  return {
+    platform: platformId,
+    connected,
+    login_method: loginMethod,
+    last_error: lastError,
+    raw_state: {
+      cookie_names: Array.from(cookieNames).sort(),
+      cookie_signal: cookieSignal,
+      page_inspected: page.inspected,
+      page_authenticated: page.authenticated,
+      page_login_visible: page.loginVisible,
+      page_evidence_required: page.provided,
+      current_url: page.currentUrl,
+    },
+  };
+}
+
 export function isLoginComplete(platformId, { url = '', cookies = [] } = {}) {
   const cookieNames = getCookieNameSet(cookies);
   if (platformId === 'qidian') {
@@ -115,35 +196,15 @@ export function getProbeUrl(platformId, probeIndex) {
   return adapter.probeUrls[probeIndex] || '';
 }
 
-export function buildHeartbeatState(platformId, cookies = [], savedState = {}) {
+export function buildHeartbeatState(platformId, cookies = [], savedState = {}, inspection = undefined) {
   const cookieNames = getCookieNameSet(cookies);
-  const loginMethod = savedState.loginMethod || 'scan';
-  const lastError = savedState.lastError || '';
   if (platformId === 'qidian') {
     const cookieSignal = qidianCookieConnected(cookieNames);
-    return {
-      platform: platformId,
-      connected: cookieSignal,
-      login_method: loginMethod,
-      last_error: lastError,
-      raw_state: {
-        cookie_names: Array.from(cookieNames).sort(),
-        cookie_signal: cookieSignal,
-      },
-    };
+    return heartbeatPayload(platformId, cookieNames, savedState, cookieSignal, inspection);
   }
   if (platformId === 'fanqie') {
     const cookieSignal = fanqieCookieConnected(cookieNames);
-    return {
-      platform: platformId,
-      connected: cookieSignal,
-      login_method: loginMethod,
-      last_error: lastError,
-      raw_state: {
-        cookie_names: Array.from(cookieNames).sort(),
-        cookie_signal: cookieSignal,
-      },
-    };
+    return heartbeatPayload(platformId, cookieNames, savedState, cookieSignal, inspection);
   }
   throw new Error(`Unsupported publisher platform: ${platformId}`);
 }

@@ -35,6 +35,7 @@ from forwin.publisher_runtime.connection_state import (
     upsert_extension_platform_state,
 )
 from forwin.publisher_runtime.service import PublisherRuntimeService
+from forwin.publisher_runtime.upload_jobs import CodexInterventionHandler
 from forwin.publisher_runtime.platform_catalog import PlatformSpec
 
 
@@ -54,6 +55,7 @@ class PublisherManager:
         preferred_client_id: str = "",
         publisher_session_secret: str = "",
         publisher_session_encryption_required: bool = False,
+        codex_intervention_handler: CodexInterventionHandler | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.extension_api_key = str(extension_api_key or "").strip()
@@ -70,6 +72,7 @@ class PublisherManager:
             preferred_client_id=self.preferred_client_id,
             publisher_session_secret=self.publisher_session_secret,
             publisher_session_encryption_required=self.publisher_session_encryption_required,
+            codex_intervention_handler=codex_intervention_handler,
         )
         self._plaintext_cookie_storage_warned = (
             self.runtime.browser_cookie_codec._plaintext_cookie_storage_warned
@@ -170,11 +173,13 @@ class PublisherManager:
         client_id: str,
         platform: str,
         cookies: list[dict[str, Any]],
+        raw_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.runtime.browser_sessions.record_browser_session(
             client_id=client_id,
             platform=platform,
             cookies=cookies,
+            raw_state=raw_state,
         )
 
     def get_browser_session(

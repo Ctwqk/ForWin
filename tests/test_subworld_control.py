@@ -17,6 +17,7 @@ from forwin.director.arc_director import ArcDirector
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.phase import BandExperiencePlan
+from forwin.models.phase4 import WorldSimulationTurn
 from forwin.models.project import ChapterPlan
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.models.thread import PlotThreadBeat
@@ -1530,6 +1531,87 @@ class SubWorldControlTests(unittest.TestCase):
 
         self.assertEqual(verdict.verdict, "fail")
         self.assertTrue(any(issue.rule_name == "sub_world_unknown_named_entity" for issue in verdict.issues))
+
+    def test_world_pressure_referenced_canon_character_is_subworld_allowed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            engine = get_engine(postgres_test_url("pressure_allowed"))
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="书", premise="p", genre="g")
+                arc = updater.create_arc_plan(project.id, "弧线")
+                updater.create_chapter_plan(
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=47,
+                    title="第四十七章",
+                    one_line="交易",
+                    goals=["推进"],
+                    experience_plan=ChapterExperiencePlan(entity_admission_rule="strict_named_character"),
+                )
+                allowed = updater.create_entity(project.id, "character", "林澈", "主角", chapter=0)
+                updater.create_entity(project.id, "character", "洛庭若", "白塔审查官", chapter=0)
+                updater.create_entity(project.id, "character", "顾岚", "黑市中间人", chapter=0)
+                global_core = updater.create_subworld(
+                    project_id=project.id,
+                    origin_arc_id=arc.id,
+                    parent_subworld_id=None,
+                    name="global_core",
+                    purpose="核心角色",
+                    scope="global_core",
+                    metadata={},
+                )
+                updater.create_roster_item(
+                    project_id=project.id,
+                    subworld_id=global_core.id,
+                    entity_id=allowed.id,
+                    display_name="林澈",
+                    description="允许角色",
+                    is_core=True,
+                    status="seeded_named",
+                )
+                updater.update_chapter_experience_plan(
+                    project.id,
+                    47,
+                    ChapterExperiencePlan(
+                        active_subworld_ids=[global_core.id],
+                        entity_admission_rule="strict_named_character",
+                    ),
+                )
+                session.add(
+                    WorldSimulationTurn(
+                        project_id=project.id,
+                        chapter_number=46,
+                        pressure_level="critical",
+                        pressure_summary="白塔监控升级。",
+                        notable_shifts_json=json.dumps(["洛庭若启动紧急重置程序，城市记忆系统开始封锁"], ensure_ascii=False),
+                    )
+                )
+                session.flush()
+
+                repo = StateRepository(session)
+                allowed_names = repo.get_allowed_entity_names(project.id, 47)
+                verdict = ContinuityChecker(repo).check(
+                    project.id,
+                    WriterOutput(
+                        chapter_number=47,
+                        title="第四十七章",
+                        body="洛庭若在岫苑站与林澈交换撤离条件。" * 80,
+                        end_of_chapter_summary="洛庭若提出交易条件。",
+                        entity_mentions=[
+                            EntityMention(entity_name="洛庭若", entity_kind="character", is_named=True),
+                            EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
+                        ],
+                    ),
+                )
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertIn("洛庭若", allowed_names)
+        unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
+        self.assertEqual(unknown, [])
 
     def test_rearc_creates_new_subworlds_via_director_delta(self) -> None:
         class FakeDirector:

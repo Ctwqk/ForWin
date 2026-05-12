@@ -436,7 +436,7 @@ export default function App() {
         `/api/projects/${projectId}/world-model/proposals/${proposalId}/review`,
         {
           method: "POST",
-          body: JSON.stringify({ status, reason: status === "accepted" ? "World Studio accepted." : "World Studio rejected." })
+          body: JSON.stringify({ status, reason: status === "accepted" ? "World archive accepted." : "World archive rejected." })
         }
       );
       setMessage(status === "accepted" ? "Proposal 已接受。" : "Proposal 已拒绝。");
@@ -457,7 +457,7 @@ export default function App() {
         `/api/projects/${projectId}/book-state/characters/${selectedCharacterId}/personality-loadout`,
         {
           method: "PUT",
-          body: JSON.stringify({ personality_loadout: loadout, reason: "World Studio personality editor." })
+          body: JSON.stringify({ personality_loadout: loadout, reason: "World archive personality editor." })
         }
       );
       setMessage("人物性格 loadout 已保存。");
@@ -506,7 +506,7 @@ export default function App() {
           ...characterCreatePayload(characterCreateDraft),
           personality_loadout: parsed.ok ? parsed.value : null,
           personality_policy: parsed.ok && createLoadoutDraft.trim() ? "manual" : "auto",
-          audit_reason: "World Studio character creation."
+          audit_reason: "World archive character creation."
         })
       });
       setCharacterCreateDraft(defaultCharacterCreateDraft());
@@ -546,7 +546,7 @@ export default function App() {
         `/api/projects/${projectId}/characters/${selectedCharacterId}/personality/reassign`,
         {
           method: "POST",
-          body: JSON.stringify({ mode: "auto_rule", respect_manual_override: true, reason: "World Studio reassign." })
+          body: JSON.stringify({ mode: "auto_rule", respect_manual_override: true, reason: "World archive reassign." })
         }
       );
       setMessage("人物性格已重新分配。");
@@ -595,7 +595,7 @@ export default function App() {
         `/api/projects/${projectId}/characters/personality/relationships/enrich`,
         {
           method: "POST",
-          body: JSON.stringify({ reason: "World Studio relationship enrichment." })
+          body: JSON.stringify({ reason: "World archive relationship enrichment." })
         }
       );
       setMessage("关系人格 enrichment 已执行。");
@@ -611,14 +611,17 @@ export default function App() {
     <main className="app-shell">
       <header className="topbar">
         <div>
-          <nav className="studio-nav" aria-label="ForWin primary navigation">
-            <a href="/">创作台</a>
+          <nav className="main-menu" aria-label="ForWin primary navigation">
+            <a href="/">书本</a>
+            <a href="/#task">任务</a>
             <a href="/world-studio" aria-current="page">
-              World Studio
+              世界档案
             </a>
+            <a href="/publishers">发布</a>
+            <a href="/#config">配置</a>
           </nav>
-          <p className="eyebrow">ForWin V3</p>
-          <h1>World Studio</h1>
+          <p className="eyebrow">ForWin Archive</p>
+          <h1>世界档案</h1>
         </div>
         <div className="topbar-actions">
           <label className="project-picker">
@@ -682,7 +685,7 @@ export default function App() {
 
       <div className="workspace">
         <aside className="sidebar">
-          <div className="tabs" role="tablist" aria-label="World Studio sections">
+          <div className="tabs" role="tablist" aria-label="世界档案 sections">
             <button className={tab === "pages" ? "active" : ""} type="button" onClick={() => setTab("pages")}>
               <BookOpen size={16} />
               页面
@@ -821,7 +824,7 @@ function Metric({
 
 function PageDetail({ page, snapshots }: { page: WorldModelPageInfo | null; snapshots: WorldModelSnapshotInfo[] }) {
   if (!page) {
-    return <EmptyState title="还没有 WorldModel 页面" text="锁定 Genesis 或导出 Obsidian 时会自动 bootstrap 第 0 章世界模型。" />;
+    return <EmptyState title="还没有世界档案页面" text="锁定 Genesis 或导出 Obsidian 时会自动 bootstrap 第 0 章世界模型。" />;
   }
   return (
     <>

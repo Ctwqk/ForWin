@@ -972,6 +972,19 @@ function isPlatformWorkflowUrl(platformId, url = '') {
   return false;
 }
 
+function isPlatformStatusUrl(platformId, url = '') {
+  if (!url) {
+    return false;
+  }
+  if (platformId === 'fanqie') {
+    return url.includes('fanqienovel.com');
+  }
+  if (platformId === 'qidian') {
+    return url.includes('write.qq.com') || url.includes('pcwrite.yuewen.com');
+  }
+  return false;
+}
+
 async function waitForUploadEditorTab(platformId, currentTabId, timeoutMs = 8000) {
   const startedAt = Date.now();
   while ((Date.now() - startedAt) < timeoutMs) {
@@ -1116,6 +1129,41 @@ async function inspectLoginState(tabId) {
   return { ok: false, authenticated: false, loginVisible: false, currentUrl: '' };
 }
 
+async function inspectPlatformState(platformId) {
+  const tabs = await queryTabs({}) || [];
+  const candidates = tabs
+    .filter((tab) => isPlatformStatusUrl(platformId, String(tab?.url || '')))
+    .sort((left, right) => {
+      if (left?.active && !right?.active) {
+        return -1;
+      }
+      if (right?.active && !left?.active) {
+        return 1;
+      }
+      return (right?.id || 0) - (left?.id || 0);
+    });
+  for (const candidate of candidates) {
+    const tabId = candidate?.id || 0;
+    if (!tabId) {
+      continue;
+    }
+    const ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
+      || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 800)
+      || (candidate?.status === 'complete' && await probePlatformAgentResponsive(tabId));
+    if (!ready) {
+      continue;
+    }
+    if (candidate?.status === 'complete') {
+      tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
+    }
+    const inspection = await inspectLoginState(tabId);
+    if (inspection?.ok) {
+      return inspection;
+    }
+  }
+  return null;
+}
+
 async function verifyFanqieDraftOnPage(tabId, chapterTitle) {
   let ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
     || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 5000);
@@ -1247,6 +1295,7 @@ const controller = new PublisherExtensionController({
   runUploadCommand,
   runCommentSyncCommand,
   inspectLoginState,
+  inspectPlatformState,
   ensureHeartbeatAlarm,
 });
 

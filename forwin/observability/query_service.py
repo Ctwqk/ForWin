@@ -52,8 +52,7 @@ class ObservabilityQueryService:
         task_id: str = "",
         limit: int = 50,
     ) -> list[PerformanceSpanInfo]:
-        spans = self._span_infos(project_id=project_id, task_id=task_id, limit=max(1, int(limit or 50)))
-        return sorted(spans, key=lambda span: (-span.duration_ms, span.created_at))[: max(1, int(limit or 50))]
+        return self._slow_span_infos(project_id=project_id, task_id=task_id, limit=max(1, int(limit or 50)))
 
     def llm_performance_report(self, *, project_id: str = "", days: int = 7) -> PerformanceReportResponse:
         spans = [span for span in self._span_infos(project_id=project_id, limit=2000) if span.span_kind == "llm"]
@@ -84,6 +83,27 @@ class ObservabilityQueryService:
             if chapter_number:
                 stmt = stmt.where(PerformanceSpan.chapter_number == int(chapter_number))
             stmt = stmt.order_by(PerformanceSpan.created_at.asc(), PerformanceSpan.id.asc()).limit(max(1, int(limit or 1000)))
+            rows = session.execute(stmt).scalars().all()
+        return [self._span_info(row) for row in rows]
+
+    def _slow_span_infos(
+        self,
+        *,
+        project_id: str = "",
+        task_id: str = "",
+        limit: int = 50,
+    ) -> list[PerformanceSpanInfo]:
+        with self.session_factory() as session:
+            stmt = select(PerformanceSpan)
+            if project_id:
+                stmt = stmt.where(PerformanceSpan.project_id == project_id)
+            if task_id:
+                stmt = stmt.where(PerformanceSpan.task_id == task_id)
+            stmt = stmt.order_by(
+                PerformanceSpan.duration_ms.desc(),
+                PerformanceSpan.created_at.asc(),
+                PerformanceSpan.id.asc(),
+            ).limit(max(1, int(limit or 50)))
             rows = session.execute(stmt).scalars().all()
         return [self._span_info(row) for row in rows]
 

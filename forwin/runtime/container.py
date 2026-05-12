@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from typing import Callable
 
 from forwin.book_genesis import BookGenesisService
@@ -16,6 +17,7 @@ from forwin.orchestrator.phase4 import NPCIntentGenerator, WorldSimulator
 from forwin.observability.service import ObservabilityService
 from forwin.planning.band_plan_service import BandPlanService
 from forwin.planning.world_contract_service import WorldContractPlanningService
+from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.retrieval import RetrievalBroker, create_memory_index
 from forwin.reviewer import HistoricalReviewHub
@@ -26,6 +28,9 @@ from forwin.skills import build_skill_runtime_components
 from forwin.storage import ArtifactStore
 from forwin.subworld_manager import SubWorldManager
 from forwin.writer.llm_client import LLMClient
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -87,6 +92,7 @@ class RuntimeContainer:
         engine = get_engine(config.database_url)
         init_db(engine)
         session_factory = get_session_factory(engine)
+        self._run_retention_cleanup(session_factory, config)
 
         llm_client = self._build_llm_client(config)
         skill_runtime = self._build_skill_runtime(config)
@@ -194,6 +200,7 @@ class RuntimeContainer:
             publisher_session_secret=config.publisher_session_secret,
             publisher_session_encryption_required=config.publisher_session_encryption_required,
             observability=observability,
+            codex_intervention_handler=build_codex_intervention_handler(config),
         )
         return RuntimeServices(
             config=config,
@@ -235,6 +242,23 @@ class RuntimeContainer:
             ),
             final_acceptance_gate=FinalAcceptanceGate(),
         )
+
+    def _run_retention_cleanup(self, session_factory, config: Config) -> None:  # noqa: ANN001
+        if not bool(getattr(config, "retention_cleanup_on_startup", True)):
+            return
+        try:
+            from forwin.maintenance.retention import RetentionPolicy, run_retention_cleanup
+
+            with session_factory.begin() as session:
+                result = run_retention_cleanup(session, RetentionPolicy.from_config(config))
+            logger.info(
+                "retention_cleanup_completed performance_spans=%s prompt_traces=%s candidate_drafts=%s",
+                result.performance_spans_deleted,
+                result.prompt_traces_deleted,
+                result.candidate_drafts_deleted,
+            )
+        except Exception:
+            logger.warning("retention_cleanup_failed", exc_info=True)
 
     @staticmethod
     def _build_llm_client(config: Config):

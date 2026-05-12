@@ -23,6 +23,7 @@ from forwin.api_schemas import (
     BulkDeleteResponse,
     CandidateDraftDetail,
     ChapterDetail,
+    ChapterListResponse,
     ChapterReviewApproveRequest,
     ChapterReviewApproveResponse,
     ChapterReviewDetail,
@@ -67,10 +68,12 @@ from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.protocol.review import normalize_repair_scope
-from forwin.state.query_helpers import load_latest_drafts_by_plan_id
+from forwin.state.query_helpers import load_latest_drafts_by_plan_id, load_latest_rewrite_attempts_by_chapter
 from forwin.state.updater import StateUpdater
 
 
+_DEFAULT_CHAPTER_PAGE_LIMIT = 60
+_MAX_CHAPTER_PAGE_LIMIT = 200
 _GENERATION_TASK_TERMINAL_STATUSES = {
     "completed",
     "partial_failed",
@@ -117,6 +120,14 @@ def _latest_active_generation_task(session, project_id: str) -> GenerationTask |
         .order_by(GenerationTask.updated_at.desc(), GenerationTask.id.desc())
         .limit(1)
     ).scalar_one_or_none()
+
+
+def latest_rewrite_attempts_by_chapter(
+    session,
+    project_id: str,
+    chapter_numbers: list[int] | None = None,
+) -> dict[int, ChapterRewriteAttempt]:
+    return load_latest_rewrite_attempts_by_chapter(session, project_id, chapter_numbers)
 
 
 def _overlay_active_generation_task(detail: ProjectDetail, task: GenerationTask | None) -> ProjectDetail:
@@ -1147,6 +1158,58 @@ def update_project_automation(
         session.close()
 
 
+def _normalize_chapter_page(offset: int, limit: int) -> tuple[int, int]:
+    try:
+        normalized_offset = max(0, int(offset or 0))
+    except (TypeError, ValueError):
+        normalized_offset = 0
+    try:
+        normalized_limit = int(limit or _DEFAULT_CHAPTER_PAGE_LIMIT)
+    except (TypeError, ValueError):
+        normalized_limit = _DEFAULT_CHAPTER_PAGE_LIMIT
+    normalized_limit = min(_MAX_CHAPTER_PAGE_LIMIT, max(1, normalized_limit))
+    return normalized_offset, normalized_limit
+
+
+def _chapter_infos_for_plans(session, project_id: str, plans: list[ChapterPlan]) -> list[ChapterInfo]:
+    draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
+    review_draft_ids = {
+        draft_id
+        for draft_id in session.execute(
+            select(ChapterReview.draft_id)
+            .where(ChapterReview.draft_id.in_([draft.id for draft in draft_map.values()]))
+            .distinct()
+        ).scalars().all()
+    } if draft_map else set()
+    latest_attempt_map = latest_rewrite_attempts_by_chapter(
+        session,
+        project_id,
+        [int(plan.chapter_number or 0) for plan in plans],
+    )
+
+    result = []
+    for plan in plans:
+        draft = draft_map.get(plan.id)
+        latest_attempt = latest_attempt_map.get(plan.chapter_number)
+        result.append(ChapterInfo(
+            chapter_number=plan.chapter_number,
+            title=plan.title,
+            status=plan.status,
+            char_count=draft.char_count if draft else 0,
+            summary=draft.summary if draft else "",
+            has_draft=draft is not None,
+            has_review=bool(draft and draft.id in review_draft_ids),
+            acceptance_mode=str(getattr(plan, "acceptance_mode", "") or ""),
+            repair_attempt_count=int(getattr(plan, "repair_attempt_count", 0) or 0),
+            canon_risk_level=str(getattr(plan, "canon_risk_level", "") or ""),
+            latest_repair_scope=normalize_repair_scope(
+                getattr(latest_attempt, "repair_scope", ""),
+                default="",
+            ),
+        ))
+    return result
+
+
 def list_chapters(project_id: str, *, get_session) -> list[ChapterInfo]:
     session = get_session()
     try:
@@ -1157,44 +1220,47 @@ def list_chapters(project_id: str, *, get_session) -> list[ChapterInfo]:
         plans = session.execute(
             select(ChapterPlan).where(ChapterPlan.project_id == project_id).order_by(ChapterPlan.chapter_number)
         ).scalars().all()
-        draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
-        review_draft_ids = {
-            draft_id
-            for draft_id in session.execute(
-                select(ChapterReview.draft_id)
-                .where(ChapterReview.draft_id.in_([draft.id for draft in draft_map.values()]))
-                .distinct()
-            ).scalars().all()
-        } if draft_map else set()
-        latest_attempt_map: dict[int, ChapterRewriteAttempt] = {}
-        for attempt in session.execute(
-            select(ChapterRewriteAttempt)
-            .where(ChapterRewriteAttempt.project_id == project_id)
-            .order_by(ChapterRewriteAttempt.chapter_number.asc(), ChapterRewriteAttempt.attempt_no.desc(), ChapterRewriteAttempt.created_at.desc())
-        ).scalars().all():
-            latest_attempt_map.setdefault(int(attempt.chapter_number or 0), attempt)
+        return _chapter_infos_for_plans(session, project_id, plans)
+    finally:
+        session.close()
 
-        result = []
-        for plan in plans:
-            draft = draft_map.get(plan.id)
-            latest_attempt = latest_attempt_map.get(plan.chapter_number)
-            result.append(ChapterInfo(
-                chapter_number=plan.chapter_number,
-                title=plan.title,
-                status=plan.status,
-                char_count=draft.char_count if draft else 0,
-                summary=draft.summary if draft else "",
-                has_draft=draft is not None,
-                has_review=bool(draft and draft.id in review_draft_ids),
-                acceptance_mode=str(getattr(plan, "acceptance_mode", "") or ""),
-                repair_attempt_count=int(getattr(plan, "repair_attempt_count", 0) or 0),
-                canon_risk_level=str(getattr(plan, "canon_risk_level", "") or ""),
-                latest_repair_scope=normalize_repair_scope(
-                    getattr(latest_attempt, "repair_scope", ""),
-                    default="",
-                ),
-            ))
-        return result
+
+def list_chapter_page(
+    project_id: str,
+    *,
+    offset: int = 0,
+    limit: int = _DEFAULT_CHAPTER_PAGE_LIMIT,
+    get_session,
+) -> ChapterListResponse:
+    offset, limit = _normalize_chapter_page(offset, limit)
+    session = get_session()
+    try:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+
+        total = int(
+            session.execute(
+                select(func.count(ChapterPlan.id)).where(ChapterPlan.project_id == project_id)
+            ).scalar_one()
+            or 0
+        )
+        plans = session.execute(
+            select(ChapterPlan)
+            .where(ChapterPlan.project_id == project_id)
+            .order_by(ChapterPlan.chapter_number)
+            .offset(offset)
+            .limit(limit)
+        ).scalars().all()
+        chapters = _chapter_infos_for_plans(session, project_id, plans)
+        return ChapterListResponse(
+            project_id=project_id,
+            total=total,
+            offset=offset,
+            limit=limit,
+            has_more=(offset + len(chapters)) < total,
+            chapters=chapters,
+        )
     finally:
         session.close()
 

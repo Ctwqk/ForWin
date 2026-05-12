@@ -12,6 +12,7 @@ from forwin.models.entity import EntityState
 from forwin.models.phase import (
     ArcEnvelope,
     ArcEnvelopeAnalysis,
+    ChapterRewriteAttempt,
     ProjectReplanEvent,
     ProjectStageAnalysis,
     ProvisionalBandExecution,
@@ -194,6 +195,47 @@ def load_latest_drafts_by_plan_id(
             ChapterDraft.id.desc(),
         ),
     )
+
+
+def load_latest_rewrite_attempts_by_chapter(
+    session: Session,
+    project_id: str,
+    chapter_numbers: Iterable[int] | None = None,
+) -> dict[int, ChapterRewriteAttempt]:
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_project_id:
+        return {}
+    normalized_chapters = sorted({int(value or 0) for value in chapter_numbers or [] if int(value or 0) > 0})
+    if chapter_numbers is not None and not normalized_chapters:
+        return {}
+
+    stmt = select(
+        ChapterRewriteAttempt.id.label("row_id"),
+        ChapterRewriteAttempt.chapter_number.label("chapter_number"),
+        func.row_number()
+        .over(
+            partition_by=ChapterRewriteAttempt.chapter_number,
+            order_by=(
+                ChapterRewriteAttempt.attempt_no.desc(),
+                ChapterRewriteAttempt.created_at.desc(),
+                ChapterRewriteAttempt.id.desc(),
+            ),
+        )
+        .label("rn"),
+    ).where(ChapterRewriteAttempt.project_id == normalized_project_id)
+    if chapter_numbers is not None:
+        stmt = stmt.where(ChapterRewriteAttempt.chapter_number.in_(normalized_chapters))
+    ranked = stmt.subquery()
+    rows = session.execute(
+        select(ChapterRewriteAttempt)
+        .join(ranked, ChapterRewriteAttempt.id == ranked.c.row_id)
+        .where(ranked.c.rn == 1)
+    ).scalars().all()
+    return {
+        chapter_number: row
+        for row in rows
+        if (chapter_number := int(row.chapter_number or 0)) > 0
+    }
 
 
 def load_latest_stage_analysis_by_project(

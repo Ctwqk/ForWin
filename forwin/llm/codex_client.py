@@ -66,6 +66,37 @@ class CodexBridgeClient:
             raise RuntimeError(str(payload.get("error") or "Codex bridge call failed"))
         return str(payload.get("content", "") or "")
 
+    def submit_job(
+        self,
+        *,
+        prompt: str,
+        output_schema: dict | None = None,
+        cwd: str = "",
+        model: str = "",
+        permission_profile: str = "prompt_only_readonly",
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        headers = {"Content-Type": "application/json"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        response = self.client.post(
+            f"{self.bridge_url}/v1/codex/jobs",
+            headers=headers,
+            json={
+                "prompt": prompt,
+                "output_schema": output_schema,
+                "timeout_seconds": timeout_seconds or self.timeout_seconds,
+                "cwd": cwd,
+                "model": model,
+                "permission_profile": permission_profile,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if not payload.get("ok", False):
+            raise RuntimeError(str(payload.get("error") or "Codex job submit failed"))
+        return payload
+
     @staticmethod
     def _prompt_from_messages(
         messages: list[dict],

@@ -107,6 +107,8 @@ services:
   publisher-browser:
     build: .
     container_name: forwin-publisher-browser
+    profiles:
+      - "publisher"
     depends_on:
       forwin:
         condition: service_healthy

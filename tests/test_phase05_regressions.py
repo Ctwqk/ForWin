@@ -5,9 +5,10 @@ import gc
 import json
 import logging
 import unittest
+import zipfile
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -23,6 +24,7 @@ from tests_support import capture_select_statements, count_matching_statements
 
 import forwin.api as api_module
 import forwin.api_project_payloads as api_project_payloads_module
+import forwin.api_publisher_ops as api_publisher_ops_module
 import forwin.api_runtime as api_runtime_module
 from forwin import cli as cli_module
 from forwin.api_pages import render_home_page
@@ -1713,6 +1715,101 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(payload[0].chapters[0]["summary"], "摘要一")
         self.assertEqual(payload[0].chapters[1]["char_count"], 200)
 
+    def test_api_projects_only_include_recent_chapter_preview(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = postgres_test_url("projects-with-chapter-preview")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="测试书", premise="前提", genre="玄幻")
+                arc = updater.create_arc_plan(project.id, "剧情")
+                for number in range(1, 76):
+                    plan = updater.create_chapter_plan(
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=number,
+                        title=f"第{number}章",
+                        one_line="推进",
+                        goals=["推进"],
+                    )
+                    session.add(
+                        ChapterDraft(
+                            chapter_plan_id=plan.id,
+                            version=1,
+                            body_text=f"正文{number}",
+                            summary=f"摘要{number}",
+                            char_count=number,
+                        )
+                    )
+                session.commit()
+
+                old_engine = api_module._engine
+                old_factory = api_module._SessionFactory
+                try:
+                    api_module._engine = engine
+                    api_module._SessionFactory = get_session_factory(engine)
+                    payload = api_module.list_projects()
+                finally:
+                    api_module._engine = old_engine
+                    api_module._SessionFactory = old_factory
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertEqual(payload[0].chapter_count, 75)
+        self.assertEqual([row["chapter_number"] for row in payload[0].chapters], [73, 74, 75])
+
+    def test_api_list_chapter_page_returns_page_metadata(self) -> None:
+        from forwin import api_project_ops
+
+        with TemporaryDirectory() as tmp:
+            db_path = postgres_test_url("chapter-page")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session_factory = get_session_factory(engine)
+            session = session_factory()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="分页书", premise="前提", genre="玄幻")
+                arc = updater.create_arc_plan(project.id, "剧情")
+                for number in range(1, 76):
+                    plan = updater.create_chapter_plan(
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=number,
+                        title=f"第{number}章",
+                        one_line="推进",
+                        goals=["推进"],
+                    )
+                    session.add(
+                        ChapterDraft(
+                            chapter_plan_id=plan.id,
+                            version=1,
+                            body_text=f"正文{number}",
+                            summary=f"摘要{number}",
+                            char_count=number,
+                        )
+                    )
+                session.commit()
+
+                page = api_project_ops.list_chapter_page(
+                    project.id,
+                    offset=60,
+                    limit=20,
+                    get_session=session_factory,
+                )
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertEqual(page.total, 75)
+        self.assertEqual(page.offset, 60)
+        self.assertEqual(page.limit, 20)
+        self.assertFalse(page.has_more)
+        self.assertEqual([item.chapter_number for item in page.chapters], list(range(61, 76)))
+
     def test_api_projects_include_generation_and_upload_counts(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = postgres_test_url("projects-with-counts")
@@ -3177,6 +3274,88 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(len(payload), 1)
         self.assertEqual(payload[0].char_count, 20)
         self.assertEqual(payload[0].summary, "新摘要")
+
+    def test_latest_rewrite_attempts_by_chapter_returns_one_latest_attempt_per_chapter(self) -> None:
+        from forwin.api_project_ops import latest_rewrite_attempts_by_chapter
+
+        with TemporaryDirectory() as tmp:
+            db_path = postgres_test_url("api-list-chapters-latest-attempt-helper")
+            engine = get_engine(db_path)
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="书", premise="p", genre="g")
+                arc = updater.create_arc_plan(project.id, "剧情")
+                plan_1 = updater.create_chapter_plan(
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=1,
+                    title="第一章",
+                    one_line="开场",
+                    goals=["推进"],
+                )
+                plan_2 = updater.create_chapter_plan(
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=2,
+                    title="第二章",
+                    one_line="转折",
+                    goals=["推进"],
+                )
+                draft_1 = ChapterDraft(chapter_plan_id=plan_1.id, version=1, body_text="正文一", summary="", char_count=3)
+                draft_2 = ChapterDraft(chapter_plan_id=plan_2.id, version=1, body_text="正文二", summary="", char_count=3)
+                session.add_all([draft_1, draft_2])
+                session.flush()
+                review_1 = ChapterReview(draft_id=draft_1.id, verdict="needs_revision")
+                review_2 = ChapterReview(draft_id=draft_2.id, verdict="needs_revision")
+                session.add_all([review_1, review_2])
+                session.flush()
+                session.add_all(
+                    [
+                        ChapterRewriteAttempt(
+                            project_id=project.id,
+                            chapter_number=1,
+                            attempt_no=1,
+                            trigger_review_id=review_1.id,
+                            source_draft_id=draft_1.id,
+                            result_draft_id=draft_1.id,
+                            repair_scope="chapter_plan",
+                            created_at=datetime(2026, 1, 1, 0, 0, 0),
+                        ),
+                        ChapterRewriteAttempt(
+                            project_id=project.id,
+                            chapter_number=1,
+                            attempt_no=2,
+                            trigger_review_id=review_1.id,
+                            source_draft_id=draft_1.id,
+                            result_draft_id=draft_1.id,
+                            repair_scope="draft",
+                            created_at=datetime(2026, 1, 1, 0, 1, 0),
+                        ),
+                        ChapterRewriteAttempt(
+                            project_id=project.id,
+                            chapter_number=2,
+                            attempt_no=1,
+                            trigger_review_id=review_2.id,
+                            source_draft_id=draft_2.id,
+                            result_draft_id=draft_2.id,
+                            repair_scope="band_plan",
+                            created_at=datetime(2026, 1, 1, 0, 2, 0),
+                        ),
+                    ]
+                )
+                session.commit()
+
+                attempts = latest_rewrite_attempts_by_chapter(session, project.id)
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertEqual(sorted(attempts), [1, 2])
+        self.assertEqual(attempts[1].attempt_no, 2)
+        self.assertEqual(attempts[1].repair_scope, "draft")
+        self.assertEqual(attempts[2].repair_scope, "band_plan")
 
     def test_phase4_prompt_includes_npc_intents_and_world_pressure(self) -> None:
         context = ChapterContextPack(
@@ -5574,7 +5753,9 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.assertIn("browser_extension/forwin-publisher", page.text)
                 self.assertIn("最近上传任务", page.text)
                 self.assertIn("下载扩展包", page.text)
+                self.assertIn("下载 Firefox 扩展包", page.text)
                 self.assertIn("/api/publishers/extension-package", page.text)
+                self.assertIn("/api/publishers/extension-package/firefox", page.text)
 
                 package = client.get("/api/publishers/extension-package")
                 self.assertEqual(package.status_code, 200)
@@ -5582,6 +5763,35 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.assertIn("forwin-publisher-extension.zip", package.headers["content-disposition"])
                 self.assertGreater(len(package.content), 0)
                 self.assertIn(b"manifest.json", package.content)
+
+                firefox_package = client.get("/api/publishers/extension-package/firefox")
+                self.assertEqual(firefox_package.status_code, 200)
+                self.assertEqual(firefox_package.headers["content-type"], "application/zip")
+                self.assertIn(
+                    "forwin-publisher-firefox-extension.zip",
+                    firefox_package.headers["content-disposition"],
+                )
+                self.assertEqual(firefox_package.headers["x-forwin-extension-target"], "firefox")
+                self.assertGreater(len(firefox_package.content), 0)
+                self.assertIn(b"manifest.json", firefox_package.content)
+
+                firefox_payload = api_publisher_ops_module._build_extension_package(
+                    Path.cwd() / "browser_extension" / "forwin-publisher",
+                    target="firefox",
+                )
+                with zipfile.ZipFile(BytesIO(firefox_payload)) as archive:
+                    manifest = json.loads(
+                        archive.read("forwin-publisher-firefox/manifest.json").decode("utf-8")
+                    )
+                    self.assertIn("forwin-publisher-firefox/README.md", archive.namelist())
+                self.assertIn("options_ui", manifest)
+                self.assertNotIn("options_page", manifest)
+                self.assertEqual(manifest["background"]["scripts"], ["background.js"])
+                self.assertEqual(
+                    manifest["browser_specific_settings"]["gecko"]["id"],
+                    "forwin-publisher@example.com",
+                )
+                self.assertNotIn("debugger", manifest.get("permissions", []))
 
                 platforms = client.get("/api/publishers/platforms")
                 self.assertEqual(platforms.status_code, 200)

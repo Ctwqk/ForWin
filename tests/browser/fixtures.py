@@ -467,6 +467,24 @@ class MockForWinBackend:
         self.handle_project_subroutes(route, path, method)
 
     def handle_project_subroutes(self, route: Route, path: str, method: str) -> None:
+        chapter_page = re.fullmatch(r"/api/projects/([^/]+)/chapters/page", path)
+        if chapter_page and method == "GET":
+            parsed = urlparse(route.request.url)
+            query = parse_qs(parsed.query)
+            offset = int((query.get("offset") or ["0"])[0] or 0)
+            limit = int((query.get("limit") or ["60"])[0] or 60)
+            all_chapters = self.project_detail(chapter_page.group(1))["chapters"]
+            page = all_chapters[offset:offset + limit]
+            self.capture(route, {})
+            json_reply(route, {
+                "project_id": chapter_page.group(1),
+                "total": len(all_chapters),
+                "offset": offset,
+                "limit": limit,
+                "has_more": offset + len(page) < len(all_chapters),
+                "chapters": page,
+            })
+            return
         chapters = re.fullmatch(r"/api/projects/([^/]+)/chapters", path)
         if chapters and method == "GET":
             json_reply(route, self.project_detail(chapters.group(1))["chapters"])
@@ -1179,4 +1197,4 @@ def goto_publishers(page: Page, base_url: str, backend: MockForWinBackend, *, br
 def goto_world_studio(page: Page, base_url: str, backend: MockForWinBackend) -> None:
     backend.install(page)
     page.goto(f"{base_url}/world-studio", wait_until="domcontentloaded")
-    expect(page.get_by_role("heading", name="World Studio")).to_be_visible()
+    expect(page.get_by_role("heading", name="世界档案")).to_be_visible()

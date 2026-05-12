@@ -5,6 +5,34 @@
       }
     }
 
+    function uploadJobPayloadLines(data) {
+      const payload = data && data.result_payload && typeof data.result_payload === 'object'
+        ? data.result_payload
+        : {};
+      const retry = payload.auto_retry && typeof payload.auto_retry === 'object'
+        ? payload.auto_retry
+        : null;
+      const lines = [];
+      if (retry && retry.failure_count) {
+        const maxAttempts = retry.max_attempts || 3;
+        if (retry.login_failure) {
+          lines.push(`自动重试：${retry.failure_count}/${maxAttempts}，登录状态失效，等待重新登录。`);
+        } else if (retry.next_attempt) {
+          lines.push(`自动重试：${retry.failure_count}/${maxAttempts}，已排队第 ${retry.next_attempt} 次尝试。`);
+        } else if (retry.exhausted) {
+          lines.push(`自动重试：${retry.failure_count}/${maxAttempts}，已达上限。`);
+        }
+      }
+      if (payload.codex_intervention_required) {
+        const intervention = payload.codex_intervention && typeof payload.codex_intervention === 'object'
+          ? payload.codex_intervention
+          : {};
+        const codexJobId = intervention.call && intervention.call.job_id;
+        lines.push(codexJobId ? `Codex：已提交介入任务 ${codexJobId}` : 'Codex：已请求介入排查上传失败。');
+      }
+      return lines;
+    }
+
     function renderUploadJob(data) {
       const lines = [
         `任务状态：${data.status}`,
@@ -13,6 +41,7 @@
         `章节：${data.chapter_title}`,
         data.message ? `说明：${data.message}` : '',
         data.error ? `错误：${data.error}` : '',
+        ...uploadJobPayloadLines(data),
         data.current_url ? `当前页面：${data.current_url}` : '',
         data.started_at ? `开始时间：${data.started_at}` : '',
         data.finished_at ? `结束时间：${data.finished_at}` : '',
@@ -54,6 +83,7 @@
           item.finished_at ? `结束时间：${item.finished_at}` : '',
           item.message ? `说明：${item.message}` : '',
           item.error ? `错误：${item.error}` : '',
+          ...uploadJobPayloadLines(item),
         ].filter(Boolean);
         node.appendChild(createNode('div', lines.join('\\n'), 'status'));
         if (item.current_url) {

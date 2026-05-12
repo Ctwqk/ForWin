@@ -49,6 +49,67 @@ def test_connection_state_lists_platforms_and_does_not_trust_connected_without_c
         engine.dispose()
 
 
+def test_connection_state_login_page_evidence_overrides_cookie_signal() -> None:
+    engine, runtime = _runtime("publisher-runtime-connection-login-page")
+    try:
+        runtime.connection_state.heartbeat(
+            client_id="client-1",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://127.0.0.1:8899",
+            platforms=[
+                {
+                    "platform": "qidian",
+                    "connected": False,
+                    "cookie_signal": True,
+                    "page_login_visible": True,
+                    "current_url": "https://write.qq.com/portal/login",
+                    "login_method": "scan",
+                    "last_error": "login-required",
+                }
+            ],
+        )
+        items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
+
+        assert items["qidian"]["connected"] is False
+        assert items["qidian"]["extension_online"] is True
+        assert items["qidian"]["last_error"] == "login-required"
+    finally:
+        engine.dispose()
+
+
+def test_connection_state_unverified_cookie_signal_does_not_display_logged_in() -> None:
+    engine, runtime = _runtime("publisher-runtime-connection-cookie-unverified")
+    try:
+        runtime.connection_state.heartbeat(
+            client_id="client-1",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://127.0.0.1:8899",
+            platforms=[
+                {
+                    "platform": "qidian",
+                    "connected": False,
+                    "cookie_signal": True,
+                    "page_evidence_required": True,
+                    "page_inspected": False,
+                    "page_authenticated": False,
+                    "login_method": "scan",
+                    "last_error": "",
+                }
+            ],
+        )
+        items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
+
+        assert items["qidian"]["connected"] is False
+        assert items["qidian"]["extension_online"] is True
+        assert items["qidian"]["last_error"] == ""
+    finally:
+        engine.dispose()
+
+
 def test_connection_state_prefers_recent_non_stale_client_when_preferred_is_stale() -> None:
     engine, runtime = _runtime(
         "publisher-runtime-connection-preferred",

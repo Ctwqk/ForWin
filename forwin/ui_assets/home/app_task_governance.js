@@ -1,3 +1,5 @@
+    const PROJECT_CHAPTER_RENDER_BATCH_SIZE = 60;
+
     function governanceLabel(governance = {}) {
       const parts = [
         governance.progression_mode || 'legacy_relaxed',
@@ -71,6 +73,54 @@
       };
       card.appendChild(list);
       return card;
+    }
+
+    function appendProjectChapterRow(chapterList, item, project, chapter) {
+      const row = createNode('div', '', 'chapter-row');
+      const hasDraft = Boolean(chapter.has_draft);
+      const hasReview = Boolean(chapter.has_review);
+      row.appendChild(createNode('strong', `第${chapter.chapter_number}章《${chapter.title}》`));
+      row.appendChild(createNode('div', `状态：${chapterStatusLabel(chapter.status)} | 字数：${chapter.char_count || 0}`, 'meta-line'));
+      if (chapter.summary) row.appendChild(createNode('div', chapter.summary, 'meta-line'));
+      const actions = createNode('div', '', 'action-row');
+      const bodyId = `chapter_body_${item.project_id}_${chapter.chapter_number}`;
+      if (hasDraft) {
+        actions.appendChild(createButton('查看正文', () => toggleChapterBody(item.project_id, chapter.chapter_number, bodyId), 'ghost'));
+        actions.appendChild(createButton('发布到平台', async () => {
+          try {
+            const chapterDetail = await requestJson(`/api/projects/${item.project_id}/chapters/${chapter.chapter_number}`);
+            openTaskModal('upload', {
+              project_id: item.project_id,
+              platform: project.automation?.publish?.platform || '',
+              book_name: project.automation?.publish?.book_name || project.title || item.title || '',
+              chapter_title: chapter.title,
+              body: chapterDetail.body || '',
+              upload_url: project.automation?.publish?.upload_url || '',
+              create_if_missing: Boolean(project.automation?.publish?.create_if_missing),
+            });
+          } catch (error) {
+            setGlobalStatus(error.message || String(error), '章节读取失败');
+          }
+        }, 'secondary'));
+      }
+      if (chapter.status === 'needs_review' && hasReview) {
+        actions.appendChild(createButton('查看 Review', () => showReview(item.project_id, chapter.chapter_number), 'ghost'));
+        actions.appendChild(createButton('Review 决策链', () => jumpToReviewDecisionChain(item.project_id, chapter.chapter_number), 'ghost'));
+        actions.appendChild(createButton('接受', () => approveReview(item.project_id, chapter.chapter_number, false), 'ghost'));
+        actions.appendChild(createButton('接受并继续', () => approveReview(item.project_id, chapter.chapter_number, true), 'primary'));
+      }
+      if (!actions.childNodes.length) {
+        const reason = chapter.status === 'needs_review'
+          ? '该章当前停在待处理状态，但还没有可查看的 draft / review。'
+          : '该章目前只有计划信息，还没有可查看正文。';
+        row.appendChild(createNode('div', reason, 'meta-line'));
+      } else {
+        row.appendChild(actions);
+      }
+      const bodyBlock = createNode('div', '', 'chapter-body');
+      bodyBlock.id = bodyId;
+      row.appendChild(bodyBlock);
+      chapterList.appendChild(row);
     }
 
     function buildQueryString(params = {}) {
@@ -649,22 +699,38 @@
       return card;
     }
 
-    async function renderGenerationDrawer(item, drawerProject = null, drawerChapters = null) {
+    async function renderGenerationDrawer(item, drawerProject = null, drawerChapters = null, drawerChapterPage = null) {
       const body = document.getElementById('drawer_body');
       let projectDetail = drawerProject || null;
+      let projectChapterPage = drawerChapterPage || null;
       let projectChapters = Array.isArray(drawerChapters) ? drawerChapters : null;
       let projectLoadError = null;
       if (item.project_id) {
         try {
           projectDetail = projectDetail || await loadProjectDetail(item.project_id);
-          projectChapters = projectChapters || (Array.isArray(projectDetail.chapters)
-            ? projectDetail.chapters
-            : await loadProjectChapters(item.project_id));
+          if (!projectChapters) {
+            projectChapterPage = await loadProjectChapterPage(item.project_id, 0, PROJECT_CHAPTER_RENDER_BATCH_SIZE);
+            projectChapters = projectChapterPage.chapters;
+          }
         } catch (error) {
           projectLoadError = error;
           projectChapters = projectChapters || [];
+          projectChapterPage = projectChapterPage || {
+            total: projectChapters.length,
+            offset: 0,
+            limit: projectChapters.length,
+            has_more: false,
+            chapters: projectChapters,
+          };
         }
       }
+      projectChapterPage = projectChapterPage || {
+        total: Number(projectDetail?.chapter_count || projectChapters?.length || 0),
+        offset: 0,
+        limit: projectChapters?.length || 0,
+        has_more: Number(projectDetail?.chapter_count || 0) > (projectChapters?.length || 0),
+        chapters: projectChapters || [],
+      };
 
       body.appendChild(renderGenerationControlPanel(item, projectDetail, projectChapters || []));
       if (item.project_id && projectDetail) {
@@ -955,57 +1021,57 @@
         const section = createNode('section', '', 'detail-card');
         section.appendChild(createNode('div', '项目章节', 'task-id'));
         const chapterList = createNode('div', '', 'drawer-grid');
-        const visibleChapters = chapters.filter((chapter) => chapter.status !== 'planned');
+        let visibleChapters = chapters.filter((chapter) => chapter.status !== 'planned');
+        let totalChapterCount = Number(projectChapterPage?.total || visibleChapters.length);
+        let nextChapterOffset = Number(projectChapterPage?.offset || 0) + (Array.isArray(projectChapterPage?.chapters) ? projectChapterPage.chapters.length : visibleChapters.length);
+        let hasMoreChapterPages = Boolean(projectChapterPage?.has_more);
         if (!visibleChapters.length) {
           chapterList.appendChild(createNode('div', '项目已创建，但还没有可展示的已生成章节。', 'empty'));
         } else {
-          visibleChapters.forEach((chapter) => {
-            const row = createNode('div', '', 'chapter-row');
-            const hasDraft = Boolean(chapter.has_draft);
-            const hasReview = Boolean(chapter.has_review);
-            row.appendChild(createNode('strong', `第${chapter.chapter_number}章《${chapter.title}》`));
-            row.appendChild(createNode('div', `状态：${chapterStatusLabel(chapter.status)} | 字数：${chapter.char_count || 0}`, 'meta-line'));
-            if (chapter.summary) row.appendChild(createNode('div', chapter.summary, 'meta-line'));
-            const actions = createNode('div', '', 'action-row');
-            const bodyId = `chapter_body_${item.project_id}_${chapter.chapter_number}`;
-            if (hasDraft) {
-              actions.appendChild(createButton('查看正文', () => toggleChapterBody(item.project_id, chapter.chapter_number, bodyId), 'ghost'));
-              actions.appendChild(createButton('发布到平台', async () => {
-                try {
-                  const chapterDetail = await requestJson(`/api/projects/${item.project_id}/chapters/${chapter.chapter_number}`);
-                  openTaskModal('upload', {
-                    project_id: item.project_id,
-                    platform: project.automation?.publish?.platform || '',
-                    book_name: project.automation?.publish?.book_name || project.title || item.title || '',
-                    chapter_title: chapter.title,
-                    body: chapterDetail.body || '',
-                    upload_url: project.automation?.publish?.upload_url || '',
-                    create_if_missing: Boolean(project.automation?.publish?.create_if_missing),
-                  });
-                } catch (error) {
-                  setGlobalStatus(error.message || String(error), '章节读取失败');
-                }
-              }, 'secondary'));
+          let renderedChapterCount = Math.min(PROJECT_CHAPTER_RENDER_BATCH_SIZE, visibleChapters.length);
+          const pagingStatus = createNode('div', '', 'meta-line');
+          const loadMoreButton = createButton('加载更多章节', async () => {
+            if (renderedChapterCount < visibleChapters.length) {
+              renderedChapterCount = Math.min(
+                renderedChapterCount + PROJECT_CHAPTER_RENDER_BATCH_SIZE,
+                visibleChapters.length,
+              );
+              renderVisibleProjectChapters();
+              return;
             }
-            if (chapter.status === 'needs_review' && hasReview) {
-              actions.appendChild(createButton('查看 Review', () => showReview(item.project_id, chapter.chapter_number), 'ghost'));
-              actions.appendChild(createButton('Review 决策链', () => jumpToReviewDecisionChain(item.project_id, chapter.chapter_number), 'ghost'));
-              actions.appendChild(createButton('接受', () => approveReview(item.project_id, chapter.chapter_number, false), 'ghost'));
-              actions.appendChild(createButton('接受并继续', () => approveReview(item.project_id, chapter.chapter_number, true), 'primary'));
+            if (!hasMoreChapterPages || !item.project_id) return;
+            loadMoreButton.disabled = true;
+            try {
+              const page = await loadProjectChapterPage(item.project_id, nextChapterOffset, PROJECT_CHAPTER_RENDER_BATCH_SIZE);
+              const incoming = (Array.isArray(page.chapters) ? page.chapters : [])
+                .filter((chapter) => chapter.status !== 'planned');
+              visibleChapters = visibleChapters.concat(incoming);
+              totalChapterCount = Number(page.total || totalChapterCount || visibleChapters.length);
+              nextChapterOffset = Number(page.offset || nextChapterOffset) + (Array.isArray(page.chapters) ? page.chapters.length : incoming.length);
+              hasMoreChapterPages = Boolean(page.has_more);
+              renderedChapterCount = visibleChapters.length;
+              renderVisibleProjectChapters();
+            } catch (error) {
+              setGlobalStatus(error.message || String(error), '章节分页加载失败');
+            } finally {
+              loadMoreButton.disabled = false;
             }
-            if (!actions.childNodes.length) {
-              const reason = chapter.status === 'needs_review'
-                ? '该章当前停在待处理状态，但还没有可查看的 draft / review。'
-                : '该章目前只有计划信息，还没有可查看正文。';
-              row.appendChild(createNode('div', reason, 'meta-line'));
-            } else {
-              row.appendChild(actions);
-            }
-            const bodyBlock = createNode('div', '', 'chapter-body');
-            bodyBlock.id = bodyId;
-            row.appendChild(bodyBlock);
-            chapterList.appendChild(row);
-          });
+          }, 'ghost');
+          const renderVisibleProjectChapters = () => {
+            clearNode(chapterList);
+            visibleChapters
+              .slice(0, renderedChapterCount)
+              .forEach((chapter) => appendProjectChapterRow(chapterList, item, project, chapter));
+            pagingStatus.textContent = `已显示 ${renderedChapterCount} / ${totalChapterCount || visibleChapters.length} 章`;
+            loadMoreButton.style.display = renderedChapterCount < visibleChapters.length || hasMoreChapterPages ? '' : 'none';
+          };
+          renderVisibleProjectChapters();
+          if (visibleChapters.length > PROJECT_CHAPTER_RENDER_BATCH_SIZE || hasMoreChapterPages) {
+            section.appendChild(pagingStatus);
+            const pagingActions = createNode('div', '', 'action-row');
+            pagingActions.appendChild(loadMoreButton);
+            section.appendChild(pagingActions);
+          }
         }
         section.appendChild(chapterList);
         body.appendChild(section);

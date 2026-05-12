@@ -31,6 +31,37 @@
       pointer-events:none;
     }
     .wrap { position:relative; max-width:1220px; margin:0 auto; padding:32px 24px 80px; }
+    .main-menu {
+      display:flex;
+      align-items:center;
+      gap:8px;
+      flex-wrap:nowrap;
+      overflow-x:auto;
+      white-space:nowrap;
+      scrollbar-width:none;
+      margin-bottom:18px;
+      font:700 13px/1 var(--ui);
+    }
+    .main-menu::-webkit-scrollbar { display:none; }
+    .main-menu .menu-item {
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      flex:0 0 auto;
+      min-height:36px;
+      padding:0 14px;
+      border:1px solid rgba(114,95,73,.14);
+      border-radius:999px;
+      background:rgba(255,255,255,.62);
+      color:var(--muted);
+      text-decoration:none;
+      box-shadow:none;
+    }
+    .main-menu .menu-item[aria-current="page"] {
+      border-color:rgba(182,75,42,.28);
+      background:linear-gradient(135deg, rgba(182,75,42,.14), rgba(40,77,70,.1));
+      color:var(--ink);
+    }
     .masthead {
       display:flex;
       justify-content:space-between;
@@ -58,6 +89,8 @@
       padding:26px;
       box-shadow:0 20px 56px rgba(73,52,28,.10);
       backdrop-filter:blur(8px);
+      min-width:0;
+      overflow-wrap:anywhere;
     }
     .hero-card {
       min-height:280px;
@@ -89,6 +122,7 @@
     .hero-actions, .actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
     .hero-actions { margin-top:20px; }
     .layout-grid { display:grid; grid-template-columns:minmax(0, 1fr) minmax(340px, .96fr); gap:22px; margin-top:24px; }
+    .layout-grid > *, .stack, .grid { min-width:0; }
     .stack { display:grid; gap:22px; }
     .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:18px; margin-top:20px; }
     button, a.button {
@@ -159,10 +193,12 @@
     }
     .task-item strong { display:block; margin-bottom:8px; font-size:18px; line-height:1.2; }
     .task-item a { color:var(--accent); }
-    code { font-family:"SFMono-Regular","Consolas",monospace; font-size:13px; }
+    code { font-family:"SFMono-Regular","Consolas",monospace; font-size:13px; overflow-wrap:anywhere; }
     .card-title { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:12px; }
     .section-note { font:500 13px/1.6 var(--ui); color:var(--muted); }
     @media (max-width: 980px) {
+      .main-menu { gap:6px; }
+      .main-menu .menu-item { padding:0 10px; }
       .masthead, .hero, .layout-grid { grid-template-columns:1fr; display:grid; }
       .masthead { gap:12px; }
       h1 { font-size:42px; max-width:11ch; }

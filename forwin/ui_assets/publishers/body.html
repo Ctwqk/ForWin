@@ -1,4 +1,11 @@
   <div class="wrap">
+    <nav class="main-menu" aria-label="ForWin primary navigation">
+      <a class="menu-item" href="/">书本</a>
+      <a class="menu-item" href="/#task">任务</a>
+      <a class="menu-item" href="/world-studio">世界档案</a>
+      <a class="menu-item" href="/publishers" aria-current="page">发布</a>
+      <a class="menu-item" href="/#config">配置</a>
+    </nav>
     <header class="masthead">
       <div>
         <div class="eyebrow">Publisher Control</div>
@@ -16,7 +23,8 @@
         <div class="hero-actions">
           <a class="button secondary" href="/">返回首页控制台</a>
           <button class="secondary" onclick="openExtensionOptions()">打开扩展设置</button>
-          <a class="button secondary" href="/api/publishers/extension-package">下载扩展包</a>
+          <a class="button secondary" href="/api/publishers/extension-package">下载扩展包（Chrome/Edge）</a>
+          <a class="button secondary" href="/api/publishers/extension-package/firefox">下载 Firefox 扩展包</a>
         </div>
       </article>
       <aside class="card">
@@ -26,7 +34,7 @@
             <div class="section-note">如果你通过 Mac 或笔记本访问这台 Linux 后端，请在本机浏览器安装扩展。</div>
           </div>
         </div>
-        <p class="muted">不要直接把 Linux 服务器路径当成本机路径使用。先下载 zip，再用浏览器开发者模式加载解压目录。</p>
+        <p class="muted">不要直接把 Linux 服务器路径当成本机路径使用。Chrome/Edge 下载后解压并加载 forwin-publisher；Firefox 下载后在 about:debugging 里临时加载 forwin-publisher-firefox/manifest.json。</p>
         <p><code>@@EXTENSION_INSTALL_PATH@@</code></p>
         <p class="muted">扩展里要填当前 ForWin 后端 URL 和共享 API Key。首次安装时，请先在浏览器扩展管理页手动打开扩展选项；页面里的“打开扩展设置”按钮要等扩展已经完成首次配置后才会生效。</p>
       </aside>

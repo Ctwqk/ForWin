@@ -96,10 +96,10 @@ def _world_studio_html() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ForWin World Studio</title>
+  <title>ForWin 世界档案</title>
 </head>
 <body>
-  <div id="root">World Studio 尚未构建。运行 npm --prefix frontend/world-studio run build。</div>
+  <div id="root">世界档案尚未构建。运行 npm --prefix frontend/world-studio run build。</div>
 </body>
 </html>
 """
@@ -111,9 +111,9 @@ def _world_studio_asset(asset_path: str) -> tuple[bytes, str]:
     try:
         path.relative_to(asset_root)
     except ValueError:
-        raise HTTPException(404, "World Studio asset not found") from None
+        raise HTTPException(404, "世界档案 asset not found") from None
     if not path.exists():
-        raise HTTPException(404, "World Studio asset not found")
+        raise HTTPException(404, "世界档案 asset not found")
     suffix = path.suffix.lower()
     media_type = {
         ".js": "text/javascript; charset=utf-8",

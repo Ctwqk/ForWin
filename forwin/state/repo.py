@@ -709,6 +709,7 @@ class StateRepository:
                 for item in chapter_experience.chapter_entry_targets
                 if str(item.entity_name or "").strip()
             )
+        names.update(self._world_pressure_character_names(project_id, chapter_number))
         return names
 
     def get_allowed_entity_snapshots(
@@ -725,15 +726,50 @@ class StateRepository:
             for item in roster_items
             if item.entity_kind == "character" and str(item.entity_id or "").strip()
         }
+        pressure_character_names = self._world_pressure_character_names(project_id, chapter_number)
         active_entities = self.get_active_entities(project_id)
         snapshots: list[EntitySnapshot] = []
         for entity in active_entities:
             if entity.kind != "character":
                 snapshots.append(entity)
                 continue
-            if entity.entity_id in allowed_character_ids:
+            entity_names = {
+                str(entity.name or "").strip(),
+                *[str(alias or "").strip() for alias in (entity.aliases or [])],
+            }
+            if entity.entity_id in allowed_character_ids or bool(entity_names & pressure_character_names):
                 snapshots.append(entity)
         return snapshots
+
+    def _world_pressure_character_names(
+        self,
+        project_id: str,
+        chapter_number: int,
+    ) -> set[str]:
+        pressure = self.get_latest_world_pressure(project_id, before_chapter=chapter_number)
+        if pressure is None:
+            return set()
+        pressure_text = "\n".join(
+            [
+                str(pressure.pressure_summary or ""),
+                *[str(item or "") for item in (pressure.notable_shifts or [])],
+            ]
+        )
+        if not pressure_text.strip():
+            return set()
+
+        names: set[str] = set()
+        for entity in self.get_active_entities(project_id):
+            if entity.kind != "character":
+                continue
+            candidates = [
+                str(entity.name or "").strip(),
+                *[str(alias or "").strip() for alias in (entity.aliases or [])],
+            ]
+            matched = [name for name in candidates if name and name in pressure_text]
+            if matched:
+                names.update(name for name in candidates if name)
+        return names
 
     def get_active_subworld_summary(
         self,

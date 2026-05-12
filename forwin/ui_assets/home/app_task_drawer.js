@@ -52,8 +52,8 @@
         return { item };
       }
       const project = await loadProjectDetail(item.project_id);
-      const chapters = Array.isArray(project.chapters) ? project.chapters : await loadProjectChapters(item.project_id);
-      return { item, project, chapters };
+      const chapterPage = await loadProjectChapterPage(item.project_id, 0, 60);
+      return { item, project, chapters: chapterPage.chapters, chapterPage };
     }
 
     function captureDrawerBodyState() {
@@ -103,7 +103,7 @@
       clearNode(body);
       overlay.classList.add('open');
       if (item.task_kind === 'generation') {
-        await renderGenerationDrawer(item, snapshot.project || null, snapshot.chapters || null);
+        await renderGenerationDrawer(item, snapshot.project || null, snapshot.chapters || null, snapshot.chapterPage || null);
       } else {
         renderUploadDrawer(item);
       }

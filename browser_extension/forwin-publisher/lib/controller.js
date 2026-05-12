@@ -622,13 +622,27 @@ export class PublisherExtensionController {
     await this.dispatchPendingCommentSyncJobs();
   }
 
+  async inspectPlatformState(platformId) {
+    if (typeof this.deps.inspectPlatformState !== 'function') {
+      return null;
+    }
+    try {
+      return await this.deps.inspectPlatformState(platformId);
+    } catch (_error) {
+      return null;
+    }
+  }
+
   async _collectConnectedPlatforms() {
     const connectedPlatforms = [];
     for (const platformId of Object.keys(PLATFORM_ADAPTERS)) {
       const savedState = await this.deps.getPlatformState(platformId);
       const cookies = await this.deps.getCookies(platformId);
-      const heartbeatState = buildHeartbeatState(platformId, cookies, savedState);
-      if (heartbeatState.connected || heartbeatState.raw_state?.cookie_signal) {
+      const inspection = await this.inspectPlatformState(platformId);
+      const heartbeatState = buildHeartbeatState(platformId, cookies, savedState, inspection);
+      const loggedOutByPage = heartbeatState.raw_state?.page_login_visible
+        && !heartbeatState.raw_state?.page_authenticated;
+      if (!loggedOutByPage && (heartbeatState.connected || heartbeatState.raw_state?.cookie_signal)) {
         connectedPlatforms.push(platformId);
       }
     }
@@ -646,7 +660,8 @@ export class PublisherExtensionController {
     for (const platformId of Object.keys(PLATFORM_ADAPTERS)) {
       const cookies = await this.deps.getCookies(platformId);
       const savedState = await this.deps.getPlatformState(platformId);
-      const heartbeatState = buildHeartbeatState(platformId, cookies, savedState);
+      const inspection = await this.inspectPlatformState(platformId);
+      const heartbeatState = buildHeartbeatState(platformId, cookies, savedState, inspection);
       platforms.push({
         ...heartbeatState,
         raw_state: {
@@ -675,8 +690,11 @@ export class PublisherExtensionController {
     for (const platformId of Object.keys(PLATFORM_ADAPTERS)) {
       const savedState = await this.deps.getPlatformState(platformId);
       const cookies = await this.deps.getCookies(platformId);
-      const heartbeatState = buildHeartbeatState(platformId, cookies, savedState);
-      if (!heartbeatState.connected && !heartbeatState.raw_state?.cookie_signal) {
+      const inspection = await this.inspectPlatformState(platformId);
+      const heartbeatState = buildHeartbeatState(platformId, cookies, savedState, inspection);
+      const loggedOutByPage = heartbeatState.raw_state?.page_login_visible
+        && !heartbeatState.raw_state?.page_authenticated;
+      if (loggedOutByPage || (!heartbeatState.connected && !heartbeatState.raw_state?.cookie_signal)) {
         continue;
       }
       if (!cookies.length) {
@@ -685,6 +703,13 @@ export class PublisherExtensionController {
       await this.deps.backend.syncBrowserSession({
         client_id: clientId,
         platform: platformId,
+        raw_state: {
+          ...heartbeatState.raw_state,
+          connected: heartbeatState.connected,
+          login_method: heartbeatState.login_method,
+          last_error: heartbeatState.last_error,
+          cookie_count: cookies.length,
+        },
         cookies: cookies.map((cookie) => this.#cookieForSessionSync(cookie)),
       });
       synced += 1;
@@ -804,8 +829,8 @@ export class PublisherExtensionController {
         connected: true,
         message: `${getPlatformAdapter(session.platformId).displayName} 登录成功，正在关闭弹窗。`,
       });
-      await this.deps.closePopup(session.popupWindowId);
       this.loginSessions.delete(session.popupTabId);
+      await this.deps.closePopup(session.popupWindowId);
       return;
     }
 

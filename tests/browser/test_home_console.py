@@ -13,18 +13,12 @@ def test_home_console_navigation_books_and_config(page, browser_test_base_url: s
     goto_home(page, browser_test_base_url, backend)
 
     expect(page.locator("#book_list")).to_contain_text("雾港潮生录")
+    expect(page.get_by_role("navigation", name="ForWin primary navigation")).to_contain_text("世界档案")
+    expect(page.get_by_role("navigation", name="ForWin primary navigation")).to_contain_text("发布")
+    expect(page.get_by_text("V4 世界")).to_have_count(0)
     page.locator("#tab_task").click()
     expect(page.locator("#panel_task")).to_contain_text("统一任务中心")
     expect(page.locator("#task_list")).to_contain_text("等待人工 review")
-    page.locator("#tab_world_v4").click()
-    expect(page.locator("#panel_world_v4")).to_contain_text("V4 世界模型")
-    page.locator("#world_v4_project_id").fill("project-1")
-    page.get_by_role("button", name="Debug").click()
-    expect(page.locator("#world_v4_debug_output")).to_contain_text("debug-1")
-    page.get_by_role("button", name="Lines").click()
-    expect(page.locator("#world_v4_debug_output")).to_contain_text("lines-1")
-    page.get_by_role("button", name="Export").click()
-    expect(page.locator("#world_v4_debug_output")).to_contain_text("export-1")
 
     page.locator("#tab_config").click()
     expect(page.locator("#profile_list")).to_contain_text("测试 MiniMax")
@@ -45,8 +39,8 @@ def test_home_console_navigation_books_and_config(page, browser_test_base_url: s
     assert prefs["min_chapter_chars"] == 3100
     assert prefs["operation_mode"] == "copilot"
 
-    expect(page.get_by_role("link", name="高级发布页")).to_have_attribute("href", "/publishers")
-    expect(page.get_by_role("link", name="World Studio")).to_have_attribute("href", "/world-studio")
+    expect(page.get_by_role("link", name="发布")).to_have_attribute("href", "/publishers")
+    expect(page.get_by_role("link", name="世界档案")).to_have_attribute("href", "/world-studio")
 
 
 def test_book_modal_validates_bindings_and_opens_genesis(page, browser_test_base_url: str) -> None:

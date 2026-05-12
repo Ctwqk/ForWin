@@ -6,7 +6,7 @@ from .browser_sessions import BrowserCookieCodec, BrowserSessionService
 from .comment_sync import CommentSyncService
 from .connection_state import ExtensionConnectionService
 from .platform_catalog import PlatformCatalog
-from .upload_jobs import UploadJobService
+from .upload_jobs import CodexInterventionHandler, UploadJobService
 
 
 class PublisherRuntimeService:
@@ -20,6 +20,7 @@ class PublisherRuntimeService:
         publisher_session_secret: str,
         publisher_session_encryption_required: bool,
         observability=None,
+        codex_intervention_handler: CodexInterventionHandler | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.observability = observability
@@ -48,6 +49,7 @@ class PublisherRuntimeService:
             platform_catalog=self.platform_catalog,
             connection_state=self.connection_state,
             audit=self.audit,
+            codex_intervention_handler=codex_intervention_handler,
         )
         self.comment_sync = CommentSyncService(
             session_factory=session_factory,

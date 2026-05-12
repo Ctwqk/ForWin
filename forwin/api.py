@@ -184,6 +184,7 @@ from forwin.protocol.trope_library import (
 from forwin.state.repo import StateRepository
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
+from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime_settings import RuntimeSettingsStore
@@ -2010,6 +2011,7 @@ async def lifespan(app: FastAPI):
             preferred_client_id=_config.publisher_preferred_client_id,
             publisher_session_secret=_config.publisher_session_secret,
             publisher_session_encryption_required=_config.publisher_session_encryption_required,
+            codex_intervention_handler=build_codex_intervention_handler(_config),
         )
     _publisher_manager.requeue_interrupted_upload_jobs()
     if _runtime_settings is None:

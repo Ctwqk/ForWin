@@ -763,6 +763,15 @@ class ChapterInfo(BaseModel):
     latest_repair_scope: str = ""
 
 
+class ChapterListResponse(BaseModel):
+    project_id: str
+    total: int = 0
+    offset: int = 0
+    limit: int = 60
+    has_more: bool = False
+    chapters: list[ChapterInfo] = Field(default_factory=list)
+
+
 class ProjectDetail(ProjectArcSnapshotFields):
     id: str
     title: str
@@ -1447,6 +1456,7 @@ class ExtensionSessionSyncRequest(BaseModel):
     client_id: str
     platform: str
     cookies: list[ExtensionBrowserCookie] = Field(default_factory=list)
+    raw_state: dict[str, Any] = Field(default_factory=dict)
 
 
 class ExtensionSessionSyncResponse(BaseModel):

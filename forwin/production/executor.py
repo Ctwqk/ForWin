@@ -144,6 +144,9 @@ class ProductionExecutor:
             return self.publisher_manager_factory()
         if self.session_factory is None or self.config is None:
             return None
+        from forwin.publisher_runtime.codex_intervention import (
+            build_codex_intervention_handler,
+        )
         from forwin.publishers import PublisherManager
 
         return PublisherManager(
@@ -154,4 +157,5 @@ class ProductionExecutor:
             publisher_session_encryption_required=bool(
                 getattr(self.config, "publisher_session_encryption_required", False)
             ),
+            codex_intervention_handler=build_codex_intervention_handler(self.config),
         )

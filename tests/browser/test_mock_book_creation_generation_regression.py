@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from playwright.sync_api import expect
 
-from tests.browser.fixtures import GENESIS_STAGES, MockForWinBackend, goto_home
+from tests.browser.fixtures import (
+    GENESIS_STAGES,
+    MockForWinBackend,
+    goto_home,
+    sample_chapter,
+    sample_generation_task,
+    sample_project,
+)
 
 
 STAGE_LABELS = {
@@ -60,3 +67,49 @@ def test_mock_regression_create_book_start_generation_and_persist_after_refresh(
     expect(page.locator("#drawer_body")).to_contain_text("潮声第1章")
     page.get_by_role("button", name="查看正文").first.click()
     expect(page.locator("#drawer_body")).to_contain_text("第1章正文")
+
+
+def test_large_project_chapter_list_renders_in_batches(page, browser_test_base_url: str) -> None:
+    """CI regression only: mocked frontend data, verifies large projects avoid full chapter DOM upfront."""
+    project = sample_project("project-many", title="长篇分页书")
+    project["chapters"] = [sample_chapter(number) for number in range(1, 76)]
+    project["chapter_count"] = 75
+    project["generated_chapter_count"] = 75
+    backend = MockForWinBackend(
+        projects=[project],
+        tasks={"task-many": sample_generation_task("task-many", project_id="project-many")},
+    )
+    goto_home(page, browser_test_base_url, backend)
+
+    page.locator("#tab_book").click()
+    page.locator(".task-item").filter(has_text="长篇分页书").get_by_role("button", name="查看书本").click()
+    expect(page.locator("#drawer_body")).to_contain_text("项目章节")
+
+    page_requests = [
+        item
+        for item in backend.captured
+        if item["method"] == "GET" and item["path"] == "/api/projects/project-many/chapters/page"
+    ]
+    assert page_requests
+    assert page_requests[0]["query"]["offset"] == ["0"]
+    assert page_requests[0]["query"]["limit"] == ["60"]
+
+    section = page.locator("#drawer_body section.detail-card").filter(
+        has=page.locator(".task-id", has_text="项目章节")
+    ).first
+    rows = section.locator(".chapter-row")
+    expect(rows).to_have_count(60)
+    expect(section).to_contain_text("已显示 60 / 75 章")
+    expect(section).not_to_contain_text("潮声第75章")
+
+    section.get_by_role("button", name="加载更多章节").click()
+
+    page_requests = [
+        item
+        for item in backend.captured
+        if item["method"] == "GET" and item["path"] == "/api/projects/project-many/chapters/page"
+    ]
+    assert page_requests[-1]["query"]["offset"] == ["60"]
+    assert page_requests[-1]["query"]["limit"] == ["60"]
+    expect(rows).to_have_count(75)
+    expect(section).to_contain_text("潮声第75章")

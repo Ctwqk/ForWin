@@ -211,10 +211,22 @@ def _env_values() -> dict[str, object]:
             env, "FORWIN_OBSERVABILITY_SLOW_SPAN_THRESHOLD_MS", 1000
         ),
         "observability_record_db_spans": _env_bool(
-            env, "FORWIN_OBSERVABILITY_RECORD_DB_SPANS", False
+            env, "FORWIN_OBSERVABILITY_RECORD_DB_SPANS", True
         ),
         "observability_record_payload_sizes": _env_bool(
             env, "FORWIN_OBSERVABILITY_RECORD_PAYLOAD_SIZES", True
+        ),
+        "retention_cleanup_on_startup": _env_bool(
+            env, "FORWIN_RETENTION_CLEANUP_ON_STARTUP", True
+        ),
+        "performance_span_retention_days": _env_int(
+            env, "FORWIN_PERFORMANCE_SPAN_RETENTION_DAYS", 30
+        ),
+        "prompt_trace_retention_days": _env_int(
+            env, "FORWIN_PROMPT_TRACE_RETENTION_DAYS", 30
+        ),
+        "candidate_draft_keep_per_chapter": _env_int(
+            env, "FORWIN_CANDIDATE_DRAFT_KEEP_PER_CHAPTER", 5
         ),
         "publisher_extension_api_key": _env_str(
             env,
@@ -360,8 +372,12 @@ class _ConfigFields:
     observability_performance_enabled: bool = True
     observability_span_sample_rate: float = 1.0
     observability_slow_span_threshold_ms: int = 1000
-    observability_record_db_spans: bool = False
+    observability_record_db_spans: bool = True
     observability_record_payload_sizes: bool = True
+    retention_cleanup_on_startup: bool = True
+    performance_span_retention_days: int = 30
+    prompt_trace_retention_days: int = 30
+    candidate_draft_keep_per_chapter: int = 5
     publisher_extension_api_key: str = ""
     publisher_session_secret: str = ""
     publisher_session_encryption_required: bool = False

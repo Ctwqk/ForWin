@@ -24,9 +24,41 @@ from .browser_sessions import (
     pick_browser_sessions_by_platform,
     utc_now,
 )
+from .login_evidence import platform_login_evidence
 from .platform_catalog import PlatformCatalog
 
 logger = logging.getLogger(__name__)
+
+
+def row_login_evidence(row: Any) -> bool:
+    if row is None:
+        return False
+    payload = {
+        "last_error": getattr(row, "last_error", ""),
+    }
+    try:
+        status_payload = json.loads(str(getattr(row, "status_json", "") or "{}"))
+    except json.JSONDecodeError:
+        status_payload = {}
+    if isinstance(status_payload, dict):
+        payload.update(status_payload)
+    return platform_login_evidence(str(getattr(row, "platform_id", "") or ""), payload)
+
+
+def row_unverified_cookie_signal(row: Any) -> bool:
+    if row is None:
+        return False
+    try:
+        status_payload = json.loads(str(getattr(row, "status_json", "") or "{}"))
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(status_payload, dict):
+        return False
+    return bool(
+        status_payload.get("page_evidence_required")
+        and status_payload.get("cookie_signal")
+        and not status_payload.get("page_authenticated")
+    )
 
 
 def ensure_extension_client(
@@ -120,6 +152,7 @@ class ExtensionConnectionService:
                     PublisherConnectionState.extension_client_id,
                     PublisherConnectionState.connected,
                     PublisherConnectionState.last_error,
+                    PublisherConnectionState.status_json,
                     PublisherConnectionState.last_heartbeat_at,
                 ).where(PublisherConnectionState.platform_id.in_(platform_ids))
             ).all()
@@ -178,6 +211,7 @@ class ExtensionConnectionService:
                             PublisherExtensionPlatformState.client_id,
                             PublisherExtensionPlatformState.connected,
                             PublisherExtensionPlatformState.last_error,
+                            PublisherExtensionPlatformState.status_json,
                             PublisherExtensionPlatformState.last_heartbeat_at,
                         ).where(
                             PublisherExtensionPlatformState.client_id == self.preferred_client_id,
@@ -221,6 +255,18 @@ class ExtensionConnectionService:
                 session_client and self.is_recent(session_client.last_heartbeat_at)
             )
             state_recent = bool(state and self.is_recent(state.last_heartbeat_at))
+            login_evidence_recent = (
+                bool(preferred_state and preferred_state_recent and row_login_evidence(preferred_state))
+                or bool(state and state_recent and row_login_evidence(state))
+            )
+            unverified_cookie_recent = (
+                bool(
+                    preferred_state
+                    and preferred_state_recent
+                    and row_unverified_cookie_signal(preferred_state)
+                )
+                or bool(state and state_recent and row_unverified_cookie_signal(state))
+            )
             extension_heartbeat_at = None
             if preferred_client_recent and preferred_client.last_heartbeat_at:
                 extension_heartbeat_at = preferred_client.last_heartbeat_at
@@ -248,7 +294,9 @@ class ExtensionConnectionService:
 
             extension_online = self.is_recent(extension_heartbeat_at or last_heartbeat_at)
             connected = False
-            if (
+            if login_evidence_recent or unverified_cookie_recent:
+                connected = False
+            elif (
                 preferred_state
                 and preferred_state.connected
                 and self.is_recent(preferred_state.last_heartbeat_at)
@@ -374,9 +422,17 @@ class ExtensionConnectionService:
                         session.add(state)
                     state.extension_client_id = client_id
                     cookie_signal = bool(item.get("cookie_signal"))
-                    state.connected = cookie_signal
+                    login_evidence = platform_login_evidence(platform_id, item)
+                    state.connected = bool(
+                        (cookie_signal or bool(item.get("page_authenticated")))
+                        and not login_evidence
+                    )
                     state.login_method = str(item.get("login_method", "")).strip()
-                    state.last_error = str(item.get("last_error", "")).strip()
+                    state.last_error = (
+                        "login-required"
+                        if login_evidence
+                        else str(item.get("last_error", "")).strip()
+                    )
                     state.status_json = json.dumps(item, ensure_ascii=False)
                     state.last_heartbeat_at = now
                     self.upsert_extension_platform_state(

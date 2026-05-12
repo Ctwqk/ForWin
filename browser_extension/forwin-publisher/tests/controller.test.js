@@ -124,6 +124,67 @@ test('controller dispatches upload and comment jobs after successful login confi
   assert.equal(commentDispatches, 1);
 });
 
+test('controller does not let popup close event reset a confirmed login', async () => {
+  const platformStateWrites = [];
+  const heartbeatPayloads = [];
+  let popupClosed = false;
+  let controllerRef;
+  const fixture = makeController({
+    getCookies: async () => [],
+    inspectPlatformState: async (platformId) => (
+      !popupClosed && platformId === 'qidian'
+        ? {
+          ok: true,
+          currentUrl: 'https://write.qq.com/portal/dashboard',
+          platform: 'qidian',
+          authenticated: true,
+          loginVisible: false,
+        }
+        : null
+    ),
+    setPlatformState: async (platformId, state) => {
+      platformStateWrites.push({ platformId, state });
+    },
+    closePopup: async () => {
+      popupClosed = true;
+      await controllerRef.handleTabRemoved(42);
+    },
+    backend: {
+      heartbeat: async (payload) => {
+        heartbeatPayloads.push(payload);
+        return { ok: true };
+      },
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
+      getBrowserSession: async () => null,
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      claimNextCommentSyncJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
+      updateUploadJobResult: async () => ({ ok: true }),
+      updateCommentSyncJobResult: async () => ({ ok: true }),
+    },
+  });
+  controllerRef = fixture.controller;
+
+  await fixture.controller.handleMessage(
+    { action: 'open-login', payload: { platform: 'qidian' } },
+    { tab: { id: 99 } },
+  );
+  await fixture.controller.handleTabUpdated(42, { url: 'https://write.qq.com/portal/dashboard' }, { id: 42 });
+
+  assert.deepEqual(
+    platformStateWrites.map((item) => item.state.connected),
+    [false, true],
+  );
+  assert.equal(fixture.events.at(-1).payload.connected, true);
+  const qidianHeartbeats = heartbeatPayloads
+    .flatMap((payload) => payload.platforms)
+    .filter((item) => item.platform === 'qidian');
+  assert.equal(qidianHeartbeats.at(-1).connected, true);
+});
+
 test('controller still opens login popup when heartbeat sync fails', async () => {
   const { controller, events } = makeController({
     backend: {
@@ -752,6 +813,115 @@ test('controller heartbeat reports cookie summary without leaking full cookies',
   assert.equal(Array.isArray(qidian.cookies), false);
   assert.equal(qidian.raw_state.cookie_count, 2);
   assert.deepEqual(qidian.raw_state.cookie_names, ['AppAuthToken', 'pubtoken']);
+});
+
+test('controller heartbeat uses inspected login page to override stale auth cookies', async () => {
+  const payloads = [];
+  const { controller } = makeController({
+    backend: {
+      heartbeat: async (payload) => {
+        payloads.push(payload);
+        return { ok: true };
+      },
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+    },
+    inspectPlatformState: async (platformId) => (
+      platformId === 'qidian'
+        ? {
+          ok: true,
+          currentUrl: 'https://write.qq.com/portal/login',
+          platform: 'qidian',
+          authenticated: false,
+          loginVisible: true,
+        }
+        : null
+    ),
+    getPlatformState: async () => ({}),
+    getCookies: async (platformId) => (
+      platformId === 'qidian'
+        ? [{ name: 'AppAuthToken' }, { name: 'pubtoken' }]
+        : []
+    ),
+  });
+
+  await controller.sendHeartbeat();
+
+  const qidian = payloads[0].platforms.find((item) => item.platform === 'qidian');
+  assert.equal(qidian.connected, false);
+  assert.equal(qidian.last_error, 'login-required');
+  assert.equal(qidian.raw_state.cookie_signal, true);
+  assert.equal(qidian.raw_state.page_login_visible, true);
+});
+
+test('controller heartbeat does not display connected before page verification', async () => {
+  const payloads = [];
+  const { controller } = makeController({
+    backend: {
+      heartbeat: async (payload) => {
+        payloads.push(payload);
+        return { ok: true };
+      },
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+    },
+    inspectPlatformState: async () => null,
+    getPlatformState: async () => ({}),
+    getCookies: async (platformId) => (
+      platformId === 'qidian'
+        ? [{ name: 'AppAuthToken' }, { name: 'pubtoken' }]
+        : []
+    ),
+  });
+
+  await controller.sendHeartbeat();
+
+  const qidian = payloads[0].platforms.find((item) => item.platform === 'qidian');
+  assert.equal(qidian.connected, false);
+  assert.equal(qidian.raw_state.cookie_signal, true);
+  assert.equal(qidian.raw_state.page_evidence_required, true);
+});
+
+test('controller session sync carries unverified page evidence', async () => {
+  const payloads = [];
+  const { controller } = makeController({
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      syncBrowserSession: async (payload) => {
+        payloads.push(payload);
+        return { ok: true, cookie_count: 2 };
+      },
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+    },
+    inspectPlatformState: async () => null,
+    getPlatformState: async () => ({}),
+    getCookies: async (platformId) => (
+      platformId === 'qidian'
+        ? [{ name: 'AppAuthToken' }, { name: 'pubtoken' }]
+        : []
+    ),
+  });
+
+  await controller.syncConnectedSessionsToBackend();
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].platform, 'qidian');
+  assert.equal(payloads[0].raw_state.connected, false);
+  assert.equal(payloads[0].raw_state.cookie_signal, true);
+  assert.equal(payloads[0].raw_state.page_evidence_required, true);
+  assert.equal(payloads[0].raw_state.page_authenticated, false);
 });
 
 test('controller heartbeat does not keep sticky connected=true without current strong cookies', async () => {

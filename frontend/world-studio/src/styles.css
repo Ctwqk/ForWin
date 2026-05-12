@@ -68,18 +68,28 @@ button:disabled {
   border-radius: 8px;
 }
 
-.studio-nav {
+.main-menu {
   display: flex;
   align-items: center;
   gap: 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: none;
   margin-bottom: 12px;
   font-size: 13px;
   font-weight: 700;
 }
 
-.studio-nav a {
+.main-menu::-webkit-scrollbar {
+  display: none;
+}
+
+.main-menu a {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
   min-height: 32px;
   padding: 0 11px;
   border: 1px solid #d8e0e8;
@@ -89,7 +99,7 @@ button:disabled {
   text-decoration: none;
 }
 
-.studio-nav a[aria-current="page"] {
+.main-menu a[aria-current="page"] {
   border-color: #2c5f7c;
   background: #e7f1f6;
   color: #1d536e;

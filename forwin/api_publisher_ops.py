@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -36,11 +37,48 @@ from forwin.publishers.manager import (
 )
 
 
-def _build_extension_package(extension_root: Path) -> bytes:
+def _firefox_manifest(source_manifest: dict[str, Any]) -> dict[str, Any]:
+    manifest = json.loads(json.dumps(source_manifest))
+    manifest["permissions"] = [
+        permission
+        for permission in manifest.get("permissions", [])
+        if permission != "debugger"
+    ]
+    manifest["background"] = {
+        "scripts": ["background.js"],
+        "type": "module",
+    }
+    manifest.pop("options_page", None)
+    manifest["options_ui"] = {
+        "page": "options.html",
+        "open_in_tab": True,
+    }
+    manifest["browser_specific_settings"] = {
+        "gecko": {
+            "id": "forwin-publisher@example.com",
+        },
+    }
+    return manifest
+
+
+def _build_extension_package(extension_root: Path, *, target: str = "chromium") -> bytes:
     if not extension_root.exists():
         raise HTTPException(404, "浏览器扩展目录不存在。")
+    target = str(target or "chromium").strip().lower()
+    if target not in {"chromium", "firefox"}:
+        raise HTTPException(400, "不支持的扩展目标浏览器。")
+    manifest_path = extension_root / "manifest.json"
+    if not manifest_path.exists():
+        raise HTTPException(404, "浏览器扩展 manifest.json 不存在。")
+
+    try:
+        source_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise HTTPException(500, "浏览器扩展 manifest.json 无法解析。") from exc
+    manifest = _firefox_manifest(source_manifest) if target == "firefox" else source_manifest
 
     buffer = io.BytesIO()
+    archive_root = Path("forwin-publisher-firefox" if target == "firefox" else "forwin-publisher")
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         paths = sorted(path for path in extension_root.rglob("*") if path.is_file())
         paths.sort(
@@ -50,7 +88,14 @@ def _build_extension_package(extension_root: Path) -> bytes:
             )
         )
         for path in paths:
-            archive.write(path, arcname=Path("forwin-publisher") / path.relative_to(extension_root))
+            arcname = archive_root / path.relative_to(extension_root)
+            if path == manifest_path:
+                archive.writestr(
+                    str(arcname),
+                    f"{json.dumps(manifest, ensure_ascii=False, indent=2)}\n",
+                )
+            else:
+                archive.write(path, arcname=arcname)
     buffer.seek(0)
     return buffer.getvalue()
 
@@ -65,12 +110,29 @@ def _require_extension_auth(publisher_manager, x_forwin_extension_key: str | Non
 
 
 def download_publisher_extension_package(*, extension_root: Path) -> StreamingResponse:
-    payload = _build_extension_package(extension_root)
+    payload = _build_extension_package(extension_root, target="chromium")
     return StreamingResponse(
         io.BytesIO(payload),
         media_type="application/zip",
         headers={
             "Content-Disposition": 'attachment; filename="forwin-publisher-extension.zip"',
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+            "X-Forwin-Extension-Target": "chromium",
+        },
+    )
+
+
+def download_publisher_firefox_extension_package(*, extension_root: Path) -> StreamingResponse:
+    payload = _build_extension_package(extension_root, target="firefox")
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="forwin-publisher-firefox-extension.zip"',
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+            "X-Forwin-Extension-Target": "firefox",
         },
     )
 
@@ -190,6 +252,7 @@ def publisher_extension_session_sync(
         client_id=req.client_id,
         platform=req.platform,
         cookies=[item.model_dump() for item in req.cookies],
+        raw_state=req.raw_state,
     )
     return ExtensionSessionSyncResponse(**payload)
 

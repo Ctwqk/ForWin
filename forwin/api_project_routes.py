@@ -283,6 +283,14 @@ def build_handlers(
             get_session=get_session,
         )
 
+    def list_chapter_page(project_id: str, offset: int = 0, limit: int = 60):
+        return api_project_ops.list_chapter_page(
+            project_id,
+            offset=offset,
+            limit=limit,
+            get_session=get_session,
+        )
+
     def get_chapter(project_id: str, chapter_number: int):
         return api_project_ops.get_chapter(
             project_id,
@@ -376,6 +384,7 @@ def build_handlers(
         "continue_project_generation": continue_project_generation,
         "update_project_automation": update_project_automation,
         "list_chapters": list_chapters,
+        "list_chapter_page": list_chapter_page,
         "get_chapter": get_chapter,
         "create_project_chapter_upload_job": create_project_chapter_upload_job,
         "get_chapter_review": get_chapter_review,

@@ -41,7 +41,6 @@ from forwin.models.phase import (
     ArcEnvelopeAnalysis,
     ArcStructureDraft,
     BandExperiencePlan,
-    ChapterRewriteAttempt,
     ProjectReplanEvent,
     ProjectStageAnalysis,
     ProvisionalBandExecution,
@@ -61,6 +60,7 @@ from forwin.state.query_helpers import (
     load_latest_drafts_by_plan_id,
     load_latest_provisional_band_execution_by_project,
     load_latest_replan_event_by_project,
+    load_latest_rewrite_attempts_by_chapter,
     load_latest_stage_analysis_by_project,
     load_latest_world_turn_by_project,
 )
@@ -69,6 +69,8 @@ from forwin.world_templates import empty_world_root
 
 DisplayDatetime = Callable[[datetime | None], str]
 _GENESIS_STAGE_ORDER = ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap")
+_PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
+_PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 
 
 def _deep_merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
@@ -1249,7 +1251,7 @@ def build_project_summaries(
                 world_pressure_level=latest_world.pressure_level if latest_world else "",
                 world_pressure_summary=latest_world.pressure_summary if latest_world else "",
                 generation_control=generation_control,
-                chapters=chapters_by_project.get(project.id, []),
+                chapters=chapters_by_project.get(project.id, [])[-_PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT:],
                 latest_band_checkpoint=generation_control.latest_band_checkpoint,
                 blocking_reason=generation_control.blocking_reason,
                 next_gate=generation_control.next_gate,
@@ -1323,17 +1325,11 @@ def build_project_detail(
             .distinct()
         ).scalars().all()
     } if draft_map else set()
-    latest_attempt_map: dict[int, ChapterRewriteAttempt] = {}
-    for attempt in session.execute(
-        select(ChapterRewriteAttempt)
-        .where(ChapterRewriteAttempt.project_id == project_id)
-        .order_by(
-            ChapterRewriteAttempt.chapter_number.asc(),
-            ChapterRewriteAttempt.attempt_no.desc(),
-            ChapterRewriteAttempt.created_at.desc(),
-        )
-    ).scalars().all():
-        latest_attempt_map.setdefault(int(attempt.chapter_number or 0), attempt)
+    latest_attempt_map = load_latest_rewrite_attempts_by_chapter(
+        session,
+        project_id,
+        [int(plan.chapter_number or 0) for plan in plans],
+    )
     upload_stats = load_project_upload_stats(session, [project_id]).get(project_id, {})
     chapter_infos = [
         ChapterInfo(
@@ -1455,7 +1451,7 @@ def build_project_detail(
         factions=factions,
         subworlds=subworlds,
         threads=thread_infos,
-        chapters=chapter_infos,
+        chapters=chapter_infos[:_PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT],
         latest_stage=latest_stage.stage_label if latest_stage else "",
         progress_ratio=latest_stage.progress_ratio if latest_stage else 0.0,
         pacing_verdict=latest_stage.pacing_verdict if latest_stage else "",

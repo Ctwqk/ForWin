@@ -70,6 +70,30 @@ def test_browser_session_service_encrypts_and_redacts_cookie_values() -> None:
         engine.dispose()
 
 
+def test_browser_session_sync_keeps_unverified_cookie_signal_logged_out() -> None:
+    engine, runtime = _runtime("publisher-runtime-browser-unverified-cookie")
+    try:
+        payload = runtime.browser_sessions.record_browser_session(
+            client_id="client-1",
+            platform="qidian",
+            cookies=QIDIAN_COOKIES,
+            raw_state={
+                "cookie_signal": True,
+                "page_evidence_required": True,
+                "page_inspected": False,
+                "page_authenticated": False,
+                "last_error": "",
+            },
+        )
+        assert payload["cookie_count"] == 2
+
+        items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
+        assert items["qidian"]["connected"] is False
+        assert items["qidian"]["extension_online"] is True
+    finally:
+        engine.dispose()
+
+
 def test_browser_session_legacy_plaintext_upgrade_stays_available_through_manager() -> None:
     engine, plaintext_runtime = _runtime("publisher-runtime-browser-legacy")
     try:

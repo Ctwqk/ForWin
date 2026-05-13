@@ -35,6 +35,7 @@ def approve_world_edit_proposal(
     project_id: str,
     proposal_id: str,
     reason: str = "",
+    forced_accept_reason: str = "",
     trigger: str = "obsidian_proposal_approve",
     qdrant_url: str | None = None,
     qdrant_collection: str | None = None,
@@ -53,6 +54,7 @@ def approve_world_edit_proposal(
         graph_deltas=[delta],
         approved_by=[f"{trigger}_approval"],
         review_verdict_id=f"obsidian_proposal_review_{proposal_id}",
+        forced_accept_reason=forced_accept_reason,
     )
     verdict = BookStateReviewGate(session).review(changes)
     if not verdict.accepted or verdict.approved_changes is None:

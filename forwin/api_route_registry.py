@@ -13,6 +13,7 @@ from forwin import (
     api_llm_kb_routes,
     api_map_routes,
     api_obsidian_routes,
+    api_proposal_routes,
     api_projection_routes,
     api_project_routes,
     api_publisher_routes,
@@ -82,6 +83,7 @@ from forwin.api_schemas import (
     TropeTemplateInfo,
     TropeTemplateValidationResponse,
     WorldEditProposalInfo,
+    WorldEditProposalCreateRequest,
     WorldEditProposalReviewRequest,
     WorldModelConflictInfo,
     WorldModelExportRequest,
@@ -364,6 +366,10 @@ def register_api_routes(
         get_session=get_session,
         get_config=get_config,
     )
+    proposal_handlers = api_proposal_routes.build_handlers(
+        get_session=get_session,
+        get_config=get_config,
+    )
     map_handlers = api_map_routes.build_handlers(
         get_session=get_session,
     )
@@ -380,6 +386,7 @@ def register_api_routes(
         **obsidian_handlers,
         **llm_kb_handlers,
         **projection_handlers,
+        **proposal_handlers,
         **map_handlers,
     }
 
@@ -448,6 +455,11 @@ def register_api_routes(
         ("/api/projects/{project_id}/world-model/import-obsidian", ["POST"], handlers["import_project_world_model"], {"response_model": WorldModelImportResponse}),
         ("/api/projects/{project_id}/world-model/proposals", ["GET"], handlers["list_project_world_model_proposals"], {"response_model": list[WorldEditProposalInfo]}),
         ("/api/projects/{project_id}/world-model/proposals/{proposal_id}/review", ["POST"], handlers["review_project_world_model_proposal"], {"response_model": WorldEditProposalInfo}),
+        ("/api/projects/{project_id}/proposals", ["GET"], handlers["list_project_proposals"], {"response_model": list[WorldEditProposalInfo]}),
+        ("/api/projects/{project_id}/proposals", ["POST"], handlers["create_project_proposal"], {"response_model": WorldEditProposalInfo}),
+        ("/api/projects/{project_id}/proposals/{proposal_id}", ["GET"], handlers["get_project_proposal"], {"response_model": WorldEditProposalInfo}),
+        ("/api/projects/{project_id}/proposals/{proposal_id}/approve", ["POST"], handlers["approve_project_proposal"], {"response_model": WorldEditProposalInfo}),
+        ("/api/projects/{project_id}/proposals/{proposal_id}/reject", ["POST"], handlers["reject_project_proposal"], {"response_model": WorldEditProposalInfo}),
         ("/api/projects/{project_id}/start-writing", ["POST"], handlers["start_project_writing"], {"response_model": StartWritingResponse}),
         ("/api/projects/{project_id}/continue-generation", ["POST"], handlers["continue_project_generation"], {"response_model": TaskResponse}),
         ("/api/projects/{project_id}/automation", ["PUT"], handlers["update_project_automation"], {"response_model": ProjectAutomationUpdateResponse}),

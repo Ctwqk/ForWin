@@ -1189,6 +1189,45 @@ def test_llm_kb_vector_payloads_enforce_role_visibility_scopes(tmp_path: Path) -
         engine.dispose()
 
 
+def test_llm_kb_vector_rebuild_skips_unchanged_section_digests(tmp_path: Path) -> None:
+    Session, engine = _session_factory()
+    qdrant_client = FakeQdrantClient()
+    try:
+        with Session.begin() as session:
+            project_id = _create_project(session)
+            BookStateRepository(session).create_world_node(
+                WorldNode(
+                    id="char_lin",
+                    project_id=project_id,
+                    node_type="character",
+                    name="林烬",
+                    summary="旧城线主角。",
+                    source_refs=["chapter:1"],
+                )
+            )
+            compiler = LLMKnowledgeBaseCompiler(
+                session,
+                root=tmp_path / "kb",
+                qdrant_client=qdrant_client,
+                qdrant_models=FakeQdrantModels,
+            )
+            first = compiler.rebuild(project_id, as_of_chapter=1)
+            first_point_count = len(qdrant_client.collections["llm_kb_vectors"]["points"])
+            second = compiler.rebuild(project_id, as_of_chapter=1)
+
+        assert first.vector_index["section_count"] == first_point_count
+        assert second.vector_index["section_count"] == first.vector_index["section_count"]
+        assert second.vector_index["skipped_section_count"] == first.vector_index["section_count"]
+        assert second.vector_index["upserted_section_count"] == 0
+        payloads = [
+            point.payload
+            for point in qdrant_client.collections["llm_kb_vectors"]["points"].values()
+        ]
+        assert all(payload.get("section_digest") for payload in payloads)
+    finally:
+        engine.dispose()
+
+
 def test_obsidian_human_index_searches_manual_notes_without_writer_context(tmp_path: Path) -> None:
     from forwin.retrieval.obsidian_human_index import ObsidianHumanVectorIndex
     from forwin.world_studio.search_service import WorldStudioSearchService
@@ -1227,6 +1266,12 @@ def test_obsidian_human_index_searches_manual_notes_without_writer_context(tmp_p
             qdrant_client=qdrant_client,
             qdrant_models=FakeQdrantModels,
         ).rebuild_project(project_id, vault_root=tmp_path / "vault")
+        second_rebuild = ObsidianHumanVectorIndex(
+            qdrant_client=qdrant_client,
+            qdrant_models=FakeQdrantModels,
+        ).rebuild_project(project_id, vault_root=tmp_path / "vault")
+        assert second_rebuild["upserted_section_count"] == 0
+        assert second_rebuild["skipped_section_count"] == 1
 
         service_results = WorldStudioSearchService(
             llm_kb_root=tmp_path / "kb",
@@ -1258,6 +1303,19 @@ def test_obsidian_human_index_searches_manual_notes_without_writer_context(tmp_p
         )
         assert api_results["results"][0]["index_kind"] == "obsidian_human"
         assert api_results["results"][0]["canon_status"] == "human_unreviewed"
+
+        writer_all_results = WorldStudioSearchService(
+            llm_kb_root=tmp_path / "kb",
+            qdrant_client=qdrant_client,
+            qdrant_models=FakeQdrantModels,
+        ).search(
+            project_id,
+            query="伏笔线索",
+            index_kind="all",
+            role="writer",
+            limit=10,
+        )["results"]
+        assert all(item["index_kind"] != "obsidian_human" for item in writer_all_results)
 
         canon_results = build_world_model_handlers(
             get_session=Session,
@@ -1345,6 +1403,18 @@ mode: instruction_only
         assert service_results[0]["index_kind"] == "skill"
         assert service_results[0]["skill_id"] == "trait-suspicious-survivor"
         assert service_results[0]["role_scope"] == "skill_maintenance"
+        writer_results = WorldStudioSearchService(
+            skill_root=skill_root,
+            qdrant_client=qdrant_client,
+            qdrant_models=FakeQdrantModels,
+        ).search(
+            project_id,
+            query="疑心幸存者",
+            index_kind="all",
+            role="writer",
+            limit=10,
+        )["results"]
+        assert all(item["index_kind"] != "skill" for item in writer_results)
 
         with Session() as session:
             writer_pack = RetrievalBroker().build_world_model_pack(

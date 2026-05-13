@@ -187,7 +187,6 @@ def test_non_login_upload_failure_requeues_until_codex_intervention() -> None:
     finally:
         engine.dispose()
 
-
 def test_upload_success_clears_retry_and_codex_failure_payload() -> None:
     engine, runtime = _runtime("publisher-runtime-upload-retry-cleared")
     try:

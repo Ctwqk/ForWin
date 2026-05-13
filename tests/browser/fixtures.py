@@ -588,6 +588,50 @@ class MockForWinBackend:
             }[kind]
             json_reply(route, payload)
             return
+        proposals = re.fullmatch(r"/api/projects/([^/]+)/proposals", path)
+        if proposals and method == "GET":
+            json_reply(route, self.world_proposals)
+            return
+        if proposals and method == "POST":
+            payload = read_json(route)
+            self.capture(route, payload)
+            proposal = {
+                "id": f"proposal-{len(self.world_proposals) + 1}",
+                "project_id": proposals.group(1),
+                "status": "pending",
+                "created_at": now_text(),
+                "reviewed_at": "",
+                **payload,
+            }
+            self.world_proposals.insert(0, proposal)
+            json_reply(route, proposal)
+            return
+        proposal_get = re.fullmatch(r"/api/projects/([^/]+)/proposals/([^/]+)", path)
+        if proposal_get and method == "GET":
+            proposal_id = proposal_get.group(2)
+            json_reply(route, next((item for item in self.world_proposals if item["id"] == proposal_id), sample_world_proposals()[0]))
+            return
+        proposal_decision = re.fullmatch(r"/api/projects/([^/]+)/proposals/([^/]+)/(approve|reject)", path)
+        if proposal_decision and method == "POST":
+            payload = read_json(route)
+            self.capture(route, payload)
+            proposal_id, action = proposal_decision.group(2), proposal_decision.group(3)
+            status = "accepted" if action == "approve" else "rejected"
+            for proposal in self.world_proposals:
+                if proposal["id"] == proposal_id:
+                    proposal["status"] = status
+                    proposal["reviewed_at"] = now_text()
+                    proposal["review_reason"] = payload.get("reason", "")
+            json_reply(route, next((item for item in self.world_proposals if item["id"] == proposal_id), sample_world_proposals()[0]))
+            return
+        book_state_edges = re.fullmatch(r"/api/projects/([^/]+)/book-state/edges", path)
+        if book_state_edges and method == "GET":
+            json_reply(route, {"project_id": book_state_edges.group(1), "as_of_chapter": 2, "edges": sample_book_state_edges()})
+            return
+        world_studio_search = re.fullmatch(r"/api/projects/([^/]+)/world-studio/search", path)
+        if world_studio_search and method == "GET":
+            json_reply(route, {"project_id": world_studio_search.group(1), "results": sample_world_studio_search_results()})
+            return
         export = re.fullmatch(r"/api/projects/([^/]+)/world-model/(export-obsidian|import-obsidian)", path)
         if export and method == "POST":
             payload = read_json(route)
@@ -1041,12 +1085,21 @@ def sample_world_pages(project_id: str) -> list[dict[str, Any]]:
         {
             "id": "page-1",
             "project_id": project_id,
-            "page_key": "entity/linye",
-            "page_type": "entity",
+            "page_key": "character:linye",
+            "page_type": "character",
             "title": "林夜",
             "vault_path": "Entities/林夜.md",
-            "markdown": "# 林夜\n\n见习记录员。",
-            "frontmatter": {"status": "active"},
+            "markdown": "# 林夜\n\n## Canon Summary\n见习记录员。\n\n## Manual Notes\n_empty_\n\n## Human Questions\n_empty_\n\n## Proposed Correction\n_empty_\n",
+            "frontmatter": {"status": "active", "node_id": "linye", "source_refs": ["book_state:node:linye"]},
+            "projection_kind": "world_studio",
+            "projection_version": "obsidian_v2",
+            "source_digest": "1234567890abcdef",
+            "section_digest": {"Canon Summary": "abc"},
+            "observer_type": "reader",
+            "observer_id": "reader",
+            "role_scope": "human",
+            "visibility_scope": "reader_known",
+            "canon_status": "canon_projection",
             "content_hash": "1234567890abcdef",
             "revision": 1,
             "status": "current",
@@ -1056,17 +1109,61 @@ def sample_world_pages(project_id: str) -> list[dict[str, Any]]:
         {
             "id": "page-2",
             "project_id": project_id,
-            "page_key": "location/fog-port",
+            "page_key": "location:fog-port",
             "page_type": "location",
             "title": "雾港",
             "vault_path": "Locations/雾港.md",
-            "markdown": "# 雾港\n\n潮雾之城。",
-            "frontmatter": {},
+            "markdown": "# 雾港\n\n## Canon Summary\n潮雾之城。\n\n## Manual Notes\n_empty_\n\n## Human Questions\n_empty_\n\n## Proposed Correction\n_empty_\n",
+            "frontmatter": {"node_id": "fog-port", "source_refs": ["book_state:node:fog-port"]},
+            "projection_kind": "world_studio",
+            "projection_version": "obsidian_v2",
+            "source_digest": "abcdef1234567890",
+            "section_digest": {"Canon Summary": "def"},
+            "observer_type": "reader",
+            "observer_id": "reader",
+            "role_scope": "human",
+            "visibility_scope": "reader_known",
+            "canon_status": "canon_projection",
             "content_hash": "abcdef1234567890",
             "revision": 1,
             "status": "current",
             "as_of_chapter": 2,
             "updated_at": "2026-04-24T12:00:00Z",
+        },
+    ]
+
+
+def sample_book_state_edges() -> list[dict[str, Any]]:
+    return [
+        {
+            "id": "edge-linye-fog",
+            "source_id": "linye",
+            "target_id": "fog-port",
+            "edge_type": "located_in",
+            "edge_family": "social",
+            "status": "active",
+            "truth_relation": "true",
+        }
+    ]
+
+
+def sample_world_studio_search_results() -> list[dict[str, Any]]:
+    return [
+        {
+            "index_kind": "canon",
+            "canon_status": "canon_projection",
+            "title": "林夜",
+            "text": "见习记录员。",
+            "node_id": "linye",
+            "score": 1.0,
+        },
+        {
+            "index_kind": "obsidian_human",
+            "canon_status": "human_unreviewed",
+            "title": "Manual Notes",
+            "text": "只给编辑看的伏笔。",
+            "page_key": "character:linye",
+            "score": 0.9,
         },
     ]
 

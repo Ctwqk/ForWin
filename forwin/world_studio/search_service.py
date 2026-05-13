@@ -46,6 +46,7 @@ class WorldStudioSearchService:
         limit: int = 10,
     ) -> dict[str, Any]:
         kinds = _normalize_index_kinds(index_kind)
+        kinds = _role_allowed_index_kinds(kinds, role)
         results: list[dict[str, Any]] = []
         per_index_limit = max(1, int(limit or 10))
         if "canon" in kinds and self.session is not None:
@@ -117,6 +118,16 @@ def _normalize_index_kinds(index_kind: str) -> set[str]:
     if normalized in {"obsidian_human", "llm_kb", "skill"}:
         return {normalized}
     return set()
+
+def _role_allowed_index_kinds(kinds: set[str], role: str) -> set[str]:
+    normalized = str(role or "human").strip().lower()
+    if normalized == "writer":
+        return {kind for kind in kinds if kind in {"canon", "llm_kb"}}
+    if normalized in {"planner", "compiler"}:
+        return {kind for kind in kinds if kind in {"canon", "llm_kb"}}
+    if normalized == "reviewer":
+        return {kind for kind in kinds if kind in {"canon", "llm_kb", "skill"}}
+    return kinds
 
 
 def _canon_search(

@@ -682,6 +682,18 @@ class WorldEditProposalInfo(BaseModel):
     projection_refresh: dict[str, Any] = Field(default_factory=dict)
 
 
+class WorldEditProposalCreateRequest(BaseModel):
+    source: str = "world_studio"
+    target_page_key: str = ""
+    target_node_id: str = ""
+    target_field: str = ""
+    proposal_type: str = "CanonCorrectionProposal"
+    proposed_patch: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+    human_notes: str = ""
+    created_by: str = "world_studio"
+
+
 class WorldModelExportRequest(BaseModel):
     vault_root: str = ""
 
@@ -710,6 +722,7 @@ class WorldModelImportResponse(BaseModel):
 class WorldEditProposalReviewRequest(BaseModel):
     status: str
     reason: str = ""
+    forced_accept_reason: str = ""
 
 
 class ProjectSummary(ProjectArcSnapshotFields):

@@ -391,6 +391,7 @@ def review_proposal(
                 project_id=project_id,
                 proposal_id=proposal_id,
                 reason=req.reason,
+                forced_accept_reason=req.forced_accept_reason,
                 trigger="world_model_proposal_review",
                 qdrant_url=getattr(config, "qdrant_url", None),
                 qdrant_collection=getattr(config, "llm_kb_qdrant_collection", None),

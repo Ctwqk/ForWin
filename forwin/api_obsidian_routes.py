@@ -134,6 +134,7 @@ def build_handlers(
                     project_id=project_id,
                     proposal_id=proposal_id,
                     reason=request.reason,
+                    forced_accept_reason=request.forced_accept_reason,
                     trigger="obsidian_proposal_approve",
                     qdrant_url=_qdrant_url(),
                     qdrant_collection=_llm_kb_qdrant_collection(),

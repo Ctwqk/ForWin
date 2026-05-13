@@ -202,3 +202,42 @@ def test_connection_state_strict_preferred_client_blocks_fallback_claims() -> No
             ) == ["fanqie"]
     finally:
         engine.dispose()
+
+
+def test_connection_state_strict_preferred_client_blocks_fallback_claims() -> None:
+    engine, runtime = _runtime(
+        "publisher-runtime-connection-strict-preferred",
+        preferred_client_id="linux-client",
+        strict_preferred_client=True,
+    )
+    try:
+        runtime.connection_state.heartbeat(
+            client_id="linux-client",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://10.0.0.150:8899",
+            platforms=[{"platform": "fanqie", "connected": False, "cookie_signal": False}],
+        )
+        runtime.connection_state.heartbeat(
+            client_id="laptop-client",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://10.0.0.35:8899",
+            platforms=[{"platform": "fanqie", "connected": True, "cookie_signal": True}],
+        )
+
+        with runtime.session_factory() as session:
+            assert runtime.connection_state.claimable_platforms(
+                session,
+                client_id="laptop-client",
+                platforms=["fanqie"],
+            ) == []
+            assert runtime.connection_state.claimable_platforms(
+                session,
+                client_id="linux-client",
+                platforms=["fanqie"],
+            ) == ["fanqie"]
+    finally:
+        engine.dispose()

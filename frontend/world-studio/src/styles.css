@@ -588,6 +588,92 @@ pre {
   max-height: 340px;
 }
 
+.context-panel,
+.page-editor,
+.graph-view,
+.search-results {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.context-panel {
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
+}
+
+.context-panel > div,
+.page-editor,
+.graph-view,
+.search-results {
+  padding: 14px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.context-panel pre {
+  max-height: 260px;
+}
+
+.page-editor {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.page-editor button {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.graph-controls,
+.search-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.graph-node-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.graph-node {
+  display: grid;
+  gap: 4px;
+  min-height: 72px;
+  padding: 10px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #f7f9fb;
+}
+
+.graph-node.current {
+  border-color: #2c5f7c;
+  background: #e7f1f6;
+}
+
+.graph-node span,
+.graph-edge-list article span {
+  color: #607083;
+  font-size: 12px;
+}
+
+.graph-edge-list {
+  display: grid;
+  gap: 8px;
+}
+
+.graph-edge-list article {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
 .character-create-form,
 .personality-editor,
 .assignment-report,
@@ -792,6 +878,11 @@ pre {
   }
 
   .personality-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .context-panel,
+  .page-editor {
     grid-template-columns: 1fr;
   }
 

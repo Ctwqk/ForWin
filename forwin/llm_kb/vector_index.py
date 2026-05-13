@@ -31,6 +31,7 @@ class LLMKBVectorRecord:
     text: str
     source_refs: list[str]
     source_digest: str
+    section_digest: str = ""
     index_kind: str = "llm_kb"
     as_of_chapter: int = 0
     projection_version: str = LLM_KB_PROJECTION_VERSION
@@ -62,6 +63,7 @@ class LLMKBVectorRecord:
             "text": self.text,
             "source_refs": list(self.source_refs),
             "source_digest": self.source_digest,
+            "section_digest": self.section_digest,
             "score": self.score,
         }
 
@@ -168,25 +170,34 @@ class LLMKBVectorIndex:
             as_of_chapter=as_of_chapter,
             projection_version=projection_version,
         )
-        texts = [section["text"] for section in sections]
-        embeddings = self.embedder.embed(texts) if texts else []
-        self.client.delete(
-            collection_name=self.collection_name,
-            points_selector=self._rest.FilterSelector(
-                filter=self._project_filter(project_id),
-            ),
-            wait=True,
+        existing_payloads = _existing_payloads_by_point_id(
+            self.client,
+            self.collection_name,
+            project_id,
+            index_kind="llm_kb",
+            project_filter=self._project_filter(project_id),
         )
+        sections_to_upsert = []
+        skipped = 0
+        for section in sections:
+            point_id = _point_id(
+                project_id,
+                section["file_key"],
+                section["section_key"],
+                section["role_scope"],
+            )
+            existing = existing_payloads.get(point_id)
+            if existing and existing.get("section_digest") == section.get("section_digest"):
+                skipped += 1
+                continue
+            sections_to_upsert.append((point_id, section))
+        texts = [section["text"] for _, section in sections_to_upsert]
+        embeddings = self.embedder.embed(texts) if texts else []
         points = []
-        for section, embedding in zip(sections, embeddings):
+        for (point_id, section), embedding in zip(sections_to_upsert, embeddings):
             points.append(
                 self._rest.PointStruct(
-                    id=_point_id(
-                        project_id,
-                        section["file_key"],
-                        section["section_key"],
-                        section["role_scope"],
-                    ),
+                    id=point_id,
                     vector=embedding,
                     payload={
                         "project_id": project_id,
@@ -206,6 +217,7 @@ class LLMKBVectorIndex:
                         "text": section["text"],
                         "source_refs": section["source_refs"],
                         "source_digest": section["source_digest"],
+                        "section_digest": section["section_digest"],
                     },
                 )
             )
@@ -215,6 +227,8 @@ class LLMKBVectorIndex:
             "backend": "qdrant",
             "collection": self.collection_name,
             "section_count": len(sections),
+            "upserted_section_count": len(points),
+            "skipped_section_count": skipped,
             "dims": self.embedder.dims,
         }
 
@@ -262,6 +276,7 @@ class LLMKBVectorIndex:
                     text=_trim(str(payload.get("text") or ""), 900),
                     source_refs=_source_refs(payload.get("source_refs")),
                     source_digest=str(payload.get("source_digest") or ""),
+                    section_digest=str(payload.get("section_digest") or ""),
                     index_kind=str(payload.get("index_kind") or "llm_kb"),
                     as_of_chapter=int(payload.get("as_of_chapter") or 0),
                     projection_version=str(payload.get("projection_version") or LLM_KB_PROJECTION_VERSION),
@@ -353,6 +368,42 @@ def _collect_project_sections(
                 )
             )
     return [section for section in sections if section["text"].strip()]
+
+def _existing_payloads_by_point_id(
+    client: Any,
+    collection_name: str,
+    project_id: str,
+    *,
+    index_kind: str,
+    project_filter: Any,
+) -> dict[str, dict[str, Any]]:
+    if hasattr(client, "collections"):
+        collection = getattr(client, "collections", {}).get(collection_name, {})
+        points = collection.get("points", {}) if isinstance(collection, dict) else {}
+        return {
+            str(point_id): dict(getattr(point, "payload", {}) or {})
+            for point_id, point in points.items()
+            if getattr(point, "payload", {}).get("project_id") == project_id
+            and getattr(point, "payload", {}).get("index_kind") == index_kind
+        }
+    if hasattr(client, "scroll"):
+        try:
+            response = client.scroll(
+                collection_name=collection_name,
+                scroll_filter=project_filter,
+                limit=10_000,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except TypeError:
+            return {}
+        points = response[0] if isinstance(response, tuple) else response
+        return {
+            str(getattr(point, "id", "")): dict(getattr(point, "payload", {}) or {})
+            for point in points
+            if getattr(point, "id", None)
+        }
+    return {}
 
 
 def _markdown_sections(
@@ -486,6 +537,21 @@ def _section_record(
     raw_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     refs = _reference_fields(file_key, text, source_refs, raw_payload=raw_payload)
+    section_digest = sha1(
+        json.dumps(
+            {
+                "file_key": file_key,
+                "section_key": section_key,
+                "role_scope": role_scope,
+                "visibility_scope": _visibility_scope_for_role(role_scope),
+                "text": text,
+                "source_refs": source_refs,
+                **refs,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
     return {
         "project_id": "",
         "index_kind": "llm_kb",
@@ -497,6 +563,7 @@ def _section_record(
         "text": text,
         "source_refs": source_refs,
         "source_digest": source_digest,
+        "section_digest": section_digest,
         "as_of_chapter": int(as_of_chapter or 0),
         "projection_version": projection_version or LLM_KB_PROJECTION_VERSION,
         **refs,

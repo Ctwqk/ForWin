@@ -24,6 +24,7 @@ from forwin.protocol.world_model import (
     WorldModelPage,
     WorldModelSnapshot,
 )
+from .page_repository import WorldModelPageRepository
 
 
 def stable_json(value: Any) -> str:
@@ -181,6 +182,59 @@ class WorldModelStore:
         as_of_chapter: int,
     ) -> WorldModelPageRow:
         digest = content_hash(stable_json(frontmatter), markdown)
+        page_repo = WorldModelPageRepository(self.session)
+        identity = page_repo.identity_for_values(
+            page_type=page_type,
+            title=title,
+            page_key=page_key,
+            frontmatter=frontmatter,
+            as_of_chapter=as_of_chapter,
+        )
+        page_repo.supersede_duplicate_pages(
+            project_id,
+            identity_key=identity.logical_identity_key,
+            page_type=page_type,
+        )
+        desired_status = "canon_live"
+        supersedes_page_id = ""
+        existing_live_rows = [
+            existing
+            for existing in self.session.execute(
+                select(WorldModelPageRow).where(
+                    WorldModelPageRow.project_id == project_id,
+                    WorldModelPageRow.page_type == page_type,
+                    WorldModelPageRow.status == "canon_live",
+                )
+            ).scalars()
+            if page_repo.identity_for_row(existing).logical_identity_key == identity.logical_identity_key
+        ]
+        existing_live_rows = [existing for existing in existing_live_rows if existing.page_key != page_key]
+        if existing_live_rows:
+            best_existing = max(
+                existing_live_rows,
+                key=lambda existing: (
+                    int(page_repo.identity_for_row(existing).canonical_rank),
+                    int(existing.as_of_chapter or 0),
+                    int(existing.revision or 0),
+                    str(existing.updated_at or ""),
+                    str(existing.id or ""),
+                ),
+            )
+            best_existing_key = (
+                int(page_repo.identity_for_row(best_existing).canonical_rank),
+                int(best_existing.as_of_chapter or 0),
+                int(best_existing.revision or 0),
+            )
+            new_key = (int(identity.canonical_rank), int(as_of_chapter or 0), 1)
+            if best_existing_key >= new_key:
+                desired_status = "superseded"
+                supersedes_page_id = best_existing.id
+            else:
+                for existing in existing_live_rows:
+                    existing.status = "superseded"
+                    existing.supersedes_page_id = ""
+                    self.session.add(existing)
+                self.session.flush()
         stmt = (
             select(WorldModelPageRow)
             .where(
@@ -203,8 +257,13 @@ class WorldModelStore:
                 frontmatter_json=json.dumps(frontmatter, ensure_ascii=False),
                 content_hash=digest,
                 revision=1,
-                status="canon_live",
+                status=desired_status,
                 as_of_chapter=int(as_of_chapter),
+                logical_identity_key=identity.logical_identity_key,
+                canonical_source_type=identity.canonical_source_type,
+                canonical_source_id=identity.canonical_source_id,
+                supersedes_page_id=supersedes_page_id,
+                canonical_rank=identity.canonical_rank,
             )
         else:
             if row.content_hash != digest:
@@ -215,10 +274,22 @@ class WorldModelStore:
             row.markdown = markdown
             row.frontmatter_json = json.dumps(frontmatter, ensure_ascii=False)
             row.content_hash = digest
-            row.status = "canon_live"
+            row.status = desired_status
             row.as_of_chapter = int(as_of_chapter)
+            row.logical_identity_key = identity.logical_identity_key
+            row.canonical_source_type = identity.canonical_source_type
+            row.canonical_source_id = identity.canonical_source_id
+            row.canonical_rank = identity.canonical_rank
+            row.supersedes_page_id = supersedes_page_id
         self.session.add(row)
         self.session.flush()
+        if desired_status == "canon_live":
+            page_repo.supersede_duplicate_pages(
+                project_id,
+                identity_key=identity.logical_identity_key,
+                page_type=page_type,
+            )
+        self.session.refresh(row)
         return row
 
     def replace_links(
@@ -230,12 +301,15 @@ class WorldModelStore:
         self.session.query(WorldModelLinkRow).filter(WorldModelLinkRow.project_id == project_id).delete(
             synchronize_session=False
         )
-        page_ids = {
-            row.page_key: row.id
-            for row in self.session.execute(
-                select(WorldModelPageRow).where(WorldModelPageRow.project_id == project_id)
-            ).scalars()
-        }
+        page_repo = WorldModelPageRepository(self.session)
+        rows = page_repo.list_canonical_rows(project_id)
+        page_ids = {row.page_key: row.id for row in rows}
+        for row in self.session.execute(
+            select(WorldModelPageRow).where(WorldModelPageRow.project_id == project_id)
+        ).scalars():
+            canonical = page_repo.resolve_page_key(project_id, row.page_key)
+            if canonical is not None:
+                page_ids[row.page_key] = canonical.id
         for source_key, target_key, relation_type, refs in links:
             source_id = page_ids.get(source_key)
             target_id = page_ids.get(target_key)
@@ -294,6 +368,7 @@ class WorldModelStore:
         human_notes: str = "",
         reason: str = "",
         created_by: str = "",
+        status: str = "pending",
     ) -> WorldEditProposalRow:
         row = WorldEditProposalRow(
             id=new_id(),
@@ -306,7 +381,7 @@ class WorldModelStore:
             proposed_patch_json=json.dumps(proposed_patch, ensure_ascii=False),
             reason=reason,
             human_notes=human_notes,
-            status="pending",
+            status=status or "pending",
             created_by=created_by,
         )
         self.session.add(row)
@@ -346,6 +421,11 @@ def page_to_schema(row: WorldModelPageRow) -> WorldModelPage:
         revision=row.revision,
         status=row.status,
         as_of_chapter=row.as_of_chapter,
+        logical_identity_key=getattr(row, "logical_identity_key", "") or "",
+        canonical_source_type=getattr(row, "canonical_source_type", "") or "",
+        canonical_source_id=getattr(row, "canonical_source_id", "") or "",
+        supersedes_page_id=getattr(row, "supersedes_page_id", "") or "",
+        canonical_rank=int(getattr(row, "canonical_rank", 0) or 0),
     )
 
 

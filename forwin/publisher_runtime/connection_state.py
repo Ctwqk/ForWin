@@ -188,6 +188,8 @@ class ExtensionConnectionService:
                 for client_id in [row.client_id]
                 if client_id
             }
+            if self.preferred_client_id:
+                client_ids.add(self.preferred_client_id)
             client_rows = (
                 session.execute(
                     select(
@@ -293,22 +295,34 @@ class ExtensionConnectionService:
                     last_heartbeat_at = state.last_heartbeat_at
 
             extension_online = self.is_recent(extension_heartbeat_at or last_heartbeat_at)
-            connected = False
-            if login_evidence_recent or unverified_cookie_recent:
-                connected = False
-            elif (
+            preferred_connected = bool(
                 preferred_state
                 and preferred_state.connected
                 and self.is_recent(preferred_state.last_heartbeat_at)
+            )
+            global_connected = bool(
+                state and state.connected and self.is_recent(state.last_heartbeat_at)
+            )
+            browser_connected = bool(
+                browser_session
+                and self.is_browser_session_connected(
+                    spec.platform_id,
+                    browser_session.cookies_json,
+                    browser_session.last_error,
+                )
+            )
+            connected = False
+            if login_evidence_recent or unverified_cookie_recent:
+                connected = False
+            elif self.preferred_client_id:
+                connected = preferred_connected
+            elif (
+                preferred_connected
             ):
                 connected = True
-            elif state and state.connected and self.is_recent(state.last_heartbeat_at):
+            elif global_connected:
                 connected = True
-            elif browser_session and self.is_browser_session_connected(
-                spec.platform_id,
-                browser_session.cookies_json,
-                browser_session.last_error,
-            ):
+            elif browser_connected:
                 connected = True
 
             last_error = (
@@ -325,6 +339,45 @@ class ExtensionConnectionService:
             if not last_error and summary_browser_session:
                 last_error = summary_browser_session.last_error
 
+            preferred_client_id = (
+                preferred_state.client_id
+                if preferred_state and preferred_state.client_id
+                else self.preferred_client_id
+            )
+            latest_client_id = (
+                state.extension_client_id if state and state.extension_client_id else ""
+            )
+            session_client_id = (
+                browser_session.client_id if browser_session and browser_session.client_id else ""
+            )
+            fallback_client_id = ""
+            if self.preferred_client_id and not connected:
+                if (
+                    latest_client_id
+                    and latest_client_id != self.preferred_client_id
+                    and global_connected
+                ):
+                    fallback_client_id = latest_client_id
+                elif (
+                    session_client_id
+                    and session_client_id != self.preferred_client_id
+                    and browser_connected
+                ):
+                    fallback_client_id = session_client_id
+            selected_extension_client_id = (
+                preferred_client_id
+                if self.preferred_client_id
+                else (
+                    latest_client_id
+                    or session_client_id
+                    or (
+                        summary_browser_session.extension_client_id
+                        if summary_browser_session
+                        else ""
+                    )
+                )
+            )
+
             items.append(
                 {
                     "platform_id": spec.platform_id,
@@ -338,55 +391,48 @@ class ExtensionConnectionService:
                     "extension_online": extension_online,
                     "last_heartbeat_at": isoformat(last_heartbeat_at),
                     "last_error": last_error,
-                    "extension_client_id": (
-                        preferred_client.client_id
-                        if preferred_client_recent
-                        else (
-                            preferred_state.client_id
-                            if preferred_state_recent
+                    "extension_client_id": selected_extension_client_id,
+                    "preferred_client_state": {
+                        "client_id": preferred_client_id,
+                        "connected": preferred_connected,
+                        "recent": preferred_state_recent and preferred_client_recent,
+                        "last_heartbeat_at": isoformat(
+                            preferred_state.last_heartbeat_at
+                            if preferred_state is not None
                             else (
-                                client.client_id
-                                if client_recent
-                                else (
-                                    session_client.client_id
-                                    if session_client_recent
-                                    else (
-                                        state.extension_client_id
-                                        if state_recent and state and state.extension_client_id
-                                        else (
-                                            preferred_client.client_id
-                                            if preferred_client
-                                            else (
-                                                preferred_state.client_id
-                                                if preferred_state
-                                                else (
-                                                    client.client_id
-                                                    if client
-                                                    else (
-                                                        session_client.client_id
-                                                        if session_client
-                                                        else (
-                                                            state.extension_client_id
-                                                            if state and state.extension_client_id
-                                                            else (
-                                                                browser_session.client_id
-                                                                if browser_session
-                                                                else (
-                                                                    summary_browser_session.extension_client_id
-                                                                    if summary_browser_session
-                                                                    else ""
-                                                                )
-                                                            )
-                                                        )
-                                                    )
-                                                )
-                                            )
-                                        )
-                                    )
-                                )
+                                preferred_client.last_heartbeat_at
+                                if preferred_client is not None
+                                else None
                             )
-                        )
-                    ),
+                        ),
+                        "last_error": preferred_state.last_error if preferred_state else "",
+                    },
+                    "latest_client_state": {
+                        "client_id": latest_client_id,
+                        "connected": global_connected,
+                        "recent": state_recent and client_recent,
+                        "last_heartbeat_at": isoformat(
+                            state.last_heartbeat_at if state is not None else None
+                        ),
+                        "last_error": state.last_error if state else "",
+                    },
+                    "global_platform_state": {
+                        "client_id": latest_client_id,
+                        "connected": global_connected,
+                        "recent": state_recent,
+                        "last_heartbeat_at": isoformat(
+                            state.last_heartbeat_at if state is not None else None
+                        ),
+                        "last_error": state.last_error if state else "",
+                    },
+                    "browser_session_state": {
+                        "client_id": session_client_id,
+                        "connected": browser_connected,
+                        "recent": session_client_recent,
+                        "last_error": browser_session.last_error if browser_session else "",
+                    },
+                    "fallback_available": bool(fallback_client_id),
+                    "fallback_client_id": fallback_client_id,
                 }
             )
         return items

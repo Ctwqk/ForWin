@@ -285,24 +285,45 @@ def build_debug_response(session, project_id: str) -> WorldModelV4DebugResponse:
     )
 
 
-def build_handlers(*, get_session: Callable[[], Any]) -> dict[str, Callable[..., Any]]:
+def _debug_enabled_value(debug_enabled: bool | Callable[[], bool]) -> bool:
+    return bool(debug_enabled() if callable(debug_enabled) else debug_enabled)
+
+
+def _require_debug_enabled(debug_enabled: bool | Callable[[], bool]) -> None:
+    if not _debug_enabled_value(debug_enabled):
+        raise HTTPException(
+            status_code=404,
+            detail="world_v4 compatibility debug API is disabled",
+        )
+
+
+def build_handlers(
+    *,
+    get_session: Callable[[], Any],
+    debug_enabled: bool | Callable[[], bool] = False,
+) -> dict[str, Callable[..., Any]]:
     def get_world_model_v4_debug(project_id: str):
+        _require_debug_enabled(debug_enabled)
         with get_session() as session:
             return build_debug_response(session, project_id)
 
     def get_world_model_v4_lines(project_id: str):
+        _require_debug_enabled(debug_enabled)
         with get_session() as session:
             return build_lines_response(session, project_id)
 
     def get_world_model_v4_gaps(project_id: str):
+        _require_debug_enabled(debug_enabled)
         with get_session() as session:
             return build_gaps_response(session, project_id)
 
     def get_world_model_v4_reveals(project_id: str):
+        _require_debug_enabled(debug_enabled)
         with get_session() as session:
             return build_reveals_response(session, project_id)
 
     def get_world_model_v4_export(project_id: str):
+        _require_debug_enabled(debug_enabled)
         with get_session() as session:
             return WorldModelV4ExportResponse(
                 project_id=project_id,
@@ -325,8 +346,9 @@ def register_world_model_v4_routes(
     app: FastAPI,
     *,
     get_session: Callable[[], Any],
+    debug_enabled: bool | Callable[[], bool] = False,
 ) -> dict[str, Callable[..., Any]]:
-    handlers = build_handlers(get_session=get_session)
+    handlers = build_handlers(get_session=get_session, debug_enabled=debug_enabled)
     app.add_api_route(
         "/api/projects/{project_id}/world-model/v4/debug",
         handlers["get_world_model_v4_debug"],

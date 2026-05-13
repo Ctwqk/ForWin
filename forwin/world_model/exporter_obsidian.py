@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.models.world_model import WorldModelLinkRow, WorldModelPageRow
 from forwin.protocol.world_model import WorldModelExportResult
+from forwin.world_model.page_repository import WorldModelPageRepository
 
 
 class ObsidianWorldExporter:
@@ -22,11 +22,8 @@ class ObsidianWorldExporter:
     ) -> WorldModelExportResult:
         root = Path(vault_root) if vault_root is not None else Path("data") / "world_vaults" / project_id
         root.mkdir(parents=True, exist_ok=True)
-        rows = self.session.execute(
-            select(WorldModelPageRow)
-            .where(WorldModelPageRow.project_id == project_id, WorldModelPageRow.status == "canon_live")
-            .order_by(WorldModelPageRow.vault_path.asc())
-        ).scalars().all()
+        page_repo = WorldModelPageRepository(self.session)
+        rows = sorted(page_repo.list_canonical_rows(project_id), key=lambda row: row.vault_path)
 
         self._write_rules(root)
         exported = 0
@@ -75,6 +72,8 @@ class ObsidianWorldExporter:
             "secret_reveal_ladder.canvas": {"secret", "promise"},
             "arc_dependencies.canvas": {"arc", "promise", "overview"},
         }
+        from sqlalchemy import select
+
         links = self.session.execute(
             select(WorldModelLinkRow).where(WorldModelLinkRow.project_id == project_id)
         ).scalars().all()
@@ -127,20 +126,3 @@ class ObsidianWorldExporter:
                 }
             )
         return {"nodes": nodes, "edges": edges}
-        schema = root / "world_model_schema.md"
-        if not schema.exists():
-            schema.write_text(
-                "\n".join(
-                    [
-                        "# WorldModel Schema",
-                        "",
-                        "- `world_root`: overview, axioms, history, culture profiles",
-                        "- `space_model`: submaps, regions, nodes, routes, ownership, travel constraints",
-                        "- `actor_model`: characters, factions, relationships, NPC intents",
-                        "- `plot_model`: canon events, threads, promises, secrets, world pressure",
-                        "- `quality_model`: contradictions, risky claims, open questions, review findings",
-                        "",
-                    ]
-                ),
-                encoding="utf-8",
-            )

@@ -8,6 +8,7 @@ from typing import Any, Callable
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
+from forwin.book_state import BookStateRepository
 from forwin.api_schemas import (
     BandCheckpointDetail,
     BookGenesisPack,
@@ -1280,7 +1281,13 @@ def build_project_detail(
     entities = session.execute(
         select(Entity).where(Entity.project_id == project_id, Entity.is_active == True)
     ).scalars().all()
-    characters = [
+    book_state_nodes = BookStateRepository(session).list_world_nodes(project_id)
+    book_state_characters = [
+        EntityInfo(id=node.id, kind="character", name=node.name, description=node.description, importance=node.importance)
+        for node in book_state_nodes
+        if str(node.node_type) == "character" and bool(node.is_active)
+    ]
+    characters = book_state_characters or [
         EntityInfo(id=e.id, kind=e.kind, name=e.name, description=e.description, importance=e.importance)
         for e in entities
         if e.kind == "character"
@@ -1290,7 +1297,12 @@ def build_project_detail(
         for e in entities
         if e.kind == "location"
     ]
-    factions = [
+    book_state_factions = [
+        EntityInfo(id=node.id, kind=str(node.node_type), name=node.name, description=node.description, importance=node.importance)
+        for node in book_state_nodes
+        if str(node.node_type) in {"faction", "organization", "family", "institution"} and bool(node.is_active)
+    ]
+    factions = book_state_factions or [
         EntityInfo(id=e.id, kind=e.kind, name=e.name, description=e.description, importance=e.importance)
         for e in entities
         if e.kind == "faction"

@@ -21,6 +21,8 @@ CONFIG_ENV_KEYS = {
     "FEEDBACK_COOLDOWN_CHAPTERS",
     "FORWIN_ARTIFACT_BACKEND",
     "FORWIN_ARTIFACT_ROOT",
+    "FORWIN_ALLOW_BIND_ALL_INTERFACES",
+    "FORWIN_ALLOW_UNAUTHENTICATED_LAN",
     "FORWIN_CODEX_BRIDGE_TOKEN",
     "FORWIN_CODEX_BRIDGE_URL",
     "FORWIN_CODEX_ENABLED",
@@ -30,6 +32,7 @@ CONFIG_ENV_KEYS = {
     "FORWIN_DATABASE_URL",
     "FORWIN_DB_PATH",
     "FORWIN_DISABLED_SKILL_IDS",
+    "FORWIN_ENABLE_COMPAT_DEBUG_API",
     "FORWIN_EMBEDDING_API_KEY",
     "FORWIN_EMBEDDING_BACKEND",
     "FORWIN_EMBEDDING_BASE_URL",
@@ -198,7 +201,11 @@ def test_publisher_extension_legacy_alias_still_works(
     _set_env_file(
         monkeypatch,
         tmp_path,
-        ["PUBLISHER_EXTENSION_API_KEY=legacy-extension-key"],
+        [
+            "PUBLISHER_EXTENSION_API_KEY=legacy-extension-key",
+            "FORWIN_PUBLISHER_SESSION_SECRET=legacy-session-secret",
+            "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED=true",
+        ],
     )
 
     config = Config.from_env()

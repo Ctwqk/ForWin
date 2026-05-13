@@ -31,6 +31,7 @@ from forwin.obsidian.proposal_review import approve_world_edit_proposal
 from .compiler import WorldModelCompiler
 from .exporter_obsidian import ObsidianWorldExporter
 from .importer_obsidian import ObsidianWorldImporter
+from .page_repository import WorldModelPageRepository
 from .store import load_json
 from forwin.obsidian import ObsidianExporter as BookStateObsidianExporter
 from forwin.obsidian import ObsidianImporter as BookStateObsidianImporter
@@ -75,6 +76,11 @@ def _page_info(row: WorldModelPageRow) -> WorldModelPageInfo:
         revision=row.revision,
         status=row.status,
         as_of_chapter=row.as_of_chapter,
+        logical_identity_key=getattr(row, "logical_identity_key", "") or "",
+        canonical_source_type=getattr(row, "canonical_source_type", "") or "",
+        canonical_source_id=getattr(row, "canonical_source_id", "") or "",
+        supersedes_page_id=getattr(row, "supersedes_page_id", "") or "",
+        canonical_rank=int(getattr(row, "canonical_rank", 0) or 0),
         updated_at=_dt(row.updated_at),
     )
 
@@ -158,11 +164,7 @@ def list_pages(project_id: str, *, get_session) -> list[WorldModelPageInfo]:
     try:
         _ensure_project(session, project_id)
         _bootstrap_if_needed(session, project_id)
-        rows = session.execute(
-            select(WorldModelPageRow)
-            .where(WorldModelPageRow.project_id == project_id)
-            .order_by(WorldModelPageRow.page_type.asc(), WorldModelPageRow.title.asc())
-        ).scalars().all()
+        rows = WorldModelPageRepository(session).list_canonical_rows(project_id)
         session.commit()
         return [_page_info(row) for row in rows]
     finally:
@@ -173,12 +175,7 @@ def get_page(project_id: str, page_key: str, *, get_session) -> WorldModelPageIn
     session = get_session()
     try:
         _ensure_project(session, project_id)
-        row = session.execute(
-            select(WorldModelPageRow).where(
-                WorldModelPageRow.project_id == project_id,
-                WorldModelPageRow.page_key == page_key,
-            )
-        ).scalar_one_or_none()
+        row = WorldModelPageRepository(session).resolve_page_key(project_id, page_key)
         if row is None:
             raise HTTPException(404, "WorldModel page 不存在")
         return _page_info(row)

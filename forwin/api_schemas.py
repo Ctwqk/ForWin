@@ -632,6 +632,11 @@ class WorldModelPageInfo(BaseModel):
     revision: int = 1
     status: str = "canon_live"
     as_of_chapter: int = 0
+    logical_identity_key: str = ""
+    canonical_source_type: str = ""
+    canonical_source_id: str = ""
+    supersedes_page_id: str = ""
+    canonical_rank: int = 0
     updated_at: str = ""
 
 
@@ -1355,6 +1360,12 @@ class PublisherPlatformInfo(BaseModel):
     last_heartbeat_at: str = ""
     last_error: str = ""
     extension_client_id: str = ""
+    preferred_client_state: dict[str, Any] = Field(default_factory=dict)
+    latest_client_state: dict[str, Any] = Field(default_factory=dict)
+    global_platform_state: dict[str, Any] = Field(default_factory=dict)
+    browser_session_state: dict[str, Any] = Field(default_factory=dict)
+    fallback_available: bool = False
+    fallback_client_id: str = ""
 
 
 class PublisherBookMetaRequest(BaseModel):

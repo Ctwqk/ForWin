@@ -13,6 +13,7 @@ from forwin.api_schemas import (
     WorldModelExportRequest,
     WorldModelImportRequest,
 )
+from forwin.book_state.repository import BookStateRepository
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.entity import EntityState
 from forwin.models.event import CanonEvent
@@ -26,14 +27,17 @@ from forwin.models.world_model import (
     WorldModelSnapshotRow,
 )
 from forwin.protocol.context import WorldContextPack
+from forwin.protocol.book_state import WorldNode
 from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.updater import StateUpdater
 from forwin.world_model.compiler import WorldModelCompiler
 from forwin.world_model.exporter_obsidian import ObsidianWorldExporter
 from forwin.world_model.importer_obsidian import ObsidianWorldImporter
 from forwin.world_model.retriever import WorldModelRetriever
+from forwin.obsidian.importer import ObsidianImporter
 from forwin.config import Config
 from forwin.context.assembler import assemble_context
+from forwin.retrieval.broker import RetrievalBroker
 from forwin.state.repo import StateRepository
 from forwin.reviewer.context_builder import build_review_context_pack
 
@@ -316,9 +320,40 @@ class WorldModelTests(unittest.TestCase):
             session.commit()
 
         self.assertEqual(result.proposal_count, 1)
-        self.assertEqual(proposal.status, "pending")
+        self.assertEqual(proposal.status, "needs_resolution")
         self.assertIn("人工备注", proposal.proposed_patch_json)
         self.assertNotIn("人工备注", page.markdown)
+
+    def test_book_state_obsidian_import_without_target_node_needs_resolution(self) -> None:
+        project_id = self._create_genesis_project()
+        vault_root = Path(self.tmpdir.name) / "legacy_vault"
+        page_path = vault_root / "03_Actors" / "Characters" / "林烬.md"
+        page_path.parent.mkdir(parents=True)
+        page_path.write_text(
+            "\n".join(
+                [
+                    "---",
+                    f"project_id: {project_id}",
+                    "forwin_id: legacy:character:lin",
+                    "node_type: character",
+                    "title: 林烬",
+                    "---",
+                    "## Manual Notes",
+                    "需要人工确认这个旧 vault 页面对应哪个 BookState node。",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        with self.session_factory() as session:
+            result = ObsidianImporter(session).import_project(project_id, vault_root=vault_root)
+            proposal = session.query(WorldEditProposalRow).filter_by(project_id=project_id).one()
+            session.commit()
+
+        self.assertEqual(result.proposal_count, 1)
+        self.assertEqual(proposal.status, "needs_resolution")
+        self.assertEqual(proposal.target_node_id, "")
+        self.assertIn("target_resolution_required", proposal.proposed_patch_json)
 
     def test_world_model_retriever_returns_context_pack_with_pages_and_conflicts(self) -> None:
         project_id = self._create_genesis_project()
@@ -404,6 +439,199 @@ class WorldModelTests(unittest.TestCase):
             WorldEditProposalReviewRequest.model_validate({"status": "accepted", "reason": "测试接受"}),
         )
         self.assertEqual(reviewed.status, "accepted")
+
+    def test_world_model_store_upsert_supersedes_lower_rank_duplicate_pages(self) -> None:
+        with self.session_factory() as session:
+            project = Project(title="Canonical 页面测试", premise="同名人物只能有一个 live 页面。", genre="玄幻")
+            session.add(project)
+            session.flush()
+            legacy = WorldModelPageRow(
+                project_id=project.id,
+                page_key="character:legacy_entity_1",
+                page_type="character",
+                title="林烬",
+                vault_path="03_Actors/Characters/林烬.md",
+                markdown="# 林烬\n\n## Canon Summary\nlegacy",
+                frontmatter_json=json.dumps({"forwin_id": "character:legacy_entity_1"}, ensure_ascii=False),
+                content_hash="legacy",
+                status="canon_live",
+                as_of_chapter=3,
+            )
+            session.add(legacy)
+            session.flush()
+
+            from forwin.world_model.store import WorldModelStore
+
+            row = WorldModelStore(session).upsert_page(
+                project_id=project.id,
+                page_key="character:char_book_state",
+                page_type="character",
+                title="林烬",
+                vault_path="04_Characters/林烬.md",
+                markdown="# 林烬\n\n## Canon Summary\nbook state",
+                frontmatter={
+                    "forwin_id": "character:char_book_state",
+                    "node_id": "char_book_state",
+                    "node_type": "character",
+                    "editable_fields": ["Manual Notes"],
+                },
+                as_of_chapter=4,
+            )
+            session.commit()
+
+            rows = session.query(WorldModelPageRow).filter_by(project_id=project.id, title="林烬").all()
+
+        live_rows = [item for item in rows if item.status == "canon_live"]
+        superseded_rows = [item for item in rows if item.status == "superseded"]
+        self.assertEqual([item.page_key for item in live_rows], [row.page_key])
+        self.assertEqual([item.page_key for item in superseded_rows], ["character:legacy_entity_1"])
+
+    def test_world_model_canonical_pages_are_shared_across_api_export_retriever_and_broker(self) -> None:
+        vault_root = Path(self.tmpdir.name) / "canonical-vault"
+        with self.session_factory() as session:
+            project = Project(title="Canonical Consumer 测试", premise="所有 consumer 必须共享 canonical page。", genre="玄幻")
+            session.add(project)
+            session.flush()
+            session.add(
+                WorldModelSnapshotRow(
+                    project_id=project.id,
+                    as_of_chapter=5,
+                    version=1,
+                    status="live",
+                    snapshot_json=json.dumps({"source_refs": []}, ensure_ascii=False),
+                    source_digest="digest",
+                )
+            )
+            pages = [
+                WorldModelPageRow(
+                    project_id=project.id,
+                    page_key="world:index",
+                    page_type="overview",
+                    title="00_Index",
+                    vault_path="00_Index.md",
+                    markdown="# 00_Index\n\n## Canon Summary\nindex",
+                    frontmatter_json=json.dumps({"forwin_id": "world:index"}, ensure_ascii=False),
+                    content_hash="index",
+                    status="canon_live",
+                    as_of_chapter=5,
+                ),
+                WorldModelPageRow(
+                    project_id=project.id,
+                    page_key="character:genesis:character:林烬",
+                    page_type="character",
+                    title="林烬",
+                    vault_path="03_Actors/Characters/林烬.md",
+                    markdown="# 林烬\n\n## Canon Summary\ngenesis",
+                    frontmatter_json=json.dumps({"forwin_id": "character:genesis:character:林烬"}, ensure_ascii=False),
+                    content_hash="genesis",
+                    status="canon_live",
+                    as_of_chapter=0,
+                ),
+                WorldModelPageRow(
+                    project_id=project.id,
+                    page_key="character:legacy_entity_1",
+                    page_type="character",
+                    title="林烬",
+                    vault_path="03_Actors/Characters/林烬-legacy.md",
+                    markdown="# 林烬\n\n## Canon Summary\nlegacy",
+                    frontmatter_json=json.dumps({"forwin_id": "character:legacy_entity_1"}, ensure_ascii=False),
+                    content_hash="legacy",
+                    status="canon_live",
+                    as_of_chapter=5,
+                ),
+                WorldModelPageRow(
+                    project_id=project.id,
+                    page_key="character:char_book_state",
+                    page_type="character",
+                    title="林烬",
+                    vault_path="04_Characters/林烬.md",
+                    markdown="# 林烬\n\n## Canon Summary\nbook state",
+                    frontmatter_json=json.dumps(
+                        {
+                            "forwin_id": "character:char_book_state",
+                            "node_id": "char_book_state",
+                            "node_type": "character",
+                            "editable_fields": ["Manual Notes"],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    content_hash="book",
+                    status="canon_live",
+                    as_of_chapter=5,
+                ),
+            ]
+            session.add_all(pages)
+            session.commit()
+            project_id = project.id
+
+        api_pages = api_module.list_project_world_model_pages(project_id)
+        api_character_pages = [page for page in api_pages if page.page_type == "character" and page.title == "林烬"]
+        self.assertEqual([page.page_key for page in api_character_pages], ["character:char_book_state"])
+
+        with self.session_factory() as session:
+            export = ObsidianWorldExporter(session).export_project(project_id, vault_root=vault_root)
+            context = WorldModelRetriever(session).build_context(
+                project_id=project_id,
+                chapter_number=6,
+                query_terms=["林烬"],
+                max_pages=6,
+            )
+            broker_pages = RetrievalBroker()._load_obsidian_page_context(
+                session,
+                project_id,
+                include_hidden_truth=True,
+            )
+
+        self.assertEqual(export.exported_count, 2)
+        self.assertEqual(
+            [page.page_key for page in context.relevant_world_pages if page.page_type == "character" and page.title == "林烬"],
+            ["character:char_book_state"],
+        )
+        self.assertEqual(
+            [page["page_key"] for page in broker_pages if page["page_type"] == "character" and page["title"] == "林烬"],
+            ["character:char_book_state"],
+        )
+
+    def test_compile_for_book_state_project_ignores_legacy_and_genesis_character_sources(self) -> None:
+        project_id = self._create_genesis_project()
+        with self.session_factory() as session:
+            repo = BookStateRepository(session)
+            repo.create_world_node(
+                WorldNode(
+                    id="char_book_state",
+                    project_id=project_id,
+                    node_type="character",
+                    name="陆沉",
+                    summary="BookState canon 主角。",
+                    description="只应从 BookState 进入 WorldModel 投影。",
+                    source_refs=["book_state:delta:1"],
+                )
+            )
+            repo.append_world_node_state(
+                project_id=project_id,
+                node_id="char_book_state",
+                node_type="character",
+                as_of_chapter=1,
+                state={"goal": "查明灵矿真相"},
+            )
+            StateUpdater(session).create_entity(
+                project_id=project_id,
+                kind="character",
+                name="旧影",
+                description="legacy Entity mirror，不应进入 BookState 项目投影。",
+                chapter=0,
+            )
+            snapshot = WorldModelCompiler(session).compile_after_chapter(project_id, 1)
+            session.commit()
+            pages = session.query(WorldModelPageRow).filter_by(project_id=project_id, page_type="character", status="canon_live").all()
+
+        character_names = sorted(page.title for page in pages)
+        snapshot_names = sorted(item["name"] for item in snapshot.snapshot["actor_model"]["characters"])
+        self.assertEqual(character_names, ["陆沉"])
+        self.assertEqual(snapshot_names, ["陆沉"])
+        self.assertNotIn("旧影", json.dumps(snapshot.snapshot, ensure_ascii=False))
+        self.assertNotIn("林烬", json.dumps(snapshot.snapshot, ensure_ascii=False))
+        self.assertNotIn("沈砚", json.dumps(snapshot.snapshot, ensure_ascii=False))
 
 
 if __name__ == "__main__":

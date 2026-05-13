@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from forwin.models.world_model import WorldModelConflictRow, WorldModelPageRow
 from forwin.protocol.world_model import WorldContextPack
 
+from .page_repository import WorldModelPageRepository
 from .store import conflict_to_schema, page_to_schema, snapshot_to_schema
 from .store import WorldModelStore
 
@@ -64,11 +65,7 @@ class WorldModelRetriever:
         )
 
     def _pick_pages(self, *, project_id: str, terms: list[str], max_pages: int) -> list:
-        rows = self.session.execute(
-            select(WorldModelPageRow)
-            .where(WorldModelPageRow.project_id == project_id, WorldModelPageRow.status == "canon_live")
-            .order_by(WorldModelPageRow.as_of_chapter.desc(), WorldModelPageRow.page_type.asc(), WorldModelPageRow.title.asc())
-        ).scalars().all()
+        rows = WorldModelPageRepository(self.session).list_canonical_rows(project_id)
         if not rows:
             return []
 

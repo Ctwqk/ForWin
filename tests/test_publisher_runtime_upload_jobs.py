@@ -188,6 +188,52 @@ def test_non_login_upload_failure_requeues_until_codex_intervention() -> None:
         engine.dispose()
 
 
+def test_upload_success_clears_retry_and_codex_failure_payload() -> None:
+    engine, runtime = _runtime("publisher-runtime-upload-retry-cleared")
+    try:
+        created = runtime.upload_jobs.create_upload_job(
+            platform="fanqie",
+            book_name="测试书",
+            chapter_title="第一章",
+            body="正文",
+            upload_url=None,
+            publish=False,
+        )
+
+        first = runtime.upload_jobs.update_upload_job_result(
+            job_id=created["job_id"],
+            client_id="client-1",
+            status="failed",
+            message="上传失败。",
+            current_url="https://fanqienovel.com/main/writer/",
+            error="番茄章节管理页未找到新草稿。",
+            result_payload={"error_code": "publish-not-confirmed", "failure_phase": "confirm"},
+        )
+        assert first["status"] == "pending"
+
+        succeeded = runtime.upload_jobs.update_upload_job_result(
+            job_id=created["job_id"],
+            client_id="client-1",
+            status="succeeded",
+            message="完成",
+            current_url="https://fanqienovel.com/main/writer/",
+            error="",
+            result_payload={"remote_chapter_id": "remote-1"},
+        )
+
+        payload = succeeded["result_payload"]
+        assert succeeded["status"] == "succeeded"
+        assert payload["remote_chapter_id"] == "remote-1"
+        assert "auto_retry" not in payload
+        assert "codex_intervention_required" not in payload
+        assert "codex_intervention" not in payload
+        assert "error_code" not in payload
+        assert "failure_phase" not in payload
+        assert payload["retry_history"][0]["failure_count"] == 1
+    finally:
+        engine.dispose()
+
+
 def test_login_upload_failure_does_not_retry() -> None:
     engine, runtime = _runtime("publisher-runtime-upload-login-failure")
     try:

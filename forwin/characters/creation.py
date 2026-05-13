@@ -24,6 +24,7 @@ from .events import (
     PERSONALITY_LOADOUT_AUTO_ASSIGNED,
 )
 from .integrity import CharacterIntegrityIssue, CharacterIntegrityReport, failed_integrity
+from .identity import CharacterIdentityMap
 from .models import CharacterCreationRequest, CharacterCreationResult
 from .normalization import is_generic_character_name
 from .registry import CharacterRegistry
@@ -86,6 +87,7 @@ class CharacterCreationHelper:
             )
             legacy_entity_id = entity.id
 
+        genesis_ref_id = self._genesis_ref_id(request)
         profile = dict(request.profile)
         if request.personality_tags and not profile.get("personality_tags"):
             profile["personality_tags"] = list(request.personality_tags)
@@ -93,6 +95,13 @@ class CharacterCreationHelper:
         metadata = {
             "legacy_entity_id": legacy_entity_id,
             "roster_item_ids": [request.roster_item_id] if request.roster_item_id else [],
+            "character_identity": {
+                "canonical_character_id": character_id,
+                "book_state_node_id": character_id,
+                "legacy_entity_id": legacy_entity_id,
+                "genesis_ref_id": genesis_ref_id,
+                "roster_item_ids": [request.roster_item_id] if request.roster_item_id else [],
+            },
             "personality_assignment": assignment_payload,
             "character_creation": {
                 "source": request.source,
@@ -102,6 +111,8 @@ class CharacterCreationHelper:
                 "created_at_chapter": int(request.created_at_chapter or 0),
             },
         }
+        if genesis_ref_id:
+            metadata["genesis_ref_id"] = genesis_ref_id
         disambiguation = self._disambiguation_metadata(request, resolution)
         if disambiguation:
             metadata["character_creation"]["disambiguation"] = disambiguation
@@ -120,6 +131,14 @@ class CharacterCreationHelper:
             metadata=metadata,
         )
         self.repo.create_world_node(node)
+        self._sync_identity_map(
+            request,
+            character_id=node.id,
+            legacy_entity_id=legacy_entity_id,
+            display_name=node.name,
+            aliases=list(node.aliases),
+            genesis_ref_id=genesis_ref_id,
+        )
         self.repo.append_world_node_state(
             project_id=request.project_id,
             node_id=node.id,
@@ -262,6 +281,15 @@ class CharacterCreationHelper:
         )
 
     def _existing_result(self, request: CharacterCreationRequest, node: WorldNode) -> CharacterCreationResult:
+        metadata = dict(node.metadata)
+        self._sync_identity_map(
+            request,
+            character_id=node.id,
+            legacy_entity_id=str(request.legacy_entity_id or metadata.get("legacy_entity_id") or ""),
+            display_name=node.name,
+            aliases=list(node.aliases),
+            genesis_ref_id=self._genesis_ref_id(request) or str(metadata.get("genesis_ref_id") or ""),
+        )
         self._save_event(
             request,
             CHARACTER_MERGED_EXISTING,
@@ -270,7 +298,6 @@ class CharacterCreationHelper:
             {"character_id": node.id, "character_name": node.name, "resolution": "get_or_create"},
         )
         profile = dict(node.profile)
-        metadata = dict(node.metadata)
         return CharacterCreationResult(
             project_id=request.project_id,
             character_id=node.id,
@@ -283,6 +310,43 @@ class CharacterCreationHelper:
             personality_assignment=metadata.get("personality_assignment") or {},
             integrity_report=CharacterIntegrityReport(ok=bool(profile.get("personality_loadout"))),
         )
+
+    def _sync_identity_map(
+        self,
+        request: CharacterCreationRequest,
+        *,
+        character_id: str,
+        legacy_entity_id: str = "",
+        display_name: str = "",
+        aliases: list[str] | None = None,
+        genesis_ref_id: str = "",
+    ):
+        return CharacterIdentityMap(self.session).upsert(
+            project_id=request.project_id,
+            canonical_character_id=character_id,
+            book_state_node_id=character_id,
+            legacy_entity_id=legacy_entity_id,
+            genesis_ref_id=genesis_ref_id,
+            roster_item_ids=[request.roster_item_id] if request.roster_item_id else [],
+            aliases=list(aliases or request.aliases),
+            display_name=display_name or request.name,
+            metadata={
+                "source": request.source,
+                "source_ref": request.source_ref,
+                "created_at_chapter": int(request.created_at_chapter or 0),
+            },
+        )
+
+    def _genesis_ref_id(self, request: CharacterCreationRequest) -> str:
+        context = dict(request.creation_context) if isinstance(request.creation_context, dict) else {}
+        value = str(context.get("genesis_ref_id") or context.get("genesis_ref") or "").strip()
+        if value:
+            return value
+        if str(request.source_ref or "").startswith("genesis:"):
+            return str(request.source_ref or "").strip()
+        if str(request.source or "").startswith("genesis") and request.source_ref:
+            return str(request.source_ref or "").strip()
+        return ""
 
     def _assignment_request(self, request: CharacterCreationRequest) -> PersonalityAssignmentRequest:
         profile = dict(request.profile)

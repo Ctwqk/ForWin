@@ -74,3 +74,10 @@ def test_compose_publishes_forwin_qdrant_on_dedicated_local_debug_port() -> None
     qdrant_block = compose.split("\n  qdrant:\n", 1)[1].split("\n  forwin-mcp:", 1)[0]
 
     assert '"${FORWIN_QDRANT_DEBUG_BIND:-127.0.0.1:6335}:6333"' in qdrant_block
+
+
+def test_publisher_extension_manifest_does_not_request_all_hosts() -> None:
+    manifest = (ROOT / "browser_extension" / "forwin-publisher" / "manifest.json").read_text(encoding="utf-8")
+
+    assert '"http://*/*"' not in manifest
+    assert '"https://*/*"' not in manifest

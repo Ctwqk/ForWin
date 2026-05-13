@@ -140,7 +140,7 @@ def test_v4_debug_endpoint_exposes_world_model_diagnostics() -> None:
         )
 
     app = FastAPI()
-    register_world_model_v4_routes(app, get_session=Session)
+    register_world_model_v4_routes(app, get_session=Session, debug_enabled=True)
     response = TestClient(app).get(f"/api/projects/{project_id}/world-model/v4/debug")
 
     assert response.status_code == 200
@@ -158,3 +158,16 @@ def test_v4_debug_endpoint_exposes_world_model_diagnostics() -> None:
 def test_v4_debug_route_is_registered_in_main_route_registry() -> None:
     source = inspect.getsource(api_route_registry.register_api_routes)
     assert "world-model/v4/debug" in source
+
+
+def test_v4_debug_routes_are_gated_by_default() -> None:
+    engine = get_engine(postgres_test_url("world-v4-debug-gated"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    app = FastAPI()
+    register_world_model_v4_routes(app, get_session=Session)
+
+    response = TestClient(app).get("/api/projects/missing/world-model/v4/debug")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "world_v4 compatibility debug API is disabled"

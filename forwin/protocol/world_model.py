@@ -24,6 +24,11 @@ class WorldModelPage(BaseModel):
     revision: int = 1
     status: str = "canon_live"
     as_of_chapter: int = 0
+    logical_identity_key: str = ""
+    canonical_source_type: str = ""
+    canonical_source_id: str = ""
+    supersedes_page_id: str = ""
+    canonical_rank: int = 0
 
 
 class WorldModelLink(BaseModel):

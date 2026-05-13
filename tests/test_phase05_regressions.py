@@ -5125,6 +5125,12 @@ class Phase05RegressionTests(unittest.TestCase):
                     "last_heartbeat_at",
                     "last_error",
                     "extension_client_id",
+                    "preferred_client_state",
+                    "latest_client_state",
+                    "global_platform_state",
+                    "browser_session_state",
+                    "fallback_available",
+                    "fallback_client_id",
                 },
             )
             self.assertFalse(items["qidian"]["connected"])
@@ -5695,9 +5701,12 @@ class Phase05RegressionTests(unittest.TestCase):
                 session.commit()
 
             items = {item["platform_id"]: item for item in manager.list_platforms()}
-            self.assertTrue(items["fanqie"]["connected"])
+            self.assertFalse(items["fanqie"]["connected"])
             self.assertTrue(items["fanqie"]["extension_online"])
-            self.assertEqual(items["fanqie"]["extension_client_id"], "laptop-client")
+            self.assertEqual(items["fanqie"]["extension_client_id"], "linux-client")
+            self.assertTrue(items["fanqie"]["fallback_available"])
+            self.assertEqual(items["fanqie"]["fallback_client_id"], "laptop-client")
+            self.assertTrue(items["fanqie"]["latest_client_state"]["connected"])
             self.assertTrue(items["fanqie"]["last_heartbeat_at"].endswith("PDT"))
         finally:
             engine.dispose()
@@ -5741,6 +5750,8 @@ class Phase05RegressionTests(unittest.TestCase):
             api_module._config = Config(
                 database_url=engine.url.render_as_string(hide_password=False),
                 publisher_extension_api_key="secret",
+                publisher_session_secret="test-session-secret",
+                publisher_session_encryption_required=True,
                 minimax_api_key="",
                 minimax_model="fake-model",
             )

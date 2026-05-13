@@ -344,6 +344,9 @@ def register_api_routes(
     )
     world_model_v4_handlers = api_world_model_v4_routes.build_handlers(
         get_session=get_session,
+        debug_enabled=lambda: bool(
+            getattr(get_config(), "enable_world_v4_debug_api", False)
+        ),
     )
     book_state_handlers = api_book_state_routes.build_handlers(
         get_session=get_session,

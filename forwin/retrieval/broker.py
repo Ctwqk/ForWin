@@ -41,6 +41,7 @@ from forwin.protocol.context import (
     WritingPack,
 )
 from forwin.protocol.world_model import WorldContextPack
+from forwin.world_model.page_repository import WorldModelPageRepository
 from forwin.world_model.store import load_json
 from forwin.obsidian.frontmatter import parse_sections
 from .memory_index import ChapterMemoryIndex, create_memory_index
@@ -67,6 +68,7 @@ class RetrievalBroker:
         llm_kb_qdrant_collection: str | None = None,
         llm_kb_qdrant_client: object | None = None,
         llm_kb_qdrant_models: object | None = None,
+        include_world_v4_compat: bool = False,
     ) -> None:
         self.context_budget_chars = context_budget_chars
         self.max_entities = max_entities
@@ -84,6 +86,7 @@ class RetrievalBroker:
         self.llm_kb_qdrant_collection = llm_kb_qdrant_collection
         self.llm_kb_qdrant_client = llm_kb_qdrant_client
         self.llm_kb_qdrant_models = llm_kb_qdrant_models
+        self.include_world_v4_compat = bool(include_world_v4_compat)
         self.last_observability_summary: dict[str, object] = {}
 
     def build_chapter_context(self, repo, project_id: str, chapter_plan) -> ChapterContextPack:
@@ -234,75 +237,82 @@ class RetrievalBroker:
         if session is None:
             raise TypeError("repo must expose a SQLAlchemy session")
 
-        lines = list(
-            session.execute(
-                select(WorldLineRow)
-                .where(WorldLineRow.project_id == project_id)
-                .order_by(WorldLineRow.created_at.asc(), WorldLineRow.id.asc())
+        if self.include_world_v4_compat:
+            lines = list(
+                session.execute(
+                    select(WorldLineRow)
+                    .where(WorldLineRow.project_id == project_id)
+                    .order_by(WorldLineRow.created_at.asc(), WorldLineRow.id.asc())
+                )
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
-        deltas = list(
-            session.execute(
-                select(WorldDeltaRow)
-                .where(
-                    WorldDeltaRow.project_id == project_id,
-                    WorldDeltaRow.narrative_chapter <= chapter_number,
+            deltas = list(
+                session.execute(
+                    select(WorldDeltaRow)
+                    .where(
+                        WorldDeltaRow.project_id == project_id,
+                        WorldDeltaRow.narrative_chapter <= chapter_number,
+                    )
+                    .order_by(
+                        WorldDeltaRow.narrative_chapter.desc(),
+                        WorldDeltaRow.created_at.desc(),
+                        WorldDeltaRow.id.desc(),
+                    )
+                    .limit(12)
                 )
-                .order_by(
-                    WorldDeltaRow.narrative_chapter.desc(),
-                    WorldDeltaRow.created_at.desc(),
-                    WorldDeltaRow.id.desc(),
-                )
-                .limit(12)
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
-        gaps = list(
-            session.execute(
-                select(KnowledgeGapRow)
-                .where(
-                    KnowledgeGapRow.project_id == project_id,
-                    KnowledgeGapRow.status.in_(("open", "hinted", "partially_closed")),
+            gaps = list(
+                session.execute(
+                    select(KnowledgeGapRow)
+                    .where(
+                        KnowledgeGapRow.project_id == project_id,
+                        KnowledgeGapRow.status.in_(("open", "hinted", "partially_closed")),
+                    )
+                    .order_by(KnowledgeGapRow.created_at.asc(), KnowledgeGapRow.id.asc())
                 )
-                .order_by(KnowledgeGapRow.created_at.asc(), KnowledgeGapRow.id.asc())
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
-        reader_experience = list(
-            session.execute(
-                select(ReaderExperienceDeltaRow)
-                .where(
-                    ReaderExperienceDeltaRow.project_id == project_id,
-                    ReaderExperienceDeltaRow.chapter_number <= chapter_number,
+            reader_experience = list(
+                session.execute(
+                    select(ReaderExperienceDeltaRow)
+                    .where(
+                        ReaderExperienceDeltaRow.project_id == project_id,
+                        ReaderExperienceDeltaRow.chapter_number <= chapter_number,
+                    )
+                    .order_by(
+                        ReaderExperienceDeltaRow.chapter_number.desc(),
+                        ReaderExperienceDeltaRow.created_at.desc(),
+                        ReaderExperienceDeltaRow.id.desc(),
+                    )
+                    .limit(8)
                 )
-                .order_by(
-                    ReaderExperienceDeltaRow.chapter_number.desc(),
-                    ReaderExperienceDeltaRow.created_at.desc(),
-                    ReaderExperienceDeltaRow.id.desc(),
-                )
-                .limit(8)
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
-        beliefs = list(
-            session.execute(
-                select(BeliefRow)
-                .where(BeliefRow.project_id == project_id)
-                .order_by(
-                    BeliefRow.last_updated_at_chapter.desc(),
-                    BeliefRow.created_at.desc(),
-                    BeliefRow.id.desc(),
+            beliefs = list(
+                session.execute(
+                    select(BeliefRow)
+                    .where(BeliefRow.project_id == project_id)
+                    .order_by(
+                        BeliefRow.last_updated_at_chapter.desc(),
+                        BeliefRow.created_at.desc(),
+                        BeliefRow.id.desc(),
+                    )
+                    .limit(24)
                 )
-                .limit(24)
+                .scalars()
+                .all()
             )
-            .scalars()
-            .all()
-        )
+        else:
+            lines = []
+            deltas = []
+            gaps = []
+            reader_experience = []
+            beliefs = []
 
         visible_lines = [
             line.world_line_id
@@ -397,7 +407,12 @@ class RetrievalBroker:
             rejected_delta_ids=[
                 delta.delta_id for delta in deltas if not bool(delta.allowed_for_canon)
             ],
-            metadata={"hidden_truth_included": include_hidden_truth},
+            metadata={
+                "hidden_truth_included": include_hidden_truth,
+                "world_v4_compatibility_source": (
+                    "enabled" if self.include_world_v4_compat else "disabled"
+                ),
+            },
         )
         return self._augment_v46_context(
             session=session,
@@ -497,16 +512,12 @@ class RetrievalBroker:
         *,
         include_hidden_truth: bool,
     ) -> list[dict[str, object]]:
-        rows = list(
-            session.execute(
-                select(WorldModelPageRow)
-                .where(WorldModelPageRow.project_id == project_id, WorldModelPageRow.status == "canon_live")
-                .order_by(WorldModelPageRow.as_of_chapter.desc(), WorldModelPageRow.updated_at.desc(), WorldModelPageRow.id.desc())
-                .limit(max(self.max_world_pages * 4, 12))
-            )
-            .scalars()
-            .all()
-        )
+        rows = WorldModelPageRepository(session).list_canonical_rows(project_id)
+        rows = sorted(
+            rows,
+            key=lambda row: (int(row.as_of_chapter or 0), str(row.updated_at or ""), str(row.id or "")),
+            reverse=True,
+        )[: max(self.max_world_pages * 4, 12)]
         pages: list[dict[str, object]] = []
         for row in rows:
             frontmatter = load_json(row.frontmatter_json, {})

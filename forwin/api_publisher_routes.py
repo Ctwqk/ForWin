@@ -112,8 +112,14 @@ def build_handlers(
         client_id: str = "",
         stale_seconds: int = 90,
         allow_latest_recent_fallback: bool = False,
+        x_forwin_extension_key: str | None = Header(default=None),
     ):
-        return get_publisher_manager().preferred_client_heartbeat(
+        publisher_manager = get_publisher_manager()
+        api_publisher_ops._require_extension_auth(  # noqa: SLF001
+            publisher_manager,
+            x_forwin_extension_key,
+        )
+        return publisher_manager.preferred_client_heartbeat(
             preferred_client_id=client_id,
             stale_seconds=stale_seconds,
             allow_latest_recent_fallback=allow_latest_recent_fallback,

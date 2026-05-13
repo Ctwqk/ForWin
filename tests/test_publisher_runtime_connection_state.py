@@ -110,7 +110,7 @@ def test_connection_state_unverified_cookie_signal_does_not_display_logged_in() 
         engine.dispose()
 
 
-def test_connection_state_prefers_recent_non_stale_client_when_preferred_is_stale() -> None:
+def test_connection_state_marks_latest_client_as_fallback_not_connected_when_preferred_is_stale() -> None:
     engine, runtime = _runtime(
         "publisher-runtime-connection-preferred",
         preferred_client_id="linux-client",
@@ -146,8 +146,14 @@ def test_connection_state_prefers_recent_non_stale_client_when_preferred_is_stal
             session.commit()
 
         items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
-        assert items["fanqie"]["connected"] is True
+        assert items["fanqie"]["connected"] is False
         assert items["fanqie"]["extension_online"] is True
-        assert items["fanqie"]["extension_client_id"] == "laptop-client"
+        assert items["fanqie"]["extension_client_id"] == "linux-client"
+        assert items["fanqie"]["preferred_client_state"]["client_id"] == "linux-client"
+        assert items["fanqie"]["preferred_client_state"]["recent"] is False
+        assert items["fanqie"]["latest_client_state"]["client_id"] == "laptop-client"
+        assert items["fanqie"]["latest_client_state"]["connected"] is True
+        assert items["fanqie"]["fallback_available"] is True
+        assert items["fanqie"]["fallback_client_id"] == "laptop-client"
     finally:
         engine.dispose()

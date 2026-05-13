@@ -90,7 +90,8 @@ def test_writer_context_includes_v4_hint_intent_without_hidden_truth() -> None:
         assert chapter_plan is not None
         raw_pack = assemble_context(StateRepository(session), project_id, chapter_plan)
         writer_pack = RetrievalBroker(
-            memory_index=type("FakeMemoryIndex", (), {"search": lambda self, **_kwargs: []})()
+            memory_index=type("FakeMemoryIndex", (), {"search": lambda self, **_kwargs: []})(),
+            include_world_v4_compat=True,
         ).build_chapter_context(
             StateRepository(session),
             project_id,

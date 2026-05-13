@@ -63,7 +63,12 @@ def test_apply_canon_candidate_runs_v4_compiler_before_legacy_state_update() -> 
         init_db(engine)
         Session = get_session_factory(engine)
         orchestrator = WritingOrchestrator(
-            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
+            Config(
+                database_url=db_path,
+                minimax_api_key="",
+                minimax_model="fake-model",
+                world_v4_compat_write_enabled=True,
+            )
         )
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001

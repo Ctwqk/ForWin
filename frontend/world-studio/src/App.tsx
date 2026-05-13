@@ -611,14 +611,14 @@ export default function App() {
     <main className="app-shell">
       <header className="topbar">
         <div>
-          <nav className="main-menu" aria-label="ForWin primary navigation">
-            <a href="/">书本</a>
-            <a href="/#task">任务</a>
-            <a href="/world-studio" aria-current="page">
+          <nav className="nav-tabs nav-tabs--primary" aria-label="ForWin primary navigation">
+            <a className="nav-tab" href="/">书本</a>
+            <a className="nav-tab" href="/#task">任务</a>
+            <a className="nav-tab" href="/world-studio" aria-current="page">
               世界档案
             </a>
-            <a href="/publishers">发布</a>
-            <a href="/#config">配置</a>
+            <a className="nav-tab" href="/publishers">发布</a>
+            <a className="nav-tab" href="/#config">配置</a>
           </nav>
           <p className="eyebrow">ForWin Archive</p>
           <h1>世界档案</h1>
@@ -685,9 +685,9 @@ export default function App() {
 
       <div className="workspace">
         <aside className="sidebar">
-          <div className="tabs" role="tablist" aria-label="世界档案 sections">
+          <div className="nav-tabs nav-tabs--secondary" role="tablist" aria-label="世界档案 sections">
             <button
-              className={tab === "pages" ? "active" : ""}
+              className={tab === "pages" ? "nav-tab active" : "nav-tab"}
               type="button"
               role="tab"
               aria-selected={tab === "pages"}
@@ -697,7 +697,7 @@ export default function App() {
               页面
             </button>
             <button
-              className={tab === "conflicts" ? "active" : ""}
+              className={tab === "conflicts" ? "nav-tab active" : "nav-tab"}
               type="button"
               role="tab"
               aria-selected={tab === "conflicts"}
@@ -707,7 +707,7 @@ export default function App() {
               矛盾
             </button>
             <button
-              className={tab === "proposals" ? "active" : ""}
+              className={tab === "proposals" ? "nav-tab active" : "nav-tab"}
               type="button"
               role="tab"
               aria-selected={tab === "proposals"}
@@ -717,7 +717,7 @@ export default function App() {
               Proposal
             </button>
             <button
-              className={tab === "personality" ? "active" : ""}
+              className={tab === "personality" ? "nav-tab active" : "nav-tab"}
               type="button"
               role="tab"
               aria-selected={tab === "personality"}

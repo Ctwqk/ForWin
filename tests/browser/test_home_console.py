@@ -22,6 +22,14 @@ def test_home_console_navigation_books_and_config(page, browser_test_base_url: s
 
     page.locator("#tab_config").click()
     expect(page.locator("#profile_list")).to_contain_text("测试 MiniMax")
+    expect(page.get_by_role("heading", name="浏览器扩展")).to_be_visible()
+    expect(page.get_by_role("button", name="打开扩展设置")).to_be_visible()
+    expect(page.get_by_role("link", name="下载扩展包（Chrome/Edge）")).to_have_attribute(
+        "href", "/api/publishers/extension-package"
+    )
+    expect(page.get_by_role("link", name="下载 Firefox 扩展包")).to_have_attribute(
+        "href", "/api/publishers/extension-package/firefox"
+    )
     page.get_by_role("button", name="添加模型").click()
     expect(page.locator("#model_modal_shell")).to_have_class(re.compile(r".*\bopen\b.*"))
     page.locator("#model_form_name").fill("Kimi 测试")

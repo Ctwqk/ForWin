@@ -47,41 +47,57 @@
       margin:0 auto;
       padding:24px 22px 72px;
     }
-    .main-menu {
+    .nav-tabs {
       display:flex;
       align-items:center;
-      gap:8px;
+      gap:4px;
+      max-width:100%;
       margin-bottom:16px;
-      font:700 13px/1 var(--ui);
+      padding:4px;
+      border:1px solid rgba(109,98,85,.14);
+      border-radius:8px;
+      background:rgba(255,255,255,.48);
+      font:700 12px/1 var(--ui);
       flex-wrap:nowrap;
       overflow-x:auto;
       white-space:nowrap;
       scrollbar-width:none;
     }
-    .main-menu::-webkit-scrollbar { display:none; }
-    .main-menu .menu-item {
+    .nav-tabs::-webkit-scrollbar { display:none; }
+    .nav-tabs--primary {
+      width:max-content;
+    }
+    .nav-tabs .nav-tab {
       display:inline-flex;
       align-items:center;
       justify-content:center;
+      gap:6px;
       flex:0 0 auto;
-      min-height:36px;
-      padding:0 14px;
-      border:1px solid rgba(109,98,85,.14);
-      border-radius:999px;
-      background:rgba(255,255,255,.62);
+      min-height:32px;
+      padding:0 12px;
+      border:1px solid transparent;
+      border-radius:6px;
+      background:transparent;
       color:var(--muted);
       text-decoration:none;
       box-shadow:none;
     }
-    .main-menu .menu-item.active,
-    .main-menu .menu-item[aria-current="page"] {
-      border-color:rgba(178,75,49,.28);
-      background:linear-gradient(135deg, rgba(178,75,49,.14), rgba(31,91,84,.1));
-      color:var(--ink);
+    .nav-tabs .nav-tab:hover {
+      border-color:rgba(109,98,85,.14);
+      background:rgba(255,255,255,.78);
+      transform:none;
     }
-    .main-menu button.menu-item {
+    .nav-tabs .nav-tab.active,
+    .nav-tabs .nav-tab[aria-current="page"],
+    .nav-tabs .nav-tab[aria-selected="true"] {
+      border-color:rgba(178,75,49,.24);
+      background:rgba(255,255,255,.92);
+      color:var(--ink);
+      box-shadow:0 1px 2px rgba(56,36,17,.08);
+    }
+    .nav-tabs button.nav-tab {
       cursor:pointer;
-      font:700 13px/1 var(--ui);
+      font:700 12px/1 var(--ui);
     }
     .masthead {
       display:flex;
@@ -1008,8 +1024,8 @@
       .wrap { padding:18px 14px 56px; }
       .masthead { flex-direction:column; }
       .masthead h1 { font-size:40px; }
-      .main-menu { gap:6px; }
-      .main-menu .menu-item { padding:0 10px; }
+      .nav-tabs { gap:4px; width:100%; }
+      .nav-tabs .nav-tab { padding:0 10px; }
       .tab-panel { padding:14px; }
       .status-bar { padding:14px; }
       .progress-grid { grid-template-columns:minmax(0, 1fr); }

@@ -19,8 +19,10 @@ class WorldStudioFrontendTests(unittest.TestCase):
         self.assertIn('世界档案', app_source)
         self.assertIn('发布', app_source)
         self.assertIn('配置', app_source)
-        self.assertIn("main-menu", app_source)
-        self.assertIn(".main-menu", css_source)
+        self.assertIn("nav-tabs nav-tabs--primary", app_source)
+        self.assertIn("nav-tabs nav-tabs--secondary", app_source)
+        self.assertIn(".nav-tabs", css_source)
+        self.assertIn(".nav-tabs--secondary", css_source)
         self.assertNotIn("studio-nav", app_source)
         self.assertNotIn(".studio-nav", css_source)
 

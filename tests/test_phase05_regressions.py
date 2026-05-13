@@ -5094,6 +5094,7 @@ class Phase05RegressionTests(unittest.TestCase):
     def _make_publisher_manager(
         self,
         preferred_client_id: str = "",
+        strict_preferred_client: bool = False,
     ) -> tuple[TemporaryDirectory, object, PublisherManager]:
         tmp = TemporaryDirectory()
         db_path = postgres_test_url("publisher")
@@ -5104,6 +5105,7 @@ class Phase05RegressionTests(unittest.TestCase):
             session_factory,
             extension_api_key="secret",
             preferred_client_id=preferred_client_id,
+            strict_preferred_client=strict_preferred_client,
         )
 
     def test_publisher_manager_tracks_extension_heartbeat_and_stale_state(self) -> None:
@@ -5663,6 +5665,55 @@ class Phase05RegressionTests(unittest.TestCase):
             assert fallback_claim is not None
             self.assertEqual(fallback_claim["job_id"], fallback_job["job_id"])
             self.assertEqual(fallback_claim["extension_client_id"], "laptop-client")
+        finally:
+            engine.dispose()
+            tmp.cleanup()
+
+    def test_publisher_manager_strict_preferred_client_blocks_fallback_claims(self) -> None:
+        tmp, engine, manager = self._make_publisher_manager(
+            preferred_client_id="linux-client",
+            strict_preferred_client=True,
+        )
+        try:
+            manager.record_extension_heartbeat(
+                client_id="linux-client",
+                extension_version="0.1.0",
+                browser_name="Chrome",
+                browser_version="146.0",
+                backend_base_url="http://10.0.0.150:8899",
+                platforms=[{"platform": "fanqie", "connected": False, "cookie_signal": False}],
+            )
+            manager.record_extension_heartbeat(
+                client_id="laptop-client",
+                extension_version="0.1.0",
+                browser_name="Chrome",
+                browser_version="146.0",
+                backend_base_url="http://10.0.0.35:8899",
+                platforms=[{"platform": "fanqie", "connected": True, "cookie_signal": True}],
+            )
+            job = manager.create_upload_job(
+                platform="fanqie",
+                book_name="测试书",
+                chapter_title="严格首选调度",
+                body="正文",
+                upload_url=None,
+                publish=False,
+            )
+
+            self.assertIsNone(
+                manager.claim_next_upload_job(
+                    client_id="laptop-client",
+                    connected_platforms=["fanqie"],
+                )
+            )
+            claimed = manager.claim_next_upload_job(
+                client_id="linux-client",
+                connected_platforms=["fanqie"],
+            )
+            self.assertIsNotNone(claimed)
+            assert claimed is not None
+            self.assertEqual(claimed["job_id"], job["job_id"])
+            self.assertEqual(claimed["extension_client_id"], "linux-client")
         finally:
             engine.dispose()
             tmp.cleanup()

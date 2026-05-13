@@ -296,7 +296,7 @@ input {
 
 .workspace {
   display: grid;
-  grid-template-columns: 330px minmax(0, 1fr);
+  grid-template-columns: 360px minmax(0, 1fr);
   min-height: 650px;
   margin-top: 14px;
   border-radius: 8px;
@@ -314,21 +314,46 @@ input {
 }
 
 .tabs {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 4px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #eef3f7;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .tabs button {
-  width: 100%;
+  flex: 1 0 max-content;
+  width: auto;
   min-width: 0;
+  min-height: 34px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #556577;
   font-size: 13px;
+  font-weight: 700;
+  padding: 0 10px;
+}
+
+.tabs button:hover {
+  border-color: #d8e0e8;
+  background: #ffffff;
 }
 
 .tabs button.active {
-  border-color: #2c5f7c;
-  background: #e7f1f6;
+  border-color: #c9d3df;
+  background: #ffffff;
   color: #1d536e;
+  box-shadow: 0 1px 2px rgb(29 36 48 / 8%);
 }
 
 .search-row {
@@ -795,10 +820,6 @@ pre {
   .topbar-actions,
   .project-picker {
     width: 100%;
-  }
-
-  .tabs {
-    grid-template-columns: 1fr;
   }
 
   dl {

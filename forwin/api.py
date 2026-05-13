@@ -1202,6 +1202,7 @@ def _update_task(task_id: str, **changes: Any) -> None:
     if task is None or task.get("deleted"):
         return
     normalized = dict(changes)
+    normalized.pop("requested_chapters", None)
     if task.get("cancel_requested") and normalized.get("status") in {"starting", "running", "needs_review"}:
         normalized.pop("status", None)
     if task.get("cancel_requested") and normalized.get("current_stage") not in {"terminating", "cancelled"}:
@@ -2009,6 +2010,7 @@ async def lifespan(app: FastAPI):
             _SessionFactory,
             extension_api_key=_config.publisher_extension_api_key,
             preferred_client_id=_config.publisher_preferred_client_id,
+            strict_preferred_client=_config.publisher_strict_preferred_client,
             publisher_session_secret=_config.publisher_session_secret,
             publisher_session_encryption_required=_config.publisher_session_encryption_required,
             codex_intervention_handler=build_codex_intervention_handler(_config),

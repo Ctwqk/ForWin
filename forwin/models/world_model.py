@@ -44,6 +44,8 @@ class WorldModelPageRow(Base):
             unique=True,
             postgresql_where=text("status = 'canon_live' AND logical_identity_key <> ''"),
         ),
+        Index("ix_world_model_pages_project_projection", "project_id", "projection_kind", "projection_version"),
+        Index("ix_world_model_pages_project_source_digest", "project_id", "source_digest"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
@@ -63,6 +65,15 @@ class WorldModelPageRow(Base):
     canonical_source_id: Mapped[str] = mapped_column(String, nullable=False, default="")
     supersedes_page_id: Mapped[str] = mapped_column(String, nullable=False, default="")
     canonical_rank: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    projection_kind: Mapped[str] = mapped_column(String, nullable=False, default="world_studio")
+    projection_version: Mapped[str] = mapped_column(String, nullable=False, default="")
+    source_digest: Mapped[str] = mapped_column(String, nullable=False, default="")
+    section_digest_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    observer_type: Mapped[str] = mapped_column(String, nullable=False, default="")
+    observer_id: Mapped[str] = mapped_column(String, nullable=False, default="")
+    role_scope: Mapped[str] = mapped_column(String, nullable=False, default="")
+    visibility_scope: Mapped[str] = mapped_column(String, nullable=False, default="")
+    canon_status: Mapped[str] = mapped_column(String, nullable=False, default="canon_projection")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
 

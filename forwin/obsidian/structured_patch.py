@@ -5,15 +5,18 @@ import re
 from typing import Any
 
 from forwin.book_state.projection import BookStateProjection
+from forwin.book_state.repository import BookStateRepository
 from forwin.models.base import new_id
 from forwin.models.world_model import WorldEditProposalRow
 from forwin.protocol.book_state import (
+    CognitionPatch,
     EdgePatch,
     FactPatch,
     GraphDelta,
     GraphDeltaType,
     MapPatch,
     NodePatch,
+    ReaderPromise,
     WORLD_EDGE_TYPES_BY_FAMILY,
 )
 from forwin.world_model.store import load_json
@@ -39,12 +42,22 @@ def proposal_to_graph_delta(session, row: WorldEditProposalRow, *, reason: str =
     edge_patches: list[EdgePatch] = []
     fact_patches: list[FactPatch] = []
     map_patches: list[MapPatch] = []
+    cognition_patches: list[CognitionPatch] = []
+    reader_promise_patches: list[dict[str, Any]] = []
 
     for operation in operations:
         op = str(operation.get("op") or "").strip()
         if not op:
             raise ValueError("forwin-patch operation is missing op")
-        if op in {"set_node_field", "merge_node_metadata", "rename_node", "append_alias", "append_manual_note"}:
+        if op in {
+            "set_node_field",
+            "merge_node_metadata",
+            "rename_node",
+            "append_alias",
+            "append_manual_note",
+            "set_personality_loadout",
+            "append_personality_note",
+        }:
             node_patches.append(_node_patch(operation, row, runtime, reason=reason))
         elif op in {"create_edge", "set_edge_field", "deactivate_edge"}:
             edge_patches.append(_edge_patch(operation, row, runtime, reason=reason, source_refs=source_refs))
@@ -52,6 +65,12 @@ def proposal_to_graph_delta(session, row: WorldEditProposalRow, *, reason: str =
             map_patches.append(_map_patch(operation, row, runtime, reason=reason, source_refs=source_refs))
         elif op in {"create_fact", "set_fact_field"}:
             fact_patches.append(_fact_patch(operation, row, runtime, reason=reason, source_refs=source_refs))
+        elif op in {"set_cognition_field", "append_cognition_ref", "remove_cognition_ref"}:
+            cognition_patches.append(_cognition_patch(operation, row, runtime, reason=reason, source_refs=source_refs))
+        elif op in {"create_reader_promise", "set_reader_promise_field", "resolve_reader_promise"}:
+            reader_promise_patches.extend(
+                _reader_promise_patches(session, operation, row, reason=reason, source_refs=source_refs)
+            )
         else:
             raise ValueError(f"unsupported forwin-patch op: {op}")
 
@@ -70,6 +89,7 @@ def proposal_to_graph_delta(session, row: WorldEditProposalRow, *, reason: str =
         edge_patches=edge_patches,
         fact_patches=fact_patches,
         map_patches=map_patches,
+        cognition_patches=cognition_patches,
         evidence_refs=source_refs,
         review_verdict_id=f"obsidian_proposal_review_{row.id}",
         allowed_for_canon=True,
@@ -80,6 +100,7 @@ def proposal_to_graph_delta(session, row: WorldEditProposalRow, *, reason: str =
             "target_page_key": row.target_page_key,
             "target_node_id": getattr(row, "target_node_id", "") or "",
             "structured_patch_count": len(operations),
+            "reader_promise_patches": reader_promise_patches,
         },
     )
 
@@ -220,6 +241,15 @@ def _node_patch(operation: dict[str, Any], row: WorldEditProposalRow, runtime, *
         new_value = operation.get("alias", operation.get("new_value"))
     elif op == "append_manual_note":
         field_path = "metadata.manual_notes"
+        patch_op = "append"
+        new_value = operation.get("text", operation.get("new_value"))
+    elif op == "set_personality_loadout":
+        field_path = "profile.personality_loadout"
+        new_value = operation.get("loadout", operation.get("new_value"))
+        if not isinstance(new_value, dict):
+            raise ValueError("set_personality_loadout requires an object loadout/new_value")
+    elif op == "append_personality_note":
+        field_path = "profile.personality_notes"
         patch_op = "append"
         new_value = operation.get("text", operation.get("new_value"))
     if not field_path:
@@ -459,6 +489,130 @@ def _fact_patch(
     )
 
 
+def _cognition_patch(
+    operation: dict[str, Any],
+    row: WorldEditProposalRow,
+    runtime,
+    *,
+    reason: str,
+    source_refs: list[str],
+) -> CognitionPatch:
+    op = str(operation.get("op") or "")
+    observer_type = str(operation.get("observer_type") or "reader")
+    observer_id = str(operation.get("observer_id") or "reader")
+    field_path = str(operation.get("field_path") or "")
+    if op in {"append_cognition_ref", "remove_cognition_ref"}:
+        if field_path not in {"visible_refs", "hidden_refs", "suspected_refs", "confirmed_refs"}:
+            raise ValueError(f"{op} requires a cognition *_refs field_path")
+        patch_op = "append" if op == "append_cognition_ref" else "remove"
+        new_value = operation.get("ref", operation.get("new_value"))
+        if not new_value:
+            raise ValueError(f"{op} requires ref/new_value")
+    else:
+        if not field_path:
+            raise ValueError("set_cognition_field requires field_path")
+        patch_op = str(operation.get("patch_op") or "set")
+        new_value = operation.get("new_value")
+    return CognitionPatch(
+        observer_type=observer_type,
+        observer_id=observer_id,
+        op=patch_op,
+        field_path=field_path,
+        old_value=operation.get(
+            "old_value",
+            _cognition_current(runtime, observer_type, observer_id, field_path),
+        ),
+        new_value=new_value,
+        reason=reason or str(operation.get("reason") or row.reason or ""),
+        evidence_refs=list(operation.get("evidence_refs", source_refs)),
+    )
+
+
+def _reader_promise_patches(
+    session,
+    operation: dict[str, Any],
+    row: WorldEditProposalRow,
+    *,
+    reason: str,
+    source_refs: list[str],
+) -> list[dict[str, Any]]:
+    op = str(operation.get("op") or "")
+    promise_id = str(operation.get("promise_id") or operation.get("target_id") or "")
+    if not promise_id:
+        raise ValueError(f"{op} requires promise_id")
+    repo = BookStateRepository(session)
+    as_of_chapter = _proposal_chapter(row)
+    promises = {
+        promise.promise_id: promise
+        for promise in repo.list_reader_promises_native(row.project_id, as_of_chapter=as_of_chapter)
+    }
+    current = promises.get(promise_id)
+    patch_reason = reason or str(operation.get("reason") or row.reason or "")
+    if op == "create_reader_promise":
+        payload = operation.get("new_value", operation.get("promise", {}))
+        if not isinstance(payload, dict):
+            raise ValueError("create_reader_promise requires object new_value/promise")
+        promise = ReaderPromise.model_validate(
+            {
+                "promise_id": promise_id,
+                "project_id": row.project_id,
+                "created_at_chapter": as_of_chapter,
+                "status": "open",
+                "source_refs": source_refs,
+                **payload,
+            }
+        )
+        return [
+            {
+                "op": "create",
+                "promise_id": promise_id,
+                "field_path": "",
+                "old_value": operation.get("old_value"),
+                "new_value": promise.model_dump(mode="json"),
+                "reason": patch_reason,
+                "evidence_refs": list(operation.get("evidence_refs", source_refs)),
+            }
+        ]
+    if current is None:
+        raise ValueError(f"unknown reader promise: {promise_id}")
+    payload = current.model_dump(mode="json")
+    if op == "resolve_reader_promise":
+        return [
+            {
+                "op": "set",
+                "promise_id": promise_id,
+                "field_path": "status",
+                "old_value": operation.get("old_value", payload.get("status")),
+                "new_value": operation.get("new_value", "resolved"),
+                "reason": patch_reason,
+                "evidence_refs": list(operation.get("evidence_refs", source_refs)),
+            },
+            {
+                "op": "set",
+                "promise_id": promise_id,
+                "field_path": "current_debt_level",
+                "old_value": payload.get("current_debt_level"),
+                "new_value": operation.get("current_debt_level", 0),
+                "reason": patch_reason,
+                "evidence_refs": list(operation.get("evidence_refs", source_refs)),
+            },
+        ]
+    field_path = str(operation.get("field_path") or "")
+    if not field_path:
+        raise ValueError("set_reader_promise_field requires field_path")
+    return [
+        {
+            "op": "set",
+            "promise_id": promise_id,
+            "field_path": field_path,
+            "old_value": operation.get("old_value", _get_path(payload, field_path)),
+            "new_value": operation.get("new_value"),
+            "reason": patch_reason,
+            "evidence_refs": list(operation.get("evidence_refs", source_refs)),
+        }
+    ]
+
+
 def _proposal_chapter(row: WorldEditProposalRow) -> int:
     payload = load_json(row.proposed_patch_json, {})
     frontmatter = payload.get("frontmatter") if isinstance(payload.get("frontmatter"), dict) else {}
@@ -493,3 +647,12 @@ def _get_path(payload: dict[str, Any], field_path: str) -> Any:
         else:
             return None
     return cursor
+
+
+def _cognition_current(runtime, observer_type: str, observer_id: str, field_path: str) -> Any:
+    view = runtime.cognition_by_observer.get((observer_type, observer_id))
+    if view is None:
+        return [] if field_path in {"visible_refs", "hidden_refs", "suspected_refs", "confirmed_refs"} else None
+    if field_path in {"visible_refs", "hidden_refs", "suspected_refs", "confirmed_refs"}:
+        return sorted(getattr(view, field_path))
+    return getattr(view, field_path, None)

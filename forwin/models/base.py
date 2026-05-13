@@ -56,6 +56,9 @@ POSTGRES_BASELINE_MIGRATIONS = (
     "performance_spans_v1",
     "world_model_canonical_pages_v1",
     "character_identity_map_v1",
+    "legacy_checkpoint_statuses_v1",
+    "canon_quality_v1",
+    "projection_cache_fields_v1",
 )
 
 
@@ -160,6 +163,16 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
             _mark_migration_applied(conn, version)
         _upgrade_world_model_canonical_pages(conn)
         _upgrade_character_identity_map(conn)
+        conn.execute(
+            text(
+                """
+                UPDATE band_checkpoints
+                SET status = 'overridden',
+                    resolved_at = COALESCE(resolved_at, updated_at, created_at)
+                WHERE status = 'approved'
+                """
+            )
+        )
 
 
 def _upgrade_world_model_canonical_pages(conn) -> None:

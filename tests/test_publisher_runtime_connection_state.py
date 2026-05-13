@@ -7,7 +7,12 @@ from forwin.models.publisher import PublisherExtensionClient, PublisherExtension
 from forwin.publisher_runtime.service import PublisherRuntimeService
 
 
-def _runtime(name: str, *, preferred_client_id: str = "") -> tuple[object, PublisherRuntimeService]:
+def _runtime(
+    name: str,
+    *,
+    preferred_client_id: str = "",
+    strict_preferred_client: bool = False,
+) -> tuple[object, PublisherRuntimeService]:
     engine = get_engine(postgres_test_url(name))
     init_db(engine)
     return engine, PublisherRuntimeService(
@@ -15,6 +20,7 @@ def _runtime(name: str, *, preferred_client_id: str = "") -> tuple[object, Publi
         extension_api_key="secret",
         heartbeat_stale_seconds=90,
         preferred_client_id=preferred_client_id,
+        strict_preferred_client=strict_preferred_client,
         publisher_session_secret="",
         publisher_session_encryption_required=False,
     )
@@ -155,5 +161,44 @@ def test_connection_state_marks_latest_client_as_fallback_not_connected_when_pre
         assert items["fanqie"]["latest_client_state"]["connected"] is True
         assert items["fanqie"]["fallback_available"] is True
         assert items["fanqie"]["fallback_client_id"] == "laptop-client"
+    finally:
+        engine.dispose()
+
+
+def test_connection_state_strict_preferred_client_blocks_fallback_claims() -> None:
+    engine, runtime = _runtime(
+        "publisher-runtime-connection-strict-preferred",
+        preferred_client_id="linux-client",
+        strict_preferred_client=True,
+    )
+    try:
+        runtime.connection_state.heartbeat(
+            client_id="linux-client",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://10.0.0.150:8899",
+            platforms=[{"platform": "fanqie", "connected": False, "cookie_signal": False}],
+        )
+        runtime.connection_state.heartbeat(
+            client_id="laptop-client",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://10.0.0.35:8899",
+            platforms=[{"platform": "fanqie", "connected": True, "cookie_signal": True}],
+        )
+
+        with runtime.session_factory() as session:
+            assert runtime.connection_state.claimable_platforms(
+                session,
+                client_id="laptop-client",
+                platforms=["fanqie"],
+            ) == []
+            assert runtime.connection_state.claimable_platforms(
+                session,
+                client_id="linux-client",
+                platforms=["fanqie"],
+            ) == ["fanqie"]
     finally:
         engine.dispose()

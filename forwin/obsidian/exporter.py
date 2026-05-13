@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +20,7 @@ from .frontmatter import EDITABLE_FIELDS, LOCKED_FIELDS, parse_sections, render_
 
 
 DEFAULT_VAULT_ROOT = Path("data/world_vaults")
+OBSIDIAN_PROJECTION_VERSION = "obsidian_v2"
 
 
 @dataclass
@@ -303,8 +306,16 @@ class ObsidianExporter:
             for field_name in EDITABLE_FIELDS:
                 if current_sections.get(field_name, "").strip() and not sections.get(field_name, "").strip():
                     sections[field_name] = current_sections[field_name]
+        source_digest = _page_source_digest(frontmatter, sections)
+        section_digest = _section_digest(sections)
+        frontmatter = {
+            **frontmatter,
+            "projection_version": OBSIDIAN_PROJECTION_VERSION,
+            "source_digest": source_digest,
+        }
         markdown = render_page(frontmatter, title, sections)
-        path.write_text(markdown, encoding="utf-8")
+        if not path.exists() or path.read_text(encoding="utf-8") != markdown:
+            path.write_text(markdown, encoding="utf-8")
         self.store.upsert_page(
             project_id=frontmatter.get("project_id", ""),
             page_key=frontmatter.get("forwin_id", rel_path),
@@ -314,6 +325,15 @@ class ObsidianExporter:
             markdown=markdown,
             frontmatter=frontmatter,
             as_of_chapter=int(frontmatter.get("as_of_chapter", 0) or 0),
+            projection_kind="obsidian",
+            projection_version=OBSIDIAN_PROJECTION_VERSION,
+            source_digest=source_digest,
+            section_digest=section_digest,
+            observer_type="reader",
+            observer_id="reader",
+            role_scope="human",
+            visibility_scope=str(frontmatter.get("visibility", "")),
+            canon_status="canon_projection",
         )
 
     def _frontmatter(
@@ -339,6 +359,8 @@ class ObsidianExporter:
             "source_refs": source_refs or [],
             "locked_fields": LOCKED_FIELDS,
             "editable_fields": EDITABLE_FIELDS,
+            "projection_version": OBSIDIAN_PROJECTION_VERSION,
+            "source_digest": "",
         }
 
     def _node_relpath(self, node: WorldNode) -> str:
@@ -450,3 +472,30 @@ def _format_open_questions(node: WorldNode) -> str:
     if node.node_type in {"secret", "knowledge_gap"}:
         return node.summary or node.description or node.name or node.id
     return "_none_"
+
+
+def _page_source_digest(frontmatter: dict[str, Any], sections: dict[str, str]) -> str:
+    digest_frontmatter = {
+        key: value
+        for key, value in frontmatter.items()
+        if key != "source_digest"
+    }
+    return _sha256_json(
+        {
+            "frontmatter": digest_frontmatter,
+            "locked_sections": {key: sections.get(key, "") for key in LOCKED_FIELDS},
+            "projection_version": OBSIDIAN_PROJECTION_VERSION,
+        }
+    )
+
+
+def _section_digest(sections: dict[str, str]) -> dict[str, str]:
+    return {
+        key: hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+        for key, value in sorted(sections.items())
+    }
+
+
+def _sha256_json(payload: Any) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()

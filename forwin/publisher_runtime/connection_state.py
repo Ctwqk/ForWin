@@ -120,12 +120,14 @@ class ExtensionConnectionService:
         codec: BrowserCookieCodec,
         heartbeat_stale_seconds: int = 90,
         preferred_client_id: str = "",
+        strict_preferred_client: bool = False,
     ) -> None:
         self.session_factory = session_factory
         self.platform_catalog = platform_catalog
         self.codec = codec
         self.heartbeat_stale_seconds = heartbeat_stale_seconds
         self.preferred_client_id = str(preferred_client_id or "").strip()
+        self.strict_preferred_client = bool(strict_preferred_client)
         self.ensure_extension_client = ensure_extension_client
         self.upsert_extension_platform_state = upsert_extension_platform_state
 
@@ -634,6 +636,8 @@ class ExtensionConnectionService:
         if not platforms:
             return []
         preferred_client_id = self.preferred_client_id
+        if self.strict_preferred_client and preferred_client_id:
+            return list(platforms) if client_id == preferred_client_id else []
         if not preferred_client_id or client_id == preferred_client_id:
             return list(platforms)
         return [

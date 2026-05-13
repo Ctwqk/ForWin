@@ -20,6 +20,7 @@ from forwin.api_schemas import (
 )
 from forwin.book_state.repository import BookStateRepository
 from forwin.models.project import Project
+from forwin.models.canon_quality import CanonQualitySignalRow
 from forwin.models.world_model import (
     WorldEditProposalRow,
     WorldModelConflictRow,
@@ -72,6 +73,15 @@ def _page_info(row: WorldModelPageRow) -> WorldModelPageInfo:
         vault_path=row.vault_path,
         markdown=row.markdown,
         frontmatter=load_json(row.frontmatter_json, {}),
+        projection_kind=getattr(row, "projection_kind", "") or "world_studio",
+        projection_version=getattr(row, "projection_version", "") or "",
+        source_digest=getattr(row, "source_digest", "") or "",
+        section_digest=load_json(getattr(row, "section_digest_json", "") or "{}", {}),
+        observer_type=getattr(row, "observer_type", "") or "",
+        observer_id=getattr(row, "observer_id", "") or "",
+        role_scope=getattr(row, "role_scope", "") or "",
+        visibility_scope=getattr(row, "visibility_scope", "") or "",
+        canon_status=getattr(row, "canon_status", "") or "canon_projection",
         content_hash=row.content_hash,
         revision=row.revision,
         status=row.status,
@@ -83,6 +93,51 @@ def _page_info(row: WorldModelPageRow) -> WorldModelPageInfo:
         canonical_rank=int(getattr(row, "canonical_rank", 0) or 0),
         updated_at=_dt(row.updated_at),
     )
+
+
+def _is_book_state_page(row: WorldModelPageRow) -> bool:
+    frontmatter = load_json(row.frontmatter_json, {})
+    return bool(
+        frontmatter.get("node_id")
+        or frontmatter.get("node_type")
+        or frontmatter.get("editable_fields")
+    )
+
+
+def _page_preference(row: WorldModelPageRow) -> tuple[int, int, str]:
+    if _is_book_state_page(row):
+        rank = 3
+    elif ":genesis:" in str(row.page_key or ""):
+        rank = 1
+    else:
+        rank = 2
+    return (rank, int(row.as_of_chapter or 0), _dt(row.updated_at))
+
+
+def _dedupe_world_pages(rows: list[WorldModelPageRow]) -> list[WorldModelPageRow]:
+    dedupe_types = {
+        "character",
+        "faction",
+        "organization",
+        "family",
+        "institution",
+        "resource",
+        "region",
+        "node",
+        "location",
+    }
+    chosen: dict[tuple[str, str], WorldModelPageRow] = {}
+    passthrough: list[WorldModelPageRow] = []
+    for row in rows:
+        key = (str(row.page_type or ""), str(row.title or "").strip())
+        if key[0] not in dedupe_types or not key[1]:
+            passthrough.append(row)
+            continue
+        current = chosen.get(key)
+        if current is None or _page_preference(row) > _page_preference(current):
+            chosen[key] = row
+    combined = [*passthrough, *chosen.values()]
+    return sorted(combined, key=lambda row: (str(row.page_type or ""), str(row.title or ""), str(row.page_key or "")))
 
 
 def _conflict_info(row: WorldModelConflictRow) -> WorldModelConflictInfo:
@@ -166,7 +221,7 @@ def list_pages(project_id: str, *, get_session) -> list[WorldModelPageInfo]:
         _bootstrap_if_needed(session, project_id)
         rows = WorldModelPageRepository(session).list_canonical_rows(project_id)
         session.commit()
-        return [_page_info(row) for row in rows]
+        return [_page_info(row) for row in _dedupe_world_pages(rows)]
     finally:
         session.close()
 
@@ -192,9 +247,48 @@ def list_conflicts(project_id: str, *, get_session) -> list[WorldModelConflictIn
             .where(WorldModelConflictRow.project_id == project_id)
             .order_by(WorldModelConflictRow.status.asc(), WorldModelConflictRow.created_at.desc())
         ).scalars().all()
-        return [_conflict_info(row) for row in rows]
+        conflicts = [_conflict_info(row) for row in rows]
+        quality_rows = session.execute(
+            select(CanonQualitySignalRow)
+            .where(
+                CanonQualitySignalRow.project_id == project_id,
+                CanonQualitySignalRow.status == "open",
+            )
+            .order_by(CanonQualitySignalRow.severity.desc(), CanonQualitySignalRow.created_at.desc())
+            .limit(100)
+        ).scalars().all()
+        conflicts.extend(_quality_signal_conflict(row) for row in quality_rows)
+        return conflicts
     finally:
         session.close()
+
+
+def _quality_signal_conflict(row: CanonQualitySignalRow) -> WorldModelConflictInfo:
+    refs = []
+    for ref in load_json(row.evidence_refs_json, []):
+        if isinstance(ref, dict):
+            refs.append(ref)
+        else:
+            refs.append(
+                {
+                    "source_type": "canon_quality",
+                    "source_id": str(ref),
+                    "chapter_number": int(row.chapter_number or 0),
+                    "summary": row.description,
+                }
+            )
+    return WorldModelConflictInfo(
+        id=row.id,
+        project_id=row.project_id,
+        conflict_type=row.signal_type,
+        severity=row.severity,
+        subject_key=row.subject_key,
+        description=row.description,
+        evidence_refs=refs,
+        status=row.status,
+        created_at=_dt(row.created_at),
+        resolved_at=_dt(row.resolved_at),
+    )
 
 
 def export_obsidian(
@@ -288,7 +382,9 @@ def review_proposal(
         row = session.get(WorldEditProposalRow, proposal_id)
         if row is None or row.project_id != project_id:
             raise HTTPException(404, "WorldEditProposal 不存在")
-        if status == "accepted" and _has_book_state_canon(session, project_id):
+        if status == "accepted" and (
+            _has_book_state_canon(session, project_id) or _has_structured_forwin_patch(row)
+        ):
             config = get_config() if get_config is not None else None
             result = approve_world_edit_proposal(
                 session,
@@ -334,6 +430,17 @@ def _has_book_state_canon(session, project_id: str) -> bool:
         or repo.list_fact_nodes(project_id)
         or repo.list_map_nodes(project_id)
     )
+
+
+def _has_structured_forwin_patch(row: WorldEditProposalRow) -> bool:
+    payload = load_json(row.proposed_patch_json, {})
+    if any(payload.get(key) for key in ("forwin_patch", "structured_patch", "proposed_patch")):
+        return True
+    for key in ("new_value", "human_notes", "reason"):
+        value = payload.get(key)
+        if isinstance(value, str) and "```forwin-patch" in value.lower():
+            return True
+    return False
 
 
 def _bootstrap_if_needed(session, project_id: str) -> WorldModelSnapshotRow | None:

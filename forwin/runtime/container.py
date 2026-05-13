@@ -199,6 +199,7 @@ class RuntimeContainer:
             preferred_client_id=config.publisher_preferred_client_id,
             publisher_session_secret=config.publisher_session_secret,
             publisher_session_encryption_required=config.publisher_session_encryption_required,
+            strict_preferred_client=config.publisher_strict_preferred_client,
             observability=observability,
             codex_intervention_handler=build_codex_intervention_handler(config),
         )

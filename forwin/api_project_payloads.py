@@ -32,7 +32,9 @@ from forwin.governance import (
     NarrativeConstraintInfo,
     ProjectGovernanceSettings,
     DecisionEventType,
+    checkpoint_reason_with_legacy_status,
     chapter_blocking_message,
+    normalize_checkpoint_status,
     normalize_project_governance,
 )
 from forwin.models.draft import ChapterDraft, ChapterReview
@@ -265,6 +267,7 @@ def _band_checkpoint_detail(row: BandCheckpoint | None) -> BandCheckpointDetail 
         if not isinstance(item, dict):
             continue
         issues.append(BandCheckpointIssueInfo.model_validate(item))
+    normalized_status = normalize_checkpoint_status(row.status)
     return BandCheckpointDetail(
         id=row.id,
         project_id=row.project_id,
@@ -275,13 +278,17 @@ def _band_checkpoint_detail(row: BandCheckpoint | None) -> BandCheckpointDetail 
         trigger_source=str(row.trigger_source or ""),
         boundary_kind=str(row.boundary_kind or ""),
         boundary_chapter=int(row.boundary_chapter or 0),
-        status=str(row.status or "pending"),
+        status=normalized_status,
         summary=str(row.summary or ""),
-        reason=str(row.reason or ""),
+        reason=checkpoint_reason_with_legacy_status(row.reason, row.status),
         issues=issues,
         created_at=row.created_at.isoformat() if row.created_at else "",
         updated_at=row.updated_at.isoformat() if row.updated_at else "",
-        resolved_at=row.resolved_at.isoformat() if row.resolved_at else "",
+        resolved_at=(
+            (row.resolved_at or (row.updated_at if normalized_status in {"pass", "overridden"} else None)).isoformat()
+            if row.resolved_at or (normalized_status in {"pass", "overridden"} and row.updated_at)
+            else ""
+        ),
     )
 
 

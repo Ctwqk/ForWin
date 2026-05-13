@@ -1,9 +1,11 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.23';
+import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { getPlatformAdapter } from './lib/platforms.js';
 import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
 import { READY_CHANNELS, TabReadyRegistry } from './lib/tab-ready-registry.js';
+import { uploadMessageTimeoutMs } from './lib/upload-timeouts.js?v=0.1.23';
 import {
   assertDebuggerCapability,
   extensionCapabilities,
@@ -738,7 +740,12 @@ async function runUploadCommand(tabId, payload) {
           await sleep(1200);
         }
       }
-      const response = await sendPlatformAgentMessage(activeTabId, 'run-upload', payload, 30000);
+      const response = await sendPlatformAgentMessage(
+        activeTabId,
+        'run-upload',
+        payload,
+        uploadMessageTimeoutMs(payload.platform),
+      );
       if (response) {
         if (!response.ok && response.errorCode === 'platform-agent-timeout') {
           lastError = response.error || '平台页面执行超时。';
@@ -1173,52 +1180,45 @@ async function verifyFanqieDraftOnPage(tabId, chapterTitle) {
       tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
     }
   }
-  let attempt = 0;
-  while (attempt < 10) {
-    attempt += 1;
-    try {
-      const response = await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
-        channel: PLATFORM_AGENT_CHANNEL,
-        action: 'verify-fanqie-draft',
-        payload: { chapterTitle },
-      });
-      if (response) {
-        if (
-          !response.ok
-          && response.errorCode === 'publish-not-confirmed'
-          && String(response.error || '').includes('未找到新草稿')
-          && attempt < 10
-        ) {
-          await sleep(1500);
-          if (attempt % 3 === 0) {
-            try {
-              await wrapCall(extensionApi.tabs, 'reload', tabId);
-            } catch (_error) {
-              // Ignore reload failures and keep polling the page.
-            }
-            await sleep(1500);
+  return verifyFanqieDraftWithRetries({
+    chapterTitle,
+    maxAttempts: 24,
+    verify: async () => {
+      try {
+        return await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
+          channel: PLATFORM_AGENT_CHANNEL,
+          action: 'verify-fanqie-draft',
+          payload: { chapterTitle },
+        });
+      } catch (_error) {
+        ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
+          || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 2000);
+        if (!ready) {
+          ready = await probePlatformAgentResponsive(tabId);
+          if (ready) {
+            tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
           }
-          continue;
         }
-        return response;
+        return null;
       }
-    } catch (_error) {
-      ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
-        || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 2000);
-      if (!ready) {
-        ready = await probePlatformAgentResponsive(tabId);
-        if (ready) {
-          tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
+    },
+    reload: async () => {
+      try {
+        tabReadyRegistry.reset(tabId, READY_CHANNELS.PLATFORM_AGENT);
+        await wrapCall(extensionApi.tabs, 'reload', tabId);
+        ready = await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 8000);
+        if (!ready) {
+          ready = await probePlatformAgentResponsive(tabId);
+          if (ready) {
+            tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
+          }
         }
+      } catch (_error) {
+        // Ignore reload failures and keep polling the page.
       }
-    }
-  }
-  return {
-    ok: false,
-    currentUrl: '',
-    error: '番茄章节管理页未响应草稿核验。',
-    errorCode: 'chapter-editor-navigation-failed',
-  };
+    },
+    sleep,
+  });
 }
 
 async function ensureHeartbeatAlarm() {

@@ -266,6 +266,7 @@ class WorldModelRetrievalPack(BaseModel):
     obsidian_pages: list[dict[str, Any]] = Field(default_factory=list)
     llm_kb_context: dict[str, Any] = Field(default_factory=dict)
     review_conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    active_personality_contexts: list[dict[str, Any]] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
     source_digest: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -333,3 +334,4 @@ class ReviewContextPack(BaseModel):
     recent_review_notes: list[ReviewNote] = Field(default_factory=list)
     lint_signals: list[LintSignal] = Field(default_factory=list)
     active_personality_contexts: list[dict[str, Any]] = Field(default_factory=list)
+    deterministic_quality_report: dict[str, Any] = Field(default_factory=dict)

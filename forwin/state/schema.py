@@ -16,6 +16,13 @@ class CharacterState(_BaseStateModel):
     goal: str = ""
     power_level: str = ""
     mood: str = ""
+    life_state: str = ""
+    custody_state: str = ""
+    injury_state: str = ""
+    participation_state: str = ""
+    terminal_event_id: str = ""
+    terminal_event_chapter: str = ""
+    bridge_event_id: str = ""
 
 
 class LocationState(_BaseStateModel):

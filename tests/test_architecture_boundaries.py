@@ -53,11 +53,14 @@ def test_orchestrator_book_state_compile_precedes_world_v4_projection() -> None:
 def test_legacy_world_model_is_labeled_projection_in_runtime_paths() -> None:
     source = _read("forwin/orchestrator/loop.py")
     v4_compiler = _read("forwin/world_model_v4/compiler.py")
+    compat_compiler = _read("forwin/world_v4_compat/compiler.py")
 
     assert "LegacyWorldModelCompiler" in source
     assert "legacy_projection" in source
     assert "BookState canon 不回滚" in source
     assert "compatibility projection rows" in v4_compiler
+    assert "class WorldModelCompiler" in compat_compiler
+    assert "BookStateCompilerV46" in compat_compiler
     assert "sole v4 canon writer" not in v4_compiler
 
 

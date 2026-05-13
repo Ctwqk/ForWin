@@ -6,6 +6,7 @@ produces fluent Chinese web-novel prose and metadata without code-switching.
 from __future__ import annotations
 
 import json
+import re
 
 from forwin.canon_names import canon_name_anchor_lines, extract_canon_name_anchors
 from forwin.protocol.context import ChapterContextPack
@@ -66,6 +67,23 @@ def _story_basics_section(context: ChapterContextPack) -> str:
         f"前提：{context.premise}",
         f"世界背景：{context.setting_summary}",
     ]
+    protagonist_name = _extract_protagonist_name(context)
+    if protagonist_name:
+        lines.extend(
+            [
+                f"主角姓名：{protagonist_name}",
+                (
+                    "主角命名约束：正文叙事必须用这个姓名或自然代词承接，不要用“工作人员”、"
+                    "“主角”、“主人公”、“相关人员”等泛称替代主角；第 1 章正文前 300 字内必须出现主角姓名。"
+                    "无名追踪者、守卫或操作员也要写成具体职能称谓或阵营代号，例如“白塔巡检员”，"
+                    "不要把“工作人员”单独作为角色标签或揭示。"
+                ),
+                (
+                    "倒计时约束：如果同章出现多个计时器，必须在正文中明确区分用途，例如“终端审计窗口剩余4小时”"
+                    "和“记忆重置周期剩余7天”是两个不同倒计时；不要让较短局部计时器和主线重置倒计时混在一起。"
+                ),
+            ]
+        )
     if getattr(context, "genesis_context_refs", None):
         revision_id = str(context.genesis_context_refs.get("genesis_revision_id", "") or "")
         if revision_id:
@@ -77,6 +95,20 @@ def _story_basics_section(context: ChapterContextPack) -> str:
     if getattr(context, "genesis_story_engine_summary", ""):
         lines.append(f"Genesis 长线引擎：{context.genesis_story_engine_summary}")
     return "\n".join(lines)
+
+
+def _extract_protagonist_name(context: ChapterContextPack) -> str:
+    candidates = [
+        str(getattr(context, "premise", "") or ""),
+        str(getattr(context, "genesis_story_engine_summary", "") or ""),
+    ]
+    for text in candidates:
+        match = re.search(r"(?:主角|主人公|主视角)\s*(?:[：:是为]\s*|\s+)([\u4e00-\u9fff]{2,4})", text)
+        if match:
+            name = match.group(1).strip()
+            if name and name not in {"工作人员", "相关人员", "主人公", "主角"}:
+                return name
+    return ""
 
 
 def _chapter_plan_section(context: ChapterContextPack, title: str) -> str:

@@ -49,7 +49,7 @@ def test_executor_starts_continue_generation_task() -> None:
         date="2026-05-05",
         write_chapters=[2, 4, 1],
         generation_mode="continue",
-        requested_chapters=4,
+        requested_chapters=3,
     )
 
     result = ProductionExecutor(
@@ -65,7 +65,7 @@ def test_executor_starts_continue_generation_task() -> None:
 
     assert result.action == "started_continue_generation"
     assert result.task_id == "task-continue"
-    assert calls[0]["requested_chapters"] == 4
+    assert calls[0]["requested_chapters"] == 3
     assert calls[0]["max_chapters"] == 3
 
 

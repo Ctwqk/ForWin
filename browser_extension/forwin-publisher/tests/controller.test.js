@@ -296,6 +296,116 @@ test('controller marks upload job running then succeeded', async () => {
   assert.equal(uploadResults.at(-1).status, 'succeeded');
 });
 
+test('controller gives qidian draft upload a longer execution timeout', async () => {
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const delays = [];
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    delays.push(Number(delay || 0));
+    return originalSetTimeout(callback, delay, ...args);
+  };
+  globalThis.clearTimeout = (timer) => originalClearTimeout(timer);
+  try {
+    const { controller } = makeController({
+      backend: {
+        heartbeat: async () => ({ ok: true }),
+        syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
+        getBrowserSession: async () => null,
+        claimNextUploadJob: async () => ({ found: false, job: null }),
+        claimNextCommentSyncJob: async () => ({ found: false, job: null }),
+        getUploadJob: async () => ({
+          job_id: 'job-qidian-draft',
+          platform: 'qidian',
+          display_name: '起点小说',
+          book_name: '测试书',
+          chapter_title: '第一章',
+          body: '正文',
+          upload_url: null,
+          publish: false,
+        }),
+        syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
+        updateUploadJobResult: async () => ({ ok: true }),
+        updateCommentSyncJobResult: async () => ({ ok: true }),
+      },
+    });
+
+    await controller.handleMessage(
+      { action: 'execute-upload-job', payload: { jobId: 'job-qidian-draft' } },
+      { tab: { id: 100 } },
+    );
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+
+  assert.ok(Math.max(...delays) >= 420000);
+});
+
+test('controller recovers qidian draft timeout when a real ccid draft url exists', async () => {
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const timeoutSentinel = { qidianTimeout: true };
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    if (Number(delay || 0) >= 420000) {
+      callback(...args);
+      return timeoutSentinel;
+    }
+    return originalSetTimeout(callback, delay, ...args);
+  };
+  globalThis.clearTimeout = (timer) => {
+    if (timer === timeoutSentinel) {
+      return;
+    }
+    return originalClearTimeout(timer);
+  };
+  try {
+    const { controller, uploadResults } = makeController({
+      getTab: async (tabId) => ({
+        id: tabId,
+        status: 'complete',
+        url: 'https://write.qq.com/portal/booknovels/chaptertmp/CBID/35512915704247809?entry=publish#ccid=96252466911310489',
+      }),
+      runUploadCommand: async () => new Promise(() => {}),
+      backend: {
+        heartbeat: async () => ({ ok: true }),
+        syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
+        getBrowserSession: async () => null,
+        claimNextUploadJob: async () => ({ found: false, job: null }),
+        claimNextCommentSyncJob: async () => ({ found: false, job: null }),
+        getUploadJob: async () => ({
+          job_id: 'job-qidian-timeout-recover',
+          platform: 'qidian',
+          display_name: '起点小说',
+          book_name: '测试书',
+          chapter_title: '第一章',
+          body: '正文',
+          upload_url: null,
+          publish: false,
+        }),
+        syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
+        updateUploadJobResult: async (_jobId, payload) => {
+          uploadResults.push(payload);
+          return { ok: true };
+        },
+        updateCommentSyncJobResult: async () => ({ ok: true }),
+      },
+    });
+
+    await controller.handleMessage(
+      { action: 'execute-upload-job', payload: { jobId: 'job-qidian-timeout-recover' } },
+      { tab: { id: 100 } },
+    );
+
+    assert.equal(uploadResults.at(-1).status, 'succeeded');
+    assert.equal(uploadResults.at(-1).error, '');
+    assert.equal(uploadResults.at(-1).result_payload.verified_via, 'qidian-real-ccid-timeout-recovery');
+    assert.equal(uploadResults.at(-1).result_payload.error_code, undefined);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 test('controller cancels upload job before execution when abort was requested', async () => {
   const { controller, uploadResults } = makeController({
     runUploadCommand: async () => {

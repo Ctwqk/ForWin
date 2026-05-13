@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -16,6 +17,8 @@ from .platform_catalog import PlatformCatalog, PlatformSpec
 
 
 AUTO_UPLOAD_MAX_ATTEMPTS = 3
+
+QIDIAN_REAL_CCID_RE = re.compile(r"(?:[?#&])ccid=(\d{6,})")
 
 LOGIN_FAILURE_ERROR_CODES = {
     "login-required",
@@ -85,6 +88,24 @@ def _upload_failure_is_login_failure(
         )
     ).lower()
     return any(fragment.lower() in haystack for fragment in LOGIN_FAILURE_FRAGMENTS)
+
+
+def _failed_qidian_draft_has_real_ccid(
+    job: PublisherUploadJob,
+    *,
+    current_url: str,
+    error: str,
+    result_payload: dict[str, Any],
+) -> bool:
+    if str(job.platform_id or "").strip() != "qidian" or bool(job.publish):
+        return False
+    error_code = str(result_payload.get("error_code") or "").strip()
+    if error_code != "extension-upload-timeout" and "执行超时" not in str(error or ""):
+        return False
+    url = str(current_url or "").strip()
+    if "write.qq.com" not in url or "/chaptertmp/" not in url:
+        return False
+    return QIDIAN_REAL_CCID_RE.search(url) is not None
 
 
 def _upload_retry_history(
@@ -558,6 +579,26 @@ class UploadJobService:
                 merged_payload.update(result_payload)
 
             requeued_after_failure = False
+            if effective_status == "failed" and _failed_qidian_draft_has_real_ccid(
+                job,
+                current_url=current_url,
+                error=error,
+                result_payload=merged_payload,
+            ):
+                recovered_error_code = str(merged_payload.pop("error_code", "") or "")
+                effective_status = "succeeded"
+                message = "章节草稿已保存到起点。"
+                error = ""
+                merged_payload.update(
+                    {
+                        "phase": "server-timeout-ccid-recovered",
+                        "mode": "draft",
+                        "official_status": "drafted",
+                        "verified_via": "qidian-real-ccid-timeout-recovery",
+                    }
+                )
+                if recovered_error_code:
+                    merged_payload["recovered_error_code"] = recovered_error_code
             if effective_status == "failed":
                 failed_at = isoformat(now)
                 existing_retry = merged_payload.get("auto_retry", {})

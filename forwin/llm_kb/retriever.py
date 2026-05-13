@@ -33,8 +33,17 @@ class LLMKnowledgeBaseRetriever:
         *,
         role: str = "writer",
         limit: int = 5,
+        as_of_chapter: int | None = None,
+        visibility_scope: str | None = None,
     ) -> list[dict[str, Any]]:
         return [
             record.as_dict()
-            for record in self.index.search(project_id, query, role=role, limit=limit)
+            for record in self.index.search(
+                project_id,
+                query,
+                role=role,
+                limit=limit,
+                as_of_chapter=as_of_chapter,
+                visibility_scope=visibility_scope,
+            )
         ]

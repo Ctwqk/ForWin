@@ -180,6 +180,15 @@ class WorldModelStore:
         markdown: str,
         frontmatter: dict[str, Any],
         as_of_chapter: int,
+        projection_kind: str = "world_studio",
+        projection_version: str = "",
+        source_digest: str = "",
+        section_digest: dict[str, str] | None = None,
+        observer_type: str = "",
+        observer_id: str = "",
+        role_scope: str = "",
+        visibility_scope: str = "",
+        canon_status: str = "canon_projection",
     ) -> WorldModelPageRow:
         digest = content_hash(stable_json(frontmatter), markdown)
         page_repo = WorldModelPageRepository(self.session)
@@ -190,6 +199,7 @@ class WorldModelStore:
             frontmatter=frontmatter,
             as_of_chapter=as_of_chapter,
         )
+        section_digest_json = json.dumps(section_digest or {}, ensure_ascii=False, sort_keys=True)
         page_repo.supersede_duplicate_pages(
             project_id,
             identity_key=identity.logical_identity_key,
@@ -264,6 +274,15 @@ class WorldModelStore:
                 canonical_source_id=identity.canonical_source_id,
                 supersedes_page_id=supersedes_page_id,
                 canonical_rank=identity.canonical_rank,
+                projection_kind=projection_kind,
+                projection_version=projection_version,
+                source_digest=source_digest,
+                section_digest_json=section_digest_json,
+                observer_type=observer_type,
+                observer_id=observer_id,
+                role_scope=role_scope,
+                visibility_scope=visibility_scope,
+                canon_status=canon_status,
             )
         else:
             if row.content_hash != digest:
@@ -281,6 +300,15 @@ class WorldModelStore:
             row.canonical_source_id = identity.canonical_source_id
             row.canonical_rank = identity.canonical_rank
             row.supersedes_page_id = supersedes_page_id
+            row.projection_kind = projection_kind
+            row.projection_version = projection_version
+            row.source_digest = source_digest
+            row.section_digest_json = section_digest_json
+            row.observer_type = observer_type
+            row.observer_id = observer_id
+            row.role_scope = role_scope
+            row.visibility_scope = visibility_scope
+            row.canon_status = canon_status
         self.session.add(row)
         self.session.flush()
         if desired_status == "canon_live":

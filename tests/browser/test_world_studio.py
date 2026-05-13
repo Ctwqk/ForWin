@@ -20,9 +20,9 @@ def test_world_studio_pages_conflicts_proposals_export_import(page, browser_test
     expect(page.locator(".list-scroll")).to_contain_text("雾港")
     expect(page.locator(".list-scroll")).not_to_contain_text("林夜")
 
-    page.get_by_role("button", name="矛盾").click()
+    page.get_by_role("tab", name="矛盾").click()
     expect(page.locator(".main-panel")).to_contain_text("location_mismatch")
-    page.get_by_role("button", name="Proposal", exact=True).click()
+    page.get_by_role("tab", name="Proposal", exact=True).click()
     expect(page.locator(".main-panel")).to_contain_text("Proposal Review")
     expect(page.locator(".sidebar")).to_contain_text("entity/linye")
 

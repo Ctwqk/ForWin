@@ -59,12 +59,7 @@ class ProductionPlanner:
             plan.write_chapters.extend(write_candidates[:write_quota])
             if plan.write_chapters:
                 plan.generation_mode = "continue"
-                plan.requested_chapters = max(
-                    int(backlog.chapter_plan_count or 0),
-                    len(write_candidates),
-                    len(plan.write_chapters),
-                    1,
-                )
+                plan.requested_chapters = len(plan.write_chapters)
 
         publish_quota = max(0, int(policy.quota.publish or 0))
         if (

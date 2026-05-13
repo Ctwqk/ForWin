@@ -126,6 +126,35 @@ class MockForWinBackend:
             if item["path"] == path and item["method"] == method
         ]
 
+    def project_ref(self, project_id: str) -> dict[str, Any]:
+        project = next((item for item in self.projects if item["id"] == project_id), None)
+        if project is None:
+            project = sample_project(project_id)
+            self.projects.append(project)
+        return project
+
+    def mark_generation_started(self, project_id: str, task_id: str, action: str) -> None:
+        project = self.project_ref(project_id)
+        chapters = project.setdefault(
+            "chapters",
+            [
+                sample_chapter(1),
+                sample_chapter(2, status="needs_review", has_review=True),
+                sample_chapter(3, status="planned"),
+            ],
+        )
+        if action == "start-writing":
+            project["creation_status"] = "writing"
+        project["chapter_count"] = len(chapters)
+        project["generated_chapter_count"] = len(
+            [item for item in chapters if item.get("status") in {"accepted", "drafted", "needs_review"}]
+        )
+        project["accepted_chapter_count"] = len(
+            [item for item in chapters if item.get("status") == "accepted"]
+        )
+        project["generation_control"] = sample_generation_control(can_resume=True)
+        self.tasks[task_id] = sample_generation_task(task_id, project_id=project_id)
+
     def handle(self, route: Route) -> None:
         parsed = urlparse(route.request.url)
         path = parsed.path
@@ -419,7 +448,7 @@ class MockForWinBackend:
             payload = read_json(route)
             self.capture(route, payload)
             task_id = f"task-{len(self.tasks) + 1}"
-            self.tasks[task_id] = sample_generation_task(task_id, project_id=project_id)
+            self.mark_generation_started(project_id, task_id, action)
             json_reply(route, {"task_id": task_id, "message": "已启动写作" if action == "start-writing" else "已继续生成"})
             return
 
@@ -602,7 +631,7 @@ class MockForWinBackend:
         return items
 
     def project_detail(self, project_id: str) -> dict[str, Any]:
-        project = deepcopy(next((item for item in self.projects if item["id"] == project_id), self.projects[0]))
+        project = deepcopy(self.project_ref(project_id))
         project["id"] = project_id
         project.setdefault("chapters", [sample_chapter(1), sample_chapter(2, status="needs_review", has_review=True)])
         project.setdefault("governance", sample_governance())

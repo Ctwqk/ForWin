@@ -686,19 +686,43 @@ export default function App() {
       <div className="workspace">
         <aside className="sidebar">
           <div className="tabs" role="tablist" aria-label="世界档案 sections">
-            <button className={tab === "pages" ? "active" : ""} type="button" onClick={() => setTab("pages")}>
+            <button
+              className={tab === "pages" ? "active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={tab === "pages"}
+              onClick={() => setTab("pages")}
+            >
               <BookOpen size={16} />
               页面
             </button>
-            <button className={tab === "conflicts" ? "active" : ""} type="button" onClick={() => setTab("conflicts")}>
+            <button
+              className={tab === "conflicts" ? "active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={tab === "conflicts"}
+              onClick={() => setTab("conflicts")}
+            >
               <AlertTriangle size={16} />
               矛盾
             </button>
-            <button className={tab === "proposals" ? "active" : ""} type="button" onClick={() => setTab("proposals")}>
+            <button
+              className={tab === "proposals" ? "active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={tab === "proposals"}
+              onClick={() => setTab("proposals")}
+            >
               <GitBranch size={16} />
               Proposal
             </button>
-            <button className={tab === "personality" ? "active" : ""} type="button" onClick={() => setTab("personality")}>
+            <button
+              className={tab === "personality" ? "active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={tab === "personality"}
+              onClick={() => setTab("personality")}
+            >
               <UserRound size={16} />
               人物性格
             </button>

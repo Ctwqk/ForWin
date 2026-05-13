@@ -300,6 +300,64 @@ class WorldModelTests(unittest.TestCase):
         self.assertIn("灵矿封印不稳", json.dumps(snapshot_payload, ensure_ascii=False))
         self.assertIn("查清矿难真相", json.dumps(snapshot_payload, ensure_ascii=False))
 
+    def test_compile_prefers_runtime_actor_over_duplicate_genesis_actor(self) -> None:
+        project_id = self._create_genesis_project()
+        with self.session_factory() as session:
+            compiler = WorldModelCompiler(session)
+            updater = StateUpdater(session)
+            updater.create_entity(
+                project_id=project_id,
+                kind="character",
+                name="林烬",
+                description="运行期主角档案。",
+                chapter=0,
+            )
+
+            snapshot = compiler.bootstrap_from_genesis(project_id)
+
+        characters = snapshot.snapshot["actor_model"]["characters"]
+        matches = [item for item in characters if item.get("name") == "林烬"]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["description"], "运行期主角档案。")
+
+    def test_world_model_page_list_prefers_book_state_projection_for_duplicate_title(self) -> None:
+        project_id = self._create_genesis_project()
+        with self.session_factory() as session:
+            WorldModelCompiler(session).bootstrap_from_genesis(project_id)
+            session.add(
+                WorldModelPageRow(
+                    project_id=project_id,
+                    page_key="character:char_runtime_linye",
+                    page_type="character",
+                    title="林烬",
+                    vault_path="03_Actors/Characters/林烬_char_runtime_linye.md",
+                    markdown="# 林烬\n\nBookState projection",
+                    frontmatter_json=json.dumps(
+                        {
+                            "forwin_id": "character:char_runtime_linye",
+                            "project_id": project_id,
+                            "node_id": "char_runtime_linye",
+                            "node_type": "character",
+                            "status": "canon_live",
+                            "as_of_chapter": 1,
+                            "editable_fields": ["Manual Notes"],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    content_hash="book-state-linye",
+                    revision=1,
+                    status="canon_live",
+                    as_of_chapter=1,
+                )
+            )
+            session.commit()
+
+        pages = api_module.list_project_world_model_pages(project_id)
+        linye_pages = [page for page in pages if page.page_type == "character" and page.title == "林烬"]
+
+        self.assertEqual(len(linye_pages), 1)
+        self.assertEqual(linye_pages[0].page_key, "character:char_runtime_linye")
+
     def test_import_obsidian_changes_creates_proposal_without_mutating_page(self) -> None:
         project_id = self._create_genesis_project()
         vault_root = Path(self.tmpdir.name) / "vault"

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 import forwin.api as api_module
 from forwin import api_project_ops
@@ -244,6 +245,68 @@ class ProjectOperationGuardTests(unittest.TestCase):
             ).count()
         self.assertEqual(task_count, 0)
 
+    def test_approve_review_continue_uses_remaining_active_workset_count(self) -> None:
+        project = self._create_project(project_id="proj-approve-workset-count")
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "writing"
+            arc = ArcPlanVersion(
+                id="arc-approve-workset-count",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+                arc_number=1,
+                chapter_start=1,
+                chapter_end=4,
+            )
+            session.add(arc)
+            session.flush()
+            for chapter_number, status in [
+                (1, "accepted"),
+                (2, "needs_review"),
+                (3, "planned"),
+                (4, "planned"),
+            ]:
+                session.add(
+                    ChapterPlan(
+                        id=f"plan-approve-workset-{chapter_number}",
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=chapter_number,
+                        title=f"第{chapter_number}章",
+                        status=status,
+                    )
+                )
+            session.commit()
+
+        captured: dict[str, object] = {}
+
+        def accept_review(_project_id, chapter_number, **_kwargs):
+            with self.session_factory() as session:
+                plan = session.query(ChapterPlan).filter(
+                    ChapterPlan.project_id == _project_id,
+                    ChapterPlan.chapter_number == chapter_number,
+                ).one()
+                plan.status = "accepted"
+                session.commit()
+            return {"status": "accepted", "message": "accepted", "frozen_artifact": ""}
+
+        def capture_task_creation(**kwargs):
+            captured.update(kwargs)
+            return "task-approve-workset"
+
+        api_module._orchestrator = SimpleNamespace(accept_review=accept_review)
+
+        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+            payload = api_module.approve_chapter_review(
+                project.id,
+                2,
+                ChapterReviewApproveRequest(continue_generation=True, reason="accept and continue"),
+            )
+
+        self.assertEqual(payload.task_id, "task-approve-workset")
+        self.assertEqual(captured["requested_chapters"], 2)
+
     def test_retry_chapter_review_resets_needs_review_to_planned(self) -> None:
         project = self._create_project(project_id="proj-review-retry")
         with self.session_factory() as session:
@@ -283,6 +346,57 @@ class ProjectOperationGuardTests(unittest.TestCase):
             self.assertEqual(plan.repair_attempt_count, 0)
             self.assertEqual(plan.residual_review_issues_json, "[]")
             self.assertEqual(plan.canon_risk_level, "")
+
+    def test_retry_chapter_review_continue_uses_retry_workset_count(self) -> None:
+        project = self._create_project(project_id="proj-retry-workset-count")
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "writing"
+            arc = ArcPlanVersion(
+                id="arc-retry-workset-count",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+                arc_number=1,
+                chapter_start=1,
+                chapter_end=5,
+            )
+            session.add(arc)
+            session.flush()
+            for chapter_number, status in [
+                (1, "accepted"),
+                (2, "accepted"),
+                (3, "needs_review"),
+                (4, "planned"),
+                (5, "planned"),
+            ]:
+                session.add(
+                    ChapterPlan(
+                        id=f"plan-retry-workset-{chapter_number}",
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=chapter_number,
+                        title=f"第{chapter_number}章",
+                        status=status,
+                    )
+                )
+            session.commit()
+
+        captured: dict[str, object] = {}
+
+        def capture_task_creation(**kwargs):
+            captured.update(kwargs)
+            return "task-retry-workset"
+
+        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+            payload = api_module.retry_chapter_review(
+                project.id,
+                3,
+                ChapterReviewRetryRequest(continue_generation=True, reason="retry and continue"),
+            )
+
+        self.assertEqual(payload.task_id, "task-retry-workset")
+        self.assertEqual(captured["requested_chapters"], 3)
 
     def test_retry_chapter_review_can_reset_accepted_when_explicitly_allowed(self) -> None:
         project = self._create_project(project_id="proj-review-retry-accepted")
@@ -678,6 +792,80 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(response.requested_chapters, 2)
         self.assertEqual(captured["requested_chapters"], 2)
         self.assertEqual(captured["max_chapters"], 2)
+
+    def test_continue_generation_count_is_scoped_to_active_arc(self) -> None:
+        project = self._create_project(project_id="proj-continue-active-arc-only")
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "writing"
+            active_arc = ArcPlanVersion(
+                id="arc-continue-active-only",
+                project_id=project.id,
+                arc_synopsis="当前弧线",
+                status="active",
+                arc_number=1,
+                chapter_start=1,
+                chapter_end=3,
+            )
+            future_arc = ArcPlanVersion(
+                id="arc-continue-future-only",
+                project_id=project.id,
+                arc_synopsis="后续弧线",
+                status="planned",
+                arc_number=2,
+                chapter_start=4,
+                chapter_end=6,
+            )
+            session.add_all([active_arc, future_arc])
+            session.flush()
+            for chapter_number, status, arc_id in [
+                (1, "accepted", active_arc.id),
+                (2, "accepted", active_arc.id),
+                (3, "planned", active_arc.id),
+                (4, "planned", future_arc.id),
+                (5, "planned", future_arc.id),
+            ]:
+                session.add(
+                    ChapterPlan(
+                        id=f"plan-continue-active-only-{chapter_number}",
+                        project_id=project.id,
+                        arc_plan_id=arc_id,
+                        chapter_number=chapter_number,
+                        title=f"第{chapter_number}章",
+                        status=status,
+                    )
+                )
+            session.commit()
+
+        captured: dict[str, object] = {}
+
+        def capture_task_creation(**kwargs):
+            captured.update(kwargs)
+            task_id = "task-continue-active-only"
+            task = api_module._create_task_record(
+                message=str(kwargs.get("message") or ""),
+                requested_chapters=int(kwargs.get("requested_chapters") or 0),
+            )
+            task["project_id"] = project.id
+            api_module._persist_generation_task(task_id, task)
+            return task_id
+
+        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+            response = api_module.continue_project_generation(
+                project.id,
+                ProjectContinueGenerationRequest(max_chapters=10),
+            )
+
+        self.assertEqual(response.requested_chapters, 1)
+        self.assertEqual(captured["requested_chapters"], 1)
+        self.assertEqual(captured["max_chapters"], 10)
+
+    def test_project_continue_generation_request_rejects_non_positive_max_chapters(self) -> None:
+        with self.assertRaises(ValidationError):
+            ProjectContinueGenerationRequest(max_chapters=0)
+        with self.assertRaises(ValidationError):
+            ProjectContinueGenerationRequest(max_chapters=-1)
+        self.assertEqual(ProjectContinueGenerationRequest(max_chapters=1).max_chapters, 1)
 
     def test_generation_control_drafted_chapter_blocks_future_arc_resume(self) -> None:
         project = self._create_project(project_id="proj-drafted-future-arc")

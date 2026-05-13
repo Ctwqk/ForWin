@@ -25,8 +25,10 @@ from forwin.governance import (
     CONSTRAINT_STATUSES,
     CONSTRAINT_TYPES,
     DecisionEventType,
+    checkpoint_reason_with_legacy_status,
     ensure_decision_event_type,
     issue_group_for_issue,
+    normalize_checkpoint_status,
     normalize_project_governance,
 )
 from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
@@ -225,6 +227,7 @@ def latest_band_checkpoint_row(
 
 def serialize_band_checkpoint(row: BandCheckpoint, *, session=None) -> BandCheckpointDetail:
     issues_payload = _json_load_list(row.issues_json)
+    normalized_status = normalize_checkpoint_status(row.status)
     return BandCheckpointDetail(
         id=row.id,
         project_id=row.project_id,
@@ -235,9 +238,9 @@ def serialize_band_checkpoint(row: BandCheckpoint, *, session=None) -> BandCheck
         trigger_source=str(row.trigger_source or ""),
         boundary_kind=str(row.boundary_kind or ""),
         boundary_chapter=int(row.boundary_chapter or 0),
-        status=str(row.status or "pending"),
+        status=normalized_status,
         summary=str(row.summary or ""),
-        reason=str(row.reason or ""),
+        reason=checkpoint_reason_with_legacy_status(row.reason, row.status),
         issues=[
             BandCheckpointIssueInfo.model_validate(item)
             for item in issues_payload
@@ -246,7 +249,7 @@ def serialize_band_checkpoint(row: BandCheckpoint, *, session=None) -> BandCheck
         decision_refs=decision_refs_for_checkpoint(session, row) if session is not None else [],
         created_at=_display_datetime(row.created_at),
         updated_at=_display_datetime(row.updated_at),
-        resolved_at=_display_datetime(row.resolved_at),
+        resolved_at=_display_datetime(row.resolved_at or (row.updated_at if normalized_status in {"pass", "overridden"} else None)),
     )
 
 

@@ -19,6 +19,7 @@ from forwin.models.project import Project
 from forwin.models.world_model import WorldEditProposalRow
 from forwin.obsidian import ObsidianExporter, ObsidianImporter
 from forwin.obsidian.proposal_review import approve_world_edit_proposal
+from forwin.retrieval.obsidian_human_index import ObsidianHumanVectorIndex
 from forwin.world_model.store import load_json
 
 
@@ -83,6 +84,7 @@ def build_handlers(
             with session.begin_nested():
                 result = ObsidianExporter(session).export_project(project_id, vault_root=vault_root)
             session.commit()
+            _rebuild_human_index(project_id, Path(result.vault_root))
             return WorldModelExportResponse(
                 ok=True,
                 project_id=project_id,
@@ -98,6 +100,7 @@ def build_handlers(
             with session.begin_nested():
                 result = ObsidianImporter(session).import_project(project_id, vault_root=vault_root)
             session.commit()
+            _rebuild_human_index(project_id, Path(result.vault_root))
             return WorldModelImportResponse(
                 ok=True,
                 project_id=project_id,
@@ -160,6 +163,16 @@ def build_handlers(
             session.add(row)
             session.commit()
             return _proposal_info(row)
+
+    def _rebuild_human_index(project_id: str, vault_root: Path) -> None:
+        try:
+            ObsidianHumanVectorIndex(
+                qdrant_url=_qdrant_url(),
+                qdrant_client=qdrant_client,
+                qdrant_models=qdrant_models,
+            ).rebuild_project(project_id, vault_root=vault_root)
+        except Exception:
+            return
 
     return {
         "export_obsidian": export_obsidian,

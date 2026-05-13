@@ -11,6 +11,7 @@ from forwin.protocol.review import (
     normalize_repair_scope,
 )
 from forwin.protocol.writer import WriterOutput
+from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.skills import serialize_prompt_layers
 from .context_builder import build_review_context_pack
 from .experience import ExperienceReviewer
@@ -92,10 +93,29 @@ class HistoricalReviewHub:
                 personality_signals = personality_collect(context, writer_output)
                 lint_signals.extend(personality_signals)
                 span.metric("issue_count", len(personality_signals))
+        deterministic_quality_report = {}
+        session = getattr(repo, "session", None) if repo is not None else None
+        if session is not None:
+            with self.observability.span(
+                obs_context,
+                "review.canon_quality.collect",
+                span_kind="reviewer",
+                component="canon_quality",
+            ) as span:
+                quality = analyze_writer_output_quality(
+                    session=session,
+                    project_id=project_id,
+                    chapter_number=int(getattr(context, "chapter_number", 0) or 0),
+                    writer_output=writer_output,
+                    persist=False,
+                )
+                deterministic_quality_report = quality.deterministic_quality_report
+                span.metric("signal_count", len(quality.signals))
         review_context = build_review_context_pack(
             repo=repo,
             context=context,
             lint_signals=lint_signals,
+            deterministic_quality_report=deterministic_quality_report,
         )
         with self.observability.span(
             obs_context,

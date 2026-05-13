@@ -44,6 +44,7 @@ from forwin.protocol.world_model import WorldContextPack
 from forwin.world_model.page_repository import WorldModelPageRepository
 from forwin.world_model.store import load_json
 from forwin.obsidian.frontmatter import parse_sections
+from forwin.personality import CharacterPersonalityLibrary, build_active_personality_contexts
 from .memory_index import ChapterMemoryIndex, create_memory_index
 
 
@@ -463,6 +464,7 @@ class RetrievalBroker:
             "nodes": [_map_node_context(node) for node in map_nodes[: self.max_world_pages * 4]],
             "edges": [_map_edge_context(edge) for edge in map_edges[: self.max_world_pages * 4]],
         }
+        active_personality_contexts = _active_personality_contexts(nodes)
         obsidian_pages = self._load_obsidian_page_context(
             session,
             project_id,
@@ -488,6 +490,7 @@ class RetrievalBroker:
             "book_state_fact_count": len(book_state_facts),
             "obsidian_page_count": len(obsidian_pages),
             "llm_kb_files": sorted(llm_kb_context.get("files", [])),
+            "active_personality_context_count": len(active_personality_contexts),
         }
         return pack.model_copy(
             update={
@@ -499,6 +502,7 @@ class RetrievalBroker:
                 "obsidian_pages": obsidian_pages[: self.max_world_pages],
                 "llm_kb_context": llm_kb_context,
                 "review_conflicts": conflicts,
+                "active_personality_contexts": active_personality_contexts,
                 "source_refs": list(dict.fromkeys(source_refs)),
                 "source_digest": str(source_digest or ""),
                 "metadata": metadata,
@@ -667,6 +671,7 @@ class RetrievalBroker:
                 "obsidian_pages": world_pack.obsidian_pages,
                 "llm_kb_context": world_pack.llm_kb_context,
                 "review_conflicts": world_pack.review_conflicts,
+                "active_personality_contexts": world_pack.active_personality_contexts,
             }
         }
         map_context = dict(pack.map_context or {})
@@ -689,6 +694,7 @@ class RetrievalBroker:
                 "recent_reader_experience_deltas": world_pack.recent_reader_experience_deltas or pack.recent_reader_experience_deltas,
                 "must_not_reveal": world_pack.must_not_reveal or pack.must_not_reveal,
                 "fair_misdirection_requirements": world_pack.fair_misdirection_requirements or pack.fair_misdirection_requirements,
+                "active_personality_contexts": world_pack.active_personality_contexts or pack.active_personality_contexts,
                 "map_context": map_context,
                 "knowledge_system_context": knowledge_system_context,
                 "world_context": pack.world_context.model_copy(
@@ -1005,6 +1011,37 @@ def _map_edge_context(edge) -> dict[str, object]:
         "risk_level": edge.risk_level,
         "visibility": edge.visibility_default,
     }
+
+
+def _active_personality_contexts(nodes: list[object]) -> list[dict[str, object]]:
+    characters = []
+    for node in nodes:
+        if str(getattr(node, "node_type", "") or "") != "character":
+            continue
+        profile = getattr(node, "profile", {}) if isinstance(getattr(node, "profile", {}), dict) else {}
+        loadout = profile.get("personality_loadout") if isinstance(profile, dict) else None
+        if not loadout:
+            continue
+        characters.append(
+            {
+                "character_id": getattr(node, "id", ""),
+                "character_name": getattr(node, "name", ""),
+                "personality_loadout": loadout,
+            }
+        )
+    if not characters:
+        return []
+    try:
+        return [
+            item.model_dump(mode="json")
+            for item in build_active_personality_contexts(
+                characters,
+                library=CharacterPersonalityLibrary(),
+                scene_flags=["chapter_generation"],
+            )
+        ]
+    except Exception:
+        return []
 
 
 def _truncate(value: str, *, limit: int = 600) -> str:

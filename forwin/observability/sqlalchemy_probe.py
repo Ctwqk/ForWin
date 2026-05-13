@@ -17,13 +17,12 @@ _INSTALLED_ATTR = "_forwin_observability_sqlalchemy_probe_installed"
 def install_sqlalchemy_query_probe(engine: Any) -> None:
     if engine is None or bool(getattr(engine, _INSTALLED_ATTR, False)):
         return
-    setattr(engine, _INSTALLED_ATTR, True)
     try:
         event.listen(engine, "before_cursor_execute", _before_cursor_execute)
         event.listen(engine, "after_cursor_execute", _after_cursor_execute)
     except InvalidRequestError:
-        setattr(engine, _INSTALLED_ATTR, False)
         return
+    setattr(engine, _INSTALLED_ATTR, True)
 
 
 def _before_cursor_execute(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001

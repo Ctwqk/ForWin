@@ -25,6 +25,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.canon_quality.gate import evaluate_canon_admission
+from forwin.canon_quality.placeholder import extract_expected_protagonist_names
+from forwin.canon_quality.repository import CanonQualityRepository
+from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.canon_names import is_plausible_person_name
 from forwin.checker.rules import ContinuityChecker
 from forwin.config import Config
@@ -62,6 +66,7 @@ from forwin.observability.spans import SpanRecord, current_span
 from forwin.book_state.extraction_contract import BookStateExtractionRequest
 from forwin.book_state.review_gate_ext import BookStateDirectCommitService
 from forwin.extractor.book_state_graph_delta import BookStateGraphDeltaExtractor
+from forwin.generation.continue_workset import build_continue_generation_workset
 from forwin.knowledge_system import KnowledgeProjectionRefresher
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.experience import ArcPayoffMap, BandDelightSchedule, ChapterExperiencePlan
@@ -961,6 +966,12 @@ class WritingOrchestrator:
                 raise ValueError(f"仍有章节等待 review：{waiting}")
             session.commit()
             repo, updater, checker = self._make_state_helpers(session)
+            workset = build_continue_generation_workset(
+                session,
+                project_id,
+                max_chapters=max_chapters,
+                source="orchestrator_continue",
+            )
             self._record_decision_event(
                 updater=updater,
                 project_id=project_id,
@@ -970,41 +981,41 @@ class WritingOrchestrator:
                 summary="已有项目生成 run 已启动。",
                 related_object_type="project",
                 related_object_id=project_id,
-                payload={"requested_chapters": len(chapter_plans)},
+                payload={
+                    "resolved_workset_count": workset.requested_chapters,
+                    "materialized_plan_count": workset.materialized_plan_count,
+                    "workset_reason": workset.reason,
+                },
             )
             session.commit()
 
-            pending_chapter_numbers = [
-                plan.chapter_number
-                for plan in chapter_plans
-                if plan.status in {"planned", "failed"}
-            ]
-            if not pending_chapter_numbers:
+            pending_chapter_numbers = list(workset.chapter_numbers)
+            if workset.reason == "future_arc_materialization_required":
                 if self._materialize_next_genesis_arc_if_needed(
                     session=session,
                     updater=updater,
                     project=project,
                 ):
                     repo, updater, checker = self._make_state_helpers(session)
-                    chapter_plans = session.query(ChapterPlan).filter(
-                        ChapterPlan.project_id == project_id
-                    ).order_by(ChapterPlan.chapter_number).all()
-                    pending_chapter_numbers = [
-                        plan.chapter_number
-                        for plan in chapter_plans
-                        if plan.status in {"planned", "failed"}
-                    ]
-                if not pending_chapter_numbers:
-                    return RunResult(
-                        project_id=project_id,
-                        requested_chapters=0,
+                    workset = build_continue_generation_workset(
+                        session,
+                        project_id,
+                        max_chapters=max_chapters,
+                        source="orchestrator_continue",
                     )
+                    pending_chapter_numbers = list(workset.chapter_numbers)
+            if not pending_chapter_numbers:
+                return RunResult(
+                    project_id=project_id,
+                    requested_chapters=0,
+                )
 
             self._emit_progress(
                 "stage_changed",
                 stage="resolving_arc_envelope",
                 project_id=project_id,
-                requested_chapters=len(pending_chapter_numbers),
+                pending_chapter_count=len(pending_chapter_numbers),
+                resolved_workset_count=workset.requested_chapters,
                 current_chapter=min(pending_chapter_numbers) - 1,
             )
             if self._abort_requested():
@@ -1053,11 +1064,13 @@ class WritingOrchestrator:
                     gate=failed_provisional,
                 )
 
-            chapter_numbers = self._pending_chapter_numbers_for_active_arc(
-                session=session,
-                project_id=project_id,
+            workset = build_continue_generation_workset(
+                session,
+                project_id,
                 max_chapters=max_chapters,
+                source="orchestrator_continue",
             )
+            chapter_numbers = list(workset.chapter_numbers)
             if not chapter_numbers:
                 return RunResult(
                     project_id=project_id,
@@ -2108,6 +2121,17 @@ class WritingOrchestrator:
     def _project_character_names(repo: StateRepository, project_id: str) -> set[str]:
         names: set[str] = set()
         try:
+            project = repo.get_project(project_id)
+        except Exception:  # noqa: BLE001
+            project = None
+        if project is not None:
+            names.update(
+                extract_expected_protagonist_names(
+                    str(getattr(project, "premise", "") or ""),
+                    str(getattr(project, "setting_summary", "") or ""),
+                )
+            )
+        try:
             entities = repo.get_active_entities(project_id)
         except Exception:  # noqa: BLE001
             return names
@@ -2130,7 +2154,7 @@ class WritingOrchestrator:
             marker_window = body
         if any(marker in marker_window for marker in ("集团", "董事", "会议", "总监", "高管", "部门")):
             return "集团高管"
-        return "相关人员"
+        return "工作人员"
 
     @staticmethod
     def _subworld_role_titles() -> tuple[str, ...]:
@@ -4690,6 +4714,115 @@ class WritingOrchestrator:
                 ),
             )
 
+    def _apply_canon_quality_gate(
+        self,
+        *,
+        session: Session,
+        repo: StateRepository,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_number: int,
+        writer_output: WriterOutput,
+        verdict: ReviewVerdict,
+    ) -> str:
+        latest_draft, latest_review = self._latest_draft_and_review_for_chapter(
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_number,
+        )
+        draft_id = str(getattr(latest_draft, "id", "") or "")
+        review_id = str(getattr(latest_review, "id", "") or "")
+        analysis = analyze_writer_output_quality(
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            writer_output=writer_output,
+            draft_id=draft_id,
+            persist=True,
+        )
+        gate_result = evaluate_canon_admission(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            draft_id=draft_id,
+            review_id=review_id,
+            review_verdict=verdict.verdict,
+            signals=analysis.signals,
+            mode=str(getattr(self.config, "canon_quality_gate", "strict") or "strict"),
+        )
+        CanonQualityRepository(session).save_admission_run(gate_result, signals=analysis.signals)
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="evaluation_verdict",
+            event_type=DecisionEventType.REVIEW_VERDICT_RECORDED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 canon quality gate: {gate_result.verdict}",
+            related_object_type="canon_admission_run",
+            payload=gate_result.model_dump(mode="json"),
+        )
+        if gate_result.commit_allowed:
+            return ""
+        frozen_path = ""
+        if self.config.freeze_failed_candidates:
+            frozen_path = self.artifact_store.save_frozen_candidate(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                payload={
+                    "reason": "canon-quality-gate-blocked",
+                    "chapter_number": chapter_number,
+                    "writer_output": writer_output.model_dump(mode="json"),
+                    "review_verdict": verdict.model_dump(mode="json"),
+                    "canon_quality_gate": gate_result.model_dump(mode="json"),
+                    "canon_quality_signals": [
+                        signal.model_dump(mode="json") for signal in analysis.signals
+                    ],
+                },
+            )
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="evaluation_verdict",
+            event_type=DecisionEventType.CANON_COMMIT_BLOCKED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 canon quality gate 阻止 canon 写入。",
+            reason=gate_result.gate_summary,
+            payload=gate_result.model_dump(mode="json"),
+        )
+        return frozen_path or "canon-quality-gate-blocked"
+
+    def _latest_draft_and_review_for_chapter(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+        chapter_number: int,
+    ) -> tuple[ChapterDraft | None, ChapterReview | None]:
+        chapter_plan = session.execute(
+            select(ChapterPlan).where(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number == chapter_number,
+            )
+        ).scalar_one_or_none()
+        if chapter_plan is None:
+            return None, None
+        latest_draft = session.execute(
+            select(ChapterDraft)
+            .where(ChapterDraft.chapter_plan_id == chapter_plan.id)
+            .order_by(ChapterDraft.version.desc(), ChapterDraft.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        if latest_draft is None:
+            return None, None
+        latest_review = session.execute(
+            select(ChapterReview)
+            .where(ChapterReview.draft_id == latest_draft.id)
+            .order_by(ChapterReview.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        return latest_draft, latest_review
+
     def _apply_canon_candidate(
         self,
         *,
@@ -4716,6 +4849,17 @@ class WritingOrchestrator:
             },
         )
         try:
+            quality_blocked_path = self._apply_canon_quality_gate(
+                session=session,
+                repo=repo,
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                writer_output=writer_output,
+                verdict=verdict,
+            )
+            if quality_blocked_path:
+                return quality_blocked_path
             v4_blocked_path = self._apply_world_v4_gate(
                 session=session,
                 repo=repo,
@@ -5397,6 +5541,10 @@ class WritingOrchestrator:
         allowed_names.update(
             ContinuityChecker._normalize_character_reference(anchor.canonical_name)
             for anchor in ContinuityChecker(repo)._canon_name_anchors(project_id)
+        )
+        allowed_names.update(
+            ContinuityChecker._normalize_character_reference(name)
+            for name in self._project_character_names(repo, project_id)
         )
         if not allowed_names:
             return

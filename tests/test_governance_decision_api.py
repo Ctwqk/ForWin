@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -18,6 +19,7 @@ from forwin.governance import (
     ProjectGovernanceSettings,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
+from forwin.models.governance import BandCheckpoint
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ArcPlanVersion, Project
 from forwin.protocol.review import ReviewVerdict
@@ -49,6 +51,117 @@ class GovernanceDecisionApiTests(unittest.TestCase):
                 status="approved",
                 reason="operator typo should not persist an invalid checkpoint status",
             )
+
+    def test_legacy_approved_band_checkpoint_serializes_without_validation_error(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = postgres_test_url("legacy_checkpoint_status")
+            self._prime_api(db_path)
+            project_id = new_id()
+            arc_id = new_id()
+            created = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+            with api_module._get_session() as session:
+                session.add(
+                    Project(
+                        id=project_id,
+                        title="历史 checkpoint",
+                        premise="premise",
+                        genre="玄幻",
+                        setting_summary="",
+                    )
+                )
+                session.flush()
+                session.add(
+                    ArcPlanVersion(
+                        id=arc_id,
+                        project_id=project_id,
+                        version=1,
+                        arc_synopsis="治理弧线",
+                        status="active",
+                    )
+                )
+                session.flush()
+                session.add(
+                    BandCheckpoint(
+                        id="checkpoint-legacy-approved",
+                        project_id=project_id,
+                        arc_id=arc_id,
+                        band_id="band-legacy",
+                        chapter_start=1,
+                        chapter_end=3,
+                        boundary_kind="band_end",
+                        boundary_chapter=3,
+                        status="approved",
+                        summary="历史人工通过",
+                        reason="legacy operator approval",
+                        created_at=created,
+                        updated_at=created,
+                    )
+                )
+                session.commit()
+
+            checkpoint = api_module.get_band_checkpoint(project_id, "band-legacy")
+            project = api_module.get_project(project_id)
+
+            self.assertEqual(checkpoint.status, "overridden")
+            self.assertIn("legacy_status=approved", checkpoint.reason)
+            self.assertTrue(checkpoint.resolved_at)
+            self.assertIsNotNone(project.latest_band_checkpoint)
+            self.assertEqual(project.latest_band_checkpoint.status, "overridden")
+
+    def test_approve_band_checkpoint_sets_resolved_at(self) -> None:
+        with TemporaryDirectory() as tmp:
+            db_path = postgres_test_url("checkpoint_resolved_at")
+            self._prime_api(db_path)
+            project_id = new_id()
+            arc_id = new_id()
+            with api_module._get_session() as session:
+                session.add(
+                    Project(
+                        id=project_id,
+                        title="checkpoint resolved",
+                        premise="premise",
+                        genre="玄幻",
+                        setting_summary="",
+                    )
+                )
+                session.flush()
+                session.add(
+                    ArcPlanVersion(
+                        id=arc_id,
+                        project_id=project_id,
+                        version=1,
+                        arc_synopsis="治理弧线",
+                        status="active",
+                    )
+                )
+                session.flush()
+                session.add(
+                    BandCheckpoint(
+                        id="checkpoint-resolved-at",
+                        project_id=project_id,
+                        arc_id=arc_id,
+                        band_id="band-resolved",
+                        chapter_start=1,
+                        chapter_end=3,
+                        boundary_kind="band_end",
+                        boundary_chapter=3,
+                        status="warn",
+                        summary="需要人工放行",
+                    )
+                )
+                session.commit()
+
+            response = api_module.approve_band_checkpoint(
+                project_id,
+                "band-resolved",
+                api_module.BandCheckpointApproveRequest(status="pass", reason="manual pass after review"),
+            )
+
+            self.assertEqual(response.status, "pass")
+            self.assertTrue(response.resolved_at)
+            with api_module._get_session() as session:
+                row = session.get(BandCheckpoint, "checkpoint-resolved-at")
+                self.assertIsNotNone(row.resolved_at)
 
     def test_chapter_review_and_band_checkpoint_expose_decision_refs_and_replay(self) -> None:
         with TemporaryDirectory() as tmp:

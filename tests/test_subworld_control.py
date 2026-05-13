@@ -1473,6 +1473,105 @@ class SubWorldControlTests(unittest.TestCase):
 
         self.assertIsNone(fixed)
 
+    def test_project_character_names_include_premise_protagonist(self) -> None:
+        class FakeRepo:
+            def get_project(self, _project_id: str) -> object:
+                return SimpleNamespace(
+                    premise="主角：林澈，旧城档案修复师。",
+                    setting_summary="白塔记忆系统维持公共档案秩序。",
+                )
+
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+        names = WritingOrchestrator._project_character_names(FakeRepo(), "p1")  # type: ignore[arg-type]
+
+        self.assertIn("林澈", names)
+
+    def test_subworld_admission_allows_premise_protagonist(self) -> None:
+        class FakeRepo:
+            def get_project(self, _project_id: str) -> object:
+                return SimpleNamespace(
+                    premise="主角：林澈，旧城档案修复师。",
+                    setting_summary="白塔记忆系统维持公共档案秩序。",
+                )
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return set()
+
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=1,
+                title="档案室",
+                body="林澈推开白塔档案室的门。",
+                end_of_chapter_summary="林澈发现家族档案异常。",
+                entity_mentions=[
+                    EntityMention(
+                        entity_name="林澈",
+                        entity_kind="character",
+                        is_named=True,
+                        is_on_stage=True,
+                    )
+                ],
+            ),
+        )
+
+        self.assertFalse(
+            [issue for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
+        )
+
+    def test_canon_commit_subworld_gate_allows_premise_protagonist(self) -> None:
+        class FakeRepo:
+            def get_project(self, _project_id: str) -> object:
+                return SimpleNamespace(
+                    premise="主角：林澈，旧城档案修复师。",
+                    setting_summary="白塔记忆系统维持公共档案秩序。",
+                )
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return set()
+
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        output = WriterOutput(
+            chapter_number=1,
+            title="档案室",
+            body="林澈推开白塔档案室的门。",
+            end_of_chapter_summary="林澈发现家族档案异常。",
+            entity_mentions=[
+                EntityMention(
+                    entity_name="林澈",
+                    entity_kind="character",
+                    is_named=True,
+                    is_on_stage=True,
+                )
+            ],
+        )
+        orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
+
+        orchestrator._validate_subworld_admission(
+            repo=FakeRepo(),  # type: ignore[arg-type]
+            project_id="p1",
+            chapter_number=1,
+            writer_output=output,
+        )
+
+    def test_descriptive_masked_pursuer_is_not_treated_as_named_character(self) -> None:
+        self.assertTrue(ContinuityChecker._looks_like_generic_character_reference("无脸人"))
+        self.assertFalse(ContinuityChecker._looks_like_named_character("不明追踪者"))
+
     def test_subworld_admission_autofix_genericizes_old_surname_nickname(self) -> None:
         output = WriterOutput(
             chapter_number=20,
@@ -1508,8 +1607,9 @@ class SubWorldControlTests(unittest.TestCase):
         assert fixed is not None
         serialized_content = fixed.model_dump_json(exclude={"generation_meta"})
         self.assertNotIn("老孙", serialized_content)
-        self.assertIn("相关人员", fixed.body)
-        self.assertEqual(fixed.generation_meta["subworld_admission_autofix"]["老孙"], "相关人员")
+        self.assertNotIn("相关人员", fixed.body)
+        self.assertIn("工作人员", fixed.body)
+        self.assertEqual(fixed.generation_meta["subworld_admission_autofix"]["老孙"], "工作人员")
 
     def test_continuity_repair_instruction_preserves_suggested_fix(self) -> None:
         instruction = HistoricalReviewHub._continuity_repair_instruction(

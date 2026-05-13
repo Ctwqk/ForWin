@@ -49,6 +49,10 @@ from forwin.api_schemas import (
     TaskResponse,
 )
 from forwin.book_genesis import GENESIS_STAGE_ORDER, StaleGenesisRevisionError
+from forwin.generation.continue_workset import (
+    ContinueGenerationWorkset,
+    build_continue_generation_workset,
+)
 from forwin.genesis_handoff import StartWritingCommand
 from forwin.governance import (
     DecisionEventInfo,
@@ -82,6 +86,16 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
     "cancelled",
     "paused",
 }
+
+
+def _continue_workset_http_error(workset: ContinueGenerationWorkset) -> HTTPException:
+    if workset.reason == "pending_review_blocker":
+        return HTTPException(409, "仍有章节等待 review")
+    if workset.reason == "pending_acceptance_blocker":
+        return HTTPException(409, "仍有章节等待接受")
+    if workset.reason == "project_completed":
+        return HTTPException(400, "项目已完成，没有剩余章节需要继续生成")
+    return HTTPException(400, "没有剩余章节需要继续生成")
 
 
 def _load_json_object(raw: str, default):
@@ -1059,18 +1073,6 @@ def continue_project_generation(
         waiting_acceptance = [plan.chapter_number for plan in plans if plan.status == "drafted"]
         if waiting_acceptance:
             raise HTTPException(409, f"仍有章节等待接受：{', '.join(str(item) for item in waiting_acceptance)}")
-        remaining = [plan.chapter_number for plan in plans if plan.status in {"planned", "failed"}]
-        planned_future_arc = session.execute(
-            select(ArcPlanVersion.id)
-            .where(
-                ArcPlanVersion.project_id == project_id,
-                ArcPlanVersion.status == "planned",
-            )
-            .order_by(ArcPlanVersion.arc_number.asc(), ArcPlanVersion.created_at.asc())
-            .limit(1)
-        ).scalar_one_or_none()
-        if not remaining and planned_future_arc is None:
-            raise HTTPException(400, "没有剩余章节需要继续生成")
         project_detail = build_project_detail(
             session=session,
             project=project,
@@ -1095,15 +1097,18 @@ def continue_project_generation(
             session.commit()
             raise HTTPException(409, project_detail.blocking_reason.message)
         max_chapters = req.max_chapters if req is not None else None
-        requested_chapters = len(remaining)
-        if max_chapters is not None:
-            max_chapters = max(1, int(max_chapters or 1))
-            requested_chapters = min(requested_chapters or max_chapters, max_chapters)
-        requested_chapters = max(1, int(requested_chapters or 0))
+        workset = build_continue_generation_workset(
+            session,
+            project_id,
+            max_chapters=max_chapters,
+            source="direct_continue",
+        )
+        if workset.requested_chapters <= 0:
+            raise _continue_workset_http_error(workset)
         task_id = create_continue_generation_task(
             project_id=project_id,
             runtime_config=runtime_config,
-            requested_chapters=requested_chapters,
+            requested_chapters=workset.requested_chapters,
             max_chapters=max_chapters,
             title=project.title,
             subtitle=f"继续生成 · {project.genre}",
@@ -1616,7 +1621,6 @@ def approve_chapter_review(
     )
     reason = require_reason(req.reason, action="接受 review")
     task_id = ""
-    total_chapters = 0
     if req.continue_generation:
         session = get_session()
         try:
@@ -1659,9 +1663,6 @@ def approve_chapter_review(
                 )
                 session.commit()
                 raise HTTPException(409, project_detail.blocking_reason.message)
-            total_chapters = session.execute(
-                select(func.count(ChapterPlan.id)).where(ChapterPlan.project_id == project_id)
-            ).scalar_one()
         finally:
             session.close()
 
@@ -1679,11 +1680,31 @@ def approve_chapter_review(
     accepted_status = str(result.get("status") or "accepted")
     message = result["message"]
     if req.continue_generation and accepted_status == "accepted":
+        session = get_session()
+        try:
+            workset = build_continue_generation_workset(
+                session,
+                project_id,
+                source="review_approve_continue",
+            )
+        finally:
+            session.close()
+        if workset.requested_chapters <= 0:
+            message = f"{message} 未启动后续章节。"
+            return ChapterReviewApproveResponse(
+                ok=True,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                status=accepted_status,
+                message=message,
+                task_id=task_id,
+                frozen_artifact=result.get("frozen_artifact") or "",
+            )
         try:
             task_id = create_continue_generation_task(
                 project_id=project_id,
                 runtime_config=runtime_config,
-                requested_chapters=int(total_chapters or 0),
+                requested_chapters=workset.requested_chapters,
                 message=f"已接受第{chapter_number}章，准备继续后续章节。",
             )
         except active_generation_task_error_cls as exc:
@@ -1732,7 +1753,7 @@ def retry_chapter_review(
         runtime_settings=runtime_settings,
     )
     task_id = ""
-    total_chapters = 0
+    continue_requested_chapters = 0
     session = get_session()
     try:
         project = session.get(Project, project_id)
@@ -1800,25 +1821,31 @@ def retry_chapter_review(
             related_object_type="chapter",
             related_object_id=str(plan.id),
         )
-        total_chapters = session.execute(
-            select(func.count(ChapterPlan.id)).where(ChapterPlan.project_id == project_id)
-        ).scalar_one()
+        if req.continue_generation:
+            workset = build_continue_generation_workset(
+                session,
+                project_id,
+                source="review_retry_continue",
+            )
+            continue_requested_chapters = int(workset.requested_chapters or 0)
         session.commit()
     finally:
         session.close()
 
     message = f"第{chapter_number}章已重置为 planned。"
-    if req.continue_generation:
+    if req.continue_generation and continue_requested_chapters > 0:
         try:
             task_id = create_continue_generation_task(
                 project_id=project_id,
                 runtime_config=runtime_config,
-                requested_chapters=int(total_chapters or 0),
+                requested_chapters=continue_requested_chapters,
                 message=f"已重置第{chapter_number}章，准备重新生成。",
             )
         except active_generation_task_error_cls as exc:
             raise HTTPException(409, str(exc)) from exc
         message = f"{message} 已启动后续章节继续执行。"
+    elif req.continue_generation:
+        message = f"{message} 未启动后续章节。"
 
     return ChapterReviewApproveResponse(
         ok=True,

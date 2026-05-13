@@ -234,6 +234,41 @@ def test_upload_success_clears_retry_and_codex_failure_payload() -> None:
         engine.dispose()
 
 
+def test_qidian_draft_timeout_with_real_ccid_is_recorded_as_success() -> None:
+    engine, runtime = _runtime("publisher-runtime-qidian-ccid-recovery")
+    try:
+        created = runtime.upload_jobs.create_upload_job(
+            platform="qidian",
+            book_name="测试书",
+            chapter_title="第一章",
+            body="正文",
+            upload_url=None,
+            publish=False,
+        )
+
+        updated = runtime.upload_jobs.update_upload_job_result(
+            job_id=created["job_id"],
+            client_id="client-1",
+            status="failed",
+            message="上传失败。",
+            current_url=(
+                "https://write.qq.com/portal/booknovels/chaptertmp/CBID/123"
+                "?entry=publish#ccid=96252587187165183"
+            ),
+            error="浏览器扩展执行超时，未能完成平台章节流程。",
+            result_payload={"error_code": "extension-upload-timeout"},
+        )
+
+        assert updated["status"] == "succeeded"
+        assert updated["message"] == "章节草稿已保存到起点。"
+        assert updated["error"] == ""
+        assert updated["result_payload"]["verified_via"] == "qidian-real-ccid-timeout-recovery"
+        assert updated["result_payload"]["recovered_error_code"] == "extension-upload-timeout"
+        assert "auto_retry" not in updated["result_payload"]
+    finally:
+        engine.dispose()
+
+
 def test_login_upload_failure_does_not_retry() -> None:
     engine, runtime = _runtime("publisher-runtime-upload-login-failure")
     try:

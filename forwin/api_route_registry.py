@@ -13,6 +13,7 @@ from forwin import (
     api_llm_kb_routes,
     api_map_routes,
     api_obsidian_routes,
+    api_projection_routes,
     api_project_routes,
     api_publisher_routes,
     api_system_routes,
@@ -359,6 +360,10 @@ def register_api_routes(
         get_session=get_session,
         get_config=get_config,
     )
+    projection_handlers = api_projection_routes.build_handlers(
+        get_session=get_session,
+        get_config=get_config,
+    )
     map_handlers = api_map_routes.build_handlers(
         get_session=get_session,
     )
@@ -374,6 +379,7 @@ def register_api_routes(
         **book_state_handlers,
         **obsidian_handlers,
         **llm_kb_handlers,
+        **projection_handlers,
         **map_handlers,
     }
 
@@ -383,6 +389,7 @@ def register_api_routes(
         ("/publishers", ["GET"], handlers["publishers_page"], {"response_class": HTMLResponse}),
         ("/world-studio", ["GET"], handlers["world_studio_page"], {"response_class": HTMLResponse}),
         ("/world-studio/assets/{asset_path:path}", ["GET"], handlers["world_studio_asset"], {}),
+        ("/api/projects/{project_id}/world-studio/search", ["GET"], handlers["search_project_world_studio"], {}),
         ("/api/generate", ["POST"], handlers["generate"], {"response_model": TaskResponse}),
         ("/api/settings/llm", ["GET"], handlers["get_llm_settings"], {"response_model": LLMSettingsResponse}),
         ("/api/settings/llm", ["POST"], handlers["save_llm_settings"], {"response_model": LLMSettingsResponse}),
@@ -503,6 +510,10 @@ def register_api_routes(
         ("/api/projects/{project_id}/llm-kb/files", ["GET"], handlers["list_llm_kb_files"], {}),
         ("/api/projects/{project_id}/llm-kb/file/{file_key}", ["GET"], handlers["get_llm_kb_file"], {}),
         ("/api/projects/{project_id}/llm-kb/search", ["GET"], handlers["search_llm_kb"], {}),
+        ("/api/projects/{project_id}/projections/refresh", ["POST"], handlers["refresh_projection"], {}),
+        ("/api/projects/{project_id}/projections/status", ["GET"], handlers["get_projection_status"], {}),
+        ("/api/projects/{project_id}/projections/pages", ["GET"], handlers["list_projection_pages"], {}),
+        ("/api/projects/{project_id}/projections/pages/{page_key}", ["GET"], handlers["get_projection_page"], {}),
         ("/api/projects/{project_id}/context-pack/{role}", ["GET"], handlers["get_context_pack"], {}),
         ("/api/projects/{project_id}/chapters", ["GET"], handlers["list_chapters"], {"response_model": list[ChapterInfo]}),
         ("/api/projects/{project_id}/chapters/page", ["GET"], handlers["list_chapter_page"], {"response_model": ChapterListResponse}),

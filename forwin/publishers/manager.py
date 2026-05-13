@@ -53,6 +53,7 @@ class PublisherManager:
         extension_api_key: str = "",
         heartbeat_stale_seconds: int = 90,
         preferred_client_id: str = "",
+        strict_preferred_client: bool = False,
         publisher_session_secret: str = "",
         publisher_session_encryption_required: bool = False,
         codex_intervention_handler: CodexInterventionHandler | None = None,
@@ -61,6 +62,7 @@ class PublisherManager:
         self.extension_api_key = str(extension_api_key or "").strip()
         self.heartbeat_stale_seconds = heartbeat_stale_seconds
         self.preferred_client_id = str(preferred_client_id or "").strip()
+        self.strict_preferred_client = bool(strict_preferred_client)
         self.publisher_session_secret = str(publisher_session_secret or "").strip()
         self.publisher_session_encryption_required = bool(
             publisher_session_encryption_required
@@ -72,6 +74,7 @@ class PublisherManager:
             preferred_client_id=self.preferred_client_id,
             publisher_session_secret=self.publisher_session_secret,
             publisher_session_encryption_required=self.publisher_session_encryption_required,
+            strict_preferred_client=self.strict_preferred_client,
             codex_intervention_handler=codex_intervention_handler,
         )
         self._plaintext_cookie_storage_warned = (
@@ -90,6 +93,9 @@ class PublisherManager:
         self.runtime.connection_state.preferred_client_id = str(
             self.preferred_client_id or ""
         ).strip()
+        self.runtime.connection_state.strict_preferred_client = bool(
+            self.strict_preferred_client
+        )
 
     def list_platforms(self) -> list[dict[str, Any]]:
         self._sync_runtime_config()

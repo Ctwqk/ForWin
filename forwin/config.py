@@ -243,6 +243,9 @@ def _env_values() -> dict[str, object]:
             env,
             "FORWIN_PUBLISHER_PREFERRED_CLIENT_ID", ""
         ),
+        "publisher_strict_preferred_client": _env_bool(
+            env, "FORWIN_PUBLISHER_STRICT_PREFERRED_CLIENT", False
+        ),
         "http_bind": _env_str(env, "FORWIN_HTTP_BIND", "127.0.0.1"),
         "http_port": _env_int(env, "FORWIN_HTTP_PORT", 8899),
         "http_basic_user": _env_str(env, "FORWIN_HTTP_BASIC_USER"),
@@ -324,6 +327,9 @@ def _env_values() -> dict[str, object]:
         ),
         "lint_review_enabled": _env_bool(env, "LINT_REVIEW_ENABLED", True),
         "review_fail_max_rewrites": _env_int(env, "REVIEW_FAIL_MAX_REWRITES", 3),
+        "canon_quality_gate": _env_str(env, "FORWIN_CANON_QUALITY_GATE", "strict"),
+        "final_completion_gate": _env_str(env, "FORWIN_FINAL_COMPLETION_GATE", "strict"),
+        "style_telemetry_mode": _env_str(env, "FORWIN_STYLE_TELEMETRY_MODE", "warn"),
         "phase4_use_llm": _env_bool(env, "PHASE4_USE_LLM", True),
         "codex_enabled": _env_bool(env, "FORWIN_CODEX_ENABLED", False),
         "codex_bridge_url": _env_str(
@@ -382,6 +388,7 @@ class _ConfigFields:
     publisher_session_secret: str = ""
     publisher_session_encryption_required: bool = False
     publisher_preferred_client_id: str = ""
+    publisher_strict_preferred_client: bool = False
     http_bind: str = "127.0.0.1"
     http_port: int = 8899
     http_basic_user: str = ""
@@ -434,6 +441,9 @@ class _ConfigFields:
     experience_review_enabled: bool = True
     lint_review_enabled: bool = True
     review_fail_max_rewrites: int = 3
+    canon_quality_gate: str = "strict"
+    final_completion_gate: str = "strict"
+    style_telemetry_mode: str = "warn"
     phase4_use_llm: bool = True
     codex_enabled: bool = False
     codex_bridge_url: str = "http://host.docker.internal:8897"

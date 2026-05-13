@@ -1,5 +1,4 @@
 import {
-  AlertTriangle,
   BookOpen,
   Check,
   Database,
@@ -44,6 +43,15 @@ type WorldModelPageInfo = {
   vault_path: string;
   markdown: string;
   frontmatter: Record<string, unknown>;
+  projection_kind: string;
+  projection_version: string;
+  source_digest: string;
+  section_digest: Record<string, string>;
+  observer_type: string;
+  observer_id: string;
+  role_scope: string;
+  visibility_scope: string;
+  canon_status: string;
   content_hash: string;
   revision: number;
   status: string;
@@ -65,13 +73,48 @@ type WorldEditProposalInfo = {
   id: string;
   source: string;
   target_page_key: string;
+  target_node_id: string;
   target_field: string;
+  proposal_type: string;
   proposed_patch: Record<string, unknown>;
   reason: string;
   status: string;
   created_by: string;
   created_at: string;
   reviewed_at: string;
+  review_reason?: string;
+  graph_delta_id?: string;
+};
+
+type BookStateEdgeInfo = {
+  id: string;
+  source_id: string;
+  target_id: string;
+  edge_type: string;
+  edge_family: string;
+  status: string;
+  truth_relation?: string;
+};
+
+type BookStateEdgesResponse = {
+  edges: BookStateEdgeInfo[];
+};
+
+type WorldStudioSearchResult = {
+  index_kind: string;
+  canon_status: string;
+  title?: string;
+  text?: string;
+  page_key?: string;
+  node_id?: string;
+  source_ref?: string;
+  role_scope?: string;
+  visibility_scope?: string;
+  score?: number;
+};
+
+type WorldStudioSearchResponse = {
+  results: WorldStudioSearchResult[];
 };
 
 type PersonalitySkillInfo = {
@@ -184,7 +227,7 @@ type ImportResponse = {
   message: string;
 };
 
-type TabKey = "pages" | "conflicts" | "proposals" | "personality";
+type TabKey = "pages" | "graph" | "search" | "proposals" | "personality";
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -254,6 +297,7 @@ export default function App() {
   const [snapshots, setSnapshots] = useState<WorldModelSnapshotInfo[]>([]);
   const [latest, setLatest] = useState<WorldModelSnapshotInfo | null>(null);
   const [pages, setPages] = useState<WorldModelPageInfo[]>([]);
+  const [bookStateEdges, setBookStateEdges] = useState<BookStateEdgeInfo[]>([]);
   const [conflicts, setConflicts] = useState<WorldModelConflictInfo[]>([]);
   const [proposals, setProposals] = useState<WorldEditProposalInfo[]>([]);
   const [personalitySkills, setPersonalitySkills] = useState<PersonalitySkillInfo[]>([]);
@@ -271,6 +315,16 @@ export default function App() {
   const [selectedPageKey, setSelectedPageKey] = useState("");
   const [query, setQuery] = useState("");
   const [pageType, setPageType] = useState("all");
+  const [graphDepth, setGraphDepth] = useState<1 | 2>(1);
+  const [graphNodeType, setGraphNodeType] = useState("all");
+  const [graphEdgeFamily, setGraphEdgeFamily] = useState("all");
+  const [graphStatus, setGraphStatus] = useState("active");
+  const [studioSearchQuery, setStudioSearchQuery] = useState("");
+  const [studioSearchKind, setStudioSearchKind] = useState("all");
+  const [studioSearchResults, setStudioSearchResults] = useState<WorldStudioSearchResult[]>([]);
+  const [manualNotesDraft, setManualNotesDraft] = useState("");
+  const [humanQuestionsDraft, setHumanQuestionsDraft] = useState("");
+  const [proposedCorrectionDraft, setProposedCorrectionDraft] = useState("");
   const [tab, setTab] = useState<TabKey>("pages");
   const [vaultRoot, setVaultRoot] = useState("");
   const [busy, setBusy] = useState(false);
@@ -318,6 +372,12 @@ export default function App() {
     return pages.find((page) => page.page_key === selectedPageKey) ?? filteredPages[0] ?? null;
   }, [filteredPages, pages, selectedPageKey]);
 
+  useEffect(() => {
+    setManualNotesDraft(extractMarkdownSection(selectedPage?.markdown ?? "", "Manual Notes"));
+    setHumanQuestionsDraft(extractMarkdownSection(selectedPage?.markdown ?? "", "Human Questions"));
+    setProposedCorrectionDraft(extractMarkdownSection(selectedPage?.markdown ?? "", "Proposed Correction"));
+  }, [selectedPage?.id, selectedPage?.markdown]);
+
   const filteredCharacterPersonalities = useMemo(() => {
     if (personalityCoverageFilter === "all" || !personalityCoverage) return characterPersonalities;
     const visibleIds = new Set(
@@ -348,10 +408,11 @@ export default function App() {
     setError("");
     try {
       const pageRows = await apiJson<WorldModelPageInfo[]>(`/api/projects/${nextProjectId}/world-model/pages`);
-      const [snapshotRows, conflictRows, proposalRows, skillRows, personalityRows, coverageRows, metricsRows] = await Promise.all([
+      const [snapshotRows, conflictRows, proposalRows, edgeRows, skillRows, personalityRows, coverageRows, metricsRows] = await Promise.all([
         apiJson<WorldModelSnapshotInfo[]>(`/api/projects/${nextProjectId}/world-model/snapshots`),
         apiJson<WorldModelConflictInfo[]>(`/api/projects/${nextProjectId}/world-model/conflicts`),
-        apiJson<WorldEditProposalInfo[]>(`/api/projects/${nextProjectId}/world-model/proposals`),
+        apiJson<WorldEditProposalInfo[]>(`/api/projects/${nextProjectId}/proposals`),
+        apiJson<BookStateEdgesResponse>(`/api/projects/${nextProjectId}/book-state/edges`),
         apiJson<PersonalityCatalogResponse>("/api/personality-skills"),
         apiJson<CharacterPersonalityResponse>(`/api/projects/${nextProjectId}/book-state/characters/personality`),
         apiJson<PersonalityCoverageResponse>(`/api/projects/${nextProjectId}/characters/personality/coverage`),
@@ -362,6 +423,7 @@ export default function App() {
       setPages(pageRows);
       setConflicts(conflictRows);
       setProposals(proposalRows);
+      setBookStateEdges(edgeRows.edges);
       setPersonalitySkills(skillRows.skills);
       setCharacterPersonalities(personalityRows.characters);
       setPersonalityCoverage(coverageRows);
@@ -433,7 +495,7 @@ export default function App() {
     setError("");
     try {
       await apiJson<WorldEditProposalInfo>(
-        `/api/projects/${projectId}/world-model/proposals/${proposalId}/review`,
+        `/api/projects/${projectId}/proposals/${proposalId}/${status === "accepted" ? "approve" : "reject"}`,
         {
           method: "POST",
           body: JSON.stringify({ status, reason: status === "accepted" ? "World archive accepted." : "World archive rejected." })
@@ -450,23 +512,102 @@ export default function App() {
 
   async function savePersonalityLoadout(loadout: Record<string, unknown>) {
     if (!projectId || !selectedCharacterId) return;
+    const character = characterPersonalities.find((item) => item.character_id === selectedCharacterId);
+    const oldValue = character?.personality_loadout ?? {};
+    const patch = [
+      {
+        op: "set_personality_loadout",
+        node_id: selectedCharacterId,
+        old_value: oldValue,
+        new_value: loadout,
+        reason: "World archive personality editor."
+      }
+    ];
     setBusy(true);
     setError("");
     try {
-      const result = await apiJson<CharacterPersonalityInfo>(
-        `/api/projects/${projectId}/book-state/characters/${selectedCharacterId}/personality-loadout`,
-        {
-          method: "PUT",
-          body: JSON.stringify({ personality_loadout: loadout, reason: "World archive personality editor." })
-        }
-      );
-      setMessage("人物性格 loadout 已保存。");
-      setCharacterPersonalities((current) =>
-        current.map((item) => (item.character_id === result.character_id ? result : item))
-      );
-      setPersonalityDraft(formatLoadout(result.personality_loadout));
+      const proposal = await apiJson<WorldEditProposalInfo>(`/api/projects/${projectId}/proposals`, {
+        method: "POST",
+        body: JSON.stringify({
+          source: "world_studio",
+          target_page_key: `character:${selectedCharacterId}`,
+          target_node_id: selectedCharacterId,
+          target_field: "Proposed Correction",
+          proposal_type: "PersonalityLoadoutProposal",
+          proposed_patch: {
+            new_value: `\`\`\`forwin-patch\n${JSON.stringify(patch, null, 2)}\n\`\`\``,
+            frontmatter: { as_of_chapter: latest?.as_of_chapter ?? 0 }
+          },
+          reason: "World archive personality editor.",
+          created_by: "world_studio"
+        })
+      });
+      setMessage("人物性格 loadout proposal 已创建，接受后写入 canon。");
+      setProposals((current) => [proposal, ...current.filter((item) => item.id !== proposal.id)]);
+      setTab("proposals");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "人物性格保存失败");
+      setError(err instanceof Error ? err.message : "人物性格 proposal 创建失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runWorldStudioSearch() {
+    if (!projectId || !studioSearchQuery.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      const params = new URLSearchParams({
+        query: studioSearchQuery.trim(),
+        index_kind: studioSearchKind,
+        role: "human",
+        limit: "20"
+      });
+      const result = await apiJson<WorldStudioSearchResponse>(
+        `/api/projects/${projectId}/world-studio/search?${params.toString()}`
+      );
+      setStudioSearchResults(result.results);
+      setMessage(`搜索返回 ${result.results.length} 条结果。`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "World Studio 搜索失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createPageProposal(field: "Manual Notes" | "Human Questions" | "Proposed Correction", value: string) {
+    if (!projectId || !selectedPage || !value.trim()) return;
+    const nodeId = stringField(selectedPage.frontmatter, "node_id");
+    const proposalType =
+      field === "Manual Notes"
+        ? "NoteOnlyProposal"
+        : field === "Human Questions"
+          ? "HumanQuestionProposal"
+          : "CanonCorrectionProposal";
+    setBusy(true);
+    setError("");
+    try {
+      const proposal = await apiJson<WorldEditProposalInfo>(`/api/projects/${projectId}/proposals`, {
+        method: "POST",
+        body: JSON.stringify({
+          source: "world_studio",
+          target_page_key: selectedPage.page_key,
+          target_node_id: nodeId,
+          target_field: field,
+          proposal_type: proposalType,
+          proposed_patch: {
+            new_value: value,
+            frontmatter: selectedPage.frontmatter
+          },
+          reason: `World Studio ${field} edit.`,
+          created_by: "world_studio"
+        })
+      });
+      setProposals((current) => [proposal, ...current.filter((item) => item.id !== proposal.id)]);
+      setMessage(`${field} proposal 已创建。`);
+      setTab("proposals");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `${field} proposal 创建失败`);
     } finally {
       setBusy(false);
     }
@@ -686,19 +827,53 @@ export default function App() {
       <div className="workspace">
         <aside className="sidebar">
           <div className="tabs" role="tablist" aria-label="世界档案 sections">
-            <button className={tab === "pages" ? "active" : ""} type="button" onClick={() => setTab("pages")}>
+            <button
+              className={tab === "pages" ? "active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={tab === "pages"}
+              onClick={() => setTab("pages")}
+            >
               <BookOpen size={16} />
               页面
             </button>
-            <button className={tab === "conflicts" ? "active" : ""} type="button" onClick={() => setTab("conflicts")}>
-              <AlertTriangle size={16} />
-              矛盾
-            </button>
-            <button className={tab === "proposals" ? "active" : ""} type="button" onClick={() => setTab("proposals")}>
+            <button
+              className={tab === "graph" ? "active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={tab === "graph"}
+              onClick={() => setTab("graph")}
+            >
               <GitBranch size={16} />
+              图谱
+            </button>
+            <button
+              className={tab === "search" ? "active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={tab === "search"}
+              onClick={() => setTab("search")}
+            >
+              <Search size={16} />
+              搜索
+            </button>
+            <button
+              className={tab === "proposals" ? "active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={tab === "proposals"}
+              onClick={() => setTab("proposals")}
+            >
+              <FileText size={16} />
               Proposal
             </button>
-            <button className={tab === "personality" ? "active" : ""} type="button" onClick={() => setTab("personality")}>
+            <button
+              className={tab === "personality" ? "active" : ""}
+              type="button"
+              role="tab"
+              aria-selected={tab === "personality"}
+              onClick={() => setTab("personality")}
+            >
               <UserRound size={16} />
               人物性格
             </button>
@@ -733,7 +908,29 @@ export default function App() {
             </>
           ) : null}
 
-          {tab === "conflicts" ? <ConflictList conflicts={conflicts} /> : null}
+          {tab === "graph" ? (
+            <GraphControls
+              depth={graphDepth}
+              setDepth={setGraphDepth}
+              nodeType={graphNodeType}
+              setNodeType={setGraphNodeType}
+              edgeFamily={graphEdgeFamily}
+              setEdgeFamily={setGraphEdgeFamily}
+              status={graphStatus}
+              setStatus={setGraphStatus}
+              pageTypes={pageTypes}
+            />
+          ) : null}
+          {tab === "search" ? (
+            <SearchControls
+              query={studioSearchQuery}
+              setQuery={setStudioSearchQuery}
+              indexKind={studioSearchKind}
+              setIndexKind={setStudioSearchKind}
+              onSearch={runWorldStudioSearch}
+              busy={busy}
+            />
+          ) : null}
           {tab === "proposals" ? <ProposalList proposals={proposals} onReview={reviewProposal} busy={busy} /> : null}
           {tab === "personality" ? (
             <>
@@ -760,8 +957,33 @@ export default function App() {
         </aside>
 
         <section className="main-panel">
-          {tab === "pages" ? <PageDetail page={selectedPage} snapshots={snapshots} /> : null}
-          {tab === "conflicts" ? <ConflictDetail conflicts={conflicts} /> : null}
+          {tab === "pages" ? (
+            <PageDetail
+              page={selectedPage}
+              snapshots={snapshots}
+              proposals={proposals}
+              manualNotesDraft={manualNotesDraft}
+              setManualNotesDraft={setManualNotesDraft}
+              humanQuestionsDraft={humanQuestionsDraft}
+              setHumanQuestionsDraft={setHumanQuestionsDraft}
+              proposedCorrectionDraft={proposedCorrectionDraft}
+              setProposedCorrectionDraft={setProposedCorrectionDraft}
+              onCreateProposal={createPageProposal}
+              busy={busy}
+            />
+          ) : null}
+          {tab === "graph" ? (
+            <GraphView
+              page={selectedPage}
+              pages={pages}
+              edges={bookStateEdges}
+              depth={graphDepth}
+              nodeType={graphNodeType}
+              edgeFamily={graphEdgeFamily}
+              status={graphStatus}
+            />
+          ) : null}
+          {tab === "search" ? <SearchResultsPanel results={studioSearchResults} /> : null}
           {tab === "proposals" ? <ProposalDetail proposals={proposals} /> : null}
           {tab === "personality" ? (
             <>
@@ -822,7 +1044,31 @@ function Metric({
   );
 }
 
-function PageDetail({ page, snapshots }: { page: WorldModelPageInfo | null; snapshots: WorldModelSnapshotInfo[] }) {
+function PageDetail({
+  page,
+  snapshots,
+  proposals,
+  manualNotesDraft,
+  setManualNotesDraft,
+  humanQuestionsDraft,
+  setHumanQuestionsDraft,
+  proposedCorrectionDraft,
+  setProposedCorrectionDraft,
+  onCreateProposal,
+  busy
+}: {
+  page: WorldModelPageInfo | null;
+  snapshots: WorldModelSnapshotInfo[];
+  proposals: WorldEditProposalInfo[];
+  manualNotesDraft: string;
+  setManualNotesDraft: (value: string) => void;
+  humanQuestionsDraft: string;
+  setHumanQuestionsDraft: (value: string) => void;
+  proposedCorrectionDraft: string;
+  setProposedCorrectionDraft: (value: string) => void;
+  onCreateProposal: (field: "Manual Notes" | "Human Questions" | "Proposed Correction", value: string) => void;
+  busy: boolean;
+}) {
   if (!page) {
     return <EmptyState title="还没有世界档案页面" text="锁定 Genesis 或导出 Obsidian 时会自动 bootstrap 第 0 章世界模型。" />;
   }
@@ -847,8 +1093,10 @@ function PageDetail({ page, snapshots }: { page: WorldModelPageInfo | null; snap
             <dd>{page.page_key}</dd>
             <dt>Vault Path</dt>
             <dd>{page.vault_path}</dd>
-            <dt>Content Hash</dt>
-            <dd>{shortDigest(page.content_hash)}</dd>
+            <dt>Source Digest</dt>
+            <dd>{shortDigest(page.source_digest || page.content_hash)}</dd>
+            <dt>Projection</dt>
+            <dd>{page.projection_kind || "world_studio"} · {page.projection_version || "unknown"}</dd>
           </dl>
         </section>
         <section className="summary-panel">
@@ -864,11 +1112,310 @@ function PageDetail({ page, snapshots }: { page: WorldModelPageInfo | null; snap
           </ol>
         </section>
       </div>
+      <ContextPanel page={page} proposals={proposals} />
+      <PageEditor
+        manualNotesDraft={manualNotesDraft}
+        setManualNotesDraft={setManualNotesDraft}
+        humanQuestionsDraft={humanQuestionsDraft}
+        setHumanQuestionsDraft={setHumanQuestionsDraft}
+        proposedCorrectionDraft={proposedCorrectionDraft}
+        setProposedCorrectionDraft={setProposedCorrectionDraft}
+        onCreateProposal={onCreateProposal}
+        busy={busy}
+      />
       <section className="markdown-panel">
         <h3>Markdown Projection</h3>
         <pre>{page.markdown}</pre>
       </section>
     </>
+  );
+}
+
+function ContextPanel({ page, proposals }: { page: WorldModelPageInfo; proposals: WorldEditProposalInfo[] }) {
+  const sourceRefs = Array.isArray(page.frontmatter.source_refs) ? page.frontmatter.source_refs : [];
+  return (
+    <section className="context-panel">
+      <div>
+        <h3>Frontmatter</h3>
+        <pre>{JSON.stringify(page.frontmatter, null, 2)}</pre>
+      </div>
+      <div>
+        <h3>Projection Metadata</h3>
+        <dl>
+          <dt>role_scope</dt>
+          <dd>{page.role_scope || "human"}</dd>
+          <dt>visibility</dt>
+          <dd>{page.visibility_scope || String(page.frontmatter.visibility ?? "")}</dd>
+          <dt>canon_status</dt>
+          <dd>{page.canon_status || page.status}</dd>
+          <dt>source_refs</dt>
+          <dd>{sourceRefs.map(String).join(", ") || "none"}</dd>
+          <dt>related proposals</dt>
+          <dd>{proposals.filter((proposal) => proposal.target_page_key === page.page_key).length}</dd>
+        </dl>
+      </div>
+    </section>
+  );
+}
+
+function PageEditor({
+  manualNotesDraft,
+  setManualNotesDraft,
+  humanQuestionsDraft,
+  setHumanQuestionsDraft,
+  proposedCorrectionDraft,
+  setProposedCorrectionDraft,
+  onCreateProposal,
+  busy
+}: {
+  manualNotesDraft: string;
+  setManualNotesDraft: (value: string) => void;
+  humanQuestionsDraft: string;
+  setHumanQuestionsDraft: (value: string) => void;
+  proposedCorrectionDraft: string;
+  setProposedCorrectionDraft: (value: string) => void;
+  onCreateProposal: (field: "Manual Notes" | "Human Questions" | "Proposed Correction", value: string) => void;
+  busy: boolean;
+}) {
+  return (
+    <section className="page-editor">
+      <label className="field-stack">
+        <span>Manual Notes</span>
+        <textarea value={manualNotesDraft} onChange={(event) => setManualNotesDraft(event.target.value)} />
+        <button type="button" disabled={busy || !manualNotesDraft.trim()} onClick={() => onCreateProposal("Manual Notes", manualNotesDraft)}>
+          <GitBranch size={16} />
+          生成 proposal
+        </button>
+      </label>
+      <label className="field-stack">
+        <span>Human Questions</span>
+        <textarea value={humanQuestionsDraft} onChange={(event) => setHumanQuestionsDraft(event.target.value)} />
+        <button type="button" disabled={busy || !humanQuestionsDraft.trim()} onClick={() => onCreateProposal("Human Questions", humanQuestionsDraft)}>
+          <GitBranch size={16} />
+          生成 proposal
+        </button>
+      </label>
+      <label className="field-stack">
+        <span>Proposed Correction</span>
+        <textarea value={proposedCorrectionDraft} onChange={(event) => setProposedCorrectionDraft(event.target.value)} />
+        <button type="button" disabled={busy || !proposedCorrectionDraft.trim()} onClick={() => onCreateProposal("Proposed Correction", proposedCorrectionDraft)}>
+          <GitBranch size={16} />
+          生成 proposal
+        </button>
+      </label>
+    </section>
+  );
+}
+
+function GraphControls({
+  depth,
+  setDepth,
+  nodeType,
+  setNodeType,
+  edgeFamily,
+  setEdgeFamily,
+  status,
+  setStatus,
+  pageTypes
+}: {
+  depth: 1 | 2;
+  setDepth: (value: 1 | 2) => void;
+  nodeType: string;
+  setNodeType: (value: string) => void;
+  edgeFamily: string;
+  setEdgeFamily: (value: string) => void;
+  status: string;
+  setStatus: (value: string) => void;
+  pageTypes: string[];
+}) {
+  return (
+    <div className="graph-controls">
+      <label className="field-stack">
+        <span>Depth</span>
+        <select value={depth} onChange={(event) => setDepth(Number(event.target.value) === 2 ? 2 : 1)}>
+          <option value={1}>1-hop</option>
+          <option value={2}>2-hop</option>
+        </select>
+      </label>
+      <label className="field-stack">
+        <span>Node Type</span>
+        <select value={nodeType} onChange={(event) => setNodeType(event.target.value)}>
+          {pageTypes.map((type) => (
+            <option key={type} value={type}>
+              {type === "all" ? "全部类型" : type}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="field-stack">
+        <span>Edge Family</span>
+        <select value={edgeFamily} onChange={(event) => setEdgeFamily(event.target.value)}>
+          <option value="all">全部关系</option>
+          <option value="social">social</option>
+          <option value="control_conflict">control_conflict</option>
+          <option value="knowledge_visibility">knowledge_visibility</option>
+          <option value="reader_experience">reader_experience</option>
+        </select>
+      </label>
+      <label className="field-stack">
+        <span>Status</span>
+        <select value={status} onChange={(event) => setStatus(event.target.value)}>
+          <option value="all">全部状态</option>
+          <option value="active">active</option>
+          <option value="resolved">resolved</option>
+          <option value="hidden">hidden</option>
+          <option value="suspected">suspected</option>
+          <option value="contradicted">contradicted</option>
+        </select>
+      </label>
+    </div>
+  );
+}
+
+function SearchControls({
+  query,
+  setQuery,
+  indexKind,
+  setIndexKind,
+  onSearch,
+  busy
+}: {
+  query: string;
+  setQuery: (value: string) => void;
+  indexKind: string;
+  setIndexKind: (value: string) => void;
+  onSearch: () => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="search-controls">
+      <div className="search-row">
+        <Search size={16} />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 canon / notes / LLM KB / skill" />
+      </div>
+      <select value={indexKind} onChange={(event) => setIndexKind(event.target.value)}>
+        <option value="all">all</option>
+        <option value="canon">canon</option>
+        <option value="llm_kb">llm_kb</option>
+        <option value="obsidian_human">obsidian_human</option>
+        <option value="skill">skill</option>
+      </select>
+      <button type="button" disabled={busy || !query.trim()} onClick={onSearch}>
+        <Search size={16} />
+        搜索
+      </button>
+    </div>
+  );
+}
+
+function GraphView({
+  page,
+  pages,
+  edges,
+  depth,
+  nodeType,
+  edgeFamily,
+  status
+}: {
+  page: WorldModelPageInfo | null;
+  pages: WorldModelPageInfo[];
+  edges: BookStateEdgeInfo[];
+  depth: 1 | 2;
+  nodeType: string;
+  edgeFamily: string;
+  status: string;
+}) {
+  const currentNodeId = page ? pageNodeId(page) : "";
+  if (!page || !currentNodeId) {
+    return <EmptyState title="Graph View" text="选择一个对象页后显示当前节点 1-hop / 2-hop 图谱。" />;
+  }
+  const pageByNodeId = new Map<string, WorldModelPageInfo>();
+  for (const item of pages) {
+    const nodeId = pageNodeId(item);
+    if (nodeId) pageByNodeId.set(nodeId, item);
+  }
+  const visibleNodeIds = expandGraphNodeIds(currentNodeId, edges, depth);
+  const visibleEdges = edges.filter((edge) => {
+    if (!visibleNodeIds.has(edge.source_id) || !visibleNodeIds.has(edge.target_id)) return false;
+    if (edgeFamily !== "all" && edge.edge_family !== edgeFamily) return false;
+    if (status !== "all" && edge.status !== status) return false;
+    if (nodeType === "all") return true;
+    const sourceType = pageByNodeId.get(edge.source_id)?.page_type;
+    const targetType = pageByNodeId.get(edge.target_id)?.page_type;
+    return sourceType === nodeType || targetType === nodeType;
+  });
+  const nodeIds = new Set([currentNodeId]);
+  for (const edge of visibleEdges) {
+    nodeIds.add(edge.source_id);
+    nodeIds.add(edge.target_id);
+  }
+  return (
+    <section className="graph-view">
+      <div className="panel-head">
+        <div>
+          <p className="eyebrow">Object Graph</p>
+          <h2>{page.title}</h2>
+        </div>
+        <div className="pill-row">
+          <span>{depth}-hop</span>
+          <span>{visibleEdges.length} edges</span>
+        </div>
+      </div>
+      <div className="graph-node-grid">
+        {Array.from(nodeIds).map((nodeId) => {
+          const nodePage = pageByNodeId.get(nodeId);
+          return (
+            <div className={nodeId === currentNodeId ? "graph-node current" : "graph-node"} key={nodeId}>
+              <strong>{nodePage?.title || nodeId}</strong>
+              <span>{nodePage?.page_type || "unknown"}</span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="graph-edge-list">
+        {visibleEdges.length === 0 ? (
+          <EmptyState title="没有相关边" text="当前过滤条件下没有 1-hop / 2-hop 关系。" compact />
+        ) : (
+          visibleEdges.map((edge) => (
+            <article key={edge.id}>
+              <strong>{edge.source_id}{" -> "}{edge.target_id}</strong>
+              <span>{edge.edge_family || "edge"} · {edge.edge_type} · {edge.status}</span>
+            </article>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+function SearchResultsPanel({ results }: { results: WorldStudioSearchResult[] }) {
+  if (results.length === 0) {
+    return <EmptyState title="World Studio Search" text="选择 canon、LLM KB、human notes 或 skill 索引后执行搜索。" />;
+  }
+  return (
+    <section className="search-results">
+      <div className="panel-head">
+        <div>
+          <p className="eyebrow">Search</p>
+          <h2>检索结果</h2>
+        </div>
+      </div>
+      <div className="table-list">
+        {results.map((result, index) => (
+          <article key={`${result.index_kind}-${result.page_key || result.node_id || result.source_ref || index}`}>
+            <header>
+              <strong>{result.title || result.page_key || result.node_id || result.source_ref || result.index_kind}</strong>
+              <span className="severity">{result.canon_status || result.visibility_scope || result.index_kind}</span>
+            </header>
+            <p>{result.text || ""}</p>
+            <footer>
+              <span>{result.index_kind}</span>
+              <span>{result.role_scope || result.visibility_scope || ""}</span>
+            </footer>
+          </article>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -1374,6 +1921,42 @@ function dominantSkillName(loadout: Record<string, unknown>): string {
   if (!dominant || typeof dominant !== "object" || Array.isArray(dominant)) return "";
   const skill = (dominant as Record<string, unknown>).skill;
   return typeof skill === "string" ? skill : "";
+}
+
+function stringField(payload: Record<string, unknown>, key: string): string {
+  const value = payload[key];
+  return typeof value === "string" ? value : "";
+}
+
+function pageNodeId(page: WorldModelPageInfo): string {
+  const parts = page.page_key.split(":");
+  return stringField(page.frontmatter, "node_id") || parts[parts.length - 1] || page.page_key;
+}
+
+function extractMarkdownSection(markdown: string, sectionName: string): string {
+  const pattern = new RegExp(`^## ${escapeRegExp(sectionName)}\\n([\\s\\S]*?)(?=\\n## |\\n# |$)`, "m");
+  const match = markdown.match(pattern);
+  const value = match?.[1]?.trim() ?? "";
+  return value === "_empty_" ? "" : value;
+}
+
+function expandGraphNodeIds(currentNodeId: string, edges: BookStateEdgeInfo[], depth: 1 | 2): Set<string> {
+  const seen = new Set([currentNodeId]);
+  let frontier = new Set([currentNodeId]);
+  for (let hop = 0; hop < depth; hop += 1) {
+    const next = new Set<string>();
+    for (const edge of edges) {
+      if (frontier.has(edge.source_id) && !seen.has(edge.target_id)) next.add(edge.target_id);
+      if (frontier.has(edge.target_id) && !seen.has(edge.source_id)) next.add(edge.source_id);
+    }
+    for (const nodeId of next) seen.add(nodeId);
+    frontier = next;
+  }
+  return seen;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function EmptyState({ title, text, compact = false }: { title: string; text: string; compact?: boolean }) {

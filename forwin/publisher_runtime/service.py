@@ -19,6 +19,7 @@ class PublisherRuntimeService:
         preferred_client_id: str,
         publisher_session_secret: str,
         publisher_session_encryption_required: bool,
+        strict_preferred_client: bool = False,
         observability=None,
         codex_intervention_handler: CodexInterventionHandler | None = None,
     ) -> None:
@@ -37,6 +38,7 @@ class PublisherRuntimeService:
             codec=self.browser_cookie_codec,
             heartbeat_stale_seconds=heartbeat_stale_seconds,
             preferred_client_id=preferred_client_id,
+            strict_preferred_client=strict_preferred_client,
         )
         self.browser_sessions = BrowserSessionService(
             session_factory=session_factory,

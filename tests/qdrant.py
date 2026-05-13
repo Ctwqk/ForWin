@@ -46,6 +46,9 @@ class FakeQdrantModels:
 class FakeQdrantClient:
     def __init__(self) -> None:
         self.collections: dict[str, dict[str, Any]] = {}
+        self.upsert_calls = 0
+        self.upserted_point_count = 0
+        self.delete_calls = 0
 
     def get_collections(self):
         return SimpleNamespace(
@@ -65,11 +68,14 @@ class FakeQdrantClient:
         )
 
     def upsert(self, *, collection_name: str, points: list[Any]) -> None:
+        self.upsert_calls += 1
+        self.upserted_point_count += len(points)
         collection = self.collections.setdefault(collection_name, {"points": {}})
         for point in points:
             collection["points"][str(point.id)] = point
 
     def delete(self, *, collection_name: str, points_selector, wait: bool = True) -> None:  # noqa: ARG002
+        self.delete_calls += 1
         collection = self.collections.setdefault(collection_name, {"points": {}})
         point_ids = [
             point_id

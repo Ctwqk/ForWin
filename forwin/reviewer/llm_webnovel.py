@@ -393,6 +393,25 @@ class LLMWebNovelReviewer:
                 "lint",
                 signal.message,
             )
+        deterministic_quality_report = (
+            context.deterministic_quality_report
+            if isinstance(getattr(context, "deterministic_quality_report", None), dict)
+            else {}
+        )
+        for signal in (
+            list(deterministic_quality_report.get("blocking_signals", []) or [])
+            + list(deterministic_quality_report.get("warning_signals", []) or [])
+        )[:12]:
+            if not isinstance(signal, dict):
+                continue
+            signal_id = str(signal.get("signal_id") or "").strip()
+            if not signal_id:
+                continue
+            add_evidence(
+                f"canon_quality:{signal_id}",
+                "canon_quality_signal",
+                str(signal.get("description") or signal.get("signal_type") or ""),
+            )
         if context.reader_feedback is not None:
             for signal in context.reader_feedback.confirmed_signals[:8]:
                 signal_key = str(signal.signal_key or "").strip()
@@ -478,6 +497,7 @@ class LLMWebNovelReviewer:
                     else None
                 ),
             },
+            "deterministic_quality_report": deterministic_quality_report,
             "evidence_index": evidence_index,
         }
 

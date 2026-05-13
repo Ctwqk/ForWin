@@ -19,6 +19,10 @@ from forwin.api_schemas import (
 )
 from forwin.book_genesis import BookGenesisService
 from forwin.book_genesis import StaleGenesisRevisionError
+from forwin.book_genesis import _fallback_brief
+from forwin.book_genesis import _fallback_blueprint
+from forwin.book_genesis import _fallback_map
+from forwin.book_genesis import _fallback_named_entity_seed
 from forwin.config import Config
 from forwin.governance import DecisionEventType
 from forwin.map.models import MapEdgeRow, MapGenerationRunRow, MapNodeRow, MapRegionRow
@@ -96,6 +100,77 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertEqual(revision.revision, 1)
         self.assertEqual(response.creation_status, "creating")
         self.assertTrue(response.workspace_url.endswith(f"project_id={project.id}"))
+
+    def test_fallback_map_does_not_promote_placeholder_guardrails_to_places(self) -> None:
+        pack = {
+            "book_brief": {
+                "premise": "主角：林澈。质量要求：不要使用“相关人员”等正文占位符。",
+                "setting_seed": "地下旧轨、潮汐钟楼、岫苑、档案公会、失忆广场是核心场景。",
+            },
+            "world": {
+                "world_bible": {
+                    "overview": "旧城由白塔记忆系统维持公共档案秩序。",
+                    "culture_profiles": [{"id": "culture-main-stage", "generator_civilization": "中华"}],
+                }
+            },
+        }
+
+        seed = _fallback_named_entity_seed(pack)
+        fallback_map = _fallback_map(pack)
+        serialized = json.dumps({"seed": seed, "map": fallback_map}, ensure_ascii=False)
+
+        self.assertIn("林澈", seed["characters"])
+        for name in ("地下旧轨", "潮汐钟楼", "岫苑", "档案公会", "失忆广场"):
+            self.assertIn(name, serialized)
+        self.assertNotIn("相关人员", serialized)
+
+    def test_fallback_brief_prefers_story_conflict_over_test_metadata(self) -> None:
+        project = Project(
+            title="旧城遗档",
+            genre="悬疑科幻",
+            premise=(
+                "本书用于 ForWin 新 canon quality gate 真实端到端复测。\n"
+                "主角：林澈，旧城档案修复师。\n"
+                "背景：一座每隔十年会遗失一段历史的城市。\n"
+                "核心冲突：林澈必须在记忆重置前找回家族档案，并决定是否公开白塔真相。\n"
+                "质量要求：不要使用正文占位符。"
+            ),
+            setting_summary="旧城由白塔记忆系统维持公共档案秩序。",
+            target_total_chapters=60,
+        )
+
+        brief = _fallback_brief(project, {})
+
+        self.assertIn("林澈必须在记忆重置前", brief["one_line"])
+        self.assertNotIn("长篇长篇", brief["one_line"])
+        self.assertNotIn("ForWin", brief["one_line"])
+        self.assertNotIn("质量要求", brief["one_line"])
+
+    def test_fallback_blueprint_uses_clean_brief_focus_for_arc_synopsis(self) -> None:
+        project = Project(
+            title="旧城遗档",
+            genre="悬疑科幻",
+            premise=(
+                "本书用于 ForWin 新 canon quality gate 真实端到端复测。\n"
+                "主角：林澈，旧城档案修复师。\n"
+                "背景：一座每隔十年会遗失一段历史的城市。\n"
+                "核心冲突：林澈必须在记忆重置前找回家族档案，并决定是否公开白塔真相。\n"
+                "质量要求：不要使用正文占位符。"
+            ),
+            setting_summary="旧城由白塔记忆系统维持公共档案秩序。",
+            target_total_chapters=60,
+        )
+        pack = {"book_brief": _fallback_brief(project, {})}
+
+        blueprint = _fallback_blueprint(project, pack)
+        serialized = json.dumps(blueprint, ensure_ascii=False)
+
+        self.assertIn("林澈必须在记忆重置前", serialized)
+        self.assertNotIn("悬疑科幻长篇，围绕", serialized)
+        self.assertNotIn("展开”推进", serialized)
+        self.assertNotIn("ForWin", serialized)
+        self.assertNotIn("质量要求", serialized)
+        self.assertNotIn("主角：", serialized)
 
     def test_continue_generation_is_blocked_before_start_writing(self) -> None:
         created = api_module.create_project(

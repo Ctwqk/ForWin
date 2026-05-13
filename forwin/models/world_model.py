@@ -35,6 +35,8 @@ class WorldModelPageRow(Base):
         Index("ix_world_model_pages_project_key", "project_id", "page_key"),
         Index("ix_world_model_pages_project_type", "project_id", "page_type"),
         Index("ix_world_model_pages_project_status", "project_id", "status"),
+        Index("ix_world_model_pages_project_projection", "project_id", "projection_kind", "projection_version"),
+        Index("ix_world_model_pages_project_source_digest", "project_id", "source_digest"),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
@@ -49,6 +51,15 @@ class WorldModelPageRow(Base):
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String, nullable=False, default="canon_live")
     as_of_chapter: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    projection_kind: Mapped[str] = mapped_column(String, nullable=False, default="world_studio")
+    projection_version: Mapped[str] = mapped_column(String, nullable=False, default="")
+    source_digest: Mapped[str] = mapped_column(String, nullable=False, default="")
+    section_digest_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    observer_type: Mapped[str] = mapped_column(String, nullable=False, default="")
+    observer_id: Mapped[str] = mapped_column(String, nullable=False, default="")
+    role_scope: Mapped[str] = mapped_column(String, nullable=False, default="")
+    visibility_scope: Mapped[str] = mapped_column(String, nullable=False, default="")
+    canon_status: Mapped[str] = mapped_column(String, nullable=False, default="canon_projection")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
 

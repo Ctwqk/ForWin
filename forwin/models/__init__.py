@@ -2,6 +2,16 @@ from __future__ import annotations
 
 from .base import Base, get_engine, get_session_factory, init_db, new_id
 from .draft import CandidateDraftRecord, ChapterDraft, ChapterReview
+from .canon_quality import (
+    ArtifactCollectionLedgerRow,
+    CanonAdmissionRunRow,
+    CanonQualitySignalRow,
+    ChapterBodyMetricRow,
+    CharacterStateTransitionRow,
+    CountdownLedgerRow,
+    RevealRegistryEntryRow,
+    StoryObligationRow,
+)
 from .entity import Entity, EntityAlias, EntityState, RelationEdge
 from .event import CanonEvent, EventEntityLink
 from .genesis import BookGenesisRevision, PromptTrace
@@ -136,6 +146,14 @@ __all__ = [
     "ChapterDraft",
     "ChapterReview",
     "CandidateDraftRecord",
+    "ArtifactCollectionLedgerRow",
+    "CanonAdmissionRunRow",
+    "CanonQualitySignalRow",
+    "ChapterBodyMetricRow",
+    "CharacterStateTransitionRow",
+    "CountdownLedgerRow",
+    "RevealRegistryEntryRow",
+    "StoryObligationRow",
     "WorldModelSnapshotRow",
     "WorldModelPageRow",
     "WorldModelLinkRow",

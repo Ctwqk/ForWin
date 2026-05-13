@@ -153,6 +153,9 @@ class ProductionExecutor:
             self.session_factory,
             extension_api_key=str(getattr(self.config, "publisher_extension_api_key", "") or ""),
             preferred_client_id=str(getattr(self.config, "publisher_preferred_client_id", "") or ""),
+            strict_preferred_client=bool(
+                getattr(self.config, "publisher_strict_preferred_client", False)
+            ),
             publisher_session_secret=str(getattr(self.config, "publisher_session_secret", "") or ""),
             publisher_session_encryption_required=bool(
                 getattr(self.config, "publisher_session_encryption_required", False)

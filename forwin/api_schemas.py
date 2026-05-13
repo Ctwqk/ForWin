@@ -628,6 +628,15 @@ class WorldModelPageInfo(BaseModel):
     vault_path: str = ""
     markdown: str = ""
     frontmatter: dict[str, Any] = Field(default_factory=dict)
+    projection_kind: str = "world_studio"
+    projection_version: str = ""
+    source_digest: str = ""
+    section_digest: dict[str, str] = Field(default_factory=dict)
+    observer_type: str = ""
+    observer_id: str = ""
+    role_scope: str = ""
+    visibility_scope: str = ""
+    canon_status: str = "canon_projection"
     content_hash: str = ""
     revision: int = 1
     status: str = "canon_live"
@@ -668,6 +677,18 @@ class WorldEditProposalInfo(BaseModel):
     projection_refresh: dict[str, Any] = Field(default_factory=dict)
 
 
+class WorldEditProposalCreateRequest(BaseModel):
+    source: str = "world_studio"
+    target_page_key: str = ""
+    target_node_id: str = ""
+    target_field: str = ""
+    proposal_type: str = "CanonCorrectionProposal"
+    proposed_patch: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+    human_notes: str = ""
+    created_by: str = "world_studio"
+
+
 class WorldModelExportRequest(BaseModel):
     vault_root: str = ""
 
@@ -696,6 +717,7 @@ class WorldModelImportResponse(BaseModel):
 class WorldEditProposalReviewRequest(BaseModel):
     status: str
     reason: str = ""
+    forced_accept_reason: str = ""
 
 
 class ProjectSummary(ProjectArcSnapshotFields):
@@ -852,7 +874,7 @@ class ProjectCreateResponse(BaseModel):
 
 
 class ProjectContinueGenerationRequest(BaseModel):
-    max_chapters: int | None = None
+    max_chapters: int | None = Field(default=None, ge=1)
     operation_mode: str | None = None
     review_interval_chapters: int | None = None
     progression_mode: str | None = None

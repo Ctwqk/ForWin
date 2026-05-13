@@ -14,6 +14,7 @@ def build_review_context_pack(
     repo=None,
     context: ChapterContextPack,
     lint_signals: list[LintSignal] | None = None,
+    deterministic_quality_report: dict | None = None,
 ) -> ReviewContextPack:
     band = context.band_delight_schedule
     active_entities = list(context.active_entities)
@@ -102,6 +103,7 @@ def build_review_context_pack(
         recent_review_notes=recent_review_notes,
         lint_signals=list(lint_signals or []),
         active_personality_contexts=list(context.active_personality_contexts),
+        deterministic_quality_report=dict(deterministic_quality_report or {}),
     )
 
 

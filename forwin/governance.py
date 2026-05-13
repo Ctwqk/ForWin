@@ -29,6 +29,27 @@ ConstraintType = Literal[
 ConstraintLevel = Literal["hard", "soft", "hint"]
 ConstraintStatus = Literal["active", "inactive", "archived"]
 CheckpointStatus = Literal["pending", "pass", "warn", "fail", "error", "overridden"]
+CHECKPOINT_STATUS_VALUES = {"pending", "pass", "warn", "fail", "error", "overridden"}
+
+
+def normalize_checkpoint_status(value: object) -> str:
+    raw = str(value or "").strip()
+    if raw in CHECKPOINT_STATUS_VALUES:
+        return raw
+    if raw == "approved":
+        return "overridden"
+    return "overridden"
+
+
+def checkpoint_reason_with_legacy_status(reason: object, value: object) -> str:
+    normalized_reason = str(reason or "").strip()
+    raw = str(value or "").strip()
+    if not raw or raw in CHECKPOINT_STATUS_VALUES:
+        return normalized_reason
+    legacy_marker = f"legacy_status={raw}"
+    if legacy_marker in normalized_reason:
+        return normalized_reason
+    return f"{normalized_reason}; {legacy_marker}".strip("; ")
 BlockingReasonCode = Literal[
     "",
     "chapter_not_canon",
@@ -105,6 +126,7 @@ class DecisionEventType:
 
     CANON_COMMIT = "canon_commit"
     CANON_COMMIT_FAILED = "canon_commit_failed"
+    CANON_COMMIT_BLOCKED = "canon_commit_blocked"
     HARD_GATE_HIT = "hard_gate_hit"
 
     STAGE_ENTERED = "stage_entered"

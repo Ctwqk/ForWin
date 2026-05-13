@@ -54,6 +54,9 @@ POSTGRES_BASELINE_MIGRATIONS = (
     "map_graph_schema_v1",
     "map_graph_schema_v2",
     "performance_spans_v1",
+    "legacy_checkpoint_statuses_v1",
+    "canon_quality_v1",
+    "projection_cache_fields_v1",
 )
 
 
@@ -156,6 +159,16 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
         )
         for version in POSTGRES_BASELINE_MIGRATIONS:
             _mark_migration_applied(conn, version)
+        conn.execute(
+            text(
+                """
+                UPDATE band_checkpoints
+                SET status = 'overridden',
+                    resolved_at = COALESCE(resolved_at, updated_at, created_at)
+                WHERE status = 'approved'
+                """
+            )
+        )
 
 
 def upgrade_db(engine: Engine) -> None:

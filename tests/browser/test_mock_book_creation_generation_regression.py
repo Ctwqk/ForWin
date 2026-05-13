@@ -24,7 +24,12 @@ STAGE_LABELS = {
 
 def test_mock_regression_create_book_start_generation_and_persist_after_refresh(page, browser_test_base_url: str) -> None:
     """CI regression only: mocked backend/provider, not a replacement for live LLM E2E."""
-    backend = MockForWinBackend()
+    backend = MockForWinBackend(
+        projects=[
+            sample_project("project-seed-a", title="Seed A"),
+            sample_project("project-seed-b", title="Seed B"),
+        ]
+    )
     goto_home(page, browser_test_base_url, backend)
 
     page.get_by_role("button", name="新建书本").click()
@@ -34,26 +39,28 @@ def test_mock_regression_create_book_start_generation_and_persist_after_refresh(
     page.locator("#book_form_premise").fill("林澈追查被白塔抹除的家族档案。")
     page.locator("#book_form_setting_summary").fill("旧城每十年遗失一段历史。")
 
-    with page.expect_response(lambda response: response.url.endswith("/api/projects") and response.request.method == "POST"):
+    with page.expect_response(lambda response: response.url.endswith("/api/projects") and response.request.method == "POST") as create_response:
         page.get_by_role("button", name="创建并进入创世").click()
 
+    project_id = create_response.value.json()["project_id"]
     created_payload = backend.captured_payloads("/api/projects")[-1]
     assert created_payload["target_total_chapters"] == 4
     expect(page.locator("#genesis_modal_shell")).to_have_class(__import__("re").compile(r".*\bopen\b.*"))
 
     for stage in GENESIS_STAGES:
         page.locator("#genesis_stage_board button").filter(has_text=STAGE_LABELS[stage]).click()
-        with page.expect_response(lambda response, stage=stage: f"/api/projects/project-2/genesis/stages/{stage}/generate" in response.url):
+        with page.expect_response(lambda response, stage=stage: f"/api/projects/{project_id}/genesis/stages/{stage}/generate" in response.url):
             page.locator("#genesis_generate_stage_btn").click()
-        with page.expect_response(lambda response, stage=stage: f"/api/projects/project-2/genesis/stages/{stage}/lock" in response.url):
+        with page.expect_response(lambda response, stage=stage: f"/api/projects/{project_id}/genesis/stages/{stage}/lock" in response.url):
             page.locator("#genesis_lock_stage_btn").click()
 
     expect(page.locator("#genesis_start_writing_btn")).to_be_enabled()
     page.once("dialog", lambda dialog: dialog.accept())
-    with page.expect_response(lambda response: response.url.endswith("/api/projects/project-2/start-writing") and response.request.method == "POST"):
+    with page.expect_response(lambda response: response.url.endswith(f"/api/projects/{project_id}/start-writing") and response.request.method == "POST") as start_response:
         page.locator("#genesis_start_writing_btn").click()
 
-    assert backend.captured_payloads("/api/projects/project-2/start-writing")[-1] == {}
+    task_id = start_response.value.json()["task_id"]
+    assert backend.captured_payloads(f"/api/projects/{project_id}/start-writing")[-1] == {}
     expect(page.locator("#drawer_body")).to_contain_text("项目章节")
     expect(page.locator("#drawer_body")).to_contain_text("潮声第1章")
 
@@ -63,7 +70,7 @@ def test_mock_regression_create_book_start_generation_and_persist_after_refresh(
     page.reload(wait_until="domcontentloaded")
     expect(page.locator("#global_status")).to_contain_text("首页已加载")
     page.locator("#tab_task").click()
-    page.locator(".task-item").filter(has_text="task-2").get_by_role("button", name="查看详情").click()
+    page.locator(".task-item").filter(has_text=task_id).get_by_role("button", name="查看详情").click()
     expect(page.locator("#drawer_body")).to_contain_text("潮声第1章")
     page.get_by_role("button", name="查看正文").first.click()
     expect(page.locator("#drawer_body")).to_contain_text("第1章正文")

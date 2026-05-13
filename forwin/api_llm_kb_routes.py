@@ -86,7 +86,14 @@ def build_handlers(
                 raise HTTPException(status_code=404, detail="LLM KB file not found") from exc
             return {"project_id": project_id, "file_key": file_key, "content": content}
 
-    def search_llm_kb(project_id: str, query: str, role: str = "writer", limit: int = 5) -> dict[str, Any]:
+    def search_llm_kb(
+        project_id: str,
+        query: str,
+        role: str = "writer",
+        limit: int = 5,
+        as_of_chapter: int = 0,
+        visibility_scope: str = "",
+    ) -> dict[str, Any]:
         role_key = str(role or "").strip().lower()
         if role_key not in ROLE_PACK_KIND:
             raise HTTPException(status_code=404, detail="search role must be writer, reviewer, planner, or compiler")
@@ -98,7 +105,14 @@ def build_handlers(
                 qdrant_collection=_llm_kb_qdrant_collection(),
                 qdrant_client=qdrant_client,
                 qdrant_models=qdrant_models,
-            ).search(project_id, query, role=role_key, limit=limit)
+            ).search(
+                project_id,
+                query,
+                role=role_key,
+                limit=limit,
+                as_of_chapter=as_of_chapter,
+                visibility_scope=visibility_scope or None,
+            )
             return {"project_id": project_id, "role": role_key, "query": query, "results": results}
 
     def get_context_pack(project_id: str, role: str, chapter_number: int = 0, query: str = "") -> dict[str, Any]:

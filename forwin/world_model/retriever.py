@@ -5,7 +5,9 @@ from collections.abc import Iterable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.models.canon_quality import CanonQualitySignalRow
 from forwin.models.world_model import WorldModelConflictRow, WorldModelPageRow
+from forwin.protocol.world_model import EvidenceRef, WorldModelConflict
 from forwin.protocol.world_model import WorldContextPack
 
 from .store import conflict_to_schema, page_to_schema, snapshot_to_schema
@@ -43,6 +45,15 @@ class WorldModelRetriever:
                 .limit(8)
             ).scalars().all()
         ]
+        conflicts.extend(
+            _quality_signal_to_conflict(row)
+            for row in self.session.execute(
+                select(CanonQualitySignalRow)
+                .where(CanonQualitySignalRow.project_id == project_id, CanonQualitySignalRow.status == "open")
+                .order_by(CanonQualitySignalRow.severity.desc(), CanonQualitySignalRow.created_at.desc())
+                .limit(8)
+            ).scalars().all()
+        )
         secrets = [page for page in pages if page.page_type == "secret"]
         promises = [page for page in pages if page.page_type == "promise"]
         resources = [page for page in pages if page.page_type in {"resource", "currency"}]
@@ -94,3 +105,22 @@ class WorldModelRetriever:
             if overview is not None:
                 selected = [overview, *selected[: max(0, len(selected) - 1)]]
         return [page_to_schema(row) for row in selected]
+
+
+def _quality_signal_to_conflict(row: CanonQualitySignalRow) -> WorldModelConflict:
+    return WorldModelConflict(
+        id=row.id,
+        conflict_type=row.signal_type,
+        severity=row.severity,  # type: ignore[arg-type]
+        subject_key=row.subject_key,
+        description=row.description,
+        evidence_refs=[
+            EvidenceRef(
+                source_type="canon_quality",
+                source_id=row.signal_id,
+                chapter_number=int(row.chapter_number or 0),
+                summary=row.description,
+            )
+        ],
+        status=row.status,
+    )

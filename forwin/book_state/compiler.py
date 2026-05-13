@@ -158,8 +158,17 @@ class BookStateCompiler:
                 continue
             if _json_equal(old_value, current):
                 continue
-            reason = getattr(patch, "reason", "") or forced_accept_reason
-            if is_repair and reason:
+            if is_repair and forced_accept_reason:
+                continue
+            blocked.append(
+                f"{delta.id}:{label} old_value mismatch; expected {old_value!r}, current {current!r}"
+            )
+        for label, old_value, current in self._iter_reader_promise_patch_current_values(runtime, delta):
+            if old_value is None:
+                continue
+            if _json_equal(old_value, current):
+                continue
+            if is_repair and forced_accept_reason:
                 continue
             blocked.append(
                 f"{delta.id}:{label} old_value mismatch; expected {old_value!r}, current {current!r}"
@@ -193,6 +202,38 @@ class BookStateCompiler:
         for patch in delta.narrative_patches:
             current = _narrative_current(runtime, patch)
             values.append((f"narrative:{patch.target_ref}:{patch.field_path}", patch, current))
+        return values
+
+    def _iter_reader_promise_patch_current_values(
+        self,
+        runtime: BookStateRuntime,
+        delta: GraphDelta,
+    ) -> list[tuple[str, Any, Any]]:
+        values: list[tuple[str, Any, Any]] = []
+        promises = {
+            promise.promise_id: promise.model_dump(mode="json")
+            for promise in self.repo.list_reader_promises_native(
+                delta.project_id,
+                as_of_chapter=runtime.as_of_chapter,
+            )
+        }
+        for patch in _reader_promise_patches(delta):
+            promise_id = str(patch.get("promise_id") or "")
+            op = str(patch.get("op") or "")
+            field_path = str(patch.get("field_path") or "")
+            payload = promises.get(promise_id)
+            current = None if op == "create" else _get_path(payload or {}, field_path)
+            values.append((f"reader_promise:{promise_id}:{field_path or op}", patch.get("old_value"), current))
+            if op == "create" and isinstance(patch.get("new_value"), dict):
+                promises[promise_id] = ReaderPromise.model_validate(
+                    {
+                        **patch["new_value"],
+                        "project_id": delta.project_id,
+                        "promise_id": promise_id,
+                    }
+                ).model_dump(mode="json")
+            elif payload is not None:
+                _set_path(payload, field_path, patch.get("new_value"))
         return values
 
     def _persist_delta_side_effects(self, runtime: BookStateRuntime, delta: GraphDelta) -> None:
@@ -275,9 +316,69 @@ class BookStateCompiler:
                 if "created_at_chapter" not in node.metadata:
                     node = node.model_copy(
                         update={"metadata": {**node.metadata, "created_at_chapter": delta.chapter_number}}
-                    )
+                )
                 self.repo.create_narrative_node(node)
+        persisted_cognition_keys: set[tuple[str, str]] = set()
+        for patch in delta.cognition_patches:
+            key = (str(patch.observer_type), patch.observer_id)
+            if key in persisted_cognition_keys:
+                continue
+            view = runtime.cognition_by_observer.get(key)
+            if view is None:
+                continue
+            self.repo.upsert_cognition_overlay(
+                self.repo.overlay_from_view(
+                    view,
+                    project_id=delta.project_id,
+                    as_of_chapter=delta.chapter_number,
+                    as_of_story_time=delta.story_time,
+                )
+            )
+            persisted_cognition_keys.add(key)
+        self._persist_reader_promise_patch_side_effects(delta)
         self._persist_reader_experience_side_effects(delta)
+
+    def _persist_reader_promise_patch_side_effects(self, delta: GraphDelta) -> None:
+        patches = _reader_promise_patches(delta)
+        if not patches:
+            return
+        promises = {
+            promise.promise_id: promise.model_dump(mode="json")
+            for promise in self.repo.list_reader_promises_native(delta.project_id)
+        }
+        for patch in patches:
+            promise_id = str(patch.get("promise_id") or "")
+            op = str(patch.get("op") or "")
+            if not promise_id:
+                continue
+            if op == "create":
+                new_value = patch.get("new_value")
+                if not isinstance(new_value, dict):
+                    continue
+                payload = {
+                    **new_value,
+                    "project_id": delta.project_id,
+                    "promise_id": promise_id,
+                }
+            else:
+                payload = dict(promises.get(promise_id, {}))
+                if not payload:
+                    continue
+                _set_path(payload, str(patch.get("field_path") or ""), patch.get("new_value"))
+            metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+            evidence_refs = list(payload.get("source_refs", []))
+            for ref in patch.get("evidence_refs") or []:
+                if ref not in evidence_refs:
+                    evidence_refs.append(ref)
+            payload["source_refs"] = evidence_refs
+            payload["metadata"] = {
+                **metadata,
+                "source_delta_id": delta.id,
+                "reader_promise_patch_reason": str(patch.get("reason") or ""),
+            }
+            promise = ReaderPromise.model_validate(payload)
+            self.repo.upsert_reader_promise(promise)
+            promises[promise_id] = promise.model_dump(mode="json")
 
     def _persist_reader_experience_side_effects(self, delta: GraphDelta) -> None:
         payload = delta.metadata.get("reader_experience_delta") if isinstance(delta.metadata, dict) else None
@@ -383,6 +484,13 @@ def _split_target_ref(target_ref: str) -> tuple[str, str]:
     return tuple(target_ref.split(":", 1))  # type: ignore[return-value]
 
 
+def _reader_promise_patches(delta: GraphDelta) -> list[dict[str, Any]]:
+    payload = delta.metadata.get("reader_promise_patches") if isinstance(delta.metadata, dict) else None
+    if not isinstance(payload, list):
+        return []
+    return [dict(item) for item in payload if isinstance(item, dict)]
+
+
 def _get_path(payload: dict[str, Any], field_path: str) -> Any:
     if not field_path:
         return payload
@@ -392,6 +500,21 @@ def _get_path(payload: dict[str, Any], field_path: str) -> Any:
             return None
         cursor = cursor[part]
     return cursor
+
+
+def _set_path(payload: dict[str, Any], field_path: str, value: Any) -> None:
+    if not field_path:
+        return
+    cursor: Any = payload
+    parts = [part for part in field_path.split(".") if part]
+    for part in parts[:-1]:
+        nested = cursor.get(part) if isinstance(cursor, dict) else None
+        if not isinstance(nested, dict):
+            nested = {}
+            cursor[part] = nested
+        cursor = nested
+    if parts and isinstance(cursor, dict):
+        cursor[parts[-1]] = value
 
 
 def _json_equal(left: Any, right: Any) -> bool:

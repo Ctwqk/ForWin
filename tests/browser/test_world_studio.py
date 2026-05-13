@@ -16,13 +16,19 @@ def test_world_studio_pages_conflicts_proposals_export_import(page, browser_test
 
     page.get_by_placeholder("搜索页面").fill("雾港")
     expect(page.locator(".list-scroll")).to_contain_text("雾港")
-    page.locator(".sidebar select").last.select_option("location")
+    page.locator(".sidebar select").select_option("location")
     expect(page.locator(".list-scroll")).to_contain_text("雾港")
     expect(page.locator(".list-scroll")).not_to_contain_text("林夜")
 
-    page.get_by_role("button", name="矛盾").click()
-    expect(page.locator(".main-panel")).to_contain_text("location_mismatch")
-    page.get_by_role("button", name="Proposal", exact=True).click()
+    page.get_by_role("tab", name="图谱").click()
+    expect(page.locator(".main-panel")).to_contain_text("Object Graph")
+    expect(page.locator(".main-panel")).to_contain_text("located_in")
+    page.get_by_role("tab", name="搜索").click()
+    page.get_by_placeholder("搜索 canon / notes / LLM KB / skill").fill("林夜")
+    page.get_by_role("button", name="搜索").click()
+    expect(page.locator(".main-panel")).to_contain_text("检索结果")
+    expect(page.locator(".main-panel")).to_contain_text("human_unreviewed")
+    page.get_by_role("tab", name="Proposal", exact=True).click()
     expect(page.locator(".main-panel")).to_contain_text("Proposal Review")
     expect(page.locator(".sidebar")).to_contain_text("entity/linye")
 
@@ -34,7 +40,7 @@ def test_world_studio_pages_conflicts_proposals_export_import(page, browser_test
 
     page.get_by_title("接受 proposal").click()
     expect(page.locator(".notice.success")).to_contain_text("Proposal 已接受")
-    assert backend.captured_payloads("/api/projects/project-1/world-model/proposals/proposal-1/review")[-1]["status"] == "accepted"
+    assert backend.captured_payloads("/api/projects/project-1/proposals/proposal-1/approve")[-1]["status"] == "accepted"
 
 
 def test_world_studio_empty_and_error_states(page, browser_test_base_url: str) -> None:

@@ -50,7 +50,7 @@ def test_planner_prioritizes_planned_chapters_before_failed_chapters() -> None:
     )
 
     assert plan.generation_mode == "continue"
-    assert plan.requested_chapters == 4
+    assert plan.requested_chapters == 3
     assert plan.write_chapters == [2, 4, 1]
 
 

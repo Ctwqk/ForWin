@@ -31,7 +31,9 @@ class WorldStudioFrontendTests(unittest.TestCase):
         self.assertIn('"personality"', app_source)
         self.assertIn("人物性格", app_source)
         self.assertIn("/api/personality-skills", app_source)
-        self.assertIn("personality-loadout", app_source)
+        self.assertIn("/api/projects/${projectId}/proposals", app_source)
+        self.assertIn("PersonalityLoadoutProposal", app_source)
+        self.assertNotIn("/book-state/characters/${selectedCharacterId}/personality-loadout", app_source)
         self.assertIn("PersonalityEditor", app_source)
         self.assertIn(".personality-editor", css_source)
 
@@ -59,6 +61,25 @@ class WorldStudioFrontendTests(unittest.TestCase):
         self.assertIn("personality/reassign", app_source)
         self.assertIn(".character-create-form", css_source)
         self.assertIn(".assignment-report", css_source)
+
+    def test_world_studio_exposes_projection_graph_search_and_page_proposals(self) -> None:
+        app_source = (REPO_ROOT / "frontend/world-studio/src/App.tsx").read_text(encoding="utf-8")
+        css_source = (REPO_ROOT / "frontend/world-studio/src/styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('type TabKey = "pages" | "graph" | "search" | "proposals" | "personality"', app_source)
+        self.assertIn("GraphView", app_source)
+        self.assertIn("SearchResultsPanel", app_source)
+        self.assertIn("PageEditor", app_source)
+        self.assertIn("ContextPanel", app_source)
+        self.assertIn("/api/projects/${projectId}/world-studio/search", app_source)
+        self.assertIn("Manual Notes", app_source)
+        self.assertIn("Human Questions", app_source)
+        self.assertIn("Proposed Correction", app_source)
+        self.assertIn("createPageProposal", app_source)
+        self.assertIn(".graph-view", css_source)
+        self.assertIn(".search-results", css_source)
+        self.assertIn(".page-editor", css_source)
+        self.assertIn(".context-panel", css_source)
 
 
 if __name__ == "__main__":

@@ -5,6 +5,23 @@ import {
   getProbeUrl,
   shouldProbeLogin,
 } from './platforms.js';
+import { uploadExecutionTimeoutMs } from './upload-timeouts.js?v=0.1.23';
+
+function hasRecoverableQidianDraftUrl(platformId, url) {
+  if (String(platformId || '').trim() !== 'qidian') {
+    return false;
+  }
+  const text = String(url || '').trim();
+  if (!text.includes('write.qq.com') || !text.includes('/chaptertmp/')) {
+    return false;
+  }
+  const match = text.match(/(?:[?#&]|#)ccid=([^&#]+)/);
+  if (!match) {
+    return false;
+  }
+  const ccid = decodeURIComponent(match[1] || '').trim();
+  return /^\d{6,}$/.test(ccid) && ccid !== '-1';
+}
 
 export class PublisherExtensionController {
   constructor(deps) {
@@ -353,6 +370,7 @@ export class PublisherExtensionController {
       this.registerExecutionTask(taskKey, tab.tabId);
       await this.waitForOpenedUploadTab(tab.tabId, job.platform, 6000);
       const openedTab = await this.deps.getTab(tab.tabId);
+      const executionTimeoutMs = uploadExecutionTimeoutMs(job.platform);
       const latestJob = await refreshJob();
       if (latestJob.abort_requested || latestJob.status === 'terminating' || latestJob.status === 'cancelled') {
         await this.cleanupExecutionTabs(taskKey);
@@ -367,6 +385,7 @@ export class PublisherExtensionController {
         result_payload: {
           ...(job.result_payload || {}),
           phase: 'opened-upload-tab',
+          upload_execution_timeout_ms: executionTimeoutMs,
         },
       });
       const uploadPayload = {
@@ -385,7 +404,10 @@ export class PublisherExtensionController {
         this.runUploadWithPageReadyRetries(tab.tabId, job.platform, uploadPayload)
           .catch((error) => ({ __forwinUploadError: error })),
         new Promise((resolve) => {
-          timeoutId = globalThis.setTimeout(() => resolve({ __forwinTimedOut: true }), 90000);
+          timeoutId = globalThis.setTimeout(
+            () => resolve({ __forwinTimedOut: true }),
+            executionTimeoutMs,
+          );
         }),
         abortWatcher.promise,
       ]);
@@ -399,17 +421,33 @@ export class PublisherExtensionController {
       if (timedResult?.__forwinUploadError) {
         throw timedResult.__forwinUploadError;
       }
-      const result = timedResult?.__forwinTimedOut
-        ? {
+      let result = timedResult;
+      if (timedResult?.__forwinTimedOut) {
+        const timeoutUrl = String((await this.deps.getTab(tab.tabId))?.url || '');
+        result = hasRecoverableQidianDraftUrl(job.platform, timeoutUrl)
+          ? {
+            ok: true,
+            currentUrl: timeoutUrl,
+            message: '章节草稿已保存到起点。',
+            resultPayload: {
+              phase: 'execute-upload-timeout-recovered',
+              mode: 'draft',
+              official_status: 'drafted',
+              verified_via: 'qidian-real-ccid-timeout-recovery',
+              timeout_ms: executionTimeoutMs,
+            },
+          }
+          : {
           ok: false,
-          currentUrl: String((await this.deps.getTab(tab.tabId))?.url || ''),
+          currentUrl: timeoutUrl,
           error: '浏览器扩展执行超时，未能完成平台章节流程。',
           errorCode: 'extension-upload-timeout',
           resultPayload: {
             phase: 'execute-upload-timeout',
+            timeout_ms: executionTimeoutMs,
           },
-        }
-        : timedResult;
+        };
+      }
       const finalStatus = result.ok ? 'succeeded' : 'failed';
       const cleanupPayload = result.ok ? await this.cleanupExecutionTabs(taskKey) : { attempted: false };
       if (!result.ok) {

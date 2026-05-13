@@ -204,6 +204,347 @@ Recommended fix:
 - Decide whether these artifacts are intentionally versioned.
 - If not, remove them from git and add ignore rules.
 
+## 60-Chapter Real-Run Content Findings
+
+Run under review:
+
+- Project: `bbe070bc8eda49c9a551c3ce1c755391`, title `端到端实测长篇小说_60章`.
+- Final state observed through ForWin project/chapter APIs: `60/60 accepted`, `next_gate=completed`, `creation_status=writing`.
+- Runtime log note: `data/forwin-api.log` did not show a chapter-generation crash for this run; the only observed service-level error was an unrelated port bind failure. MCP `task_get` also reports `error:null` for the relevant generation tasks. The useful failure evidence is therefore the task decision timeline, reviewer verdicts, generation metadata, accepted chapter text, and world-model conflict output.
+- World conflict checks returned no conflicts (`{"conflicts":[]}` through MCP, previously observed HTTP payload `{"conflict_count":0}`) even though the accepted book contains obvious continuity contradictions. That makes this a reviewer/canon-admission failure, not a missing UI display problem.
+
+### P1 - Placeholder names leaked into accepted prose
+
+Observed text symptoms:
+
+- Chapter 1 repeatedly uses `相关人员`; the chapter summary also starts from that placeholder.
+- Chapter 31 contains `签名人一栏写着一个名字：相关人员。`.
+- Chapter 17 summary contains `温和派代表相关人员`.
+
+Observed error log:
+
+```text
+2026-05-11 16:32:53 PDT task 1cb173fa06a9 review_verdict_recorded 第1章 review verdict: pass
+payload: {"verdict":"pass","issue_types":[],"issue_groups":[],"forced_accept_applied":false}
+第1章 writer generation_meta.subworld_admission_autofix: {"林澈":"相关人员","林总":"相关人员"}
+第1章 related_count: 28
+
+第31章 review verdict: warn
+payload issue_types: ["lint"]
+第31章 writer generation_meta.subworld_admission_autofix: {"林远舟":"相关人员","林总":"相关人员"}
+第31章 related_count: 2
+```
+
+Fault flow:
+
+1. Writer introduced unknown named entities such as `林澈` / `林远舟`.
+2. Reviewer/checker treated them as `sub_world_unknown_named_entity`.
+3. `WritingOrchestrator._apply_subworld_admission_autofix()` rewrote the unknown names before final admission.
+4. `WritingOrchestrator._generic_subworld_reference()` fell back to `相关人员`.
+5. `forwin/checker/rules.py` includes `相关人员` in `GENERIC_CHARACTER_REFERENCES`, so the placeholder then bypassed named-character checking.
+6. The final reviewer verdict became `pass` or `warn`; canon admission accepted the chapter and cleared residual issues when the chapter was not force-accepted.
+
+Code roots:
+
+- `forwin/orchestrator/loop.py:2041` applies `subworld_admission_autofix`.
+- `forwin/orchestrator/loop.py:2125` returns `相关人员` as the generic fallback.
+- `forwin/checker/rules.py:26` treats `相关人员` as a generic character reference.
+- `forwin/orchestrator/loop.py:3695` clears `residual_review_issues` for normally accepted chapters.
+
+Fix study:
+
+- Do not use `相关人员` as an in-prose repair token. Either block the chapter and request a named character repair, or replace with a role that is semantically valid in context and cannot appear as a proper signature/name.
+- Add a deterministic lint rule: `相关人员` / `一名相关人员` is allowed only in metadata-like summaries, not in chapter body, dialogue, signatures, letters, legal documents, or scene-critical reveals.
+- Preserve autofix metadata as a hard review input. If `subworld_admission_autofix` touched body text, the rewritten body must be rechecked for placeholder leakage before canon admission.
+
+### P1 - Death, rescue, and alive-state contradictions were accepted
+
+Observed text symptoms:
+
+- Chapter 23 presents 沈砚 as shot and near death.
+- Chapter 32 marks him as cleared/removed.
+- Chapters 35 and 40 both rescue him again.
+- Chapter 42 has another sacrifice version.
+- Chapter 43 contains a public execution track.
+- Chapters 47, 48, 51, 56, 57, 58, 59, and 60 continue to use him as active/alive/wounded/recovering.
+
+Observed error log:
+
+```text
+2026-05-11 17:28:31 PDT task f989a175f66f review_verdict_recorded 第23章 review verdict: fail
+payload issue_types: ["subworld_admission","payoff_miss","character_motivation","missing_anchor"]
+2026-05-11 17:28:31 PDT task f989a175f66f repair_started 第1次 draft
+task f989a175f66f repair_succeeded rewrite 后 verdict: pass
+final payload issue_types: ["payoff_miss","behavioral_inconsistency"]
+canon_commit issue_count=2
+
+第32章 / 第35章 / 第40章 / 第42章 / 第43章 / 第51章 / 第57章 / 第58章: pass 或 warn 后 canon_commit
+world-model conflicts endpoint: {"conflict_count":0}
+```
+
+Fault flow:
+
+1. The chapter text used strong terminal-state wording, but the compiled actor state did not consistently mark `alive=false` or exact dead statuses.
+2. `forwin/world_model/conflict_detector.py` only detects dead/alive conflict when state is exactly `alive is False` or status is one of `dead`, `deceased`, `死亡`, `已死`.
+3. Non-exact states such as `临终`, `被清除`, `牺牲`, `处决`, `濒死`, `重伤后失踪` did not become a blocking state transition.
+4. Later active participation was therefore not detected as a contradiction.
+5. Warn-level continuity issues were still canon-applied in blackbox mode.
+
+Code roots:
+
+- `forwin/world_model/conflict_detector.py:9` only implements `dead_alive_conflict` and `character_location_conflict`.
+- `forwin/world_model/conflict_detector.py:24` uses a narrow dead-status vocabulary.
+- `forwin/orchestrator/loop.py:3587` accepts `warn` verdicts in blackbox mode.
+
+Fix study:
+
+- Add a structured character-state transition ledger: `alive`, `dead`, `terminally_wounded`, `captured`, `missing`, `rescued`, `executed`, `sacrificed`, `recovered`.
+- Treat resurrection/rescue-after-terminal-state as a hard continuity gate unless the current chapter supplies an explicit bridge event that references the terminal event.
+- Expand conflict detection beyond current state to state history and canon events, so repeated rescue/death cycles are detected even if the latest snapshot overwrites prior status.
+
+### P1 - Final reset/countdown hook was not closed before completion
+
+Observed text symptoms:
+
+- Chapter 59 ends on a final reset/countdown around `59:59`.
+- Chapter 60 jumps to post-victory/recovery state and even says there are still `三十多天` left, without explicitly resolving the active reset/countdown threat.
+
+Observed error log:
+
+```text
+第59章 review verdict: warn
+payload issue_types: ["continuity","continuity","continuity","payoff_miss","consistency","consistency"]
+canon_commit issue_count=6
+
+2026-05-11 20:20:45 PDT 第60章 review verdict: fail
+payload issue_types: ["subworld_admission","consistency","consistency","consistency"]
+repair_started 第1次 draft
+repair_succeeded rewrite 后 verdict: pass
+rewrite payload issue_types: ["character_omniscience","character_omniscience"]
+2026-05-11 20:27:48 PDT 第60章 canon_commit issue_count=2
+```
+
+Fault flow:
+
+1. Chapter 59 installed a high-priority hook: active reset/countdown and unresolved terminal stakes.
+2. Chapter 60 repair focused on the local fail issues in that chapter.
+3. The reviewer did not enforce closure of the immediately previous chapter's active hook before marking the final chapter pass.
+4. Accepted completion state was driven by `60/60 accepted`, not by an explicit "all terminal hooks closed" book-level gate.
+
+Fix study:
+
+- Add a final-chapter completion gate that requires closure evidence for all active P0/P1 hooks from the preceding chapters.
+- Track countdowns and reset timers as structured obligations with `started_at_chapter`, `deadline`, `current_value`, and `resolved_at_chapter`.
+- For the last requested chapter, block completion if any terminal hook remains open, even if the local chapter review is pass.
+
+### P2 - Artifact/file count ledger drifted across the book
+
+Observed text symptoms:
+
+- Chapter 14 already mentions the 13th archive/file.
+- Chapter 21 jumps through `第15-18份`.
+- Chapter 31 obtains 12 backup files and later refers to 13.
+- Chapter 43 says `还有五十九份档案，还有五十九天`.
+- Chapter 57 alternates between `五十九份`, `六十份`, and `六十一份`.
+
+Observed error log:
+
+```text
+第31章 review verdict: warn
+payload issue_types: ["lint"]
+canon_commit issue_count=1
+
+第43章 review verdict: pass/warn path accepted
+第57章 review verdict: warn
+canon_commit accepted despite count drift
+```
+
+Fault flow:
+
+1. The story used files/fragments as a central progress counter.
+2. The counter was not represented as a structured canon resource.
+3. Review saw individual count mentions as local prose/continuity warnings rather than a blocking ledger contradiction.
+4. Canon commit accepted chapters with incompatible arithmetic.
+
+Fix study:
+
+- Add an `artifact_collection_ledger` to BookState or chapter task state: total target, collected count, consumed count, newly found item ids, duplicate ids, and source chapter.
+- Add deterministic count checks for `第N份`, `还有N份`, `N/60`, and equivalent Chinese numerals.
+- If a chapter changes the count by more than the declared newly acquired artifacts, fail review with a repair instruction that updates either the prose or the ledger.
+
+### P2 - Countdown/time continuity was treated as prose, not state
+
+Observed text symptoms:
+
+- The book moves through `60 days`, `53 days`, `48 days`, `5 days`, `47 hours`, `24 hours`, `6 hours`, `59 minutes`.
+- Chapter 60 then says `还有三十多天`.
+
+Observed error log:
+
+```text
+第59章 review verdict: warn
+payload issue_types: ["continuity","continuity","continuity","payoff_miss","consistency","consistency"]
+canon_commit issue_count=6
+第60章 repair_succeeded 后 pass
+```
+
+Fault flow:
+
+1. Time pressure appears as natural language rather than a typed resource.
+2. The reviewer can warn on local continuity problems, but there is no arithmetic consistency gate for countdown monotonicity.
+3. A repaired final chapter can pass without reconciling the global countdown ledger.
+
+Fix study:
+
+- Model countdowns as typed state with monotonic constraints and explicit reset events.
+- Require every time jump to declare whether it consumes time, resets the timer, branches to a different clock, or changes narrator knowledge.
+- Add a deterministic review rule that fails non-monotonic countdown changes unless a reset/branch event is cited.
+
+### P2 - Repeated reveal beats and locations passed as progress
+
+Observed text symptoms:
+
+- Chapters 6 and 7 are near-duplicates around `潮汐钟楼废弃观测室`, the third fragment, and `沈砚不可信`.
+- Later chapters repeatedly reveal white-tower backdoors, genetic keys, father/ancestor system-designer identity, and `潮汐钟楼地下三层`.
+
+Observed error log:
+
+```text
+第6章 review verdict: pass
+payload issue_types: ["character_consistency","world_legibility"]
+canon_commit issue_count=2
+
+第7章 review verdict: pass
+payload issue_types: ["character_consistency"]
+canon_commit
+
+第20章 review verdict: warn
+payload includes continuity role mismatch / character consistency
+canon_commit
+```
+
+Fault flow:
+
+1. Repeated reveal beats were not tracked as first-class `reveal_id` / `payoff_id` objects.
+2. The LLM reviewer prompt allows pass/warn when a chapter has micro-progress.
+3. The reviewer payload contains only `body_head`, `body_tail`, first four `scene_outputs`, first five `new_events`, first four `thread_beats`, and first five `state_changes`, so full-book duplicate reveal detection is weak.
+
+Code roots:
+
+- `forwin/reviewer/llm_webnovel.py:468` sends only trimmed body head/tail.
+- `forwin/reviewer/llm_webnovel.py:471` caps scene evidence to the first four scene outputs.
+- `forwin/reviewer/llm_webnovel.py:514` explicitly limits fail verdicts when there is some progress.
+
+Fix study:
+
+- Add a reveal registry with stable ids, first reveal chapter, repeats, escalations, and payoff status.
+- Fail or at least block final completion when the same reveal is presented as new without escalation.
+- Add deterministic duplicate-scene checks using normalized key terms, locations, involved characters, and reveal tags across recent chapters.
+
+### P2 - Full-body repetition and scene stitching were not reliably reviewed
+
+Observed text symptoms:
+
+- Chapter 23 repeats trap/dialogue/escape material.
+- Chapter 42 contains multiple inconsistent prisoner/sacrifice versions.
+- Chapter 51 repeats the moderate-faction ultimatum.
+- Chapter 58 repeats broadcast debate material.
+
+Observed error log:
+
+```text
+第23章 initial fail -> 第1次 draft repair_succeeded -> pass with residual warnings -> canon_commit
+第42章 pass/warn path accepted
+第51章 pass/warn path accepted
+第58章 pass/warn path accepted
+```
+
+Fault flow:
+
+1. The reviewer received a compressed draft payload rather than the full body.
+2. Duplicate material in the middle of a long chapter can be absent from `body_head` and `body_tail`.
+3. A local rewrite can repair the immediately cited fail issue while leaving internal duplication or incompatible alternate scene versions in the body.
+
+Fix study:
+
+- Add deterministic full-body checks before LLM review: repeated paragraph hash, repeated dialogue window, repeated scene-object sequence, and incompatible alternate endings in one chapter.
+- Include duplicate spans as evidence refs so the repair model can remove the exact repeated blocks.
+- For repaired drafts, compare pre-repair and post-repair body-level duplication metrics before canon commit.
+
+### P3 - Character identity and role drift remained soft
+
+Observed text symptoms:
+
+- 顾岚 drifts among black-market intermediary, former reviewer/examiner, and 30-year-old system designer.
+- 洛庭若 drifts among warning source, adversary, radical faction, and moderate-helper behavior.
+- 林远 / 林启明 / 林远舟 / group executive / father / grandfather / great-grandfather roles blur together.
+
+Observed error log:
+
+```text
+第20章 review verdict: warn
+payload includes continuity role mismatch / character consistency
+canon_commit
+
+第31章 review verdict: warn
+payload issue_types: ["lint"]
+canon_commit issue_count=1
+
+第47章 first task 655ba8d603b2: fail after repair attempts
+第47章 later task 846219d96b55: review verdict: pass
+payload issue_types: ["consistency","legibility"]
+canon_commit issue_count=2
+```
+
+Fault flow:
+
+1. Role and relationship facts are present in prose but not consistently normalized to one actor/relationship state.
+2. Warn-level consistency issues are canon-applied in blackbox mode.
+3. Accepted chapters clear residual non-force-accept issues, so later chapters lose a strong machine-readable signal that the role identity still needs reconciliation.
+
+Fix study:
+
+- Promote identity/role changes to typed state transitions with aliases, relationship roles, temporal validity, and confidence.
+- Treat conflicting family/role labels for central characters as blocking unless the chapter explicitly frames the conflict as an in-world lie/reveal.
+- Persist residual warn issues that affect central-character identity into context for later reviewer prompts.
+
+### P3 - Style repetition was not measured
+
+Observed text symptoms:
+
+- Repeated sensory/action templates: `铁锈味`, `旧纸味`, `冷白光`, `脚步声`, `通风管道`, `密钥发热`, `警报`.
+- Repeated dialogue templates: `你疯了`, `别回头`, `你知道这意味着什么吗`.
+
+Observed error log:
+
+```text
+No deterministic style telemetry was logged for repeated motif/dialogue density.
+Affected chapters mostly reached pass/warn and canon_commit without a style-specific issue type.
+```
+
+Fault flow:
+
+1. Style quality is mostly delegated to the LLM reviewer.
+2. The reviewer does not receive a cross-chapter motif-density report.
+3. Repeated imagery and dialogue can be individually acceptable but collectively lower quality across 60 chapters.
+
+Fix study:
+
+- Add a style ledger for high-frequency sensory motifs, action templates, and dialogue templates over a rolling window.
+- Feed top repeated phrases and chapter-local repeats into reviewer evidence.
+- Treat repeated templates as warn by default, but fail final chapters when repetition blocks payoff clarity or makes distinct scenes read as the same scene.
+
+### Content-Fix Order
+
+1. Remove `相关人员` prose fallback and add placeholder leakage tests.
+2. Add typed character-state transitions and expand dead/rescue/execution conflict detection.
+3. Add final-chapter closure gate for active hooks, countdowns, and terminal stakes.
+4. Add structured ledgers for artifact counts and countdown/time pressure.
+5. Add reveal registry and duplicate-reveal checks.
+6. Add full-body duplication metrics before and after repair.
+7. Persist central-character identity warn issues into later context instead of clearing them on normal acceptance.
+8. Add rolling style telemetry for motifs, action templates, and dialogue templates.
+
 ## Patch-Stack Assessment
 
 The current patch has three signs of patch stacking:

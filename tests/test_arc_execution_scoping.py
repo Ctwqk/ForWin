@@ -211,10 +211,12 @@ class ArcExecutionScopingTests(unittest.TestCase):
                     )
                 session.commit()
 
-            orchestrator = WritingOrchestrator(
-                Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
-            )
             captured: dict[str, object] = {}
+            progress_events: list[tuple[str, dict[str, object]]] = []
+            orchestrator = WritingOrchestrator(
+                Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model"),
+                progress_callback=lambda event, payload: progress_events.append((event, dict(payload))),
+            )
 
             def fake_run_project_chapters(**kwargs):
                 captured["chapter_numbers"] = list(kwargs["chapter_numbers"])
@@ -238,6 +240,13 @@ class ArcExecutionScopingTests(unittest.TestCase):
 
         self.assertEqual(captured["chapter_numbers"], [1, 2])
         self.assertEqual(captured["requested_chapters"], 2)
+        resolving_payload = next(
+            payload
+            for event, payload in progress_events
+            if event == "stage_changed" and payload.get("stage") == "resolving_arc_envelope"
+        )
+        self.assertNotIn("requested_chapters", resolving_payload)
+        self.assertEqual(resolving_payload["pending_chapter_count"], 2)
 
     def test_arc_resolution_activates_target_arc_and_uses_project_total(self) -> None:
         with TemporaryDirectory() as tmp:

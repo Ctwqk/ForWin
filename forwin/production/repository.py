@@ -5,6 +5,7 @@ from collections import defaultdict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.generation.continue_workset import build_continue_generation_workset
 from forwin.models.project import ChapterPlan
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.task import GenerationTask
@@ -41,10 +42,12 @@ class ProductionRepository:
             .where(ChapterPlan.project_id.in_(ids))
             .order_by(ChapterPlan.project_id.asc(), ChapterPlan.chapter_number.asc())
         ).scalars().all()
+        plans_by_project: dict[str, list[ChapterPlan]] = defaultdict(list)
         for plan in plans:
             backlog = backlogs.get(str(plan.project_id or ""))
             if backlog is None:
                 continue
+            plans_by_project[str(plan.project_id or "")].append(plan)
             chapter_number = int(plan.chapter_number or 0)
             if chapter_number <= 0:
                 continue
@@ -59,6 +62,7 @@ class ProductionRepository:
                 backlog.drafted_unreviewed.append(chapter_number)
             elif status == "needs_review":
                 backlog.needs_review.append(chapter_number)
+        self._attach_continue_worksets(backlogs, plans_by_project)
 
         accepted_plans = self.session.execute(
             select(ChapterPlan)
@@ -80,6 +84,36 @@ class ProductionRepository:
             terminal_statuses=upload_terminal_statuses,
         )
         return backlogs
+
+    def _attach_continue_worksets(
+        self,
+        backlogs: dict[str, ProductionBacklog],
+        plans_by_project: dict[str, list[ChapterPlan]],
+    ) -> None:
+        for project_id, backlog in backlogs.items():
+            if not backlog.has_existing_chapter_plans:
+                continue
+            if backlog.needs_review or backlog.drafted_unreviewed:
+                continue
+            workset = build_continue_generation_workset(
+                self.session,
+                project_id,
+                source="scheduler_continue",
+                preloaded_plans=plans_by_project.get(project_id, []),
+            )
+            if not workset.chapter_numbers:
+                backlog.planned_unwritten = []
+                backlog.failed = []
+                continue
+            selected = set(workset.chapter_numbers)
+            filtered_planned = [number for number in backlog.planned_unwritten if number in selected]
+            filtered_failed = [number for number in backlog.failed if number in selected]
+            if filtered_planned or filtered_failed:
+                backlog.planned_unwritten = filtered_planned
+                backlog.failed = filtered_failed
+            else:
+                backlog.planned_unwritten = list(workset.chapter_numbers)
+                backlog.failed = []
 
     def _attach_reviewed_unpublished(
         self,

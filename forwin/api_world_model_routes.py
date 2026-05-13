@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from typing import Any, Callable
+from pathlib import Path
 
 from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, Response
 
 from forwin.api_schemas import WorldEditProposalReviewRequest, WorldModelExportRequest, WorldModelImportRequest
+from forwin.world_studio.search_service import WorldStudioSearchService
 from forwin.world_model import api as world_model_api
 
 
@@ -66,9 +68,39 @@ def build_handlers(
             qdrant_models=qdrant_models,
         )
 
+    def search_project_world_studio(
+        project_id: str,
+        query: str,
+        index_kind: str = "all",
+        role: str = "human",
+        as_of_chapter: int = 0,
+        section_type: str = "",
+        limit: int = 10,
+    ):
+        with get_session() as session:
+            world_model_api._ensure_project(session, project_id)
+            config = get_config() if get_config is not None else None
+            return WorldStudioSearchService(
+                skill_root=Path(getattr(config, "skill_registry_path", "forwin_skills")),
+                qdrant_url=getattr(config, "qdrant_url", None),
+                llm_kb_collection=getattr(config, "llm_kb_qdrant_collection", None),
+                qdrant_client=qdrant_client,
+                qdrant_models=qdrant_models,
+                session=session,
+            ).search(
+                project_id,
+                query=query,
+                index_kind=index_kind,
+                role=role,
+                as_of_chapter=as_of_chapter,
+                section_type=section_type,
+                limit=limit,
+            )
+
     return {
         "world_studio_page": world_studio_page,
         "world_studio_asset": world_studio_asset,
+        "search_project_world_studio": search_project_world_studio,
         "list_project_world_model_snapshots": list_project_world_model_snapshots,
         "get_latest_project_world_model_snapshot": get_latest_project_world_model_snapshot,
         "list_project_world_model_pages": list_project_world_model_pages,

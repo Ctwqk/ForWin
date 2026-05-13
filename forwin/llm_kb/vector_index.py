@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha1
 from pathlib import Path
 from typing import Any
@@ -19,6 +19,9 @@ from forwin.retrieval.memory_index import (
 )
 
 
+LLM_KB_PROJECTION_VERSION = "llm_kb_v2"
+
+
 @dataclass
 class LLMKBVectorRecord:
     project_id: str
@@ -28,17 +31,39 @@ class LLMKBVectorRecord:
     text: str
     source_refs: list[str]
     source_digest: str
+    section_digest: str = ""
+    index_kind: str = "llm_kb"
+    as_of_chapter: int = 0
+    projection_version: str = LLM_KB_PROJECTION_VERSION
+    visibility_scope: str = "writer_safe"
+    canon_status: str = "canon_projection"
+    node_refs: list[str] = field(default_factory=list)
+    edge_refs: list[str] = field(default_factory=list)
+    fact_refs: list[str] = field(default_factory=list)
+    map_refs: list[str] = field(default_factory=list)
+    chapter_refs: list[str] = field(default_factory=list)
     score: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "project_id": self.project_id,
+            "index_kind": self.index_kind,
+            "as_of_chapter": self.as_of_chapter,
+            "projection_version": self.projection_version,
             "file_key": self.file_key,
             "section_key": self.section_key,
             "role_scope": self.role_scope,
+            "visibility_scope": self.visibility_scope,
+            "canon_status": self.canon_status,
+            "node_refs": list(self.node_refs),
+            "edge_refs": list(self.edge_refs),
+            "fact_refs": list(self.fact_refs),
+            "map_refs": list(self.map_refs),
+            "chapter_refs": list(self.chapter_refs),
             "text": self.text,
             "source_refs": list(self.source_refs),
             "source_digest": self.source_digest,
+            "section_digest": self.section_digest,
             "score": self.score,
         }
 
@@ -88,12 +113,24 @@ class LLMKBVectorIndex:
             ),
         )
 
-    def _project_filter(self, project_id: str, *, roles: set[str] | None = None) -> Any:
+    def _project_filter(
+        self,
+        project_id: str,
+        *,
+        roles: set[str] | None = None,
+        visibility_scopes: set[str] | None = None,
+        as_of_chapter: int | None = None,
+        index_kind: str = "llm_kb",
+    ) -> Any:
         must = [
             self._rest.FieldCondition(
                 key="project_id",
                 match=self._rest.MatchValue(value=project_id),
-            )
+            ),
+            self._rest.FieldCondition(
+                key="index_kind",
+                match=self._rest.MatchValue(value=index_kind),
+            ),
         ]
         if roles is not None:
             must.append(
@@ -102,39 +139,85 @@ class LLMKBVectorIndex:
                     match=self._rest.MatchAny(any=sorted(roles)),
                 )
             )
+        if visibility_scopes is not None:
+            must.append(
+                self._rest.FieldCondition(
+                    key="visibility_scope",
+                    match=self._rest.MatchAny(any=sorted(visibility_scopes)),
+                )
+            )
+        if as_of_chapter is not None and int(as_of_chapter) > 0:
+            must.append(
+                self._rest.FieldCondition(
+                    key="as_of_chapter",
+                    match=self._rest.MatchValue(value=int(as_of_chapter)),
+                )
+            )
         return self._rest.Filter(must=must)
 
-    def rebuild_project(self, project_id: str, *, source_digest: str = "") -> dict[str, Any]:
+    def rebuild_project(
+        self,
+        project_id: str,
+        *,
+        source_digest: str = "",
+        as_of_chapter: int = 0,
+        projection_version: str = LLM_KB_PROJECTION_VERSION,
+    ) -> dict[str, Any]:
         project_root = self.root / project_id
-        sections = _collect_project_sections(project_root, source_digest=source_digest)
-        texts = [section["text"] for section in sections]
-        embeddings = self.embedder.embed(texts) if texts else []
-        self.client.delete(
-            collection_name=self.collection_name,
-            points_selector=self._rest.FilterSelector(
-                filter=self._project_filter(project_id),
-            ),
-            wait=True,
+        sections = _collect_project_sections(
+            project_root,
+            source_digest=source_digest,
+            as_of_chapter=as_of_chapter,
+            projection_version=projection_version,
         )
+        existing_payloads = _existing_payloads_by_point_id(
+            self.client,
+            self.collection_name,
+            project_id,
+            index_kind="llm_kb",
+            project_filter=self._project_filter(project_id),
+        )
+        sections_to_upsert = []
+        skipped = 0
+        for section in sections:
+            point_id = _point_id(
+                project_id,
+                section["file_key"],
+                section["section_key"],
+                section["role_scope"],
+            )
+            existing = existing_payloads.get(point_id)
+            if existing and existing.get("section_digest") == section.get("section_digest"):
+                skipped += 1
+                continue
+            sections_to_upsert.append((point_id, section))
+        texts = [section["text"] for _, section in sections_to_upsert]
+        embeddings = self.embedder.embed(texts) if texts else []
         points = []
-        for section, embedding in zip(sections, embeddings):
+        for (point_id, section), embedding in zip(sections_to_upsert, embeddings):
             points.append(
                 self._rest.PointStruct(
-                    id=_point_id(
-                        project_id,
-                        section["file_key"],
-                        section["section_key"],
-                        section["role_scope"],
-                    ),
+                    id=point_id,
                     vector=embedding,
                     payload={
                         "project_id": project_id,
+                        "index_kind": section["index_kind"],
+                        "as_of_chapter": section["as_of_chapter"],
+                        "projection_version": section["projection_version"],
                         "file_key": section["file_key"],
                         "section_key": section["section_key"],
                         "role_scope": section["role_scope"],
+                        "visibility_scope": section["visibility_scope"],
+                        "canon_status": section["canon_status"],
+                        "node_refs": section["node_refs"],
+                        "edge_refs": section["edge_refs"],
+                        "fact_refs": section["fact_refs"],
+                        "map_refs": section["map_refs"],
+                        "chapter_refs": section["chapter_refs"],
                         "text": section["text"],
                         "source_refs": section["source_refs"],
                         "source_digest": section["source_digest"],
+                        "section_digest": section["section_digest"],
                     },
                 )
             )
@@ -144,6 +227,8 @@ class LLMKBVectorIndex:
             "backend": "qdrant",
             "collection": self.collection_name,
             "section_count": len(sections),
+            "upserted_section_count": len(points),
+            "skipped_section_count": skipped,
             "dims": self.embedder.dims,
         }
 
@@ -154,17 +239,27 @@ class LLMKBVectorIndex:
         *,
         role: str = "writer",
         limit: int = 5,
+        as_of_chapter: int | None = None,
+        visibility_scope: str | None = None,
     ) -> list[LLMKBVectorRecord]:
         query_text = str(query or "").strip()
         if not query_text:
             return []
         limit_value = max(1, int(limit or 5))
+        allowed_visibility = _allowed_visibility_scopes(role)
+        requested_visibility = str(visibility_scope or "").strip()
+        if requested_visibility:
+            allowed_visibility = allowed_visibility.intersection({requested_visibility})
+            if not allowed_visibility:
+                return []
         response = self.client.query_points(
             collection_name=self.collection_name,
             query=self.embedder.embed([query_text])[0],
             query_filter=self._project_filter(
                 project_id,
                 roles=_allowed_role_scopes(role),
+                visibility_scopes=allowed_visibility,
+                as_of_chapter=as_of_chapter,
             ),
             limit=limit_value,
         )
@@ -181,6 +276,17 @@ class LLMKBVectorIndex:
                     text=_trim(str(payload.get("text") or ""), 900),
                     source_refs=_source_refs(payload.get("source_refs")),
                     source_digest=str(payload.get("source_digest") or ""),
+                    section_digest=str(payload.get("section_digest") or ""),
+                    index_kind=str(payload.get("index_kind") or "llm_kb"),
+                    as_of_chapter=int(payload.get("as_of_chapter") or 0),
+                    projection_version=str(payload.get("projection_version") or LLM_KB_PROJECTION_VERSION),
+                    visibility_scope=str(payload.get("visibility_scope") or "writer_safe"),
+                    canon_status=str(payload.get("canon_status") or "canon_projection"),
+                    node_refs=_source_refs(payload.get("node_refs")),
+                    edge_refs=_source_refs(payload.get("edge_refs")),
+                    fact_refs=_source_refs(payload.get("fact_refs")),
+                    map_refs=_source_refs(payload.get("map_refs")),
+                    chapter_refs=_source_refs(payload.get("chapter_refs")),
                     score=float(getattr(point, "score", 0.0) or 0.0),
                 )
             )
@@ -200,7 +306,13 @@ def _source_refs(raw: Any) -> list[str]:
     return []
 
 
-def _collect_project_sections(project_root: Path, *, source_digest: str) -> list[dict[str, Any]]:
+def _collect_project_sections(
+    project_root: Path,
+    *,
+    source_digest: str,
+    as_of_chapter: int,
+    projection_version: str,
+) -> list[dict[str, Any]]:
     sections: list[dict[str, Any]] = []
     if not project_root.exists():
         return sections
@@ -209,28 +321,100 @@ def _collect_project_sections(project_root: Path, *, source_digest: str) -> list
         if not path.exists() or not path.is_file():
             continue
         if file_key.endswith(".jsonl"):
-            sections.extend(_jsonl_sections(file_key, path, source_digest=source_digest))
+            sections.extend(
+                _jsonl_sections(
+                    file_key,
+                    path,
+                    source_digest=source_digest,
+                    as_of_chapter=as_of_chapter,
+                    projection_version=projection_version,
+                )
+            )
         else:
-            sections.extend(_markdown_sections(file_key, path, source_digest=source_digest))
+            sections.extend(
+                _markdown_sections(
+                    file_key,
+                    path,
+                    source_digest=source_digest,
+                    as_of_chapter=as_of_chapter,
+                    projection_version=projection_version,
+                )
+            )
     packs_root = project_root / "packs"
     for role in ("reviewer", "planner", "compiler"):
         path = packs_root / role / "context.json"
         if path.exists() and path.is_file():
-            text = _trim(path.read_text(encoding="utf-8"), 6000)
+            raw_text = path.read_text(encoding="utf-8")
+            text = _trim(raw_text, 6000)
             sections.append(
-                {
-                    "file_key": f"packs/{role}/context.json",
-                    "section_key": "context",
-                    "role_scope": role,
-                    "text": text,
-                    "source_refs": [f"llm_kb:pack:{role}"],
-                    "source_digest": source_digest,
-                }
+                _section_record(
+                    file_key=f"packs/{role}/context.json",
+                    section_key="context",
+                    role_scope=role,
+                    text=text,
+                    source_refs=[f"llm_kb:pack:{role}"],
+                    source_digest=source_digest,
+                    as_of_chapter=as_of_chapter,
+                    projection_version=projection_version,
+                )
+            )
+            sections.extend(
+                _active_personality_sections(
+                    role,
+                    raw_text,
+                    source_digest=source_digest,
+                    as_of_chapter=as_of_chapter,
+                    projection_version=projection_version,
+                )
             )
     return [section for section in sections if section["text"].strip()]
 
 
-def _markdown_sections(file_key: str, path: Path, *, source_digest: str) -> list[dict[str, Any]]:
+def _existing_payloads_by_point_id(
+    client: Any,
+    collection_name: str,
+    project_id: str,
+    *,
+    index_kind: str,
+    project_filter: Any,
+) -> dict[str, dict[str, Any]]:
+    if hasattr(client, "collections"):
+        collection = getattr(client, "collections", {}).get(collection_name, {})
+        points = collection.get("points", {}) if isinstance(collection, dict) else {}
+        return {
+            str(point_id): dict(getattr(point, "payload", {}) or {})
+            for point_id, point in points.items()
+            if getattr(point, "payload", {}).get("project_id") == project_id
+            and getattr(point, "payload", {}).get("index_kind") == index_kind
+        }
+    if hasattr(client, "scroll"):
+        try:
+            response = client.scroll(
+                collection_name=collection_name,
+                scroll_filter=project_filter,
+                limit=10_000,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except TypeError:
+            return {}
+        points = response[0] if isinstance(response, tuple) else response
+        return {
+            str(getattr(point, "id", "")): dict(getattr(point, "payload", {}) or {})
+            for point in points
+            if getattr(point, "id", None)
+        }
+    return {}
+
+
+def _markdown_sections(
+    file_key: str,
+    path: Path,
+    *,
+    source_digest: str,
+    as_of_chapter: int,
+    projection_version: str,
+) -> list[dict[str, Any]]:
     text = path.read_text(encoding="utf-8")
     chunks: list[tuple[str, str]] = []
     current_key = "root"
@@ -246,20 +430,29 @@ def _markdown_sections(file_key: str, path: Path, *, source_digest: str) -> list
     if current_lines:
         chunks.append((current_key, "\n".join(current_lines).strip()))
     return [
-        {
-            "file_key": file_key,
-            "section_key": key,
-            "role_scope": _role_scope_for_file(file_key),
-            "text": _trim(chunk, 3000),
-            "source_refs": [f"llm_kb:{file_key}#{key}"],
-            "source_digest": source_digest,
-        }
+        _section_record(
+            file_key=file_key,
+            section_key=key,
+            role_scope=_role_scope_for_file(file_key),
+            text=_trim(chunk, 3000),
+            source_refs=[f"llm_kb:{file_key}#{key}"],
+            source_digest=source_digest,
+            as_of_chapter=as_of_chapter,
+            projection_version=projection_version,
+        )
         for key, chunk in chunks
         if chunk.strip()
     ]
 
 
-def _jsonl_sections(file_key: str, path: Path, *, source_digest: str) -> list[dict[str, Any]]:
+def _jsonl_sections(
+    file_key: str,
+    path: Path,
+    *,
+    source_digest: str,
+    as_of_chapter: int,
+    projection_version: str,
+) -> list[dict[str, Any]]:
     sections: list[dict[str, Any]] = []
     for index, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not raw.strip():
@@ -270,16 +463,160 @@ def _jsonl_sections(file_key: str, path: Path, *, source_digest: str) -> list[di
             payload = {"raw": raw}
         text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         sections.append(
-            {
-                "file_key": file_key,
-                "section_key": str(payload.get("id") or index) if isinstance(payload, dict) else str(index),
-                "role_scope": _role_scope_for_file(file_key),
-                "text": _trim(text, 2400),
-                "source_refs": [f"llm_kb:{file_key}:{index}"],
-                "source_digest": source_digest,
-            }
+            _section_record(
+                file_key=file_key,
+                section_key=str(payload.get("id") or index) if isinstance(payload, dict) else str(index),
+                role_scope=_role_scope_for_file(file_key),
+                text=_trim(text, 2400),
+                source_refs=[f"llm_kb:{file_key}:{index}"],
+                source_digest=source_digest,
+                as_of_chapter=as_of_chapter,
+                projection_version=projection_version,
+                raw_payload=payload if isinstance(payload, dict) else None,
+            )
         )
     return sections
+
+
+def _active_personality_sections(
+    role: str,
+    raw_text: str,
+    *,
+    source_digest: str,
+    as_of_chapter: int,
+    projection_version: str,
+) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(raw_text or "{}")
+    except json.JSONDecodeError:
+        return []
+    contexts = payload.get("active_personality_contexts") if isinstance(payload, dict) else None
+    if not isinstance(contexts, list):
+        return []
+    sections: list[dict[str, Any]] = []
+    for index, context in enumerate(contexts, start=1):
+        if not isinstance(context, dict):
+            continue
+        character_id = str(context.get("character_id") or index)
+        text = json.dumps(
+            {
+                "character_id": context.get("character_id", ""),
+                "character_name": context.get("character_name", ""),
+                "active_skills": context.get("active_skills", {}),
+                "current_behavior_bias": context.get("current_behavior_bias", {}),
+                "constraints": context.get("constraints", []),
+                "source_refs": context.get("source_refs", []),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        sections.append(
+            _section_record(
+                file_key=f"packs/{role}/active_personality_context.json",
+                section_key=character_id,
+                role_scope=role,
+                text=_trim(text, 2400),
+                source_refs=[f"llm_kb:pack:{role}:active_personality_context:{character_id}"],
+                source_digest=source_digest,
+                as_of_chapter=as_of_chapter,
+                projection_version=projection_version,
+            )
+        )
+    return sections
+
+
+def _section_record(
+    *,
+    file_key: str,
+    section_key: str,
+    role_scope: str,
+    text: str,
+    source_refs: list[str],
+    source_digest: str,
+    as_of_chapter: int,
+    projection_version: str,
+    raw_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    refs = _reference_fields(file_key, text, source_refs, raw_payload=raw_payload)
+    section_digest = sha1(
+        json.dumps(
+            {
+                "file_key": file_key,
+                "section_key": section_key,
+                "role_scope": role_scope,
+                "visibility_scope": _visibility_scope_for_role(role_scope),
+                "text": text,
+                "source_refs": source_refs,
+                **refs,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "project_id": "",
+        "index_kind": "llm_kb",
+        "file_key": file_key,
+        "section_key": section_key,
+        "role_scope": role_scope,
+        "visibility_scope": _visibility_scope_for_role(role_scope),
+        "canon_status": "canon_projection",
+        "text": text,
+        "source_refs": source_refs,
+        "source_digest": source_digest,
+        "section_digest": section_digest,
+        "as_of_chapter": int(as_of_chapter or 0),
+        "projection_version": projection_version or LLM_KB_PROJECTION_VERSION,
+        **refs,
+    }
+
+
+def _reference_fields(
+    file_key: str,
+    text: str,
+    source_refs: list[str],
+    *,
+    raw_payload: dict[str, Any] | None = None,
+) -> dict[str, list[str]]:
+    blob = "\n".join([text, *source_refs])
+    node_refs = set(_extract_ref_ids(blob, "node"))
+    edge_refs = set(_extract_ref_ids(blob, "edge"))
+    fact_refs = set(_extract_ref_ids(blob, "fact"))
+    map_refs = set(_extract_map_refs(blob))
+    chapter_refs = set(re.findall(r"\bchapter:\d+\b", blob))
+    if raw_payload:
+        item_id = str(raw_payload.get("id") or "").strip()
+        if item_id:
+            if file_key == "facts.jsonl":
+                fact_refs.add(item_id)
+            elif file_key == "graph_deltas.jsonl":
+                target_type = str(raw_payload.get("target_type") or "").strip()
+                target_id = str(raw_payload.get("target_id") or "").strip()
+                if target_type == "node" and target_id:
+                    node_refs.add(target_id)
+                elif target_type == "edge" and target_id:
+                    edge_refs.add(target_id)
+            else:
+                node_refs.add(item_id)
+        raw_chapter = raw_payload.get("as_of_chapter") or raw_payload.get("chapter_number")
+        if raw_chapter:
+            chapter_refs.add(f"chapter:{int(raw_chapter)}")
+    return {
+        "node_refs": sorted(node_refs),
+        "edge_refs": sorted(edge_refs),
+        "fact_refs": sorted(fact_refs),
+        "map_refs": sorted(map_refs),
+        "chapter_refs": sorted(chapter_refs),
+    }
+
+
+def _extract_ref_ids(blob: str, ref_type: str) -> list[str]:
+    return re.findall(rf"(?:book_state:{ref_type}:|{ref_type}:)([A-Za-z0-9_.-]+)", blob)
+
+
+def _extract_map_refs(blob: str) -> list[str]:
+    refs = re.findall(r"(?:book_state:(map_node|map_edge):|(map_node|map_edge):)([A-Za-z0-9_.-]+)", blob)
+    return [f"{left or right}:{item_id}" for left, right, item_id in refs]
 
 
 def _role_scope_for_file(file_key: str) -> str:
@@ -299,6 +636,28 @@ def _allowed_role_scopes(role: str) -> set[str]:
     if normalized == "compiler":
         return {"writer", "compiler"}
     return {"writer"}
+
+
+def _visibility_scope_for_role(role_scope: str) -> str:
+    normalized = str(role_scope or "writer").strip().lower()
+    if normalized == "reviewer":
+        return "reviewer_only"
+    if normalized == "planner":
+        return "planner_only"
+    if normalized == "compiler":
+        return "compiler_only"
+    return "writer_safe"
+
+
+def _allowed_visibility_scopes(role: str) -> set[str]:
+    normalized = str(role or "writer").strip().lower()
+    if normalized == "reviewer":
+        return {"writer_safe", "reviewer_only"}
+    if normalized == "planner":
+        return {"writer_safe", "planner_only"}
+    if normalized == "compiler":
+        return {"writer_safe", "compiler_only"}
+    return {"writer_safe"}
 
 
 def _trim(text: str, limit: int) -> str:

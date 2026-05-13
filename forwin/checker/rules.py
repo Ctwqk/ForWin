@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 from forwin.protocol.writer import WriterOutput
 from forwin.protocol.review import ReviewVerdict, ContinuityIssue
 from forwin.governance import issue_group_for_issue
+from forwin.canon_quality.placeholder import extract_expected_protagonist_names
 from forwin.canon_names import extract_canon_name_anchors, find_canon_name_violations
 
 logger = logging.getLogger(__name__)
@@ -39,8 +40,6 @@ GENERIC_CHARACTER_REFERENCES = {
     "部门总监",
     "部门负责人",
     "集团高管",
-    "相关人员",
-    "一名相关人员",
     "同学",
     "众人",
     "人群",
@@ -49,6 +48,9 @@ GENERIC_CHARACTER_REFERENCES = {
     "管理员",
     "工作人员",
     "服务员",
+    "追踪者",
+    "不明追踪者",
+    "无脸人",
 }
 GENERIC_CHARACTER_ROLE_SUFFIXES = (
     "技术员",
@@ -428,6 +430,7 @@ class ContinuityChecker:
             self._normalize_character_reference(anchor.canonical_name)
             for anchor in self._canon_name_anchors(project_id)
         )
+        allowed_names.update(self._project_protagonist_names(project_id))
         if not allowed_names:
             return []
         candidate_names: set[str] = set()
@@ -490,6 +493,23 @@ class ContinuityChecker:
                 )
             )
         return issues
+
+    def _project_protagonist_names(self, project_id: str) -> set[str]:
+        get_project = getattr(self.repo, "get_project", None)
+        if not callable(get_project):
+            return set()
+        try:
+            project = get_project(project_id)
+        except Exception:  # noqa: BLE001
+            return set()
+        return {
+            self._normalize_character_reference(name)
+            for name in extract_expected_protagonist_names(
+                str(getattr(project, "premise", "") or ""),
+                str(getattr(project, "setting_summary", "") or ""),
+            )
+            if str(name or "").strip()
+        }
 
     @staticmethod
     def _looks_like_named_character(name: str) -> bool:

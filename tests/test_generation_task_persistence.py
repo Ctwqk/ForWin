@@ -131,6 +131,27 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertEqual(paused["current_stage"], "paused")
         self.assertTrue(paused["pause_requested"])
 
+    def test_progress_update_cannot_expand_requested_chapters_contract(self) -> None:
+        task = api_module._create_task_record(title="继续生成计数契约", requested_chapters=2)
+        task["project_id"] = "project-progress-contract"
+        task["status"] = "running"
+        task["current_stage"] = "queued"
+        api_module._persist_generation_task("task-progress-contract", task)
+
+        api_module._update_task(
+            "task-progress-contract",
+            current_stage="resolving_arc_envelope",
+            requested_chapters=12,
+            current_chapter=1,
+        )
+
+        loaded = api_module._get_generation_task_or_404("task-progress-contract")
+        self.assertEqual(loaded["requested_chapters"], 2)
+        self.assertEqual(loaded["current_stage"], "resolving_arc_envelope")
+        with self.session_factory() as session:
+            row = session.get(GenerationTask, "task-progress-contract")
+            self.assertEqual(row.requested_chapters, 2)
+
     def test_checkpoint_pause_does_not_become_user_pause_request(self) -> None:
         task = api_module._create_task_record(title="检查点暂停语义", requested_chapters=2)
         task["status"] = "running"

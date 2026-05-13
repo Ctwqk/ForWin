@@ -273,6 +273,8 @@ def approve_band_checkpoint(
         )
         row.status = next_status
         row.reason = reason
+        if next_status in {"pass", "overridden"} and row.resolved_at is None:
+            row.resolved_at = datetime.now(timezone.utc)
         session.add(row)
         session.flush()
         log_decision_event(

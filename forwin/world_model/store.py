@@ -179,8 +179,18 @@ class WorldModelStore:
         markdown: str,
         frontmatter: dict[str, Any],
         as_of_chapter: int,
+        projection_kind: str = "world_studio",
+        projection_version: str = "",
+        source_digest: str = "",
+        section_digest: dict[str, str] | None = None,
+        observer_type: str = "",
+        observer_id: str = "",
+        role_scope: str = "",
+        visibility_scope: str = "",
+        canon_status: str = "canon_projection",
     ) -> WorldModelPageRow:
         digest = content_hash(stable_json(frontmatter), markdown)
+        section_digest_json = json.dumps(section_digest or {}, ensure_ascii=False, sort_keys=True)
         stmt = (
             select(WorldModelPageRow)
             .where(
@@ -205,6 +215,15 @@ class WorldModelStore:
                 revision=1,
                 status="canon_live",
                 as_of_chapter=int(as_of_chapter),
+                projection_kind=projection_kind,
+                projection_version=projection_version,
+                source_digest=source_digest,
+                section_digest_json=section_digest_json,
+                observer_type=observer_type,
+                observer_id=observer_id,
+                role_scope=role_scope,
+                visibility_scope=visibility_scope,
+                canon_status=canon_status,
             )
         else:
             if row.content_hash != digest:
@@ -217,6 +236,15 @@ class WorldModelStore:
             row.content_hash = digest
             row.status = "canon_live"
             row.as_of_chapter = int(as_of_chapter)
+            row.projection_kind = projection_kind
+            row.projection_version = projection_version
+            row.source_digest = source_digest
+            row.section_digest_json = section_digest_json
+            row.observer_type = observer_type
+            row.observer_id = observer_id
+            row.role_scope = role_scope
+            row.visibility_scope = visibility_scope
+            row.canon_status = canon_status
         self.session.add(row)
         self.session.flush()
         return row

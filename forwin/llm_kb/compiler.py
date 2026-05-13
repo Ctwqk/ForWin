@@ -15,7 +15,7 @@ from forwin.retrieval.broker import RetrievalBroker
 from forwin.state.repo import StateRepository
 
 from .store import DEFAULT_LLM_KB_ROOT
-from .vector_index import LLMKBVectorIndex
+from .vector_index import LLM_KB_PROJECTION_VERSION, LLMKBVectorIndex
 
 
 ROOT_MARKDOWN_FILES = [
@@ -131,6 +131,7 @@ class LLMKnowledgeBaseCompiler:
             "project_id": project_id,
             "as_of_chapter": as_of,
             "source_digest": source_digest,
+            "projection_version": LLM_KB_PROJECTION_VERSION,
             "files": sorted(files),
             "root_policy": "writer_safe",
             "canon_source": "BookState DB canon",
@@ -144,7 +145,12 @@ class LLMKnowledgeBaseCompiler:
             collection_name=self.qdrant_collection,
             qdrant_client=self.qdrant_client,
             qdrant_models=self.qdrant_models,
-        ).rebuild_project(project_id, source_digest=source_digest)
+        ).rebuild_project(
+            project_id,
+            source_digest=source_digest,
+            as_of_chapter=as_of,
+            projection_version=LLM_KB_PROJECTION_VERSION,
+        )
         retrieval_index["vector_index"] = vector_index
         (project_root / "retrieval_index.json").write_text(json.dumps(retrieval_index, ensure_ascii=False, indent=2), encoding="utf-8")
         return LLMKBCompileResult(
@@ -368,4 +374,3 @@ def _delta_record(delta: GraphDelta, as_of: int, digest: str) -> dict[str, Any]:
 def _digest(value: Any) -> str:
     raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-

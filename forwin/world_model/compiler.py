@@ -327,11 +327,15 @@ class WorldModelCompiler:
                 "travel_constraints": map_atlas.get("topology_rules") if isinstance(map_atlas.get("topology_rules"), list) else [],
             },
             "actor_model": {
-                "characters": characters
-                + self._genesis_actor_pages(story_engine, "characters", "character")
-                + self._genesis_actor_pages(story_engine, "core_cast", "character")
-                + self._culture_example_characters(world_bible),
-                "factions": factions + self._genesis_actor_pages(story_engine, "factions", "faction"),
+                "characters": self._dedupe_actor_payloads(
+                    characters
+                    + self._genesis_actor_pages(story_engine, "characters", "character")
+                    + self._genesis_actor_pages(story_engine, "core_cast", "character")
+                    + self._culture_example_characters(world_bible)
+                ),
+                "factions": self._dedupe_actor_payloads(
+                    factions + self._genesis_actor_pages(story_engine, "factions", "faction")
+                ),
                 "organizations": organizations,
                 "families": [],
                 "other_entities": other_entities,
@@ -530,6 +534,36 @@ class WorldModelCompiler:
             }
             for row in rows
         ]
+
+    @staticmethod
+    def _dedupe_actor_payloads(payloads: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        seen: dict[str, int] = {}
+        for payload in payloads:
+            if not isinstance(payload, dict):
+                continue
+            name = str(payload.get("name", "") or "").strip()
+            key = re.sub(r"\s+", "", name).lower() or str(payload.get("id", "") or "").strip()
+            if not key:
+                continue
+            if key not in seen:
+                seen[key] = len(result)
+                result.append(payload)
+                continue
+            existing = result[seen[key]]
+            aliases = []
+            for source in (existing.get("aliases"), payload.get("aliases")):
+                if isinstance(source, list):
+                    aliases.extend(str(item).strip() for item in source if str(item).strip())
+            if aliases:
+                existing["aliases"] = list(dict.fromkeys(aliases))
+            if not str(existing.get("description", "") or "").strip() and payload.get("description"):
+                existing["description"] = payload.get("description")
+            existing_state = existing.get("current_state") if isinstance(existing.get("current_state"), dict) else {}
+            payload_state = payload.get("current_state") if isinstance(payload.get("current_state"), dict) else {}
+            if payload_state:
+                existing["current_state"] = {**payload_state, **existing_state}
+        return result
 
     @staticmethod
     def _genesis_actor_pages(story_engine: dict[str, Any], key: str, kind: str) -> list[dict[str, Any]]:

@@ -107,6 +107,29 @@ def test_scheduler_runs_due_projects_and_preserves_legacy_actions() -> None:
                         status=status,
                     )
                 )
+                if project is project_continue:
+                    future_arc = ArcPlanVersion(
+                        id=new_id(),
+                        project_id=project.id,
+                        version=1,
+                        arc_synopsis="后续弧线",
+                        status="planned",
+                        arc_number=2,
+                        chapter_start=2,
+                        chapter_end=2,
+                    )
+                    session.add(future_arc)
+                    session.flush()
+                    session.add(
+                        ChapterPlan(
+                            id=new_id(),
+                            project_id=project.id,
+                            arc_plan_id=future_arc.id,
+                            chapter_number=2,
+                            title="第二章",
+                            status="planned",
+                        )
+                    )
             session.add(
                 GenerationTask(
                     id="task-active",

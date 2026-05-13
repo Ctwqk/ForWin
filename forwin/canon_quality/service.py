@@ -4,17 +4,19 @@ import re
 from typing import Any
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from forwin.models.project import Project
+from forwin.models.draft import CandidateDraftRecord, ChapterDraft
+from forwin.models.project import ChapterPlan, Project
 from forwin.protocol.writer import WriterOutput
 
 from .artifact_ledger import analyze_artifact_counts
 from .character_state import analyze_character_state_transitions
 from .countdown_ledger import analyze_countdowns
 from .duplication import analyze_full_body_duplication
-from .identity import analyze_identity_roles
+from .final_completion import analyze_final_completion
+from .identity import analyze_identity_roles, extract_identity_role_facts
 from .placeholder import analyze_placeholder_leakage, extract_expected_protagonist_names
 from .repository import CanonQualityRepository
 from .reveal_registry import analyze_reveals
@@ -41,8 +43,14 @@ def analyze_writer_output_quality(
 ) -> CanonQualityAnalysisResult:
     repo = CanonQualityRepository(session)
     project = session.get(Project, project_id)
-    target_total = int(getattr(project, "target_total_chapters", 0) or 0)
-    is_final_chapter = bool(target_total and int(chapter_number or 0) >= target_total)
+    is_final_chapter = _is_final_chapter(
+        session=session,
+        project=project,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        title=str(writer_output.title or ""),
+        summary=str(writer_output.end_of_chapter_summary or ""),
+    )
     body = str(writer_output.body or "")
     summary = str(writer_output.end_of_chapter_summary or "")
 
@@ -78,6 +86,18 @@ def analyze_writer_output_quality(
     )
     signals.extend(countdown_signals)
 
+    signals.extend(
+        analyze_final_completion(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            draft_id=draft_id,
+            body=body,
+            title=str(writer_output.title or ""),
+            summary=summary,
+            is_final_chapter=is_final_chapter,
+        )
+    )
+
     artifact_signals, artifact_entries = analyze_artifact_counts(
         project_id=project_id,
         chapter_number=chapter_number,
@@ -106,12 +126,28 @@ def analyze_writer_output_quality(
     )
     signals.extend(duplicate_signals)
 
+    identity_text = "\n".join(part for part in (summary, body) if part)
+    current_identity_names = {
+        fact.character_name
+        for fact in extract_identity_role_facts(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            draft_id=draft_id,
+            text=identity_text,
+        )
+        if fact.character_name
+    }
     identity_signals, _identity_facts = analyze_identity_roles(
         project_id=project_id,
         chapter_number=chapter_number,
         draft_id=draft_id,
-        body=body,
-        previous_facts=[],
+        body=identity_text,
+        previous_facts=_previous_identity_facts(
+            session,
+            project_id,
+            before_chapter=chapter_number,
+            known_names=current_identity_names,
+        ),
         central_characters=_central_character_names(body),
     )
     signals.extend(identity_signals)
@@ -168,6 +204,87 @@ def _quality_report(*, signals: list[CanonQualitySignal], countdown_entries: lis
             "countdown_mentions": [getattr(item, "model_dump", lambda **_: {})(mode="json") for item in countdown_entries],
         },
     }
+
+
+def _previous_identity_facts(
+    session: Session,
+    project_id: str,
+    *,
+    before_chapter: int,
+    known_names: set[str] | None = None,
+) -> list[Any]:
+    rows = session.execute(
+        select(CandidateDraftRecord, ChapterDraft)
+        .join(ChapterDraft, ChapterDraft.id == CandidateDraftRecord.candidate_draft_id)
+        .where(
+            CandidateDraftRecord.project_id == project_id,
+            CandidateDraftRecord.chapter_number < int(before_chapter or 0),
+            CandidateDraftRecord.status == "canon_committed",
+            CandidateDraftRecord.canon_status == "canon",
+        )
+        .order_by(CandidateDraftRecord.chapter_number.asc(), CandidateDraftRecord.updated_at.asc())
+    ).all()
+    facts: list[Any] = []
+    names: set[str] = {str(name) for name in (known_names or set()) if str(name).strip()}
+    for record, draft in rows:
+        chapter_number = int(record.chapter_number or 0)
+        text = "\n".join(part for part in (str(draft.summary or ""), str(draft.body_text or "")) if part)
+        chapter_facts = extract_identity_role_facts(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            draft_id=str(draft.id or ""),
+            text=text,
+            known_names=names,
+        )
+        facts.extend(chapter_facts)
+        names.update(fact.character_name for fact in chapter_facts if fact.character_name)
+    return facts
+
+
+def _is_final_chapter(
+    *,
+    session: Session,
+    project: Project | None,
+    project_id: str,
+    chapter_number: int,
+    title: str = "",
+    summary: str = "",
+) -> bool:
+    current = int(chapter_number or 0)
+    if current <= 0:
+        return False
+    target_total = int(getattr(project, "target_total_chapters", 0) or 0)
+    if target_total and current >= target_total:
+        return True
+    max_materialized = session.execute(
+        select(func.max(ChapterPlan.chapter_number)).where(ChapterPlan.project_id == project_id)
+    ).scalar_one_or_none()
+    if (
+        max_materialized is not None
+        and current >= int(max_materialized or 0)
+        and _looks_like_final_chapter_label(title=title, summary=summary)
+    ):
+        return True
+    return False
+
+
+def _looks_like_final_chapter_label(*, title: str, summary: str) -> bool:
+    text = f"{title}\n{summary}"
+    return any(
+        marker in text
+        for marker in (
+            "终章",
+            "尾声",
+            "大结局",
+            "最终章",
+            "最后一章",
+            "最后一日",
+            "最后一天",
+            "最终决战",
+            "finale",
+            "Finale",
+        )
+    )
 
 
 def _infer_artifact_target(project: Project | None, body: str) -> int:

@@ -51,8 +51,18 @@ GENERIC_CHARACTER_REFERENCES = {
     "追踪者",
     "不明追踪者",
     "无脸人",
+    "手下",
+    "下属",
+    "部下",
+    "同伙",
+    "随从",
 }
 GENERIC_CHARACTER_ROLE_SUFFIXES = (
+    "手下",
+    "下属",
+    "部下",
+    "同伙",
+    "随从",
     "技术员",
     "工程师",
     "程序员",
@@ -61,12 +71,29 @@ GENERIC_CHARACTER_ROLE_SUFFIXES = (
     "中间人",
     "摊主",
     "追兵",
+    "追踪者",
     "安保",
     "保镖",
     "警员",
     "警察",
+    "巡检员",
     "员工",
     "主管",
+)
+POSSESSIVE_GENERIC_ROLE_SUFFIXES = (
+    "手下",
+    "下属",
+    "部下",
+    "同伙",
+    "随从",
+    "队员",
+    "巡检员",
+    "追兵",
+    "追踪者",
+    "守卫",
+    "保镖",
+    "安保",
+    "员工",
 )
 NON_CHARACTER_NAME_KEYWORDS = (
     "集团",
@@ -430,6 +457,7 @@ class ContinuityChecker:
             self._normalize_character_reference(anchor.canonical_name)
             for anchor in self._canon_name_anchors(project_id)
         )
+        allowed_names.update(self._known_character_names(project_id))
         allowed_names.update(self._project_protagonist_names(project_id))
         if not allowed_names:
             return []
@@ -511,6 +539,25 @@ class ContinuityChecker:
             if str(name or "").strip()
         }
 
+    def _known_character_names(self, project_id: str) -> set[str]:
+        get_active_entities = getattr(self.repo, "get_active_entities", None)
+        if not callable(get_active_entities):
+            return set()
+        try:
+            entities = get_active_entities(project_id)
+        except Exception:  # noqa: BLE001
+            return set()
+        names: set[str] = set()
+        for entity in entities or []:
+            if str(getattr(entity, "kind", "") or "") != "character":
+                continue
+            raw_names = [getattr(entity, "name", "") or "", *(getattr(entity, "aliases", []) or [])]
+            for raw_name in raw_names:
+                name = self._normalize_character_reference(str(raw_name or ""))
+                if name:
+                    names.add(name)
+        return names
+
     @staticmethod
     def _looks_like_named_character(name: str) -> bool:
         text = ContinuityChecker._normalize_character_reference(name)
@@ -532,6 +579,10 @@ class ContinuityChecker:
             return False
         if text in GENERIC_CHARACTER_REFERENCES:
             return True
+        if "的" in text:
+            _prefix, suffix = text.rsplit("的", 1)
+            if suffix and any(suffix.endswith(role) for role in POSSESSIVE_GENERIC_ROLE_SUFFIXES):
+                return True
         return len(text) <= 8 and any(text.endswith(suffix) for suffix in GENERIC_CHARACTER_ROLE_SUFFIXES)
 
     @staticmethod
@@ -543,7 +594,7 @@ class ContinuityChecker:
             prefix, suffix = text.rsplit(opener, 1)
             suffix = suffix[: -len(closer)].strip()
             prefix = prefix.strip()
-            if suffix in {"提及", "无名", "记录", "旁白"} and prefix:
+            if suffix in {"提及", "无名", "记录", "旁白", "幕后", "间接"} and prefix:
                 text = prefix
             elif prefix and ContinuityChecker._looks_like_generic_character_reference(prefix):
                 text = prefix

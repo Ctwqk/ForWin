@@ -4,6 +4,9 @@ import json
 import logging
 from typing import Any
 
+from sqlalchemy import func, select
+
+from forwin.models.project import ChapterPlan
 from forwin.protocol.context import (
     ArcEnvelopeView,
     AudienceHintView,
@@ -691,6 +694,138 @@ def _save_personality_integrity_failure(repo_session, project_id: str, chapter_n
     )
 
 
+def _build_canon_quality_context(
+    *,
+    session,
+    project_id: str,
+    chapter_number: int,
+    target_total_chapters: int,
+    chapter_title: str = "",
+    chapter_summary: str = "",
+) -> dict[str, Any]:
+    is_final_chapter = _is_final_chapter_for_context(
+        session=session,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        target_total_chapters=target_total_chapters,
+        title=chapter_title,
+        summary=chapter_summary,
+    )
+    base = {
+        "target_total_chapters": int(target_total_chapters or 0),
+        "is_final_chapter": is_final_chapter,
+        "countdown_constraints": [],
+        "open_signals": [],
+    }
+    if session is None:
+        return base
+    try:
+        from forwin.canon_quality.repository import CanonQualityRepository
+
+        repo = CanonQualityRepository(session)
+        entries = repo.list_countdown_entries(
+            project_id,
+            before_chapter=int(chapter_number or 0),
+            include_details=True,
+        )
+        latest_by_key: dict[str, dict[str, Any]] = {}
+        for entry in entries:
+            key = str(entry.get("countdown_key") or "").strip()
+            if not key:
+                continue
+            if bool(entry.get("is_resolution_event")) or str(entry.get("status") or "") == "resolved":
+                latest_by_key.pop(key, None)
+                continue
+            remaining = entry.get("normalized_remaining_minutes")
+            if remaining is None:
+                continue
+            latest_by_key[key] = entry
+        countdown_constraints = [
+            {
+                "countdown_key": key,
+                "label": str(item.get("label") or key),
+                "latest_remaining_minutes": int(item.get("normalized_remaining_minutes") or 0),
+                "latest_chapter": int(item.get("chapter_number") or 0),
+                "raw_mention": str(item.get("raw_mention") or ""),
+                "status": str(item.get("status") or ""),
+            }
+            for key, item in sorted(latest_by_key.items())
+            if int(item.get("normalized_remaining_minutes") or 0) > 0
+        ]
+        open_signals = [
+            {
+                "signal_type": signal.signal_type,
+                "severity": signal.severity,
+                "chapter_number": signal.chapter_number,
+                "subject_key": signal.subject_key,
+                "description": signal.description,
+            }
+            for signal in repo.list_open_signals(project_id, before_chapter=chapter_number, limit=10)
+        ]
+        return {
+            **base,
+            "countdown_constraints": countdown_constraints,
+            "open_signals": open_signals,
+        }
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Failed to build canon quality context for project %s chapter %s",
+            project_id,
+            chapter_number,
+        )
+        return base
+
+
+def _is_final_chapter_for_context(
+    *,
+    session,
+    project_id: str,
+    chapter_number: int,
+    target_total_chapters: int,
+    title: str = "",
+    summary: str = "",
+) -> bool:
+    current = int(chapter_number or 0)
+    if current <= 0:
+        return False
+    target_total = int(target_total_chapters or 0)
+    if target_total and current >= target_total:
+        return True
+    if session is None or not _looks_like_final_chapter_label(title=title, summary=summary):
+        return False
+    try:
+        max_materialized = session.execute(
+            select(func.max(ChapterPlan.chapter_number)).where(ChapterPlan.project_id == project_id)
+        ).scalar_one_or_none()
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "Failed to infer final chapter context for project %s chapter %s",
+            project_id,
+            chapter_number,
+        )
+        return False
+    return max_materialized is not None and current >= int(max_materialized or 0)
+
+
+def _looks_like_final_chapter_label(*, title: str, summary: str = "") -> bool:
+    text = f"{title}\n{summary}"
+    return any(
+        marker in text
+        for marker in (
+            "终章",
+            "尾声",
+            "大结局",
+            "最终章",
+            "最后一章",
+            "最后一日",
+            "最后一天",
+            "最终决战",
+            "finale",
+            "Finale",
+        )
+    )
+
+
 class ChapterContextAssembler:
     def __init__(self, *, providers: list | None = None, gates: list | None = None, observability=None) -> None:
         self.providers = providers or self._default_providers()
@@ -748,9 +883,14 @@ class ChapterContextAssembler:
                 issues = gate.validate(request, draft)
                 draft.issues.extend(issues)
                 span.metric("issue_count", len(issues))
-        return self._build_pack(project_id=project_id, chapter_plan=chapter_plan, draft=draft)
+        return self._build_pack(
+            project_id=project_id,
+            chapter_plan=chapter_plan,
+            draft=draft,
+            session=getattr(repo, "session", None),
+        )
 
-    def _build_pack(self, *, project_id: str, chapter_plan, draft) -> ChapterContextPack:
+    def _build_pack(self, *, project_id: str, chapter_plan, draft, session=None) -> ChapterContextPack:
         from forwin.protocol.world_model import WorldContextPack
 
         data = draft.data
@@ -765,6 +905,7 @@ class ChapterContextAssembler:
             premise=project.premise,
             genre=project.genre,
             setting_summary=project.setting_summary,
+            project_target_total_chapters=int(getattr(project, "target_total_chapters", 0) or 0),
             genesis_context_refs=data.get("genesis_refs", {}),
             genesis_world_overview=data.get("genesis_world_overview", ""),
             genesis_map_overview=data.get("genesis_map_overview", ""),
@@ -860,6 +1001,14 @@ class ChapterContextAssembler:
             chapter_world_delta_intent=chapter_world_delta_intent,
             active_personality_contexts=data.get("active_personality_contexts", []),
             personality_integrity_issues=data.get("personality_integrity_issues", []),
+            canon_quality_context=_build_canon_quality_context(
+                session=session,
+                project_id=project_id,
+                chapter_number=int(getattr(chapter_plan, "chapter_number", 0) or 0),
+                target_total_chapters=int(getattr(project, "target_total_chapters", 0) or 0),
+                chapter_title=str(getattr(chapter_plan, "title", "") or ""),
+                chapter_summary=str(getattr(chapter_plan, "one_line", "") or ""),
+            ),
         )
 
     @staticmethod

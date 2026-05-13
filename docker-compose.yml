@@ -14,6 +14,8 @@ services:
         required: false
     environment:
       - FORWIN_DATABASE_URL=${FORWIN_DATABASE_URL:-postgresql+psycopg://forwin:forwin@postgres:5432/forwin}
+      - FORWIN_ALLOW_BIND_ALL_INTERFACES=${FORWIN_ALLOW_BIND_ALL_INTERFACES:-false}
+      - FORWIN_ALLOW_UNAUTHENTICATED_LAN=${FORWIN_ALLOW_UNAUTHENTICATED_LAN:-false}
     ports:
       - "${FORWIN_HTTP_BIND:-127.0.0.1}:${FORWIN_HTTP_PORT:-8899}:8899"
     volumes:

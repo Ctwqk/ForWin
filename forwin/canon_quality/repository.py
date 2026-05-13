@@ -179,7 +179,13 @@ class CanonQualityRepository:
         self.session.flush()
         return rows
 
-    def list_countdown_entries(self, project_id: str, *, before_chapter: int | None = None) -> list[dict[str, Any]]:
+    def list_countdown_entries(
+        self,
+        project_id: str,
+        *,
+        before_chapter: int | None = None,
+        include_details: bool = False,
+    ) -> list[dict[str, Any]]:
         query = select(CountdownLedgerRow).where(CountdownLedgerRow.project_id == project_id)
         if before_chapter is not None:
             query = query.where(CountdownLedgerRow.chapter_number < int(before_chapter))
@@ -189,15 +195,28 @@ class CanonQualityRepository:
             project_id=project_id,
             before_chapter=before_chapter,
         )
-        return [
-            {
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item: dict[str, Any] = {
                 "countdown_key": row.countdown_key,
                 "chapter_number": row.chapter_number,
                 "normalized_remaining_minutes": row.normalized_remaining_minutes,
                 "status": row.status,
             }
-            for row in rows
-        ]
+            if include_details:
+                item.update(
+                    {
+                        "label": row.label,
+                        "raw_mention": row.raw_mention,
+                        "is_reset_event": row.is_reset_event == "true",
+                        "is_branch_clock": row.is_branch_clock == "true",
+                        "is_resolution_event": row.is_resolution_event == "true",
+                        "previous_remaining_minutes": row.previous_remaining_minutes,
+                        "payload": _loads(row.payload_json, {}),
+                    }
+                )
+            result.append(item)
+        return result
 
     def _filter_rows_to_committed_drafts(
         self,

@@ -189,6 +189,42 @@ def test_workset_predicts_future_arc_without_materializing() -> None:
         engine.dispose()
 
 
+def test_workset_prefers_materialized_retry_chapter_when_no_active_arc() -> None:
+    engine, Session = _session_factory("continue-workset-accepted-retry")
+    try:
+        with Session.begin() as session:
+            project = _project(session)
+            session.flush()
+            arc = _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-completed",
+                arc_number=1,
+                status="planned",
+                chapter_start=1,
+                chapter_end=12,
+            )
+            for number in range(1, 12):
+                _chapter(session, project_id=project.id, arc_id=arc.id, number=number, status="accepted")
+            _chapter(session, project_id=project.id, arc_id=arc.id, number=12, status="planned")
+
+        with Session() as session:
+            workset = build_continue_generation_workset(
+                session,
+                "project-workset",
+                source="review_retry_continue",
+            )
+
+        assert workset.chapter_numbers == (12,)
+        assert workset.requested_chapters == 1
+        assert workset.materialized_plan_count == 1
+        assert workset.active_arc_id == "arc-completed"
+        assert workset.active_arc_number == 1
+        assert workset.reason == "materialized_pending"
+    finally:
+        engine.dispose()
+
+
 def test_workset_rejects_invalid_max_chapters() -> None:
     engine, Session = _session_factory("continue-workset-invalid-max")
     try:

@@ -2107,6 +2107,50 @@ class WritingOrchestrator:
         return WriterOutput.model_validate(payload)
 
     @staticmethod
+    def _apply_placeholder_leakage_autofix(
+        writer_output: WriterOutput,
+        review: ReviewVerdict,
+    ) -> WriterOutput | None:
+        body = str(writer_output.body or "")
+        if "工作人员" not in body and "工作人员" not in str(writer_output.end_of_chapter_summary or ""):
+            return None
+        should_replace = any(
+            str(issue.rule_name or "") == "bare_role_placeholder_leakage"
+            and str(issue.severity or "") == "error"
+            for issue in review.issues
+        )
+        if not should_replace:
+            return None
+        replacement = WritingOrchestrator._placeholder_role_replacement(body)
+        replacements = {"工作人员": replacement}
+        payload = WritingOrchestrator._replace_canon_name_strings(
+            writer_output.model_dump(mode="python"),
+            replacements,
+        )
+        payload["char_count"] = len(str(payload.get("body") or ""))
+        generation_meta = dict(payload.get("generation_meta") or {})
+        previous_autofix = generation_meta.get("placeholder_leakage_autofix")
+        if isinstance(previous_autofix, dict):
+            autofix_meta = {str(key): str(value) for key, value in previous_autofix.items()}
+            autofix_meta.update(replacements)
+        else:
+            autofix_meta = replacements
+        generation_meta["placeholder_leakage_autofix"] = autofix_meta
+        payload["generation_meta"] = generation_meta
+        return WriterOutput.model_validate(payload)
+
+    @staticmethod
+    def _placeholder_role_replacement(body: str) -> str:
+        text = str(body or "")
+        if "旧书摊" in text or "书摊" in text:
+            return "岫苑旧书摊主"
+        if "白塔系统维护组" in text or "维护组" in text:
+            return "岫苑旧书摊主"
+        if "分馆" in text or "地下三层" in text:
+            return "分馆地下管理员"
+        return "岫苑旧书摊主"
+
+    @staticmethod
     def _looks_like_genericizable_unknown_reference(name: str) -> bool:
         text = ContinuityChecker._normalize_character_reference(name)
         if not text:
@@ -2154,7 +2198,7 @@ class WritingOrchestrator:
             marker_window = body
         if any(marker in marker_window for marker in ("集团", "董事", "会议", "总监", "高管", "部门")):
             return "集团高管"
-        return "工作人员"
+        return "馆员"
 
     @staticmethod
     def _subworld_role_titles() -> tuple[str, ...]:
@@ -2454,6 +2498,16 @@ class WritingOrchestrator:
             current_review,
             protected_names=protected_subworld_names,
         )
+        if autofixed_output is not None:
+            current_output = autofixed_output
+            current_review = self._review_current_output(
+                repo=repo,
+                checker=checker,
+                project_id=project_id,
+                context=context,
+                writer_output=current_output,
+            )
+        autofixed_output = self._apply_placeholder_leakage_autofix(current_output, current_review)
         if autofixed_output is not None:
             current_output = autofixed_output
             current_review = self._review_current_output(
@@ -2771,6 +2825,19 @@ class WritingOrchestrator:
                 rewritten_output,
                 rewritten_review,
                 protected_names=self._project_character_names(repo, project_id),
+            )
+            if autofixed_rewritten_output is not None:
+                rewritten_output = autofixed_rewritten_output
+                rewritten_review = self._review_current_output(
+                    repo=repo,
+                    checker=checker,
+                    project_id=project_id,
+                    context=updated_context,
+                    writer_output=rewritten_output,
+                )
+            autofixed_rewritten_output = self._apply_placeholder_leakage_autofix(
+                rewritten_output,
+                rewritten_review,
             )
             if autofixed_rewritten_output is not None:
                 rewritten_output = autofixed_rewritten_output
@@ -3173,6 +3240,11 @@ class WritingOrchestrator:
         current_plan: ChapterExperiencePlan,
         repair_instruction: RepairInstruction,
     ) -> dict[str, object]:
+        repair_rule_anchors = [
+            f"repair must fix: {item}"
+            for item in repair_instruction.must_fix[:3]
+            if str(item or "").strip()
+        ]
         update: dict[str, object] = {
             "planned_reward_tags": list(
                 repair_instruction.design_patch.get("planned_reward_tags")
@@ -3223,6 +3295,9 @@ class WritingOrchestrator:
             update["immersion_anchors"] = ["补入感官锚点", "让角色即时反应落地"]
         if repair_instruction.failure_type == "immersion" and not update["rule_anchors"]:
             update["rule_anchors"] = ["补清规则边界或代价，防止作者强行感"]
+        if repair_rule_anchors:
+            existing_rule_anchors = [str(item) for item in update.get("rule_anchors", []) or []]
+            update["rule_anchors"] = [*repair_rule_anchors, *existing_rule_anchors]
         if repair_instruction.failure_type == "stall" and not update["progress_markers"]:
             update["progress_markers"] = ["让主目标出现不可逆推进"]
         if repair_instruction.failure_type == "stall" and not update["question_hook"]:

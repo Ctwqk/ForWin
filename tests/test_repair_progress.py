@@ -7,6 +7,7 @@ from tests.postgres import postgres_test_url
 
 from forwin.config import Config
 from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 
@@ -117,3 +118,20 @@ def test_review_repair_loop_emits_distinct_progress_stages() -> None:
 
     assert 'stage="repairing_chapter"' in source
     assert 'stage="repair_review"' in source
+
+
+def test_repair_must_fix_is_carried_into_writer_rule_anchors() -> None:
+    payload = WritingOrchestrator._chapter_experience_patch_payload(
+        ChapterExperiencePlan(rule_anchors=["保留既有规则"]),
+        RepairInstruction(
+            repair_scope="draft",
+            failure_type="continuity",
+            must_fix=["不要把终端审计窗口从239分钟延长到60小时。"],
+            must_preserve=["章节目标"],
+            design_patch={},
+            evidence_refs=["canon_quality:x"],
+        ),
+    )
+
+    assert payload["rule_anchors"][0] == "repair must fix: 不要把终端审计窗口从239分钟延长到60小时。"
+    assert "保留既有规则" in payload["rule_anchors"]

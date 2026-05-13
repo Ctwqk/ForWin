@@ -5,6 +5,8 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from sqlalchemy import inspect, text
+
 import forwin.api as api_module
 from forwin.api_schemas import (
     BookGenesisPatchRequest,
@@ -14,7 +16,7 @@ from forwin.api_schemas import (
     WorldModelImportRequest,
 )
 from forwin.book_state.repository import BookStateRepository
-from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.base import get_engine, get_session_factory, init_db, upgrade_db
 from forwin.models.entity import EntityState
 from forwin.models.event import CanonEvent
 from forwin.models.phase4 import NPCIntentSnapshot, WorldSimulationTurn
@@ -142,6 +144,29 @@ class WorldModelTests(unittest.TestCase):
         for stage in ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap"):
             api_module.lock_project_genesis_stage(created.project_id, stage)
         return created.project_id
+
+    def test_upgrade_backfills_projection_cache_columns_for_existing_world_model_pages_table(self) -> None:
+        projection_columns = (
+            "canon_status",
+            "visibility_scope",
+            "role_scope",
+            "observer_id",
+            "observer_type",
+            "section_digest_json",
+            "source_digest",
+            "projection_version",
+            "projection_kind",
+        )
+        with self.engine.begin() as conn:
+            conn.execute(text("DROP INDEX IF EXISTS ix_world_model_pages_project_source_digest"))
+            conn.execute(text("DROP INDEX IF EXISTS ix_world_model_pages_project_projection"))
+            for column in projection_columns:
+                conn.execute(text(f"ALTER TABLE world_model_pages DROP COLUMN IF EXISTS {column}"))
+
+        upgrade_db(self.engine)
+
+        columns = {column["name"] for column in inspect(self.engine).get_columns("world_model_pages")}
+        assert set(projection_columns) <= columns
 
     def test_migration_creates_world_model_tables(self) -> None:
         with self.session_factory() as session:

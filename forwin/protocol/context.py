@@ -173,6 +173,7 @@ class ChapterContextPack(BaseModel):
     premise: str
     genre: str
     setting_summary: str
+    project_target_total_chapters: int = 0
     genesis_context_refs: dict[str, str] = Field(default_factory=dict)
     genesis_world_overview: str = ""
     genesis_map_overview: str = ""
@@ -230,6 +231,7 @@ class ChapterContextPack(BaseModel):
     chapter_world_delta_intent: ChapterWorldDeltaIntent | None = None
     active_personality_contexts: list[dict[str, Any]] = Field(default_factory=list)
     personality_integrity_issues: list[dict[str, Any]] = Field(default_factory=list)
+    canon_quality_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorldModelRetrievalPack(BaseModel):

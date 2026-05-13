@@ -134,6 +134,50 @@ class SubWorldControlTests(unittest.TestCase):
 
         self.assertFalse(any(issue.rule_name == "sub_world_unknown_named_entity" for issue in verdict.issues))
 
+    def test_subworld_admission_allows_known_active_character_even_when_not_in_chapter_entry_targets(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return [
+                    SimpleNamespace(
+                        kind="character",
+                        name="沈宴秋",
+                        aliases=["洛庭若"],
+                        current_state={"status": "active"},
+                    )
+                ]
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林澈"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=10,
+                title="沈砚的背叛",
+                body="林澈与沈宴秋在潮汐钟楼会面，洛庭若的人在远处跟踪。" * 50,
+                end_of_chapter_summary="沈宴秋帮助林澈识破洛庭若的追踪。",
+                entity_mentions=[
+                    EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="沈宴秋", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="洛庭若（幕后）", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="洛庭若（间接）", entity_kind="character", is_named=True),
+                ],
+            ),
+        )
+
+        unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
+        self.assertNotIn("沈宴秋", unknown)
+        self.assertNotIn("洛庭若", unknown)
+        self.assertNotIn("洛庭若（幕后）", unknown)
+        self.assertNotIn("洛庭若（间接）", unknown)
+
     def test_subworld_admission_ignores_deceased_record_state_change_names(self) -> None:
         class FakeRepo:
             def get_active_entities(self, _project_id: str) -> list[object]:
@@ -246,6 +290,48 @@ class SubWorldControlTests(unittest.TestCase):
 
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
         self.assertEqual(unknown, [])
+
+    def test_subworld_admission_ignores_existing_character_possessive_role_group(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"林澈", "洛庭若"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=12,
+                title="倒计时：最后一日",
+                body="洛庭若的手下封锁巷口，林澈绕开白塔巡检员，继续向失忆广场前进。" * 40,
+                end_of_chapter_summary="林澈躲开洛庭若的手下。",
+                entity_mentions=[
+                    EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="洛庭若", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="洛庭若的手下", entity_kind="character", is_named=True),
+                ],
+                scene_outputs=[
+                    {
+                        "scene_no": 1,
+                        "scene_objective": "突破封锁",
+                        "text": "洛庭若的手下守住巷口。",
+                        "involved_entities": ["林澈", "洛庭若的手下"],
+                    }
+                ],
+            ),
+        )
+
+        unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
+        self.assertEqual(unknown, [])
+        self.assertFalse(ContinuityChecker._looks_like_named_character("洛庭若的手下"))
 
     def test_subworld_admission_allows_canon_name_anchor(self) -> None:
         class FakeRepo:
@@ -1571,6 +1657,8 @@ class SubWorldControlTests(unittest.TestCase):
     def test_descriptive_masked_pursuer_is_not_treated_as_named_character(self) -> None:
         self.assertTrue(ContinuityChecker._looks_like_generic_character_reference("无脸人"))
         self.assertFalse(ContinuityChecker._looks_like_named_character("不明追踪者"))
+        self.assertFalse(ContinuityChecker._looks_like_named_character("白塔追踪者"))
+        self.assertFalse(ContinuityChecker._looks_like_named_character("白塔巡检员"))
 
     def test_subworld_admission_autofix_genericizes_old_surname_nickname(self) -> None:
         output = WriterOutput(
@@ -1608,8 +1696,9 @@ class SubWorldControlTests(unittest.TestCase):
         serialized_content = fixed.model_dump_json(exclude={"generation_meta"})
         self.assertNotIn("老孙", serialized_content)
         self.assertNotIn("相关人员", fixed.body)
-        self.assertIn("工作人员", fixed.body)
-        self.assertEqual(fixed.generation_meta["subworld_admission_autofix"]["老孙"], "工作人员")
+        self.assertNotIn("工作人员", fixed.body)
+        self.assertIn("馆员", fixed.body)
+        self.assertEqual(fixed.generation_meta["subworld_admission_autofix"]["老孙"], "馆员")
 
     def test_continuity_repair_instruction_preserves_suggested_fix(self) -> None:
         instruction = HistoricalReviewHub._continuity_repair_instruction(

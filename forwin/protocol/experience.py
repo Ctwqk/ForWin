@@ -89,6 +89,11 @@ class MacroPayoff(BaseModel):
     setup_requirement: str = ""
     success_signal: str = ""
 
+    @field_validator("payoff_id", mode="before")
+    @classmethod
+    def _coerce_payoff_id(cls, value: object) -> str:
+        return _stringify_llm_item(value) or "payoff"
+
     @field_validator("category", mode="before")
     @classmethod
     def _normalize_category(cls, value: object) -> str:

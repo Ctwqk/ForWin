@@ -76,7 +76,9 @@ def upgrade() -> None:
                 aliases_json,
                 display_name,
                 status,
-                metadata_json
+                metadata_json,
+                created_at,
+                updated_at
             )
             SELECT
                 'char_identity_' || id,
@@ -93,7 +95,9 @@ def upgrade() -> None:
                 END,
                 name,
                 'active',
-                jsonb_build_object('backfilled_from', 'world_nodes')::text
+                jsonb_build_object('backfilled_from', 'world_nodes')::text,
+                CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP
             FROM world_nodes
             WHERE node_type = 'character'
             """

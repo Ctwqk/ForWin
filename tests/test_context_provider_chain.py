@@ -195,3 +195,49 @@ def test_context_assembler_has_no_top_level_provider_domain_imports() -> None:
         for line in import_lines
         if any(token in line for token in forbidden)
     ]
+
+
+class _ScalarResult:
+    def __init__(self, value: int | None) -> None:
+        self.value = value
+
+    def scalar_one_or_none(self) -> int | None:
+        return self.value
+
+
+class _MaxChapterSession:
+    def __init__(self, value: int | None) -> None:
+        self.value = value
+
+    def execute(self, _statement):
+        return _ScalarResult(self.value)
+
+
+def test_canon_quality_context_infers_final_when_target_total_is_stale() -> None:
+    from forwin.context.assembler import _build_canon_quality_context
+
+    context = _build_canon_quality_context(
+        session=_MaxChapterSession(12),
+        project_id="project-1",
+        chapter_number=12,
+        target_total_chapters=0,
+        chapter_title="倒计时：最后一日",
+        chapter_summary="林澈必须关闭白塔系统。",
+    )
+
+    assert context["is_final_chapter"] is True
+
+
+def test_canon_quality_context_does_not_infer_ordinary_last_arc_chapter_as_final() -> None:
+    from forwin.context.assembler import _build_canon_quality_context
+
+    context = _build_canon_quality_context(
+        session=_MaxChapterSession(8),
+        project_id="project-1",
+        chapter_number=8,
+        target_total_chapters=0,
+        chapter_title="旧轨夹击",
+        chapter_summary="林澈被巡检员追击，逃入下一处线索。",
+    )
+
+    assert context["is_final_chapter"] is False

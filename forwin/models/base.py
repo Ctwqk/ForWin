@@ -162,6 +162,7 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
         for version in POSTGRES_BASELINE_MIGRATIONS:
             _mark_migration_applied(conn, version)
         _upgrade_world_model_canonical_pages(conn)
+        _upgrade_world_model_projection_cache_fields(conn)
         _upgrade_character_identity_map(conn)
         conn.execute(
             text(
@@ -250,6 +251,33 @@ def _upgrade_world_model_canonical_pages(conn) -> None:
     )
 
 
+def _upgrade_world_model_projection_cache_fields(conn) -> None:
+    for column, ddl in (
+        ("projection_kind", "VARCHAR NOT NULL DEFAULT 'world_studio'"),
+        ("projection_version", "VARCHAR NOT NULL DEFAULT ''"),
+        ("source_digest", "VARCHAR NOT NULL DEFAULT ''"),
+        ("section_digest_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("observer_type", "VARCHAR NOT NULL DEFAULT ''"),
+        ("observer_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("role_scope", "VARCHAR NOT NULL DEFAULT ''"),
+        ("visibility_scope", "VARCHAR NOT NULL DEFAULT ''"),
+        ("canon_status", "VARCHAR NOT NULL DEFAULT 'canon_projection'"),
+    ):
+        conn.execute(text(f"ALTER TABLE world_model_pages ADD COLUMN IF NOT EXISTS {column} {ddl}"))
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_world_model_pages_project_projection "
+            "ON world_model_pages (project_id, projection_kind, projection_version)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_world_model_pages_project_source_digest "
+            "ON world_model_pages (project_id, source_digest)"
+        )
+    )
+
+
 def _upgrade_character_identity_map(conn) -> None:
     conn.execute(
         text(
@@ -300,7 +328,9 @@ def _upgrade_character_identity_map(conn) -> None:
                 aliases_json,
                 display_name,
                 status,
-                metadata_json
+                metadata_json,
+                created_at,
+                updated_at
             )
             SELECT
                 'char_identity_' || id,
@@ -317,7 +347,9 @@ def _upgrade_character_identity_map(conn) -> None:
                 END::text,
                 name,
                 'active',
-                jsonb_build_object('backfilled_from', 'world_nodes')::text
+                jsonb_build_object('backfilled_from', 'world_nodes')::text,
+                CURRENT_TIMESTAMP,
+                CURRENT_TIMESTAMP
             FROM world_nodes
             WHERE node_type = 'character'
               AND NOT EXISTS (

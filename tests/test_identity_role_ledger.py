@@ -43,3 +43,25 @@ def test_identity_drift_with_lie_bridge_is_warning() -> None:
 
     assert not [signal for signal in signals if signal.severity == "error"]
     assert any(signal.signal_type == "identity_relationship_bridge" for signal in signals)
+
+
+def test_gender_marker_drift_blocks_without_bridge() -> None:
+    signals, facts = analyze_identity_roles(
+        project_id="p1",
+        chapter_number=12,
+        draft_id="d1",
+        body="林澈得知，沈宴秋是自己叔叔。这个自称是他叔叔的男人把钥匙交给他。",
+        previous_facts=[
+            {
+                "character_name": "沈宴秋",
+                "role_label": "gender:female",
+                "truth_value": "true",
+                "chapter_number": 8,
+                "payload": {"gender_label": "female"},
+            }
+        ],
+        central_characters={"沈宴秋"},
+    )
+
+    assert any(fact.character_name == "沈宴秋" and fact.payload.get("gender_label") == "male" for fact in facts)
+    assert any(signal.signal_type == "identity_gender_conflict" and signal.severity == "error" for signal in signals)

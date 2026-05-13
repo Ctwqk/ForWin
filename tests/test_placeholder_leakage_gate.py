@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from forwin.canon_quality.placeholder import analyze_placeholder_leakage
 from forwin.checker.rules import ContinuityChecker
+from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.protocol.review import ContinuityIssue, ReviewVerdict
+from forwin.protocol.writer import WriterOutput
 
 
 def test_placeholder_in_signature_blocks_canon() -> None:
@@ -86,6 +89,7 @@ def test_bare_role_label_for_key_actor_blocks_canon() -> None:
 
     assert [signal.signal_type for signal in signals] == ["bare_role_placeholder_leakage"]
     assert signals[0].severity == "error"
+    assert "不应再用「工作人员」" in signals[0].payload["repair_hint"]
 
 
 def test_generic_staff_role_used_as_actor_name_blocks_canon() -> None:
@@ -104,3 +108,37 @@ def test_generic_staff_role_used_as_actor_name_blocks_canon() -> None:
 
 def test_related_personnel_is_not_safe_generic_character_reference() -> None:
     assert ContinuityChecker._looks_like_generic_character_reference("相关人员") is False
+
+
+def test_placeholder_leakage_autofix_replaces_bare_staff_role_with_stable_alias() -> None:
+    output = WriterOutput(
+        project_id="p1",
+        chapter_number=5,
+        title="岫苑的故人",
+        body="林澈看见工作人员站在旧书摊后。工作人员说他在白塔系统维护组。",
+        end_of_chapter_summary="林澈遇到工作人员。",
+    )
+    review = ReviewVerdict(
+        verdict="fail",
+        issues=[
+            ContinuityIssue(
+                rule_name="bare_role_placeholder_leakage",
+                severity="error",
+                description="placeholder",
+                reviewer="canon_quality",
+            )
+        ],
+    )
+
+    fixed = WritingOrchestrator._apply_placeholder_leakage_autofix(output, review)
+
+    assert fixed is not None
+    assert "工作人员" not in fixed.body
+    assert "工作人员" not in fixed.end_of_chapter_summary
+    assert fixed.generation_meta["placeholder_leakage_autofix"] == {"工作人员": "岫苑旧书摊主"}
+
+
+def test_subworld_generic_autofix_does_not_introduce_blocked_staff_placeholder() -> None:
+    assert WritingOrchestrator._generic_subworld_reference("普通现场", "陈总") == "馆员"
+    assert ContinuityChecker._looks_like_generic_character_reference("馆员") is True
+    assert ContinuityChecker._looks_like_generic_character_reference("岫苑旧书摊主") is True

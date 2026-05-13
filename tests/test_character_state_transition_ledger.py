@@ -52,3 +52,51 @@ def test_terminal_character_with_mistaken_death_bridge_passes() -> None:
 
     assert not [item for item in signals if item.severity == "error"]
     assert any(item.transition_type == "bridge_event" for item in transitions)
+
+
+def test_terminal_keywords_do_not_apply_to_every_character_globally() -> None:
+    signals, transitions = analyze_character_state_transitions(
+        project_id="p1",
+        chapter_number=8,
+        draft_id="d8",
+        body=(
+            "林澈刚从档案公会侧门出来，洛庭若最后那句话仍在耳边。"
+            "沈宴秋从广场雕像的阴影里冲出来，拉住林澈逃入地下旧轨。"
+            "林澈发现沈宴秋受伤，袖口下有一枚皮下追踪器。"
+        ),
+        previous_transitions=[],
+        central_characters={"林澈", "洛庭若", "沈宴秋"},
+    )
+
+    assert not signals
+    assert not [
+        item
+        for item in transitions
+        if item.character_name in {"林澈", "洛庭若"} and item.terminality != "none"
+    ]
+
+
+def test_legacy_auto_terminal_transition_without_trigger_is_ignored() -> None:
+    previous = [
+        {
+            "character_name": "林澈",
+            "chapter_number": 8,
+            "transition_type": "life_state",
+            "to_state": "terminally_wounded",
+            "terminality": "soft_terminal",
+            "can_participate": False,
+            "payload": {"draft_id": "legacy-draft"},
+        }
+    ]
+
+    signals, transitions = analyze_character_state_transitions(
+        project_id="p1",
+        chapter_number=10,
+        draft_id="d10",
+        body="林澈推门而入，冷静观察巡检员制服细节后带路突围。",
+        previous_transitions=previous,
+        central_characters={"林澈"},
+    )
+
+    assert not [item for item in signals if item.signal_type == "terminal_state_active_conflict"]
+    assert any(item.character_name == "林澈" and item.transition_type == "participation" for item in transitions)

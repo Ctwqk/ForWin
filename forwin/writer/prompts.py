@@ -82,6 +82,11 @@ def _story_basics_section(context: ChapterContextPack) -> str:
                     "倒计时约束：如果同章出现多个计时器，必须在正文中明确区分用途，例如“终端审计窗口剩余4小时”"
                     "和“记忆重置周期剩余7天”是两个不同倒计时；不要让较短局部计时器和主线重置倒计时混在一起。"
                 ),
+                (
+                    "人物身份连续性约束：不得突然改变已登场命名人物的性别、代词、亲属关系或辈分；"
+                    "不要把前文女性角色改写成叔叔、父亲、祖父、男人，也不要把既有男性角色改写成母亲、姐姐或女人。"
+                    "亲属/性别反转只有在前文已有明确伏笔且本章完整解释时才允许。"
+                ),
             ]
         )
     if getattr(context, "genesis_context_refs", None):
@@ -535,6 +540,97 @@ def _timeline_section(context: ChapterContextPack) -> str | None:
     return "【当前时间】\n" f"  · {context.timeline.current_time_label}"
 
 
+def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
+    quality = getattr(context, "canon_quality_context", {}) or {}
+    if not isinstance(quality, dict):
+        return None
+    countdown_constraints = [
+        item for item in quality.get("countdown_constraints", []) or [] if isinstance(item, dict)
+    ]
+    open_signals = [item for item in quality.get("open_signals", []) or [] if isinstance(item, dict)]
+    is_final_chapter = bool(
+        quality.get("is_final_chapter")
+        or (
+            int(getattr(context, "project_target_total_chapters", 0) or 0)
+            and int(getattr(context, "chapter_number", 0) or 0)
+            >= int(getattr(context, "project_target_total_chapters", 0) or 0)
+        )
+    )
+    if not any((countdown_constraints, open_signals, is_final_chapter)):
+        return None
+    lines = ["【Canon 质量连续性约束】"]
+    if is_final_chapter:
+        lines.extend(
+            [
+                "  · 本章是全书终章或当前目标终章，必须在正文内完成主线危机的关闭、公开、阻止或明确代价结算。",
+                "  · 终章不得以追兵逼近、被困、钥匙损坏、准备公开、正要关闭、等待下一步等主线未完成动作作结。",
+                "  · 如果写到关闭方法、钥匙、坐标、芯片或锁孔，必须在本章完成使用、关闭或公开；不要只把它们作为下一步任务。",
+                "  · 不要新增需要下一章解决的三把钥匙、下一层入口、未知坐标或新倒计时。若这些元素已经出现，必须在本章付清代价并收束。",
+                "  · 不要把“去档案公会交最后一段记录”、最后一段记录、剩余证据、最后一份档案、最后一枚芯片写成结尾后的新任务；如果出现，必须在本章写完交付、公开和结果。",
+                "  · 不要把“被困在机房/地下/白塔内”当作终章结局；牺牲必须写成已完成的终局代价，必须给出被救出、死亡/牺牲确认、或后日谈确认主线已结清。",
+                "  · 如需留余味，只能留在主线危机已解决之后，作为轻量后日谈或续作暗线。",
+            ]
+        )
+    if countdown_constraints:
+        lines.append("  · 已进入 canon 的倒计时 ledger 上限：")
+        lines.append(
+            "    · 硬性优先级：下面的 ledger 上限优先于前情摘要、章节计划和旧设定；"
+            "旧摘要里的七天、五天或更长时间只代表当时状态，不能覆盖最新 ledger。"
+        )
+        for item in countdown_constraints[:6]:
+            key = str(item.get("countdown_key") or "").strip()
+            label = str(item.get("label") or key or "倒计时").strip()
+            latest = int(item.get("latest_remaining_minutes") or 0)
+            chapter = int(item.get("latest_chapter") or 0)
+            raw = str(item.get("raw_mention") or "").strip()
+            raw_suffix = f"（原文：{raw}）" if raw else ""
+            lines.append(
+                f"    · {label}{f'/{key}' if key and key != label else ''}：第{chapter}章已剩余 {latest} 分钟{raw_suffix}；"
+                f"本章继续同一倒计时时必须小于等于 {latest} 分钟，除非正文明确 reset 或声明为另一个分支倒计时。"
+            )
+            if key == "memory_reset" or "记忆重置" in label or "重置周期" in label:
+                lines.append(
+                    f"      · 记忆重置周期硬性规则：只能写小于等于 {latest} 分钟，"
+                    "不得把记忆重置周期写回五天、七天、三十多天或任何更大的剩余时间；"
+                    "若另写终端审计窗口，必须明确它是更短的局部窗口，不能改变主线重置周期。"
+                )
+            if key == "archive_cleanup" or "终端审计" in label or "授权窗口" in label:
+                lines.append(
+                    f"      · 终端审计/授权窗口硬性规则：只能写小于等于 {latest} 分钟，"
+                    "不得写成四小时、五小时、一天或任何更大的剩余时间；"
+                    "如果另写记忆重置周期，必须明确它是 memory_reset，不要把两个计时器混用。"
+                )
+    if open_signals:
+        lines.append("  · 前文 residual quality signals，后续写作必须解释、修复或避免扩大：")
+        for item in open_signals[:5]:
+            severity = str(item.get("severity") or "").strip()
+            chapter = int(item.get("chapter_number") or 0)
+            description = str(item.get("description") or "").strip()
+            if description:
+                lines.append(f"    · 第{chapter}章 {severity}：{description[:180]}")
+    return "\n".join(lines)
+
+
+def _chapter_hook_requirement(context: ChapterContextPack) -> str:
+    quality = getattr(context, "canon_quality_context", {}) or {}
+    target_total = int(getattr(context, "project_target_total_chapters", 0) or 0)
+    is_final = bool(
+        isinstance(quality, dict)
+        and quality.get("is_final_chapter")
+        or (target_total and int(getattr(context, "chapter_number", 0) or 0) >= target_total)
+    )
+    if is_final:
+        return (
+            "本章是终章，结尾必须呈现主线危机已被关闭、公开、阻止或完成代价结算；"
+            "如果写到关闭方法、钥匙、坐标、芯片或锁孔，必须在本章完成使用、关闭或公开；"
+            "不要把最后一段记录、剩余证据、最后一份档案或去某地交付真相写成结尾后的任务；"
+            "不要把“被困在机房/地下/白塔内”当作终章结局；牺牲必须写成已完成的终局代价，"
+            "必须给出被救出、死亡/牺牲确认、或后日谈确认主线已结清；"
+            "不要留下追兵、被困、钥匙损坏、准备公开、正要关闭等主线未完成钩子。"
+        )
+    return "本章结尾必须留下明确钩子。"
+
+
 def _join_sections(*sections: str | None) -> str:
     return "\n\n".join(section for section in sections if section)
 
@@ -600,6 +696,7 @@ def _scene_prompt_sections(
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=memory_limit, excerpt_chars=80),
         _timeline_section(context),
+        _canon_quality_context_section(context),
     ]
     if extra_sections:
         sections.extend(extra_sections)
@@ -637,6 +734,7 @@ def build_single_chapter_draft_prompt(
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=3, excerpt_chars=80),
         _timeline_section(context),
+        _canon_quality_context_section(context),
     )
 
     user_content = (
@@ -645,7 +743,7 @@ def build_single_chapter_draft_prompt(
         f"1. 请写出一章可直接落稿的完整正文，目标正文长度 {target_chars} 到 {max_chars} 中文字，"
         f"不得低于 {min_chars} 中文字。\n"
         "2. 正文必须是自然流畅的网文叙事，不要分点，不要写提纲。\n"
-        "3. 本章结尾必须留下明确钩子。\n"
+        f"3. {_chapter_hook_requirement(context)}\n"
         "4. 不要输出 JSON，不要输出 markdown，不要解释。\n"
         "5. 严格使用下面这个纯文本结构输出，并保留标签本身：\n"
         "<<FORWIN_TITLE>>\n"
@@ -692,6 +790,7 @@ def build_preview_chapter_prompt(
         _audience_hints_section(context),
         _retrieved_memories_section(context, limit=2, excerpt_chars=60),
         _timeline_section(context),
+        _canon_quality_context_section(context),
     )
 
     user_content = (
@@ -709,7 +808,7 @@ def build_preview_chapter_prompt(
         "这里写一句到两句总结\n"
         "如果你更习惯，也可以使用【标题】【正文】【摘要】这一组标签，但整篇只保留一组最终结果。\n"
         "4. 正文必须是自然叙事，不要列提纲。\n"
-        "5. 结尾必须保留钩子。"
+        f"5. {_chapter_hook_requirement(context)}"
     )
     return _apply_skill_layers([
         {"role": "system", "content": "你是中文网文作者，只输出指定标签格式的纯文本，不要解释。"},
@@ -873,7 +972,7 @@ def build_scene_stitch_prompt(
         "1. 保持人称、文风、时间地点衔接一致。\n"
         "2. 必须显式利用每个 scene 的 continuation 信息承接动作、时间、地点和角色焦点。\n"
         "3. 只做轻量衔接和润色，不要改写核心事件。\n"
-        "4. 保留章末钩子。\n"
+        f"4. {_chapter_hook_requirement(context)}\n"
         "5. 不要输出 JSON，不要解释。\n"
         "6. 严格使用下面这个纯文本结构输出，并保留标签本身：\n"
         "<<FORWIN_TITLE>>\n"

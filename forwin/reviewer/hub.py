@@ -111,6 +111,13 @@ class HistoricalReviewHub:
                 )
                 deterministic_quality_report = quality.deterministic_quality_report
                 span.metric("signal_count", len(quality.signals))
+        canon_quality_issues = self._canon_quality_issues(deterministic_quality_report)
+        quality_verdict = self._merge_verdicts(
+            *[
+                "fail" if issue.severity == "error" else "warn" if issue.severity == "warning" else "pass"
+                for issue in canon_quality_issues
+            ]
+        ) if canon_quality_issues else "pass"
         review_context = build_review_context_pack(
             repo=repo,
             context=context,
@@ -175,6 +182,7 @@ class HistoricalReviewHub:
             *self._normalize_issues(webnovel.issues, reviewer="webnovel_experience"),
             *self._normalize_issues(map_movement.issues, reviewer="map_movement"),
             *self._normalize_issues(personality_review.issues, reviewer="personality"),
+            *canon_quality_issues,
         ]
         verdict = self._merge_verdicts(
             continuity.verdict,
@@ -182,16 +190,21 @@ class HistoricalReviewHub:
             webnovel.verdict,
             map_movement.verdict,
             personality_review.verdict,
+            quality_verdict,
         )
         repair_instruction = None
         if verdict == "fail":
             repair_instruction = self._merge_repair_instructions(
                 continuity_instruction=(
                     self._continuity_repair_instruction(
-                        continuity_issues=[issue for issue in issues if issue.reviewer == "continuity" and issue.severity == "error"],
+                        continuity_issues=[
+                            issue
+                            for issue in issues
+                            if issue.reviewer in {"continuity", "canon_quality"} and issue.severity == "error"
+                        ],
                         context=context,
                     )
-                    if continuity.verdict == "fail"
+                    if continuity.verdict == "fail" or quality_verdict == "fail"
                     else None
                 ),
                 governance_instruction=(
@@ -371,6 +384,39 @@ class HistoricalReviewHub:
                 )
             )
         return normalized
+
+    @staticmethod
+    def _canon_quality_issues(deterministic_quality_report: dict | None) -> list[ContinuityIssue]:
+        if not isinstance(deterministic_quality_report, dict):
+            return []
+        raw_signals = [
+            *list(deterministic_quality_report.get("blocking_signals", []) or []),
+            *list(deterministic_quality_report.get("warning_signals", []) or []),
+        ]
+        issues: list[ContinuityIssue] = []
+        for signal in raw_signals:
+            if not isinstance(signal, dict):
+                continue
+            signal_id = str(signal.get("signal_id") or "").strip()
+            signal_type = str(signal.get("signal_type") or "canon_quality_signal").strip()
+            severity = str(signal.get("severity") or "warning").strip()
+            if severity not in {"error", "warning", "info"}:
+                severity = "warning"
+            payload = signal.get("payload") if isinstance(signal.get("payload"), dict) else {}
+            suggested_fix = str(payload.get("repair_hint") or signal.get("description") or "").strip()
+            issues.append(
+                ContinuityIssue(
+                    rule_name=signal_type,
+                    severity=severity,  # type: ignore[arg-type]
+                    description=str(signal.get("description") or signal_type),
+                    reviewer="canon_quality",
+                    issue_type=str(signal.get("signal_type") or "canon_quality"),
+                    target_scope=str(signal.get("target_scope") or "chapter"),
+                    evidence_refs=[f"canon_quality:{signal_id}"] if signal_id else [],
+                    suggested_fix=suggested_fix,
+                )
+            )
+        return issues
 
     @staticmethod
     def _merge_verdicts(*verdicts: str) -> str:

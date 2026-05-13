@@ -91,6 +91,28 @@ def build_continue_generation_workset(
                 reason="active_arc_pending",
             )
 
+    materialized_candidates = [
+        plan
+        for plan in plans
+        if str(plan.status or "") in pending_statuses
+        and int(plan.chapter_number or 0) > 0
+    ]
+    if materialized_candidates:
+        candidate_numbers = [int(plan.chapter_number or 0) for plan in materialized_candidates]
+        selected = _apply_max(candidate_numbers, max_chapters)
+        selected_arc_id = str(getattr(materialized_candidates[0], "arc_plan_id", "") or "")
+        selected_arc = session.get(ArcPlanVersion, selected_arc_id) if selected_arc_id else None
+        return ContinueGenerationWorkset(
+            project_id=normalized_project_id,
+            chapter_numbers=tuple(selected),
+            requested_chapters=len(selected),
+            materialized_plan_count=len(candidate_numbers),
+            active_arc_id=str(getattr(selected_arc, "id", "") or selected_arc_id),
+            active_arc_number=int(getattr(selected_arc, "arc_number", 0) or 0),
+            source=normalized_source,
+            reason="materialized_pending",
+        )
+
     future_arc = _next_planned_arc(session, normalized_project_id)
     if future_arc is not None:
         predicted = _future_arc_chapter_numbers(future_arc)

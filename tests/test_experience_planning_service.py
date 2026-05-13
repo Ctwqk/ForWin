@@ -72,3 +72,38 @@ def test_experience_services_split_arc_band_and_chapter_planning() -> None:
     }
     assert any("规则" in item for item in chapter_overlay.rule_anchors)
     assert "rule" in chapter_overlay.minimum_progress_channels
+
+
+def test_arc_payoff_ids_from_llm_payload_are_coerced_to_strings() -> None:
+    project = Project(id="project-1", title="体验测试", premise="规则雨夜", genre="玄幻")
+    structure = ArcStructureDraftData(
+        phase_layout=["setup", "pressure", "payoff"],
+        key_beats=["开场受压", "规则显形", "阶段兑现"],
+        thread_priorities=[],
+        hotspot_candidates=[],
+        compression_candidates=[],
+    )
+
+    arc_experience = ArcExperiencePlanningService().plan_arc_experience(
+        project=project,
+        structure=structure,
+        chapter_plans=[],
+        audience_trends=[],
+        drafted_payload={
+            "arc_payoff_map": {
+                "macro_payoffs": [
+                    {
+                        "payoff_id": 1,
+                        "category": "mystery",
+                        "target_chapter_hint": 12,
+                        "setup_requirement": "关闭主线倒计时",
+                        "success_signal": "白塔重置被明确解决",
+                    }
+                ]
+            }
+        },
+    )
+
+    payoff = arc_experience.arc_payoff_map.macro_payoffs[0]
+    assert payoff.payoff_id == "1"
+    assert payoff.target_chapter_hint == "12"

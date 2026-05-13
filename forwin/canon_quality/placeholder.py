@@ -126,6 +126,11 @@ def _analyze_bare_role_placeholder(
             continue
         start = match.start(2) if match.lastindex and match.lastindex >= 2 else match.start(1)
         subject = f"placeholder:{placeholder}:bare_role"
+        repair_hint = (
+            f"删除正文中所有作为角色标签的「{placeholder}」。"
+            "改用具体姓名，或改成可追踪且非占位的稳定代号，例如「岫苑旧书摊主」「分馆地下管理员」；"
+            f"修复后正文和 summary 都不应再用「{placeholder}」称呼关键行动者。"
+        )
         return CanonQualitySignal(
             signal_id=make_signal_id(project_id, chapter_number, "bare_role_placeholder_leakage", subject),
             project_id=project_id,
@@ -140,7 +145,7 @@ def _analyze_bare_role_placeholder(
             evidence_refs=[f"body:{start}-{start + len(placeholder)}"],
             span_start=start,
             span_end=start + len(placeholder),
-            payload={"draft_id": draft_id, "placeholder": placeholder},
+            payload={"draft_id": draft_id, "placeholder": placeholder, "repair_hint": repair_hint},
         )
     return None
 

@@ -16,13 +16,48 @@ from forwin.book_state import BookStateRepository
 from forwin.characters.creation import CharacterCreationHelper
 from forwin.characters.models import CharacterCreationRequest
 from forwin.characters.registry import CharacterRegistry
-from forwin.models import CharacterIdentityMapRow, DecisionEvent, Entity, Project
-from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models import CharacterIdentityMapRow, DecisionEvent, Entity, Project, WorldNodeRow
+from forwin.models.base import get_engine, get_session_factory, init_db, upgrade_db
 from forwin.personality.library import CharacterPersonalityLibrary
 from forwin.personality.policy import CharacterPersonalityPolicyResolver
 from forwin.protocol.book_state import WorldNode
 from tests.postgres import postgres_test_url
 from tests.test_personality_assignment import _library_root
+
+
+def test_upgrade_backfills_identity_map_timestamps_for_existing_world_nodes() -> None:
+    engine = get_engine(postgres_test_url("character-identity-map-backfill"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project = Project(title="身份回填", premise="p", genre="玄幻", setting_summary="s")
+        session.add(project)
+        session.flush()
+        session.add(
+            WorldNodeRow(
+                id="char_legacy_backfill",
+                project_id=project.id,
+                node_type="character",
+                name="苏时雨",
+                aliases_json='["苏时雨"]',
+                metadata_json='{"legacy_entity_id":"legacy_su"}',
+            )
+        )
+
+    upgrade_db(engine)
+
+    with Session.begin() as session:
+        identity = session.execute(
+            select(CharacterIdentityMapRow).where(
+                CharacterIdentityMapRow.book_state_node_id == "char_legacy_backfill"
+            )
+        ).scalar_one()
+
+    assert identity.display_name == "苏时雨"
+    assert identity.legacy_entity_id == "legacy_su"
+    assert identity.created_at is not None
+    assert identity.updated_at is not None
 
 
 def test_create_character_writes_book_state_loadout_metadata_legacy_and_audit(tmp_path: Path) -> None:

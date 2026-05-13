@@ -246,7 +246,7 @@ def run_deterministic_v4_runtime_fixture(
                 )
             elif chapter == 23:
                 state_repo = StateRepository(session)
-                broker = RetrievalBroker()
+                broker = RetrievalBroker(include_world_v4_compat=True)
                 writer_pack = broker.build_world_model_pack(
                     state_repo,
                     project_id,

@@ -61,6 +61,31 @@ class WorldNodeStateRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
+class CharacterIdentityMapRow(Base):
+    __tablename__ = "character_identity_map"
+    __table_args__ = (
+        Index("ix_character_identity_project_canonical", "project_id", "canonical_character_id"),
+        Index("ix_character_identity_project_book_node", "project_id", "book_state_node_id"),
+        Index("ix_character_identity_project_legacy", "project_id", "legacy_entity_id"),
+        Index("ix_character_identity_project_genesis", "project_id", "genesis_ref_id"),
+        Index("ix_character_identity_project_status", "project_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
+    canonical_character_id: Mapped[str] = mapped_column(String, nullable=False, default="")
+    book_state_node_id: Mapped[str] = mapped_column(String, nullable=False, default="")
+    legacy_entity_id: Mapped[str] = mapped_column(String, nullable=False, default="")
+    genesis_ref_id: Mapped[str] = mapped_column(String, nullable=False, default="")
+    roster_item_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    aliases_json: Mapped[str] = mapped_column(Text, default="[]")
+    display_name: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String, default="active")
+    metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+
 class WorldEdgeRow(Base):
     __tablename__ = "world_edges"
     __table_args__ = (

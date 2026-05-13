@@ -105,7 +105,7 @@ def _build_client():
         )
 
     app = FastAPI()
-    register_world_model_v4_routes(app, get_session=Session)
+    register_world_model_v4_routes(app, get_session=Session, debug_enabled=True)
     return TestClient(app), project_id
 
 

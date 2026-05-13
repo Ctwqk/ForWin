@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.repository import BookStateRepository
 from forwin.models import (
     BookGenesisRevision,
     CanonEvent,
@@ -23,6 +24,7 @@ from forwin.models import (
     StoryTimePoint,
     WorldSimulationTurn,
 )
+from forwin.models.book_state import WorldNodeStateRow
 from forwin.models.world_model import WorldModelSnapshotRow
 from forwin.protocol.world_model import EvidenceRef, WorldModelConflict, WorldModelSnapshot
 
@@ -49,6 +51,13 @@ def _slug(value: str) -> str:
     text = re.sub(r"[^A-Za-z0-9_\-\u4e00-\u9fff]+", "-", str(value or "").strip().lower())
     text = re.sub(r"-+", "-", text).strip("-")
     return text or "item"
+
+
+def _metadata_chapter(metadata: dict[str, Any]) -> int:
+    try:
+        return int((metadata or {}).get("created_at_chapter") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _frontmatter_text(frontmatter: dict[str, Any]) -> str:
@@ -236,6 +245,18 @@ class WorldModelCompiler:
         map_atlas = world.get("map_atlas") if isinstance(world.get("map_atlas"), dict) else {}
         story_engine = world.get("story_engine") if isinstance(world.get("story_engine"), dict) else {}
 
+        book_state_payload = self._build_book_state_snapshot_payload(
+            project=project,
+            genesis=genesis,
+            as_of_chapter=as_of_chapter,
+            world_bible=world_bible,
+            map_atlas=map_atlas,
+            story_engine=story_engine,
+            world=world,
+        )
+        if book_state_payload is not None:
+            return book_state_payload
+
         entities = self.session.execute(
             select(Entity)
             .where(Entity.project_id == project.id, Entity.created_at_chapter <= as_of_chapter)
@@ -401,6 +422,237 @@ class WorldModelCompiler:
             },
             "source_refs": source_refs,
         }
+
+    def _build_book_state_snapshot_payload(
+        self,
+        *,
+        project: Project,
+        genesis: BookGenesisRevision | None,
+        as_of_chapter: int,
+        world_bible: dict[str, Any],
+        map_atlas: dict[str, Any],
+        story_engine: dict[str, Any],
+        world: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        repo = BookStateRepository(self.session)
+        nodes = repo.list_world_nodes(project.id, as_of_chapter=as_of_chapter)
+        edges = repo.list_world_edges(project.id, as_of_chapter=as_of_chapter)
+        facts = repo.list_fact_nodes(project.id, as_of_chapter=as_of_chapter)
+        map_nodes = [
+            node
+            for node in repo.list_map_nodes(project.id)
+            if _metadata_chapter(node.metadata) <= as_of_chapter
+        ]
+        if not (nodes or edges or facts or map_nodes):
+            return None
+
+        latest_state_by_node = self._latest_book_state_node_states(
+            project.id,
+            [node.id for node in nodes],
+            as_of_chapter,
+        )
+        characters: list[dict[str, Any]] = []
+        factions: list[dict[str, Any]] = []
+        organizations: list[dict[str, Any]] = []
+        other_entities: list[dict[str, Any]] = []
+        for node in nodes:
+            state = latest_state_by_node.get(node.id, {})
+            payload = {
+                "id": node.id,
+                "kind": str(node.node_type),
+                "name": node.name or node.id,
+                "aliases": list(node.aliases),
+                "description": node.description or node.summary,
+                "importance": node.importance,
+                "created_at_chapter": node.created_at_chapter,
+                "current_state": state,
+                "state_chapter": int(state.get("_as_of_chapter", node.created_at_chapter) or 0) if isinstance(state, dict) else 0,
+                "source": "book_state",
+                "source_refs": list(node.source_refs),
+                "profile": dict(node.profile),
+                "metadata": dict(node.metadata),
+            }
+            node_type = str(node.node_type)
+            if node_type == "character":
+                characters.append(payload)
+            elif node_type == "faction":
+                factions.append(payload)
+            elif node_type in {"organization", "family", "institution"}:
+                organizations.append(payload)
+            else:
+                other_entities.append(payload)
+
+        node_name_by_id = {node.id: node.name or node.id for node in nodes}
+        relationships = [
+            {
+                "id": edge.id,
+                "source_name": node_name_by_id.get(edge.source_id, edge.source_id),
+                "target_name": node_name_by_id.get(edge.target_id, edge.target_id),
+                "relation_type": edge.edge_type,
+                "description": str(edge.state.get("description") or edge.metadata.get("description") or edge.edge_family),
+                "established_at_chapter": edge.established_at_chapter,
+                "source": "book_state",
+            }
+            for edge in edges
+        ]
+        region_payloads = []
+        node_payloads = []
+        for map_node in map_nodes:
+            payload = {
+                "id": map_node.id,
+                "name": map_node.name or map_node.id,
+                "title": map_node.name or map_node.id,
+                "summary": map_node.description,
+                "description": map_node.description,
+                "node_type": str(map_node.node_type),
+                "source": "book_state",
+                "metadata": dict(map_node.metadata),
+            }
+            if str(map_node.node_type) in {"world_area", "region"}:
+                region_payloads.append(payload)
+            else:
+                node_payloads.append(payload)
+
+        source_refs: list[dict[str, Any]] = []
+        if genesis is not None:
+            source_refs.append(
+                EvidenceRef(
+                    source_type="book_genesis_revision",
+                    source_id=genesis.id,
+                    chapter_number=0,
+                    summary=f"Genesis revision {genesis.revision}",
+                ).model_dump(mode="json")
+            )
+        source_refs.extend(
+            EvidenceRef(
+                source_type="book_state_node",
+                source_id=node.id,
+                chapter_number=int(node.created_at_chapter or 0),
+                summary=node.name or node.id,
+            ).model_dump(mode="json")
+            for node in nodes[:20]
+        )
+        source_refs.extend(
+            EvidenceRef(
+                source_type="book_state_fact",
+                source_id=fact.id,
+                chapter_number=int(fact.created_at_chapter or 0),
+                summary=fact.proposition,
+            ).model_dump(mode="json")
+            for fact in facts[:20]
+        )
+        return {
+            "project_id": project.id,
+            "project_title": project.title,
+            "as_of_chapter": as_of_chapter,
+            "projection_source": "book_state",
+            "world_root": {
+                "overview": world_bible.get("overview", "") or project.setting_summary,
+                "axioms": world_bible.get("axioms") if isinstance(world_bible.get("axioms"), list) else [],
+                "history": world_bible.get("history_slice", ""),
+                "culture_profiles": world_bible.get("culture_profiles") if isinstance(world_bible.get("culture_profiles"), list) else [],
+            },
+            "space_model": {
+                "overview": map_atlas.get("overview", ""),
+                "submaps": [],
+                "regions": region_payloads,
+                "nodes": node_payloads,
+                "routes": [],
+                "ownership": [],
+                "travel_constraints": [],
+            },
+            "actor_model": {
+                "characters": characters,
+                "factions": factions,
+                "organizations": organizations,
+                "families": [],
+                "other_entities": other_entities,
+                "relationship_edges": relationships,
+                "hierarchy_templates": [],
+                "npc_intents": [],
+            },
+            "institution_model": {
+                "governments": [],
+                "religious_orders": [],
+                "sects": [],
+                "guilds": [],
+                "military_chains": [],
+                "laws": [],
+                "ranks": [],
+                "permissions": [],
+                "profiles": [item for item in organizations if item.get("kind") == "institution"],
+            },
+            "economy_model": {
+                "resources": [],
+                "currencies": [],
+                "trade_routes": [],
+                "scarcity": [],
+                "production": [],
+                "monopolies": [],
+                "profiles": [],
+            },
+            "time_model": self._time_model(project.id, as_of_chapter),
+            "technology_model": {
+                "magic": world.get("magic_system", {}),
+                "cultivation": world.get("cultivation_system", {}),
+                "science": {},
+                "weapons": [],
+                "communication": [],
+                "transport": [],
+                "medical_limits": [],
+            },
+            "plot_model": {
+                "canon_events": [
+                    {
+                        "id": fact.id,
+                        "chapter_number": fact.created_at_chapter,
+                        "summary": fact.proposition,
+                        "significance": fact.truth_value,
+                        "source": "book_state",
+                    }
+                    for fact in facts
+                ],
+                "active_threads": [],
+                "reader_promises": story_engine.get("reader_promises") if isinstance(story_engine.get("reader_promises"), list) else [],
+                "secrets": [],
+                "reveal_ladder": [],
+                "unresolved_hooks": [],
+                "world_pressure": self._world_turn(project.id, as_of_chapter),
+            },
+            "quality_model": {
+                "contradictions": [],
+                "risky_claims": [],
+                "open_questions": [],
+                "review_findings": [],
+            },
+            "source_refs": source_refs,
+        }
+
+    def _latest_book_state_node_states(
+        self,
+        project_id: str,
+        node_ids: list[str],
+        as_of_chapter: int,
+    ) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
+        for node_id in node_ids:
+            row = self.session.execute(
+                select(WorldNodeStateRow)
+                .where(
+                    WorldNodeStateRow.project_id == project_id,
+                    WorldNodeStateRow.node_id == node_id,
+                    WorldNodeStateRow.as_of_chapter <= as_of_chapter,
+                )
+                .order_by(WorldNodeStateRow.as_of_chapter.desc(), WorldNodeStateRow.created_at.desc(), WorldNodeStateRow.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if row is None:
+                continue
+            state = _load_json(row.state_json, {})
+            if isinstance(state, dict):
+                state = {**state, "_as_of_chapter": int(row.as_of_chapter or 0)}
+                result[node_id] = state
+        return result
 
     def _latest_entity_states(self, entity_ids: list[str], as_of_chapter: int) -> dict[str, EntityState]:
         result: dict[str, EntityState] = {}
@@ -735,9 +987,20 @@ class WorldModelCompiler:
             "status": "canon_live",
             "as_of_chapter": as_of_chapter,
             "snapshot_id": snapshot_id,
-            "source_refs": [ref.get("source_type", "") + ":" + ref.get("source_id", "") for ref in source_refs[:8] if isinstance(ref, dict)],
+            "projection_source_refs": [ref.get("source_type", "") + ":" + ref.get("source_id", "") for ref in source_refs[:8] if isinstance(ref, dict)],
+            "canon_evidence_refs": list(entity.get("source_refs", [])) if isinstance(entity.get("source_refs"), list) else [],
             "locked_fields": ["Canon Summary", "Current State", "Evidence"],
         }
+        if str(entity.get("source", "")) == "book_state":
+            fm.update(
+                {
+                    "projection_source": "book_state",
+                    "node_id": str(entity.get("id") or ""),
+                    "node_type": page_type,
+                    "editable_fields": ["Manual Notes", "Human Questions", "Proposed Correction"],
+                }
+            )
+        fm["source_refs"] = list(dict.fromkeys([*fm["projection_source_refs"], *fm["canon_evidence_refs"]]))
         state = entity.get("current_state") if isinstance(entity.get("current_state"), dict) else {}
         markdown = _page_markdown(
             frontmatter=fm,

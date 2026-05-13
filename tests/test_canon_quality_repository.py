@@ -5,7 +5,7 @@ from sqlalchemy import inspect
 from forwin.canon_quality.gate import evaluate_canon_admission
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.signals import CanonQualitySignal, CountdownLedgerEntry
-from forwin.models import ArcPlanVersion, CandidateDraftRecord, ChapterDraft, ChapterPlan, Project
+from forwin.models import ArcPlanVersion, CandidateDraftRecord, ChapterDraft, ChapterPlan, ChapterReview, Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 
 
@@ -17,48 +17,6 @@ def test_repository_persists_signals_and_admission_runs() -> None:
         with session_factory() as session:
             project = Project(title="Canon Quality", premise="测试", genre="悬疑")
             session.add(project)
-            session.flush()
-            arc = ArcPlanVersion(
-                project_id=project.id,
-                arc_number=1,
-                chapter_start=1,
-                chapter_end=1,
-                arc_synopsis="测试 arc",
-            )
-            session.add(arc)
-            session.flush()
-            plan = ChapterPlan(
-                project_id=project.id,
-                arc_plan_id=arc.id,
-                chapter_number=1,
-                title="第一章",
-            )
-            session.add(plan)
-            session.flush()
-            stale_draft = ChapterDraft(
-                id="draft-stale",
-                chapter_plan_id=plan.id,
-                body_text="stale",
-                summary="stale",
-            )
-            accepted_draft = ChapterDraft(
-                id="draft-accepted",
-                chapter_plan_id=plan.id,
-                body_text="accepted",
-                summary="accepted",
-            )
-            session.add_all([stale_draft, accepted_draft])
-            session.flush()
-            session.add(
-                CandidateDraftRecord(
-                    project_id=project.id,
-                    chapter_plan_id=plan.id,
-                    chapter_number=1,
-                    candidate_draft_id=accepted_draft.id,
-                    status="canon_committed",
-                    canon_status="canon",
-                )
-            )
             session.flush()
             repo = CanonQualityRepository(session)
             signal = CanonQualitySignal(
@@ -115,6 +73,56 @@ def test_countdown_history_uses_only_committed_draft_ledgers() -> None:
         with session_factory() as session:
             project = Project(title="Canon Quality", premise="测试", genre="悬疑")
             session.add(project)
+            session.flush()
+            arc = ArcPlanVersion(
+                project_id=project.id,
+                arc_number=1,
+                chapter_start=1,
+                chapter_end=1,
+                arc_synopsis="测试 arc",
+            )
+            session.add(arc)
+            session.flush()
+            plan = ChapterPlan(
+                project_id=project.id,
+                arc_plan_id=arc.id,
+                chapter_number=1,
+                title="第一章",
+            )
+            session.add(plan)
+            session.flush()
+            stale_draft = ChapterDraft(
+                id="draft-stale",
+                chapter_plan_id=plan.id,
+                body_text="stale",
+                summary="stale",
+            )
+            accepted_draft = ChapterDraft(
+                id="draft-accepted",
+                chapter_plan_id=plan.id,
+                body_text="accepted",
+                summary="accepted",
+            )
+            session.add_all([stale_draft, accepted_draft])
+            session.flush()
+            accepted_review = ChapterReview(
+                id="review-accepted",
+                draft_id=accepted_draft.id,
+                verdict="pass",
+            )
+            session.add(accepted_review)
+            session.flush()
+            session.add(
+                CandidateDraftRecord(
+                    project_id=project.id,
+                    chapter_plan_id=plan.id,
+                    chapter_number=1,
+                    candidate_draft_id=accepted_draft.id,
+                    review_id=accepted_review.id,
+                    status="canon_committed",
+                    canon_status="canon",
+                )
+            )
             session.flush()
             repo = CanonQualityRepository(session)
             repo.save_countdown_entries(

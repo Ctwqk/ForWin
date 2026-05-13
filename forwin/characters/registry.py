@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state import BookStateRepository
 from forwin.protocol.book_state import WorldNode
+from .identity import CharacterIdentityMap
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,18 @@ class CharacterRegistry:
         normalized_legacy_id = str(legacy_entity_id or "").strip()
         normalized_roster_id = str(roster_item_id or "").strip()
         normalized_name = _normalize_name(name)
+        identity = CharacterIdentityMap(self.session).resolve(
+            project_id=project_id,
+            character_id=normalized_id,
+            legacy_entity_id=normalized_legacy_id,
+            roster_item_id=normalized_roster_id,
+        )
         nodes = [node for node in repo.list_world_nodes(project_id) if str(node.node_type) == "character"]
+        if identity is not None:
+            target_id = identity.row.book_state_node_id or identity.row.canonical_character_id
+            for node in nodes:
+                if node.id == target_id:
+                    return CharacterResolutionResult(node=node, resolution=identity.resolution)
 
         if normalized_id:
             for node in nodes:

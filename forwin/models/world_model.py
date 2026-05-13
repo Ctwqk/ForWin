@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -35,6 +35,15 @@ class WorldModelPageRow(Base):
         Index("ix_world_model_pages_project_key", "project_id", "page_key"),
         Index("ix_world_model_pages_project_type", "project_id", "page_type"),
         Index("ix_world_model_pages_project_status", "project_id", "status"),
+        Index("ix_world_model_pages_project_identity", "project_id", "page_type", "logical_identity_key"),
+        Index(
+            "ux_world_model_pages_live_identity",
+            "project_id",
+            "page_type",
+            "logical_identity_key",
+            unique=True,
+            postgresql_where=text("status = 'canon_live' AND logical_identity_key <> ''"),
+        ),
         Index("ix_world_model_pages_project_projection", "project_id", "projection_kind", "projection_version"),
         Index("ix_world_model_pages_project_source_digest", "project_id", "source_digest"),
     )
@@ -51,6 +60,11 @@ class WorldModelPageRow(Base):
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String, nullable=False, default="canon_live")
     as_of_chapter: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    logical_identity_key: Mapped[str] = mapped_column(String, nullable=False, default="")
+    canonical_source_type: Mapped[str] = mapped_column(String, nullable=False, default="")
+    canonical_source_id: Mapped[str] = mapped_column(String, nullable=False, default="")
+    supersedes_page_id: Mapped[str] = mapped_column(String, nullable=False, default="")
+    canonical_rank: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     projection_kind: Mapped[str] = mapped_column(String, nullable=False, default="world_studio")
     projection_version: Mapped[str] = mapped_column(String, nullable=False, default="")
     source_digest: Mapped[str] = mapped_column(String, nullable=False, default="")

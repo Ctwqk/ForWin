@@ -369,7 +369,6 @@ def _collect_project_sections(
             )
     return [section for section in sections if section["text"].strip()]
 
-
 def _existing_payloads_by_point_id(
     client: Any,
     collection_name: str,

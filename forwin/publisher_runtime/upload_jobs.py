@@ -122,6 +122,7 @@ def _upload_retry_history(
     normalized.append(
         {
             "attempt": failure_count,
+            "failure_count": failure_count,
             "failed_at": failed_at,
             "current_url": current_url,
             "message": message,
@@ -129,6 +130,28 @@ def _upload_retry_history(
         }
     )
     return normalized
+
+
+def _clear_terminal_failure_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(payload)
+    retry = cleaned.get("auto_retry")
+    if isinstance(retry, dict):
+        history = retry.get("history")
+        if isinstance(history, list) and history:
+            cleaned["retry_history"] = [row for row in history if isinstance(row, dict)]
+    for key in (
+        "auto_retry",
+        "codex_intervention_required",
+        "codex_intervention",
+        "error_code",
+        "error_class",
+        "last_error",
+        "failure_phase",
+        "failed_at",
+        "last_failed_at",
+    ):
+        cleaned.pop(key, None)
+    return cleaned
 
 
 def _build_codex_intervention_payload(
@@ -633,6 +656,9 @@ class UploadJobService:
                     )
                     self.request_codex_intervention(intervention)
                     merged_payload["codex_intervention"] = intervention
+
+            if effective_status in {"succeeded", "cancelled"}:
+                merged_payload = _clear_terminal_failure_payload(merged_payload)
 
             if effective_status == "running":
                 job.claimed_at = job.claimed_at or now

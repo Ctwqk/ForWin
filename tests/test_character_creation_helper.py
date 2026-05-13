@@ -16,7 +16,7 @@ from forwin.book_state import BookStateRepository
 from forwin.characters.creation import CharacterCreationHelper
 from forwin.characters.models import CharacterCreationRequest
 from forwin.characters.registry import CharacterRegistry
-from forwin.models import DecisionEvent, Entity, Project
+from forwin.models import CharacterIdentityMapRow, DecisionEvent, Entity, Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.personality.library import CharacterPersonalityLibrary
 from forwin.personality.policy import CharacterPersonalityPolicyResolver
@@ -70,11 +70,54 @@ def test_create_character_writes_book_state_loadout_metadata_legacy_and_audit(tm
     assert node.aliases == ["沈师兄"]
     assert node.profile["personality_loadout"]["dominant"]["skill"] == "trait-loyal-protector"
     assert node.metadata["legacy_entity_id"] == result.legacy_entity_id
+    assert node.metadata["character_identity"]["canonical_character_id"] == result.character_id
+    assert node.metadata["character_identity"]["legacy_entity_id"] == result.legacy_entity_id
     assert node.metadata["personality_assignment"]["assignment_mode"] == "auto_rule"
     assert node.metadata["character_creation"]["source"] == "api_manual"
     assert legacy is not None
     assert legacy.kind == "character"
     assert {event.event_type for event in events} >= {"character_created", "personality_loadout_auto_assigned"}
+
+
+def test_create_character_persists_identity_map_for_book_state_legacy_and_roster(tmp_path: Path) -> None:
+    engine = get_engine(postgres_test_url("character-identity-map"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project = Project(title="人物身份", premise="p", genre="玄幻", setting_summary="s")
+        session.add(project)
+        session.flush()
+
+        result = CharacterCreationHelper(
+            session,
+            personality_library=CharacterPersonalityLibrary(_library_root(tmp_path)),
+        ).create_character(
+            CharacterCreationRequest(
+                project_id=project.id,
+                source="subworld_planned_slot_materialization",
+                source_ref="roster_a",
+                roster_item_id="roster_a",
+                name="周怀瑾",
+                aliases=["周执事"],
+                description="负责联络内城。",
+                creation_context={"genesis_ref_id": "genesis:core_cast:zhou"},
+            )
+        )
+        identity = session.execute(
+            select(CharacterIdentityMapRow).where(
+                CharacterIdentityMapRow.project_id == project.id,
+                CharacterIdentityMapRow.book_state_node_id == result.character_id,
+            )
+        ).scalar_one()
+
+    assert identity.canonical_character_id == result.character_id
+    assert identity.display_name == "周怀瑾"
+    assert identity.legacy_entity_id == result.legacy_entity_id
+    assert identity.genesis_ref_id == "genesis:core_cast:zhou"
+    assert identity.roster_item_ids_json == '["roster_a"]'
+    assert identity.aliases_json == '["周执事", "周怀瑾"]'
+    assert identity.status == "active"
 
 
 def test_create_character_preserves_explicit_loadout_as_manual_override(tmp_path: Path) -> None:

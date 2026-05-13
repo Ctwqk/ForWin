@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from forwin.models.world_model import WorldModelPageRow
 from forwin.protocol.world_model import WorldModelImportResult
 
-from .store import WorldModelStore, content_hash
+from .page_repository import WorldModelPageRepository
+from .store import WorldModelStore, content_hash, load_json
 
 
 class ObsidianWorldImporter:
@@ -37,18 +38,16 @@ class ObsidianWorldImporter:
             digest = content_hash(row.frontmatter_json, markdown)
             if digest == row.content_hash or markdown == row.markdown:
                 continue
-            existing_pending = self.session.execute(
-                select(WorldModelPageRow).where(
-                    WorldModelPageRow.project_id == project_id,
-                    WorldModelPageRow.page_key == row.page_key,
-                )
-            ).scalar_one_or_none()
+            existing_pending = WorldModelPageRepository(self.session).resolve_page_key(project_id, row.page_key)
             if existing_pending is None:
                 continue
+            frontmatter = load_json(existing_pending.frontmatter_json, {})
+            target_node_id = str(frontmatter.get("node_id") or "").strip()
             self.store.create_proposal(
                 project_id=project_id,
                 source="obsidian",
-                target_page_key=row.page_key,
+                target_page_key=existing_pending.page_key,
+                target_node_id=target_node_id,
                 target_field="markdown",
                 proposed_patch={
                     "vault_path": relative_path,
@@ -56,9 +55,11 @@ class ObsidianWorldImporter:
                     "new_hash": digest,
                     "old_markdown": row.markdown,
                     "new_markdown": markdown,
+                    "target_resolution_required": not bool(target_node_id),
                 },
                 reason="Obsidian markdown content changed.",
                 created_by="obsidian",
+                status="pending" if target_node_id else "needs_resolution",
             )
             changed_paths.append(relative_path)
             proposal_count += 1

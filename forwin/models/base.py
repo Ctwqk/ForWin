@@ -54,6 +54,8 @@ POSTGRES_BASELINE_MIGRATIONS = (
     "map_graph_schema_v1",
     "map_graph_schema_v2",
     "performance_spans_v1",
+    "world_model_canonical_pages_v1",
+    "character_identity_map_v1",
     "legacy_checkpoint_statuses_v1",
     "canon_quality_v1",
     "projection_cache_fields_v1",
@@ -159,6 +161,8 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
         )
         for version in POSTGRES_BASELINE_MIGRATIONS:
             _mark_migration_applied(conn, version)
+        _upgrade_world_model_canonical_pages(conn)
+        _upgrade_character_identity_map(conn)
         conn.execute(
             text(
                 """
@@ -169,6 +173,167 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
                 """
             )
         )
+
+
+def _upgrade_world_model_canonical_pages(conn) -> None:
+    conn.execute(text("ALTER TABLE world_model_pages ADD COLUMN IF NOT EXISTS logical_identity_key VARCHAR NOT NULL DEFAULT ''"))
+    conn.execute(text("ALTER TABLE world_model_pages ADD COLUMN IF NOT EXISTS canonical_source_type VARCHAR NOT NULL DEFAULT ''"))
+    conn.execute(text("ALTER TABLE world_model_pages ADD COLUMN IF NOT EXISTS canonical_source_id VARCHAR NOT NULL DEFAULT ''"))
+    conn.execute(text("ALTER TABLE world_model_pages ADD COLUMN IF NOT EXISTS supersedes_page_id VARCHAR NOT NULL DEFAULT ''"))
+    conn.execute(text("ALTER TABLE world_model_pages ADD COLUMN IF NOT EXISTS canonical_rank INTEGER NOT NULL DEFAULT 0"))
+    conn.execute(
+        text(
+            """
+            UPDATE world_model_pages
+            SET logical_identity_key = CASE
+                    WHEN page_type IN ('character','faction','organization','family','institution','resource','region','node','location')
+                         AND trim(title) <> ''
+                    THEN page_type || ':name:' || regexp_replace(lower(trim(title)), '[[:space:]]+', '', 'g')
+                    ELSE page_type || ':page:' || COALESCE(NULLIF(page_key, ''), regexp_replace(lower(trim(title)), '[[:space:]]+', '', 'g'))
+                END,
+                canonical_source_type = CASE
+                    WHEN frontmatter_json LIKE '%"node_id"%' THEN 'book_state_node'
+                    WHEN frontmatter_json LIKE '%"legacy_entity_id"%' THEN 'legacy_entity'
+                    WHEN page_key LIKE '%:genesis:%' OR page_key LIKE 'genesis:%' THEN 'genesis'
+                    ELSE 'world_model_page'
+                END,
+                canonical_source_id = COALESCE(NULLIF(page_key, ''), id),
+                canonical_rank = CASE
+                    WHEN frontmatter_json LIKE '%"node_id"%' THEN 30000
+                    WHEN page_key LIKE '%:genesis:%' OR page_key LIKE 'genesis:%' THEN 10000
+                    ELSE 20000
+                END + LEAST(GREATEST(COALESCE(as_of_chapter, 0), 0), 9999)
+            WHERE logical_identity_key = ''
+            """
+        )
+    )
+    conn.execute(
+        text(
+            """
+            WITH ranked AS (
+                SELECT
+                    id,
+                    first_value(id) OVER (
+                        PARTITION BY project_id, page_type, logical_identity_key
+                        ORDER BY canonical_rank DESC, as_of_chapter DESC, revision DESC, updated_at DESC, id DESC
+                    ) AS canonical_id,
+                    row_number() OVER (
+                        PARTITION BY project_id, page_type, logical_identity_key
+                        ORDER BY canonical_rank DESC, as_of_chapter DESC, revision DESC, updated_at DESC, id DESC
+                    ) AS rn
+                FROM world_model_pages
+                WHERE status = 'canon_live'
+                  AND logical_identity_key <> ''
+            )
+            UPDATE world_model_pages AS page
+            SET status = 'superseded',
+                supersedes_page_id = ranked.canonical_id
+            FROM ranked
+            WHERE page.id = ranked.id
+              AND ranked.rn > 1
+            """
+        )
+    )
+    conn.execute(text("UPDATE world_model_pages SET supersedes_page_id = '' WHERE status = 'canon_live'"))
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_world_model_pages_project_identity "
+            "ON world_model_pages (project_id, page_type, logical_identity_key)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_world_model_pages_live_identity "
+            "ON world_model_pages (project_id, page_type, logical_identity_key) "
+            "WHERE status = 'canon_live' AND logical_identity_key <> ''"
+        )
+    )
+
+
+def _upgrade_character_identity_map(conn) -> None:
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS character_identity_map (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR NOT NULL REFERENCES projects(id),
+                canonical_character_id VARCHAR NOT NULL DEFAULT '',
+                book_state_node_id VARCHAR NOT NULL DEFAULT '',
+                legacy_entity_id VARCHAR NOT NULL DEFAULT '',
+                genesis_ref_id VARCHAR NOT NULL DEFAULT '',
+                roster_item_ids_json TEXT DEFAULT '[]',
+                aliases_json TEXT DEFAULT '[]',
+                display_name TEXT DEFAULT '',
+                status VARCHAR DEFAULT 'active',
+                metadata_json TEXT DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    for column, ddl in (
+        ("canonical_character_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("book_state_node_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("legacy_entity_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("genesis_ref_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("roster_item_ids_json", "TEXT DEFAULT '[]'"),
+        ("aliases_json", "TEXT DEFAULT '[]'"),
+        ("display_name", "TEXT DEFAULT ''"),
+        ("status", "VARCHAR DEFAULT 'active'"),
+        ("metadata_json", "TEXT DEFAULT '{}'"),
+        ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+        ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+    ):
+        conn.execute(text(f"ALTER TABLE character_identity_map ADD COLUMN IF NOT EXISTS {column} {ddl}"))
+    conn.execute(
+        text(
+            """
+            INSERT INTO character_identity_map (
+                id,
+                project_id,
+                canonical_character_id,
+                book_state_node_id,
+                legacy_entity_id,
+                genesis_ref_id,
+                roster_item_ids_json,
+                aliases_json,
+                display_name,
+                status,
+                metadata_json
+            )
+            SELECT
+                'char_identity_' || id,
+                project_id,
+                id,
+                id,
+                COALESCE((metadata_json::jsonb ->> 'legacy_entity_id'), ''),
+                COALESCE((metadata_json::jsonb ->> 'genesis_ref_id'), ''),
+                COALESCE((metadata_json::jsonb -> 'roster_item_ids')::text, '[]'),
+                CASE
+                    WHEN aliases_json IS NULL OR aliases_json = '' OR aliases_json = '[]'
+                    THEN jsonb_build_array(name)::text
+                    ELSE (aliases_json::jsonb || to_jsonb(name))::text
+                END::text,
+                name,
+                'active',
+                jsonb_build_object('backfilled_from', 'world_nodes')::text
+            FROM world_nodes
+            WHERE node_type = 'character'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM character_identity_map existing
+                WHERE existing.project_id = world_nodes.project_id
+                  AND existing.book_state_node_id = world_nodes.id
+              )
+            """
+        )
+    )
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_canonical ON character_identity_map (project_id, canonical_character_id)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_book_node ON character_identity_map (project_id, book_state_node_id)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_legacy ON character_identity_map (project_id, legacy_entity_id)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_genesis ON character_identity_map (project_id, genesis_ref_id)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_status ON character_identity_map (project_id, status)"))
 
 
 def upgrade_db(engine: Engine) -> None:

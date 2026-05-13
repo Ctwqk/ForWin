@@ -104,6 +104,8 @@ async def test_basic_auth_exempts_health_and_extension_paths() -> None:
         http_basic_user="alice",
         http_basic_password="secret",
         publisher_extension_api_key="extension-secret",
+        publisher_session_secret="test-session-secret",
+        publisher_session_encryption_required=True,
     )
     app = _build_app(config)
 
@@ -135,6 +137,8 @@ async def test_extension_key_can_bypass_basic_auth_for_extension_used_job_paths(
         http_basic_user="alice",
         http_basic_password="secret",
         publisher_extension_api_key="extension-secret",
+        publisher_session_secret="test-session-secret",
+        publisher_session_encryption_required=True,
     )
     app = _build_app(config)
 

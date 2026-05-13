@@ -114,7 +114,7 @@ def test_role_specific_retrieval_packs_filter_hidden_truth_for_writer_only() -> 
         )
 
     with Session() as session:
-        broker = RetrievalBroker()
+        broker = RetrievalBroker(include_world_v4_compat=True)
         repo = StateRepository(session)
         packs = {
             kind: broker.build_world_model_pack(repo, project_id, 23, kind)
@@ -146,3 +146,40 @@ def test_role_specific_retrieval_packs_filter_hidden_truth_for_writer_only() -> 
     assert packs["compiler"].hidden_objective_truths == ["Day 30 父亲在母星被围"]
     assert packs["review"].planned_reveal_ladder[0].gap_id == "gap_homeworld_siege"
     assert packs["compiler"].planned_reveal_ladder[0].chapter_hint == 25
+
+
+def test_retrieval_broker_defaults_to_book_state_without_world_v4_compat_rows() -> None:
+    engine = get_engine(postgres_test_url("world-v4-retrieval-default-off"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project = Project(
+            title="Compat Off",
+            premise="p",
+            genre="科幻",
+            setting_summary="s",
+        )
+        session.add(project)
+        session.flush()
+        project_id = project.id
+        WorldModelRepository(session).create_world_line(
+            WorldLine(
+                world_line_id="line_legacy_only",
+                project_id=project_id,
+                line_type="primary_visible_line",
+                title="旧兼容线",
+                is_visible_onstage=True,
+            )
+        )
+
+    with Session() as session:
+        pack = RetrievalBroker().build_world_model_pack(
+            StateRepository(session),
+            project_id,
+            1,
+            "writing",
+        )
+
+    assert pack.active_world_lines == []
+    assert pack.metadata["world_v4_compatibility_source"] == "disabled"

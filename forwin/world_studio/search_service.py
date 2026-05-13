@@ -119,7 +119,6 @@ def _normalize_index_kinds(index_kind: str) -> set[str]:
         return {normalized}
     return set()
 
-
 def _role_allowed_index_kinds(kinds: set[str], role: str) -> set[str]:
     normalized = str(role or "human").strip().lower()
     if normalized == "writer":

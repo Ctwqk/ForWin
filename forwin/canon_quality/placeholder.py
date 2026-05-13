@@ -51,16 +51,6 @@ def analyze_placeholder_leakage(
     if signals:
         return signals
 
-    bare_role_signal = _analyze_bare_role_placeholder(
-        project_id=project_id,
-        chapter_number=chapter_number,
-        draft_id=draft_id,
-        body=text,
-    )
-    if bare_role_signal is not None:
-        signals.append(bare_role_signal)
-        return signals
-
     protagonist_signal = _analyze_protagonist_placeholder(
         project_id=project_id,
         chapter_number=chapter_number,
@@ -71,6 +61,16 @@ def analyze_placeholder_leakage(
     )
     if protagonist_signal is not None:
         signals.append(protagonist_signal)
+        return signals
+
+    bare_role_signal = _analyze_bare_role_placeholder(
+        project_id=project_id,
+        chapter_number=chapter_number,
+        draft_id=draft_id,
+        body=text,
+    )
+    if bare_role_signal is not None:
+        signals.append(bare_role_signal)
         return signals
 
     summary_text = str(summary or "")

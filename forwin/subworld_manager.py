@@ -8,6 +8,7 @@ from typing import Iterable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state import BookStateRepository
 from forwin.director.arc_director import ArcDirector
 from forwin.models import (
     ArcPlanVersion,
@@ -100,6 +101,58 @@ class SubWorldManager:
             ).all()
             if str(row[0] or "").strip()
         }
+        rostered_characters = set(rostered)
+        for row in session.execute(
+            select(SubWorldRosterItem.metadata_json).where(
+                SubWorldRosterItem.project_id == project_id
+            )
+        ).scalars():
+            metadata = _load_json(row, {})
+            character_id = str(
+                metadata.get("character_id") or metadata.get("book_state_node_id") or ""
+            ).strip()
+            if character_id:
+                rostered_characters.add(character_id)
+        book_state_characters = [
+            node
+            for node in BookStateRepository(session).list_world_nodes(project_id)
+            if str(node.node_type) == "character" and bool(node.is_active)
+        ]
+        if book_state_characters:
+            for node in book_state_characters:
+                metadata = dict(node.metadata) if isinstance(node.metadata, dict) else {}
+                legacy_entity_id = str(metadata.get("legacy_entity_id") or "").strip()
+                if legacy_entity_id and session.get(Entity, legacy_entity_id) is None:
+                    legacy_entity_id = ""
+                if node.id in rostered_characters or (legacy_entity_id and legacy_entity_id in rostered):
+                    continue
+                session.add(
+                    SubWorldRosterItem(
+                        id=new_id(),
+                        project_id=project_id,
+                        subworld_id=global_core.id,
+                        entity_id=legacy_entity_id or None,
+                        entity_kind="character",
+                        display_name=node.name,
+                        slot_key="",
+                        role_hint="",
+                        description=node.description,
+                        is_core=True,
+                        status="seeded_named",
+                        activation_chapter=0,
+                        metadata_json=json.dumps(
+                            {
+                                "character_id": node.id,
+                                "book_state_node_id": node.id,
+                                "canon_source": "book_state",
+                                "legacy_entity_id": legacy_entity_id,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                )
+            session.flush()
+            return global_core.id
         active_characters = session.execute(
             select(Entity)
             .where(
@@ -647,6 +700,13 @@ class SubWorldManager:
         return mapping
 
     def _entity_name_map(self, session: Session, project_id: str) -> dict[str, str]:
+        book_state_nodes = [
+            node
+            for node in BookStateRepository(session).list_world_nodes(project_id)
+            if str(node.node_type) == "character" and str(node.name or "").strip()
+        ]
+        if book_state_nodes:
+            return {node.name: node.id for node in book_state_nodes}
         entities = session.execute(
             select(Entity)
             .where(Entity.project_id == project_id)

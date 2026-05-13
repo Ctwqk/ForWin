@@ -261,7 +261,7 @@ class BookStateCompiler:
                             created_at_chapter=delta.chapter_number,
                             profile=profile,
                             state=runtime.world.get_state(patch.node_id),
-                            create_legacy_entity=True,
+                            create_legacy_entity=False,
                             audit_reason=patch.reason or "BookState GraphDelta create character",
                         )
                     )

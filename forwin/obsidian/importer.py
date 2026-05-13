@@ -4,10 +4,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.models.world_model import WorldModelPageRow
+from forwin.world_model.page_repository import WorldModelPageRepository
 from forwin.world_model.store import WorldModelStore, load_json
 
 from .frontmatter import EDITABLE_FIELDS, LOCKED_FIELDS, parse_frontmatter, parse_sections
@@ -81,6 +80,7 @@ class ObsidianImporter:
         page_key = str(frontmatter.get("forwin_id") or frontmatter.get("node_id") or path.relative_to(root))
         page_type = str(frontmatter.get("node_type", ""))
         node_id = str(frontmatter.get("node_id", ""))
+        target_resolution_required = not bool(node_id)
         current_sections = parse_sections(markdown)
         baseline_sections = self._baseline_sections(project_id, page_key)
         proposal_ids: list[str] = []
@@ -106,10 +106,12 @@ class ObsidianImporter:
                     "new_value": value,
                     "vault_path": str(path.relative_to(root)),
                     "frontmatter": frontmatter,
+                    "target_resolution_required": target_resolution_required,
                 },
                 human_notes=value if field_name in {"Manual Notes", "Human Questions"} else "",
                 reason=f"Obsidian editable section changed: {field_name}",
                 created_by=created_by,
+                status="needs_resolution" if target_resolution_required else "pending",
             )
             proposal_ids.append(row.id)
 
@@ -133,20 +135,17 @@ class ObsidianImporter:
                     "vault_path": str(path.relative_to(root)),
                     "frontmatter": frontmatter,
                     "locked_section": True,
+                    "target_resolution_required": target_resolution_required,
                 },
                 reason=f"Obsidian locked section changed: {field_name}",
                 created_by=created_by,
+                status="needs_resolution" if target_resolution_required else "pending",
             )
             proposal_ids.append(row.id)
         return proposal_ids
 
     def _baseline_sections(self, project_id: str, page_key: str) -> dict[str, str]:
-        row = self.session.execute(
-            select(WorldModelPageRow)
-            .where(WorldModelPageRow.project_id == project_id, WorldModelPageRow.page_key == page_key)
-            .order_by(WorldModelPageRow.revision.desc(), WorldModelPageRow.updated_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
+        row = WorldModelPageRepository(self.session).resolve_page_key(project_id, page_key)
         if row is None:
             return {}
         frontmatter = load_json(row.frontmatter_json, {})

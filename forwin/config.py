@@ -254,6 +254,12 @@ def _env_values() -> dict[str, object]:
             _env_csv(env, "FORWIN_HTTP_BASIC_EXEMPT_PATHS")
         )
         or DEFAULT_HTTP_BASIC_EXEMPT_PATHS,
+        "allow_unauthenticated_lan": _env_bool(
+            env, "FORWIN_ALLOW_UNAUTHENTICATED_LAN", False
+        ),
+        "allow_bind_all_interfaces": _env_bool(
+            env, "FORWIN_ALLOW_BIND_ALL_INTERFACES", False
+        ),
         "minimax_api_key": _env_str(env, "MINIMAX_API_KEY"),
         "minimax_base_url": _env_str(
             env,
@@ -296,7 +302,10 @@ def _env_values() -> dict[str, object]:
             env, "FORWIN_LEGACY_PROVISIONAL_BLOCKING", False
         ),
         "world_v4_compat_write_enabled": _env_bool(
-            env, "FORWIN_WORLD_V4_COMPAT_WRITE", True
+            env, "FORWIN_WORLD_V4_COMPAT_WRITE", False
+        ),
+        "enable_world_v4_debug_api": _env_bool(
+            env, "FORWIN_ENABLE_COMPAT_DEBUG_API", False
         ),
         "skill_runtime_enabled": _env_bool(
             env, "FORWIN_SKILL_RUNTIME_ENABLED", True
@@ -394,6 +403,8 @@ class _ConfigFields:
     http_basic_user: str = ""
     http_basic_password: str = ""
     http_basic_exempt_paths: tuple[str, ...] = DEFAULT_HTTP_BASIC_EXEMPT_PATHS
+    allow_unauthenticated_lan: bool = False
+    allow_bind_all_interfaces: bool = False
     minimax_api_key: str = ""
     minimax_base_url: str = DEFAULT_MINIMAX_BASE_URL
     minimax_model: str = DEFAULT_MINIMAX_MODEL
@@ -416,7 +427,8 @@ class _ConfigFields:
     manual_checkpoints_enabled: bool = True
     future_constraints_enabled: bool = True
     legacy_provisional_blocking: bool = False
-    world_v4_compat_write_enabled: bool = True
+    world_v4_compat_write_enabled: bool = False
+    enable_world_v4_debug_api: bool = False
     skill_runtime_enabled: bool = True
     skill_registry_path: str = "forwin_skills"
     skill_strictness: str = "normal"
@@ -485,9 +497,45 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
             raise ValueError(
                 "FORWIN_HTTP_BASIC_USER and FORWIN_HTTP_BASIC_PASSWORD must be set together"
             )
-        if self.publisher_session_encryption_required and not str(
-            self.publisher_session_secret or ""
-        ).strip():
+        bind = str(self.http_bind or "").strip().lower()
+        local_binds = {"", "127.0.0.1", "localhost", "::1"}
+        binds_all = bind in {"0.0.0.0", "::"}
+        public_bind = bind not in local_binds
+        if binds_all and not bool(self.allow_bind_all_interfaces):
+            raise ValueError(
+                "FORWIN_HTTP_BIND binds all interfaces. Set "
+                "FORWIN_ALLOW_BIND_ALL_INTERFACES=true only if this is intentional."
+            )
+        if public_bind and not (user and password) and not bool(self.allow_unauthenticated_lan):
+            raise ValueError(
+                "FORWIN_HTTP_BIND is not localhost, but Basic Auth is disabled. "
+                "Set FORWIN_HTTP_BASIC_USER/PASSWORD or explicitly set "
+                "FORWIN_ALLOW_UNAUTHENTICATED_LAN=true."
+            )
+        publisher_secret = str(self.publisher_session_secret or "").strip()
+        placeholder_secret = publisher_secret.lower().startswith(
+            ("change-me", "replace-with", "changeme")
+        )
+        if publisher_secret and placeholder_secret:
+            raise ValueError(
+                "FORWIN_PUBLISHER_SESSION_SECRET appears to be a placeholder; "
+                "replace it with a real secret."
+            )
+        publisher_profile_enabled = bool(
+            str(self.publisher_extension_api_key or "").strip()
+            or str(self.publisher_preferred_client_id or "").strip()
+        )
+        if publisher_profile_enabled and not publisher_secret:
+            raise ValueError(
+                "FORWIN_PUBLISHER_SESSION_SECRET must be set when publisher extension "
+                "profile is enabled."
+            )
+        if publisher_profile_enabled and not bool(self.publisher_session_encryption_required):
+            raise ValueError(
+                "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED=true must be set when "
+                "publisher extension profile is enabled."
+            )
+        if self.publisher_session_encryption_required and not publisher_secret:
             raise ValueError(
                 "FORWIN_PUBLISHER_SESSION_SECRET must be set when "
                 "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED=true"

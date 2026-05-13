@@ -5480,6 +5480,7 @@ class WritingOrchestrator:
     ) -> set[str]:
         names: set[str] = set()
         maybe_event_names: set[str] = set()
+        maybe_state_change_names: set[str] = set()
         absence_only_names = {
             name
             for change in writer_output.state_changes
@@ -5507,7 +5508,7 @@ class WritingOrchestrator:
                 entity_name = ContinuityChecker._candidate_character_name(change.entity_name)
                 if not entity_name:
                     continue
-                names.add(entity_name)
+                maybe_state_change_names.add(entity_name)
         for event in writer_output.new_events:
             for entity_name in event.involved_entity_names:
                 normalized = ContinuityChecker._candidate_character_name(entity_name)
@@ -5521,6 +5522,12 @@ class WritingOrchestrator:
         if maybe_event_names:
             resolved = repo.get_entities_by_names(project_id, sorted(maybe_event_names))
             for entity_name in maybe_event_names:
+                entity = resolved.get(entity_name)
+                if entity is not None and entity.kind == "character":
+                    names.add(entity_name)
+        if maybe_state_change_names:
+            resolved = repo.get_entities_by_names(project_id, sorted(maybe_state_change_names))
+            for entity_name in maybe_state_change_names:
                 entity = resolved.get(entity_name)
                 if entity is not None and entity.kind == "character":
                     names.add(entity_name)

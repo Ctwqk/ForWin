@@ -35,6 +35,7 @@ from forwin.protocol import (
     SubWorldSummary,
     WriterOutput,
 )
+from forwin.protocol.book_state import WorldNode
 from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
 from forwin.protocol.review import ContinuityIssue
 from forwin.state.repo import StateRepository
@@ -483,6 +484,78 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual(global_core.scope, "global_core")
         self.assertIsNotNone(roster)
         self.assertEqual(roster.subworld_id, global_core_id)
+
+    def test_ensure_registry_prefers_book_state_characters_without_legacy_entity(self) -> None:
+        with TemporaryDirectory() as tmp:
+            engine = get_engine(postgres_test_url("subworld-book-state"))
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="书", premise="p", genre="g")
+                BookStateRepository(session).create_world_node(
+                    WorldNode(
+                        id="char_book",
+                        project_id=project.id,
+                        node_type="character",
+                        name="陆沉",
+                        description="BookState canon 角色",
+                    )
+                )
+                manager = SubWorldManager()
+
+                global_core_id = manager.ensure_registry(session, project.id)
+                roster = session.execute(
+                    select(SubWorldRosterItem)
+                    .where(SubWorldRosterItem.project_id == project.id)
+                ).scalar_one()
+                metadata = json.loads(roster.metadata_json)
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertEqual(roster.subworld_id, global_core_id)
+        self.assertIsNone(roster.entity_id)
+        self.assertEqual(roster.display_name, "陆沉")
+        self.assertEqual(metadata["character_id"], "char_book")
+        self.assertEqual(metadata["canon_source"], "book_state")
+
+    def test_project_detail_prefers_book_state_characters_over_legacy_entities(self) -> None:
+        with TemporaryDirectory() as tmp:
+            engine = get_engine(postgres_test_url("project-detail-book-state-characters"))
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="书", premise="p", genre="g")
+                updater.create_entity(
+                    project_id=project.id,
+                    kind="character",
+                    name="旧影",
+                    description="legacy 角色",
+                    chapter=0,
+                )
+                BookStateRepository(session).create_world_node(
+                    WorldNode(
+                        id="char_book",
+                        project_id=project.id,
+                        node_type="character",
+                        name="陆沉",
+                        description="BookState canon 角色",
+                    )
+                )
+
+                detail = build_project_detail(
+                    session=session,
+                    project=project,
+                    display_datetime=lambda _value: "",
+                )
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertEqual([item.id for item in detail.characters], ["char_book"])
+        self.assertEqual(detail.characters[0].name, "陆沉")
 
     def test_arc_director_plan_arc_includes_subworld_delta_and_seed_characters(self) -> None:
         class FakeLLMClient:

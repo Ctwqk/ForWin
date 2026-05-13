@@ -1,10 +1,10 @@
   <div class="wrap">
-    <nav class="main-menu" aria-label="ForWin primary navigation">
-      <button id="tab_book" class="menu-item active" type="button" onclick="switchTab('book')">书本</button>
-      <button id="tab_task" class="menu-item" type="button" onclick="switchTab('task')">任务</button>
-      <a class="menu-item" href="/world-studio">世界档案</a>
-      <a class="menu-item" href="/publishers">发布</a>
-      <button id="tab_config" class="menu-item" type="button" onclick="switchTab('config')">配置</button>
+    <nav class="nav-tabs nav-tabs--primary" aria-label="ForWin primary navigation">
+      <button id="tab_book" class="nav-tab active" type="button" aria-selected="true" onclick="switchTab('book')">书本</button>
+      <button id="tab_task" class="nav-tab" type="button" aria-selected="false" onclick="switchTab('task')">任务</button>
+      <a class="nav-tab" href="/world-studio">世界档案</a>
+      <a class="nav-tab" href="/publishers">发布</a>
+      <button id="tab_config" class="nav-tab" type="button" aria-selected="false" onclick="switchTab('config')">配置</button>
     </nav>
     <section class="masthead">
       <div>
@@ -128,6 +128,20 @@
             </section>
           </div>
           <div class="stack">
+            <section class="card">
+              <div class="section-head">
+                <div>
+                  <h2>浏览器扩展</h2>
+                  <p>下载用户端浏览器扩展，或打开已经安装的扩展设置。扩展设置里填写当前 ForWin 后端地址和共享 API Key。</p>
+                </div>
+              </div>
+              <div class="action-row">
+                <button class="secondary" type="button" onclick="openExtensionOptions()">打开扩展设置</button>
+                <a class="button secondary" href="/api/publishers/extension-package">下载扩展包（Chrome/Edge）</a>
+                <a class="button secondary" href="/api/publishers/extension-package/firefox">下载 Firefox 扩展包</a>
+              </div>
+              <p class="muted" style="margin:12px 0 0;">Chrome/Edge 下载后解压并加载 <code>@@EXTENSION_INSTALL_PATH_TEXT@@</code>；Firefox 在 about:debugging 里临时加载 Firefox 包里的 manifest.json。</p>
+            </section>
             <section class="card">
               <div class="section-head">
                 <div>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 
 from forwin.api_pages_shared import (
@@ -63,6 +64,7 @@ def render_home_page(
             "@@DEFAULT_CHAPTERS_JSON@@": json.dumps(normalized_default_chapters),
             "@@EXTENSION_READY@@": json.dumps(bool(extension_api_key_configured)),
             "@@EXTENSION_INSTALL_PATH@@": json.dumps(extension_install_path, ensure_ascii=False),
+            "@@EXTENSION_INSTALL_PATH_TEXT@@": html.escape(extension_install_path),
             "@@PAGE_DOM_HELPERS_JS@@": PAGE_DOM_HELPERS_JS,
         },
     )

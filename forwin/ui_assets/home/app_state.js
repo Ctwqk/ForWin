@@ -1033,12 +1033,16 @@
       currentHomeTab = ['book', 'task', 'config'].includes(tab) ? tab : 'book';
       const bookActive = currentHomeTab === 'book';
       const taskActive = currentHomeTab === 'task';
+      const configActive = currentHomeTab === 'config';
       document.getElementById('tab_book').classList.toggle('active', bookActive);
+      document.getElementById('tab_book').setAttribute('aria-selected', bookActive ? 'true' : 'false');
       document.getElementById('tab_task').classList.toggle('active', taskActive);
-      document.getElementById('tab_config').classList.toggle('active', currentHomeTab === 'config');
+      document.getElementById('tab_task').setAttribute('aria-selected', taskActive ? 'true' : 'false');
+      document.getElementById('tab_config').classList.toggle('active', configActive);
+      document.getElementById('tab_config').setAttribute('aria-selected', configActive ? 'true' : 'false');
       document.getElementById('panel_book').classList.toggle('active', bookActive);
       document.getElementById('panel_task').classList.toggle('active', taskActive);
-      document.getElementById('panel_config').classList.toggle('active', currentHomeTab === 'config');
+      document.getElementById('panel_config').classList.toggle('active', configActive);
       if (bookActive && booksRefreshPending) {
         booksRefreshPending = false;
         void loadBooks();

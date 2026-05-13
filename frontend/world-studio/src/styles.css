@@ -68,41 +68,60 @@ button:disabled {
   border-radius: 8px;
 }
 
-.main-menu {
+.nav-tabs {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  max-width: 100%;
+  padding: 4px;
+  border: 1px solid #d8e0e8;
+  border-radius: 8px;
+  background: #f1f5f8;
   flex-wrap: nowrap;
   overflow-x: auto;
   white-space: nowrap;
   scrollbar-width: none;
   margin-bottom: 12px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
 }
 
-.main-menu::-webkit-scrollbar {
+.nav-tabs::-webkit-scrollbar {
   display: none;
 }
 
-.main-menu a {
+.nav-tabs--primary {
+  width: max-content;
+}
+
+.nav-tabs .nav-tab {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   flex: 0 0 auto;
   min-height: 32px;
-  padding: 0 11px;
-  border: 1px solid #d8e0e8;
-  border-radius: 999px;
-  background: #f7f9fb;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
   color: #607083;
   text-decoration: none;
+  white-space: nowrap;
 }
 
-.main-menu a[aria-current="page"] {
-  border-color: #2c5f7c;
-  background: #e7f1f6;
+.nav-tabs .nav-tab:hover {
+  border-color: #d8e0e8;
+  background: #ffffff;
+}
+
+.nav-tabs .nav-tab[aria-current="page"],
+.nav-tabs .nav-tab[aria-selected="true"],
+.nav-tabs .nav-tab.active {
+  border-color: #c9d3df;
+  background: #ffffff;
   color: #1d536e;
+  box-shadow: 0 1px 2px rgb(29 36 48 / 8%);
 }
 
 .eyebrow {
@@ -167,7 +186,7 @@ input {
 
 .icon-button,
 .vault-form button,
-.tabs button {
+.nav-tabs .nav-tab {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -313,47 +332,16 @@ input {
   padding: 12px;
 }
 
-.tabs {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.nav-tabs--secondary {
   min-width: 0;
-  overflow-x: auto;
-  padding: 4px;
-  border: 1px solid #d8e0e8;
-  border-radius: 8px;
-  background: #eef3f7;
-  scrollbar-width: none;
+  margin-bottom: 0;
 }
 
-.tabs::-webkit-scrollbar {
-  display: none;
-}
-
-.tabs button {
+.nav-tabs--secondary .nav-tab {
   flex: 1 0 max-content;
-  width: auto;
-  min-width: 0;
   min-height: 34px;
-  border-color: transparent;
-  border-radius: 6px;
-  background: transparent;
+  min-width: 0;
   color: #556577;
-  font-size: 13px;
-  font-weight: 700;
-  padding: 0 10px;
-}
-
-.tabs button:hover {
-  border-color: #d8e0e8;
-  background: #ffffff;
-}
-
-.tabs button.active {
-  border-color: #c9d3df;
-  background: #ffffff;
-  color: #1d536e;
-  box-shadow: 0 1px 2px rgb(29 36 48 / 8%);
 }
 
 .search-row {

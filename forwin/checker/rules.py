@@ -94,6 +94,7 @@ POSSESSIVE_GENERIC_ROLE_SUFFIXES = (
     "保镖",
     "安保",
     "员工",
+    "残影",
 )
 NON_CHARACTER_NAME_KEYWORDS = (
     "集团",

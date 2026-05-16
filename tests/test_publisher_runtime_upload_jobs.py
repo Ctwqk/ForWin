@@ -50,7 +50,7 @@ def test_upload_job_service_lifecycle_preserves_payload_and_audit_shape() -> Non
             upload_url=None,
             publish=False,
             create_if_missing=True,
-            book_meta={"primary_category": "都市日常", "protagonist_names": ["沈砚", "林雾", "多余"]},
+            book_meta={"primary_category": "都市日常", "protagonist_names": ["韩砚", "林雾", "多余"]},
         )
         claimed = runtime.upload_jobs.claim_next_upload_job(
             client_id="client-1",
@@ -70,7 +70,7 @@ def test_upload_job_service_lifecycle_preserves_payload_and_audit_shape() -> Non
         assert claimed["job_id"] == created["job_id"]
         assert updated["status"] == "succeeded"
         assert updated["result_payload"]["create_if_missing"] is True
-        assert updated["result_payload"]["book_meta"]["protagonist_names"] == ["沈砚", "林雾"]
+        assert updated["result_payload"]["book_meta"]["protagonist_names"] == ["韩砚", "林雾"]
         assert runtime.upload_jobs.get_upload_job(created["job_id"])["deletable"] is True
 
         with runtime.session_factory() as session:

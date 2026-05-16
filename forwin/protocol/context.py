@@ -232,6 +232,8 @@ class ChapterContextPack(BaseModel):
     active_personality_contexts: list[dict[str, Any]] = Field(default_factory=list)
     personality_integrity_issues: list[dict[str, Any]] = Field(default_factory=list)
     canon_quality_context: dict[str, Any] = Field(default_factory=dict)
+    active_narrative_obligations: list[dict[str, Any]] = Field(default_factory=list)
+    future_plan_audit_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class WorldModelRetrievalPack(BaseModel):
@@ -337,3 +339,5 @@ class ReviewContextPack(BaseModel):
     lint_signals: list[LintSignal] = Field(default_factory=list)
     active_personality_contexts: list[dict[str, Any]] = Field(default_factory=list)
     deterministic_quality_report: dict[str, Any] = Field(default_factory=dict)
+    active_narrative_obligations: list[dict[str, Any]] = Field(default_factory=list)
+    future_plan_audit_summary: dict[str, Any] = Field(default_factory=dict)

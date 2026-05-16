@@ -19,6 +19,7 @@ from forwin.api_schemas import (
     ProjectChapterPublishRequest,
     ProjectContinueGenerationRequest,
     ProjectCreateRequest,
+    ProjectExtendGenerationRequest,
 )
 from forwin.models.project import Project
 
@@ -269,6 +270,19 @@ def build_handlers(
             get_generation_task_or_404=get_generation_task_or_404,
         )
 
+    def extend_project_generation(
+        project_id: str,
+        req: ProjectExtendGenerationRequest,
+    ):
+        return api_project_ops.extend_project_generation(
+            project_id,
+            req,
+            get_session=get_session,
+            display_datetime=display_datetime,
+            project_has_active_generation_task=project_has_active_generation_task,
+            generation_task_conflict_message=generation_task_conflict_message,
+        )
+
     def update_project_automation(project_id: str, req: ProjectAutomationUpdateRequest):
         return _update_project_automation(
             project_id,
@@ -382,6 +396,7 @@ def build_handlers(
         "generate_project_genesis_name": generate_project_genesis_name,
         "start_project_writing": start_project_writing,
         "continue_project_generation": continue_project_generation,
+        "extend_project_generation": extend_project_generation,
         "update_project_automation": update_project_automation,
         "list_chapters": list_chapters,
         "list_chapter_page": list_chapter_page,

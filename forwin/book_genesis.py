@@ -607,12 +607,11 @@ def _fallback_named_entity_seed(pack: dict[str, Any]) -> dict[str, list[str]]:
         term
         for term in (
             "旧城",
-            "白塔",
-            "地下旧轨",
-            "潮汐钟楼",
-            "岫苑",
-            "档案公会",
-            "失忆广场",
+            "核心系统",
+            "地下检修线",
+            "钟塔",
+            "档案署",
+            "中央广场",
             "旧城区",
             "旧港",
             "民间记忆馆",
@@ -622,7 +621,7 @@ def _fallback_named_entity_seed(pack: dict[str, Any]) -> dict[str, list[str]]:
     )
     location_terms.extend(
         re.findall(
-            r"([\u4e00-\u9fff]{2,12}(?:白塔|旧轨|钟楼|塔|楼|苑|公会|广场|旧城区|新区|港区|港口|旧港|记忆馆|档案馆|数据市场|市场|街区|码头|城区))(?=，|、|。|；|,|;|并|是|为|和|与|$)",
+            r"([\u4e00-\u9fff]{2,12}(?:核心系统|地下线|检修线|钟塔|塔|楼|档案署|署|广场|旧城区|新区|港区|港口|记忆馆|档案馆|数据市场|市场|街区|码头|城区|边缘区))(?=，|、|。|；|,|;|并|是|为|和|与|$)",
             text,
         )
     )
@@ -667,7 +666,7 @@ def _fallback_culture_profiles() -> list[dict[str, Any]]:
             "character_name_style": "人物名以两到三字为主，简洁、冷硬、易记。",
             "region_name_style": "地区名强调功能或权力层级，如核心区、边境区、旧城带。",
             "location_name_style": "地点名强调辨识度与舞台感，如都城、渡口、要塞、旧街。",
-            "character_name_examples": ["林烬", "沈砚"],
+            "character_name_examples": ["陆明", "韩青"],
             "region_name_examples": ["主舞台核心区", "权力中心区"],
             "location_name_examples": ["主舞台", "权力中心", "危险边缘"],
             "usage_notes": "先保留结构，后续可替换为真实文化背景与命名映射。",
@@ -724,7 +723,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
             (
                 item
                 for item in core_locations
-                if any(marker in item for marker in ("白塔", "钟楼", "记忆馆", "档案馆"))
+                if any(marker in item for marker in ("核心系统", "钟塔", "记忆馆", "档案馆"))
             ),
             core_locations[0] if core_locations else stage_root,
         )
@@ -740,7 +739,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
             (
                 item
                 for item in core_locations
-                if any(marker in item for marker in ("旧轨", "市场", "港", "广场", "岫苑", "边缘"))
+                if any(marker in item for marker in ("检修线", "市场", "港", "广场", "边缘"))
             ),
             core_locations[-1] if len(core_locations) > 1 else "危险边缘",
         )
@@ -1082,7 +1081,7 @@ def _fallback_blueprint(project: Project, pack: dict[str, Any]) -> dict[str, Any
     arcs: list[dict[str, Any]] = []
     chapter_cursor = 1
     story_focus = _clean_story_focus_from_pack(project, pack)
-    phase_labels = ("触发线索", "深入追查", "真相反转", "白塔逼近", "终局抉择")
+    phase_labels = ("触发线索", "深入追查", "真相反转", "系统逼近", "终局抉择")
     for index, chapter_count in enumerate(sizes, start=1):
         chapter_start = chapter_cursor
         chapter_end = chapter_cursor + chapter_count - 1

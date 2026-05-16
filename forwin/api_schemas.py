@@ -889,6 +889,14 @@ class ProjectContinueGenerationRequest(BaseModel):
     future_constraints_enabled: bool | None = None
 
 
+class ProjectExtendGenerationRequest(BaseModel):
+    additional_chapters: int = Field(default=12, ge=1, le=100)
+    arc_title: str = ""
+    arc_synopsis: str = ""
+    continuity_guard: str = ""
+    reason: str = ""
+
+
 class ProjectGovernanceUpdateRequest(BaseModel):
     default_operation_mode: str | None = None
     review_interval_chapters: int | None = None

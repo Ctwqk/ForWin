@@ -462,6 +462,7 @@ def register_api_routes(
         ("/api/projects/{project_id}/proposals/{proposal_id}/reject", ["POST"], handlers["reject_project_proposal"], {"response_model": WorldEditProposalInfo}),
         ("/api/projects/{project_id}/start-writing", ["POST"], handlers["start_project_writing"], {"response_model": StartWritingResponse}),
         ("/api/projects/{project_id}/continue-generation", ["POST"], handlers["continue_project_generation"], {"response_model": TaskResponse}),
+        ("/api/projects/{project_id}/extend-generation", ["POST"], handlers["extend_project_generation"], {"response_model": ProjectDetail}),
         ("/api/projects/{project_id}/automation", ["PUT"], handlers["update_project_automation"], {"response_model": ProjectAutomationUpdateResponse}),
         ("/api/projects/{project_id}/governance", ["GET"], handlers["get_project_governance"], {"response_model": ProjectGovernanceResponse}),
         ("/api/projects/{project_id}/governance", ["PUT"], handlers["update_project_governance"], {"response_model": ProjectGovernanceResponse}),

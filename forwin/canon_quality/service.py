@@ -12,7 +12,7 @@ from forwin.models.project import ChapterPlan, Project
 from forwin.protocol.writer import WriterOutput
 
 from .artifact_ledger import analyze_artifact_counts
-from .character_state import analyze_character_state_transitions
+from .character_state import analyze_character_state_transitions, extract_candidate_character_names
 from .countdown_ledger import analyze_countdowns
 from .duplication import analyze_full_body_duplication
 from .final_completion import analyze_final_completion
@@ -73,15 +73,23 @@ def analyze_writer_output_quality(
         body=body,
         previous_transitions=repo.list_character_transitions(project_id, before_chapter=chapter_number),
         central_characters=_central_character_names(body),
+        recent_canon_text=_recent_canon_text(session, project_id, before_chapter=chapter_number),
+        recent_canon_chapter_number=chapter_number - 1,
     )
     signals.extend(character_signals)
 
+    previous_countdown_entries = _countdown_entries_with_recent_canon_body_fallback(
+        session=session,
+        project_id=project_id,
+        before_chapter=chapter_number,
+        existing_entries=repo.list_countdown_entries(project_id, before_chapter=chapter_number),
+    )
     countdown_signals, countdown_entries = analyze_countdowns(
         project_id=project_id,
         chapter_number=chapter_number,
         draft_id=draft_id,
         body=body,
-        previous_entries=repo.list_countdown_entries(project_id, before_chapter=chapter_number),
+        previous_entries=previous_countdown_entries,
         is_final_chapter=is_final_chapter,
     )
     signals.extend(countdown_signals)
@@ -163,6 +171,7 @@ def analyze_writer_output_quality(
     body_metrics.style_motifs = list(style_telemetry.style_motifs)
 
     if persist:
+        repo.supersede_chapter_signals(project_id, chapter_number)
         repo.save_signals(signals)
         repo.save_character_transitions(character_transitions)
         repo.save_countdown_entries(countdown_entries)
@@ -241,6 +250,83 @@ def _previous_identity_facts(
     return facts
 
 
+def _recent_canon_text(session: Session, project_id: str, *, before_chapter: int) -> str:
+    rows = session.execute(
+        select(CandidateDraftRecord, ChapterDraft)
+        .join(ChapterDraft, ChapterDraft.id == CandidateDraftRecord.candidate_draft_id)
+        .where(
+            CandidateDraftRecord.project_id == project_id,
+            CandidateDraftRecord.chapter_number < int(before_chapter or 0),
+            CandidateDraftRecord.status == "canon_committed",
+            CandidateDraftRecord.canon_status == "canon",
+        )
+        .order_by(CandidateDraftRecord.chapter_number.desc(), CandidateDraftRecord.updated_at.desc())
+        .limit(3)
+    ).all()
+    chunks: list[str] = []
+    for record, draft in reversed(rows):
+        chapter_number = int(record.chapter_number or 0)
+        text = "\n".join(part for part in (str(draft.summary or ""), str(draft.body_text or "")) if part)
+        if text:
+            chunks.append(f"第{chapter_number}章：{text}")
+    return "\n".join(chunks)
+
+
+def _countdown_entries_with_recent_canon_body_fallback(
+    *,
+    session: Session,
+    project_id: str,
+    before_chapter: int,
+    existing_entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged_entries = [dict(item) for item in existing_entries]
+    keys_by_chapter: dict[int, set[str]] = {}
+    for item in merged_entries:
+        chapter = int(item.get("chapter_number", 0) or 0)
+        keys_by_chapter.setdefault(chapter, set()).add(str(item.get("countdown_key") or "main"))
+    persisted_keys_by_chapter = {chapter: set(keys) for chapter, keys in keys_by_chapter.items()}
+
+    rows = session.execute(
+        select(CandidateDraftRecord, ChapterDraft)
+        .join(ChapterDraft, ChapterDraft.id == CandidateDraftRecord.candidate_draft_id)
+        .where(
+            CandidateDraftRecord.project_id == project_id,
+            CandidateDraftRecord.chapter_number < int(before_chapter or 0),
+            CandidateDraftRecord.status == "canon_committed",
+            CandidateDraftRecord.canon_status == "canon",
+        )
+        .order_by(CandidateDraftRecord.chapter_number.desc(), CandidateDraftRecord.updated_at.desc())
+        .limit(6)
+    ).all()
+    latest_by_chapter: dict[int, tuple[CandidateDraftRecord, ChapterDraft]] = {}
+    for record, draft in rows:
+        chapter = int(record.chapter_number or 0)
+        latest_by_chapter.setdefault(chapter, (record, draft))
+
+    running_context: list[dict[str, Any]] = [dict(item) for item in merged_entries]
+    for chapter in sorted(latest_by_chapter):
+        record, draft = latest_by_chapter[chapter]
+        text = "\n".join(part for part in (str(draft.summary or ""), str(draft.body_text or "")) if part)
+        if not text.strip():
+            continue
+        _signals, reconstructed_entries = analyze_countdowns(
+            project_id=project_id,
+            chapter_number=chapter,
+            draft_id=str(record.candidate_draft_id or ""),
+            body=text,
+            previous_entries=running_context,
+            is_final_chapter=False,
+        )
+        for entry in reconstructed_entries:
+            if entry.countdown_key in persisted_keys_by_chapter.get(chapter, set()):
+                continue
+            item = entry.model_dump(mode="json")
+            merged_entries.append(item)
+            running_context.append(item)
+            keys_by_chapter.setdefault(chapter, set()).add(entry.countdown_key)
+    return merged_entries
+
+
 def _is_final_chapter(
     *,
     session: Session,
@@ -256,6 +342,8 @@ def _is_final_chapter(
     target_total = int(getattr(project, "target_total_chapters", 0) or 0)
     if target_total and current >= target_total:
         return True
+    if target_total and current < target_total:
+        return False
     max_materialized = session.execute(
         select(func.max(ChapterPlan.chapter_number)).where(ChapterPlan.project_id == project_id)
     ).scalar_one_or_none()
@@ -329,8 +417,4 @@ def _expected_protagonist_names(project: Project | None) -> set[str]:
 
 
 def _central_character_names(body: str) -> set[str]:
-    names = set()
-    for candidate in ("沈砚", "林澈", "顾岚", "洛庭若", "林远", "林启明", "林远舟"):
-        if candidate in body:
-            names.add(candidate)
-    return names
+    return extract_candidate_character_names(body)

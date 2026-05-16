@@ -59,6 +59,9 @@ POSTGRES_BASELINE_MIGRATIONS = (
     "legacy_checkpoint_statuses_v1",
     "canon_quality_v1",
     "projection_cache_fields_v1",
+    "narrative_obligations_v1",
+    "canon_admission_obligation_fields_v1",
+    "future_plan_audit_runs_v1",
 )
 
 
@@ -164,6 +167,9 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
         _upgrade_world_model_canonical_pages(conn)
         _upgrade_world_model_projection_cache_fields(conn)
         _upgrade_character_identity_map(conn)
+        _upgrade_narrative_obligations(conn)
+        _upgrade_canon_admission_obligation_fields(conn)
+        _upgrade_future_plan_audit_runs(conn)
         conn.execute(
             text(
                 """
@@ -366,6 +372,196 @@ def _upgrade_character_identity_map(conn) -> None:
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_legacy ON character_identity_map (project_id, legacy_entity_id)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_genesis ON character_identity_map (project_id, genesis_ref_id)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_status ON character_identity_map (project_id, status)"))
+
+
+def _upgrade_narrative_obligations(conn) -> None:
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS narrative_obligations (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR NOT NULL REFERENCES projects(id),
+                origin_chapter_number INTEGER NOT NULL DEFAULT 0,
+                origin_draft_id VARCHAR NOT NULL DEFAULT '',
+                origin_review_id VARCHAR NOT NULL DEFAULT '',
+                origin_signal_ids_json TEXT NOT NULL DEFAULT '[]',
+                origin_plan_snapshot_id VARCHAR NOT NULL DEFAULT '',
+                obligation_type VARCHAR NOT NULL DEFAULT '',
+                priority VARCHAR NOT NULL DEFAULT 'P1',
+                status VARCHAR NOT NULL DEFAULT 'proposed',
+                summary TEXT NOT NULL DEFAULT '',
+                deferral_reason TEXT NOT NULL DEFAULT '',
+                hardness VARCHAR NOT NULL DEFAULT 'soft_gap',
+                subject_refs_json TEXT NOT NULL DEFAULT '[]',
+                evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+                deadline_chapter INTEGER NOT NULL DEFAULT 0,
+                deadline_policy VARCHAR NOT NULL DEFAULT 'block_at_deadline',
+                payoff_test TEXT NOT NULL DEFAULT '',
+                resolution_conditions_json TEXT NOT NULL DEFAULT '[]',
+                linked_plan_patch_ids_json TEXT NOT NULL DEFAULT '[]',
+                linked_future_chapters_json TEXT NOT NULL DEFAULT '[]',
+                blocking_policy VARCHAR NOT NULL DEFAULT 'block_at_deadline',
+                created_by VARCHAR NOT NULL DEFAULT 'system',
+                resolved_at TIMESTAMP,
+                resolution_chapter INTEGER NOT NULL DEFAULT 0,
+                resolution_evidence_refs_json TEXT NOT NULL DEFAULT '[]',
+                waive_reason TEXT NOT NULL DEFAULT '',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    for column, ddl in (
+        ("origin_chapter_number", "INTEGER NOT NULL DEFAULT 0"),
+        ("origin_draft_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("origin_review_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("origin_signal_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("origin_plan_snapshot_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("obligation_type", "VARCHAR NOT NULL DEFAULT ''"),
+        ("priority", "VARCHAR NOT NULL DEFAULT 'P1'"),
+        ("status", "VARCHAR NOT NULL DEFAULT 'proposed'"),
+        ("summary", "TEXT NOT NULL DEFAULT ''"),
+        ("deferral_reason", "TEXT NOT NULL DEFAULT ''"),
+        ("hardness", "VARCHAR NOT NULL DEFAULT 'soft_gap'"),
+        ("subject_refs_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("evidence_refs_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("deadline_chapter", "INTEGER NOT NULL DEFAULT 0"),
+        ("deadline_policy", "VARCHAR NOT NULL DEFAULT 'block_at_deadline'"),
+        ("payoff_test", "TEXT NOT NULL DEFAULT ''"),
+        ("resolution_conditions_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("linked_plan_patch_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("linked_future_chapters_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("blocking_policy", "VARCHAR NOT NULL DEFAULT 'block_at_deadline'"),
+        ("created_by", "VARCHAR NOT NULL DEFAULT 'system'"),
+        ("resolved_at", "TIMESTAMP"),
+        ("resolution_chapter", "INTEGER NOT NULL DEFAULT 0"),
+        ("resolution_evidence_refs_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("waive_reason", "TEXT NOT NULL DEFAULT ''"),
+        ("metadata_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+        ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+    ):
+        conn.execute(text(f"ALTER TABLE narrative_obligations ADD COLUMN IF NOT EXISTS {column} {ddl}"))
+
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS narrative_plan_patches (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR NOT NULL REFERENCES projects(id),
+                patch_type VARCHAR NOT NULL DEFAULT 'defer_acceptance',
+                target_scope VARCHAR NOT NULL DEFAULT 'chapter',
+                target_plan_id VARCHAR NOT NULL DEFAULT '',
+                target_arc_id VARCHAR NOT NULL DEFAULT '',
+                target_band_id VARCHAR NOT NULL DEFAULT '',
+                affected_chapters_json TEXT NOT NULL DEFAULT '[]',
+                source_obligation_ids_json TEXT NOT NULL DEFAULT '[]',
+                source_signal_ids_json TEXT NOT NULL DEFAULT '[]',
+                old_plan_digest VARCHAR NOT NULL DEFAULT '',
+                new_plan_digest VARCHAR NOT NULL DEFAULT '',
+                old_contract_json TEXT NOT NULL DEFAULT '{}',
+                new_contract_json TEXT NOT NULL DEFAULT '{}',
+                diff_summary TEXT NOT NULL DEFAULT '',
+                must_preserve_json TEXT NOT NULL DEFAULT '[]',
+                must_not_change_json TEXT NOT NULL DEFAULT '[]',
+                new_constraints_json TEXT NOT NULL DEFAULT '[]',
+                writer_context_injections_json TEXT NOT NULL DEFAULT '[]',
+                reviewer_context_injections_json TEXT NOT NULL DEFAULT '[]',
+                expected_resolution_tests_json TEXT NOT NULL DEFAULT '[]',
+                validation_status VARCHAR NOT NULL DEFAULT 'pending',
+                validation_errors_json TEXT NOT NULL DEFAULT '[]',
+                applied BOOLEAN NOT NULL DEFAULT FALSE,
+                applied_at TIMESTAMP,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    for column, ddl in (
+        ("patch_type", "VARCHAR NOT NULL DEFAULT 'defer_acceptance'"),
+        ("target_scope", "VARCHAR NOT NULL DEFAULT 'chapter'"),
+        ("target_plan_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("target_arc_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("target_band_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("affected_chapters_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("source_obligation_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("source_signal_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("old_plan_digest", "VARCHAR NOT NULL DEFAULT ''"),
+        ("new_plan_digest", "VARCHAR NOT NULL DEFAULT ''"),
+        ("old_contract_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("new_contract_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("diff_summary", "TEXT NOT NULL DEFAULT ''"),
+        ("must_preserve_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("must_not_change_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("new_constraints_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("writer_context_injections_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("reviewer_context_injections_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("expected_resolution_tests_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("validation_status", "VARCHAR NOT NULL DEFAULT 'pending'"),
+        ("validation_errors_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("applied", "BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("applied_at", "TIMESTAMP"),
+        ("metadata_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+    ):
+        conn.execute(text(f"ALTER TABLE narrative_plan_patches ADD COLUMN IF NOT EXISTS {column} {ddl}"))
+
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_narrative_obligations_project_status ON narrative_obligations (project_id, status, priority)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_narrative_obligations_project_deadline ON narrative_obligations (project_id, deadline_chapter)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_narrative_obligations_origin_chapter ON narrative_obligations (project_id, origin_chapter_number)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_narrative_plan_patches_project_scope ON narrative_plan_patches (project_id, target_scope)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_narrative_plan_patches_project_applied ON narrative_plan_patches (project_id, applied)"))
+
+
+def _upgrade_canon_admission_obligation_fields(conn) -> None:
+    for column, ddl in (
+        ("admission_mode", "VARCHAR NOT NULL DEFAULT 'clean'"),
+        ("obligation_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("required_plan_patch_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("blocking_reasons_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("expired_obligation_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("over_budget", "VARCHAR NOT NULL DEFAULT 'false'"),
+    ):
+        conn.execute(text(f"ALTER TABLE canon_admission_runs ADD COLUMN IF NOT EXISTS {column} {ddl}"))
+
+
+def _upgrade_future_plan_audit_runs(conn) -> None:
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS future_plan_audit_runs (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR NOT NULL REFERENCES projects(id),
+                current_chapter_number INTEGER NOT NULL DEFAULT 0,
+                trigger_stage VARCHAR NOT NULL DEFAULT '',
+                inspected_chapters_json TEXT NOT NULL DEFAULT '[]',
+                status VARCHAR NOT NULL DEFAULT 'pass',
+                issues_json TEXT NOT NULL DEFAULT '[]',
+                applied_plan_patch_ids_json TEXT NOT NULL DEFAULT '[]',
+                blocking_reasons_json TEXT NOT NULL DEFAULT '[]',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    for column, ddl in (
+        ("current_chapter_number", "INTEGER NOT NULL DEFAULT 0"),
+        ("trigger_stage", "VARCHAR NOT NULL DEFAULT ''"),
+        ("inspected_chapters_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("status", "VARCHAR NOT NULL DEFAULT 'pass'"),
+        ("issues_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("applied_plan_patch_ids_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("blocking_reasons_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("metadata_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+    ):
+        conn.execute(text(f"ALTER TABLE future_plan_audit_runs ADD COLUMN IF NOT EXISTS {column} {ddl}"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_future_plan_audit_project_created ON future_plan_audit_runs (project_id, created_at)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_future_plan_audit_project_chapter ON future_plan_audit_runs (project_id, current_chapter_number)"))
 
 
 def upgrade_db(engine: Engine) -> None:

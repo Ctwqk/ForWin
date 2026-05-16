@@ -222,10 +222,25 @@ def test_canon_quality_context_infers_final_when_target_total_is_stale() -> None
         chapter_number=12,
         target_total_chapters=0,
         chapter_title="倒计时：最后一日",
-        chapter_summary="林澈必须关闭白塔系统。",
+        chapter_summary="陆明必须关闭核心系统。",
     )
 
     assert context["is_final_chapter"] is True
+
+
+def test_canon_quality_context_does_not_infer_final_before_known_target_total() -> None:
+    from forwin.context.assembler import _build_canon_quality_context
+
+    context = _build_canon_quality_context(
+        session=_MaxChapterSession(12),
+        project_id="project-1",
+        chapter_number=12,
+        target_total_chapters=60,
+        chapter_title="倒计时：最后一日",
+        chapter_summary="陆明必须关闭核心系统。",
+    )
+
+    assert context["is_final_chapter"] is False
 
 
 def test_canon_quality_context_does_not_infer_ordinary_last_arc_chapter_as_final() -> None:
@@ -237,7 +252,7 @@ def test_canon_quality_context_does_not_infer_ordinary_last_arc_chapter_as_final
         chapter_number=8,
         target_total_chapters=0,
         chapter_title="旧轨夹击",
-        chapter_summary="林澈被巡检员追击，逃入下一处线索。",
+        chapter_summary="陆明被巡检员追击，逃入下一处线索。",
     )
 
     assert context["is_final_chapter"] is False

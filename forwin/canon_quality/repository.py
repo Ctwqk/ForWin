@@ -59,6 +59,20 @@ class CanonQualityRepository:
         self.session.flush()
         return rows
 
+    def supersede_chapter_signals(self, project_id: str, chapter_number: int) -> int:
+        rows = self.session.execute(
+            select(CanonQualitySignalRow).where(
+                CanonQualitySignalRow.project_id == project_id,
+                CanonQualitySignalRow.chapter_number == int(chapter_number or 0),
+                CanonQualitySignalRow.status == "open",
+            )
+        ).scalars().all()
+        for row in rows:
+            row.status = "superseded"
+            self.session.add(row)
+        self.session.flush()
+        return len(rows)
+
     def list_open_signals(
         self,
         project_id: str,
@@ -94,6 +108,12 @@ class CanonQualityRepository:
             review_id=result.review_id,
             commit_allowed="true" if result.commit_allowed else "false",
             verdict=result.verdict,
+            admission_mode=result.admission_mode,
+            obligation_ids_json=_json(result.obligation_ids),
+            required_plan_patch_ids_json=_json(result.required_plan_patch_ids),
+            blocking_reasons_json=_json(result.blocking_reasons),
+            expired_obligation_ids_json=_json(result.expired_obligation_ids),
+            over_budget="true" if result.over_budget else "false",
             blocking_issue_count=result.blocking_issue_count,
             warning_issue_count=result.warning_issue_count,
             gate_summary=result.gate_summary,
@@ -230,7 +250,11 @@ class CanonQualityRepository:
             before_chapter=before_chapter,
         )
         if not accepted_draft_ids:
-            return rows
+            return [
+                row
+                for row in rows
+                if not str(_loads(getattr(row, "payload_json", "{}") or "{}", {}).get("draft_id") or "")
+            ]
         filtered: list[Any] = []
         for row in rows:
             chapter_number = int(getattr(row, "chapter_number", 0) or 0)

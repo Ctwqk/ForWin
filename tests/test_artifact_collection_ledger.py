@@ -27,7 +27,7 @@ def test_artifact_counts_are_disabled_without_known_collection_target() -> None:
         project_id="p1",
         chapter_number=1,
         draft_id="d1",
-        body="林澈看到47条记录被抹除，只剩三条档案索引和第五份待修复旧档。",
+        body="陆明看到47条记录被抹除，只剩三条档案索引和第五份待修复旧档。",
         previous_ledgers=[],
         target_total=0,
     )

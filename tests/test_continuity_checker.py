@@ -22,7 +22,7 @@ class ContinuityCheckerTests(unittest.TestCase):
         checker = ContinuityChecker(FakeRepo(), min_chars=100, max_chars=5000)
         body = (
             "黑暗吞没一切。但在彻底失明前的最后一帧，"
-            "林澈看清了编号下方那行"
+            "陆明看清了编号下方那行"
         )
 
         verdict = checker.check(
@@ -31,7 +31,7 @@ class ContinuityCheckerTests(unittest.TestCase):
                 chapter_number=2,
                 title="第一日·锚定医师",
                 body=body * 8,
-                end_of_chapter_summary="林澈发现线索。",
+                end_of_chapter_summary="陆明发现线索。",
             ),
         )
 

@@ -25,6 +25,7 @@ from forwin.llm.compat import call_chat_compat
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 
 logger = logging.getLogger(__name__)
+_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS = 8.0
 
 _POSITIVE_COMMENT_KEYWORDS = ("喜欢", "精彩", "好看", "期待", "爽", "牛", "神")
 _NEGATIVE_COMMENT_KEYWORDS = ("水", "拖", "崩", "失望", "弃", "烂", "短", "乱")
@@ -348,6 +349,8 @@ class CommentAnalyzer:
                     task_family="phase4",
                     stage_key="comment_analysis",
                     output_schema={"type": "object"},
+                    timeout_seconds=_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS,
+                    retry_on_timeout=False,
                 )
             except TypeError as exc:
                 if "response_format" not in str(exc):
@@ -359,6 +362,8 @@ class CommentAnalyzer:
                     max_tokens=min(1200, 200 + len(comment_payload) * 120),
                     task_family="phase4",
                     stage_key="comment_analysis",
+                    timeout_seconds=_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS,
+                    retry_on_timeout=False,
                 )
         except Exception:
             logger.warning("CommentAnalyzer LLM call failed.", exc_info=True)
@@ -814,6 +819,8 @@ class NPCIntentGenerator:
                 task_family="phase4",
                 stage_key="npc_intents",
                 output_schema={"type": "object"},
+                timeout_seconds=_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS,
+                retry_on_timeout=False,
             )
         except TypeError as exc:
             if "response_format" not in str(exc):
@@ -827,6 +834,8 @@ class NPCIntentGenerator:
                     max_tokens=900,
                     task_family="phase4",
                     stage_key="npc_intents",
+                    timeout_seconds=_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS,
+                    retry_on_timeout=False,
                 )
             except Exception:
                 logger.warning("Phase4 NPC LLM fallback call failed.", exc_info=True)
@@ -1013,6 +1022,8 @@ class WorldSimulator:
                 task_family="phase4",
                 stage_key="world_pressure",
                 output_schema={"type": "object"},
+                timeout_seconds=_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS,
+                retry_on_timeout=False,
             )
         except TypeError as exc:
             if "response_format" not in str(exc):
@@ -1026,6 +1037,8 @@ class WorldSimulator:
                     max_tokens=700,
                     task_family="phase4",
                     stage_key="world_pressure",
+                    timeout_seconds=_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS,
+                    retry_on_timeout=False,
                 )
             except Exception:
                 logger.warning("Phase4 world LLM fallback call failed.", exc_info=True)

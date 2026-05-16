@@ -105,6 +105,8 @@ class DecisionEventType:
     CONSTRAINT_UPDATED = "constraint_updated"
     CONSTRAINT_ARCHIVED = "constraint_archived"
     PLAN_TASK_CONTRACT_UPDATED = "plan_task_contract_updated"
+    FUTURE_PLAN_AUDIT_RUN = "future_plan_audit_run"
+    FUTURE_PLAN_PATCH_APPLIED = "future_plan_patch_applied"
 
     PAUSE_REQUESTED = "pause_requested"
     PAUSE_REACHED = "pause_reached"
@@ -242,6 +244,8 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.CONSTRAINT_UPDATED,
     DecisionEventType.CONSTRAINT_ARCHIVED,
     DecisionEventType.PLAN_TASK_CONTRACT_UPDATED,
+    DecisionEventType.FUTURE_PLAN_AUDIT_RUN,
+    DecisionEventType.FUTURE_PLAN_PATCH_APPLIED,
     DecisionEventType.PAUSE_REQUESTED,
     DecisionEventType.PAUSE_REACHED,
     DecisionEventType.TERMINATE_REQUESTED,
@@ -258,6 +262,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.BAND_CHECKPOINT_APPROVED,
     DecisionEventType.BAND_CHECKPOINT_OVERRIDDEN,
     DecisionEventType.CANON_COMMIT,
+    DecisionEventType.CANON_COMMIT_BLOCKED,
     DecisionEventType.CANON_COMMIT_FAILED,
     DecisionEventType.HARD_GATE_HIT,
     DecisionEventType.STAGE_ENTERED,
@@ -556,6 +561,8 @@ def derive_chapter_task_contract(goals: list[str]) -> list[PlanTaskItem]:
         text = str(goal or "").strip()
         if len(text) < 2:
             continue
+        if is_derived_goal_control_instruction(text):
+            continue
         tasks.append(
             PlanTaskItem(
                 task_type="plot_advance",
@@ -564,6 +571,30 @@ def derive_chapter_task_contract(goals: list[str]) -> list[PlanTaskItem]:
             )
         )
     return tasks
+
+
+def is_derived_goal_control_instruction(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value:
+        return False
+    return any(
+        marker in value
+        for marker in (
+            "accepted canon",
+            "canon 优先",
+            "不改写已发生事实",
+            "必须紧接最新 accepted canon",
+            "必须紧接此状态",
+            "承接上一章 accepted",
+            "连续性护栏",
+            "最新 canon ledger",
+            "旧计划/旧摘要",
+            "不得回退成几天",
+            "不要回退成几天",
+            "不要写成几天",
+            "分钟级倒计时不得回退",
+        )
+    )
 
 
 def derive_band_task_contract(schedule: "BandDelightSchedule") -> list[PlanTaskItem]:

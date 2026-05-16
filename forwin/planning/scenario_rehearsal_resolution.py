@@ -820,17 +820,18 @@ class ScenarioRehearsalCoordinator:
 
 
 def latest_blocking_scenario_rehearsal(session: Session, project_id: str) -> ScenarioRehearsalRunRow | None:
-    rows = session.execute(
+    row = session.execute(
         select(ScenarioRehearsalRunRow)
         .where(ScenarioRehearsalRunRow.project_id == project_id)
         .order_by(ScenarioRehearsalRunRow.created_at.desc(), ScenarioRehearsalRunRow.id.desc())
-        .limit(3)
-    ).scalars().all()
-    for row in rows:
-        try:
-            payload = json.loads(row.report_json or "{}") or {}
-        except (TypeError, ValueError, json.JSONDecodeError):
-            payload = {}
-        if str(payload.get("resolution_status") or "") in TERMINAL_BLOCKING_RESOLUTION_STATUSES:
-            return row
+        .limit(1)
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    try:
+        payload = json.loads(row.report_json or "{}") or {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        payload = {}
+    if str(payload.get("resolution_status") or "") in TERMINAL_BLOCKING_RESOLUTION_STATUSES:
+        return row
     return None

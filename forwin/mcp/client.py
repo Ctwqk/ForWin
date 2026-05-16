@@ -180,6 +180,35 @@ class ForWinAPIClient:
             task=await self._safe_task_get(task_id, fallback_payload=payload),
         )
 
+    async def project_extend_generation(
+        self,
+        *,
+        project_id: str,
+        additional_chapters: int = 12,
+        continuity_guard: str = "",
+        arc_title: str = "",
+        arc_synopsis: str = "",
+        reason: str = "",
+    ) -> MutationResult:
+        if additional_chapters < 1:
+            raise ValueError("additional_chapters must be positive")
+        payload = await self._request_json(
+            "POST",
+            f"/api/projects/{project_id}/extend-generation",
+            json={
+                "additional_chapters": int(additional_chapters),
+                "continuity_guard": continuity_guard,
+                "arc_title": arc_title,
+                "arc_synopsis": arc_synopsis,
+                "reason": reason,
+            },
+        )
+        return MutationResult(
+            ok=True,
+            message=f"已追加 {additional_chapters} 章计划。",
+            project=self._project_view(payload),
+        )
+
     async def task_list(self, *, limit: int = 20) -> list[TaskView]:
         normalized_limit = max(1, min(int(limit), 100))
         payload = await self._request_json("GET", "/api/tasks", params={"limit": normalized_limit})

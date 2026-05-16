@@ -18,6 +18,7 @@ from forwin.api_schemas import (
     ProjectBulkDeleteRequest,
     ProjectContinueGenerationRequest,
     ProjectCreateRequest,
+    ProjectExtendGenerationRequest,
     ProjectGovernanceUpdateRequest,
 )
 from forwin.config import Config
@@ -142,6 +143,94 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(detail.generation_control.current_chapter, 1)
         self.assertTrue(detail.generation_control.pause_requested)
         self.assertFalse(detail.generation_control.can_resume)
+
+    def test_extend_generation_appends_future_plans_after_completed_workset(self) -> None:
+        project = self._create_project(project_id="proj-extend-after-24")
+        with self.session_factory() as session:
+            project = session.get(Project, project.id)
+            project.creation_status = "writing"
+            project.target_total_chapters = 24
+            arc = ArcPlanVersion(
+                id="arc-extend-1",
+                project_id=project.id,
+                arc_synopsis="已完成弧线",
+                status="active",
+                arc_number=1,
+                chapter_start=1,
+                chapter_end=24,
+                planned_target_size=24,
+            )
+            session.add(arc)
+            for chapter_number in range(1, 25):
+                session.add(
+                    ChapterPlan(
+                        id=f"plan-extend-{chapter_number}",
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=chapter_number,
+                        title=f"第{chapter_number}章",
+                        status="accepted",
+                    )
+                )
+            session.commit()
+
+        detail = api_project_ops.extend_project_generation(
+            project.id,
+            ProjectExtendGenerationRequest(
+                additional_chapters=12,
+                continuity_guard="第24章 canon 已确认记忆重置剩余79分钟，不要回退成几天或数日。",
+                reason="operator wants to continue the interrupted sixty-chapter run",
+            ),
+            get_session=self.session_factory,
+            display_datetime=lambda value: str(value),
+            project_has_active_generation_task=lambda *_args, **_kwargs: False,
+            generation_task_conflict_message=lambda project_id: f"active {project_id}",
+        )
+
+        self.assertEqual(detail.target_total_chapters, 36)
+        self.assertEqual(detail.generation_control.next_chapter, 25)
+        self.assertEqual(detail.generation_control.planned_chapters, list(range(25, 37)))
+
+        with self.session_factory() as session:
+            plans = session.query(ChapterPlan).filter(
+                ChapterPlan.project_id == project.id,
+                ChapterPlan.chapter_number >= 25,
+            ).order_by(ChapterPlan.chapter_number).all()
+            arcs = session.query(ArcPlanVersion).filter(
+                ArcPlanVersion.project_id == project.id,
+                ArcPlanVersion.arc_number == 2,
+            ).all()
+
+        self.assertEqual([plan.chapter_number for plan in plans], list(range(25, 37)))
+        self.assertEqual([plan.status for plan in plans], ["planned"] * 12)
+        self.assertEqual(len(arcs), 1)
+        self.assertEqual(arcs[0].chapter_start, 25)
+        self.assertEqual(arcs[0].chapter_end, 36)
+        first_future_contract = " ".join(
+            [
+                plans[0].one_line,
+                plans[0].goals_json,
+                plans[0].experience_plan_json,
+            ]
+        )
+        self.assertIn("79分钟", first_future_contract)
+        self.assertIn("不要回退成几天", first_future_contract)
+
+    def test_extend_generation_rejects_active_generation_task(self) -> None:
+        project = self._create_project(project_id="proj-extend-active")
+
+        with self.assertRaises(HTTPException) as ctx:
+            api_project_ops.extend_project_generation(
+                project.id,
+                ProjectExtendGenerationRequest(additional_chapters=12),
+                get_session=self.session_factory,
+                display_datetime=lambda value: str(value),
+                project_has_active_generation_task=lambda *_args, **_kwargs: True,
+                generation_task_conflict_message=lambda project_id: f"active {project_id}",
+            )
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("active proj-extend-active", str(ctx.exception.detail))
 
     def test_approve_review_rejects_continue_when_active_generation_task_exists(self) -> None:
         project = self._create_project(project_id="proj-active-continue")

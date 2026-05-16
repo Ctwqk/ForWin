@@ -42,6 +42,7 @@ from forwin.api_schemas import (
     ProjectCreateResponse,
     ProjectDeleteResponse,
     ProjectDetail,
+    ProjectExtendGenerationRequest,
     ProjectSummary,
     PublisherUploadJobResponse,
     RepairVerificationInfo,
@@ -71,6 +72,7 @@ from forwin.observability.payloads import audit_payload
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
+from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id, load_latest_rewrite_attempts_by_chapter
 from forwin.state.updater import StateUpdater
@@ -1119,6 +1121,215 @@ def continue_project_generation(
     finally:
         session.close()
     return serialize_task(task_id, get_generation_task_or_404(task_id))
+
+
+_EXTENSION_BEATS: tuple[tuple[str, str], ...] = (
+    (
+        "协议启动的代价",
+        "紧接上一章启动的关键协议，确认倒计时仍是分钟级危机，并让主角付出明确代价。",
+    ),
+    (
+        "核心区的回声",
+        "主角在核心区域取得恢复后门的第一段证据，同时确认被扣押盟友的位置和救援代价。",
+    ),
+    (
+        "被扣押的证人",
+        "推进盟友被扣押后的桥接，不让角色无解释脱身，并让证人提供能验证协议状态的线索。",
+    ),
+    (
+        "恢复后门的第一把锁",
+        "解释父亲在算法中留下的恢复后门如何运作，避免把倒计时重置成几天或新的无约束周期。",
+    ),
+    (
+        "反派的反制",
+        "让主要反派针对紧急协议发起反制，迫使主角在公开真相和保住个人记忆之间做选择。",
+    ),
+    (
+        "组织旧账的清算",
+        "让关键组织旧账浮出水面，补足谁授权、谁执行、谁受益的因果证据链。",
+    ),
+    (
+        "旧城集体记忆震荡",
+        "展示协议造成的城市级后果，但时间推进必须受最新 canon 约束，不能跳成数日后。",
+    ),
+    (
+        "盟友的救援窗口",
+        "在不破坏被捕状态的前提下打开救援窗口，并明确盟友是否仍受追踪器或系统权限限制。",
+    ),
+    (
+        "家族守门人的真相",
+        "揭示家族维护者身份的完整因果，关闭家族档案为何被拆散和抹除的主线缺口。",
+    ),
+    (
+        "核心层的审判",
+        "把关键盟友、主要反派、父辈后门和系统规则集中到核心层冲突中验证。",
+    ),
+    (
+        "倒计时的终止条件",
+        "明确倒计时是被终止、锁定、转移还是以代价完成，不留下主线 ledger 悬空。",
+    ),
+    (
+        "遗档的归档",
+        "终章关闭记忆重置、家族档案、盟友状态和公开真相等主线承诺，只保留非主线续作钩子。",
+    ),
+)
+
+
+def _extension_continuity_guard(req: ProjectExtendGenerationRequest) -> str:
+    explicit = str(getattr(req, "continuity_guard", "") or "").strip()
+    if explicit:
+        return explicit
+    return (
+        "必须紧接最新 accepted canon；尊重最新倒计时、地点、身份和角色状态。"
+        "如果 canon 已进入分钟级危机，后续计划不得回退成几天或数日；"
+        "任何时间跳跃都必须先解释倒计时被中止、锁定、转移或分支。"
+    )
+
+
+def _extension_arc_synopsis(
+    *,
+    req: ProjectExtendGenerationRequest,
+    start_chapter: int,
+    end_chapter: int,
+) -> str:
+    title = str(req.arc_title or "").strip() or f"续写弧线：第{start_chapter}-{end_chapter}章"
+    synopsis = str(req.arc_synopsis or "").strip()
+    guard = _extension_continuity_guard(req)
+    parts = [title]
+    if synopsis:
+        parts.append(synopsis)
+    parts.append(guard)
+    return "\n".join(parts)
+
+
+def _extension_chapter_blueprint(
+    *,
+    chapter_number: int,
+    offset: int,
+    guard: str,
+    end_chapter: int,
+) -> tuple[str, str, list[str], ChapterExperiencePlan]:
+    beat_title, beat_line = _EXTENSION_BEATS[offset] if offset < len(_EXTENSION_BEATS) else (
+        f"续写推进 {offset + 1}",
+        "推进最新 canon 后果，关闭已登记的主线缺口，并保持倒计时、地点、身份和角色状态连续。",
+    )
+    title = f"第{chapter_number}章 {beat_title}"
+    one_line = f"{beat_line} 连续性护栏：{guard}"
+    goals = [
+        "承接上一章 accepted canon，不改写已发生事实。",
+        guard,
+        beat_line,
+    ]
+    if chapter_number == end_chapter:
+        goals.append("作为当前追加段落的终点，必须关闭 P0/P1 主线缺口，不能留下主线倒计时或身份债。")
+    experience_plan = ChapterExperiencePlan(
+        question_hook="最新 canon 的分钟级危机如何被推进或关闭？",
+        question_resolution=beat_line,
+        immersion_anchors=["核心区域", "倒计时终端", "家族档案后门"],
+        progress_markers=[guard, beat_line],
+        rule_anchors=["canon 优先于旧计划", "分钟级倒计时不得回退成几天或数日"],
+        relationship_or_status_shift="跟踪主角、盟友、反派与系统权限的最新状态变化。",
+    )
+    return title, one_line, goals, experience_plan
+
+
+def extend_project_generation(
+    project_id: str,
+    req: ProjectExtendGenerationRequest,
+    *,
+    get_session,
+    display_datetime,
+    project_has_active_generation_task,
+    generation_task_conflict_message,
+) -> ProjectDetail:
+    session = get_session()
+    try:
+        project = session.get(Project, project_id)
+        if project is None:
+            raise HTTPException(404, "项目不存在")
+        if str(project.creation_status or "") in {"creating", "genesis_ready"}:
+            raise HTTPException(409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。")
+        if project_has_active_generation_task(project_id, session=session):
+            raise HTTPException(409, generation_task_conflict_message(project_id))
+
+        plans = session.execute(
+            select(ChapterPlan)
+            .where(ChapterPlan.project_id == project_id)
+            .order_by(ChapterPlan.chapter_number.asc(), ChapterPlan.id.asc())
+        ).scalars().all()
+        waiting_review = [plan.chapter_number for plan in plans if plan.status == "needs_review"]
+        if waiting_review:
+            raise HTTPException(409, f"仍有章节等待 review：{', '.join(str(item) for item in waiting_review)}")
+        waiting_acceptance = [plan.chapter_number for plan in plans if plan.status == "drafted"]
+        if waiting_acceptance:
+            raise HTTPException(409, f"仍有章节等待接受：{', '.join(str(item) for item in waiting_acceptance)}")
+        pending_generation = [
+            plan.chapter_number
+            for plan in plans
+            if str(plan.status or "") in {"planned", "failed"}
+        ]
+        if pending_generation:
+            raise HTTPException(
+                409,
+                "已有待生成章节计划，请先使用 continue-generation："
+                + ", ".join(str(item) for item in pending_generation[:12]),
+            )
+
+        additional_chapters = int(req.additional_chapters or 0)
+        last_chapter = max([int(plan.chapter_number or 0) for plan in plans] or [0])
+        start_chapter = last_chapter + 1
+        end_chapter = start_chapter + additional_chapters - 1
+        if end_chapter <= last_chapter:
+            raise HTTPException(400, "追加章节数必须大于 0")
+
+        max_arc_number = session.execute(
+            select(func.max(ArcPlanVersion.arc_number)).where(ArcPlanVersion.project_id == project_id)
+        ).scalar_one()
+        next_arc_number = int(max_arc_number or 0) + 1
+        guard = _extension_continuity_guard(req)
+        updater = StateUpdater(session)
+        project.target_total_chapters = max(int(project.target_total_chapters or 0), end_chapter)
+        session.add(project)
+        arc = updater.create_arc_plan(
+            project_id=project_id,
+            arc_synopsis=_extension_arc_synopsis(
+                req=req,
+                start_chapter=start_chapter,
+                end_chapter=end_chapter,
+            ),
+            version=1,
+            status="planned",
+            arc_number=next_arc_number,
+            chapter_start=start_chapter,
+            chapter_end=end_chapter,
+            planned_target_size=additional_chapters,
+            planned_soft_min=max(1, int(round(additional_chapters * 0.85))),
+            planned_soft_max=max(additional_chapters, int(round(additional_chapters * 1.20))),
+        )
+        for offset, chapter_number in enumerate(range(start_chapter, end_chapter + 1)):
+            title, one_line, goals, experience_plan = _extension_chapter_blueprint(
+                chapter_number=chapter_number,
+                offset=offset,
+                guard=guard,
+                end_chapter=end_chapter,
+            )
+            updater.create_chapter_plan(
+                project_id=project_id,
+                arc_plan_id=arc.id,
+                chapter_number=chapter_number,
+                title=title,
+                one_line=one_line,
+                goals=goals,
+                experience_plan=experience_plan,
+            )
+        session.commit()
+        return build_project_detail(
+            session=session,
+            project=project,
+            display_datetime=display_datetime,
+        )
+    finally:
+        session.close()
 
 
 def update_project_automation(

@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from forwin.arc_sizing import allocate_arc_chapter_sizes
+from forwin.canon_quality.placeholder import extract_expected_protagonist_names
 from forwin.llm.compat import call_chat_compat
 from forwin.writer.llm_client import LLMClient
 from forwin.utils import LLMJSONParseError, parse_llm_json
@@ -292,7 +293,8 @@ class ArcDirector:
         )
         first_line = str((chapter_seed[0] or {}).get("one_line", "")).strip() if chapter_seed else ""
         focus_note = "、".join(focus_threads) if focus_threads else (first_line or premise[:16])
-        protagonist_name = "顾临川"
+        protagonist_names = sorted(extract_expected_protagonist_names(premise, first_line, arc_synopsis))
+        protagonist_name = protagonist_names[0] if protagonist_names else "主角"
         return {
             "reuse_subworld_ids": [global_core_id] if global_core_id else [],
             "retire_subworld_ids": [],

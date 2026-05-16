@@ -225,6 +225,54 @@ def test_workset_prefers_materialized_retry_chapter_when_no_active_arc() -> None
         engine.dispose()
 
 
+def test_workset_does_not_skip_earlier_pending_chapter_outside_active_arc() -> None:
+    engine, Session = _session_factory("continue-workset-earlier-pending")
+    try:
+        with Session.begin() as session:
+            project = _project(session)
+            session.flush()
+            previous = _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-previous",
+                arc_number=5,
+                status="completed",
+                chapter_start=25,
+                chapter_end=31,
+            )
+            active = _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-active",
+                arc_number=6,
+                status="active",
+                chapter_start=32,
+                chapter_end=36,
+            )
+            for number in range(25, 31):
+                _chapter(session, project_id=project.id, arc_id=previous.id, number=number, status="accepted")
+            _chapter(session, project_id=project.id, arc_id=previous.id, number=31, status="planned")
+            for number in range(32, 37):
+                _chapter(session, project_id=project.id, arc_id=active.id, number=number, status="planned")
+
+        with Session() as session:
+            workset = build_continue_generation_workset(
+                session,
+                "project-workset",
+                max_chapters=3,
+                source="review_retry_continue",
+            )
+
+        assert workset.chapter_numbers == (31, 32, 33)
+        assert workset.requested_chapters == 3
+        assert workset.materialized_plan_count == 6
+        assert workset.active_arc_id == "arc-previous"
+        assert workset.active_arc_number == 5
+        assert workset.reason == "materialized_pending"
+    finally:
+        engine.dispose()
+
+
 def test_workset_rejects_invalid_max_chapters() -> None:
     engine, Session = _session_factory("continue-workset-invalid-max")
     try:

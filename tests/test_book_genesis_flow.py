@@ -104,12 +104,12 @@ class BookGenesisFlowTests(unittest.TestCase):
     def test_fallback_map_does_not_promote_placeholder_guardrails_to_places(self) -> None:
         pack = {
             "book_brief": {
-                "premise": "主角：林澈。质量要求：不要使用“相关人员”等正文占位符。",
-                "setting_seed": "地下旧轨、潮汐钟楼、岫苑、档案公会、失忆广场是核心场景。",
+                "premise": "主角：陆明。质量要求：不要使用“相关人员”等正文占位符。",
+                "setting_seed": "地下检修线、钟塔、旧港、档案署、中央广场是核心场景。",
             },
             "world": {
                 "world_bible": {
-                    "overview": "旧城由白塔记忆系统维持公共档案秩序。",
+                    "overview": "旧城由核心系统记忆系统维持公共档案秩序。",
                     "culture_profiles": [{"id": "culture-main-stage", "generator_civilization": "中华"}],
                 }
             },
@@ -119,45 +119,45 @@ class BookGenesisFlowTests(unittest.TestCase):
         fallback_map = _fallback_map(pack)
         serialized = json.dumps({"seed": seed, "map": fallback_map}, ensure_ascii=False)
 
-        self.assertIn("林澈", seed["characters"])
-        for name in ("地下旧轨", "潮汐钟楼", "岫苑", "档案公会", "失忆广场"):
+        self.assertIn("陆明", seed["characters"])
+        for name in ("地下检修线", "钟塔", "旧港", "档案署", "中央广场"):
             self.assertIn(name, serialized)
         self.assertNotIn("相关人员", serialized)
 
     def test_fallback_brief_prefers_story_conflict_over_test_metadata(self) -> None:
         project = Project(
-            title="旧城遗档",
+            title="灰城遗档",
             genre="悬疑科幻",
             premise=(
                 "本书用于 ForWin 新 canon quality gate 真实端到端复测。\n"
-                "主角：林澈，旧城档案修复师。\n"
+                "主角：陆明，旧城档案修复师。\n"
                 "背景：一座每隔十年会遗失一段历史的城市。\n"
-                "核心冲突：林澈必须在记忆重置前找回家族档案，并决定是否公开白塔真相。\n"
+                "核心冲突：陆明必须在记忆重置前找回家族档案，并决定是否公开核心系统真相。\n"
                 "质量要求：不要使用正文占位符。"
             ),
-            setting_summary="旧城由白塔记忆系统维持公共档案秩序。",
+            setting_summary="旧城由核心系统记忆系统维持公共档案秩序。",
             target_total_chapters=60,
         )
 
         brief = _fallback_brief(project, {})
 
-        self.assertIn("林澈必须在记忆重置前", brief["one_line"])
+        self.assertIn("陆明必须在记忆重置前", brief["one_line"])
         self.assertNotIn("长篇长篇", brief["one_line"])
         self.assertNotIn("ForWin", brief["one_line"])
         self.assertNotIn("质量要求", brief["one_line"])
 
     def test_fallback_blueprint_uses_clean_brief_focus_for_arc_synopsis(self) -> None:
         project = Project(
-            title="旧城遗档",
+            title="灰城遗档",
             genre="悬疑科幻",
             premise=(
                 "本书用于 ForWin 新 canon quality gate 真实端到端复测。\n"
-                "主角：林澈，旧城档案修复师。\n"
+                "主角：陆明，旧城档案修复师。\n"
                 "背景：一座每隔十年会遗失一段历史的城市。\n"
-                "核心冲突：林澈必须在记忆重置前找回家族档案，并决定是否公开白塔真相。\n"
+                "核心冲突：陆明必须在记忆重置前找回家族档案，并决定是否公开核心系统真相。\n"
                 "质量要求：不要使用正文占位符。"
             ),
-            setting_summary="旧城由白塔记忆系统维持公共档案秩序。",
+            setting_summary="旧城由核心系统记忆系统维持公共档案秩序。",
             target_total_chapters=60,
         )
         pack = {"book_brief": _fallback_brief(project, {})}
@@ -165,7 +165,7 @@ class BookGenesisFlowTests(unittest.TestCase):
         blueprint = _fallback_blueprint(project, pack)
         serialized = json.dumps(blueprint, ensure_ascii=False)
 
-        self.assertIn("林澈必须在记忆重置前", serialized)
+        self.assertIn("陆明必须在记忆重置前", serialized)
         self.assertNotIn("悬疑科幻长篇，围绕", serialized)
         self.assertNotIn("展开”推进", serialized)
         self.assertNotIn("ForWin", serialized)
@@ -963,9 +963,9 @@ class BookGenesisFlowTests(unittest.TestCase):
                 {
                     "title": "三十日回响压力测试",
                     "premise": (
-                        "失业档案修复师林澈在第零日收到母亲十年前留下的空白遗书，随后发现整座城市"
+                        "失业档案修复师陆明在第零日收到母亲十年前留下的空白遗书，随后发现整座城市"
                         "每过一天就会抹去一段公共记忆。为了在三十日内找回真相，他必须联合前调查记者许安、"
-                        "企业继承人沈砚、地下算法师阿棠和失忆警员周岚，逐步揭开回声账本、临潮集团、"
+                        "企业继承人韩砚、地下算法师阿棠和失忆警员周岚，逐步揭开回声账本、临潮集团、"
                         "旧港火灾、母亲失踪和城市记忆循环之间的关系。"
                     ),
                     "setting_summary": (
@@ -1023,8 +1023,8 @@ class BookGenesisFlowTests(unittest.TestCase):
             *(item["name"] for item in world["map_atlas"]["nodes"]),
         }
 
-        self.assertIn("林澈", cast_names)
-        self.assertTrue({"许安", "沈砚", "阿棠", "周岚"}.issubset(cast_names))
+        self.assertIn("陆明", cast_names)
+        self.assertTrue({"许安", "韩砚", "阿棠", "周岚"}.issubset(cast_names))
         self.assertIn("临潮集团", faction_names | opposition_names)
         self.assertIn("临潮", map_names)
         self.assertIn("旧城区", map_names)

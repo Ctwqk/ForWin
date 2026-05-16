@@ -27,8 +27,8 @@ def test_world_conflicts_include_open_canon_quality_signals() -> None:
                         signal_type="terminal_state_active_conflict",
                         severity="error",
                         target_scope="character",
-                        subject_key="character:沈砚",
-                        description="沈砚终止态后继续活跃。",
+                        subject_key="character:韩砚",
+                        description="韩砚终止态后继续活跃。",
                         evidence_refs=["body:1-5"],
                     )
                 ]

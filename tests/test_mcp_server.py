@@ -35,7 +35,7 @@ from forwin.mcp.models import (
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft, ChapterReview
-from forwin.models.project import ChapterPlan
+from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.updater import StateUpdater
 
@@ -280,6 +280,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     "genesis_stage_lock",
                     "project_start_writing",
                     "project_continue_generation",
+                    "project_extend_generation",
                     "task_list",
                     "task_get",
                     "task_active_generation_check",
@@ -310,6 +311,69 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
 
         chapters = self._load_model(ChapterListView, self._call_tool("chapter_list", {"project_id": project_id}))
         self.assertEqual([item.chapter_number for item in chapters.chapters], [1])
+
+    def test_extend_generation_via_mcp_appends_future_plans(self) -> None:
+        with self.session_factory() as session:
+            updater = StateUpdater(session)
+            project = updater.create_project(
+                title="MCP Extend Book",
+                premise="测试追加续写计划。",
+                genre="悬疑",
+                target_total_chapters=2,
+                creation_status="writing",
+            )
+            arc = updater.create_arc_plan(
+                project_id=project.id,
+                arc_synopsis="已完成弧线",
+                status="active",
+                arc_number=1,
+                chapter_start=1,
+                chapter_end=2,
+                planned_target_size=2,
+            )
+            for number in (1, 2):
+                plan = updater.create_chapter_plan(
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=number,
+                    title=f"第{number}章",
+                    one_line="已完成",
+                    goals=["已完成"],
+                )
+                plan.status = "accepted"
+            session.commit()
+            project_id = project.id
+
+        result = self._load_model(
+            MutationResult,
+            self._call_tool(
+                "project_extend_generation",
+                {
+                    "project_id": project_id,
+                    "additional_chapters": 2,
+                    "continuity_guard": "最新 canon 剩余79分钟，不要回退成几天。",
+                    "reason": "mcp regression",
+                },
+            ),
+        )
+
+        self.assertTrue(result.ok)
+        self.assertIsNotNone(result.project)
+        self.assertEqual(result.project.chapter_count, 4)
+        self.assertEqual(result.project.generation_control.planned_chapters, [3, 4])
+        with self.session_factory() as session:
+            plans = session.query(ChapterPlan).filter(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number >= 3,
+            ).order_by(ChapterPlan.chapter_number).all()
+            arc = session.query(ArcPlanVersion).filter(
+                ArcPlanVersion.project_id == project_id,
+                ArcPlanVersion.arc_number == 2,
+            ).one()
+
+        self.assertEqual(arc.status, "planned")
+        self.assertEqual([plan.status for plan in plans], ["planned", "planned"])
+        self.assertIn("79分钟", plans[0].goals_json)
 
     def test_task_get_includes_task_timestamps(self) -> None:
         task_id = "task-with-time"

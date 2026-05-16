@@ -156,6 +156,27 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
     async def project_continue_generation(project_id: str, max_chapters: int | None = None) -> MutationResult:
         return await client.project_continue_generation(project_id=project_id, max_chapters=max_chapters)
 
+    @register_write_tool(
+        "project_extend_generation",
+        "Append planned future chapters to an existing writing project before continuing generation. Use this when a project is writing but has no planned chapters and the user asks to keep writing.",
+    )
+    async def project_extend_generation(
+        project_id: str,
+        additional_chapters: int = 12,
+        continuity_guard: str = "",
+        arc_title: str = "",
+        arc_synopsis: str = "",
+        reason: str = "",
+    ) -> MutationResult:
+        return await client.project_extend_generation(
+            project_id=project_id,
+            additional_chapters=additional_chapters,
+            continuity_guard=continuity_guard,
+            arc_title=arc_title,
+            arc_synopsis=arc_synopsis,
+            reason=reason,
+        )
+
     @register_read_tool(
         "task_list",
         "List recent ForWin generation tasks. Use this when you need to inspect queued, running, paused, or failed generation work across projects.",

@@ -91,7 +91,7 @@ class SubWorldControlTests(unittest.TestCase):
                 return None
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈", "许安"}
+                return {"陆明", "许安"}
 
             def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
                 return {}
@@ -102,13 +102,13 @@ class SubWorldControlTests(unittest.TestCase):
             WriterOutput(
                 chapter_number=2,
                 title="第一日·消失的讣告",
-                body="林澈和许安查到临潮集团收购民间记忆馆，旧港火灾档案里陈伯伦的讣告消失。" * 50,
-                end_of_chapter_summary="林澈与许安确认线索。",
+                body="陆明和许安查到临潮集团收购民间记忆馆，旧港火灾档案里陈伯伦的讣告消失。" * 50,
+                end_of_chapter_summary="陆明与许安确认线索。",
                 entity_mentions=[
                     EntityMention(entity_name="临潮集团", entity_kind="character", is_named=True),
                     EntityMention(entity_name="民间记忆馆", entity_kind="character", is_named=True),
                     EntityMention(entity_name="旧港火灾", entity_kind="character", is_named=True),
-                    EntityMention(entity_name="林澈的母亲", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="陆明的母亲", entity_kind="character", is_named=True),
                     EntityMention(entity_name="许安（提及）", entity_kind="character", is_named=True),
                     EntityMention(entity_name="馆员", entity_kind="character", is_named=True),
                     EntityMention(
@@ -140,8 +140,8 @@ class SubWorldControlTests(unittest.TestCase):
                 return [
                     SimpleNamespace(
                         kind="character",
-                        name="沈宴秋",
-                        aliases=["洛庭若"],
+                        name="韩青",
+                        aliases=["周砚"],
                         current_state={"status": "active"},
                     )
                 ]
@@ -150,7 +150,7 @@ class SubWorldControlTests(unittest.TestCase):
                 return None
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈"}
+                return {"陆明"}
 
             def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
                 return {}
@@ -160,23 +160,23 @@ class SubWorldControlTests(unittest.TestCase):
             "p1",
             WriterOutput(
                 chapter_number=10,
-                title="沈砚的背叛",
-                body="林澈与沈宴秋在潮汐钟楼会面，洛庭若的人在远处跟踪。" * 50,
-                end_of_chapter_summary="沈宴秋帮助林澈识破洛庭若的追踪。",
+                title="韩砚的背叛",
+                body="陆明与韩青在钟塔会面，周砚的人在远处跟踪。" * 50,
+                end_of_chapter_summary="韩青帮助陆明识破周砚的追踪。",
                 entity_mentions=[
-                    EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
-                    EntityMention(entity_name="沈宴秋", entity_kind="character", is_named=True),
-                    EntityMention(entity_name="洛庭若（幕后）", entity_kind="character", is_named=True),
-                    EntityMention(entity_name="洛庭若（间接）", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="韩青", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="周砚（幕后）", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="周砚（间接）", entity_kind="character", is_named=True),
                 ],
             ),
         )
 
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
-        self.assertNotIn("沈宴秋", unknown)
-        self.assertNotIn("洛庭若", unknown)
-        self.assertNotIn("洛庭若（幕后）", unknown)
-        self.assertNotIn("洛庭若（间接）", unknown)
+        self.assertNotIn("韩青", unknown)
+        self.assertNotIn("周砚", unknown)
+        self.assertNotIn("周砚（幕后）", unknown)
+        self.assertNotIn("周砚（间接）", unknown)
 
     def test_subworld_admission_ignores_deceased_record_state_change_names(self) -> None:
         class FakeRepo:
@@ -187,7 +187,7 @@ class SubWorldControlTests(unittest.TestCase):
                 return None
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈", "许安", "沈砚"}
+                return {"陆明", "许安", "韩砚"}
 
             def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
                 return {}
@@ -199,7 +199,7 @@ class SubWorldControlTests(unittest.TestCase):
                 chapter_number=7,
                 title="第六日",
                 body="协议记录显示陈屿安是旧港火灾遇难者，继承权因此被转移。" * 80,
-                end_of_chapter_summary="林澈确认陈屿安已在旧港火灾中死亡。",
+                end_of_chapter_summary="陆明确认陈屿安已在旧港火灾中死亡。",
                 state_changes=[
                     StateChangeCandidate(
                         entity_name="陈屿安",
@@ -224,7 +224,7 @@ class SubWorldControlTests(unittest.TestCase):
                 return None
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈", "许安"}
+                return {"陆明", "许安"}
 
             def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
                 return {}
@@ -235,12 +235,12 @@ class SubWorldControlTests(unittest.TestCase):
             WriterOutput(
                 chapter_number=3,
                 title="第二日",
-                body="林澈和许安查到林澈母亲曾在空腔实验室留下线索。" * 80,
-                end_of_chapter_summary="林澈确认母亲线索。",
+                body="陆明和许安查到陆明母亲曾在空腔实验室留下线索。" * 80,
+                end_of_chapter_summary="陆明确认母亲线索。",
                 entity_mentions=[
-                    EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
                     EntityMention(entity_name="许安", entity_kind="character", is_named=True),
-                    EntityMention(entity_name="林澈母亲", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="陆明母亲", entity_kind="character", is_named=True),
                     EntityMention(entity_name="空腔实验室", entity_kind="character", is_named=True),
                 ],
             ),
@@ -258,7 +258,7 @@ class SubWorldControlTests(unittest.TestCase):
                 return None
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈", "许安"}
+                return {"陆明", "许安"}
 
             def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
                 return {}
@@ -269,10 +269,10 @@ class SubWorldControlTests(unittest.TestCase):
             WriterOutput(
                 chapter_number=20,
                 title="第二十章 地下交易",
-                body="林澈和许安在地下市场与技术员交易旧港监控加密包，技术员提示他们从通风井撤离。" * 60,
-                end_of_chapter_summary="林澈与许安从技术员处拿到旧港监控线索。",
+                body="陆明和许安在地下市场与技术员交易旧港监控加密包，技术员提示他们从通风井撤离。" * 60,
+                end_of_chapter_summary="陆明与许安从技术员处拿到旧港监控线索。",
                 entity_mentions=[
-                    EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
                     EntityMention(entity_name="许安", entity_kind="character", is_named=True),
                     EntityMention(entity_name="技术员", entity_kind="character", is_named=True),
                     EntityMention(entity_name="技术员（灰衣男）", entity_kind="character", is_named=True),
@@ -281,8 +281,8 @@ class SubWorldControlTests(unittest.TestCase):
                     {
                         "scene_no": 1,
                         "scene_objective": "地下交易",
-                        "text": "林澈和许安与技术员交易。",
-                        "involved_entities": ["林澈", "许安", "技术员", "技术员（灰衣男）"],
+                        "text": "陆明和许安与技术员交易。",
+                        "involved_entities": ["陆明", "许安", "技术员", "技术员（灰衣男）"],
                     }
                 ],
             ),
@@ -300,7 +300,7 @@ class SubWorldControlTests(unittest.TestCase):
                 return None
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈", "洛庭若"}
+                return {"陆明", "周砚"}
 
             def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
                 return {}
@@ -311,19 +311,19 @@ class SubWorldControlTests(unittest.TestCase):
             WriterOutput(
                 chapter_number=12,
                 title="倒计时：最后一日",
-                body="洛庭若的手下封锁巷口，林澈绕开白塔巡检员，继续向失忆广场前进。" * 40,
-                end_of_chapter_summary="林澈躲开洛庭若的手下。",
+                body="周砚的手下封锁巷口，陆明绕开系统巡检员，继续向中央广场前进。" * 40,
+                end_of_chapter_summary="陆明躲开周砚的手下。",
                 entity_mentions=[
-                    EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
-                    EntityMention(entity_name="洛庭若", entity_kind="character", is_named=True),
-                    EntityMention(entity_name="洛庭若的手下", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="周砚", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="周砚的手下", entity_kind="character", is_named=True),
                 ],
                 scene_outputs=[
                     {
                         "scene_no": 1,
                         "scene_objective": "突破封锁",
-                        "text": "洛庭若的手下守住巷口。",
-                        "involved_entities": ["林澈", "洛庭若的手下"],
+                        "text": "周砚的手下守住巷口。",
+                        "involved_entities": ["陆明", "周砚的手下"],
                     }
                 ],
             ),
@@ -331,7 +331,48 @@ class SubWorldControlTests(unittest.TestCase):
 
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
         self.assertEqual(unknown, [])
-        self.assertFalse(ContinuityChecker._looks_like_named_character("洛庭若的手下"))
+        self.assertFalse(ContinuityChecker._looks_like_named_character("周砚的手下"))
+
+    def test_subworld_admission_ignores_relational_residual_projection(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"陆明"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=28,
+                title="恢复后门的第一把锁",
+                body="林父的残影解释恢复后门，陆明确认倒计时不会重启成天级周期。" * 40,
+                end_of_chapter_summary="陆明从父亲残影处理解恢复后门。",
+                entity_mentions=[
+                    EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="林父的残影", entity_kind="character", is_named=True),
+                ],
+                scene_outputs=[
+                    {
+                        "scene_no": 1,
+                        "scene_objective": "算法残影空间",
+                        "text": "林父的残影解释后门。",
+                        "involved_entities": ["陆明", "林父的残影"],
+                    }
+                ],
+            ),
+        )
+
+        unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
+        self.assertEqual(unknown, [])
+        self.assertFalse(ContinuityChecker._looks_like_named_character("林父的残影"))
 
     def test_subworld_admission_allows_canon_name_anchor(self) -> None:
         class FakeRepo:
@@ -350,7 +391,7 @@ class SubWorldControlTests(unittest.TestCase):
                 ]
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈", "许安"}
+                return {"陆明", "许安"}
 
             def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
                 return {}
@@ -361,10 +402,10 @@ class SubWorldControlTests(unittest.TestCase):
             WriterOutput(
                 chapter_number=3,
                 title="第二日",
-                body="林澈确认母亲林若是回声账本原型设计者之一。" * 80,
-                end_of_chapter_summary="林澈确认母亲林若的身份。",
+                body="陆明确认母亲林若是回声账本原型设计者之一。" * 80,
+                end_of_chapter_summary="陆明确认母亲林若的身份。",
                 entity_mentions=[
-                    EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
                     EntityMention(entity_name="林若", entity_kind="character", is_named=True),
                 ],
             ),
@@ -389,7 +430,7 @@ class SubWorldControlTests(unittest.TestCase):
                     "scene_objective": "检索讣告",
                     "text": "正文内容" * 80,
                     "involved_entities": [
-                        "林澈",
+                        "陆明",
                         "馆员",
                         "陈伯伦",
                         "许安（提及）",
@@ -412,12 +453,12 @@ class SubWorldControlTests(unittest.TestCase):
 
         names = WritingOrchestrator._collect_subworld_candidate_names(FakeRepo(), "p1", output)
 
-        self.assertEqual(names, {"林澈", "许安"})
+        self.assertEqual(names, {"陆明", "许安"})
 
     def test_canon_commit_subworld_gate_allows_canon_name_anchor(self) -> None:
         class FakeRepo:
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈", "许安"}
+                return {"陆明", "许安"}
 
             def get_active_threads(self, _project_id: str) -> list[object]:
                 return [
@@ -433,10 +474,10 @@ class SubWorldControlTests(unittest.TestCase):
         output = WriterOutput(
             chapter_number=7,
             title="第六日·协议真相",
-            body="林澈确认母亲林若留下了协议覆写线索。" * 80,
-            end_of_chapter_summary="林澈确认母亲林若与协议真相有关。",
+            body="陆明确认母亲林若留下了协议覆写线索。" * 80,
+            end_of_chapter_summary="陆明确认母亲林若与协议真相有关。",
             entity_mentions=[
-                EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
+                EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
                 EntityMention(entity_name="林若", entity_kind="character", is_named=True),
             ],
             state_changes=[
@@ -463,7 +504,7 @@ class SubWorldControlTests(unittest.TestCase):
     def test_canon_commit_subworld_gate_ignores_deceased_record_state_change_names(self) -> None:
         class FakeRepo:
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈", "许安", "沈砚"}
+                return {"陆明", "许安", "韩砚"}
 
             def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
                 return {}
@@ -472,7 +513,7 @@ class SubWorldControlTests(unittest.TestCase):
             chapter_number=7,
             title="第六日",
             body="协议记录显示陈屿安是旧港火灾遇难者，继承权因此被转移。" * 80,
-            end_of_chapter_summary="林澈确认陈屿安已在旧港火灾中死亡。",
+            end_of_chapter_summary="陆明确认陈屿安已在旧港火灾中死亡。",
             state_changes=[
                 StateChangeCandidate(
                     entity_name="陈屿安",
@@ -888,14 +929,14 @@ class SubWorldControlTests(unittest.TestCase):
         context = SimpleNamespace(
             project_title="测试书",
             genre="都市悬疑",
-            premise="林澈追查母亲留下的空白遗书。",
+            premise="陆明追查母亲留下的空白遗书。",
             setting_summary="临潮有回声账本。",
             chapter_number=3,
             chapter_plan_title="第二日",
             chapter_plan_one_line="提取回声残片",
             chapter_goals=["揭示母亲与回声账本有关"],
-            previous_chapter_summaries=["林澈发现母亲留下的空白遗书。"],
-            active_entities=[SimpleNamespace(name="林澈", description="主角")],
+            previous_chapter_summaries=["陆明发现母亲留下的空白遗书。"],
+            active_entities=[SimpleNamespace(name="陆明", description="主角")],
             active_threads=[
                 SimpleNamespace(
                     name="空白遗书",
@@ -913,7 +954,7 @@ class SubWorldControlTests(unittest.TestCase):
             band_delight_schedule=None,
             chapter_experience_plan=None,
             active_subworlds=[],
-            allowed_entities=["林澈"],
+            allowed_entities=["陆明"],
             chapter_entry_targets=[],
             entity_admission_rule="strict_named_character",
             chapter_task_contract=[],
@@ -934,14 +975,14 @@ class SubWorldControlTests(unittest.TestCase):
         context = SimpleNamespace(
             project_title="测试书",
             genre="都市悬疑",
-            premise="林澈追查母亲留下的空白遗书。",
+            premise="陆明追查母亲留下的空白遗书。",
             setting_summary="临潮有回声账本。",
             chapter_number=3,
             chapter_plan_title="第二日",
             chapter_plan_one_line="提取回声残片",
             chapter_goals=["揭示母亲与回声账本有关"],
-            previous_chapter_summaries=["林澈发现母亲留下的空白遗书。"],
-            active_entities=[SimpleNamespace(name="林澈", description="主角")],
+            previous_chapter_summaries=["陆明发现母亲留下的空白遗书。"],
+            active_entities=[SimpleNamespace(name="陆明", description="主角")],
             active_threads=[
                 SimpleNamespace(name="合作与危机", description="", status="resolved", priority=2, recent_beats=["合作线已暂时收束。"]),
                 SimpleNamespace(name="母亲线索", description="", status="active", priority=2, recent_beats=["火灾录音确认是母亲的声音。"]),
@@ -949,7 +990,7 @@ class SubWorldControlTests(unittest.TestCase):
                 SimpleNamespace(name="空白遗书", description="", status="active", priority=2, recent_beats=["终端显示条目标题为“原型设计者：林若”，即母亲的名字。"]),
                 SimpleNamespace(name="记忆删除", description="", status="active", priority=2, recent_beats=["公共记忆正在被系统性抹除。"]),
                 SimpleNamespace(name="许安出现", description="", status="active", priority=2, recent_beats=["许安提供旧港火灾档案。"]),
-                SimpleNamespace(name="陈伯伦消失", description="", status="active", priority=2, recent_beats=["林澈检索陈伯伦，发现记录消失。"]),
+                SimpleNamespace(name="陈伯伦消失", description="", status="active", priority=2, recent_beats=["陆明检索陈伯伦，发现记录消失。"]),
             ],
             active_relations=[],
             timeline=None,
@@ -961,7 +1002,7 @@ class SubWorldControlTests(unittest.TestCase):
             band_delight_schedule=None,
             chapter_experience_plan=None,
             active_subworlds=[],
-            allowed_entities=["林澈"],
+            allowed_entities=["陆明"],
             chapter_entry_targets=[],
             entity_admission_rule="strict_named_character",
             chapter_task_contract=[],
@@ -996,7 +1037,7 @@ class SubWorldControlTests(unittest.TestCase):
                 ]
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈", "许安"}
+                return {"陆明", "许安"}
 
             def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
                 return {}
@@ -1008,11 +1049,11 @@ class SubWorldControlTests(unittest.TestCase):
                 chapter_number=3,
                 title="第二日",
                 body=(
-                    "沈砚说：“你母亲叫林静安，十年前是临潮集团算法部的核心成员。”"
+                    "韩砚说：“你母亲叫林静安，十年前是临潮集团算法部的核心成员。”"
                     "残片里又有人称她为林若水。"
                 )
                 * 30,
-                end_of_chapter_summary="林澈确认母亲林静安是回声账本设计者。",
+                end_of_chapter_summary="陆明确认母亲林静安是回声账本设计者。",
             ),
         )
 
@@ -1040,7 +1081,7 @@ class SubWorldControlTests(unittest.TestCase):
                 ]
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈", "许安", "沈砚", "阿棠", "林若"}
+                return {"陆明", "许安", "韩砚", "阿棠", "林若"}
 
             def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
                 return {}
@@ -1051,11 +1092,11 @@ class SubWorldControlTests(unittest.TestCase):
             WriterOutput(
                 chapter_number=7,
                 title="第六日",
-                body=("林澈确认母亲林若留下了协议覆写线索。") * 80,
-                end_of_chapter_summary="林澈确认母亲林若与协议真相有关。",
+                body=("陆明确认母亲林若留下了协议覆写线索。") * 80,
+                end_of_chapter_summary="陆明确认母亲林若与协议真相有关。",
                 state_changes=[
                     StateChangeCandidate(
-                        entity_name="林澈",
+                        entity_name="陆明",
                         entity_kind="character",
                         field="knowledge",
                         old_value="未知母亲参与协议修改",
@@ -1106,7 +1147,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_canon_name_observation_ignores_mother_negative_description(self) -> None:
         violations = find_canon_name_violations(
-            "沈砚说：“你母亲不是普通的档案管理员。”",
+            "韩砚说：“你母亲不是普通的档案管理员。”",
             [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
         )
 
@@ -1142,7 +1183,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_canon_name_observation_ignores_canonical_name_followed_by_time_preposition(self) -> None:
         violations = find_canon_name_violations(
-            "他记得林澈的遗书提到母亲林若在十年前失踪。",
+            "他记得陆明的遗书提到母亲林若在十年前失踪。",
             [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
         )
 
@@ -1182,7 +1223,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_canon_name_observation_allows_canonical_name_in_normal_sentence(self) -> None:
         violations = find_canon_name_violations(
-            "林澈确认母亲林若是回声账本原型设计者之一，也找到了林若的签名。",
+            "陆明确认母亲林若是回声账本原型设计者之一，也找到了林若的签名。",
             [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
         )
 
@@ -1190,7 +1231,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_canon_name_observation_reports_wrong_name_before_possessive_fact(self) -> None:
         violations = find_canon_name_violations(
-            "林澈从残片中提取到母亲林清漪的声音残片，确认她是回声账本原型设计者。",
+            "陆明从残片中提取到母亲林清漪的声音残片，确认她是回声账本原型设计者。",
             [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
         )
 
@@ -1198,7 +1239,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_canon_name_observation_reports_wrong_name_before_dash_clause(self) -> None:
         violations = find_canon_name_violations(
-            "沈砚说：“你母亲苏晚晴——不是普通的档案管理员。”",
+            "韩砚说：“你母亲苏晚晴——不是普通的档案管理员。”",
             [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
         )
 
@@ -1206,7 +1247,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_canon_name_observation_reports_wrong_name_after_qi_mother_prefix(self) -> None:
         violations = find_canon_name_violations(
-            "沈砚告知林澈其母亲苏晚晴是回声系统原型设计者之一。",
+            "韩砚告知陆明其母亲苏晚晴是回声系统原型设计者之一。",
             [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
         )
 
@@ -1226,8 +1267,8 @@ class SubWorldControlTests(unittest.TestCase):
     def test_canon_name_observation_reports_document_name_in_mother_context(self) -> None:
         violations = find_canon_name_violations(
             (
-                "沈砚说：“你母亲留下的不只是遗书，还有一份她亲手签名的协议。”"
-                "林澈看到纸上的内容——一个签名栏，签名栏上方是打印体的名字：林清漪。"
+                "韩砚说：“你母亲留下的不只是遗书，还有一份她亲手签名的协议。”"
+                "陆明看到纸上的内容——一个签名栏，签名栏上方是打印体的名字：林清漪。"
             ),
             [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
         )
@@ -1239,7 +1280,7 @@ class SubWorldControlTests(unittest.TestCase):
             (
                 "算法签名。\n\n"
                 "一个名字出现在解析结果的末尾：叶知秋。\n\n"
-                "林澈的母亲。"
+                "陆明的母亲。"
             ),
             [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
         )
@@ -1249,7 +1290,7 @@ class SubWorldControlTests(unittest.TestCase):
     def test_canon_name_observation_reports_name_followed_by_mother_signature(self) -> None:
         violations = find_canon_name_violations(
             (
-                "林澈看到家属签字栏里那个名字时，胸腔里的空气像是被抽走了。\n\n"
+                "陆明看到家属签字栏里那个名字时，胸腔里的空气像是被抽走了。\n\n"
                 "林婉清。\n\n"
                 "母亲的签名。他认得这笔字。"
             ),
@@ -1260,7 +1301,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_canon_name_observation_reports_dash_appositive_mother_name(self) -> None:
         violations = find_canon_name_violations(
-            "档案上印着一个人名：苏瑾——林澈母亲的名字，标注为主架构师。",
+            "档案上印着一个人名：苏瑾——陆明母亲的名字，标注为主架构师。",
             [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
         )
 
@@ -1276,7 +1317,7 @@ class SubWorldControlTests(unittest.TestCase):
 
     def test_canon_name_observation_ignores_breath_before_canonical_name_apposition(self) -> None:
         violations = find_canon_name_violations(
-            "林澈的呼吸林若。母亲的名字像一根针，精准地刺进他不敢触碰的区域。",
+            "陆明的呼吸林若。母亲的名字像一根针，精准地刺进他不敢触碰的区域。",
             [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
         )
 
@@ -1309,7 +1350,7 @@ class SubWorldControlTests(unittest.TestCase):
     def test_canon_name_observation_ignores_signature_followed_by_verb_phrase(self) -> None:
         violations = find_canon_name_violations(
             (
-                "林澈反复回放着母亲最后的口型。"
+                "陆明反复回放着母亲最后的口型。"
                 "周岚把医疗记录摊开在台面上，指着手术同意书上的签名：“林若下这份同意书的时间，是旧港火灾发生后的第二天。”"
             ),
             [CanonNameAnchor(role_label="母亲", canonical_name="林若")],
@@ -1337,7 +1378,7 @@ class SubWorldControlTests(unittest.TestCase):
                 ]
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈", "许安"}
+                return {"陆明", "许安"}
 
             def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
                 return {}
@@ -1349,7 +1390,7 @@ class SubWorldControlTests(unittest.TestCase):
                 chapter_number=3,
                 title="第二日",
                 body=("许安说：“你母亲的遗书是空白的。”周岚说：“你母亲叫林婉清。”") * 30,
-                end_of_chapter_summary="林澈发现母亲林婉清是回声账本设计者。",
+                end_of_chapter_summary="陆明发现母亲林婉清是回声账本设计者。",
             ),
         )
 
@@ -1363,13 +1404,13 @@ class SubWorldControlTests(unittest.TestCase):
         output = WriterOutput(
             chapter_number=3,
             title="第二日",
-            body="旧港是母亲最后出现的地方。林澈发现母亲林婉是原型设计者，报告撰写人是林婉。",
-            end_of_chapter_summary="林澈在记忆馆发现母亲林婉是回声账本原型设计者之一。",
+            body="旧港是母亲最后出现的地方。陆明发现母亲林婉是原型设计者，报告撰写人是林婉。",
+            end_of_chapter_summary="陆明在记忆馆发现母亲林婉是回声账本原型设计者之一。",
             new_events=[
                 EventCandidate(
-                    summary="林澈发现林婉留下技术报告",
+                    summary="陆明发现林婉留下技术报告",
                     significance="major",
-                    involved_entity_names=["林澈", "林婉"],
+                    involved_entity_names=["陆明", "林婉"],
                 )
             ],
         )
@@ -1401,7 +1442,7 @@ class SubWorldControlTests(unittest.TestCase):
             chapter_number=13,
             title="旧港的余烬",
             body="许安说：“因为是我帮你母亲申请的工位。”这是他和母亲之间的暗号。录音结束。",
-            end_of_chapter_summary="林澈和许安发现旧港线索。",
+            end_of_chapter_summary="陆明和许安发现旧港线索。",
         )
         review = ReviewVerdict(
             verdict="fail",
@@ -1436,7 +1477,7 @@ class SubWorldControlTests(unittest.TestCase):
             chapter_number=13,
             title="旧港的余烬",
             body="母亲林若警告他不要相信回声账本。",
-            end_of_chapter_summary="林澈发现母亲留下警告。",
+            end_of_chapter_summary="陆明发现母亲留下警告。",
         )
         review = ReviewVerdict(
             verdict="fail",
@@ -1457,12 +1498,12 @@ class SubWorldControlTests(unittest.TestCase):
     def test_subworld_admission_autofix_genericizes_unknown_named_executives(self) -> None:
         output = WriterOutput(
             chapter_number=15,
-            title="沈砚的立场",
+            title="韩砚的立场",
             body=(
                 "首席运营官赵衍坐在长桌远端。财务总监陈维盯着平板。"
                 "赵总要求陈维在午夜前清理旧港档案。"
             ),
-            end_of_chapter_summary="沈砚发现集团高管启动档案清理。",
+            end_of_chapter_summary="韩砚发现集团高管启动档案清理。",
             entity_mentions=[
                 EntityMention(
                     entity_name="赵衍",
@@ -1483,7 +1524,7 @@ class SubWorldControlTests(unittest.TestCase):
                 EventCandidate(
                     summary="赵衍要求陈维清理旧港档案",
                     significance="major",
-                    involved_entity_names=["沈砚", "赵衍", "陈维"],
+                    involved_entity_names=["韩砚", "赵衍", "陈维"],
                     roles=["protagonist", "antagonist", "witness"],
                 )
             ],
@@ -1525,8 +1566,8 @@ class SubWorldControlTests(unittest.TestCase):
     def test_subworld_admission_autofix_does_not_mask_known_canon_characters(self) -> None:
         output = WriterOutput(
             chapter_number=15,
-            title="沈砚的立场",
-            body="沈砚在会议室看见父亲沈崇山签下旧港档案销毁命令。",
+            title="韩砚的立场",
+            body="韩砚在会议室看见父亲沈崇山签下旧港档案销毁命令。",
             end_of_chapter_summary="沈崇山在集团会议上现身。",
             entity_mentions=[
                 EntityMention(
@@ -1563,8 +1604,8 @@ class SubWorldControlTests(unittest.TestCase):
         class FakeRepo:
             def get_project(self, _project_id: str) -> object:
                 return SimpleNamespace(
-                    premise="主角：林澈，旧城档案修复师。",
-                    setting_summary="白塔记忆系统维持公共档案秩序。",
+                    premise="主角：陆明，旧城档案修复师。",
+                    setting_summary="核心系统记忆系统维持公共档案秩序。",
                 )
 
             def get_active_entities(self, _project_id: str) -> list[object]:
@@ -1572,14 +1613,14 @@ class SubWorldControlTests(unittest.TestCase):
 
         names = WritingOrchestrator._project_character_names(FakeRepo(), "p1")  # type: ignore[arg-type]
 
-        self.assertIn("林澈", names)
+        self.assertIn("陆明", names)
 
     def test_subworld_admission_allows_premise_protagonist(self) -> None:
         class FakeRepo:
             def get_project(self, _project_id: str) -> object:
                 return SimpleNamespace(
-                    premise="主角：林澈，旧城档案修复师。",
-                    setting_summary="白塔记忆系统维持公共档案秩序。",
+                    premise="主角：陆明，旧城档案修复师。",
+                    setting_summary="核心系统记忆系统维持公共档案秩序。",
                 )
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
@@ -1597,11 +1638,11 @@ class SubWorldControlTests(unittest.TestCase):
             WriterOutput(
                 chapter_number=1,
                 title="档案室",
-                body="林澈推开白塔档案室的门。",
-                end_of_chapter_summary="林澈发现家族档案异常。",
+                body="陆明推开核心系统档案室的门。",
+                end_of_chapter_summary="陆明发现家族档案异常。",
                 entity_mentions=[
                     EntityMention(
-                        entity_name="林澈",
+                        entity_name="陆明",
                         entity_kind="character",
                         is_named=True,
                         is_on_stage=True,
@@ -1618,8 +1659,8 @@ class SubWorldControlTests(unittest.TestCase):
         class FakeRepo:
             def get_project(self, _project_id: str) -> object:
                 return SimpleNamespace(
-                    premise="主角：林澈，旧城档案修复师。",
-                    setting_summary="白塔记忆系统维持公共档案秩序。",
+                    premise="主角：陆明，旧城档案修复师。",
+                    setting_summary="核心系统记忆系统维持公共档案秩序。",
                 )
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
@@ -1634,11 +1675,11 @@ class SubWorldControlTests(unittest.TestCase):
         output = WriterOutput(
             chapter_number=1,
             title="档案室",
-            body="林澈推开白塔档案室的门。",
-            end_of_chapter_summary="林澈发现家族档案异常。",
+            body="陆明推开核心系统档案室的门。",
+            end_of_chapter_summary="陆明发现家族档案异常。",
             entity_mentions=[
                 EntityMention(
-                    entity_name="林澈",
+                    entity_name="陆明",
                     entity_kind="character",
                     is_named=True,
                     is_on_stage=True,
@@ -1657,15 +1698,15 @@ class SubWorldControlTests(unittest.TestCase):
     def test_descriptive_masked_pursuer_is_not_treated_as_named_character(self) -> None:
         self.assertTrue(ContinuityChecker._looks_like_generic_character_reference("无脸人"))
         self.assertFalse(ContinuityChecker._looks_like_named_character("不明追踪者"))
-        self.assertFalse(ContinuityChecker._looks_like_named_character("白塔追踪者"))
-        self.assertFalse(ContinuityChecker._looks_like_named_character("白塔巡检员"))
+        self.assertFalse(ContinuityChecker._looks_like_named_character("核心系统追踪者"))
+        self.assertFalse(ContinuityChecker._looks_like_named_character("系统巡检员"))
 
     def test_subworld_admission_autofix_genericizes_old_surname_nickname(self) -> None:
         output = WriterOutput(
             chapter_number=20,
             title="地下交易",
-            body="老孙站在门后，要求林澈三天后再带灰盒过来。老孙没有留下真名。",
-            end_of_chapter_summary="林澈发现老孙的交易有问题。",
+            body="老孙站在门后，要求陆明三天后再带灰盒过来。老孙没有留下真名。",
+            end_of_chapter_summary="陆明发现老孙的交易有问题。",
             entity_mentions=[
                 EntityMention(
                     entity_name="老孙",
@@ -1812,8 +1853,8 @@ class SubWorldControlTests(unittest.TestCase):
                     goals=["推进"],
                     experience_plan=ChapterExperiencePlan(entity_admission_rule="strict_named_character"),
                 )
-                allowed = updater.create_entity(project.id, "character", "林澈", "主角", chapter=0)
-                updater.create_entity(project.id, "character", "洛庭若", "白塔审查官", chapter=0)
+                allowed = updater.create_entity(project.id, "character", "陆明", "主角", chapter=0)
+                updater.create_entity(project.id, "character", "周砚", "核心系统审查官", chapter=0)
                 updater.create_entity(project.id, "character", "顾岚", "黑市中间人", chapter=0)
                 global_core = updater.create_subworld(
                     project_id=project.id,
@@ -1828,7 +1869,7 @@ class SubWorldControlTests(unittest.TestCase):
                     project_id=project.id,
                     subworld_id=global_core.id,
                     entity_id=allowed.id,
-                    display_name="林澈",
+                    display_name="陆明",
                     description="允许角色",
                     is_core=True,
                     status="seeded_named",
@@ -1846,8 +1887,8 @@ class SubWorldControlTests(unittest.TestCase):
                         project_id=project.id,
                         chapter_number=46,
                         pressure_level="critical",
-                        pressure_summary="白塔监控升级。",
-                        notable_shifts_json=json.dumps(["洛庭若启动紧急重置程序，城市记忆系统开始封锁"], ensure_ascii=False),
+                        pressure_summary="核心系统监控升级。",
+                        notable_shifts_json=json.dumps(["周砚启动紧急重置程序，城市记忆系统开始封锁"], ensure_ascii=False),
                     )
                 )
                 session.flush()
@@ -1859,11 +1900,11 @@ class SubWorldControlTests(unittest.TestCase):
                     WriterOutput(
                         chapter_number=47,
                         title="第四十七章",
-                        body="洛庭若在岫苑站与林澈交换撤离条件。" * 80,
-                        end_of_chapter_summary="洛庭若提出交易条件。",
+                        body="周砚在档案区站与陆明交换撤离条件。" * 80,
+                        end_of_chapter_summary="周砚提出交易条件。",
                         entity_mentions=[
-                            EntityMention(entity_name="洛庭若", entity_kind="character", is_named=True),
-                            EntityMention(entity_name="林澈", entity_kind="character", is_named=True),
+                            EntityMention(entity_name="周砚", entity_kind="character", is_named=True),
+                            EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
                         ],
                     ),
                 )
@@ -1871,7 +1912,7 @@ class SubWorldControlTests(unittest.TestCase):
                 session.close()
                 engine.dispose()
 
-        self.assertIn("洛庭若", allowed_names)
+        self.assertIn("周砚", allowed_names)
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
         self.assertEqual(unknown, [])
 

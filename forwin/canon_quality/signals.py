@@ -32,6 +32,12 @@ class CanonAdmissionGateResult(BaseModel):
     review_id: str = ""
     commit_allowed: bool
     verdict: Literal["pass", "warn", "fail"]
+    admission_mode: Literal["clean", "with_obligation", "blocked", "manual_required"] = "clean"
+    obligation_ids: list[str] = Field(default_factory=list)
+    required_plan_patch_ids: list[str] = Field(default_factory=list)
+    blocking_reasons: list[str] = Field(default_factory=list)
+    expired_obligation_ids: list[str] = Field(default_factory=list)
+    over_budget: bool = False
     blocking_issue_count: int = 0
     warning_issue_count: int = 0
     open_terminal_obligation_count: int = 0

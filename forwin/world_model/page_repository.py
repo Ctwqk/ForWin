@@ -105,17 +105,30 @@ class WorldModelPageRepository:
         rows = self._load_rows(project_id, page_type=page_type, include_superseded=False)
         groups: dict[tuple[str, str], list[WorldModelPageRow]] = {}
         for row in rows:
-            self.prepare_row(row)
-            key = (row.page_type, row.logical_identity_key)
-            if identity_key and row.logical_identity_key != identity_key:
+            identity = self.identity_for_row(row)
+            if identity_key and identity.logical_identity_key != identity_key:
                 continue
-            if not row.logical_identity_key:
+            if not identity.logical_identity_key:
                 continue
+            key = (row.page_type, identity.logical_identity_key)
             groups.setdefault(key, []).append(row)
 
-        for _key, group in groups.items():
+        duplicate_groups = [group for group in groups.values() if len(group) > 1]
+        for group in duplicate_groups:
             chosen = _pick_canonical_row(group)
             for row in group:
+                if row.id == chosen.id:
+                    continue
+                row.status = "superseded"
+                row.supersedes_page_id = chosen.id
+                self.session.add(row)
+        if duplicate_groups:
+            self.session.flush()
+
+        for group in groups.values():
+            chosen = _pick_canonical_row(group)
+            for row in group:
+                self.prepare_row(row)
                 if row.id == chosen.id:
                     row.status = "canon_live"
                     row.supersedes_page_id = ""

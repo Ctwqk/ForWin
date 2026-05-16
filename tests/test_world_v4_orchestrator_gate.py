@@ -160,7 +160,7 @@ def test_apply_canon_candidate_drops_unregistered_character_state_changes() -> N
             known = updater.create_entity(
                 project_id=project.id,
                 kind="character",
-                name="林澈",
+                name="陆明",
                 description="主角",
                 chapter=0,
             )
@@ -174,11 +174,11 @@ def test_apply_canon_candidate_drops_unregistered_character_state_changes() -> N
                     project_id=project.id,
                     chapter_number=23,
                     title="状态候选",
-                    body="林澈移动，旁人没有入册。",
+                    body="陆明移动，旁人没有入册。",
                     end_of_chapter_summary="测试状态候选过滤。",
                     state_changes=[
                         StateChangeCandidate(
-                            entity_name="林澈",
+                            entity_name="陆明",
                             entity_kind="character",
                             field="location",
                             old_value="",

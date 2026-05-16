@@ -34,9 +34,11 @@ class _FakeLLM:
     def __init__(self, raw: str) -> None:
         self.raw = raw
         self.prompts: list[list[dict[str, str]]] = []
+        self.kwargs: list[dict[str, object]] = []
 
     def chat(self, prompt, **_kwargs):  # noqa: ANN001
         self.prompts.append(prompt)
+        self.kwargs.append(dict(_kwargs))
         return self.raw
 
 
@@ -279,6 +281,46 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
             [("confusion", "general", 1), ("pacing", "arc", 1)],
         )
         self.assertEqual({row.target_name for row in rows}, {""})
+
+    def test_comment_analyzer_uses_short_optional_llm_timeout(self) -> None:
+        project = self._create_project()
+        comment = self._add_comment(
+            work_name=project.title,
+            body="感觉节奏偏慢。",
+            remote_comment_id="comment-timeout-1",
+            author_id="user-timeout",
+            author_name="读者T",
+        )
+        self.session.commit()
+
+        llm = _FakeLLM(
+            json.dumps(
+                {
+                    "signals": [
+                        {
+                            "comment_index": 0,
+                            "signal_type": "pacing",
+                            "target_type": "arc",
+                            "target_name": "节奏",
+                            "severity": 2,
+                            "confidence": 0.8,
+                            "evidence_span": "节奏偏慢",
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+        )
+        analyzer = CommentAnalyzer(llm_client=llm)
+        analyzer.analyze_and_store(
+            session=self.session,
+            project_id=project.id,
+            comments=[comment],
+            chapter_number=3,
+        )
+
+        self.assertEqual(llm.kwargs[0]["timeout_seconds"], 8.0)
+        self.assertIs(llm.kwargs[0]["retry_on_timeout"], False)
 
     def test_comment_analyzer_accepts_extended_signal_type_schema(self) -> None:
         project = self._create_project()

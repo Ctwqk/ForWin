@@ -91,7 +91,7 @@ def test_personality_library_loads_nested_metadata_and_builds_active_context(tmp
     )
     context = build_active_personality_context(
         character_id="char_mc",
-        character_name="沈砚",
+        character_name="韩砚",
         loadout=loadout,
         library=library,
         scene_flags=["public_scene"],
@@ -202,7 +202,7 @@ def test_writer_prompt_includes_compressed_personality_context() -> None:
             [
                 {
                     "character_id": "char_mc",
-                    "character_name": "沈砚",
+                    "character_name": "韩砚",
                     "active_skills": {"dominant": ["trait-suspicious-survivor"], "stress_mode": []},
                     "current_behavior_bias": {
                         "decision": ["先判断动机、收益者和隐藏代价。"],
@@ -233,7 +233,7 @@ def test_reviewer_payload_indexes_personality_context_as_evidence() -> None:
         active_personality_contexts=[
             {
                 "character_id": "char_mc",
-                "character_name": "沈砚",
+                "character_name": "韩砚",
                 "active_skills": {"dominant": ["trait-suspicious-survivor"]},
                 "current_behavior_bias": {"decision": ["先判断动机。"]},
                 "constraints": ["Do not override canon."],
@@ -247,9 +247,9 @@ def test_reviewer_payload_indexes_personality_context_as_evidence() -> None:
             project_id="project",
             chapter_number=1,
             title="第一章 雨夜",
-            body="沈砚没有立刻答应，而是先问消息从哪里来。",
+            body="韩砚没有立刻答应，而是先问消息从哪里来。",
             char_count=24,
-            end_of_chapter_summary="沈砚开始核验线索。",
+            end_of_chapter_summary="韩砚开始核验线索。",
         ),
     )
 
@@ -277,7 +277,7 @@ def test_book_state_personality_handlers_update_character_profile(tmp_path: Path
                 id="char_mc",
                 project_id=project.id,
                 node_type="character",
-                name="沈砚",
+                name="韩砚",
                 profile={"public_identity": "军师"},
             )
         )
@@ -306,7 +306,7 @@ def test_book_state_personality_handlers_update_character_profile(tmp_path: Path
         assert row.profile["personality_loadout"]["dominant"]["weight"] == 0.8
 
     summary = handlers["list_character_personality_loadouts"](project_id)
-    assert summary["characters"][0]["character_name"] == "沈砚"
+    assert summary["characters"][0]["character_name"] == "韩砚"
     assert summary["characters"][0]["personality_loadout"]["dominant"]["skill"] == "trait-suspicious-survivor"
     assert json.loads(json.dumps(handlers["list_personality_skills"]()))["skills"][0]["name"] == "trait-suspicious-survivor"
 

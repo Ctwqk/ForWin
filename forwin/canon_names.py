@@ -259,7 +259,7 @@ def is_plausible_person_name(name: str) -> bool:
 
 
 def _mother_name_observation_patterns() -> list[re.Pattern[str]]:
-    prefix = r"(?:你(?:的)?|他(?:的)?|她(?:的)?|林澈的|林澈)?母亲"
+    prefix = rf"(?:你(?:的)?|他(?:的)?|她(?:的)?|{_CJK_NAME}(?:的)?)?母亲"
     return [
         re.compile(
             rf"{prefix}(?:叫|名叫|名字是|的名字是|名为|署名为|署名是)[:：]?"
@@ -278,7 +278,7 @@ def _mother_name_observation_patterns() -> list[re.Pattern[str]]:
             rf"(?=$|[\s，,。；;、！？!?]|的|是|曾|在|十年前|授权)"
         ),
         re.compile(
-            rf"(?:你(?:的)?|他(?:的)?|她(?:的)?|林澈(?:的)?|{_CJK_NAME})?"
+            rf"(?:你(?:的)?|他(?:的)?|她(?:的)?|{_CJK_NAME}(?:的)?)?"
             rf"母亲(?:的名字|姓名|的姓名|的签名|签名)"
             rf"[\s，,：:、—-]+[{re.escape(_QUOTE_OPEN)}]?"
             rf"(?P<name>{_CJK_NAME})[{re.escape(_QUOTE_CLOSE)}]?"
@@ -287,7 +287,7 @@ def _mother_name_observation_patterns() -> list[re.Pattern[str]]:
         re.compile(
             rf"(?P<name>{_CJK_NAME})"
             rf"[\s，,。；;、！？!?—-]{{0,12}}"
-            rf"(?:林澈(?:的)?|你(?:的)?|他(?:的)?|她(?:的)?)?"
+            rf"(?:{_CJK_NAME}(?:的)?|你(?:的)?|他(?:的)?|她(?:的)?)?"
             rf"母亲(?:的名字|的签名|签名)"
         ),
         re.compile(
@@ -296,7 +296,7 @@ def _mother_name_observation_patterns() -> list[re.Pattern[str]]:
             rf"[{re.escape(_QUOTE_OPEN)}]?(?P<name>{_CJK_NAME})"
             rf"[{re.escape(_QUOTE_CLOSE)}]?"
             rf"[\s，,。；;、！？!?]{{0,8}}"
-            rf"(?:林澈的|你(?:的)?|他(?:的)?|她(?:的)?)?母亲"
+            rf"(?:{_CJK_NAME}的|你(?:的)?|他(?:的)?|她(?:的)?)?母亲"
         ),
     ]
 

@@ -119,7 +119,7 @@ class WorldModelTests(unittest.TestCase):
                             "long_arcs": ["旧城结界失效", "宗门税权冲突"],
                             "core_cast": [
                                 {"name": "林烬", "role": "主角"},
-                                {"name": "沈砚", "role": "盟友"},
+                                {"name": "韩砚", "role": "盟友"},
                             ],
                             "factions": [
                                 {"name": "玄霜宗", "agenda": "控制北境灵矿"},
@@ -714,7 +714,7 @@ class WorldModelTests(unittest.TestCase):
         self.assertEqual(snapshot_names, ["陆沉"])
         self.assertNotIn("旧影", json.dumps(snapshot.snapshot, ensure_ascii=False))
         self.assertNotIn("林烬", json.dumps(snapshot.snapshot, ensure_ascii=False))
-        self.assertNotIn("沈砚", json.dumps(snapshot.snapshot, ensure_ascii=False))
+        self.assertNotIn("韩砚", json.dumps(snapshot.snapshot, ensure_ascii=False))
 
 
 if __name__ == "__main__":

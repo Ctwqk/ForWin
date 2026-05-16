@@ -6,6 +6,14 @@ from .signals import CanonQualitySignal, make_signal_id
 
 
 BLOCKED_BODY_PLACEHOLDERS = ("一名相关人员", "相关人员")
+BLOCKED_INTERNAL_STATE_KEYS = (
+    "memory_reset",
+    "archive_cleanup",
+    "terminal_audit_window",
+    "core_access_window",
+    "public_countdown",
+    "countdown_key",
+)
 BARE_ROLE_PLACEHOLDERS = ("工作人员",)
 PROTAGONIST_PLACEHOLDER_ROLES = (
     "工作人员",
@@ -25,6 +33,28 @@ def analyze_placeholder_leakage(
 ) -> list[CanonQualitySignal]:
     signals: list[CanonQualitySignal] = []
     text = str(body or "")
+    for token in BLOCKED_INTERNAL_STATE_KEYS:
+        start = text.find(token)
+        if start < 0:
+            continue
+        subject = f"internal_state_key:{token}"
+        signals.append(
+            CanonQualitySignal(
+                signal_id=make_signal_id(project_id, chapter_number, "internal_state_key_leakage", subject),
+                project_id=project_id,
+                chapter_number=chapter_number,
+                signal_type="internal_state_key_leakage",
+                severity="error",
+                target_scope="body",
+                subject_key=subject,
+                description=f"章节正文泄漏内部状态键「{token}」，不能进入 canon。",
+                evidence_refs=[f"body:{start}-{start + len(token)}"],
+                span_start=start,
+                span_end=start + len(token),
+                payload={"draft_id": draft_id, "internal_state_key": token},
+            )
+        )
+        return signals
     seen: set[str] = set()
     for placeholder in BLOCKED_BODY_PLACEHOLDERS:
         start = text.find(placeholder)
@@ -128,7 +158,7 @@ def _analyze_bare_role_placeholder(
         subject = f"placeholder:{placeholder}:bare_role"
         repair_hint = (
             f"删除正文中所有作为角色标签的「{placeholder}」。"
-            "改用具体姓名，或改成可追踪且非占位的稳定代号，例如「岫苑旧书摊主」「分馆地下管理员」；"
+            "改用具体姓名，或改成可追踪且非占位的稳定代号，例如「旧书摊主」「地下管理员」；"
             f"修复后正文和 summary 都不应再用「{placeholder}」称呼关键行动者。"
         )
         return CanonQualitySignal(

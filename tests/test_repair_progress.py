@@ -135,3 +135,55 @@ def test_repair_must_fix_is_carried_into_writer_rule_anchors() -> None:
 
     assert payload["rule_anchors"][0] == "repair must fix: 不要把终端审计窗口从239分钟延长到60小时。"
     assert "保留既有规则" in payload["rule_anchors"]
+
+
+def test_countdown_non_monotonic_repair_adds_sequence_constraint() -> None:
+    payload = WritingOrchestrator._chapter_experience_patch_payload(
+        ChapterExperiencePlan(rule_anchors=[]),
+        RepairInstruction(
+            repair_scope="draft",
+            failure_type="continuity",
+            must_fix=["倒计时从 82 分钟回升到 89分钟，但正文没有明确 reset。"],
+            must_preserve=["章节目标"],
+            design_patch={},
+            evidence_refs=["canon_quality:x"],
+        ),
+    )
+
+    assert "同一倒计时 ledger 在本章全文必须单调减少" in payload["rule_anchors"][0]
+    assert any("同一倒计时 ledger 在本章全文必须单调减少" in item for item in payload["rule_anchors"])
+    assert any("89分钟必须改成小于等于82分钟" in item for item in payload["rule_anchors"])
+
+
+def test_countdown_repair_anchor_names_chinese_raw_duration() -> None:
+    payload = WritingOrchestrator._chapter_experience_patch_payload(
+        ChapterExperiencePlan(rule_anchors=[]),
+        RepairInstruction(
+            repair_scope="draft",
+            failure_type="continuity",
+            must_fix=["倒计时从 87 分钟回升到 三小时，但正文没有明确 reset。"],
+            must_preserve=["章节目标"],
+            design_patch={},
+            evidence_refs=["canon_quality:x"],
+        ),
+    )
+
+    assert any("三小时必须删除或改为小于等于87分钟" in item for item in payload["rule_anchors"])
+
+
+def test_countdown_stale_retrospective_repair_anchor_names_raw_duration() -> None:
+    payload = WritingOrchestrator._chapter_experience_patch_payload(
+        ChapterExperiencePlan(rule_anchors=[]),
+        RepairInstruction(
+            repair_scope="draft",
+            failure_type="continuity",
+            must_fix=["正文回溯旧倒计时为 三天，但 accepted canon 中记忆重置倒计时已是 90 分钟级别。"],
+            must_preserve=["章节目标"],
+            design_patch={},
+            evidence_refs=["canon_quality:x"],
+        ),
+    )
+
+    assert "旧计划/旧摘要时间不得写成前文事实" in payload["rule_anchors"][0]
+    assert "三天必须删除" in payload["rule_anchors"][0]
+    assert "小于等于90分钟" in payload["rule_anchors"][0]

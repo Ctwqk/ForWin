@@ -17,6 +17,7 @@ from .event import CanonEvent, EventEntityLink
 from .genesis import BookGenesisRevision, PromptTrace
 from .governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
 from .observability import PerformanceSpan
+from .narrative_obligation import FuturePlanAuditRunRow, NarrativeObligationRow, NarrativePlanPatchRow
 from .phase import (
     ArcEnvelope,
     ArcEnvelopeAnalysis,
@@ -124,6 +125,9 @@ __all__ = [
     "NarrativeConstraint",
     "DecisionEvent",
     "PerformanceSpan",
+    "NarrativeObligationRow",
+    "NarrativePlanPatchRow",
+    "FuturePlanAuditRunRow",
     "ProjectStageAnalysis",
     "ProjectReplanEvent",
     "ArcEnvelope",

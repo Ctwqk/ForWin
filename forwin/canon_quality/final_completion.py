@@ -5,13 +5,6 @@ import re
 from .signals import CanonQualitySignal, make_signal_id
 
 FINAL_RESOLUTION_KEYWORDS = (
-    "白塔关闭",
-    "白塔停止",
-    "白塔瘫痪",
-    "白塔系统关闭",
-    "白塔系统已关闭",
-    "白塔记忆重置系统失效",
-    "白塔的记忆重置系统已经失效",
     "记忆重置系统失效",
     "记忆重置系统已经失效",
     "系统关闭",
@@ -31,14 +24,10 @@ FINAL_RESOLUTION_KEYWORDS = (
     "重置被中止",
     "重置程序终止",
     "终止重置程序",
-    "白塔重置被阻止",
-    "旧城将不再有记忆重置",
     "不再有记忆重置",
-    "白塔将无法再进行下一次记忆重置",
-    "关闭白塔",
     "核心停摆",
     "系统停摆",
-    "白塔核心停止",
+    "核心停止",
     "证据公开完成",
     "档案已经公开",
     "真相已经公开",
@@ -103,14 +92,12 @@ SOFT_UNRESOLVED_FINAL_HOOK_PATTERNS = (
 )
 
 FINAL_CRISIS_KEYWORDS = (
-    "白塔",
     "记忆重置",
     "重置",
     "倒计时",
     "遗忘之井",
     "父亲封存",
     "记忆芯片",
-    "洛庭若",
     "巡检员",
     "真相",
 )
@@ -122,7 +109,7 @@ PENDING_RESOLUTION_PATTERNS = (
 )
 
 POST_RESOLUTION_UNFINISHED_PATTERNS = (
-    re.compile(r"(去|前往|赶往|回到|进入).{0,12}(档案公会|白塔|地下旧轨|潮汐钟楼|失忆广场).{0,30}(最后|剩下|剩余|交给|交付|公开|关闭|阻止|完成)"),
+    re.compile(r"(去|前往|赶往|回到|进入).{0,12}(核心区|控制室|档案库|地下层|调度室|广播室).{0,30}(最后|剩下|剩余|交给|交付|公开|关闭|阻止|完成)"),
     re.compile(r"(最后一段|最后一份|剩余|剩下).{0,12}(记忆记录|档案|证据|芯片|钥匙).{0,20}(交给|交付|公开|带去|送到|提交)"),
 )
 
@@ -169,7 +156,7 @@ def analyze_final_completion(
     subject = "book:finale"
     repair_hint = (
         "终章不能以主线危机、追杀、未知装置或新谜团收尾。"
-        "请明确写出白塔/记忆重置主危机如何被关闭、倒计时如何解除，以及核心真相如何已经公开或付清代价。"
+        "请明确写出系统/记忆重置主危机如何被关闭、倒计时如何解除，以及核心真相如何已经公开或付清代价。"
     )
     if matched:
         evidence_ref, span_start, span_end = _first_evidence(
@@ -247,7 +234,7 @@ def analyze_final_completion(
             target_scope="book",
             subject_key=subject,
             description=(
-                "终章涉及主线危机，但没有明确关闭白塔/记忆重置、解除倒计时或公开核心真相。"
+                "终章涉及主线危机，但没有明确关闭系统/记忆重置、解除倒计时或公开核心真相。"
                 f"修复要求：{repair_hint}"
             ),
             evidence_refs=[evidence_ref],

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
@@ -12,7 +13,7 @@ from forwin.models.subworld import SubWorld
 from forwin.models.world_v4 import ScenarioRehearsalRunRow
 from forwin.governance import DecisionEventType
 from forwin.planning.scenario_rehearsal import ScenarioRehearsalRunner
-from forwin.planning.scenario_rehearsal_resolution import ScenarioRehearsalCoordinator
+from forwin.planning.scenario_rehearsal_resolution import ScenarioRehearsalCoordinator, latest_blocking_scenario_rehearsal
 from forwin.planning.world_contracts import (
     ArcWorldContract,
     BandWorldContract,
@@ -294,3 +295,44 @@ def test_replan_resolution_creates_new_plan_version_and_governance_events() -> N
         assert json.loads(outcome.report.metadata["replan"])["new_arc_id"] == active_arc.id
         assert DecisionEventType.SCENARIO_REHEARSAL_EVALUATED in event_types
         assert DecisionEventType.SCENARIO_REHEARSAL_REPLAN_REQUIRED in event_types
+
+
+def test_latest_nonblocking_scenario_rehearsal_clears_older_blocker() -> None:
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project, arc, _chapters = _setup_project(session, chapter_start=32, chapter_end=36)
+        base_time = datetime.now(timezone.utc)
+        session.add(
+            ScenarioRehearsalRunRow(
+                project_id=project.id,
+                arc_id=arc.id,
+                band_id="band:32:36",
+                chapter_numbers_json=json.dumps([32, 33, 34, 35, 36]),
+                recommendation="patch",
+                risk_count=1,
+                blocker_count=0,
+                required_patch_count=1,
+                report_json=json.dumps({"resolution_status": "manual_patch_required"}),
+                created_at=base_time,
+            )
+        )
+        session.add(
+            ScenarioRehearsalRunRow(
+                project_id=project.id,
+                arc_id=arc.id,
+                band_id="band:32:36",
+                chapter_numbers_json=json.dumps([32, 33, 34, 35, 36]),
+                recommendation="pass",
+                risk_count=0,
+                blocker_count=0,
+                required_patch_count=0,
+                report_json=json.dumps({"resolution_status": "skipped"}),
+                created_at=base_time + timedelta(seconds=1),
+            )
+        )
+        session.flush()
+
+        assert latest_blocking_scenario_rehearsal(session, project.id) is None

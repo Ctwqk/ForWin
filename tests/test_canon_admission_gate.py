@@ -48,7 +48,7 @@ def test_canon_admission_shadow_records_but_allows_commit() -> None:
                 signal_type="terminal_state_active_conflict",
                 severity="error",
                 target_scope="character",
-                subject_key="character:沈砚",
+                subject_key="character:韩砚",
                 description="终止态后继续活跃。",
                 evidence_refs=["body:10-20"],
             )

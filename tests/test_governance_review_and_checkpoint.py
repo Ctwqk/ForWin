@@ -175,6 +175,49 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
 
         self.assertEqual(issues, [])
 
+    def test_derived_chapter_tasks_skip_continuity_guard_goals(self) -> None:
+        tasks = derive_chapter_task_contract(
+            [
+                "承接上一章 accepted canon，不改写已发生事实。",
+                (
+                    "第24章 accepted canon：陆明独自进入核心系统底层电梯确认启动紧急重置协议；"
+                    "韩青被系统巡检员抓获；记忆重置倒计时不超过9分钟。"
+                    "第25-36章必须紧接此状态。"
+                ),
+                "陆明在核心系统底层取得恢复后门的第一段证据。",
+            ]
+        )
+
+        self.assertEqual(
+            [task.description for task in tasks],
+            ["陆明在核心系统底层取得恢复后门的第一段证据。"],
+        )
+
+    def test_task_contract_review_skips_continuity_guard_warning(self) -> None:
+        issues = evaluate_task_contract(
+            [
+                PlanTaskItem(
+                    task_type="plot_advance",
+                    description="承接上一章 accepted canon，不改写已发生事实。",
+                    source="derived_from_goals",
+                ),
+                PlanTaskItem(
+                    task_type="plot_advance",
+                    description=(
+                        "第24章 accepted canon：陆明独自进入核心系统底层电梯确认启动紧急重置协议；"
+                        "韩青被系统巡检员抓获；记忆重置倒计时不超过9分钟。"
+                    ),
+                    source="derived_from_goals",
+                ),
+            ],
+            combined_text="陆明继续进入核心系统底层，确认韩青被关押，并推进救援线索。",
+            reviewer="governance",
+            issue_type="plan_task_fulfillment",
+            target_scope="chapter",
+        )
+
+        self.assertEqual(issues, [])
+
     def test_historical_review_fails_on_hard_future_constraint(self) -> None:
         hub = HistoricalReviewHub(
             experience_review_enabled=False,

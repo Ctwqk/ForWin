@@ -69,6 +69,17 @@ def build_review_context_pack(
         )
     map_context = dict(context.map_context)
     map_context.update(_build_reviewer_only_map_context(repo=repo, context=context))
+    canon_quality_context = getattr(context, "canon_quality_context", {}) or {}
+    active_narrative_obligations = getattr(context, "active_narrative_obligations", []) or []
+    if not active_narrative_obligations and isinstance(canon_quality_context, dict):
+        active_narrative_obligations = [
+            item
+            for item in canon_quality_context.get("active_narrative_obligations", [])
+            if isinstance(item, dict)
+        ]
+    future_plan_audit_summary = getattr(context, "future_plan_audit_summary", {}) or {}
+    if not future_plan_audit_summary and isinstance(canon_quality_context, dict):
+        future_plan_audit_summary = canon_quality_context.get("future_plan_audit_summary", {}) or {}
     return ReviewContextPack(
         project_id=context.project_id,
         project_title=context.project_title,
@@ -104,6 +115,8 @@ def build_review_context_pack(
         lint_signals=list(lint_signals or []),
         active_personality_contexts=list(context.active_personality_contexts),
         deterministic_quality_report=dict(deterministic_quality_report or {}),
+        active_narrative_obligations=list(active_narrative_obligations),
+        future_plan_audit_summary=dict(future_plan_audit_summary) if isinstance(future_plan_audit_summary, dict) else {},
     )
 
 

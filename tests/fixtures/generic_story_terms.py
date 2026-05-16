@@ -1,0 +1,15 @@
+from __future__ import annotations
+
+PROTAGONIST = "陆明"
+ALLY = "韩青"
+ANTAGONIST = "周砚"
+PARENT = "陆远"
+CITY = "灰城"
+SYSTEM = "核心系统"
+CORE_AREA = "核心区"
+ARCHIVE_ORG = "档案署"
+UNDERGROUND_ROUTE = "地下检修线"
+CLOCK_TOWER = "钟塔"
+PUBLIC_SQUARE = "中央广场"
+SYSTEM_PATROL = "系统巡检员"
+FAMILY_LINE = "陆氏"

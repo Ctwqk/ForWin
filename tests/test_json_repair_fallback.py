@@ -40,7 +40,7 @@ class JsonRepairFallbackTests(unittest.TestCase):
         raw = """{
   "state_changes": [
     {
-      "entity_name": "沈砚",
+      "entity_name": "韩砚",
       "entity_kind": "character",
       "field": "status",
       "old_value": "未知",
@@ -61,7 +61,7 @@ class JsonRepairFallbackTests(unittest.TestCase):
             {
                 "state_changes": [
                     {
-                        "entity_name": "沈砚",
+                        "entity_name": "韩砚",
                         "entity_kind": "character",
                         "field": "status",
                         "old_value": "未知",

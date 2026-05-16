@@ -18,6 +18,7 @@ import inspect
 import json
 import logging
 from pathlib import Path
+import re
 import time
 from typing import Any, Callable
 
@@ -32,6 +33,7 @@ from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.canon_names import is_plausible_person_name
 from forwin.checker.rules import ContinuityChecker
 from forwin.config import Config
+from forwin.context.assembler import _build_canon_quality_context
 from forwin.governance import (
     BandCheckpointDetail,
     BandCheckpointIssueInfo,
@@ -78,8 +80,10 @@ from forwin.orchestrator.phase4 import (
     save_world_turn,
 )
 from forwin.planning.scenario_rehearsal_resolution import latest_blocking_scenario_rehearsal
+from forwin.planning.future_plan_auditor import FuturePlanAuditor, FuturePlanAuditRun
 from forwin.orchestrator.phase24 import ProvisionalBandPreview
 from forwin.retrieval import RetrievalBroker
+from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.runtime.services import RuntimeServices
 from forwin.state.repo import StateRepository
 from forwin.state.schema import KNOWN_STATE_FIELDS
@@ -1168,6 +1172,13 @@ class WritingOrchestrator:
                 project_id=project_id,
                 chapter_number=chapter_number,
             )
+            self._audit_future_plans_after_acceptance(
+                session=session,
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                trigger_stage="manual_acceptance",
+            )
             self._compile_world_model_after_acceptance(
                 session=session,
                 updater=updater,
@@ -1262,6 +1273,160 @@ class WritingOrchestrator:
         if not self._governance_root_event_id:
             self._governance_root_event_id = str(row.causal_root_id or row.id or "")
         return row
+
+    def _audit_current_plan_before_write(
+        self,
+        *,
+        session: Session,
+        repo: StateRepository,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_plan: ChapterPlan,
+        context,
+        trigger_stage: str,
+    ):
+        project = session.get(Project, project_id)
+        target_total_chapters = int(getattr(project, "target_total_chapters", 0) or 0)
+        chapter_number = int(chapter_plan.chapter_number or 0)
+        canon_quality_context = dict(getattr(context, "canon_quality_context", {}) or {})
+        obligation_repo = NarrativeObligationRepository(session)
+        result = FuturePlanAuditor().audit_and_apply(
+            session=session,
+            project_id=project_id,
+            current_chapter=chapter_number,
+            trigger_stage=trigger_stage,
+            plans=[chapter_plan],
+            canon_quality_context=canon_quality_context,
+            obligations=obligation_repo.list_active_for_context(project_id, chapter_number=chapter_number),
+            target_total_chapters=target_total_chapters,
+            include_current=True,
+        )
+        self._record_future_plan_audit_events(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            result=result,
+        )
+        if result.blocking_reasons:
+            raise RuntimeError(
+                "future_plan_audit_blocked:"
+                + ";".join(str(reason) for reason in result.blocking_reasons)
+            )
+        if result.applied_plan_patch_ids:
+            session.flush()
+            return self.retrieval_broker.build_chapter_context(repo, project_id, chapter_plan)
+        return context
+
+    def _audit_future_plans_after_acceptance(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_number: int,
+        trigger_stage: str = "post_acceptance",
+    ) -> FuturePlanAuditRun | None:
+        project = session.get(Project, project_id)
+        target_total_chapters = int(getattr(project, "target_total_chapters", 0) or 0)
+        plans = self._future_plan_audit_plans(
+            session=session,
+            project_id=project_id,
+            current_chapter=chapter_number,
+            include_current=False,
+        )
+        if not plans:
+            return None
+        obligation_repo = NarrativeObligationRepository(session)
+        obligations = [
+            *obligation_repo.list_active_for_context(project_id, chapter_number=chapter_number + 1),
+            *obligation_repo.list_planned_for_chapter(project_id, origin_chapter_number=chapter_number),
+        ]
+        canon_quality_context = _build_canon_quality_context(
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_number + 1,
+            target_total_chapters=target_total_chapters,
+        )
+        result = FuturePlanAuditor().audit_and_apply(
+            session=session,
+            project_id=project_id,
+            current_chapter=chapter_number,
+            trigger_stage=trigger_stage,
+            plans=plans,
+            canon_quality_context=canon_quality_context,
+            obligations=obligations,
+            target_total_chapters=target_total_chapters,
+            include_current=False,
+        )
+        self._record_future_plan_audit_events(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            result=result,
+        )
+        return result
+
+    @staticmethod
+    def _future_plan_audit_plans(
+        *,
+        session: Session,
+        project_id: str,
+        current_chapter: int,
+        include_current: bool,
+    ) -> list[ChapterPlan]:
+        lower_bound = int(current_chapter or 0)
+        predicate = ChapterPlan.chapter_number >= lower_bound if include_current else ChapterPlan.chapter_number > lower_bound
+        return list(
+            session.execute(
+                select(ChapterPlan)
+                .where(
+                    ChapterPlan.project_id == project_id,
+                    predicate,
+                    ChapterPlan.status.in_(("planned", "failed")),
+                )
+                .order_by(ChapterPlan.chapter_number.asc())
+            ).scalars().all()
+        )
+
+    def _record_future_plan_audit_events(
+        self,
+        *,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_number: int,
+        result: FuturePlanAuditRun,
+    ) -> None:
+        if not result.inspected_chapters:
+            return
+        event = self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="evaluation_verdict",
+            event_type=DecisionEventType.FUTURE_PLAN_AUDIT_RUN,
+            scope="project",
+            summary=f"future plan audit: {result.status}",
+            related_object_type="future_plan_audit_run",
+            related_object_id=result.id,
+            payload=result.model_dump(mode="json", exclude={"plan_patches"}),
+        )
+        if result.applied_plan_patch_ids:
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="audit_action",
+                event_type=DecisionEventType.FUTURE_PLAN_PATCH_APPLIED,
+                scope="project",
+                summary=f"已应用 {len(result.applied_plan_patch_ids)} 个 future plan patch。",
+                related_object_type="future_plan_audit_run",
+                related_object_id=result.id,
+                parent_event_id=str(event.id or ""),
+                payload={
+                    "applied_plan_patch_ids": list(result.applied_plan_patch_ids),
+                    "issue_types": [issue.issue_type for issue in result.issues],
+                },
+            )
 
     def _previous_band_row(
         self,
@@ -2143,12 +2308,12 @@ class WritingOrchestrator:
     def _placeholder_role_replacement(body: str) -> str:
         text = str(body or "")
         if "旧书摊" in text or "书摊" in text:
-            return "岫苑旧书摊主"
-        if "白塔系统维护组" in text or "维护组" in text:
-            return "岫苑旧书摊主"
+            return "旧书摊主"
+        if "系统维护组" in text or "维护组" in text:
+            return "系统维护员"
         if "分馆" in text or "地下三层" in text:
-            return "分馆地下管理员"
-        return "岫苑旧书摊主"
+            return "地下分馆管理员"
+        return "具体见证人"
 
     @staticmethod
     def _looks_like_genericizable_unknown_reference(name: str) -> bool:
@@ -3240,11 +3405,12 @@ class WritingOrchestrator:
         current_plan: ChapterExperiencePlan,
         repair_instruction: RepairInstruction,
     ) -> dict[str, object]:
-        repair_rule_anchors = [
+        repair_rule_anchors = WritingOrchestrator._countdown_repair_rule_anchors(repair_instruction.must_fix)
+        repair_rule_anchors.extend([
             f"repair must fix: {item}"
             for item in repair_instruction.must_fix[:3]
             if str(item or "").strip()
-        ]
+        ])
         update: dict[str, object] = {
             "planned_reward_tags": list(
                 repair_instruction.design_patch.get("planned_reward_tags")
@@ -3303,6 +3469,55 @@ class WritingOrchestrator:
         if repair_instruction.failure_type == "stall" and not update["question_hook"]:
             update["question_hook"] = "补出一个比当前更强的新问题"
         return update
+
+    @staticmethod
+    def _countdown_repair_rule_anchors(must_fix: list[str]) -> list[str]:
+        anchors: list[str] = []
+        for raw in must_fix:
+            item = str(raw or "").strip()
+            if not item:
+                continue
+            if "倒计时" not in item:
+                continue
+            stale_match = re.search(
+                r"回溯旧倒计时为\s*([^，。,；;]+).*?([0-9]+)\s*分钟级别",
+                item,
+            )
+            if stale_match:
+                raw_target = str(stale_match.group(1) or "").strip()
+                latest = int(stale_match.group(2))
+                anchors.append(
+                    "repair countdown hard constraint: 旧计划/旧摘要时间不得写成前文事实；"
+                    f"{raw_target}必须删除，或明确改成公开伪数据/误导信息，"
+                    f"同一记忆重置周期只能写小于等于{latest}分钟。"
+                    "不得写“系统日志原本还有三天/七天/几小时”来解释当前倒计时。"
+                )
+                continue
+            if not any(marker in item for marker in ("回升", "延长", "non_monotonic", "单调")):
+                continue
+            match = re.search(r"从\s*([0-9]+)\s*分钟(?:回升|延长)到\s*([^，。,；;]+)", item)
+            if match:
+                previous = int(match.group(1))
+                raw_target = str(match.group(2) or "").strip()
+                target_digit = re.search(r"([0-9]+)\s*分钟", raw_target)
+                target_constraint = (
+                    f"{int(target_digit.group(1))}分钟必须改成小于等于{previous}分钟"
+                    if target_digit
+                    else f"{raw_target}必须删除或改为小于等于{previous}分钟"
+                )
+                anchors.append(
+                    "repair countdown hard constraint: 同一倒计时 ledger 在本章全文必须单调减少；"
+                    f"{target_constraint}，"
+                    "并同步修正文中所有相关倒计时、角色判断和摘要。除非正文明确 reset 或 branch clock，"
+                    "不得在更小剩余时间之后再写更大的剩余时间。"
+                )
+                continue
+            anchors.append(
+                "repair countdown hard constraint: 同一倒计时 ledger 在本章全文必须单调减少；"
+                "重写前先列出正文所有剩余时间，按出现顺序改成不增加序列。除非正文明确 reset 或 branch clock，"
+                "不得在更小剩余时间之后再写更大的剩余时间。"
+            )
+        return anchors
 
     @staticmethod
     def _band_schedule_patch_payload(
@@ -3483,6 +3698,15 @@ class WritingOrchestrator:
                 )
                 context = self.retrieval_broker.build_chapter_context(
                     repo, project_id, chapter_plan
+                )
+                context = self._audit_current_plan_before_write(
+                    session=session,
+                    repo=repo,
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_plan=chapter_plan,
+                    context=context,
+                    trigger_stage="pre_write",
                 )
                 context_summary = dict(
                     getattr(self.retrieval_broker, "last_observability_summary", {}) or {}
@@ -3859,6 +4083,17 @@ class WritingOrchestrator:
                     project_id=project_id,
                     chapter_number=chapter_num,
                 )
+                future_plan_audit_result = self._audit_future_plans_after_acceptance(
+                    session=session,
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                    trigger_stage="post_acceptance",
+                )
+                future_plan_audit_blocked = bool(
+                    future_plan_audit_result is not None
+                    and future_plan_audit_result.blocking_reasons
+                )
                 world_model_ok = self._compile_world_model_after_acceptance(
                     session=session,
                     updater=updater,
@@ -3959,7 +4194,12 @@ class WritingOrchestrator:
                 should_pause_for_checkpoint = checkpoint_pause or (
                     checkpoint_warn_pause and chapter_num != last_requested_chapter
                 )
-                if should_pause_for_checkpoint or manual_after_accept is not None or manual_band_end is not None:
+                if (
+                    should_pause_for_checkpoint
+                    or manual_after_accept is not None
+                    or manual_band_end is not None
+                    or future_plan_audit_blocked
+                ):
                     if should_pause_for_checkpoint and checkpoint_row is not None:
                         self._record_decision_event(
                             updater=updater,
@@ -3999,6 +4239,22 @@ class WritingOrchestrator:
                             summary="命中 band_end manual checkpoint，运行已暂停。",
                             related_object_type="band_checkpoint",
                             related_object_id=manual_band_end.id,
+                        )
+                    if future_plan_audit_blocked and future_plan_audit_result is not None:
+                        self._record_decision_event(
+                            updater=updater,
+                            project_id=project_id,
+                            chapter_number=chapter_num,
+                            event_family="evaluation_verdict",
+                            event_type=DecisionEventType.FUTURE_PLAN_AUDIT_RUN,
+                            scope="project",
+                            summary="future plan audit 存在未修复阻断，运行已暂停。",
+                            related_object_type="future_plan_audit_run",
+                            related_object_id=future_plan_audit_result.id,
+                            payload={
+                                "blocking_reasons": list(future_plan_audit_result.blocking_reasons),
+                                "inspected_chapters": list(future_plan_audit_result.inspected_chapters),
+                            },
                         )
                     session.commit()
                     completed_with_current = [*completed_chapters, chapter_num]
@@ -4815,6 +5071,21 @@ class WritingOrchestrator:
             draft_id=draft_id,
             persist=True,
         )
+        obligation_repo = NarrativeObligationRepository(session)
+        gate_obligations = [
+            *obligation_repo.list_active_for_context(project_id, chapter_number=chapter_number),
+            *obligation_repo.list_planned_for_chapter(project_id, origin_chapter_number=chapter_number),
+        ]
+        patch_ids = sorted(
+            {
+                patch_id
+                for obligation in gate_obligations
+                for patch_id in obligation.linked_plan_patch_ids
+                if patch_id
+            }
+        )
+        project = session.get(Project, project_id)
+        target_total_chapters = int(getattr(project, "target_total_chapters", 0) or 0)
         gate_result = evaluate_canon_admission(
             project_id=project_id,
             chapter_number=chapter_number,
@@ -4822,7 +5093,10 @@ class WritingOrchestrator:
             review_id=review_id,
             review_verdict=verdict.verdict,
             signals=analysis.signals,
+            obligations=gate_obligations,
+            plan_patches=obligation_repo.list_patches_by_ids(patch_ids),
             mode=str(getattr(self.config, "canon_quality_gate", "strict") or "strict"),
+            is_final_chapter=bool(target_total_chapters and chapter_number >= target_total_chapters),
         )
         CanonQualityRepository(session).save_admission_run(gate_result, signals=analysis.signals)
         self._record_decision_event(
@@ -4995,6 +5269,10 @@ class WritingOrchestrator:
                 scope="chapter",
                 summary=f"第{chapter_number}章 canon 写入成功。",
                 payload={"issue_count": len(verdict.issues)},
+            )
+            NarrativeObligationRepository(session).activate_planned_for_chapter(
+                project_id,
+                origin_chapter_number=chapter_number,
             )
             CandidateDraftRepository(session).mark_canon_committed(
                 project_id=project_id,

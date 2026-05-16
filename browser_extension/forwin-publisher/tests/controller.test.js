@@ -527,7 +527,7 @@ test('controller forwards create-if-missing book metadata to upload command', as
           book_meta: {
             audience: 'male',
             primary_category: '都市日常',
-            protagonist_names: ['沈砚', '林雾'],
+            protagonist_names: ['韩砚', '林雾'],
             intro: '一段关于旧城、旧案和失踪真相的故事。',
           },
         },
@@ -544,7 +544,7 @@ test('controller forwards create-if-missing book metadata to upload command', as
   assert.equal(payloads.length, 1);
   assert.equal(payloads[0].create_if_missing, true);
   assert.equal(payloads[0].book_meta.primary_category, '都市日常');
-  assert.deepEqual(payloads[0].book_meta.protagonist_names, ['沈砚', '林雾']);
+  assert.deepEqual(payloads[0].book_meta.protagonist_names, ['韩砚', '林雾']);
 });
 
 test('controller auto-dispatches claimed upload job for connected platform', async () => {

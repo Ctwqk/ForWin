@@ -36,7 +36,7 @@ def test_mock_regression_create_book_start_generation_and_persist_after_refresh(
     page.locator("#book_form_title").fill("CI 回归：创建并启动生成")
     page.locator("#book_form_genre").fill("架空悬疑")
     page.locator("#book_form_target_total_chapters").fill("4")
-    page.locator("#book_form_premise").fill("林澈追查被白塔抹除的家族档案。")
+    page.locator("#book_form_premise").fill("陆明追查被核心系统抹除的家族档案。")
     page.locator("#book_form_setting_summary").fill("旧城每十年遗失一段历史。")
 
     with page.expect_response(lambda response: response.url.endswith("/api/projects") and response.request.method == "POST") as create_response:

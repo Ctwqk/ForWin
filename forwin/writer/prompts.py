@@ -13,6 +13,16 @@ from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import SceneOutput, ScenePlan
 
 
+_COUNTDOWN_KEY_LABELS = {
+    "memory_reset": "记忆重置周期",
+    "archive_cleanup": "终端审计/授权窗口",
+    "terminal_audit_window": "终端审计窗口",
+    "core_access_window": "核心层授权窗口",
+    "public_countdown": "公开倒计时",
+    "main": "主线倒计时",
+}
+
+
 def _apply_skill_layers(
     messages: list[dict[str, str]],
     skill_layers: list[object] | None = None,
@@ -75,7 +85,7 @@ def _story_basics_section(context: ChapterContextPack) -> str:
                 (
                     "主角命名约束：正文叙事必须用这个姓名或自然代词承接，不要用“工作人员”、"
                     "“主角”、“主人公”、“相关人员”等泛称替代主角；第 1 章正文前 300 字内必须出现主角姓名。"
-                    "无名追踪者、守卫或操作员也要写成具体职能称谓或阵营代号，例如“白塔巡检员”，"
+                    "无名追踪者、守卫或操作员也要写成具体职能称谓或阵营代号，例如“系统巡检员”，"
                     "不要把“工作人员”单独作为角色标签或揭示。"
                 ),
                 (
@@ -187,7 +197,7 @@ def _experience_overlay_section(context: ChapterContextPack) -> str | None:
             lines.extend(f"    · {item}" for item in plan.progress_markers[:3])
         if plan.rule_anchors:
             lines.append("  · 规则锚点：")
-            lines.extend(f"    · {item}" for item in plan.rule_anchors[:3])
+            lines.extend(f"    · {item}" for item in plan.rule_anchors[:8])
         if plan.relationship_or_status_shift:
             lines.append(f"  · 关系/地位变化：{plan.relationship_or_status_shift}")
     return "\n".join(lines)
@@ -547,7 +557,20 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
     countdown_constraints = [
         item for item in quality.get("countdown_constraints", []) or [] if isinstance(item, dict)
     ]
+    character_state_constraints = [
+        item
+        for item in quality.get("character_state_constraints", []) or []
+        if isinstance(item, dict)
+    ]
     open_signals = [item for item in quality.get("open_signals", []) or [] if isinstance(item, dict)]
+    active_obligations = [
+        item
+        for item in quality.get("active_narrative_obligations", []) or []
+        if isinstance(item, dict)
+    ]
+    future_plan_audit_summary = quality.get("future_plan_audit_summary", {})
+    if not isinstance(future_plan_audit_summary, dict):
+        future_plan_audit_summary = {}
     is_final_chapter = bool(
         quality.get("is_final_chapter")
         or (
@@ -556,7 +579,14 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
             >= int(getattr(context, "project_target_total_chapters", 0) or 0)
         )
     )
-    if not any((countdown_constraints, open_signals, is_final_chapter)):
+    if not any((
+        countdown_constraints,
+        character_state_constraints,
+        open_signals,
+        active_obligations,
+        future_plan_audit_summary,
+        is_final_chapter,
+    )):
         return None
     lines = ["【Canon 质量连续性约束】"]
     if is_final_chapter:
@@ -566,8 +596,8 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
                 "  · 终章不得以追兵逼近、被困、钥匙损坏、准备公开、正要关闭、等待下一步等主线未完成动作作结。",
                 "  · 如果写到关闭方法、钥匙、坐标、芯片或锁孔，必须在本章完成使用、关闭或公开；不要只把它们作为下一步任务。",
                 "  · 不要新增需要下一章解决的三把钥匙、下一层入口、未知坐标或新倒计时。若这些元素已经出现，必须在本章付清代价并收束。",
-                "  · 不要把“去档案公会交最后一段记录”、最后一段记录、剩余证据、最后一份档案、最后一枚芯片写成结尾后的新任务；如果出现，必须在本章写完交付、公开和结果。",
-                "  · 不要把“被困在机房/地下/白塔内”当作终章结局；牺牲必须写成已完成的终局代价，必须给出被救出、死亡/牺牲确认、或后日谈确认主线已结清。",
+                "  · 不要把“去指定机构交最后一段记录”、最后一段记录、剩余证据、最后一份档案、最后一枚芯片写成结尾后的新任务；如果出现，必须在本章写完交付、公开和结果。",
+                "  · 不要把“被困在机房/地下设施/系统核心内”当作终章结局；牺牲必须写成已完成的终局代价，必须给出被救出、死亡/牺牲确认、或后日谈确认主线已结清。",
                 "  · 如需留余味，只能留在主线危机已解决之后，作为轻量后日谈或续作暗线。",
             ]
         )
@@ -579,26 +609,69 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
         )
         for item in countdown_constraints[:6]:
             key = str(item.get("countdown_key") or "").strip()
-            label = str(item.get("label") or key or "倒计时").strip()
+            label = _display_countdown_label(key=key, label=str(item.get("label") or ""))
             latest = int(item.get("latest_remaining_minutes") or 0)
             chapter = int(item.get("latest_chapter") or 0)
             raw = str(item.get("raw_mention") or "").strip()
             raw_suffix = f"（原文：{raw}）" if raw else ""
             lines.append(
-                f"    · {label}{f'/{key}' if key and key != label else ''}：第{chapter}章已剩余 {latest} 分钟{raw_suffix}；"
+                f"    · {label}：第{chapter}章已剩余 {latest} 分钟{raw_suffix}；"
                 f"本章继续同一倒计时时必须小于等于 {latest} 分钟，除非正文明确 reset 或声明为另一个分支倒计时。"
             )
+            if latest <= 0:
+                lines.append(
+                    f"      · {label}已经归零、关闭或解决；本章不得再写成 10 分钟、三小时、一天等正数剩余时间。"
+                    "若确实开启了新的局部窗口，必须明确写出新的开启事件和不同窗口名称。"
+                )
+                if key == "terminal_audit_window" or "终端审计" in label:
+                    lines.append(
+                        "      · 已关闭终端审计窗口禁写：不得写“终端审计窗口还剩/只有/显示/跳到”加任何正数时间；"
+                        "若需要紧迫感，改写为记忆重置周期、档案清理窗口或新开启的明确命名局部窗口。"
+                    )
             if key == "memory_reset" or "记忆重置" in label or "重置周期" in label:
                 lines.append(
                     f"      · 记忆重置周期硬性规则：只能写小于等于 {latest} 分钟，"
-                    "不得把记忆重置周期写回五天、七天、三十多天或任何更大的剩余时间；"
-                    "若另写终端审计窗口，必须明确它是更短的局部窗口，不能改变主线重置周期。"
+                    "不得把记忆重置周期写回五天、七天、三十多天、三小时、四十八小时、两天或任何更大的剩余时间；"
+                    "若另写终端审计窗口，必须明确它是更短的局部窗口，不能改变主线重置周期；"
+                    "不要另造“主线倒计时”来指代另一个更短数字，主线倒计时就是记忆重置周期。"
                 )
+                if latest <= 180:
+                    lines.append(
+                        f"      · 计划覆盖：当前记忆重置周期已经进入 {latest} 分钟级危机。"
+                        "本章计划、标题或旧摘要中若出现“不到十天”“九天”“八天”“七天”“三天后”等天级安排，"
+                        "或“原本三小时”“四十八小时”“两天”等任何大于最新 ledger 的旧说法，"
+                        "包括“系统日志原本还有三天”“系统原本设定七天”“主角以为还有几天”这种解释性回溯，"
+                        f"全部视为过期计划，必须改写为小于等于 {latest} 分钟的连续倒计时。"
+                    )
+                    lines.append(
+                        "      · 章内单调规则：本章如果多次写记忆重置剩余时间，必须按出现顺序严格不增加；"
+                        "写作前先在内部确定一条递减时间线，后文不得再写回更大的分钟数。"
+                        "巡逻间隔、认证窗口、解除窗口等局部时长必须明确命名为局部时长，不得写成记忆重置倒计时。"
+                    )
             if key == "archive_cleanup" or "终端审计" in label or "授权窗口" in label:
                 lines.append(
                     f"      · 终端审计/授权窗口硬性规则：只能写小于等于 {latest} 分钟，"
                     "不得写成四小时、五小时、一天或任何更大的剩余时间；"
-                    "如果另写记忆重置周期，必须明确它是 memory_reset，不要把两个计时器混用。"
+                    "如果另写记忆重置周期，必须明确它是主线记忆重置，不要把两个计时器混用。"
+                )
+    if character_state_constraints:
+        lines.append("  · 已进入 canon 的角色状态约束：")
+        for item in character_state_constraints[:6]:
+            character_name = str(item.get("character_name") or "").strip()
+            latest_state = str(item.get("latest_state") or "").strip()
+            chapter = int(item.get("latest_chapter") or 0)
+            if not character_name or not latest_state:
+                continue
+            if latest_state in {"free", "released", "rescued", "escaped"}:
+                lines.append(
+                    f"    · {character_name}：第{chapter}章已脱困/自由；本章不得把TA写回被捕、被关押、"
+                    "被羁押、被固定、仍在羁押室或等待救援，除非正文先写清楚新的再次被捕桥接。"
+                    "可以写TA仍受追踪器、系统权限、伤势或路线限制。"
+                )
+            else:
+                lines.append(
+                    f"    · {character_name}：第{chapter}章最新状态为 {latest_state}；"
+                    "本章必须承接该状态，状态改变需要明确桥接事件。"
                 )
     if open_signals:
         lines.append("  · 前文 residual quality signals，后续写作必须解释、修复或避免扩大：")
@@ -608,7 +681,50 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
             description = str(item.get("description") or "").strip()
             if description:
                 lines.append(f"    · 第{chapter}章 {severity}：{description[:180]}")
+    if future_plan_audit_summary:
+        status = str(future_plan_audit_summary.get("status") or "").strip()
+        patch_ids = [
+            str(item).strip()
+            for item in future_plan_audit_summary.get("applied_plan_patch_ids", []) or []
+            if str(item).strip()
+        ]
+        lines.append(f"  · Future plan audit：status={status or 'unknown'}")
+        if patch_ids:
+            lines.append(f"    · 已应用计划补丁：{', '.join(patch_ids[:5])}")
+        issues = [
+            item
+            for item in future_plan_audit_summary.get("issues", []) or []
+            if isinstance(item, dict)
+        ]
+        for item in issues[:5]:
+            issue_type = str(item.get("issue_type") or "").strip()
+            chapter = int(item.get("target_chapter") or 0)
+            description = str(item.get("description") or "").strip()
+            lines.append(f"    · 第{chapter}章 {issue_type}：{description[:180]}")
+    if active_obligations:
+        lines.append("  · 当前生效的叙事义务，必须在 deadline 前偿还；must_resolve_now=true 的条目本章必须给出证据：")
+        for item in active_obligations[:6]:
+            obligation_id = str(item.get("id") or "").strip()
+            obligation_type = str(item.get("type") or "").strip()
+            priority = str(item.get("priority") or "").strip()
+            summary = str(item.get("summary") or "").strip()
+            deadline = int(item.get("deadline_chapter") or 0)
+            payoff_test = str(item.get("payoff_test") or "").strip()
+            must_resolve_now = bool(item.get("must_resolve_now"))
+            lines.append(
+                f"    · {priority} {obligation_type} {obligation_id}：{summary[:140]}；"
+                f"deadline=第{deadline}章；must_resolve_now={str(must_resolve_now).lower()}；"
+                f"payoff_test={payoff_test[:160]}"
+            )
     return "\n".join(lines)
+
+
+def _display_countdown_label(*, key: str, label: str) -> str:
+    clean_label = str(label or "").strip()
+    clean_key = str(key or "").strip()
+    if clean_label and clean_label not in _COUNTDOWN_KEY_LABELS:
+        return clean_label
+    return _COUNTDOWN_KEY_LABELS.get(clean_key, clean_label or "倒计时")
 
 
 def _chapter_hook_requirement(context: ChapterContextPack) -> str:
@@ -624,7 +740,7 @@ def _chapter_hook_requirement(context: ChapterContextPack) -> str:
             "本章是终章，结尾必须呈现主线危机已被关闭、公开、阻止或完成代价结算；"
             "如果写到关闭方法、钥匙、坐标、芯片或锁孔，必须在本章完成使用、关闭或公开；"
             "不要把最后一段记录、剩余证据、最后一份档案或去某地交付真相写成结尾后的任务；"
-            "不要把“被困在机房/地下/白塔内”当作终章结局；牺牲必须写成已完成的终局代价，"
+            "不要把“被困在机房/地下设施/系统核心内”当作终章结局；牺牲必须写成已完成的终局代价，"
             "必须给出被救出、死亡/牺牲确认、或后日谈确认主线已结清；"
             "不要留下追兵、被困、钥匙损坏、准备公开、正要关闭等主线未完成钩子。"
         )
@@ -718,6 +834,7 @@ def build_single_chapter_draft_prompt(
     )
     user_sections = _join_sections(
         _story_basics_section(context),
+        _canon_quality_context_section(context),
         _chapter_plan_section(context, "本章计划"),
         _previous_summaries_section(context, limit=3),
         _active_entities_section(context, limit=6),
@@ -745,7 +862,11 @@ def build_single_chapter_draft_prompt(
         "2. 正文必须是自然流畅的网文叙事，不要分点，不要写提纲。\n"
         f"3. {_chapter_hook_requirement(context)}\n"
         "4. 不要输出 JSON，不要输出 markdown，不要解释。\n"
-        "5. 严格使用下面这个纯文本结构输出，并保留标签本身：\n"
+        "5. 只保留一条线性时间线；不要把多个备选版本的同一场景拼接进正文，"
+        "同一事件只能发生一次，后文时间数字必须承接前文递减。\n"
+        "6. 若【Canon 质量连续性约束】与本章计划、前情摘要或旧设定冲突，必须以 Canon 约束为准；"
+        "尤其是倒计时 ledger，不得写回更大的剩余时间。\n"
+        "7. 严格使用下面这个纯文本结构输出，并保留标签本身：\n"
         "<<FORWIN_TITLE>>\n"
         "这里写章节标题\n"
         "<<FORWIN_BODY>>\n"

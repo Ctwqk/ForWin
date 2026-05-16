@@ -70,6 +70,12 @@ def build_continue_generation_workset(
 
     active_arc = _active_arc(session, normalized_project_id)
     pending_statuses = {"planned", "failed"} if include_failed else {"planned"}
+    materialized_candidates = [
+        plan
+        for plan in plans
+        if str(plan.status or "") in pending_statuses
+        and int(plan.chapter_number or 0) > 0
+    ]
     if active_arc is not None:
         active_candidates = [
             int(plan.chapter_number or 0)
@@ -78,7 +84,14 @@ def build_continue_generation_workset(
             and str(plan.status or "") in pending_statuses
             and int(plan.chapter_number or 0) > 0
         ]
-        if active_candidates:
+        earliest_materialized = min(
+            (int(plan.chapter_number or 0) for plan in materialized_candidates),
+            default=0,
+        )
+        earliest_active = min(active_candidates, default=0)
+        if active_candidates and (
+            earliest_materialized <= 0 or earliest_active <= earliest_materialized
+        ):
             selected = _apply_max(active_candidates, max_chapters)
             return ContinueGenerationWorkset(
                 project_id=normalized_project_id,
@@ -91,12 +104,6 @@ def build_continue_generation_workset(
                 reason="active_arc_pending",
             )
 
-    materialized_candidates = [
-        plan
-        for plan in plans
-        if str(plan.status or "") in pending_statuses
-        and int(plan.chapter_number or 0) > 0
-    ]
     if materialized_candidates:
         candidate_numbers = [int(plan.chapter_number or 0) for plan in materialized_candidates]
         selected = _apply_max(candidate_numbers, max_chapters)

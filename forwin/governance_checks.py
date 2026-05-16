@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from forwin.governance import NarrativeConstraintInfo, NextBandSummary, PlanTaskItem, issue_group_for_issue
+from forwin.governance import (
+    NarrativeConstraintInfo,
+    NextBandSummary,
+    PlanTaskItem,
+    is_derived_goal_control_instruction,
+    issue_group_for_issue,
+)
 from forwin.protocol.review import ContinuityIssue
 from forwin.protocol.state_change import EventCandidate, StateChangeCandidate, ThreadBeatCandidate
 from forwin.protocol.writer import WriterOutput
@@ -89,7 +95,8 @@ def evaluate_task_contract(
 def _is_low_signal_derived_task(task: PlanTaskItem) -> bool:
     if str(task.source or "") != "derived_from_goals":
         return False
-    return len(str(task.description or "").strip()) < 2
+    description = str(task.description or "").strip()
+    return len(description) < 2 or is_derived_goal_control_instruction(description)
 
 
 def evaluate_constraint_issues(

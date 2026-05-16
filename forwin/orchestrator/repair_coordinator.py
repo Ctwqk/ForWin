@@ -9,6 +9,7 @@ from forwin.models.draft import ChapterReview
 from forwin.models.project import ChapterPlan
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.reviewer.outcome import ReviewOutcomeRouter, merge_repair_scope, repair_scope_for_outcome
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 
@@ -103,6 +104,15 @@ class ChapterRepairCoordinator:
             )
             session.flush()
             updated_context = self.host.retrieval_broker.build_chapter_context(repo, project_id, chapter_plan)
+            updated_context = self.host._audit_current_plan_before_write(
+                session=session,
+                repo=repo,
+                updater=updater,
+                project_id=project_id,
+                chapter_plan=chapter_plan,
+                context=updated_context,
+                trigger_stage="pre_repair_rewrite",
+            )
             try:
                 rewritten_output = self.host._write_chapter_with_attention_fallback(
                     context=updated_context,
@@ -312,11 +322,21 @@ class ChapterRepairCoordinator:
         attempt_no: int,
         attempt_history: list[dict[str, object]],
     ) -> RepairInstruction:
+        outcome = ReviewOutcomeRouter().route(
+            review=review,
+            signals=[],
+            attempt_history=attempt_history,
+            current_chapter=int(getattr(context, "chapter_number", 0) or 0),
+            target_total_chapters=int(getattr(context, "project_target_total_chapters", 0) or 0),
+        )
+        deterministic_scope = repair_scope_for_outcome(outcome, attempt_no=attempt_no)
         base_instruction = review.repair_instruction or self.host._default_repair_instruction(
-            repair_scope="scene" if attempt_no == 1 else "band",
+            repair_scope=deterministic_scope,
             context=context,
             review=review,
         )
+        requested_instruction = base_instruction
+        requested_scope = str(base_instruction.repair_scope or deterministic_scope)
         if attempt_no >= 3:
             choose_repair_escalation = getattr(self.host.review_hub, "choose_repair_escalation", None)
             if callable(choose_repair_escalation):
@@ -328,28 +348,31 @@ class ChapterRepairCoordinator:
                     repair_attempts=attempt_history,
                 )
                 if escalated.repair_scope in {"band", "arc"}:
-                    return escalated
-            return base_instruction.model_copy(
-                update={
-                    "repair_scope": "band",
-                    "scope_reason": (
-                        base_instruction.scope_reason
-                        or "third repair falls back to band scope when escalation is unavailable"
-                    ),
-                }
+                    requested_instruction = escalated
+                    requested_scope = str(escalated.repair_scope or requested_scope)
+        final_scope, downgrade_reason = merge_repair_scope(
+            deterministic_scope=deterministic_scope,
+            requested_scope=requested_scope,
+            allow_arc=deterministic_scope == "arc",
+        )
+        design_patch = dict(requested_instruction.design_patch)
+        if downgrade_reason:
+            design_patch["downgrade_reason"] = downgrade_reason
+        scope_reason = requested_instruction.scope_reason or outcome.reason
+        if downgrade_reason:
+            scope_reason = f"{scope_reason}; {downgrade_reason}" if scope_reason else downgrade_reason
+        elif final_scope != requested_scope or final_scope != deterministic_scope:
+            scope_reason = (
+                f"{scope_reason}; deterministic_minimum_scope={deterministic_scope}, "
+                f"requested_scope={requested_scope}"
+                if scope_reason
+                else f"deterministic_minimum_scope={deterministic_scope}, requested_scope={requested_scope}"
             )
-        repair_scope = "scene" if attempt_no == 1 else "band"
-        return base_instruction.model_copy(
+        return requested_instruction.model_copy(
             update={
-                "repair_scope": repair_scope,
-                "scope_reason": (
-                    base_instruction.scope_reason
-                    or (
-                        "first repair stays at scene scope"
-                        if repair_scope == "scene"
-                        else "second repair widens to band scope"
-                    )
-                ),
+                "repair_scope": final_scope,
+                "scope_reason": scope_reason,
+                "design_patch": design_patch,
             }
         )
 

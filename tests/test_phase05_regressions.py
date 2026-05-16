@@ -2101,7 +2101,7 @@ class Phase05RegressionTests(unittest.TestCase):
                                 "book_meta": {
                                     "audience": "男频",
                                     "primary_category": "都市异能",
-                                    "protagonist_names": ["沈砚", "顾临"],
+                                    "protagonist_names": ["韩砚", "顾临"],
                                     "intro": "一场雾夜事故后，主角发现整座旧城都在撒谎。",
                                 },
                             },
@@ -2121,7 +2121,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.assertEqual(summary.automation.daily_chapter_quota, 20)
                 self.assertTrue(summary.automation.enabled)
                 self.assertEqual(detail.automation.publish.book_name, "自动化测试书")
-                self.assertEqual(detail.automation.publish.book_meta.protagonist_names, ["沈砚", "顾临"])
+                self.assertEqual(detail.automation.publish.book_meta.protagonist_names, ["韩砚", "顾临"])
             finally:
                 if temp_engine is not None:
                     temp_engine.dispose()
@@ -2385,7 +2385,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 chapter_number=1,
                 title="幽灵列车",
                 summary="失踪三年的末班车忽然回归",
-                body="沈砚在雨夜看到那辆本不该出现的末班车。",
+                body="韩砚在雨夜看到那辆本不该出现的末班车。",
             )
             index.upsert_chapter(
                 project_id="p1",
@@ -2673,8 +2673,8 @@ class Phase05RegressionTests(unittest.TestCase):
                             project_id=project.id,
                             chapter_number=context.chapter_number,
                             title=f"预演第{context.chapter_number}章",
-                            body="夜雾压城，顾临川沿着堤岸追查海图上新增的坐标。"*8,
-                            char_count=len("夜雾压城，顾临川沿着堤岸追查海图上新增的坐标。"*8),
+                            body="夜雾压城，顾北沿着堤岸追查海图上新增的坐标。"*8,
+                            char_count=len("夜雾压城，顾北沿着堤岸追查海图上新增的坐标。"*8),
                             end_of_chapter_summary=f"第{context.chapter_number}章预演摘要",
                         )
 
@@ -2771,9 +2771,9 @@ class Phase05RegressionTests(unittest.TestCase):
                     "【标题】\n"
                     "午夜戏台\n"
                     "【正文】\n"
-                    + "顾临川沿着潮湿台阶走向沉没戏台，耳边全是海风和旧戏腔。" * 30
+                    + "顾北沿着潮湿台阶走向沉没戏台，耳边全是海风和旧戏腔。" * 30
                     + "\n【摘要】\n"
-                    "顾临川确认戏台将在下一次满潮时现身。"
+                    "顾北确认戏台将在下一次满潮时现身。"
                 )
 
         writer = ChapterWriter(
@@ -2798,9 +2798,9 @@ class Phase05RegressionTests(unittest.TestCase):
         output = writer.write_preview_chapter(context, max_attempts=1, retry_on_timeout=False)
 
         self.assertEqual(output.title, "午夜戏台")
-        self.assertIn("顾临川沿着潮湿台阶走向沉没戏台", output.body)
+        self.assertIn("顾北沿着潮湿台阶走向沉没戏台", output.body)
         self.assertNotIn("这里写正文", output.body)
-        self.assertEqual(output.end_of_chapter_summary, "顾临川确认戏台将在下一次满潮时现身。")
+        self.assertEqual(output.end_of_chapter_summary, "顾北确认戏台将在下一次满潮时现身。")
 
     def test_provisional_verdict_softens_fail_when_preview_body_is_usable(self) -> None:
         writer_output = WriterOutput(
@@ -2883,7 +2883,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     )
 
                     def preview_writer(_context, **_kwargs):
-                        body = "海风沿着旧城墙穿过，顾临川在潮声里翻开残卷。"
+                        body = "海风沿着旧城墙穿过，顾北在潮声里翻开残卷。"
                         body = body * 20  # > provisional min_chars, < formal 1500
                         return WriterOutput(
                             project_id=project.id,
@@ -2891,7 +2891,7 @@ class Phase05RegressionTests(unittest.TestCase):
                             title="预演第1章",
                             body=body,
                             char_count=len(body),
-                            end_of_chapter_summary="顾临川确认残卷与潮汐异象有关。",
+                            end_of_chapter_summary="顾北确认残卷与潮汐异象有关。",
                         )
 
                     orchestrator.provisional_writer.write_preview_chapter = preview_writer
@@ -3473,7 +3473,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 entity = updater.create_entity(
                     project_id=project.id,
                     kind="character",
-                    name="沈砚",
+                    name="韩砚",
                     description="主角",
                     aliases=["阿砚", "记者"],
                     importance=9,
@@ -3699,11 +3699,19 @@ class Phase05RegressionTests(unittest.TestCase):
 
     def test_phase4_generators_can_use_llm_output(self) -> None:
         class FakeIntentLLM:
-            def chat(self, messages, temperature: float, max_tokens: int, response_format=None):
+            def __init__(self) -> None:
+                self.kwargs: list[dict[str, object]] = []
+
+            def chat(self, messages, temperature: float, max_tokens: int, response_format=None, **kwargs):
+                self.kwargs.append(dict(kwargs))
                 return '{"intents":[{"entity_name":"林夜","intent_kind":"pressure","objective":"逼近失踪信号核心","tactic":"先制造信息差再逼问","urgency":5,"notes":"下章立即执行"}]}'
 
         class FakeWorldLLM:
-            def chat(self, messages, temperature: float, max_tokens: int, response_format=None):
+            def __init__(self) -> None:
+                self.kwargs: list[dict[str, object]] = []
+
+            def chat(self, messages, temperature: float, max_tokens: int, response_format=None, **kwargs):
+                self.kwargs.append(dict(kwargs))
                 return '{"pressure_level":"critical","pressure_summary":"世界开始围堵主角。","notable_shifts":["失踪信号扩散","同盟开始动摇"]}'
 
         with TemporaryDirectory() as tmp:
@@ -3730,12 +3738,14 @@ class Phase05RegressionTests(unittest.TestCase):
                 )
                 session.commit()
 
-                intents = NPCIntentGenerator(llm_client=FakeIntentLLM()).generate(
+                intent_llm = FakeIntentLLM()
+                world_llm = FakeWorldLLM()
+                intents = NPCIntentGenerator(llm_client=intent_llm).generate(
                     session=session,
                     project_id=project.id,
                     chapter_number=1,
                 )
-                world = WorldSimulator(llm_client=FakeWorldLLM()).simulate(
+                world = WorldSimulator(llm_client=world_llm).simulate(
                     session=session,
                     project_id=project.id,
                     chapter_number=1,
@@ -3748,6 +3758,10 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertIn("逼近失踪信号核心", intents[0].objective)
         self.assertEqual(world.pressure_level, "critical")
         self.assertIn("围堵主角", world.pressure_summary)
+        self.assertEqual(intent_llm.kwargs[0]["timeout_seconds"], 8.0)
+        self.assertIs(intent_llm.kwargs[0]["retry_on_timeout"], False)
+        self.assertEqual(world_llm.kwargs[0]["timeout_seconds"], 8.0)
+        self.assertIs(world_llm.kwargs[0]["retry_on_timeout"], False)
 
     def test_orchestrator_records_phase4_outputs(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -5386,7 +5400,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 book_meta={
                     "audience": "male",
                     "primary_category": "都市日常",
-                    "protagonist_names": ["沈砚", "林雾"],
+                    "protagonist_names": ["韩砚", "林雾"],
                     "intro": "一段关于旧城与旧案的故事。",
                 },
             )
@@ -5872,7 +5886,7 @@ class Phase05RegressionTests(unittest.TestCase):
                         "book_meta": {
                             "audience": "male",
                             "primary_category": "都市日常",
-                            "protagonist_names": ["沈砚", "林雾"],
+                            "protagonist_names": ["韩砚", "林雾"],
                             "intro": "一段关于旧城与旧案的故事。",
                         },
                     },

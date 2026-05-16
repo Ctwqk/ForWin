@@ -8,17 +8,17 @@ def test_repeated_reveal_packaged_as_new_is_error() -> None:
         project_id="p1",
         chapter_number=7,
         draft_id="d1",
-        reveal_claims=["白塔系统存在后门"],
+        reveal_claims=["核心系统存在后门"],
         previous_entries=[
             {
-                "reveal_key": "白塔系统存在后门",
-                "claim_summary": "白塔系统存在后门",
+                "reveal_key": "核心系统存在后门",
+                "claim_summary": "核心系统存在后门",
                 "first_revealed_chapter": 6,
                 "repeat_count": 0,
                 "status": "new",
             }
         ],
-        body="林澈第一次发现：白塔系统存在后门。",
+        body="陆明第一次发现：核心系统存在后门。",
     )
 
     assert entries[0].repeat_count == 1
@@ -30,17 +30,17 @@ def test_repeated_reveal_with_escalation_is_not_error() -> None:
         project_id="p1",
         chapter_number=7,
         draft_id="d1",
-        reveal_claims=["白塔系统存在后门"],
+        reveal_claims=["核心系统存在后门"],
         previous_entries=[
             {
-                "reveal_key": "白塔系统存在后门",
-                "claim_summary": "白塔系统存在后门",
+                "reveal_key": "核心系统存在后门",
+                "claim_summary": "核心系统存在后门",
                 "first_revealed_chapter": 6,
                 "repeat_count": 0,
                 "status": "new",
             }
         ],
-        body="白塔系统存在后门，这次新增证据指向林澈父亲留下的密钥。",
+        body="核心系统存在后门，这次新增证据指向陆明父亲留下的密钥。",
     )
 
     assert entries[0].status == "escalated"

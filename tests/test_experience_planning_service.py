@@ -97,7 +97,7 @@ def test_arc_payoff_ids_from_llm_payload_are_coerced_to_strings() -> None:
                         "category": "mystery",
                         "target_chapter_hint": 12,
                         "setup_requirement": "关闭主线倒计时",
-                        "success_signal": "白塔重置被明确解决",
+                        "success_signal": "系统重置被明确解决",
                     }
                 ]
             }

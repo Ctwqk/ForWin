@@ -34,6 +34,8 @@ class GenerateRequest(BaseModel):
     band_warn_action: str | None = None
     manual_checkpoints_enabled: bool | None = None
     future_constraints_enabled: bool | None = None
+    generation_audit_interval_chapters: int | None = Field(default=None, ge=0)
+    generation_audit_pause_enabled: bool | None = None
 
 
 class LLMSettingsRequest(BaseModel):
@@ -49,6 +51,8 @@ class LLMSettingsRequest(BaseModel):
     band_warn_action: str = "pause"
     manual_checkpoints_enabled: bool = True
     future_constraints_enabled: bool = True
+    generation_audit_interval_chapters: int = 0
+    generation_audit_pause_enabled: bool = False
 
 
 class ModelProfile(BaseModel):
@@ -82,6 +86,8 @@ class LLMPreferencesRequest(BaseModel):
     band_warn_action: str = "pause"
     manual_checkpoints_enabled: bool = True
     future_constraints_enabled: bool = True
+    generation_audit_interval_chapters: int = 0
+    generation_audit_pause_enabled: bool = False
 
 
 class LLMSettingsResponse(BaseModel):
@@ -99,6 +105,8 @@ class LLMSettingsResponse(BaseModel):
     band_warn_action: str = "pause"
     manual_checkpoints_enabled: bool = True
     future_constraints_enabled: bool = True
+    generation_audit_interval_chapters: int = 0
+    generation_audit_pause_enabled: bool = False
     message: str = ""
 
 
@@ -887,6 +895,8 @@ class ProjectContinueGenerationRequest(BaseModel):
     band_warn_action: str | None = None
     manual_checkpoints_enabled: bool | None = None
     future_constraints_enabled: bool | None = None
+    generation_audit_interval_chapters: int | None = Field(default=None, ge=0)
+    generation_audit_pause_enabled: bool | None = None
 
 
 class ProjectExtendGenerationRequest(BaseModel):
@@ -905,6 +915,8 @@ class ProjectGovernanceUpdateRequest(BaseModel):
     band_warn_action: str | None = None
     manual_checkpoints_enabled: bool | None = None
     future_constraints_enabled: bool | None = None
+    generation_audit_interval_chapters: int | None = Field(default=None, ge=0)
+    generation_audit_pause_enabled: bool | None = None
     reason: str = ""
 
 

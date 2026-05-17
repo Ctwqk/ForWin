@@ -90,6 +90,8 @@ def build_home_page_settings(
         "band_warn_action": base_config.band_warn_action if base_config else "pause",
         "manual_checkpoints_enabled": base_config.manual_checkpoints_enabled if base_config else True,
         "future_constraints_enabled": base_config.future_constraints_enabled if base_config else True,
+        "generation_audit_interval_chapters": base_config.generation_audit_interval_chapters if base_config else 0,
+        "generation_audit_pause_enabled": base_config.generation_audit_pause_enabled if base_config else False,
         "skill_runtime_enabled": base_config.skill_runtime_enabled if base_config else True,
         "skill_registry_path": base_config.skill_registry_path if base_config else "forwin_skills",
         "skill_strictness": base_config.skill_strictness if base_config else "normal",
@@ -213,6 +215,18 @@ def build_runtime_config(
         if req.future_constraints_enabled is not None
         else bool(stored.get("future_constraints_enabled", base_config.future_constraints_enabled))
     )
+    generation_audit_interval_chapters = int(
+        stored.get(
+            "generation_audit_interval_chapters",
+            base_config.generation_audit_interval_chapters,
+        )
+    )
+    generation_audit_pause_enabled = bool(
+        stored.get(
+            "generation_audit_pause_enabled",
+            base_config.generation_audit_pause_enabled,
+        )
+    )
     min_chapter_chars = max(500, int(
         req.min_chapter_chars
         if req.min_chapter_chars is not None
@@ -233,6 +247,8 @@ def build_runtime_config(
         band_warn_action=band_warn_action or "pause",
         manual_checkpoints_enabled=bool(manual_checkpoints_enabled),
         future_constraints_enabled=bool(future_constraints_enabled),
+        generation_audit_interval_chapters=max(0, int(generation_audit_interval_chapters)),
+        generation_audit_pause_enabled=bool(generation_audit_pause_enabled),
         skill_runtime_enabled=bool(
             stored.get("skill_runtime_enabled", base_config.skill_runtime_enabled)
         ),
@@ -300,6 +316,21 @@ def build_saved_runtime_config(
         ),
         future_constraints_enabled=bool(
             stored.get("future_constraints_enabled", base_config.future_constraints_enabled)
+        ),
+        generation_audit_interval_chapters=max(
+            0,
+            int(
+                stored.get(
+                    "generation_audit_interval_chapters",
+                    base_config.generation_audit_interval_chapters,
+                )
+            ),
+        ),
+        generation_audit_pause_enabled=bool(
+            stored.get(
+                "generation_audit_pause_enabled",
+                base_config.generation_audit_pause_enabled,
+            )
         ),
         skill_runtime_enabled=bool(
             stored.get("skill_runtime_enabled", base_config.skill_runtime_enabled)
@@ -605,7 +636,7 @@ def run_generation_with_config(
             )
         elif result.paused_chapters:
             paused_str = ", ".join(str(chapter) for chapter in result.paused_chapters)
-            update_task(task_id, message=f"已进入人工检查点，暂停章节: {paused_str}")
+            update_task(task_id, message=f"质量门阻断，需自动修复或重试章节: {paused_str}")
         else:
             update_task(
                 task_id,
@@ -692,7 +723,7 @@ def run_continue_project_with_config(
             )
         elif result.paused_chapters:
             paused_str = ", ".join(str(chapter) for chapter in result.paused_chapters)
-            update_task(task_id, message=f"继续执行后再次进入人工检查点，暂停章节: {paused_str}")
+            update_task(task_id, message=f"继续执行后遇到质量门阻断，需自动修复或重试章节: {paused_str}")
         elif result.completed_chapters:
             completed_str = ", ".join(str(chapter) for chapter in result.completed_chapters)
             update_task(task_id, message=f"继续执行完成章节: {completed_str}")

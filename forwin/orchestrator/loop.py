@@ -30,6 +30,7 @@ from forwin.canon_quality.gate import evaluate_canon_admission
 from forwin.canon_quality.placeholder import extract_expected_protagonist_names
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.service import analyze_writer_output_quality
+from forwin.canon_quality.temporal_semantics import LLMTemporalReconciler
 from forwin.canon_names import is_plausible_person_name
 from forwin.checker.rules import ContinuityChecker
 from forwin.config import Config
@@ -48,6 +49,7 @@ from forwin.governance import (
 )
 from forwin.governance_checks import (
     band_combined_text,
+    evaluate_band_obligation_contract,
     evaluate_constraint_issues,
     evaluate_director_imbalance,
     evaluate_intra_band_consistency,
@@ -58,6 +60,7 @@ from forwin.governance_checks import (
 from forwin.models import BookGenesisRevision, ProvisionalBandExecution, ProvisionalChapterLedger, new_id
 from forwin.models.governance import BandCheckpoint
 from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.phase import ArcStructureDraft, BandExperiencePlan, ChapterRewriteAttempt
 from forwin.observability.context import OperationContext
@@ -81,9 +84,14 @@ from forwin.orchestrator.phase4 import (
 )
 from forwin.planning.scenario_rehearsal_resolution import latest_blocking_scenario_rehearsal
 from forwin.planning.future_plan_auditor import FuturePlanAuditor, FuturePlanAuditRun
+from forwin.planning.band_plan_patcher import BandPlanPatcher
+from forwin.planning.obligation_scope_router import BandScopeCandidate, ObligationScopeRouter
 from forwin.orchestrator.phase24 import ProvisionalBandPreview
 from forwin.retrieval import RetrievalBroker
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
+from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
+from forwin.reviewer.outcome import ReviewOutcomeRouter
 from forwin.runtime.services import RuntimeServices
 from forwin.state.repo import StateRepository
 from forwin.state.schema import KNOWN_STATE_FIELDS
@@ -101,6 +109,68 @@ from forwin.world_model.compiler import WorldModelCompiler as LegacyWorldModelCo
 logger = logging.getLogger(__name__)
 
 RuntimeContainer: Any = None
+
+
+def _positive_int(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _priority_for_deferred_issue(issue_type: str) -> str:
+    normalized = str(issue_type or "").strip()
+    if normalized in {"style_repetition_pressure"}:
+        return "P3"
+    if normalized in {"foreshadowing_payoff", "transition_bridge_needed"}:
+        return "P2"
+    return "P1"
+
+
+def _summary_for_deferred_issue(*, verdict: ReviewVerdict, issue_type: str, outcome_reason: str) -> str:
+    for issue in verdict.issues:
+        if str(getattr(issue, "issue_type", "") or getattr(issue, "rule_name", "") or "") == issue_type:
+            return str(getattr(issue, "description", "") or outcome_reason or issue_type)
+    return str(outcome_reason or issue_type)
+
+
+def _payoff_test_for_deferred_issue(
+    *,
+    verdict: ReviewVerdict,
+    issue_type: str,
+    deadline_chapter: int,
+    summary: str,
+) -> str:
+    for issue in verdict.issues:
+        if str(getattr(issue, "issue_type", "") or getattr(issue, "rule_name", "") or "") != issue_type:
+            continue
+        suggested = str(getattr(issue, "suggested_fix", "") or "").strip()
+        if suggested:
+            return suggested
+    return f"第{int(deadline_chapter or 0)}章前必须偿还：{summary}"
+
+
+def _future_plan_audit_checkpoint_payload(
+    result: FuturePlanAuditRun | None,
+) -> dict[str, Any]:
+    if result is None:
+        return {
+            "status": "not_run",
+            "inspected_chapters": [],
+            "issue_count": 0,
+            "issue_types": [],
+            "applied_plan_patch_ids": [],
+            "blocking_reasons": [],
+        }
+    return {
+        "run_id": result.id,
+        "status": result.status,
+        "inspected_chapters": list(result.inspected_chapters),
+        "issue_count": len(result.issues),
+        "issue_types": [issue.issue_type for issue in result.issues],
+        "applied_plan_patch_ids": list(result.applied_plan_patch_ids),
+        "blocking_reasons": list(result.blocking_reasons),
+    }
 
 
 @dataclass(slots=True)
@@ -402,7 +472,7 @@ class WritingOrchestrator:
             if result.status == "needs_review":
                 print(
                     "生成暂停："
-                    f"第 {result.paused_chapters[0]} 章已进入人工检查点。"
+                    f"第 {result.paused_chapters[0]} 章被质量门阻断，需要修复或重试。"
                 )
             elif result.status == "completed":
                 print(f"生成完毕！本轮完成 {len(result.completed_chapters)} 章")
@@ -1334,7 +1404,12 @@ class WritingOrchestrator:
             current_chapter=chapter_number,
             include_current=False,
         )
-        if not plans:
+        band_rows = self._future_plan_audit_band_rows(
+            session=session,
+            project_id=project_id,
+            current_chapter=chapter_number,
+        )
+        if not plans and not band_rows:
             return None
         obligation_repo = NarrativeObligationRepository(session)
         obligations = [
@@ -1357,6 +1432,7 @@ class WritingOrchestrator:
             obligations=obligations,
             target_total_chapters=target_total_chapters,
             include_current=False,
+            band_rows=band_rows,
         )
         self._record_future_plan_audit_events(
             updater=updater,
@@ -1385,6 +1461,24 @@ class WritingOrchestrator:
                     ChapterPlan.status.in_(("planned", "failed")),
                 )
                 .order_by(ChapterPlan.chapter_number.asc())
+            ).scalars().all()
+        )
+
+    @staticmethod
+    def _future_plan_audit_band_rows(
+        *,
+        session: Session,
+        project_id: str,
+        current_chapter: int,
+    ) -> list[BandExperiencePlan]:
+        return list(
+            session.execute(
+                select(BandExperiencePlan)
+                .where(
+                    BandExperiencePlan.project_id == project_id,
+                    BandExperiencePlan.chapter_end > int(current_chapter or 0),
+                )
+                .order_by(BandExperiencePlan.chapter_start.asc(), BandExperiencePlan.chapter_end.asc())
             ).scalars().all()
         )
 
@@ -1427,6 +1521,174 @@ class WritingOrchestrator:
                     "issue_types": [issue.issue_type for issue in result.issues],
                 },
             )
+
+    def _record_generation_audit_checkpoint_if_due(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_number: int,
+        requested_chapters: int,
+        last_requested_chapter: int,
+        completed_chapters: list[int],
+        failed_chapters: list[int],
+        paused_chapters: list[int],
+        future_plan_audit_result: FuturePlanAuditRun | None,
+        governance,
+    ) -> bool:
+        interval = _positive_int(
+            getattr(governance, "generation_audit_interval_chapters", 0)
+        )
+        if interval <= 0:
+            return False
+        chapter_number = int(chapter_number or 0)
+        if chapter_number <= 0 or chapter_number % interval != 0:
+            return False
+        project_pause_enabled = bool(getattr(governance, "generation_audit_pause_enabled", False))
+        runtime_pause_enabled = bool(getattr(self.config, "generation_audit_pause_enabled", False))
+        pause_enabled = bool(project_pause_enabled and runtime_pause_enabled)
+        has_next_requested = chapter_number != int(last_requested_chapter or 0)
+        will_pause = bool(pause_enabled and has_next_requested)
+        payload = self._generation_audit_checkpoint_payload(
+            session=session,
+            project_id=project_id,
+            checkpoint_chapter=chapter_number,
+            interval=interval,
+            requested_chapters=requested_chapters,
+            completed_chapters=[*completed_chapters, chapter_number],
+            failed_chapters=failed_chapters,
+            paused_chapters=paused_chapters,
+            future_plan_audit_result=future_plan_audit_result,
+            will_pause=will_pause,
+            pause_enabled=pause_enabled,
+            project_pause_enabled=project_pause_enabled,
+            runtime_pause_enabled=runtime_pause_enabled,
+            next_chapter=(chapter_number + 1 if has_next_requested else 0),
+        )
+        summary = (
+            f"第{chapter_number}章命中 {interval} 章生成审计检查点，运行将暂停。"
+            if will_pause
+            else f"第{chapter_number}章命中 {interval} 章生成审计检查点，已记录摘要。"
+        )
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="evaluation_verdict",
+            event_type=DecisionEventType.GENERATION_AUDIT_CHECKPOINT_REACHED,
+            scope="project",
+            summary=summary,
+            related_object_type="generation_audit_checkpoint",
+            related_object_id=f"{project_id}:{chapter_number}",
+            payload=payload,
+        )
+        return will_pause
+
+    def _generation_audit_checkpoint_payload(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+        checkpoint_chapter: int,
+        interval: int,
+        requested_chapters: int,
+        completed_chapters: list[int],
+        failed_chapters: list[int],
+        paused_chapters: list[int],
+        future_plan_audit_result: FuturePlanAuditRun | None,
+        will_pause: bool,
+        pause_enabled: bool,
+        project_pause_enabled: bool,
+        runtime_pause_enabled: bool,
+        next_chapter: int,
+    ) -> dict[str, Any]:
+        window_start = max(1, int(checkpoint_chapter or 0) - max(1, int(interval or 1)) + 1)
+        window_end = int(checkpoint_chapter or 0)
+        plans = (
+            session.query(ChapterPlan)
+            .filter(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number >= window_start,
+                ChapterPlan.chapter_number <= window_end,
+            )
+            .order_by(ChapterPlan.chapter_number.asc())
+            .all()
+        )
+        status_by_chapter = {
+            str(int(plan.chapter_number or 0)): str(plan.status or "")
+            for plan in plans
+        }
+        accepted_chapters = [
+            int(plan.chapter_number or 0)
+            for plan in plans
+            if str(plan.status or "") == "accepted"
+        ]
+        needs_review_chapters = [
+            int(plan.chapter_number or 0)
+            for plan in plans
+            if str(plan.status or "") == "needs_review"
+        ]
+        failed_window_chapters = [
+            int(plan.chapter_number or 0)
+            for plan in plans
+            if str(plan.status or "") == "failed"
+        ]
+        high_risk_chapters = [
+            int(plan.chapter_number or 0)
+            for plan in plans
+            if str(plan.canon_risk_level or "") == "high"
+        ]
+        repair_attempts_by_chapter = {
+            str(int(plan.chapter_number or 0)): int(plan.repair_attempt_count or 0)
+            for plan in plans
+            if int(plan.repair_attempt_count or 0) > 0
+        }
+        residual_issue_count_by_chapter: dict[str, int] = {}
+        for plan in plans:
+            raw_issues = str(plan.residual_review_issues_json or "[]")
+            try:
+                parsed_issues = json.loads(raw_issues)
+            except (json.JSONDecodeError, TypeError):
+                parsed_issues = []
+            if isinstance(parsed_issues, list) and parsed_issues:
+                residual_issue_count_by_chapter[str(int(plan.chapter_number or 0))] = len(parsed_issues)
+        obligation_repo = NarrativeObligationRepository(session)
+        active_obligations = obligation_repo.list_active_for_context(
+            project_id,
+            chapter_number=window_end + 1,
+        )
+        return {
+            "checkpoint_chapter": window_end,
+            "checkpoint_interval": int(interval or 0),
+            "window_start": window_start,
+            "window_end": window_end,
+            "requested_chapters": int(requested_chapters or 0),
+            "completed_chapters": sorted({int(item) for item in completed_chapters}),
+            "failed_chapters": sorted({int(item) for item in [*failed_chapters, *failed_window_chapters]}),
+            "paused_chapters": sorted({int(item) for item in paused_chapters}),
+            "accepted_chapters": accepted_chapters,
+            "needs_review_chapters": needs_review_chapters,
+            "status_by_chapter": status_by_chapter,
+            "high_risk_chapters": high_risk_chapters,
+            "repair_attempts_by_chapter": repair_attempts_by_chapter,
+            "residual_issue_count_by_chapter": residual_issue_count_by_chapter,
+            "open_obligation_ids": [item.id for item in active_obligations],
+            "p0_p1_open_obligation_ids": [
+                item.id for item in active_obligations if item.priority in {"P0", "P1"}
+            ],
+            "future_plan_audit": _future_plan_audit_checkpoint_payload(
+                future_plan_audit_result
+            ),
+            "pause": {
+                "enabled": pause_enabled,
+                "project_enabled": project_pause_enabled,
+                "runtime_enabled": runtime_pause_enabled,
+                "will_pause": will_pause,
+                "reason": "generation_audit_checkpoint" if will_pause else "",
+            },
+            "next_chapter": int(next_chapter or 0),
+        }
 
     def _previous_band_row(
         self,
@@ -1713,6 +1975,37 @@ class WritingOrchestrator:
             issues.append(
                 BandCheckpointIssueInfo(
                     code="band_task_completion",
+                    severity=issue.severity,
+                    issue_group=issue.issue_group,
+                    description=issue.description,
+                    detail="; ".join(issue.evidence_refs),
+                )
+            )
+        try:
+            schedule_payload = json.loads(band_row.schedule_json or "{}")
+        except (TypeError, json.JSONDecodeError):
+            schedule_payload = {}
+        band_schedule = (
+            BandDelightSchedule.model_validate(schedule_payload)
+            if isinstance(schedule_payload, dict)
+            else None
+        )
+        obligation_repo = NarrativeObligationRepository(session)
+        band_obligations = [
+            *obligation_repo.list_active_for_context(project_id, chapter_number=chapter_number + 1),
+            *obligation_repo.list_planned_for_chapter(project_id, origin_chapter_number=chapter_number),
+        ]
+        band_obligation_issues = evaluate_band_obligation_contract(
+            band_schedule,
+            obligations=band_obligations,
+            band_end_chapter=chapter_number,
+            reviewer="governance",
+            target_scope="band",
+        )
+        for issue in band_obligation_issues:
+            issues.append(
+                BandCheckpointIssueInfo(
+                    code="band_obligation_completion",
                     severity=issue.severity,
                     issue_group=issue.issue_group,
                     description=issue.description,
@@ -2616,6 +2909,44 @@ class WritingOrchestrator:
             }
         )
 
+    @staticmethod
+    def _repair_policy_requested_scope(review: ReviewVerdict) -> str:
+        instruction = getattr(review, "repair_instruction", None)
+        if instruction is None:
+            return ""
+        requested_scope = str(getattr(instruction, "repair_scope", "") or "").strip()
+        if requested_scope in {"draft", "scene"} and WritingOrchestrator._review_has_structural_repair_issue(review):
+            return ""
+        return requested_scope
+
+    @staticmethod
+    def _review_has_structural_repair_issue(review: ReviewVerdict) -> bool:
+        structural_issue_types = {
+            "countdown_non_monotonic",
+            "artifact_count_explanation",
+            "artifact_ledger_conflict",
+            "identity_conflict",
+            "identity_ambiguity",
+            "payoff_miss",
+            "unpaid_promise_debt",
+            "world_model_conflict",
+            "cognition_conflict",
+        }
+        structural_target_scopes = {
+            "ledger",
+            "character",
+            "band",
+            "arc",
+            "book",
+            "world_model",
+        }
+        for issue in getattr(review, "issues", []) or []:
+            issue_type = str(getattr(issue, "issue_type", "") or "").strip()
+            target_scope = str(getattr(issue, "target_scope", "") or "").strip()
+            if issue_type in structural_issue_types or target_scope in structural_target_scopes:
+                return True
+        return False
+
     def _review_and_maybe_rewrite(
         self,
         *,
@@ -2727,11 +3058,7 @@ class WritingOrchestrator:
                 verdict=current_review.verdict,
                 operation_mode=self.config.operation_mode,
                 attempts_completed=len(existing_attempts),
-                requested_scope=(
-                    current_review.repair_instruction.repair_scope
-                    if current_review.repair_instruction is not None
-                    else ""
-                ),
+                requested_scope=self._repair_policy_requested_scope(current_review),
             )
             if repair_decision.kind != "repair":
                 final_gate = self.final_acceptance_gate.evaluate(
@@ -2771,6 +3098,10 @@ class WritingOrchestrator:
 
             attempt_no = repair_decision.attempt_no
             repair_scope = repair_decision.scope
+            repair_model_preference = {
+                "preferred_provider_kind": repair_decision.preferred_provider_kind,
+                "preferred_model": repair_decision.preferred_model,
+            }
             repair_instruction = current_review.repair_instruction or self._default_repair_instruction(
                 repair_scope=repair_scope,
                 context=current_context,
@@ -2796,7 +3127,11 @@ class WritingOrchestrator:
                 summary=f"第{chapter_plan.chapter_number}章启动第 {attempt_no} 次 repair。",
                 related_object_type="chapter_review",
                 related_object_id=current_review_row.id,
-                payload={"attempt_no": attempt_no, "repair_scope": repair_scope},
+                payload={
+                    "attempt_no": attempt_no,
+                    "repair_scope": repair_scope,
+                    **repair_model_preference,
+                },
                 parent_event_id=str(current_review_event.id or ""),
             )
             (
@@ -2814,6 +3149,11 @@ class WritingOrchestrator:
                 repair_scope=repair_scope,
                 repair_instruction=repair_instruction,
             )
+            if any(repair_model_preference.values()):
+                design_patch = {
+                    **design_patch,
+                    "repair_model_preference": repair_model_preference,
+                }
             if failure_reason:
                 attempt_row = updater.save_chapter_rewrite_attempt(
                     project_id=project_id,
@@ -2847,7 +3187,11 @@ class WritingOrchestrator:
                     reason=failure_reason,
                     related_object_type="chapter_rewrite_attempt",
                     related_object_id=attempt_row.id,
-                    payload={"attempt_no": attempt_no, "repair_scope": repair_scope},
+                    payload={
+                        "attempt_no": attempt_no,
+                        "repair_scope": repair_scope,
+                        **repair_model_preference,
+                    },
                     parent_event_id=str(repair_started_event.id or ""),
                 )
                 continue
@@ -2873,6 +3217,8 @@ class WritingOrchestrator:
                     paused_chapters=[],
                     frozen_artifacts=[],
                     trace_stage_key="chapter_rewrite",
+                    llm_preferred_provider_kind=repair_decision.preferred_provider_kind,
+                    llm_preferred_model=repair_decision.preferred_model,
                 )
             except Exception as exc:  # noqa: BLE001
                 attempt_row = updater.save_chapter_rewrite_attempt(
@@ -2907,7 +3253,11 @@ class WritingOrchestrator:
                     reason=str(exc),
                     related_object_type="chapter_rewrite_attempt",
                     related_object_id=attempt_row.id,
-                    payload={"attempt_no": attempt_no, "repair_scope": repair_scope},
+                    payload={
+                        "attempt_no": attempt_no,
+                        "repair_scope": repair_scope,
+                        **repair_model_preference,
+                    },
                     parent_event_id=str(repair_started_event.id or ""),
                 )
                 continue
@@ -2945,7 +3295,11 @@ class WritingOrchestrator:
                     reason="writer-returned-none",
                     related_object_type="chapter_rewrite_attempt",
                     related_object_id=attempt_row.id,
-                    payload={"attempt_no": attempt_no, "repair_scope": repair_scope},
+                    payload={
+                        "attempt_no": attempt_no,
+                        "repair_scope": repair_scope,
+                        **repair_model_preference,
+                    },
                     parent_event_id=str(repair_started_event.id or ""),
                 )
                 continue
@@ -3241,6 +3595,7 @@ class WritingOrchestrator:
                     chapter_number=chapter_plan.chapter_number,
                     schedule=updated_schedule,
                     arc_structure=arc_structure,
+                    repair_instruction=repair_instruction,
                 )
                 session.flush()
                 transient_chapter_plan = self._chapter_plan_snapshot(
@@ -3334,6 +3689,7 @@ class WritingOrchestrator:
         chapter_number: int,
         schedule: BandDelightSchedule,
         arc_structure: ArcStructureDraft | None,
+        repair_instruction: RepairInstruction | None = None,
     ) -> None:
         active_arc = repo.get_active_arc_plan(project_id)
         if active_arc is None:
@@ -3366,6 +3722,11 @@ class WritingOrchestrator:
                 schedule=schedule,
                 chapter_plan=plan,
             )
+            if number == chapter_number and repair_instruction is not None:
+                experience_plan = self._current_chapter_repair_experience_plan(
+                    experience_plan,
+                    repair_instruction,
+                )
             plan.experience_plan_json = json.dumps(experience_plan.model_dump(mode="json"), ensure_ascii=False)
             session.add(plan)
 
@@ -3399,6 +3760,18 @@ class WritingOrchestrator:
         from forwin.protocol.experience import ReaderPromise
 
         return ReaderPromise.model_validate(json.loads(arc_structure.reader_promise_json or "{}") or {})
+
+    @staticmethod
+    def _current_chapter_repair_experience_plan(
+        current_plan: ChapterExperiencePlan,
+        repair_instruction: RepairInstruction,
+    ) -> ChapterExperiencePlan:
+        return current_plan.model_copy(
+            update=WritingOrchestrator._chapter_experience_patch_payload(
+                current_plan,
+                repair_instruction,
+            )
+        )
 
     @staticmethod
     def _chapter_experience_patch_payload(
@@ -4113,6 +4486,19 @@ class WritingOrchestrator:
                         frozen_artifacts=frozen_artifacts,
                         current_chapter=chapter_num,
                     )
+                generation_audit_pause = self._record_generation_audit_checkpoint_if_due(
+                    session=session,
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                    requested_chapters=requested_chapters,
+                    last_requested_chapter=last_requested_chapter,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                    future_plan_audit_result=future_plan_audit_result,
+                    governance=governance,
+                )
                 checkpoint_row = None
                 checkpoint_pause = False
                 checkpoint_warn_pause = False
@@ -4199,6 +4585,7 @@ class WritingOrchestrator:
                     or manual_after_accept is not None
                     or manual_band_end is not None
                     or future_plan_audit_blocked
+                    or generation_audit_pause
                 ):
                     if should_pause_for_checkpoint and checkpoint_row is not None:
                         self._record_decision_event(
@@ -4347,6 +4734,8 @@ class WritingOrchestrator:
         paused_chapters: list[int],
         frozen_artifacts: list[str],
         trace_stage_key: str = "chapter_draft",
+        llm_preferred_provider_kind: str = "",
+        llm_preferred_model: str = "",
     ) -> WriterOutput | None:
         max_attempts = max(1, int(self.config.blackbox_writer_attention_retries))
         last_error: Exception | None = None
@@ -4380,6 +4769,8 @@ class WritingOrchestrator:
                         max_attempts=max_attempts,
                         model_profile_id=model_profile_id,
                         model=model_name,
+                        preferred_provider_kind=str(llm_preferred_provider_kind or ""),
+                        preferred_model=str(llm_preferred_model or ""),
                     ),
                 )
                 output = self._call_with_compatible_kwargs(
@@ -4387,6 +4778,8 @@ class WritingOrchestrator:
                     context,
                     skill_layers=writer_skill_layers,
                     trace_stage_key=trace_stage_key,
+                    llm_preferred_provider_kind=llm_preferred_provider_kind,
+                    llm_preferred_model=llm_preferred_model,
                 )
                 duration_ms = max(0, int((time.perf_counter() - started_at) * 1000))
                 self._record_model_fallback_payloads(
@@ -4413,6 +4806,8 @@ class WritingOrchestrator:
                         max_attempts=max_attempts,
                         model_profile_id=model_profile_id,
                         model=model_name,
+                        preferred_provider_kind=str(llm_preferred_provider_kind or ""),
+                        preferred_model=str(llm_preferred_model or ""),
                     ),
                 )
                 self._record_decision_event(
@@ -4431,6 +4826,8 @@ class WritingOrchestrator:
                         model_profile_id=model_profile_id,
                         model=model_name,
                         attempt_no=attempt,
+                        preferred_provider_kind=str(llm_preferred_provider_kind or ""),
+                        preferred_model=str(llm_preferred_model or ""),
                     ),
                 )
                 self._record_decision_event(
@@ -4502,6 +4899,8 @@ class WritingOrchestrator:
                         model=model_name,
                         attempt_count=len(llm_attempts),
                         attempt_group_ids=attempt_group_ids(llm_attempts),
+                        preferred_provider_kind=str(llm_preferred_provider_kind or ""),
+                        preferred_model=str(llm_preferred_model or ""),
                     ),
                 )
                 drain_attempts = getattr(self.writer.llm_client, "drain_llm_attempt_events", None)
@@ -4585,6 +4984,8 @@ class WritingOrchestrator:
                             delay_seconds=delay,
                             model_profile_id=model_profile_id,
                             model=model_name,
+                            preferred_provider_kind=str(llm_preferred_provider_kind or ""),
+                            preferred_model=str(llm_preferred_model or ""),
                         ),
                     )
                     time.sleep(delay)
@@ -4808,6 +5209,8 @@ class WritingOrchestrator:
             "profile_id",
             "profile_name",
             "model",
+            "preferred_provider_kind",
+            "preferred_model",
             "base_url_host",
             "requested_temperature",
             "requested_max_tokens",
@@ -5070,7 +5473,31 @@ class WritingOrchestrator:
             writer_output=writer_output,
             draft_id=draft_id,
             persist=True,
+            temporal_reconciler=LLMTemporalReconciler(self.llm_client) if self.llm_client is not None else None,
         )
+        deferred_acceptance_errors = self._prepare_deferred_acceptance_if_needed(
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            draft_id=draft_id,
+            review_id=review_id,
+            verdict=verdict,
+            signals=analysis.signals,
+            target_total_chapters=int(getattr(session.get(Project, project_id), "target_total_chapters", 0) or 0),
+        )
+        if deferred_acceptance_errors:
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="evaluation_verdict",
+                event_type=DecisionEventType.CANON_COMMIT_BLOCKED,
+                scope="chapter",
+                summary=f"第{chapter_number}章 deferred acceptance 计划补丁失败。",
+                reason=";".join(deferred_acceptance_errors),
+                payload={"deferred_acceptance_errors": deferred_acceptance_errors},
+            )
+            return "deferred-acceptance-blocked"
         obligation_repo = NarrativeObligationRepository(session)
         gate_obligations = [
             *obligation_repo.list_active_for_context(project_id, chapter_number=chapter_number),
@@ -5140,6 +5567,217 @@ class WritingOrchestrator:
             payload=gate_result.model_dump(mode="json"),
         )
         return frozen_path or "canon-quality-gate-blocked"
+
+    def _prepare_deferred_acceptance_if_needed(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+        chapter_number: int,
+        draft_id: str,
+        review_id: str,
+        verdict: ReviewVerdict,
+        signals: list[Any],
+        target_total_chapters: int,
+    ) -> list[str]:
+        outcome = ReviewOutcomeRouter().route(
+            review=verdict,
+            signals=signals,
+            current_chapter=chapter_number,
+            target_total_chapters=target_total_chapters,
+        )
+        if outcome.action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
+            return []
+        issue_type = str(outcome.primary_issue_class or "").strip()
+        if not issue_type:
+            return []
+        existing = session.execute(
+            select(NarrativeObligationRow)
+            .where(
+                NarrativeObligationRow.project_id == project_id,
+                NarrativeObligationRow.origin_chapter_number == int(chapter_number or 0),
+                NarrativeObligationRow.obligation_type == issue_type,
+                NarrativeObligationRow.status.in_(("planned", "active")),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        if existing is not None:
+            return []
+
+        bands = self._band_scope_candidates(
+            session=session,
+            project_id=project_id,
+            current_chapter=chapter_number,
+        )
+        scope_decision = ObligationScopeRouter().route(
+            issue_type=issue_type,
+            priority=_priority_for_deferred_issue(issue_type),
+            current_chapter=chapter_number,
+            target_total_chapters=target_total_chapters,
+            bands=bands,
+        )
+        if scope_decision.action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
+            return [scope_decision.reason or f"deferred_acceptance_scope_unavailable:{issue_type}"]
+
+        obligation_id = new_id()
+        summary = _summary_for_deferred_issue(verdict=verdict, issue_type=issue_type, outcome_reason=outcome.reason)
+        payoff_test = _payoff_test_for_deferred_issue(
+            verdict=verdict,
+            issue_type=issue_type,
+            deadline_chapter=scope_decision.deadline_chapter,
+            summary=summary,
+        )
+        obligation = NarrativeObligation(
+            id=obligation_id,
+            project_id=project_id,
+            origin_chapter_number=int(chapter_number or 0),
+            origin_draft_id=draft_id,
+            origin_review_id=review_id,
+            origin_signal_ids=[
+                str(getattr(signal, "signal_id", "") or "")
+                for signal in signals
+                if str(getattr(signal, "signal_type", "") or "") == issue_type
+                and str(getattr(signal, "signal_id", "") or "")
+            ],
+            obligation_type=issue_type,
+            priority=_priority_for_deferred_issue(issue_type),
+            status="proposed",
+            summary=summary,
+            deferral_reason=scope_decision.reason or outcome.reason,
+            hardness="design_debt",
+            deadline_chapter=int(scope_decision.deadline_chapter or 0),
+            payoff_test=payoff_test,
+            evidence_refs=[f"review:{review_id}"] if review_id else [],
+            metadata={"minimum_scope": scope_decision.target_scope},
+        )
+
+        if scope_decision.action == "defer_with_band_plan_patch":
+            band_row = self._band_row_by_id(
+                session=session,
+                project_id=project_id,
+                band_id=scope_decision.target_band_id,
+            )
+            if band_row is None:
+                return [f"target_band_not_found:{scope_decision.target_band_id}"]
+            plan_patch = BandPlanPatcher().build_obligation_patch(
+                project_id=project_id,
+                band_row=band_row,
+                obligations=[obligation],
+                current_chapter=chapter_number,
+                patch_type="band_defer_acceptance",
+            )
+        else:
+            target_plan = session.execute(
+                select(ChapterPlan)
+                .where(
+                    ChapterPlan.project_id == project_id,
+                    ChapterPlan.chapter_number == int(scope_decision.deadline_chapter or 0),
+                    ChapterPlan.status.in_(("planned", "failed")),
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+            if target_plan is None:
+                return [f"target_chapter_plan_not_found:{scope_decision.deadline_chapter}"]
+            plan_patch = NarrativePlanPatch(
+                id=new_id(),
+                project_id=project_id,
+                patch_type="defer_acceptance",
+                target_scope="chapter",
+                target_plan_id=str(target_plan.id or ""),
+                target_arc_id=str(target_plan.arc_plan_id or ""),
+                affected_chapters=[int(scope_decision.deadline_chapter or 0)],
+                source_obligation_ids=[obligation_id],
+                new_contract={
+                    "obligations_to_resolve": [obligation_id],
+                    "payoff_test": payoff_test,
+                    "summary": summary,
+                },
+                diff_summary=f"Bind deferred obligation {obligation_id} to chapter {scope_decision.deadline_chapter}.",
+                writer_context_injections=[
+                    {
+                        "type": "narrative_obligation",
+                        "obligation_id": obligation_id,
+                        "priority": obligation.priority,
+                        "summary": summary,
+                        "payoff_test": payoff_test,
+                        "deadline_chapter": obligation.deadline_chapter,
+                    }
+                ],
+                reviewer_context_injections=[
+                    {
+                        "type": "narrative_obligation",
+                        "obligation_id": obligation_id,
+                        "payoff_test": payoff_test,
+                        "must_resolve_now": True,
+                    }
+                ],
+                expected_resolution_tests=[payoff_test],
+            )
+        result = DeferAcceptanceTransaction(session).run(
+            obligation=obligation,
+            plan_patch=plan_patch,
+            current_chapter=chapter_number,
+            target_total_chapters=target_total_chapters,
+        )
+        return [] if result.success else list(result.errors)
+
+    @staticmethod
+    def _band_scope_candidates(
+        *,
+        session: Session,
+        project_id: str,
+        current_chapter: int,
+    ) -> list[BandScopeCandidate]:
+        rows = session.execute(
+            select(BandExperiencePlan)
+            .where(
+                BandExperiencePlan.project_id == project_id,
+                BandExperiencePlan.chapter_end > int(current_chapter or 0),
+            )
+            .order_by(BandExperiencePlan.chapter_start.asc(), BandExperiencePlan.chapter_end.asc())
+        ).scalars().all()
+        if not rows:
+            return []
+        plans = session.execute(
+            select(ChapterPlan)
+            .where(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number > int(current_chapter or 0),
+                ChapterPlan.status.in_(("planned", "failed")),
+            )
+        ).scalars().all()
+        planned_numbers = [int(plan.chapter_number or 0) for plan in plans]
+        result: list[BandScopeCandidate] = []
+        for row in rows:
+            start = int(row.chapter_start or 0)
+            end = int(row.chapter_end or 0)
+            result.append(
+                BandScopeCandidate(
+                    band_id=str(row.band_id or ""),
+                    arc_id=str(row.arc_id or ""),
+                    chapter_start=start,
+                    chapter_end=end,
+                    planned_chapters=[number for number in planned_numbers if start <= number <= end],
+                )
+            )
+        return result
+
+    @staticmethod
+    def _band_row_by_id(
+        *,
+        session: Session,
+        project_id: str,
+        band_id: str,
+    ) -> BandExperiencePlan | None:
+        return session.execute(
+            select(BandExperiencePlan)
+            .where(
+                BandExperiencePlan.project_id == project_id,
+                BandExperiencePlan.band_id == band_id,
+            )
+            .order_by(BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
 
     def _latest_draft_and_review_for_chapter(
         self,

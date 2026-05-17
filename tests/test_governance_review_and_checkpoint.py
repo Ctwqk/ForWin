@@ -21,10 +21,12 @@ from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.protocol.experience import BandDelightSchedule, ChapterExperiencePlan
+from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.reviewer import HistoricalReviewHub
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.governance_checks import (
+    evaluate_band_obligation_contract,
     evaluate_director_imbalance,
     evaluate_resource_closure_risk,
     evaluate_task_contract,
@@ -214,6 +216,80 @@ class GovernanceReviewAndCheckpointTests(unittest.TestCase):
             reviewer="governance",
             issue_type="plan_task_fulfillment",
             target_scope="chapter",
+        )
+
+        self.assertEqual(issues, [])
+
+    def test_band_obligation_contract_fails_unresolved_must_resolve_by_band_end(self) -> None:
+        schedule = BandDelightSchedule(
+            band_id="arc-1:band:2",
+            chapter_start=11,
+            chapter_end=14,
+            stall_guard_max_gap=1,
+        )
+        schedule.band_obligation_contract.open_obligations = ["obl-band"]
+        schedule.band_obligation_contract.must_resolve_by_band_end = ["obl-band"]
+        schedule.band_obligation_contract.payoff_tests = {
+            "obl-band": "第14章前必须给出审计窗口真相证据。"
+        }
+        obligations = [
+            NarrativeObligation(
+                id="obl-band",
+                project_id="project-1",
+                origin_chapter_number=10,
+                obligation_type="reader_promise_payoff",
+                priority="P1",
+                status="active",
+                summary="band 内兑现读者承诺。",
+                hardness="design_debt",
+                deadline_chapter=14,
+                payoff_test="第14章前必须给出审计窗口真相证据。",
+            )
+        ]
+
+        issues = evaluate_band_obligation_contract(
+            schedule,
+            obligations=obligations,
+            band_end_chapter=14,
+            reviewer="governance",
+            target_scope="band",
+        )
+
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].rule_name, "band_obligation_unresolved")
+        self.assertEqual(issues[0].severity, "error")
+        self.assertIn("obl-band", issues[0].description)
+
+    def test_band_obligation_contract_allows_p2_p3_carry_forward_after_band_end(self) -> None:
+        schedule = BandDelightSchedule(
+            band_id="arc-1:band:2",
+            chapter_start=11,
+            chapter_end=14,
+            stall_guard_max_gap=1,
+        )
+        schedule.band_obligation_contract.open_obligations = ["obl-style"]
+        schedule.band_obligation_contract.allowed_carry_forward = ["obl-style"]
+        obligations = [
+            NarrativeObligation(
+                id="obl-style",
+                project_id="project-1",
+                origin_chapter_number=10,
+                obligation_type="style_repetition_pressure",
+                priority="P3",
+                status="active",
+                summary="降低重复句式。",
+                hardness="soft_gap",
+                deadline_chapter=18,
+                payoff_test="后续 band 降低重复句式。",
+            )
+        ]
+
+        issues = evaluate_band_obligation_contract(
+            schedule,
+            obligations=obligations,
+            band_end_chapter=14,
+            reviewer="governance",
+            target_scope="band",
         )
 
         self.assertEqual(issues, [])

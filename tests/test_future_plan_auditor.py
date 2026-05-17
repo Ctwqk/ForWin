@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 
 from forwin.models import ChapterPlan
+from forwin.models.phase import BandExperiencePlan
+from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.planning.future_plan_auditor import FuturePlanAuditor
+from forwin.protocol.experience import BandDelightSchedule
 
 
 def _plan(number: int, *, one_line: str, goals: list[str] | None = None) -> ChapterPlan:
@@ -671,3 +674,115 @@ def test_future_plan_auditor_rewrites_closed_countdown_to_closed_state() -> None
     )
     assert "8分钟" not in serialized
     assert "终端审计窗口已关闭" in serialized
+
+
+def test_future_plan_auditor_generates_band_binding_patch_for_band_obligation() -> None:
+    schedule = BandDelightSchedule(
+        band_id="arc-1:band:2",
+        chapter_start=11,
+        chapter_end=14,
+        stall_guard_max_gap=1,
+    )
+    band_row = BandExperiencePlan(
+        id="band-row-1",
+        project_id="project-1",
+        arc_id="arc-1",
+        band_id="arc-1:band:2",
+        chapter_start=11,
+        chapter_end=14,
+        schedule_json=schedule.model_dump_json(),
+        task_contract_json="[]",
+    )
+    obligation = NarrativeObligation(
+        id="obl-band",
+        project_id="project-1",
+        origin_chapter_number=10,
+        obligation_type="reader_promise_payoff",
+        priority="P1",
+        status="active",
+        summary="band 内兑现读者承诺。",
+        hardness="design_debt",
+        deadline_chapter=14,
+        payoff_test="第14章前必须给出审计窗口真相证据。",
+        linked_plan_patch_ids=["patch-old"],
+        metadata={"minimum_scope": "band"},
+    )
+
+    result = FuturePlanAuditor().audit_plans(
+        project_id="project-1",
+        current_chapter=10,
+        trigger_stage="post_acceptance",
+        plans=[],
+        band_rows=[band_row],
+        canon_quality_context={},
+        obligations=[obligation],
+        target_total_chapters=20,
+        include_current=False,
+    )
+
+    assert result.status == "fail"
+    assert result.issues[0].issue_type == "obligation_missing_from_band_plan"
+    patch = result.plan_patches[0]
+    assert patch.patch_type == "obligation_band_plan_binding"
+    assert patch.target_scope == "band"
+    assert patch.target_band_id == "arc-1:band:2"
+    assert patch.affected_chapters == [11, 12, 13, 14]
+
+
+def test_future_plan_auditor_skips_chapter_binding_when_band_contract_covers_obligation() -> None:
+    schedule_payload = {
+        "band_id": "arc-1:band:2",
+        "chapter_start": 11,
+        "chapter_end": 14,
+        "stall_guard_max_gap": 1,
+        "band_obligation_contract": {
+            "open_obligations": ["obl-band"],
+            "must_resolve_by_band_end": ["obl-band"],
+            "allowed_carry_forward": [],
+            "payoff_tests": {"obl-band": "第14章前必须给出审计窗口真相证据。"},
+            "affected_chapters": {"obl-band": [11, 12, 13, 14]},
+            "writer_context_injections": [],
+            "reviewer_context_injections": [],
+        },
+    }
+    band_row = BandExperiencePlan(
+        id="band-row-1",
+        project_id="project-1",
+        arc_id="arc-1",
+        band_id="arc-1:band:2",
+        chapter_start=11,
+        chapter_end=14,
+        schedule_json=json.dumps(schedule_payload, ensure_ascii=False),
+        task_contract_json="[]",
+    )
+    deadline_plan = _plan(14, one_line="兑现审计窗口。")
+    obligation = NarrativeObligation(
+        id="obl-band",
+        project_id="project-1",
+        origin_chapter_number=10,
+        obligation_type="reader_promise_payoff",
+        priority="P1",
+        status="active",
+        summary="band 内兑现读者承诺。",
+        hardness="design_debt",
+        deadline_chapter=14,
+        payoff_test="第14章前必须给出审计窗口真相证据。",
+        linked_plan_patch_ids=["patch-old"],
+        metadata={"minimum_scope": "band"},
+    )
+
+    result = FuturePlanAuditor().audit_plans(
+        project_id="project-1",
+        current_chapter=10,
+        trigger_stage="post_acceptance",
+        plans=[deadline_plan],
+        band_rows=[band_row],
+        canon_quality_context={},
+        obligations=[obligation],
+        target_total_chapters=20,
+        include_current=False,
+    )
+
+    assert result.status == "pass"
+    assert result.issues == []
+    assert result.plan_patches == []

@@ -298,6 +298,12 @@ def _env_values() -> dict[str, object]:
         "future_constraints_enabled": _env_bool(
             env, "FUTURE_CONSTRAINTS_ENABLED", True
         ),
+        "generation_audit_interval_chapters": _env_int(
+            env, "GENERATION_AUDIT_INTERVAL_CHAPTERS", 0
+        ),
+        "generation_audit_pause_enabled": _env_bool(
+            env, "GENERATION_AUDIT_PAUSE_ENABLED", False
+        ),
         "legacy_provisional_blocking": _env_bool(
             env, "FORWIN_LEGACY_PROVISIONAL_BLOCKING", False
         ),
@@ -336,6 +342,15 @@ def _env_values() -> dict[str, object]:
         ),
         "lint_review_enabled": _env_bool(env, "LINT_REVIEW_ENABLED", True),
         "review_fail_max_rewrites": _env_int(env, "REVIEW_FAIL_MAX_REWRITES", 3),
+        "repair_model_sequence": _env_csv(
+            env,
+            "FORWIN_REPAIR_MODEL_SEQUENCE",
+        )
+        or [
+            "deepseek-reasoner",
+            "deepseek-reasoner",
+            "gpt-5.3-codex-spark",
+        ],
         "canon_quality_gate": _env_str(env, "FORWIN_CANON_QUALITY_GATE", "strict"),
         "final_completion_gate": _env_str(env, "FORWIN_FINAL_COMPLETION_GATE", "strict"),
         "style_telemetry_mode": _env_str(env, "FORWIN_STYLE_TELEMETRY_MODE", "warn"),
@@ -426,6 +441,8 @@ class _ConfigFields:
     band_warn_action: str = "pause"
     manual_checkpoints_enabled: bool = True
     future_constraints_enabled: bool = True
+    generation_audit_interval_chapters: int = 0
+    generation_audit_pause_enabled: bool = False
     legacy_provisional_blocking: bool = False
     world_v4_compat_write_enabled: bool = False
     enable_world_v4_debug_api: bool = False
@@ -453,6 +470,11 @@ class _ConfigFields:
     experience_review_enabled: bool = True
     lint_review_enabled: bool = True
     review_fail_max_rewrites: int = 3
+    repair_model_sequence: list[str] = [
+        "deepseek-reasoner",
+        "deepseek-reasoner",
+        "gpt-5.3-codex-spark",
+    ]
     canon_quality_gate: str = "strict"
     final_completion_gate: str = "strict"
     style_telemetry_mode: str = "warn"

@@ -11,10 +11,13 @@ from sqlalchemy.orm import Session
 
 from forwin.models.base import new_id
 from forwin.models.narrative_obligation import FuturePlanAuditRunRow
+from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
+from forwin.planning.band_plan_patcher import BandPlanPatcher
 from forwin.planning.plan_patch_validator import PlanPatchValidator
+from forwin.protocol.experience import BandDelightSchedule
 
 
 AuditStatus = Literal["pass", "warn", "fail"]
@@ -110,12 +113,18 @@ class FuturePlanAuditor:
         obligations: list[NarrativeObligation],
         target_total_chapters: int,
         include_current: bool,
+        band_rows: list[BandExperiencePlan] | None = None,
     ) -> FuturePlanAuditRun:
         inspected = [
             int(plan.chapter_number or 0)
             for plan in plans
             if include_current or int(plan.chapter_number or 0) > int(current_chapter or 0)
         ]
+        for row in band_rows or []:
+            for chapter in range(int(row.chapter_start or 0), int(row.chapter_end or 0) + 1):
+                if (include_current or chapter > int(current_chapter or 0)) and chapter not in inspected:
+                    inspected.append(chapter)
+        inspected.sort()
         issues: list[FuturePlanAuditIssue] = []
         patches: list[NarrativePlanPatch] = []
         countdowns = _countdown_constraints(canon_quality_context)
@@ -142,8 +151,35 @@ class FuturePlanAuditor:
             ):
                 issues.append(issue)
                 patches.append(patch)
+        band_covered_obligation_ids: set[str] = set()
+        for obligation in obligations:
+            if obligation.status not in {"active", "planned"}:
+                continue
+            if _minimum_scope_for_obligation(obligation) != "band":
+                continue
+            band_row = _band_row_for_obligation(
+                obligation=obligation,
+                band_rows=list(band_rows or []),
+                current_chapter=int(current_chapter or 0),
+            )
+            if band_row is None:
+                continue
+            if _band_contract_covers_obligation(band_row, obligation):
+                band_covered_obligation_ids.add(obligation.id)
+                continue
+            issue, patch = self._audit_band_obligation_binding(
+                project_id=project_id,
+                current_chapter=int(current_chapter or 0),
+                band_row=band_row,
+                obligation=obligation,
+            )
+            issues.append(issue)
+            patches.append(patch)
+
         plans_by_chapter = {int(plan.chapter_number or 0): plan for plan in plans}
         for obligation in obligations:
+            if obligation.id in band_covered_obligation_ids or _minimum_scope_for_obligation(obligation) == "band":
+                continue
             plan = plans_by_chapter.get(int(obligation.deadline_chapter or 0))
             if plan is None or str(plan.status or "") == "accepted":
                 continue
@@ -190,6 +226,7 @@ class FuturePlanAuditor:
         obligations: list[NarrativeObligation],
         target_total_chapters: int,
         include_current: bool,
+        band_rows: list[BandExperiencePlan] | None = None,
     ) -> FuturePlanAuditRun:
         result = self.audit_plans(
             project_id=project_id,
@@ -200,8 +237,10 @@ class FuturePlanAuditor:
             obligations=obligations,
             target_total_chapters=target_total_chapters,
             include_current=include_current,
+            band_rows=band_rows,
         )
         plans_by_id = {str(plan.id or ""): plan for plan in plans}
+        bands_by_id = {str(row.band_id or ""): row for row in band_rows or []}
         obligation_repo = NarrativeObligationRepository(session)
         applied_patch_ids: list[str] = []
         persisted_patches: list[NarrativePlanPatch] = []
@@ -218,10 +257,23 @@ class FuturePlanAuditor:
         ]
         validator = PlanPatchValidator()
         for patch in result.plan_patches:
-            plan = plans_by_id.get(str(patch.target_plan_id or ""))
-            if plan is None:
-                blocking_reasons.append(f"missing_plan_for_patch:{patch.id or patch.target_plan_id}")
-                continue
+            plan = None
+            band_row = None
+            band_plan_bounds: dict[str, tuple[int, int]] = {}
+            if patch.target_scope == "band":
+                band_row = bands_by_id.get(str(patch.target_band_id or ""))
+                if band_row is None:
+                    blocking_reasons.append(f"missing_band_for_patch:{patch.id or patch.target_band_id}")
+                    continue
+                band_plan_bounds[str(band_row.band_id or "")] = (
+                    int(band_row.chapter_start or 0),
+                    int(band_row.chapter_end or 0),
+                )
+            else:
+                plan = plans_by_id.get(str(patch.target_plan_id or ""))
+                if plan is None:
+                    blocking_reasons.append(f"missing_plan_for_patch:{patch.id or patch.target_plan_id}")
+                    continue
             patch_obligations = [
                 obligation
                 for obligation in obligations
@@ -234,6 +286,12 @@ class FuturePlanAuditor:
                 target_total_chapters=target_total_chapters,
                 accepted_chapters=accepted_chapters,
                 unresolved_obligation_ids=unresolved_obligation_ids,
+                band_plan_bounds=band_plan_bounds,
+                minimum_scope_by_obligation={
+                    obligation.id: _minimum_scope_for_obligation(obligation)
+                    for obligation in patch_obligations
+                    if obligation.id
+                },
             )
             if not validation.passed:
                 blocking_reasons.extend(f"plan_patch_validation_failed:{error}" for error in validation.errors)
@@ -246,8 +304,12 @@ class FuturePlanAuditor:
                     "applied": True,
                 }
             )
-            self.apply_plan_patch(plan, applied_patch)
-            session.add(plan)
+            if band_row is not None:
+                BandPlanPatcher().apply(band_row, applied_patch, obligations=patch_obligations)
+                session.add(band_row)
+            elif plan is not None:
+                self.apply_plan_patch(plan, applied_patch)
+                session.add(plan)
             stored_patch = obligation_repo.create_plan_patch(applied_patch)
             applied_patch_ids.append(stored_patch.id)
             persisted_patches.append(stored_patch)
@@ -726,6 +788,39 @@ class FuturePlanAuditor:
         )
         return issue, patch
 
+    def _audit_band_obligation_binding(
+        self,
+        *,
+        project_id: str,
+        current_chapter: int,
+        band_row: BandExperiencePlan,
+        obligation: NarrativeObligation,
+    ) -> tuple[FuturePlanAuditIssue, NarrativePlanPatch]:
+        description = f"band plan {band_row.band_id} 没有承接叙事义务 {obligation.id}: {obligation.payoff_test}"
+        issue = FuturePlanAuditIssue(
+            issue_type="obligation_missing_from_band_plan",
+            severity="error",
+            target_chapter=int(band_row.chapter_end or obligation.deadline_chapter or 0),
+            target_plan_id=str(band_row.id or band_row.band_id or ""),
+            description=description,
+            evidence_refs=[f"obligation:{obligation.id}", f"band_plan:{band_row.band_id}"],
+            patch_type="obligation_band_plan_binding",
+            metadata={
+                "obligation_id": obligation.id,
+                "priority": obligation.priority,
+                "payoff_test": obligation.payoff_test,
+                "band_id": band_row.band_id,
+            },
+        )
+        patch = BandPlanPatcher().build_obligation_patch(
+            project_id=project_id,
+            band_row=band_row,
+            obligations=[obligation],
+            current_chapter=current_chapter,
+            patch_type="obligation_band_plan_binding",
+        )
+        return issue, patch
+
     @staticmethod
     def _apply_countdown_patch(plan: ChapterPlan, patch: NarrativePlanPatch) -> None:
         metadata = patch.metadata or patch.new_contract
@@ -974,6 +1069,59 @@ def _is_custody_state_patch(patch: NarrativePlanPatch) -> bool:
     if metadata.get("conflict_type") == "custody_state":
         return True
     return str(patch.new_contract.get("transition_type") or "") == "custody_state"
+
+
+def _minimum_scope_for_obligation(obligation: NarrativeObligation) -> str:
+    metadata = obligation.metadata if isinstance(obligation.metadata, dict) else {}
+    explicit = str(metadata.get("minimum_scope") or "").strip()
+    if explicit:
+        return explicit
+    if obligation.obligation_type in {
+        "reader_promise_payoff",
+        "reveal_escalation_needed",
+        "style_repetition_pressure",
+        "repeated_scene_pattern",
+    }:
+        return "band"
+    return "chapter"
+
+
+def _band_row_for_obligation(
+    *,
+    obligation: NarrativeObligation,
+    band_rows: list[BandExperiencePlan],
+    current_chapter: int,
+) -> BandExperiencePlan | None:
+    deadline = int(obligation.deadline_chapter or 0)
+    for row in band_rows:
+        if int(row.chapter_start or 0) <= deadline <= int(row.chapter_end or 0):
+            return row
+    for row in band_rows:
+        if int(row.chapter_end or 0) > int(current_chapter or 0):
+            return row
+    return None
+
+
+def _band_contract_covers_obligation(row: BandExperiencePlan, obligation: NarrativeObligation) -> bool:
+    obligation_id = str(obligation.id or "").strip()
+    if not obligation_id:
+        return False
+    try:
+        payload = json.loads(row.schedule_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    try:
+        schedule = BandDelightSchedule.model_validate(payload)
+    except Exception:
+        return False
+    contract = schedule.band_obligation_contract
+    if obligation_id not in contract.open_obligations:
+        return False
+    if obligation_id not in contract.payoff_tests:
+        return False
+    return bool(str(contract.payoff_tests.get(obligation_id) or "").strip())
 
 
 def _plan_mentions_stale_custody(text: str, *, character_name: str) -> bool:

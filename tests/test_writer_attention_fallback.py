@@ -193,6 +193,72 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                 orchestrator.engine.dispose()
                 engine.dispose()
 
+    def test_writer_call_receives_repair_model_preference(self) -> None:
+        db_path = postgres_test_url("writer-repair-model-preference")
+        orchestrator = WritingOrchestrator(
+            Config(
+                database_url=db_path,
+                minimax_api_key="",
+                minimax_model="fake-model",
+                operation_mode="blackbox",
+            )
+        )
+        try:
+            captured: dict[str, str] = {}
+
+            def fake_write_chapter(
+                context,  # noqa: ANN001
+                *,
+                llm_preferred_provider_kind: str = "",
+                llm_preferred_model: str = "",
+                **_kwargs,  # noqa: ANN003
+            ) -> WriterOutput:
+                captured["provider"] = llm_preferred_provider_kind
+                captured["model"] = llm_preferred_model
+                return WriterOutput(
+                    project_id="project-1",
+                    chapter_number=1,
+                    title="第1章",
+                    body="修复正文",
+                    char_count=4,
+                    end_of_chapter_summary="修复摘要",
+                )
+
+            updater = Mock()
+            updater.save_decision_event.side_effect = lambda info: SimpleNamespace(
+                id=f"row-{info.event_type}",
+                causal_root_id=info.causal_root_id,
+                event_type=info.event_type,
+                payload=info.payload,
+                parent_event_id=info.parent_event_id,
+            )
+
+            with patch.object(orchestrator.writer, "write_chapter", side_effect=fake_write_chapter):
+                result = orchestrator._write_chapter_with_attention_fallback(
+                    context=SimpleNamespace(chapter_number=1),
+                    project_id="project-1",
+                    chapter_number=1,
+                    updater=updater,
+                    paused_chapters=[],
+                    frozen_artifacts=[],
+                    trace_stage_key="chapter_rewrite",
+                    llm_preferred_provider_kind="deepseek",
+                    llm_preferred_model="deepseek-reasoner",
+                )
+
+            self.assertIsNotNone(result)
+            self.assertEqual(captured, {"provider": "deepseek", "model": "deepseek-reasoner"})
+            started = next(
+                call.args[0]
+                for call in updater.save_decision_event.call_args_list
+                if call.args[0].event_type == DecisionEventType.LLM_REQUEST_STARTED
+            )
+            self.assertEqual(started.payload["preferred_provider_kind"], "deepseek")
+            self.assertEqual(started.payload["preferred_model"], "deepseek-reasoner")
+        finally:
+            orchestrator.llm_client.close()
+            orchestrator.engine.dispose()
+
     def test_transient_llm_failure_stops_before_advancing_to_next_chapter(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = postgres_test_url("transient-llm")

@@ -79,6 +79,36 @@ class ForWinAPIClientUnitTests(unittest.TestCase):
 
         self.assertGreaterEqual(client.timeout, 300.0)
 
+    def test_project_view_preserves_total_and_materialized_chapter_counts(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.path, "/api/projects/project-1")
+            return httpx.Response(
+                200,
+                json={
+                    "id": "project-1",
+                    "title": "Thirty Chapter Run",
+                    "genre": "悬疑",
+                    "premise": "测试长任务章节数状态。",
+                    "target_total_chapters": 30,
+                    "chapter_count": 12,
+                    "generated_chapter_count": 3,
+                    "accepted_chapter_count": 2,
+                    "needs_review_chapter_count": 1,
+                },
+                request=request,
+            )
+
+        client = ForWinAPIClient(
+            base_url="http://forwin.invalid",
+            transport=httpx.MockTransport(handler),
+        )
+
+        project = asyncio.run(client.project_get("project-1"))
+
+        self.assertEqual(project.target_total_chapters, 30)
+        self.assertEqual(project.materialized_chapter_count, 12)
+        self.assertEqual(project.chapter_count, 12)
+
 
 class ForWinMCPIntegrationTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -280,6 +310,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     "genesis_stage_lock",
                     "project_start_writing",
                     "project_continue_generation",
+                    "project_decision_events",
                     "project_extend_generation",
                     "task_list",
                     "task_get",
@@ -570,6 +601,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
 
         self.assertIsNotNone(started.task)
         self.assertEqual(started.project.creation_status, "writing")
+        self.assertEqual(started.project.target_total_chapters, 6)
+        self.assertEqual(started.project.materialized_chapter_count, 3)
+        self.assertEqual(started.project.chapter_count, 3)
         self.assertEqual(started.task.status, "starting")
         self.assertEqual(started.task.current_stage, "queued")
 

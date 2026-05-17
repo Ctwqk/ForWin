@@ -1049,7 +1049,7 @@ class Phase05RegressionTests(unittest.TestCase):
 
             self.assertEqual(result.status, "needs_review")
             self.assertEqual(len(attempts), 3)
-            self.assertEqual([item.repair_scope for item in attempts], ["draft", "chapter_plan", "band_plan"])
+            self.assertEqual([item.repair_scope for item in attempts], ["draft", "draft", "draft"])
             review_meta = json.loads(review.review_meta_json)
             self.assertEqual((review_meta.get("final_gate_decision") or {}).get("decision"), "manual_review_required")
             self.assertEqual((review_meta.get("final_gate_decision") or {}).get("canon_risk"), "high")

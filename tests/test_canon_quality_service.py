@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from forwin.canon_quality.signals import CountdownLedgerEntry
+from forwin.canon_quality.temporal_semantics import (
+    TemporalMentionDecision,
+    TemporalReconciliationResult,
+)
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.models import ArcPlanVersion, CandidateDraftRecord, ChapterDraft, ChapterPlan, ChapterReview, Project
@@ -598,5 +603,97 @@ def test_service_does_not_treat_last_materialized_arc_chapter_as_book_final_with
             )
 
             assert not any(signal.signal_type.startswith("final_") for signal in result.signals)
+    finally:
+        engine.dispose()
+
+
+def test_service_uses_semantic_temporal_reconciler_before_persisting_countdown_ledger() -> None:
+    engine = get_engine(postgres_test_url("canon_quality_service_temporal_semantics"))
+    init_db(engine)
+    session_factory = get_session_factory(engine)
+    try:
+        with session_factory() as session:
+            project = Project(title="时间语义门禁", premise="记忆重置倒计时", genre="悬疑", target_total_chapters=30)
+            session.add(project)
+            session.flush()
+            repo = CanonQualityRepository(session)
+            repo.save_countdown_entries(
+                [
+                    CountdownLedgerEntry(
+                        project_id=project.id,
+                        countdown_key="memory_reset",
+                        label="memory_reset",
+                        chapter_number=2,
+                        normalized_remaining_minutes=77,
+                    )
+                ]
+            )
+            output = WriterOutput(
+                project_id=project.id,
+                chapter_number=3,
+                title="第三章",
+                body=(
+                    "记忆重置窗口剩余74分钟。"
+                    "微阑看了一眼终端上的时间：凌晨03:12，距离天亮还有不到三个小时，"
+                    "但她真正能用的倒计时只有74分钟。"
+                    "记忆重置窗口继续下滑到73分钟。"
+                ),
+                end_of_chapter_summary="微阑继续按分钟级倒计时推进。",
+            )
+
+            def semantic_reconciler(**kwargs):
+                signals = [
+                    signal
+                    for signal in kwargs["signals"]
+                    if signal.signal_type == "countdown_non_monotonic"
+                ]
+                assert signals
+                signal = signals[0]
+                wall_clock_entry = next(
+                    entry
+                    for entry in kwargs["entries"]
+                    if entry.raw_mention == "03:12"
+                )
+                return TemporalReconciliationResult(
+                    decisions=[
+                        TemporalMentionDecision(
+                            action="ignore_as_non_countdown",
+                            reference_kind="wall_clock_deadline",
+                            confidence=0.96,
+                            reason="该时间表达是墙钟时间，不是倒计时。",
+                            span_start=wall_clock_entry.payload["span_start"],
+                            span_end=wall_clock_entry.payload["span_end"],
+                        ),
+                        TemporalMentionDecision(
+                            signal_id=signal.signal_id,
+                            action="ignore_as_non_countdown",
+                            reference_kind="wall_clock_deadline",
+                            confidence=0.94,
+                            reason="该时间表达说明天亮前的墙钟期限，不是记忆重置倒计时读数。",
+                            span_start=signal.span_start or 0,
+                            span_end=signal.span_end or 0,
+                        )
+                    ]
+                )
+
+            result = analyze_writer_output_quality(
+                session=session,
+                project_id=project.id,
+                chapter_number=3,
+                writer_output=output,
+                persist=True,
+                temporal_reconciler=semantic_reconciler,
+            )
+            session.commit()
+
+        with session_factory() as session:
+            entries = CanonQualityRepository(session).list_countdown_entries(project.id, include_details=True)
+            assert not any(signal.signal_type == "countdown_non_monotonic" for signal in result.signals)
+            assert [entry["raw_mention"] for entry in entries if entry["chapter_number"] == 3] == [
+                "74分钟",
+                "74分钟",
+                "73分钟",
+            ]
+            assert all(entry["normalized_remaining_minutes"] != 180 for entry in entries)
     finally:
         engine.dispose()

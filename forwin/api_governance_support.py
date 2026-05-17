@@ -104,6 +104,8 @@ def governance_request_payload(req: object) -> dict[str, object]:
         "band_warn_action",
         "manual_checkpoints_enabled",
         "future_constraints_enabled",
+        "generation_audit_interval_chapters",
+        "generation_audit_pause_enabled",
     ):
         if not hasattr(req, field):
             continue

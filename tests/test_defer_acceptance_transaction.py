@@ -10,8 +10,10 @@ from forwin.models import (
     Project,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.phase import BandExperiencePlan
 from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
+from forwin.protocol.experience import BandDelightSchedule
 
 
 def _obligation(project_id: str) -> NarrativeObligation:
@@ -138,5 +140,98 @@ def test_defer_acceptance_transaction_rolls_back_when_patch_invalid() -> None:
             patches = session.execute(select(NarrativePlanPatchRow)).scalars().all()
             assert obligations == []
             assert patches == []
+    finally:
+        engine.dispose()
+
+
+def test_defer_acceptance_transaction_applies_band_plan_patch_and_allows_commit() -> None:
+    engine = get_engine(postgres_test_url("defer_acceptance_band_success"))
+    init_db(engine)
+    session_factory = get_session_factory(engine)
+    try:
+        with session_factory() as session:
+            project = Project(title="band 延后接受", premise="测试", genre="悬疑", target_total_chapters=20)
+            session.add(project)
+            session.flush()
+            arc = ArcPlanVersion(
+                project_id=project.id,
+                arc_synopsis="测试 arc",
+                chapter_start=1,
+                chapter_end=20,
+            )
+            session.add(arc)
+            session.flush()
+            schedule = BandDelightSchedule(
+                band_id="arc-1:band:2",
+                chapter_start=11,
+                chapter_end=14,
+                stall_guard_max_gap=1,
+            )
+            band_row = BandExperiencePlan(
+                project_id=project.id,
+                arc_id=arc.id,
+                band_id="arc-1:band:2",
+                chapter_start=11,
+                chapter_end=14,
+                stall_guard_max_gap=1,
+                schedule_json=schedule.model_dump_json(),
+                task_contract_json="[]",
+            )
+            session.add(band_row)
+            session.flush()
+            obligation = _obligation(project.id).model_copy(
+                update={
+                    "id": "obl-band-tx",
+                    "obligation_type": "reader_promise_payoff",
+                    "deadline_chapter": 14,
+                    "payoff_test": "第14章必须兑现审计窗口真相。",
+                    "metadata": {"minimum_scope": "band"},
+                }
+            )
+            patch = NarrativePlanPatch(
+                project_id=project.id,
+                patch_type="band_defer_acceptance",
+                target_scope="band",
+                target_band_id=band_row.band_id,
+                affected_chapters=[11, 12, 13, 14],
+                source_obligation_ids=["obl-band-tx"],
+                new_contract={
+                    "band_obligation_contract": {
+                        "open_obligations": ["obl-band-tx"],
+                        "must_resolve_by_band_end": ["obl-band-tx"],
+                        "allowed_carry_forward": [],
+                        "payoff_tests": {"obl-band-tx": "第14章必须兑现审计窗口真相。"},
+                    }
+                },
+                writer_context_injections=[{"obligation_id": "obl-band-tx", "instruction": "band 内兑现"}],
+                reviewer_context_injections=[{"obligation_id": "obl-band-tx", "payoff_test": "第14章必须兑现审计窗口真相。"}],
+                expected_resolution_tests=["第14章必须兑现审计窗口真相。"],
+            )
+
+            result = DeferAcceptanceTransaction(session).run(
+                obligation=obligation,
+                plan_patch=patch,
+                current_chapter=10,
+                target_total_chapters=20,
+            )
+            session.commit()
+
+        assert result.success is True
+        assert result.gate_result is not None
+        assert result.gate_result.admission_mode == "with_obligation"
+
+        with session_factory() as session:
+            stored_obligation = session.get(NarrativeObligationRow, result.obligation.id)
+            stored_patch = session.get(NarrativePlanPatchRow, result.plan_patch.id)
+            updated_band = session.get(BandExperiencePlan, band_row.id)
+            assert stored_obligation is not None
+            assert stored_obligation.status == "planned"
+            assert stored_patch is not None
+            assert stored_patch.target_scope == "band"
+            assert stored_patch.validation_status == "passed"
+            assert stored_patch.applied is True
+            assert updated_band is not None
+            assert "obl-band-tx" in updated_band.schedule_json
+            assert "narrative_obligation" in updated_band.task_contract_json
     finally:
         engine.dispose()

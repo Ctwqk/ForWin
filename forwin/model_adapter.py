@@ -32,6 +32,8 @@ class ModelAdapter(Protocol):
         task_family: str = "",
         stage_key: str = "",
         output_schema: dict | None = None,
+        preferred_provider_kind: str = "",
+        preferred_model: str = "",
     ) -> str:
         ...
 

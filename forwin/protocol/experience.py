@@ -187,6 +187,16 @@ class AmbiguityPayoff(BaseModel):
     )
 
 
+class BandObligationContract(BaseModel):
+    open_obligations: list[str] = Field(default_factory=list)
+    must_resolve_by_band_end: list[str] = Field(default_factory=list)
+    allowed_carry_forward: list[str] = Field(default_factory=list)
+    payoff_tests: dict[str, str] = Field(default_factory=dict)
+    affected_chapters: dict[str, list[int]] = Field(default_factory=dict)
+    writer_context_injections: list[dict[str, Any]] = Field(default_factory=list)
+    reviewer_context_injections: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class BandDelightSchedule(BaseModel):
     band_id: str
     chapter_start: int
@@ -198,6 +208,7 @@ class BandDelightSchedule(BaseModel):
     ambiguity_payoffs: list[AmbiguityPayoff] = Field(default_factory=list)
     active_subworld_ids: list[str] = Field(default_factory=list)
     chapter_entry_targets: list[ChapterEntryTarget] = Field(default_factory=list)
+    band_obligation_contract: BandObligationContract = Field(default_factory=BandObligationContract)
 
 
 class ChapterExperiencePlan(BaseModel):

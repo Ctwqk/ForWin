@@ -4,6 +4,7 @@ import json
 import inspect
 import logging
 import re
+from contextlib import contextmanager
 
 from forwin.model_adapter import ModelAdapter
 from forwin.protocol.context import ChapterContextPack
@@ -79,6 +80,7 @@ class ChapterWriter:
         self.scene_call_timeout_seconds = max(10.0, float(scene_call_timeout_seconds))
         self._chat_signature = inspect.signature(self.llm_client.chat)
         self._business_retry_events: list[dict[str, object]] = []
+        self._llm_route_overrides: list[dict[str, str]] = []
         self.observability = observability or NullObservability()
 
     # ------------------------------------------------------------------
@@ -91,6 +93,8 @@ class ChapterWriter:
         *,
         skill_layers: list[object] | None = None,
         trace_stage_key: str = "writer_preview",
+        llm_preferred_provider_kind: str = "",
+        llm_preferred_model: str = "",
     ) -> WriterOutput:
         """Write a single chapter.
 
@@ -109,21 +113,42 @@ class ChapterWriter:
             component="writer",
             tags={"writer_mode": self.writer_mode},
         ) as span:
-            if self.writer_mode == "single":
-                output = self._write_single_chapter(
-                    context,
-                    skill_layers=skill_layers,
-                    trace_stage_key=trace_stage_key,
-                )
-            else:
-                output = self._write_scene_chapter(
-                    context,
-                    skill_layers=skill_layers,
-                    trace_stage_key=trace_stage_key,
-                )
+            with self._llm_route_override(
+                preferred_provider_kind=llm_preferred_provider_kind,
+                preferred_model=llm_preferred_model,
+            ):
+                if self.writer_mode == "single":
+                    output = self._write_single_chapter(
+                        context,
+                        skill_layers=skill_layers,
+                        trace_stage_key=trace_stage_key,
+                    )
+                else:
+                    output = self._write_scene_chapter(
+                        context,
+                        skill_layers=skill_layers,
+                        trace_stage_key=trace_stage_key,
+                    )
             span.metric("char_count", int(getattr(output, "char_count", 0) or 0))
             span.metric("scene_count", len(getattr(output, "scene_outputs", []) or []))
             return output
+
+    @contextmanager
+    def _llm_route_override(
+        self,
+        *,
+        preferred_provider_kind: str = "",
+        preferred_model: str = "",
+    ):
+        override = {
+            "preferred_provider_kind": str(preferred_provider_kind or "").strip(),
+            "preferred_model": str(preferred_model or "").strip(),
+        }
+        self._llm_route_overrides.append(override)
+        try:
+            yield
+        finally:
+            self._llm_route_overrides.pop()
 
     def write_preview_chapter(
         self,
@@ -1046,6 +1071,7 @@ class ChapterWriter:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        route_override = self._llm_route_overrides[-1] if self._llm_route_overrides else {}
         if response_format is not None and "response_format" in parameters:
             kwargs["response_format"] = response_format
         if timeout_seconds is not None and "timeout_seconds" in parameters:
@@ -1058,6 +1084,13 @@ class ChapterWriter:
             kwargs["stage_key"] = stage_key
         if "output_schema" in parameters and response_format is not None:
             kwargs["output_schema"] = output_schema or {"type": "object"}
+        if route_override:
+            preferred_provider_kind = route_override.get("preferred_provider_kind", "")
+            preferred_model = route_override.get("preferred_model", "")
+            if preferred_provider_kind and "preferred_provider_kind" in parameters:
+                kwargs["preferred_provider_kind"] = preferred_provider_kind
+            if preferred_model and "preferred_model" in parameters:
+                kwargs["preferred_model"] = preferred_model
         return self.llm_client.chat(messages, **kwargs)
 
     def _record_business_retry_event(

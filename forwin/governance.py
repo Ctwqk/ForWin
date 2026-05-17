@@ -107,6 +107,7 @@ class DecisionEventType:
     PLAN_TASK_CONTRACT_UPDATED = "plan_task_contract_updated"
     FUTURE_PLAN_AUDIT_RUN = "future_plan_audit_run"
     FUTURE_PLAN_PATCH_APPLIED = "future_plan_patch_applied"
+    GENERATION_AUDIT_CHECKPOINT_REACHED = "generation_audit_checkpoint_reached"
 
     PAUSE_REQUESTED = "pause_requested"
     PAUSE_REACHED = "pause_reached"
@@ -246,6 +247,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.PLAN_TASK_CONTRACT_UPDATED,
     DecisionEventType.FUTURE_PLAN_AUDIT_RUN,
     DecisionEventType.FUTURE_PLAN_PATCH_APPLIED,
+    DecisionEventType.GENERATION_AUDIT_CHECKPOINT_REACHED,
     DecisionEventType.PAUSE_REQUESTED,
     DecisionEventType.PAUSE_REACHED,
     DecisionEventType.TERMINATE_REQUESTED,
@@ -382,6 +384,8 @@ class ProjectGovernanceSettings(BaseModel):
     band_warn_action: BandWarnAction = "pause"
     manual_checkpoints_enabled: bool = False
     future_constraints_enabled: bool = False
+    generation_audit_interval_chapters: int = 0
+    generation_audit_pause_enabled: bool = False
 
 
 class BlockingReasonInfo(BaseModel):
@@ -481,6 +485,8 @@ def new_project_governance(
         band_warn_action="pause",
         manual_checkpoints_enabled=True,
         future_constraints_enabled=True,
+        generation_audit_interval_chapters=6,
+        generation_audit_pause_enabled=False,
     )
 
 
@@ -497,6 +503,8 @@ def legacy_project_governance(
         band_warn_action="pause",
         manual_checkpoints_enabled=False,
         future_constraints_enabled=False,
+        generation_audit_interval_chapters=0,
+        generation_audit_pause_enabled=False,
     )
 
 
@@ -533,6 +541,13 @@ def normalize_project_governance(
         merged["review_interval_chapters"] = max(0, int(merged.get("review_interval_chapters", fallback_review_interval) or 0))
     except (TypeError, ValueError):
         merged["review_interval_chapters"] = max(0, int(fallback_review_interval or 0))
+    try:
+        merged["generation_audit_interval_chapters"] = max(
+            0,
+            int(merged.get("generation_audit_interval_chapters", 0) or 0),
+        )
+    except (TypeError, ValueError):
+        merged["generation_audit_interval_chapters"] = 0
     return ProjectGovernanceSettings.model_validate(merged)
 
 

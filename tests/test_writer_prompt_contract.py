@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from forwin.protocol.context import ChapterContextPack
+from forwin.protocol.experience import BandDelightSchedule, BandObligationContract
 from forwin.writer.prompts import build_single_chapter_draft_prompt
 
 
@@ -258,6 +259,49 @@ def test_writer_prompt_includes_future_plan_audit_summary() -> None:
     assert "Future plan audit" in content
     assert "countdown_future_plan_conflict" in content
     assert "patch-24" in content
+
+
+def test_writer_prompt_includes_band_obligation_contract() -> None:
+    context = ChapterContextPack(
+        project_id="p1",
+        project_title="灰城遗档",
+        premise="主角：陆明，旧城档案修复师。",
+        genre="悬疑科幻",
+        setting_summary="核心系统记忆系统维持公共档案秩序。",
+        chapter_number=13,
+        chapter_plan_title="审计窗口回响",
+        chapter_plan_one_line="陆明继续追查审计窗口真相。",
+        chapter_goals=["推进审计窗口真相"],
+        band_delight_schedule=BandDelightSchedule(
+            band_id="arc-1:band:2",
+            chapter_start=11,
+            chapter_end=14,
+            stall_guard_max_gap=1,
+            band_obligation_contract=BandObligationContract(
+                open_obligations=["obl-band"],
+                must_resolve_by_band_end=["obl-band"],
+                allowed_carry_forward=[],
+                payoff_tests={"obl-band": "第14章前必须给出审计窗口真相证据。"},
+                affected_chapters={"obl-band": [11, 12, 13, 14]},
+                writer_context_injections=[
+                    {
+                        "obligation_id": "obl-band",
+                        "deadline_chapter": 14,
+                        "payoff_test": "第14章前必须给出审计窗口真相证据。",
+                    }
+                ],
+                reviewer_context_injections=[],
+            ),
+        ),
+    )
+
+    prompt = build_single_chapter_draft_prompt(context)
+    content = "\n".join(message["content"] for message in prompt)
+
+    assert "band 叙事义务" in content
+    assert "obl-band" in content
+    assert "第14章前必须给出审计窗口真相证据" in content
+    assert "本 band 结束前必须清偿" in content
 
 
 def test_writer_prompt_changes_hook_contract_for_final_chapter() -> None:

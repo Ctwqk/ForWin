@@ -14,6 +14,8 @@ from .models import (
     GenerationControlView,
     GenesisView,
     MutationResult,
+    DecisionEventView,
+    ProjectDecisionEventsView,
     ProjectView,
     PromptTraceSummaryView,
     STAGE_KEY_ORDER,
@@ -51,6 +53,33 @@ class ForWinAPIClient:
     async def project_get(self, project_id: str) -> ProjectView:
         payload = await self._request_json("GET", f"/api/projects/{project_id}")
         return self._project_view(payload)
+
+    async def project_decision_events(
+        self,
+        *,
+        project_id: str,
+        event_type: str = "",
+        event_family: str = "",
+        limit: int = 50,
+    ) -> ProjectDecisionEventsView:
+        params: dict[str, Any] = {}
+        if event_family.strip():
+            params["event_family"] = event_family.strip()
+        payload = await self._request_json(
+            "GET",
+            f"/api/projects/{project_id}/decision-events",
+            params=params,
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Expected decision event list payload from ForWin API.")
+        items = [
+            self._decision_event_view(item)
+            for item in self._ensure_iterable_dicts(payload.get("items"))
+        ]
+        normalized_event_type = event_type.strip()
+        if normalized_event_type:
+            items = [item for item in items if item.event_type == normalized_event_type]
+        return ProjectDecisionEventsView(items=items[: max(1, int(limit or 1))])
 
     async def project_create(
         self,
@@ -477,6 +506,10 @@ class ForWinAPIClient:
             creation_status=str(raw.get("creation_status", "legacy")),
             active_genesis_revision_id=str(raw.get("active_genesis_revision_id", "")),
             can_start_writing=bool(raw.get("can_start_writing", False)),
+            target_total_chapters=int(raw.get("target_total_chapters", 0) or 0),
+            materialized_chapter_count=int(
+                raw.get("materialized_chapter_count", raw.get("chapter_count", 0)) or 0
+            ),
             chapter_count=int(raw.get("chapter_count", 0) or 0),
             generated_chapter_count=int(raw.get("generated_chapter_count", 0) or 0),
             accepted_chapter_count=int(raw.get("accepted_chapter_count", 0) or 0),
@@ -593,6 +626,27 @@ class ForWinAPIClient:
             band_id=str(raw.get("band_id", "")),
             decision_event_id=str(raw.get("decision_event_id", "")),
             detail=str(raw.get("detail", "")),
+        )
+
+    @staticmethod
+    def _decision_event_view(raw: dict[str, Any]) -> DecisionEventView:
+        payload = raw.get("payload") or {}
+        return DecisionEventView(
+            id=str(raw.get("id", "")),
+            project_id=str(raw.get("project_id", "")),
+            task_id=str(raw.get("task_id", "")),
+            band_id=str(raw.get("band_id", "")),
+            chapter_number=int(raw.get("chapter_number", 0) or 0),
+            scope=str(raw.get("scope", "")),
+            event_family=str(raw.get("event_family", "")),
+            event_type=str(raw.get("event_type", "")),
+            actor_type=str(raw.get("actor_type", "")),
+            summary=str(raw.get("summary", "")),
+            reason=str(raw.get("reason", "")),
+            payload=payload if isinstance(payload, dict) else {},
+            related_object_type=str(raw.get("related_object_type", "")),
+            related_object_id=str(raw.get("related_object_id", "")),
+            created_at=str(raw.get("created_at", "")),
         )
 
     def _generation_control_view(self, raw: dict[str, Any]) -> GenerationControlView:

@@ -40,6 +40,28 @@ class BlockingReasonView(BaseModel):
     detail: str = ""
 
 
+class DecisionEventView(BaseModel):
+    id: str = ""
+    project_id: str = ""
+    task_id: str = ""
+    band_id: str = ""
+    chapter_number: int = 0
+    scope: str = "project"
+    event_family: str = ""
+    event_type: str = ""
+    actor_type: str = ""
+    summary: str = ""
+    reason: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+    related_object_type: str = ""
+    related_object_id: str = ""
+    created_at: str = ""
+
+
+class ProjectDecisionEventsView(BaseModel):
+    items: list[DecisionEventView] = Field(default_factory=list)
+
+
 class GenerationControlView(BaseModel):
     plan_state: str = "none"
     writing_state: str = "not_started"
@@ -91,6 +113,8 @@ class ProjectView(BaseModel):
     creation_status: str = "legacy"
     active_genesis_revision_id: str = ""
     can_start_writing: bool = False
+    target_total_chapters: int = 0
+    materialized_chapter_count: int = 0
     chapter_count: int = 0
     generated_chapter_count: int = 0
     accepted_chapter_count: int = 0

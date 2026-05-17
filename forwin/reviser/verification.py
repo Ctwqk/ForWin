@@ -108,6 +108,25 @@ class RepairVerifier:
             identity,
         )
 
+    @staticmethod
+    def _issue_class_signature(issue) -> tuple[str, str, str]:
+        return (
+            str(getattr(issue, "rule_name", "") or "").strip(),
+            str(getattr(issue, "issue_type", "") or "").strip(),
+            str(getattr(issue, "target_scope", "") or "").strip(),
+        )
+
+    @staticmethod
+    def _class_should_remain_same_until_fixed(issue) -> bool:
+        rule_name = str(getattr(issue, "rule_name", "") or "").strip()
+        issue_type = str(getattr(issue, "issue_type", "") or "").strip()
+        persistent = {
+            "countdown_non_monotonic",
+            "countdown_stale_retrospective_reference",
+            "final_countdown_unresolved",
+        }
+        return rule_name in persistent or issue_type in persistent
+
     def _rule_verify(
         self,
         *,
@@ -127,15 +146,28 @@ class RepairVerifier:
             for issue in after_review.issues
             if str(issue.severity or "") == "error"
         }
+        after_errors_by_class: dict[tuple[str, str, str], list[tuple[tuple[str, str, str, str], object]]] = {}
+        for key, issue in after_errors.items():
+            after_errors_by_class.setdefault(self._issue_class_signature(issue), []).append((key, issue))
+        persistent_unfixed_after_keys: set[tuple[str, str, str, str]] = set()
         unfixed = [
             str(before_errors[key].description or before_errors[key].rule_name or "").strip()
             for key in before_errors
             if key in after_errors
         ]
+        for key, before_issue in before_errors.items():
+            if key in after_errors or not self._class_should_remain_same_until_fixed(before_issue):
+                continue
+            for after_key, after_issue in after_errors_by_class.get(self._issue_class_signature(before_issue), []):
+                persistent_unfixed_after_keys.add(after_key)
+                unfixed.append(
+                    str(getattr(after_issue, "description", "") or getattr(after_issue, "rule_name", "") or "").strip()
+                )
+                break
         new_risks = [
             str(after_errors[key].description or after_errors[key].rule_name or "").strip()
             for key in after_errors
-            if key not in before_errors
+            if key not in before_errors and key not in persistent_unfixed_after_keys
         ]
         broken_preserve_constraints: list[str] = []
         original_text = "\n".join(

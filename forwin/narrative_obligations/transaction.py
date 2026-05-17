@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from forwin.canon_quality.gate import evaluate_canon_admission
 from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.models.base import new_id
+from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ChapterPlan
+from forwin.planning.band_plan_patcher import BandPlanPatcher
 from forwin.planning.future_plan_auditor import FuturePlanAuditor
 from forwin.planning.plan_patch_validator import PlanPatchValidator
 
@@ -57,11 +60,42 @@ class DeferAcceptanceTransaction:
             update={"source_obligation_ids": source_obligation_ids}
         )
 
+        target_band = None
+        band_plan_bounds: dict[str, tuple[int, int]] = {}
+        if prepared_patch.target_scope == "band":
+            if not prepared_patch.target_band_id:
+                return DeferAcceptanceTransactionResult(
+                    success=False,
+                    errors=["missing_target_band_id"],
+                )
+            target_band = self.session.execute(
+                select(BandExperiencePlan)
+                .where(
+                    BandExperiencePlan.project_id == prepared_obligation.project_id,
+                    BandExperiencePlan.band_id == prepared_patch.target_band_id,
+                )
+                .order_by(BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+            if target_band is None:
+                return DeferAcceptanceTransactionResult(
+                    success=False,
+                    errors=[f"target_band_not_found:{prepared_patch.target_band_id}"],
+                )
+            band_plan_bounds[str(target_band.band_id or "")] = (
+                int(target_band.chapter_start or 0),
+                int(target_band.chapter_end or 0),
+            )
+
         validation = self.validator.validate(
             patch=prepared_patch,
             obligations=[prepared_obligation],
             current_chapter=current_chapter,
             target_total_chapters=target_total_chapters,
+            band_plan_bounds=band_plan_bounds,
+            minimum_scope_by_obligation={
+                prepared_obligation.id: str(prepared_obligation.metadata.get("minimum_scope") or "")
+            },
         )
         if not validation.passed:
             return DeferAcceptanceTransactionResult(success=False, errors=validation.errors)
@@ -94,6 +128,9 @@ class DeferAcceptanceTransaction:
                 if target_plan is not None:
                     FuturePlanAuditor().apply_plan_patch(target_plan, applied_patch)
                     self.session.add(target_plan)
+                if target_band is not None:
+                    BandPlanPatcher().apply(target_band, applied_patch, obligations=[stored_obligation])
+                    self.session.add(target_band)
                 stored_patch = repo.create_plan_patch(applied_patch)
                 planned = repo.mark_obligation_planned(
                     stored_obligation.id,

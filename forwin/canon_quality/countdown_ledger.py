@@ -173,7 +173,13 @@ def analyze_countdowns(
                 previous_remaining_minutes=previous_minutes,
                 status=status,  # type: ignore[arg-type]
                 evidence_refs=[f"body:{start}-{end}"],
-                payload={"draft_id": draft_id, "is_final_chapter": is_final_chapter},
+                payload={
+                    "draft_id": draft_id,
+                    "is_final_chapter": is_final_chapter,
+                    "span_start": start,
+                    "span_end": end,
+                    "mention_context": mention_context,
+                },
             )
         )
         previous_by_key[countdown_key] = minutes

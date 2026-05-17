@@ -153,3 +153,124 @@ def test_plan_patch_validator_rejects_removing_unresolved_obligation() -> None:
 
     assert result.passed is False
     assert "removes_unresolved_obligation:obl-open" in result.errors
+
+
+def test_plan_patch_validator_accepts_band_patch_for_future_band_chapters() -> None:
+    obligation = _obligation().model_copy(
+        update={
+            "id": "obl-band",
+            "obligation_type": "reader_promise_payoff",
+            "deadline_chapter": 14,
+            "metadata": {"minimum_scope": "band"},
+        }
+    )
+    patch = NarrativePlanPatch(
+        id="patch-band",
+        project_id="project-1",
+        patch_type="band_defer_acceptance",
+        target_scope="band",
+        target_band_id="arc-1:band:2",
+        affected_chapters=[11, 12, 13, 14],
+        source_obligation_ids=["obl-band"],
+        new_contract={
+            "band_obligation_contract": {
+                "open_obligations": ["obl-band"],
+                "must_resolve_by_band_end": ["obl-band"],
+                "allowed_carry_forward": [],
+                "payoff_tests": {"obl-band": obligation.payoff_test},
+            }
+        },
+        writer_context_injections=[{"obligation_id": "obl-band", "instruction": "band 偿还"}],
+        reviewer_context_injections=[{"obligation_id": "obl-band", "payoff_test": obligation.payoff_test}],
+        expected_resolution_tests=[obligation.payoff_test],
+    )
+
+    result = PlanPatchValidator().validate(
+        patch=patch,
+        obligations=[obligation],
+        current_chapter=10,
+        target_total_chapters=20,
+        band_plan_bounds={"arc-1:band:2": (11, 14)},
+        minimum_scope_by_obligation={"obl-band": "band"},
+    )
+
+    assert result.passed is True
+    assert result.errors == []
+
+
+def test_plan_patch_validator_rejects_chapter_patch_for_band_obligation() -> None:
+    obligation = _obligation().model_copy(
+        update={
+            "id": "obl-band",
+            "obligation_type": "reader_promise_payoff",
+            "deadline_chapter": 14,
+            "metadata": {"minimum_scope": "band"},
+        }
+    )
+    patch = NarrativePlanPatch(
+        id="patch-chapter",
+        project_id="project-1",
+        patch_type="defer_acceptance",
+        target_scope="chapter",
+        target_plan_id="plan-11",
+        affected_chapters=[11],
+        source_obligation_ids=["obl-band"],
+        new_contract={"payoff_test": obligation.payoff_test},
+        writer_context_injections=[{"obligation_id": "obl-band", "instruction": "单章补一句"}],
+        reviewer_context_injections=[{"obligation_id": "obl-band", "payoff_test": obligation.payoff_test}],
+        expected_resolution_tests=[obligation.payoff_test],
+    )
+
+    result = PlanPatchValidator().validate(
+        patch=patch,
+        obligations=[obligation],
+        current_chapter=10,
+        target_total_chapters=20,
+        minimum_scope_by_obligation={"obl-band": "band"},
+    )
+
+    assert result.passed is False
+    assert "patch_scope_below_obligation_minimum:obl-band:chapter<band" in result.errors
+
+
+def test_plan_patch_validator_rejects_p1_band_carry_forward() -> None:
+    obligation = _obligation().model_copy(
+        update={
+            "id": "obl-band",
+            "priority": "P1",
+            "deadline_chapter": 14,
+            "metadata": {"minimum_scope": "band"},
+        }
+    )
+    patch = NarrativePlanPatch(
+        id="patch-band",
+        project_id="project-1",
+        patch_type="band_defer_acceptance",
+        target_scope="band",
+        target_band_id="arc-1:band:2",
+        affected_chapters=[11, 12, 13, 14],
+        source_obligation_ids=["obl-band"],
+        new_contract={
+            "band_obligation_contract": {
+                "open_obligations": ["obl-band"],
+                "must_resolve_by_band_end": [],
+                "allowed_carry_forward": ["obl-band"],
+                "payoff_tests": {"obl-band": obligation.payoff_test},
+            }
+        },
+        writer_context_injections=[{"obligation_id": "obl-band", "instruction": "band 偿还"}],
+        reviewer_context_injections=[{"obligation_id": "obl-band", "payoff_test": obligation.payoff_test}],
+        expected_resolution_tests=[obligation.payoff_test],
+    )
+
+    result = PlanPatchValidator().validate(
+        patch=patch,
+        obligations=[obligation],
+        current_chapter=10,
+        target_total_chapters=20,
+        band_plan_bounds={"arc-1:band:2": (11, 14)},
+        minimum_scope_by_obligation={"obl-band": "band"},
+    )
+
+    assert result.passed is False
+    assert "p0_p1_obligation_cannot_carry_forward:obl-band" in result.errors

@@ -1023,6 +1023,71 @@ class LLMClientRetryTests(unittest.TestCase):
         self.assertEqual([profile["model"] for profile in route_result["profiles"]], ["deepseek-chat"])
         self.assertEqual(route_result["skipped_profiles"][0]["reason"], "primary_deepseek_no_kimi_fallback")
 
+    def test_repair_route_can_prefer_deepseek_over_spark(self) -> None:
+        client = LLMClient(
+            api_key="kimi-key",
+            base_url="https://api.moonshot.cn/v1",
+            model="kimi-k2.5",
+            retry_attempts=1,
+            fallback_profiles=[
+                {
+                    "id": "spark",
+                    "name": "Codex Spark",
+                    "api_key": "spark-key",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "gpt-5.3-codex-spark",
+                },
+                {
+                    "id": "deepseek",
+                    "name": "DeepSeek",
+                    "api_key": "deepseek-key",
+                    "base_url": "https://api.deepseek.com/v1",
+                    "model": "deepseek-reasoner",
+                },
+            ],
+        )
+        try:
+            route_result = client._route_profiles_with_metadata(
+                client._request_profiles(),
+                task_family="writer",
+                stage_key="chapter_rewrite",
+                preferred_provider_kind="deepseek",
+                preferred_model="deepseek-reasoner",
+            )
+        finally:
+            client.close()
+
+        self.assertEqual(route_result["profiles"][0]["model"], "deepseek-reasoner")
+
+    def test_repair_route_can_prefer_codex_spark_for_final_attempt(self) -> None:
+        client = LLMClient(
+            api_key="deepseek-key",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-reasoner",
+            retry_attempts=1,
+            fallback_profiles=[
+                {
+                    "id": "spark",
+                    "name": "Codex Spark",
+                    "api_key": "spark-key",
+                    "base_url": "https://api.openai.com/v1",
+                    "model": "gpt-5.3-codex-spark",
+                },
+            ],
+        )
+        try:
+            route_result = client._route_profiles_with_metadata(
+                client._request_profiles(),
+                task_family="writer",
+                stage_key="chapter_rewrite",
+                preferred_provider_kind="spark",
+                preferred_model="gpt-5.3-codex-spark",
+            )
+        finally:
+            client.close()
+
+        self.assertEqual(route_result["profiles"][0]["model"], "gpt-5.3-codex-spark")
+
     def test_deepseek_timeout_is_long_enough_for_generation_calls(self) -> None:
         client = LLMClient(
             api_key="deepseek-key",

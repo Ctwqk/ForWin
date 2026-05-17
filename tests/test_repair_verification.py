@@ -127,6 +127,61 @@ def test_repair_verifier_does_not_treat_different_entities_as_same_unfixed_issue
     assert result.new_risks == ["命名角色「方敏」未在当前 chapter 的 subworld 准入名单中。"]
 
 
+def test_repair_verifier_treats_same_countdown_rule_as_unfixed_when_numbers_change() -> None:
+    instruction = RepairInstruction(
+        repair_scope="draft",
+        failure_type="continuity",
+        must_fix=["倒计时从 84 分钟回升到 89分钟，但正文没有明确 reset。"],
+        must_preserve=[],
+    )
+    before_review = ReviewVerdict(
+        verdict="fail",
+        issues=[
+            ContinuityIssue(
+                rule_name="countdown_non_monotonic",
+                severity="error",
+                description="倒计时从 84 分钟回升到 89分钟，但正文没有明确 reset。",
+                issue_type="countdown_non_monotonic",
+                target_scope="ledger",
+            )
+        ],
+    )
+    after_review = ReviewVerdict(
+        verdict="fail",
+        issues=[
+            ContinuityIssue(
+                rule_name="countdown_non_monotonic",
+                severity="error",
+                description="倒计时从 82 分钟回升到 83分钟，但正文没有明确 reset。",
+                issue_type="countdown_non_monotonic",
+                target_scope="ledger",
+            )
+        ],
+    )
+
+    result = RepairVerifier().verify(
+        original_output=WriterOutput(
+            chapter_number=1,
+            title="旧稿",
+            body="84分钟后又写89分钟。",
+            end_of_chapter_summary="旧稿",
+        ),
+        repaired_output=WriterOutput(
+            chapter_number=1,
+            title="新稿",
+            body="82分钟后又写83分钟。",
+            end_of_chapter_summary="新稿",
+        ),
+        before_review=before_review,
+        after_review=after_review,
+        repair_instruction=instruction,
+    )
+
+    assert result.fixed_all_must_fix is False
+    assert result.unfixed == ["倒计时从 82 分钟回升到 83分钟，但正文没有明确 reset。"]
+    assert result.new_risks == []
+
+
 def test_repair_verifier_ignores_single_character_preserve_fragments() -> None:
     instruction = RepairInstruction(
         repair_scope="chapter",

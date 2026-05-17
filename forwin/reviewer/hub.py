@@ -12,6 +12,7 @@ from forwin.protocol.review import (
 )
 from forwin.protocol.writer import WriterOutput
 from forwin.canon_quality.service import analyze_writer_output_quality
+from forwin.canon_quality.temporal_semantics import LLMTemporalReconciler
 from forwin.skills import serialize_prompt_layers
 from .context_builder import build_review_context_pack
 from .experience import ExperienceReviewer
@@ -49,6 +50,13 @@ class HistoricalReviewHub:
         self.personality_reviewer = personality_reviewer or PersonalityConsistencyReviewer()
         self.lint_collector = lint_collector or LintSignalCollector(enabled=lint_review_enabled)
         self.llm_webnovel_reviewer = llm_webnovel_reviewer
+        self.llm_client = llm_client
+        self.llm_enabled = bool(llm_client) if llm_enabled is None else bool(llm_enabled)
+        self.temporal_reconciler = (
+            LLMTemporalReconciler(llm_client)
+            if self.llm_enabled and llm_client is not None
+            else None
+        )
         self.observability = observability or NullObservability()
 
     def review(
@@ -108,6 +116,7 @@ class HistoricalReviewHub:
                     chapter_number=int(getattr(context, "chapter_number", 0) or 0),
                     writer_output=writer_output,
                     persist=False,
+                    temporal_reconciler=self.temporal_reconciler,
                 )
                 deterministic_quality_report = quality.deterministic_quality_report
                 span.metric("signal_count", len(quality.signals))

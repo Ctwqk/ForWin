@@ -15,6 +15,7 @@ from .models import (
     ChapterListView,
     ChapterReviewApproveView,
     MutationResult,
+    ProjectDecisionEventsView,
     ProjectListView,
     StageKey,
     TaskListView,
@@ -82,6 +83,23 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
     )
     async def project_get(project_id: str):
         return await client.project_get(project_id)
+
+    @register_read_tool(
+        "project_decision_events",
+        "List recent ForWin decision events for a project. Use this when inspecting generation audit checkpoints, future plan audits, pauses, and other audit records without reading the database.",
+    )
+    async def project_decision_events(
+        project_id: str,
+        event_type: str = "",
+        event_family: str = "",
+        limit: int = 50,
+    ) -> ProjectDecisionEventsView:
+        return await client.project_decision_events(
+            project_id=project_id,
+            event_type=event_type,
+            event_family=event_family,
+            limit=limit,
+        )
 
     @register_write_tool(
         "project_create",

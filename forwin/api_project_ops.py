@@ -1061,6 +1061,8 @@ def continue_project_generation(
             band_warn_action=governance.band_warn_action,
             manual_checkpoints_enabled=governance.manual_checkpoints_enabled,
             future_constraints_enabled=governance.future_constraints_enabled,
+            generation_audit_interval_chapters=governance.generation_audit_interval_chapters,
+            generation_audit_pause_enabled=governance.generation_audit_pause_enabled,
         )
         if project_has_active_generation_task(project_id, session=session):
             raise HTTPException(409, generation_task_conflict_message(project_id))
@@ -1848,6 +1850,8 @@ def approve_chapter_review(
                 band_warn_action=governance.band_warn_action,
                 manual_checkpoints_enabled=governance.manual_checkpoints_enabled,
                 future_constraints_enabled=governance.future_constraints_enabled,
+                generation_audit_interval_chapters=governance.generation_audit_interval_chapters,
+                generation_audit_pause_enabled=governance.generation_audit_pause_enabled,
             )
             if project_has_active_generation_task(project_id, session=session):
                 raise HTTPException(409, generation_task_conflict_message(project_id))
@@ -1982,6 +1986,8 @@ def retry_chapter_review(
             band_warn_action=governance.band_warn_action,
             manual_checkpoints_enabled=governance.manual_checkpoints_enabled,
             future_constraints_enabled=governance.future_constraints_enabled,
+            generation_audit_interval_chapters=governance.generation_audit_interval_chapters,
+            generation_audit_pause_enabled=governance.generation_audit_pause_enabled,
         )
         plan = session.execute(
             select(ChapterPlan).where(

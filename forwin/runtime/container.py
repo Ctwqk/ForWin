@@ -236,7 +236,10 @@ class RuntimeContainer:
             review_hub=review_hub,
             writer=writer,
             provisional_writer=provisional_writer,
-            repair_policy=RepairPolicy(max_attempts=max(1, min(3, int(config.review_fail_max_rewrites or 3)))),
+            repair_policy=RepairPolicy(
+                max_attempts=max(1, min(3, int(config.review_fail_max_rewrites or 3))),
+                model_sequence=list(getattr(config, "repair_model_sequence", []) or []),
+            ),
             repair_verifier=RepairVerifier(
                 llm_client=llm_client if llm_available else None,
                 llm_enabled=llm_available,

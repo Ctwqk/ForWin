@@ -171,7 +171,10 @@ class RoutedModelAdapter:
         output_schema: dict[str, Any] | None = None,
         codex_allowed: bool = True,
         permission_profile: str = "prompt_only_readonly",
+        preferred_provider_kind: str = "",
+        preferred_model: str = "",
     ) -> str:
+        deterministic_route_requested = bool(preferred_provider_kind or preferred_model)
         content = self.router.chat(
             messages,
             intent=LLMCallIntent(
@@ -179,7 +182,7 @@ class RoutedModelAdapter:
                 stage_key=stage_key,
                 latency_class=latency_class,
                 output_schema=output_schema,
-                codex_allowed=codex_allowed,
+                codex_allowed=bool(codex_allowed and not deterministic_route_requested),
                 permission_profile=permission_profile,
             ),
             temperature=temperature,
@@ -187,6 +190,8 @@ class RoutedModelAdapter:
             response_format=response_format,
             timeout_seconds=timeout_seconds,
             retry_on_timeout=retry_on_timeout,
+            preferred_provider_kind=preferred_provider_kind,
+            preferred_model=preferred_model,
         )
         self.last_call_result = self.router.last_call_result
         return content

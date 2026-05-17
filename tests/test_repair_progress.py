@@ -10,6 +10,7 @@ from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.reviser.policy import RepairPolicy
 
 
 class RepairProgressTests(unittest.TestCase):
@@ -135,6 +136,104 @@ def test_repair_must_fix_is_carried_into_writer_rule_anchors() -> None:
 
     assert payload["rule_anchors"][0] == "repair must fix: 不要把终端审计窗口从239分钟延长到60小时。"
     assert "保留既有规则" in payload["rule_anchors"]
+
+
+def test_repair_policy_keeps_requested_local_scope_for_local_hard_error() -> None:
+    policy = RepairPolicy(max_attempts=3)
+
+    second_attempt = policy.decide(
+        verdict="fail",
+        operation_mode="blackbox",
+        attempts_completed=1,
+        requested_scope="draft",
+    )
+    third_attempt = policy.decide(
+        verdict="fail",
+        operation_mode="blackbox",
+        attempts_completed=2,
+        requested_scope="scene",
+    )
+
+    assert second_attempt.scope == "draft"
+    assert third_attempt.scope == "draft"
+
+
+def test_repair_policy_selects_configured_model_sequence() -> None:
+    policy = RepairPolicy(
+        max_attempts=3,
+        model_sequence=(
+            "deepseek-reasoner",
+            "deepseek-reasoner",
+            "gpt-5.3-codex-spark",
+        ),
+    )
+
+    first = policy.decide(
+        verdict="fail",
+        operation_mode="blackbox",
+        attempts_completed=0,
+    )
+    second = policy.decide(
+        verdict="fail",
+        operation_mode="blackbox",
+        attempts_completed=1,
+    )
+    third = policy.decide(
+        verdict="fail",
+        operation_mode="blackbox",
+        attempts_completed=2,
+    )
+
+    assert first.preferred_provider_kind == "deepseek"
+    assert first.preferred_model == "deepseek-reasoner"
+    assert second.preferred_provider_kind == "deepseek"
+    assert second.preferred_model == "deepseek-reasoner"
+    assert third.preferred_provider_kind == "spark"
+    assert third.preferred_model == "gpt-5.3-codex-spark"
+
+
+def test_structural_ledger_issue_does_not_pin_repair_to_requested_draft_scope() -> None:
+    review = ReviewVerdict(
+        verdict="fail",
+        issues=[
+            ContinuityIssue(
+                rule_name="countdown_non_monotonic",
+                severity="error",
+                description="倒计时从 69 分钟回升到 78 分钟。",
+                reviewer="canon_quality",
+                issue_type="countdown_non_monotonic",
+                target_scope="ledger",
+            )
+        ],
+        repair_instruction=RepairInstruction(
+            repair_scope="draft",
+            failure_type="continuity",
+            must_fix=["不要把终端审计窗口从 69 分钟延长到 78 分钟。"],
+            must_preserve=["章节目标"],
+            design_patch={},
+            evidence_refs=[],
+        ),
+    )
+
+    assert WritingOrchestrator._repair_policy_requested_scope(review) == ""
+
+
+def test_current_chapter_repair_overlay_preserves_must_fix_for_band_plan_repair() -> None:
+    patched = WritingOrchestrator._current_chapter_repair_experience_plan(
+        ChapterExperiencePlan(rule_anchors=["原有规则"]),
+        RepairInstruction(
+            repair_scope="band_plan",
+            failure_type="continuity",
+            must_fix=["倒计时从 82 分钟回升到 83分钟，但正文没有明确 reset。"],
+            must_preserve=["章节目标"],
+            design_patch={},
+            evidence_refs=["canon_quality:x"],
+        ),
+    )
+
+    assert patched.rule_anchors[0].startswith("repair countdown hard constraint:")
+    assert any("83分钟必须改成小于等于82分钟" in item for item in patched.rule_anchors)
+    assert "原有规则" in patched.rule_anchors
 
 
 def test_countdown_non_monotonic_repair_adds_sequence_constraint() -> None:

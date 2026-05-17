@@ -76,6 +76,8 @@ class OpenAICompatibleAdapter:
         task_family: str = "",
         stage_key: str = "",
         output_schema: dict | None = None,
+        preferred_provider_kind: str = "",
+        preferred_model: str = "",
     ) -> str:
         """Send a chat completion request and return the content string.
 
@@ -105,6 +107,8 @@ class OpenAICompatibleAdapter:
             stage_key=stage_key,
             response_format=response_format,
             output_schema=output_schema,
+            preferred_provider_kind=preferred_provider_kind,
+            preferred_model=preferred_model,
         )
         profiles = route_result["profiles"]
         candidate_chain = route_result["candidate_chain"]
@@ -138,6 +142,8 @@ class OpenAICompatibleAdapter:
                 },
                 candidate_chain=candidate_chain,
                 skipped_profiles=skipped_profiles,
+                preferred_provider_kind=preferred_provider_kind,
+                preferred_model=preferred_model,
             )
             raise RuntimeError("OpenAICompatibleAdapter.chat: no usable LLM profile")
         last_exc: Exception | None = None
@@ -159,6 +165,8 @@ class OpenAICompatibleAdapter:
                     fallback_eligible_on_profile_failure=profile_index < len(profiles) - 1,
                     candidate_chain=candidate_chain,
                     skipped_profiles=skipped_profiles,
+                    preferred_provider_kind=preferred_provider_kind,
+                    preferred_model=preferred_model,
                 )
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
@@ -213,6 +221,8 @@ class OpenAICompatibleAdapter:
         fallback_eligible_on_profile_failure: bool,
         candidate_chain: list[dict[str, str]],
         skipped_profiles: list[dict[str, str]],
+        preferred_provider_kind: str = "",
+        preferred_model: str = "",
     ) -> str:
         requested_temperature = float(temperature)
         effective_temperature = self._effective_temperature_for_profile(
@@ -314,6 +324,8 @@ class OpenAICompatibleAdapter:
                         response_text=self._safe_response_text(response),
                         candidate_chain=candidate_chain,
                         skipped_profiles=skipped_profiles,
+                        preferred_provider_kind=preferred_provider_kind,
+                        preferred_model=preferred_model,
                     )
                     if attempt < self.retry_attempts - 1:
                         logger.warning(
@@ -361,6 +373,8 @@ class OpenAICompatibleAdapter:
                         response_text=response_text,
                         candidate_chain=candidate_chain,
                         skipped_profiles=skipped_profiles,
+                        preferred_provider_kind=preferred_provider_kind,
+                        preferred_model=preferred_model,
                     )
                     setattr(exc, _ATTEMPT_RECORDED_ATTR, True)
                     raise
@@ -386,6 +400,8 @@ class OpenAICompatibleAdapter:
                     response_text=response_text,
                     candidate_chain=candidate_chain,
                     skipped_profiles=skipped_profiles,
+                    preferred_provider_kind=preferred_provider_kind,
+                    preferred_model=preferred_model,
                 )
                 logger.debug(
                     "LLMClient.chat success: %d chars returned in %.2fs",
@@ -421,6 +437,8 @@ class OpenAICompatibleAdapter:
                     request_payload=payload,
                     candidate_chain=candidate_chain,
                     skipped_profiles=skipped_profiles,
+                    preferred_provider_kind=preferred_provider_kind,
+                    preferred_model=preferred_model,
                 )
                 if retry_on_timeout and attempt < self.retry_attempts - 1:
                     delay = self._retry_delay(attempt)
@@ -485,6 +503,8 @@ class OpenAICompatibleAdapter:
                     ),
                     candidate_chain=candidate_chain,
                     skipped_profiles=skipped_profiles,
+                    preferred_provider_kind=preferred_provider_kind,
+                    preferred_model=preferred_model,
                 )
                 raise
 
@@ -624,6 +644,8 @@ class OpenAICompatibleAdapter:
         response_text: str = "",
         candidate_chain: list[dict[str, str]] | None = None,
         skipped_profiles: list[dict[str, str]] | None = None,
+        preferred_provider_kind: str = "",
+        preferred_model: str = "",
     ) -> None:
         base_url = str(profile.get("base_url") or "")
         request_text = json.dumps(request_payload or {}, ensure_ascii=False, sort_keys=True)
@@ -662,6 +684,8 @@ class OpenAICompatibleAdapter:
                 "task_family": str(task_family or ""),
                 "stage_key": str(stage_key or ""),
                 "llm_task_route": str(llm_task_route or ""),
+                "preferred_provider_kind": str(preferred_provider_kind or ""),
+                "preferred_model": str(preferred_model or ""),
                 "retry_after": retry_after,
                 "sleep_ms": int(sleep_ms or 0),
                 "error_class": error_class,
@@ -691,6 +715,8 @@ class OpenAICompatibleAdapter:
         stage_key: str = "",
         response_format: dict | None = None,
         output_schema: dict | None = None,
+        preferred_provider_kind: str = "",
+        preferred_model: str = "",
     ) -> list[dict[str, str]]:
         return cls._route_profiles_with_metadata(
             profiles,
@@ -698,6 +724,8 @@ class OpenAICompatibleAdapter:
             stage_key=stage_key,
             response_format=response_format,
             output_schema=output_schema,
+            preferred_provider_kind=preferred_provider_kind,
+            preferred_model=preferred_model,
         )["profiles"]
 
     @classmethod
@@ -709,6 +737,8 @@ class OpenAICompatibleAdapter:
         stage_key: str = "",
         response_format: dict | None = None,
         output_schema: dict | None = None,
+        preferred_provider_kind: str = "",
+        preferred_model: str = "",
     ) -> dict[str, list[dict[str, str]]]:
         route = cls._llm_task_route(
             task_family=task_family,
@@ -763,6 +793,36 @@ class OpenAICompatibleAdapter:
                     }
                 )
         routed = suitable
+        preferred_kind = str(preferred_provider_kind or "").strip().lower()
+        preferred_model_text = str(preferred_model or "").strip().lower()
+        if preferred_kind or preferred_model_text:
+            preferred = [
+                item
+                for item in routed
+                if cls._profile_preference_rank(
+                    item[1],
+                    preferred_provider_kind=preferred_kind,
+                    preferred_model=preferred_model_text,
+                )
+                < 99
+            ]
+            if preferred:
+                routed.sort(
+                    key=lambda item: (
+                        cls._profile_preference_rank(
+                            item[1],
+                            preferred_provider_kind=preferred_kind,
+                            preferred_model=preferred_model_text,
+                        ),
+                        cls._profile_route_priority(item[1], route),
+                        item[0],
+                    )
+                )
+                return {
+                    "profiles": [profile for _index, profile in routed],
+                    "candidate_chain": candidate_chain,
+                    "skipped_profiles": skipped_profiles,
+                }
         primary = (
             next((item for item in routed if item[0] == 0), None)
             if primary_kind == "deepseek"
@@ -789,6 +849,25 @@ class OpenAICompatibleAdapter:
             "candidate_chain": candidate_chain,
             "skipped_profiles": skipped_profiles,
         }
+
+    @classmethod
+    def _profile_preference_rank(
+        cls,
+        profile: dict[str, str],
+        *,
+        preferred_provider_kind: str = "",
+        preferred_model: str = "",
+    ) -> int:
+        model = str(profile.get("model") or "").strip().lower()
+        kind = cls._profile_kind(profile)
+        if preferred_model:
+            if model == preferred_model:
+                return 0
+            if preferred_model in model or model in preferred_model:
+                return 1
+        if preferred_provider_kind and kind == preferred_provider_kind:
+            return 2
+        return 99
 
     @classmethod
     def _llm_task_route(

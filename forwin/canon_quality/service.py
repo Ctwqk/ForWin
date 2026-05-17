@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -22,6 +23,10 @@ from .repository import CanonQualityRepository
 from .reveal_registry import analyze_reveals
 from .signals import CanonQualitySignal
 from .style import analyze_style_telemetry
+from .temporal_semantics import (
+    TemporalReconciliationResult,
+    apply_temporal_reconciliation,
+)
 
 
 class CanonQualityAnalysisResult(BaseModel):
@@ -40,6 +45,7 @@ def analyze_writer_output_quality(
     writer_output: WriterOutput,
     draft_id: str = "",
     persist: bool = False,
+    temporal_reconciler: Callable[..., TemporalReconciliationResult | dict[str, Any] | None] | None = None,
 ) -> CanonQualityAnalysisResult:
     repo = CanonQualityRepository(session)
     project = session.get(Project, project_id)
@@ -92,6 +98,22 @@ def analyze_writer_output_quality(
         previous_entries=previous_countdown_entries,
         is_final_chapter=is_final_chapter,
     )
+    temporal_reconciliation = None
+    if temporal_reconciler is not None and countdown_signals:
+        temporal_reconciliation = temporal_reconciler(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            draft_id=draft_id,
+            body=body,
+            previous_entries=previous_countdown_entries,
+            signals=countdown_signals,
+            entries=countdown_entries,
+        )
+        countdown_signals, countdown_entries, temporal_reconciliation = apply_temporal_reconciliation(
+            signals=countdown_signals,
+            entries=countdown_entries,
+            reconciliation=temporal_reconciliation,
+        )
     signals.extend(countdown_signals)
 
     signals.extend(
@@ -180,6 +202,8 @@ def analyze_writer_output_quality(
         repo.save_body_metrics(body_metrics)
 
     report = _quality_report(signals=signals, countdown_entries=countdown_entries)
+    if temporal_reconciliation is not None:
+        report["temporal_semantics"] = temporal_reconciliation.model_dump(mode="json")
     report["residual_open_signals"] = [
         signal.model_dump(mode="json")
         for signal in repo.list_open_signals(project_id, before_chapter=chapter_number, limit=20)

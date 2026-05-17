@@ -178,6 +178,16 @@ def _experience_overlay_section(context: ChapterContextPack) -> str | None:
                 f"    · 第{item.chapter_hint}章 {item.payoff_type}：{item.summary}"
                 for item in band.ambiguity_payoffs[:3]
             )
+        contract = getattr(band, "band_obligation_contract", None)
+        if contract is not None and getattr(contract, "open_obligations", None):
+            lines.append("  · band 叙事义务：")
+            for obligation_id in contract.open_obligations[:5]:
+                payoff = contract.payoff_tests.get(obligation_id, "") if contract.payoff_tests else ""
+                affected = contract.affected_chapters.get(obligation_id, []) if contract.affected_chapters else []
+                marker = "本 band 结束前必须清偿" if obligation_id in contract.must_resolve_by_band_end else "允许后续 band 继续推进"
+                chapter_text = f"；影响章节：{', '.join(str(item) for item in affected)}" if affected else ""
+                payoff_text = f"；payoff：{payoff}" if payoff else ""
+                lines.append(f"    · {obligation_id}：{marker}{chapter_text}{payoff_text}")
     if plan is not None:
         if plan.planned_reward_tags:
             lines.append(f"  · 本章计划奖励：{'、'.join(plan.planned_reward_tags)}")

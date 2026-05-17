@@ -9,6 +9,8 @@ from forwin.governance import (
     is_derived_goal_control_instruction,
     issue_group_for_issue,
 )
+from forwin.narrative_obligations.types import NarrativeObligation
+from forwin.protocol.experience import BandDelightSchedule
 from forwin.protocol.review import ContinuityIssue
 from forwin.protocol.state_change import EventCandidate, StateChangeCandidate, ThreadBeatCandidate
 from forwin.protocol.writer import WriterOutput
@@ -87,6 +89,90 @@ def evaluate_task_contract(
                         f"task_source={task.source}",
                     ],
                     suggested_fix="补足该章/该 band 需要交付的规划任务，或显式调整任务合同。",
+                )
+            )
+    return issues
+
+
+def evaluate_band_obligation_contract(
+    schedule: BandDelightSchedule | None,
+    *,
+    obligations: list[NarrativeObligation],
+    band_end_chapter: int,
+    reviewer: str,
+    target_scope: str,
+) -> list[ContinuityIssue]:
+    if schedule is None:
+        return []
+    contract = schedule.band_obligation_contract
+    if not contract.open_obligations:
+        return []
+    obligations_by_id = {item.id: item for item in obligations if item.id}
+    issues: list[ContinuityIssue] = []
+    for obligation_id in contract.must_resolve_by_band_end:
+        obligation = obligations_by_id.get(obligation_id)
+        if obligation is None or obligation.status in {"resolved", "waived"}:
+            continue
+        issues.append(
+            ContinuityIssue(
+                rule_name="band_obligation_unresolved",
+                severity="error",
+                description=f"band 结束时叙事义务仍未清偿：{obligation_id}",
+                reviewer=reviewer,
+                issue_type="band_obligation_completion",
+                target_scope=target_scope,
+                issue_group=issue_group_for_issue(
+                    issue_type="band_obligation_completion",
+                    rule_name="band_obligation_unresolved",
+                ),
+                evidence_refs=[
+                    f"obligation={obligation_id}",
+                    f"deadline_chapter={obligation.deadline_chapter}",
+                    f"band_end={int(band_end_chapter or 0)}",
+                ],
+                suggested_fix="清偿该 band-level obligation，或通过人工治理将 P2/P3 合理 carry forward。",
+            )
+        )
+    for obligation_id in contract.allowed_carry_forward:
+        obligation = obligations_by_id.get(obligation_id)
+        if obligation is None or obligation.status in {"resolved", "waived"}:
+            continue
+        if obligation.priority in {"P0", "P1"}:
+            issues.append(
+                ContinuityIssue(
+                    rule_name="band_obligation_invalid_carry_forward",
+                    severity="error",
+                    description=f"P0/P1 叙事义务不能跨 band carry forward：{obligation_id}",
+                    reviewer=reviewer,
+                    issue_type="band_obligation_completion",
+                    target_scope=target_scope,
+                    issue_group=issue_group_for_issue(
+                        issue_type="band_obligation_completion",
+                        rule_name="band_obligation_invalid_carry_forward",
+                    ),
+                    evidence_refs=[f"obligation={obligation_id}", f"priority={obligation.priority}"],
+                    suggested_fix="将该义务改为本 band 清偿，或升级 arc/manual replan。",
+                )
+            )
+        elif int(obligation.deadline_chapter or 0) <= int(band_end_chapter or 0):
+            issues.append(
+                ContinuityIssue(
+                    rule_name="band_obligation_carry_forward_after_deadline",
+                    severity="error",
+                    description=f"叙事义务已到期，不能 carry forward：{obligation_id}",
+                    reviewer=reviewer,
+                    issue_type="band_obligation_completion",
+                    target_scope=target_scope,
+                    issue_group=issue_group_for_issue(
+                        issue_type="band_obligation_completion",
+                        rule_name="band_obligation_carry_forward_after_deadline",
+                    ),
+                    evidence_refs=[
+                        f"obligation={obligation_id}",
+                        f"deadline_chapter={obligation.deadline_chapter}",
+                        f"band_end={int(band_end_chapter or 0)}",
+                    ],
+                    suggested_fix="先清偿到期义务，再进入下一 band。",
                 )
             )
     return issues

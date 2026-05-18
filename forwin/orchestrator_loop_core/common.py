@@ -28,9 +28,6 @@ from sqlalchemy.orm import Session
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.canon_quality.gate import evaluate_canon_admission
 from forwin.canon_quality.placeholder import extract_expected_protagonist_names
-from forwin.canon_quality.prompt_json.obligation_verifier_prompt import ObligationVerifierPromptAnalyzer
-from forwin.canon_quality.prompt_json.schemas import normalize_prompt_json_mode
-from forwin.canon_quality.prompt_json.validation import issue_can_block
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.canon_names import is_plausible_person_name
@@ -59,7 +56,6 @@ from forwin.governance_checks import (
     evaluate_resource_closure_risk,
     evaluate_task_contract,
 )
-from forwin.gate.prompt_json.band_checkpoint_prompt import BandCheckpointPromptEvaluator
 from forwin.models import BookGenesisRevision, ProvisionalBandExecution, ProvisionalChapterLedger, new_id
 from forwin.models.governance import BandCheckpoint
 from forwin.models.draft import ChapterDraft, ChapterReview
@@ -112,12 +108,6 @@ from forwin.world_model.compiler import WorldModelCompiler as LegacyWorldModelCo
 logger = logging.getLogger(__name__)
 
 RuntimeContainer: Any = None
-
-
-def _configured_prompt_json_mode(value: str | None, *, enabled: bool) -> str:
-    if not enabled:
-        return "deterministic"
-    return normalize_prompt_json_mode(value, default="hybrid")
 
 
 def _chapter_plan_prompt_text(plan: ChapterPlan | None) -> str:
@@ -190,7 +180,10 @@ def _band_prompt_result_to_checkpoint_issues(
     for issue in result.get("issues", []) or []:
         if not isinstance(issue, dict):
             continue
-        can_block = issue_can_block(issue, min_confidence=min_blocking_confidence)
+        can_block = (
+            str(issue.get("severity") or "").lower() in {"critical", "blocker", "error"}
+            and float(issue.get("confidence") or 0.0) >= float(min_blocking_confidence or 0.0)
+        )
         evidence = issue.get("evidence") if isinstance(issue.get("evidence"), list) else []
         detail = "; ".join(
             str(item.get("location") or item.get("quote") or "")

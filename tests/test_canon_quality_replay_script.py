@@ -54,6 +54,6 @@ def test_replay_script_writes_markdown_report(tmp_path: Path) -> None:
 
         text = output_path.read_text(encoding="utf-8")
         assert signal_count >= 1
-        assert "placeholder_leakage" in text
+        assert "form_llm_unavailable" in text
     finally:
         engine.dispose()

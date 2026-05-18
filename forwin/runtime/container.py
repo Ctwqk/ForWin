@@ -191,6 +191,7 @@ class RuntimeContainer:
             llm_client=llm_client if llm_available else None,
             llm_enabled=llm_available,
             observability=observability,
+            chapter_review_form_mode=config.chapter_review_form_mode,
         )
         publisher_runtime = PublisherRuntimeService(
             session_factory=session_factory,

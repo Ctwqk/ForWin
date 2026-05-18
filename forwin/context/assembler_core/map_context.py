@@ -18,7 +18,7 @@ from forwin.protocol.context import (
     WorldPressureView,
 )
 from forwin.characters.events import CHARACTER_INTEGRITY_CHECK_FAILED
-from forwin.canon_quality.character_state import extract_candidate_character_names
+from forwin.canon_names import extract_candidate_character_names
 from forwin.canon_quality.rule_profile import CanonGlossary
 from forwin.governance import DecisionEventInfo
 from forwin.observability.context import OperationContext

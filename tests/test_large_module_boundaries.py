@@ -15,7 +15,6 @@ FIRST_BATCH_LIMITS = {
     "forwin/planning/future_plan_auditor.py": 250,
 }
 SECOND_BATCH_SHELL_LIMITS = {
-    "forwin/canon_quality/countdown_ledger.py": 300,
     "forwin/api_project_payloads.py": 250,
     "forwin/api_schemas.py": 250,
     "forwin/writer/prompts.py": 250,
@@ -34,7 +33,7 @@ def test_giant_module_public_imports_remain_available() -> None:
     from forwin.orchestrator.loop import RunResult, WritingOrchestrator
     from forwin.planning.future_plan_auditor import FuturePlanAuditor, FuturePlanAuditRun
     from forwin.retrieval.broker import RetrievalBroker
-    from forwin.canon_quality.countdown_ledger import analyze_countdowns, parse_countdown_minutes
+    from forwin.canon_quality.chapter_review_form.service import review_chapter_with_form
     from forwin.writer.llm_client import LLMClient
     from forwin.writer.prompts import build_single_chapter_draft_prompt
     import forwin.api_project_ops as api_project_ops
@@ -54,8 +53,7 @@ def test_giant_module_public_imports_remain_available() -> None:
     assert FuturePlanAuditor is not None
     assert FuturePlanAuditRun is not None
     assert RetrievalBroker is not None
-    assert callable(analyze_countdowns)
-    assert callable(parse_countdown_minutes)
+    assert callable(review_chapter_with_form)
     assert LLMClient is not None
     assert callable(build_single_chapter_draft_prompt)
     assert callable(api_project_ops.create_project)

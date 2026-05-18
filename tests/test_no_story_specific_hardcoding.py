@@ -40,16 +40,9 @@ BANNED_CURRENT_BOOK_MECHANISM_TERMS = (
 ALLOWED_PRODUCTION_FILES: set[str] = set()
 
 ALLOWED_PRODUCTION_MECHANISM_FILES: set[str] = {
-    # Phase 1 makes the old overfitting visible. Later cleanup phases shrink
-    # this allowlist until only explicit legacy/profile data files remain.
     "forwin/api_project_ops.py",
     "forwin/project_ops/common.py",
     "forwin/canon_quality/rule_profile.py",
-    "forwin/canon_quality/countdown_ledger.py",
-    "forwin/canon_quality/countdown/filters.py",
-    "forwin/canon_quality/countdown/keys.py",
-    "forwin/canon_quality/countdown/retrospective.py",
-    "forwin/canon_quality/final_completion.py",
     "forwin/orchestrator/loop.py",
     "forwin/orchestrator_loop_core/repair_loop.py",
     "forwin/planning/future_plan_auditor.py",

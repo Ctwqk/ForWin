@@ -345,10 +345,7 @@ def _apply_canon_quality_gate(
         writer_output=writer_output,
         draft_id=draft_id,
         persist=True,
-        mode=_configured_prompt_json_mode(
-            getattr(self.config, "canon_quality_mode", "deterministic"),
-            enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
-        ),
+        mode=str(getattr(self.config, "chapter_review_form_mode", "primary") or "primary"),
         llm_client=self.llm_client,
         return_raw_analyzer_results=True,
     )
@@ -393,15 +390,6 @@ def _apply_canon_quality_gate(
     gate_analyzer_results = [
         item for item in analysis.raw_analyzer_results if isinstance(item, dict)
     ]
-    gate_analyzer_results.extend(
-        self._run_obligation_prompt_json_gate(
-            session=session,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            writer_output=writer_output,
-            obligations=gate_obligations,
-        )
-    )
     gate_result = evaluate_canon_admission(
         project_id=project_id,
         chapter_number=chapter_number,
@@ -414,8 +402,8 @@ def _apply_canon_quality_gate(
         mode=str(getattr(self.config, "canon_quality_gate", "strict") or "strict"),
         is_final_chapter=bool(target_total_chapters and chapter_number >= target_total_chapters),
         analyzer_results=gate_analyzer_results,
-        min_blocking_confidence=float(getattr(self.config, "prompt_json_min_blocking_confidence", 0.8) or 0.8),
-        require_evidence_for_block=bool(getattr(self.config, "prompt_json_require_evidence_for_block", True)),
+        min_blocking_confidence=float(getattr(self.config, "chapter_review_form_min_blocking_confidence", 0.8) or 0.8),
+        require_evidence_for_block=True,
     )
     CanonQualityRepository(session).save_admission_run(gate_result, signals=analysis.signals)
     self._record_decision_event(
@@ -445,7 +433,7 @@ def _apply_canon_quality_gate(
                 "canon_quality_signals": [
                     signal.model_dump(mode="json") for signal in analysis.signals
                 ],
-                "prompt_json_analyzer_results": gate_analyzer_results,
+                "chapter_review_form_results": gate_analyzer_results,
             },
         )
     self._record_decision_event(
@@ -461,7 +449,7 @@ def _apply_canon_quality_gate(
     )
     return frozen_path or "canon-quality-gate-blocked"
 
-def _run_obligation_prompt_json_gate(
+def _run_obligation_form_gate(
     self,
     *,
     session: Session,
@@ -470,52 +458,7 @@ def _run_obligation_prompt_json_gate(
     writer_output: WriterOutput,
     obligations: list[NarrativeObligation],
 ) -> list[dict[str, Any]]:
-    mode = _configured_prompt_json_mode(
-        getattr(self.config, "canon_quality_mode", "deterministic"),
-        enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
-    )
-    if mode == "deterministic" or not obligations:
-        return []
-    chapter_plan = (
-        session.execute(
-            select(ChapterPlan)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number == int(chapter_number or 0),
-            )
-            .limit(1)
-        )
-        .scalars()
-        .first()
-    )
-    result = ObligationVerifierPromptAnalyzer(
-        llm_client=self.llm_client,
-        min_blocking_confidence=float(getattr(self.config, "prompt_json_min_blocking_confidence", 0.8) or 0.8),
-    ).analyze(
-        {
-            "writer_output": "\n".join(
-                part
-                for part in (
-                    str(writer_output.title or ""),
-                    str(writer_output.body or ""),
-                    str(writer_output.end_of_chapter_summary or ""),
-                )
-                if part
-            ),
-            "obligation_ledger": [
-                _obligation_prompt_item(obligation, current_chapter=chapter_number)
-                for obligation in obligations
-            ],
-            "chapter_plan": _chapter_plan_prompt_text(chapter_plan),
-            "canon_context": [],
-            "heuristic_hints": [],
-        }
-    )
-    metadata = dict(result.get("metadata") or {})
-    metadata.setdefault("source_mode", "prompt_json")
-    metadata["source_layer"] = "canon_quality"
-    result["metadata"] = metadata
-    return [result]
+    return []
 
 def _prepare_deferred_acceptance_if_needed(
     self,
@@ -903,4 +846,4 @@ def _apply_canon_candidate(
 
 
 
-__all__ = ['_is_timeout_like', '_is_transient_llm_like', '_transient_retry_delay', '_current_model_identity', '_audit_operation_id', '_drain_llm_attempt_events', '_safe_prompt_trace_attempts', '_error_category_from_attempts', '_diagnostic_kind_for_failure', '_record_failure_prompt_trace', '_record_model_fallback_payloads', '_apply_canon_quality_gate', '_run_obligation_prompt_json_gate', '_prepare_deferred_acceptance_if_needed', '_band_scope_candidates', '_band_row_by_id', '_latest_draft_and_review_for_chapter', '_apply_canon_candidate']
+__all__ = ['_is_timeout_like', '_is_transient_llm_like', '_transient_retry_delay', '_current_model_identity', '_audit_operation_id', '_drain_llm_attempt_events', '_safe_prompt_trace_attempts', '_error_category_from_attempts', '_diagnostic_kind_for_failure', '_record_failure_prompt_trace', '_record_model_fallback_payloads', '_apply_canon_quality_gate', '_run_obligation_form_gate', '_prepare_deferred_acceptance_if_needed', '_band_scope_candidates', '_band_row_by_id', '_latest_draft_and_review_for_chapter', '_apply_canon_candidate']

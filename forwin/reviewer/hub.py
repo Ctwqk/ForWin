@@ -11,8 +11,6 @@ from forwin.protocol.review import (
     normalize_repair_scope,
 )
 from forwin.protocol.writer import WriterOutput
-from forwin.config import Config
-from forwin.canon_quality.prompt_json.normalization import normalize_prompt_json_results_to_review_issues
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.skills import serialize_prompt_layers
 from .context_builder import build_review_context_pack
@@ -39,6 +37,7 @@ class HistoricalReviewHub:
         lint_collector=None,
         llm_webnovel_reviewer=None,
         observability=None,
+        chapter_review_form_mode: str = "primary",
     ) -> None:
         self.continuity_reviewer = continuity_reviewer
         self.governance_reviewer = governance_reviewer or GovernanceReviewer()
@@ -54,6 +53,7 @@ class HistoricalReviewHub:
         self.llm_client = llm_client
         self.llm_enabled = bool(llm_client) if llm_enabled is None else bool(llm_enabled)
         self.observability = observability or NullObservability()
+        self.chapter_review_form_mode = str(chapter_review_form_mode or "primary")
 
     def review(
         self,
@@ -112,7 +112,7 @@ class HistoricalReviewHub:
                     chapter_number=int(getattr(context, "chapter_number", 0) or 0),
                     writer_output=writer_output,
                     persist=False,
-                    mode=Config.from_env().reviewer_quality_mode,
+                    mode=self.chapter_review_form_mode,
                     llm_client=self.llm_client if self.llm_enabled else None,
                     return_raw_analyzer_results=True,
                 )
@@ -396,21 +396,18 @@ class HistoricalReviewHub:
     def _canon_quality_issues(deterministic_quality_report: dict | None) -> list[ContinuityIssue]:
         if not isinstance(deterministic_quality_report, dict):
             return []
-        prompt_review_issues = normalize_prompt_json_results_to_review_issues(
-            [
-                item for item in deterministic_quality_report.get("prompt_json_results", [])
-                if isinstance(item, dict)
-            ],
-            source_layer="canon_quality",
-        )
-        prompt_issues: list[ContinuityIssue] = []
-        for item in prompt_review_issues:
-            severity = "error" if item.get("blocking_origin") == "prompt_json" else "warning"
-            prompt_issues.append(
+        form_issues: list[ContinuityIssue] = []
+        for item in deterministic_quality_report.get("review_issues", []) or []:
+            if not isinstance(item, dict):
+                continue
+            severity = str(item.get("severity") or "warning")
+            if severity not in {"error", "warning", "info"}:
+                severity = "warning"
+            form_issues.append(
                 ContinuityIssue(
                     rule_name=str(item.get("source_analyzer") or item.get("reviewer_issue_type") or "canon_quality"),
                     severity=severity,  # type: ignore[arg-type]
-                    description=str(item.get("claim") or item.get("reviewer_issue_type") or "canon quality issue"),
+                    description=str(item.get("description") or item.get("claim") or item.get("reviewer_issue_type") or "canon quality issue"),
                     reviewer="canon_quality",
                     issue_type=str(item.get("reviewer_issue_type") or "canon_quality"),
                     target_scope="chapter",
@@ -418,9 +415,9 @@ class HistoricalReviewHub:
                     suggested_fix=str(item.get("suggested_fix") or ""),
                     source_layer=str(item.get("source_layer") or "canon_quality"),
                     source_analyzer=str(item.get("source_analyzer") or ""),
-                    source_mode=str(item.get("source_mode") or "prompt_json"),
+                    source_mode=str(item.get("source_mode") or "chapter_review_form"),
                     original_verdict=str(item.get("original_verdict") or ""),
-                    original_confidence=float(item.get("original_confidence") or 0.0),
+                    original_confidence=float(item.get("original_confidence") or item.get("confidence") or 0.0),
                     blocking_origin=str(item.get("blocking_origin") or ""),
                     blocking=bool(item.get("blocking", False)),
                     original_result=item.get("original_result") if isinstance(item.get("original_result"), dict) else {},
@@ -430,12 +427,12 @@ class HistoricalReviewHub:
             *list(deterministic_quality_report.get("blocking_signals", []) or []),
             *list(deterministic_quality_report.get("warning_signals", []) or []),
         ]
-        issues: list[ContinuityIssue] = [*prompt_issues]
+        issues: list[ContinuityIssue] = [*form_issues]
         for signal in raw_signals:
             if not isinstance(signal, dict):
                 continue
             payload = signal.get("payload") if isinstance(signal.get("payload"), dict) else {}
-            if prompt_issues and str(payload.get("source_mode") or "") == "prompt_json":
+            if form_issues and str(payload.get("source_mode") or "") == "chapter_review_form":
                 continue
             signal_id = str(signal.get("signal_id") or "").strip()
             signal_type = str(signal.get("signal_type") or "canon_quality_signal").strip()

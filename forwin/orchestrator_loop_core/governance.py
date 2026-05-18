@@ -70,16 +70,10 @@ def _audit_current_plan_before_write(
     canon_quality_context = dict(getattr(context, "canon_quality_context", {}) or {})
     obligation_repo = NarrativeObligationRepository(session)
     result = FuturePlanAuditor(
-        mode=_configured_prompt_json_mode(
-            getattr(self.config, "planning_audit_mode", "deterministic"),
-            enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
-        ),
-        plan_patch_validation_mode=_configured_prompt_json_mode(
-            getattr(self.config, "plan_patch_validation_mode", "deterministic"),
-            enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
-        ),
+        mode="chapter_review_form",
+        plan_patch_validation_mode="chapter_review_form",
         llm_client=self.llm_client,
-        min_blocking_confidence=float(getattr(self.config, "prompt_json_min_blocking_confidence", 0.8) or 0.8),
+        min_blocking_confidence=float(getattr(self.config, "chapter_review_form_min_blocking_confidence", 0.8) or 0.8),
     ).audit_and_apply(
         session=session,
         project_id=project_id,
@@ -143,16 +137,10 @@ def _audit_future_plans_after_acceptance(
         target_total_chapters=target_total_chapters,
     )
     result = FuturePlanAuditor(
-        mode=_configured_prompt_json_mode(
-            getattr(self.config, "planning_audit_mode", "deterministic"),
-            enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
-        ),
-        plan_patch_validation_mode=_configured_prompt_json_mode(
-            getattr(self.config, "plan_patch_validation_mode", "deterministic"),
-            enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
-        ),
+        mode="chapter_review_form",
+        plan_patch_validation_mode="chapter_review_form",
         llm_client=self.llm_client,
-        min_blocking_confidence=float(getattr(self.config, "prompt_json_min_blocking_confidence", 0.8) or 0.8),
+        min_blocking_confidence=float(getattr(self.config, "chapter_review_form_min_blocking_confidence", 0.8) or 0.8),
     ).audit_and_apply(
         session=session,
         project_id=project_id,
@@ -837,41 +825,6 @@ def _create_auto_band_checkpoint(
                     detail="; ".join(issue.evidence_refs),
                 )
             )
-    band_prompt_result: dict[str, Any] | None = None
-    band_prompt_mode = _configured_prompt_json_mode(
-        getattr(self.config, "band_checkpoint_mode", "deterministic"),
-        enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
-    )
-    if band_prompt_mode != "deterministic":
-        band_prompt_result = BandCheckpointPromptEvaluator(
-            llm_client=self.llm_client,
-            min_blocking_confidence=float(getattr(self.config, "prompt_json_min_blocking_confidence", 0.8) or 0.8),
-        ).analyze(
-            {
-                "writer_output": combined_text,
-                "current_band_definition": {
-                    "band_id": str(band_row.band_id or ""),
-                    "chapter_start": int(band_row.chapter_start or 0),
-                    "chapter_end": int(band_row.chapter_end or 0),
-                    "schedule": schedule_payload,
-                },
-                "chapter_plan": [_chapter_plan_prompt_text(plan) for plan in band_plans],
-                "canon_context": [
-                    getattr(item, "model_dump", lambda **_: {})(mode="json")
-                    for item in future_constraints
-                ],
-                "heuristic_hints": [_band_checkpoint_issue_hint(issue) for issue in issues],
-            }
-        )
-        prompt_issues = _band_prompt_result_to_checkpoint_issues(
-            band_prompt_result,
-            min_blocking_confidence=float(getattr(self.config, "prompt_json_min_blocking_confidence", 0.8) or 0.8),
-        )
-        if band_prompt_mode == "prompt_json":
-            issues = prompt_issues
-            status = "pass"
-        else:
-            issues.extend(prompt_issues)
     if status != "fail" and any(issue.severity == "error" for issue in issues):
         status = "fail"
     elif status == "pass" and any(issue.severity == "warning" for issue in issues):
@@ -903,12 +856,12 @@ def _create_auto_band_checkpoint(
         summary=summary,
         related_object_type="band_checkpoint",
         related_object_id=row.id,
-        payload={
-            "status": status,
-            "prompt_json_result": band_prompt_result or {},
-            "band_checkpoint_mode": band_prompt_mode,
-        },
-    )
+            payload={
+                "status": status,
+                "chapter_review_form_result": {},
+                "band_checkpoint_mode": "chapter_review_form",
+            },
+        )
     return row
 
 # ------------------------------------------------------------------

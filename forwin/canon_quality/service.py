@@ -1,40 +1,16 @@
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from forwin.config import Config
-from forwin.governance import normalize_project_governance
-from forwin.models.draft import CandidateDraftRecord, ChapterDraft
-from forwin.models.project import ChapterPlan, Project
 from forwin.protocol.writer import WriterOutput
 
-from .artifact_ledger import analyze_artifact_counts
-from .character_state import analyze_character_state_transitions, extract_candidate_character_names
-from .countdown_ledger import analyze_countdowns
-from .duplication import analyze_full_body_duplication
-from .final_completion import analyze_final_completion
-from .identity import analyze_identity_roles, extract_identity_role_facts
-from .placeholder import analyze_placeholder_leakage, extract_expected_protagonist_names
-from .prompt_json.character_state_prompt import CharacterStatePromptAnalyzer
-from .prompt_json.countdown_ledger_prompt import CountdownLedgerPromptAnalyzer
-from .prompt_json.final_completion_prompt import FinalCompletionPromptAnalyzer
-from .prompt_json.identity_prompt import IdentityConsistencyPromptAnalyzer
-from .prompt_json.normalization import (
-    legacy_signals_to_hints,
-    legacy_signals_to_prompt_result,
-    normalize_prompt_json_results_to_review_issues,
-    prompt_results_to_signals,
-)
-from .prompt_json.schemas import normalize_prompt_json_mode
+from .chapter_review_form.service import review_chapter_with_form
 from .repository import CanonQualityRepository
-from .reveal_registry import analyze_reveals
 from .signals import CanonQualitySignal
-from .style import analyze_style_telemetry
 
 
 class CanonQualityAnalysisResult(BaseModel):
@@ -43,7 +19,7 @@ class CanonQualityAnalysisResult(BaseModel):
     draft_id: str = ""
     signals: list[CanonQualitySignal] = Field(default_factory=list)
     deterministic_quality_report: dict[str, Any] = Field(default_factory=dict)
-    mode: str = "deterministic"
+    mode: str = "chapter_review_form"
     summary: str = ""
     review_issues: list[dict[str, Any]] = Field(default_factory=list)
     raw_analyzer_results: list[dict[str, Any]] = Field(default_factory=list)
@@ -64,199 +40,49 @@ def analyze_writer_output_quality(
     return_raw_analyzer_results: bool = False,
 ) -> CanonQualityAnalysisResult:
     config = Config.from_env()
-    resolved_mode = normalize_prompt_json_mode(mode or config.canon_quality_mode)
-    min_blocking_confidence = float(config.prompt_json_min_blocking_confidence or 0.8)
+    resolved_mode = _normalize_form_mode(mode or config.chapter_review_form_mode)
+    if resolved_mode == "off":
+        report = _quality_report(
+            signals=[],
+            countdown_entries=[],
+            review_issues=[],
+            raw_results=[],
+            summary="chapter review form disabled",
+        )
+        return CanonQualityAnalysisResult(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            draft_id=draft_id,
+            deterministic_quality_report=report,
+            mode="off",
+            summary="chapter review form disabled",
+        )
+    min_blocking_confidence = float(config.chapter_review_form_min_blocking_confidence or 0.8)
+    token_budget_chars = int(config.chapter_review_form_token_budget_chars or 8000)
     repo = CanonQualityRepository(session)
-    project = session.get(Project, project_id)
-    is_final_chapter = _is_final_chapter(
-        session=session,
-        project=project,
-        project_id=project_id,
-        chapter_number=chapter_number,
-        title=str(writer_output.title or ""),
-        summary=str(writer_output.end_of_chapter_summary or ""),
-    )
-    body = str(writer_output.body or "")
-    summary = str(writer_output.end_of_chapter_summary or "")
-
-    signals: list[CanonQualitySignal] = []
-    signals.extend(
-        analyze_placeholder_leakage(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            draft_id=draft_id,
-            body=body,
-            summary=summary,
-            expected_character_names=_expected_protagonist_names(project),
-        )
-    )
-
-    character_signals, character_transitions = analyze_character_state_transitions(
-        project_id=project_id,
-        chapter_number=chapter_number,
-        draft_id=draft_id,
-        body=body,
-        previous_transitions=repo.list_character_transitions(project_id, before_chapter=chapter_number),
-        central_characters=_central_character_names(body),
-        recent_canon_text=_recent_canon_text(session, project_id, before_chapter=chapter_number),
-        recent_canon_chapter_number=chapter_number - 1,
-    )
-
-    previous_countdown_entries = _countdown_entries_with_recent_canon_body_fallback(
+    form_result = review_chapter_with_form(
         session=session,
         project_id=project_id,
-        before_chapter=chapter_number,
-        existing_entries=repo.list_countdown_entries(project_id, before_chapter=chapter_number),
-    )
-    countdown_signals, countdown_entries = analyze_countdowns(
-        project_id=project_id,
         chapter_number=chapter_number,
+        writer_output=writer_output,
         draft_id=draft_id,
-        body=body,
-        previous_entries=previous_countdown_entries,
-        is_final_chapter=is_final_chapter,
+        llm_client=llm_client,
+        min_blocking_confidence=min_blocking_confidence,
+        token_budget_chars=token_budget_chars,
     )
-
-    governance = normalize_project_governance(
-        getattr(project, "governance_json", "") or "{}",
-        fallback_operation_mode="blackbox",
-        fallback_review_interval=0,
-        treat_empty_as_legacy=False,
-    )
-    final_completion_signals = analyze_final_completion(
-        project_id=project_id,
-        chapter_number=chapter_number,
-        draft_id=draft_id,
-        body=body,
-        title=str(writer_output.title or ""),
-        summary=summary,
-        is_final_chapter=is_final_chapter,
-        canon_glossary=governance.canon_glossary,
-    )
-
-    artifact_signals, artifact_entries = analyze_artifact_counts(
-        project_id=project_id,
-        chapter_number=chapter_number,
-        draft_id=draft_id,
-        body=body,
-        previous_ledgers=[],
-        target_total=_infer_artifact_target(project, body),
-    )
-    signals.extend(artifact_signals)
-
-    reveal_signals, reveal_entries = analyze_reveals(
-        project_id=project_id,
-        chapter_number=chapter_number,
-        draft_id=draft_id,
-        reveal_claims=_reveal_claims(writer_output),
-        previous_entries=[],
-        body=body,
-    )
-    signals.extend(reveal_signals)
-
-    duplicate_signals, body_metrics = analyze_full_body_duplication(
-        project_id=project_id,
-        chapter_number=chapter_number,
-        draft_id=draft_id,
-        body=body,
-    )
-    signals.extend(duplicate_signals)
-
-    identity_text = "\n".join(part for part in (summary, body) if part)
-    current_identity_names = {
-        fact.character_name
-        for fact in extract_identity_role_facts(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            draft_id=draft_id,
-            text=identity_text,
-        )
-        if fact.character_name
-    }
-    identity_signals, _identity_facts = analyze_identity_roles(
-        project_id=project_id,
-        chapter_number=chapter_number,
-        draft_id=draft_id,
-        body=identity_text,
-        previous_facts=_previous_identity_facts(
-            session,
-            project_id,
-            before_chapter=chapter_number,
-            known_names=current_identity_names,
-        ),
-        central_characters=_central_character_names(body),
-    )
-    prompt_json_results: list[dict[str, Any]] = []
-    legacy_prompt_managed_signals = [
-        *character_signals,
-        *countdown_signals,
-        *final_completion_signals,
-        *identity_signals,
-    ]
-    if resolved_mode == "deterministic":
-        signals.extend(character_signals)
-        signals.extend(countdown_signals)
-        signals.extend(final_completion_signals)
-        signals.extend(identity_signals)
-    else:
-        prompt_json_results.extend(
-            _run_prompt_json_canon_quality(
-                mode=resolved_mode,
-                llm_client=llm_client,
-                min_blocking_confidence=min_blocking_confidence,
-                writer_output=writer_output,
-                body=body,
-                summary=summary,
-                project=project,
-                chapter_number=chapter_number,
-                is_final_chapter=is_final_chapter,
-                previous_countdown_entries=previous_countdown_entries,
-                countdown_entries=countdown_entries,
-                countdown_signals=countdown_signals,
-                character_transitions=character_transitions,
-                character_signals=character_signals,
-                identity_signals=identity_signals,
-                final_completion_signals=final_completion_signals,
-            )
-        )
-        signals.extend(
-            prompt_results_to_signals(
-                project_id=project_id,
-                chapter_number=chapter_number,
-                draft_id=draft_id,
-                results=prompt_json_results,
-                min_blocking_confidence=min_blocking_confidence,
-            )
-        )
-
-    style_signals, style_telemetry = analyze_style_telemetry(
-        project_id=project_id,
-        chapter_number=chapter_number,
-        draft_id=draft_id,
-        body=body,
-        previous_metrics=[],
-    )
-    signals.extend(style_signals)
-    body_metrics.style_motifs = list(style_telemetry.style_motifs)
-
     if persist:
         repo.supersede_chapter_signals(project_id, chapter_number)
-        repo.save_signals(signals)
-        repo.save_character_transitions(character_transitions)
-        repo.save_countdown_entries(countdown_entries)
-        repo.save_artifact_entries(artifact_entries)
-        repo.save_reveal_entries(reveal_entries)
-        repo.save_body_metrics(body_metrics)
+        repo.save_signals(form_result.signals)
+        repo.save_character_transitions(form_result.character_transitions)
+        repo.save_countdown_entries(form_result.countdown_entries)
 
-    report = _quality_report(signals=signals, countdown_entries=countdown_entries)
-    report["mode"] = resolved_mode
-    report["legacy_prompt_managed_hints"] = legacy_signals_to_hints(legacy_prompt_managed_signals)
-    report["prompt_json_results"] = prompt_json_results
-    report["review_issues"] = normalize_prompt_json_results_to_review_issues(
-        prompt_json_results,
-        source_layer="canon_quality",
+    report = _quality_report(
+        signals=form_result.signals,
+        countdown_entries=form_result.countdown_entries,
+        review_issues=form_result.review_issues,
+        raw_results=form_result.raw_analyzer_results,
+        summary=form_result.summary,
     )
-    report["blocking"] = any(signal.severity == "error" and signal.status == "open" for signal in signals)
     report["residual_open_signals"] = [
         signal.model_dump(mode="json")
         for signal in repo.list_open_signals(project_id, before_chapter=chapter_number, limit=20)
@@ -265,363 +91,64 @@ def analyze_writer_output_quality(
         project_id=project_id,
         chapter_number=chapter_number,
         draft_id=draft_id,
-        signals=signals,
+        signals=form_result.signals,
         deterministic_quality_report=report,
-        mode=resolved_mode,
-        summary=str(report.get("summary") or ""),
-        review_issues=list(report.get("review_issues") or []),
-        raw_analyzer_results=prompt_json_results if return_raw_analyzer_results else [],
-        blocking=bool(report.get("blocking", False)),
-        confidence=max([float(item.get("confidence") or 0.0) for item in prompt_json_results] or [0.0]),
+        mode="chapter_review_form",
+        summary=form_result.summary,
+        review_issues=form_result.review_issues,
+        raw_analyzer_results=form_result.raw_analyzer_results if return_raw_analyzer_results else [],
+        blocking=form_result.blocking,
+        confidence=form_result.confidence,
     )
 
 
-def _quality_report(*, signals: list[CanonQualitySignal], countdown_entries: list[Any]) -> dict[str, Any]:
-    blocking = [signal.model_dump(mode="json") for signal in signals if signal.severity == "error" and signal.status == "open"]
-    warnings = [signal.model_dump(mode="json") for signal in signals if signal.severity == "warning" and signal.status == "open"]
+def _normalize_form_mode(value: str | None) -> str:
+    normalized = str(value or "primary").strip().lower()
+    if normalized in {"off", "disabled"}:
+        return "off"
+    return "primary"
+
+
+def _quality_report(
+    *,
+    signals: list[CanonQualitySignal],
+    countdown_entries: list[Any],
+    review_issues: list[dict[str, Any]],
+    raw_results: list[dict[str, Any]],
+    summary: str,
+) -> dict[str, Any]:
+    blocking = [
+        signal.model_dump(mode="json")
+        for signal in signals
+        if signal.severity == "error" and signal.status == "open"
+    ]
+    warnings = [
+        signal.model_dump(mode="json")
+        for signal in signals
+        if signal.severity == "warning" and signal.status == "open"
+    ]
     return {
+        "mode": "chapter_review_form",
+        "summary": summary,
+        "blocking": bool(blocking),
         "blocking_signals": blocking,
         "warning_signals": warnings,
         "open_obligations": [
             signal.model_dump(mode="json")
             for signal in signals
-            if signal.signal_type.startswith("final_") and signal.status == "open"
+            if "obligation" in signal.signal_type and signal.status == "open"
         ],
         "ledger_conflicts": [
             signal.model_dump(mode="json")
             for signal in signals
-            if signal.target_scope == "ledger" and signal.status == "open"
+            if "countdown" in signal.signal_type and signal.status == "open"
         ],
         "full_body_metrics": {
-            "countdown_mentions": [getattr(item, "model_dump", lambda **_: {})(mode="json") for item in countdown_entries],
+            "countdown_mentions": [
+                getattr(item, "model_dump", lambda **_: {})(mode="json")
+                for item in countdown_entries
+            ],
         },
+        "review_issues": list(review_issues),
+        "chapter_review_form_results": list(raw_results),
     }
-
-
-def _run_prompt_json_canon_quality(
-    *,
-    mode: str,
-    llm_client: object | None,
-    min_blocking_confidence: float,
-    writer_output: WriterOutput,
-    body: str,
-    summary: str,
-    project: Project | None,
-    chapter_number: int,
-    is_final_chapter: bool,
-    previous_countdown_entries: list[dict[str, Any]],
-    countdown_entries: list[Any],
-    countdown_signals: list[CanonQualitySignal],
-    character_transitions: list[Any],
-    character_signals: list[CanonQualitySignal],
-    identity_signals: list[CanonQualitySignal],
-    final_completion_signals: list[CanonQualitySignal],
-) -> list[dict[str, Any]]:
-    analyzer_inputs: list[tuple[str, object, dict[str, Any], list[CanonQualitySignal]]] = [
-        (
-            "CountdownLedgerPromptAnalyzer",
-            CountdownLedgerPromptAnalyzer(
-                llm_client=llm_client,
-                min_blocking_confidence=min_blocking_confidence,
-            ),
-            {
-                "writer_output": body,
-                "existing_countdown_ledger": previous_countdown_entries,
-                "chapter_time_context": {
-                    "current_chapter": str(chapter_number),
-                    "scene_time_anchor": "",
-                    "known_elapsed_time": "",
-                },
-                "canon_context": [],
-                "countdown_observations": [
-                    item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
-                    for item in countdown_entries
-                ],
-                "heuristic_hints": legacy_signals_to_hints(countdown_signals),
-            },
-            countdown_signals,
-        ),
-        (
-            "CharacterStatePromptAnalyzer",
-            CharacterStatePromptAnalyzer(
-                llm_client=llm_client,
-                min_blocking_confidence=min_blocking_confidence,
-            ),
-            {
-                "writer_output": body,
-                "known_character_states": [
-                    item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
-                    for item in character_transitions
-                ],
-                "scene_context": {
-                    "pov": "",
-                    "location": "",
-                    "time_anchor": "",
-                },
-                "canon_context": [],
-                "heuristic_hints": legacy_signals_to_hints(character_signals),
-            },
-            character_signals,
-        ),
-        (
-            "IdentityConsistencyPromptAnalyzer",
-            IdentityConsistencyPromptAnalyzer(
-                llm_client=llm_client,
-                min_blocking_confidence=min_blocking_confidence,
-            ),
-            {
-                "writer_output": "\n".join(part for part in (summary, body) if part),
-                "identity_registry": [],
-                "scene_context": {"pov": "", "who_knows_what": []},
-                "canon_context": [],
-                "heuristic_hints": legacy_signals_to_hints(identity_signals),
-            },
-            identity_signals,
-        ),
-        (
-            "FinalCompletionPromptAnalyzer",
-            FinalCompletionPromptAnalyzer(
-                llm_client=llm_client,
-                min_blocking_confidence=min_blocking_confidence,
-            ),
-            {
-                "writer_output": body,
-                "chapter_goal": str(getattr(project, "premise", "") or ""),
-                "scene_goals": [],
-                "required_beats": [],
-                "open_threads": [],
-                "planned_ending_type": "closed" if is_final_chapter else "unknown",
-                "title": str(writer_output.title or ""),
-                "summary": summary,
-                "heuristic_hints": legacy_signals_to_hints(final_completion_signals),
-            },
-            final_completion_signals,
-        ),
-    ]
-    results: list[dict[str, Any]] = []
-    for analyzer_name, analyzer, payload, legacy_signals in analyzer_inputs:
-        if llm_client is None:
-            results.append(
-                legacy_signals_to_prompt_result(
-                    analyzer=analyzer_name,
-                    legacy_signals=legacy_signals,
-                    mode=mode,
-                )
-            )
-            continue
-        analyze = getattr(analyzer, "analyze")
-        prompt_result = analyze(payload)
-        metadata = prompt_result.get("metadata") if isinstance(prompt_result.get("metadata"), dict) else {}
-        prompt_result["metadata"] = {
-            **metadata,
-            "source_mode": "prompt_json",
-            "legacy_hints": legacy_signals_to_hints(legacy_signals),
-            "legacy_signal_count": len(legacy_signals),
-        }
-        results.append(prompt_result)
-    return results
-
-
-def _previous_identity_facts(
-    session: Session,
-    project_id: str,
-    *,
-    before_chapter: int,
-    known_names: set[str] | None = None,
-) -> list[Any]:
-    rows = session.execute(
-        select(CandidateDraftRecord, ChapterDraft)
-        .join(ChapterDraft, ChapterDraft.id == CandidateDraftRecord.candidate_draft_id)
-        .where(
-            CandidateDraftRecord.project_id == project_id,
-            CandidateDraftRecord.chapter_number < int(before_chapter or 0),
-            CandidateDraftRecord.status == "canon_committed",
-            CandidateDraftRecord.canon_status == "canon",
-        )
-        .order_by(CandidateDraftRecord.chapter_number.asc(), CandidateDraftRecord.updated_at.asc())
-    ).all()
-    facts: list[Any] = []
-    names: set[str] = {str(name) for name in (known_names or set()) if str(name).strip()}
-    for record, draft in rows:
-        chapter_number = int(record.chapter_number or 0)
-        text = "\n".join(part for part in (str(draft.summary or ""), str(draft.body_text or "")) if part)
-        chapter_facts = extract_identity_role_facts(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            draft_id=str(draft.id or ""),
-            text=text,
-            known_names=names,
-        )
-        facts.extend(chapter_facts)
-        names.update(fact.character_name for fact in chapter_facts if fact.character_name)
-    return facts
-
-
-def _recent_canon_text(session: Session, project_id: str, *, before_chapter: int) -> str:
-    rows = session.execute(
-        select(CandidateDraftRecord, ChapterDraft)
-        .join(ChapterDraft, ChapterDraft.id == CandidateDraftRecord.candidate_draft_id)
-        .where(
-            CandidateDraftRecord.project_id == project_id,
-            CandidateDraftRecord.chapter_number < int(before_chapter or 0),
-            CandidateDraftRecord.status == "canon_committed",
-            CandidateDraftRecord.canon_status == "canon",
-        )
-        .order_by(CandidateDraftRecord.chapter_number.desc(), CandidateDraftRecord.updated_at.desc())
-        .limit(3)
-    ).all()
-    chunks: list[str] = []
-    for record, draft in reversed(rows):
-        chapter_number = int(record.chapter_number or 0)
-        text = "\n".join(part for part in (str(draft.summary or ""), str(draft.body_text or "")) if part)
-        if text:
-            chunks.append(f"第{chapter_number}章：{text}")
-    return "\n".join(chunks)
-
-
-def _countdown_entries_with_recent_canon_body_fallback(
-    *,
-    session: Session,
-    project_id: str,
-    before_chapter: int,
-    existing_entries: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    merged_entries = [dict(item) for item in existing_entries]
-    keys_by_chapter: dict[int, set[str]] = {}
-    for item in merged_entries:
-        chapter = int(item.get("chapter_number", 0) or 0)
-        keys_by_chapter.setdefault(chapter, set()).add(str(item.get("countdown_key") or "main"))
-    persisted_keys_by_chapter = {chapter: set(keys) for chapter, keys in keys_by_chapter.items()}
-
-    rows = session.execute(
-        select(CandidateDraftRecord, ChapterDraft)
-        .join(ChapterDraft, ChapterDraft.id == CandidateDraftRecord.candidate_draft_id)
-        .where(
-            CandidateDraftRecord.project_id == project_id,
-            CandidateDraftRecord.chapter_number < int(before_chapter or 0),
-            CandidateDraftRecord.status == "canon_committed",
-            CandidateDraftRecord.canon_status == "canon",
-        )
-        .order_by(CandidateDraftRecord.chapter_number.desc(), CandidateDraftRecord.updated_at.desc())
-        .limit(6)
-    ).all()
-    latest_by_chapter: dict[int, tuple[CandidateDraftRecord, ChapterDraft]] = {}
-    for record, draft in rows:
-        chapter = int(record.chapter_number or 0)
-        latest_by_chapter.setdefault(chapter, (record, draft))
-
-    running_context: list[dict[str, Any]] = [dict(item) for item in merged_entries]
-    for chapter in sorted(latest_by_chapter):
-        record, draft = latest_by_chapter[chapter]
-        text = "\n".join(part for part in (str(draft.summary or ""), str(draft.body_text or "")) if part)
-        if not text.strip():
-            continue
-        _signals, reconstructed_entries = analyze_countdowns(
-            project_id=project_id,
-            chapter_number=chapter,
-            draft_id=str(record.candidate_draft_id or ""),
-            body=text,
-            previous_entries=running_context,
-            is_final_chapter=False,
-        )
-        for entry in reconstructed_entries:
-            if entry.countdown_key in persisted_keys_by_chapter.get(chapter, set()):
-                continue
-            item = entry.model_dump(mode="json")
-            merged_entries.append(item)
-            running_context.append(item)
-            keys_by_chapter.setdefault(chapter, set()).add(entry.countdown_key)
-    return merged_entries
-
-
-def _is_final_chapter(
-    *,
-    session: Session,
-    project: Project | None,
-    project_id: str,
-    chapter_number: int,
-    title: str = "",
-    summary: str = "",
-) -> bool:
-    current = int(chapter_number or 0)
-    if current <= 0:
-        return False
-    target_total = int(getattr(project, "target_total_chapters", 0) or 0)
-    if target_total and current >= target_total:
-        return True
-    if target_total and current < target_total:
-        return False
-    max_materialized = session.execute(
-        select(func.max(ChapterPlan.chapter_number)).where(ChapterPlan.project_id == project_id)
-    ).scalar_one_or_none()
-    if (
-        max_materialized is not None
-        and current >= int(max_materialized or 0)
-        and _looks_like_final_chapter_label(title=title, summary=summary)
-    ):
-        return True
-    return False
-
-
-def _looks_like_final_chapter_label(*, title: str, summary: str) -> bool:
-    text = f"{title}\n{summary}"
-    return any(
-        marker in text
-        for marker in (
-            "终章",
-            "尾声",
-            "大结局",
-            "最终章",
-            "最后一章",
-            "最后一日",
-            "最后一天",
-            "最终决战",
-            "finale",
-            "Finale",
-        )
-    )
-
-
-def _infer_artifact_target(project: Project | None, body: str) -> int:
-    haystack = "\n".join(
-        [
-            str(getattr(project, "premise", "") or ""),
-            str(getattr(project, "setting_summary", "") or ""),
-            str(body or ""),
-        ]
-    )
-    if "六十份档案" in haystack or "60份档案" in haystack or "60 份档案" in haystack:
-        return 60
-    match = re.search(r"([0-9]+)\s*份档案", haystack)
-    if match:
-        return int(match.group(1))
-    return 0
-
-
-def _reveal_claims(writer_output: WriterOutput) -> list[str]:
-    claims: list[str] = []
-    for event in getattr(writer_output, "reveal_events", []) or []:
-        metadata = getattr(event, "metadata", {}) or {}
-        for key in ("claim_summary", "summary", "claim"):
-            value = str(metadata.get(key) or "").strip() if isinstance(metadata, dict) else ""
-            if value:
-                claims.append(value)
-                break
-        else:
-            fallback = str(getattr(event, "reveals_fact_id", "") or getattr(event, "reveal_event_id", "") or "").strip()
-            if fallback:
-                claims.append(fallback)
-    return list(dict.fromkeys(claims))
-
-
-def _expected_protagonist_names(project: Project | None) -> set[str]:
-    if project is None:
-        return set()
-    return extract_expected_protagonist_names(
-        str(getattr(project, "premise", "") or ""),
-        str(getattr(project, "setting_summary", "") or ""),
-    )
-
-
-def _central_character_names(body: str) -> set[str]:
-    return extract_candidate_character_names(body)

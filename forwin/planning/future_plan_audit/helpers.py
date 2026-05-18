@@ -9,9 +9,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.canon_quality.prompt_json.normalization import prompt_issue_evidence_refs
-from forwin.canon_quality.prompt_json.schemas import PromptJsonMode, normalize_prompt_json_mode
-from forwin.canon_quality.prompt_json.validation import issue_can_block
 from forwin.models.base import new_id
 from forwin.models.narrative_obligation import FuturePlanAuditRunRow
 from forwin.models.phase import BandExperiencePlan
@@ -21,7 +18,6 @@ from forwin.narrative_obligations.types import NarrativeObligation, NarrativePla
 from forwin.planning.band_plan_patcher import BandPlanPatcher
 from forwin.planning.obligation_pre_audit import select_urgent_obligation_targets
 from forwin.planning.plan_patch_validator import PlanPatchValidator
-from forwin.planning.prompt_json.future_plan_auditor_prompt import FuturePlanPromptAuditor
 from forwin.planning.signal_pre_audit import select_stale_signal_targets
 from forwin.protocol.experience import BandDelightSchedule
 
@@ -693,108 +689,6 @@ def _prompt_issue_plan_id(
             if plan_id and plan_id in location:
                 return plan_id
     return ""
-
-def _prompt_issue_to_future_plan_issue(
-    *,
-    issue: dict[str, Any],
-    result: dict[str, Any],
-    current_chapter: int,
-    plan: ChapterPlan | None,
-    plan_id: str,
-    impact: dict[str, Any] | None,
-    min_blocking_confidence: float,
-) -> FuturePlanAuditIssue:
-    blocking = issue_can_block(issue, min_confidence=min_blocking_confidence)
-    target_chapter = int(getattr(plan, "chapter_number", 0) or current_chapter + 1)
-    target_plan_id = str(plan_id or getattr(plan, "id", "") or "")
-    evidence_refs = prompt_issue_evidence_refs(issue)
-    if not evidence_refs and issue.get("issue_id"):
-        evidence_refs = [f"prompt_json:{issue.get('issue_id')}"]
-    return FuturePlanAuditIssue(
-        issue_type=str(issue.get("type") or "future_plan_prompt_issue"),
-        severity="error" if blocking else "warning",
-        target_chapter=target_chapter,
-        target_plan_id=target_plan_id,
-        description=str(issue.get("claim") or result.get("summary") or "Future plan prompt issue."),
-        evidence_refs=evidence_refs,
-        patch_type="future_plan_prompt_update",
-        blocking=blocking,
-        metadata={
-            "source_analyzer": str(result.get("analyzer") or "FuturePlanPromptAuditor"),
-            "source_mode": "prompt_json",
-            "original_verdict": str(result.get("verdict") or ""),
-            "original_confidence": float(result.get("confidence") or 0.0),
-            "blocking_origin": "prompt_json" if blocking else "non_blocking_prompt_json",
-            "prompt_json_issue": issue,
-            "plan_impact": impact or {},
-        },
-    )
-
-def _prompt_issue_to_plan_patch(
-    *,
-    project_id: str,
-    issue: dict[str, Any],
-    result: dict[str, Any],
-    plan: ChapterPlan | None,
-    plan_id: str,
-    target_chapter: int,
-    index: int,
-    impact: dict[str, Any] | None,
-) -> NarrativePlanPatch | None:
-    issue_type = str(issue.get("type") or "")
-    if issue_type not in {
-        "plan_needs_update",
-        "soft_plan_mismatch",
-        "future_beat_made_impossible",
-        "locked_plan_contradiction",
-    }:
-        return None
-    suggested_fix = str(issue.get("suggested_fix") or "").strip()
-    recommended_patch = str((impact or {}).get("recommended_plan_patch") or "").strip()
-    instruction = suggested_fix or recommended_patch or str(issue.get("claim") or result.get("summary") or "").strip()
-    if not instruction:
-        instruction = "Update the future plan to reflect the prompt-json audit result."
-    return NarrativePlanPatch(
-        id="",
-        project_id=project_id,
-        patch_type="future_plan_prompt_update",
-        target_scope="chapter",
-        target_plan_id=str(plan_id or getattr(plan, "id", "") or ""),
-        target_arc_id=str(getattr(plan, "arc_plan_id", "") or ""),
-        affected_chapters=[int(target_chapter or getattr(plan, "chapter_number", 0) or 0)],
-        source_signal_ids=[str(issue.get("issue_id") or f"prompt_json_issue:{index}")],
-        old_contract=_chapter_plan_contract(plan) if plan is not None else {},
-        new_contract={
-            "prompt_json_instruction": instruction,
-            "source_analyzer": str(result.get("analyzer") or "FuturePlanPromptAuditor"),
-            "issue_type": issue_type,
-        },
-        diff_summary=str(issue.get("claim") or result.get("summary") or issue_type),
-        writer_context_injections=[
-            {
-                "type": "future_plan_prompt_update",
-                "instruction": instruction,
-                "source": str(result.get("analyzer") or "FuturePlanPromptAuditor"),
-            }
-        ],
-        reviewer_context_injections=[
-            {
-                "type": "future_plan_prompt_update",
-                "payoff_test": instruction,
-                "source": str(result.get("analyzer") or "FuturePlanPromptAuditor"),
-            }
-        ],
-        expected_resolution_tests=[instruction],
-        validation_status="pending",
-        metadata={
-            "source_analyzer": str(result.get("analyzer") or "FuturePlanPromptAuditor"),
-            "source_mode": "prompt_json",
-            "original_verdict": str(result.get("verdict") or ""),
-            "original_confidence": float(result.get("confidence") or 0.0),
-            "prompt_json_issue_id": str(issue.get("issue_id") or ""),
-            "plan_impact": impact or {},
-        },
-    )
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False)

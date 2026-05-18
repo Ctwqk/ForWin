@@ -9,9 +9,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.canon_quality.prompt_json.normalization import prompt_issue_evidence_refs
-from forwin.canon_quality.prompt_json.schemas import PromptJsonMode, normalize_prompt_json_mode
-from forwin.canon_quality.prompt_json.validation import issue_can_block
 from forwin.models.base import new_id
 from forwin.models.narrative_obligation import FuturePlanAuditRunRow
 from forwin.models.phase import BandExperiencePlan
@@ -21,7 +18,6 @@ from forwin.narrative_obligations.types import NarrativeObligation, NarrativePla
 from forwin.planning.band_plan_patcher import BandPlanPatcher
 from forwin.planning.obligation_pre_audit import select_urgent_obligation_targets
 from forwin.planning.plan_patch_validator import PlanPatchValidator
-from forwin.planning.prompt_json.future_plan_auditor_prompt import FuturePlanPromptAuditor
 from forwin.planning.signal_pre_audit import select_stale_signal_targets
 from forwin.protocol.experience import BandDelightSchedule
 
@@ -32,12 +28,10 @@ from .helpers import *
 from .models import AuditStatus, FuturePlanAuditIssue, FuturePlanAuditRun
 from .obligations import FuturePlanObligationMixin
 from .patches import FuturePlanPatchMixin
-from .prompt_json import FuturePlanPromptJsonMixin
 
 
 class FuturePlanAuditor(
     FuturePlanApplyMixin,
-    FuturePlanPromptJsonMixin,
     FuturePlanCustodyMixin,
     FuturePlanCountdownMixin,
     FuturePlanObligationMixin,
@@ -46,16 +40,13 @@ class FuturePlanAuditor(
     def __init__(
         self,
         *,
-        mode: PromptJsonMode | str = "deterministic",
-        plan_patch_validation_mode: PromptJsonMode | str = "deterministic",
+        mode: str = "chapter_review_form",
+        plan_patch_validation_mode: str = "chapter_review_form",
         llm_client: object | None = None,
         min_blocking_confidence: float = 0.8,
     ) -> None:
-        self.mode = normalize_prompt_json_mode(str(mode), default="deterministic")
-        self.plan_patch_validation_mode = normalize_prompt_json_mode(
-            str(plan_patch_validation_mode),
-            default="deterministic",
-        )
+        self.mode = _normalize_form_mode(mode)
+        self.plan_patch_validation_mode = _normalize_form_mode(plan_patch_validation_mode)
         self.llm_client = llm_client
         self.min_blocking_confidence = float(min_blocking_confidence)
 
@@ -72,19 +63,6 @@ class FuturePlanAuditor(
         include_current: bool,
         band_rows: list[BandExperiencePlan] | None = None,
     ) -> FuturePlanAuditRun:
-        if self.mode in {"hybrid", "prompt_json", "shadow"}:
-            return self._audit_plans_prompt_json(
-                project_id=project_id,
-                current_chapter=current_chapter,
-                trigger_stage=trigger_stage,
-                plans=plans,
-                canon_quality_context=canon_quality_context,
-                obligations=obligations,
-                target_total_chapters=target_total_chapters,
-                include_current=include_current,
-                band_rows=band_rows,
-            )
-
         inspected = [
             int(plan.chapter_number or 0)
             for plan in plans
@@ -204,6 +182,13 @@ class FuturePlanAuditor(
                 "pre_write_patch_count": len(suppressed_prompt_constraint_keys),
             },
         )
+
+
+def _normalize_form_mode(value: str | None) -> str:
+    normalized = str(value or "chapter_review_form").strip().lower()
+    if normalized in {"off", "primary", "chapter_review_form"}:
+        return "chapter_review_form" if normalized == "primary" else normalized
+    return "chapter_review_form"
 
 
 __all__ = ["FuturePlanAuditor"]

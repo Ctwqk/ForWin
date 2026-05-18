@@ -398,20 +398,17 @@ def _env_values() -> dict[str, object]:
             "gpt-5.3-codex-spark",
         ],
         "canon_quality_gate": _env_str(env, "FORWIN_CANON_QUALITY_GATE", "strict"),
-        "prompt_json_analysis_enabled": _env_bool(env, "FORWIN_PROMPT_JSON_ANALYSIS_ENABLED", True),
-        "canon_quality_mode": _env_str(env, "FORWIN_CANON_QUALITY_MODE", "hybrid"),
+        "chapter_review_form_mode": _env_str(env, "FORWIN_CHAPTER_REVIEW_FORM_MODE", "primary"),
+        "chapter_review_form_min_blocking_confidence": _env_float(
+            env, "FORWIN_CHAPTER_REVIEW_FORM_MIN_BLOCKING_CONFIDENCE", 0.8
+        ),
+        "chapter_review_form_max_llm_retries": _env_int(env, "FORWIN_CHAPTER_REVIEW_FORM_MAX_LLM_RETRIES", 1),
+        "chapter_review_form_token_budget_chars": _env_int(env, "FORWIN_CHAPTER_REVIEW_FORM_TOKEN_BUDGET_CHARS", 8000),
         "reviewer_quality_mode": _env_str(env, "FORWIN_REVIEWER_QUALITY_MODE", "hybrid"),
         "planning_audit_mode": _env_str(env, "FORWIN_PLANNING_AUDIT_MODE", "hybrid"),
         "plan_patch_validation_mode": _env_str(env, "FORWIN_PLAN_PATCH_VALIDATION_MODE", "hybrid"),
         "final_gate_mode": _env_str(env, "FORWIN_FINAL_GATE_MODE", "hybrid"),
         "band_checkpoint_mode": _env_str(env, "FORWIN_BAND_CHECKPOINT_MODE", "hybrid"),
-        "prompt_json_min_blocking_confidence": _env_float(env, "FORWIN_PROMPT_JSON_MIN_BLOCKING_CONFIDENCE", 0.8),
-        "prompt_json_require_evidence_for_block": _env_bool(env, "FORWIN_PROMPT_JSON_REQUIRE_EVIDENCE_FOR_BLOCK", True),
-        "prompt_json_allow_uncertain_to_block": _env_bool(env, "FORWIN_PROMPT_JSON_ALLOW_UNCERTAIN_TO_BLOCK", False),
-        "prompt_json_allow_warn_to_block": _env_bool(env, "FORWIN_PROMPT_JSON_ALLOW_WARN_TO_BLOCK", False),
-        "prompt_json_shadow_compare_legacy": _env_bool(env, "FORWIN_PROMPT_JSON_SHADOW_COMPARE_LEGACY", True),
-        "prompt_json_log_raw": _env_bool(env, "FORWIN_PROMPT_JSON_LOG_RAW", True),
-        "prompt_json_persist_results": _env_bool(env, "FORWIN_PROMPT_JSON_PERSIST_RESULTS", False),
         "final_completion_gate": _env_str(env, "FORWIN_FINAL_COMPLETION_GATE", "strict"),
         "style_telemetry_mode": _env_str(env, "FORWIN_STYLE_TELEMETRY_MODE", "warn"),
         "phase4_use_llm": _env_bool(env, "PHASE4_USE_LLM", True),
@@ -537,20 +534,15 @@ class _ConfigFields:
         "gpt-5.3-codex-spark",
     ]
     canon_quality_gate: str = "strict"
-    prompt_json_analysis_enabled: bool = True
-    canon_quality_mode: str = "hybrid"
+    chapter_review_form_mode: str = "primary"
+    chapter_review_form_min_blocking_confidence: float = 0.8
+    chapter_review_form_max_llm_retries: int = 1
+    chapter_review_form_token_budget_chars: int = 8000
     reviewer_quality_mode: str = "hybrid"
     planning_audit_mode: str = "hybrid"
     plan_patch_validation_mode: str = "hybrid"
     final_gate_mode: str = "hybrid"
     band_checkpoint_mode: str = "hybrid"
-    prompt_json_min_blocking_confidence: float = 0.8
-    prompt_json_require_evidence_for_block: bool = True
-    prompt_json_allow_uncertain_to_block: bool = False
-    prompt_json_allow_warn_to_block: bool = False
-    prompt_json_shadow_compare_legacy: bool = True
-    prompt_json_log_raw: bool = True
-    prompt_json_persist_results: bool = False
     final_completion_gate: str = "strict"
     style_telemetry_mode: str = "warn"
     phase4_use_llm: bool = True

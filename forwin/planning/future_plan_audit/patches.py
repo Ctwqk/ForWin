@@ -9,9 +9,6 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.canon_quality.prompt_json.normalization import prompt_issue_evidence_refs
-from forwin.canon_quality.prompt_json.schemas import PromptJsonMode, normalize_prompt_json_mode
-from forwin.canon_quality.prompt_json.validation import issue_can_block
 from forwin.models.base import new_id
 from forwin.models.narrative_obligation import FuturePlanAuditRunRow
 from forwin.models.phase import BandExperiencePlan
@@ -21,7 +18,6 @@ from forwin.narrative_obligations.types import NarrativeObligation, NarrativePla
 from forwin.planning.band_plan_patcher import BandPlanPatcher
 from forwin.planning.obligation_pre_audit import select_urgent_obligation_targets
 from forwin.planning.plan_patch_validator import PlanPatchValidator
-from forwin.planning.prompt_json.future_plan_auditor_prompt import FuturePlanPromptAuditor
 from forwin.planning.signal_pre_audit import select_stale_signal_targets
 from forwin.protocol.experience import BandDelightSchedule
 
@@ -40,8 +36,8 @@ class FuturePlanPatchMixin:
         if patch.patch_type in {"obligation_plan_binding", "obligation_pre_write", "defer_acceptance"}:
             self._apply_obligation_patch(plan, patch)
             return
-        if patch.patch_type in {"future_plan_prompt_update", "signal_pre_write"}:
-            self._apply_prompt_plan_patch(plan, patch)
+        if patch.patch_type == "signal_pre_write":
+            self._apply_form_plan_patch(plan, patch)
 
     @staticmethod
     def _apply_countdown_patch(plan: ChapterPlan, patch: NarrativePlanPatch) -> None:
@@ -185,8 +181,8 @@ class FuturePlanPatchMixin:
         plan.experience_plan_json = _json(experience)
 
     @staticmethod
-    def _apply_prompt_plan_patch(plan: ChapterPlan, patch: NarrativePlanPatch) -> None:
-        instruction = str(patch.new_contract.get("prompt_json_instruction") or patch.diff_summary or "").strip()
+    def _apply_form_plan_patch(plan: ChapterPlan, patch: NarrativePlanPatch) -> None:
+        instruction = str(patch.new_contract.get("form_instruction") or patch.diff_summary or "").strip()
         if not instruction:
             return
         goals = [str(item).strip() for item in _loads(plan.goals_json, []) if str(item).strip()]

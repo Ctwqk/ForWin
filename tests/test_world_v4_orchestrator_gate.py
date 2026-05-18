@@ -67,6 +67,7 @@ def test_apply_canon_candidate_runs_v4_compiler_before_legacy_state_update() -> 
                 database_url=db_path,
                 minimax_api_key="",
                 minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                 world_v4_compat_write_enabled=True,
             )
         )
@@ -113,6 +114,7 @@ def test_apply_canon_candidate_blocks_v4_review_failure() -> None:
                 artifact_root=str(Path(tmp) / "artifacts"),
                 minimax_api_key="",
                 minimax_model="fake-model",
+                    chapter_review_form_mode="off",
             )
         )
         with Session.begin() as session:
@@ -152,7 +154,7 @@ def test_apply_canon_candidate_drops_unregistered_character_state_changes() -> N
         init_db(engine)
         Session = get_session_factory(engine)
         orchestrator = WritingOrchestrator(
-            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
+            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model", chapter_review_form_mode="off")
         )
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
@@ -231,7 +233,7 @@ def test_book_state_compile_failure_rolls_back_v4_rows(monkeypatch) -> None:
         init_db(engine)
         Session = get_session_factory(engine)
         orchestrator = WritingOrchestrator(
-            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
+            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model", chapter_review_form_mode="off")
         )
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
@@ -274,6 +276,7 @@ def test_book_state_direct_path_can_skip_world_v4_compat_projection() -> None:
                 database_url=db_path,
                 minimax_api_key="",
                 minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                 world_v4_compat_write_enabled=False,
             )
         )
@@ -314,7 +317,7 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
         init_db(engine)
         Session = get_session_factory(engine)
         orchestrator = WritingOrchestrator(
-            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
+            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model", chapter_review_form_mode="off")
         )
         with Session.begin() as session:
             updater = StateUpdater(session)

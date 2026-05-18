@@ -2,25 +2,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from forwin.canon_quality.prompt_json.schemas import PromptJsonMode, normalize_prompt_json_mode
-from forwin.canon_quality.prompt_json.validation import issue_can_block, result_can_block
 from forwin.narrative_obligations.types import (
     NarrativeObligation,
     NarrativePlanPatch,
     PlanPatchValidationResult,
 )
-from forwin.planning.prompt_json.plan_patch_validator_prompt import PlanPatchPromptValidator
 
 
 class PlanPatchValidator:
     def __init__(
         self,
         *,
-        mode: PromptJsonMode | str = "deterministic",
+        mode: str = "chapter_review_form",
         llm_client: object | None = None,
         min_blocking_confidence: float = 0.8,
     ) -> None:
-        self.mode = normalize_prompt_json_mode(str(mode), default="deterministic")
+        self.mode = _normalize_form_mode(mode)
         self.llm_client = llm_client
         self.min_blocking_confidence = float(min_blocking_confidence)
 
@@ -36,18 +33,6 @@ class PlanPatchValidator:
         band_plan_bounds: dict[str, tuple[int, int]] | None = None,
         minimum_scope_by_obligation: dict[str, str] | None = None,
     ) -> PlanPatchValidationResult:
-        if self.mode in {"hybrid", "prompt_json", "shadow"}:
-            return self._validate_prompt_json(
-                patch=patch,
-                obligations=obligations,
-                current_chapter=current_chapter,
-                target_total_chapters=target_total_chapters,
-                accepted_chapters=accepted_chapters,
-                unresolved_obligation_ids=unresolved_obligation_ids,
-                band_plan_bounds=band_plan_bounds,
-                minimum_scope_by_obligation=minimum_scope_by_obligation,
-            )
-
         errors: list[str] = []
         source_ids = set(patch.source_obligation_ids)
         affected = [int(chapter) for chapter in patch.affected_chapters]
@@ -134,74 +119,6 @@ class PlanPatchValidator:
 
         return PlanPatchValidationResult(passed=not errors, errors=errors)
 
-    def _validate_prompt_json(
-        self,
-        *,
-        patch: NarrativePlanPatch,
-        obligations: list[NarrativeObligation],
-        current_chapter: int,
-        target_total_chapters: int,
-        accepted_chapters: list[int] | None,
-        unresolved_obligation_ids: list[str] | None,
-        band_plan_bounds: dict[str, tuple[int, int]] | None,
-        minimum_scope_by_obligation: dict[str, str] | None,
-    ) -> PlanPatchValidationResult:
-        legacy_errors: list[str] = []
-        if self.mode in {"hybrid", "shadow"}:
-            legacy_errors = PlanPatchValidator(mode="deterministic").validate(
-                patch=patch,
-                obligations=obligations,
-                current_chapter=current_chapter,
-                target_total_chapters=target_total_chapters,
-                accepted_chapters=accepted_chapters,
-                unresolved_obligation_ids=unresolved_obligation_ids,
-                band_plan_bounds=band_plan_bounds,
-                minimum_scope_by_obligation=minimum_scope_by_obligation,
-            ).errors
-        result = PlanPatchPromptValidator(
-            llm_client=self.llm_client,
-            min_blocking_confidence=self.min_blocking_confidence,
-        ).analyze(
-            {
-                "old_plan": patch.old_contract,
-                "proposed_patch": patch.model_dump(mode="json"),
-                "writer_output": "",
-                "canon_context": [],
-                "locked_constraints": _locked_constraints_payload(
-                    obligations=obligations,
-                    current_chapter=current_chapter,
-                    target_total_chapters=target_total_chapters,
-                    accepted_chapters=accepted_chapters,
-                    unresolved_obligation_ids=unresolved_obligation_ids,
-                    band_plan_bounds=band_plan_bounds,
-                    minimum_scope_by_obligation=minimum_scope_by_obligation,
-                ),
-                "heuristic_hints": [
-                    {
-                        "hint_type": "legacy_plan_patch_validation_error",
-                        "message": error,
-                        "matched_text": "",
-                    }
-                    for error in legacy_errors
-                ],
-            }
-        )
-        if not result_can_block(
-            result,
-            min_confidence=self.min_blocking_confidence,
-        ):
-            return PlanPatchValidationResult(passed=True, errors=[])
-        errors = [
-            f"prompt_json:{str(issue.get('type') or 'critical_issue')}"
-            for issue in result.get("issues", [])
-            if isinstance(issue, dict)
-            and issue_can_block(issue, min_confidence=self.min_blocking_confidence)
-        ]
-        return PlanPatchValidationResult(
-            passed=False,
-            errors=errors or ["prompt_json:blocking_issue"],
-        )
-
 
 def _scope_rank(scope: str) -> int:
     return {
@@ -215,6 +132,13 @@ def _scope_rank(scope: str) -> int:
         "book": 4,
         "manual": 5,
     }.get(str(scope or "").strip().lower(), 0)
+
+
+def _normalize_form_mode(value: str | None) -> str:
+    normalized = str(value or "chapter_review_form").strip().lower()
+    if normalized in {"off", "primary", "chapter_review_form"}:
+        return "chapter_review_form" if normalized == "primary" else normalized
+    return "chapter_review_form"
 
 
 def _locked_constraints_payload(

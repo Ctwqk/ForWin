@@ -505,6 +505,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="copilot",
                 )
             )
@@ -629,7 +630,7 @@ class Phase05RegressionTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             db_path = postgres_test_url("dirty-state")
             orchestrator = WritingOrchestrator(
-                Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
+                Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model", chapter_review_form_mode="off")
             )
             try:
                 def fake_plan_arc(premise: str, genre: str, num_chapters: int) -> dict:
@@ -720,6 +721,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="checkpoint",
                 )
             )
@@ -786,6 +788,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     artifact_root=artifact_root,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     freeze_failed_candidates=True,
                 )
             )
@@ -867,6 +870,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     freeze_failed_candidates=True,
                 )
             )
@@ -994,6 +998,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="blackbox",
                 )
             )
@@ -1102,6 +1107,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="blackbox",
                 )
             )
@@ -1205,6 +1211,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="blackbox",
                 )
             )
@@ -1273,6 +1280,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="checkpoint",
                 )
             )
@@ -1347,6 +1355,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     pacing_window_size=3,
                     stale_thread_window=2,
                     replan_cooldown_chapters=3,
@@ -2643,6 +2652,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     artifact_root=str(Path(tmp) / "artifacts"),
                     minimax_api_key="fake-key",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     legacy_provisional_blocking=True,
                 )
             )
@@ -2863,6 +2873,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     artifact_root=str(Path(tmp) / "artifacts"),
                     minimax_api_key="fake-key",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                 )
             )
             try:
@@ -2931,6 +2942,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     artifact_root=str(Path(tmp) / "artifacts"),
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                 ),
                 progress_callback=lambda event, payload: progress_events.append((event, payload)),
             )
@@ -3771,6 +3783,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                 )
             )
             try:
@@ -4077,6 +4090,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="blackbox",
                     blackbox_writer_attention_retries=2,
                     freeze_failed_candidates=True,
@@ -4128,6 +4142,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="blackbox",
                     blackbox_writer_attention_retries=3,
                     freeze_failed_candidates=True,
@@ -4172,6 +4187,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="test-key",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="blackbox",
                     legacy_provisional_blocking=True,
                 ),
@@ -5819,6 +5835,7 @@ class Phase05RegressionTests(unittest.TestCase):
                 publisher_session_encryption_required=True,
                 minimax_api_key="",
                 minimax_model="fake-model",
+                    chapter_review_form_mode="off",
             )
             api_module._publisher_manager = manager
             with TestClient(api_module.app) as client:
@@ -6153,6 +6170,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                 )
                 with TestClient(api_module.app) as client:
                     page = client.get("/publishers")
@@ -6190,6 +6208,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="checkpoint",
                 )
             )
@@ -6937,6 +6956,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="checkpoint",
                 )
             )
@@ -7100,6 +7120,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="copilot",
                 )
             )
@@ -7197,6 +7218,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="blackbox",
                 )
             )
@@ -7354,6 +7376,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="copilot",
                 )
             )
@@ -7434,6 +7457,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                     operation_mode="blackbox",
                 )
             )
@@ -8069,6 +8093,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     database_url=db_path,
                     minimax_api_key="",
                     minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                 )
             )
             with session_factory() as session:
@@ -8215,6 +8240,7 @@ class SkillRuntimeTraceRegressionTests(unittest.TestCase):
                 minimax_api_key="test-key",
                 minimax_base_url="http://example.invalid",
                 minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                 skill_runtime_enabled=True,
                 skill_registry_path="forwin_skills",
             )

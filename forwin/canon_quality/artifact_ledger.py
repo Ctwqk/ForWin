@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .countdown_ledger import parse_chinese_number
 from .signals import ArtifactLedgerEntry, CanonQualitySignal, make_signal_id
 
 
@@ -89,6 +88,23 @@ def _previous_collected_count(entries: list[dict[str, Any] | ArtifactLedgerEntry
         item = raw.model_dump(mode="json") if isinstance(raw, ArtifactLedgerEntry) else dict(raw)
         values.append(int(item.get("collected_count_after", 0) or 0))
     return max(values or [0])
+
+
+def parse_chinese_number(raw: str) -> int | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        return int(text)
+    digits = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    if text in digits:
+        return digits[text]
+    if "十" in text:
+        left, _, right = text.partition("十")
+        tens = digits.get(left, 1) if left else 1
+        ones = digits.get(right, 0) if right else 0
+        return tens * 10 + ones
+    return None
 
 
 __all__ = ["analyze_artifact_counts", "parse_chinese_number"]

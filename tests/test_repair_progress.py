@@ -52,6 +52,7 @@ class RepairProgressTests(unittest.TestCase):
                 database_url=postgres_test_url("repair-progress"),
                 minimax_api_key="",
                 minimax_model="fake-model",
+                    chapter_review_form_mode="off",
                 operation_mode="blackbox",
                 review_fail_max_rewrites=1,
                 auto_band_checkpoint=False,

@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Literal
 
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
-from forwin.canon_quality.prompt_json.validation import result_can_block
 
 from .signals import CanonAdmissionGateResult, CanonQualitySignal
 
@@ -51,7 +50,7 @@ def evaluate_canon_admission(
         if signal.status == "open" and signal.severity == "warning"
     ]
     deterministic_refs = [signal.signal_id for signal in blocking]
-    prompt_blocking_refs = _prompt_blocking_refs(
+    form_blocking_refs = _form_blocking_refs(
         analyzer_results=analyzer_results or [],
         min_blocking_confidence=float(min_blocking_confidence or 0.8),
         require_evidence_for_block=bool(require_evidence_for_block),
@@ -98,7 +97,7 @@ def evaluate_canon_admission(
     else:
         commit_allowed = (
             not blocking
-            and not prompt_blocking_refs
+            and not form_blocking_refs
             and open_terminal_obligation_count <= 0
             and not obligation_reasons
         )
@@ -134,13 +133,13 @@ def evaluate_canon_admission(
         warning_issue_count=len(warnings),
         open_terminal_obligation_count=max(0, int(open_terminal_obligation_count or 0)),
         deterministic_issue_refs=deterministic_refs,
-        llm_issue_refs=prompt_blocking_refs,
+        llm_issue_refs=form_blocking_refs,
         required_repair_scope="draft" if blocking else None,
         gate_summary=summary,
     )
 
 
-def _prompt_blocking_refs(
+def _form_blocking_refs(
     *,
     analyzer_results: list[dict],
     min_blocking_confidence: float,
@@ -148,18 +147,29 @@ def _prompt_blocking_refs(
 ) -> list[str]:
     refs: list[str] = []
     for result in analyzer_results:
-        if not result_can_block(
-            result,
-            min_confidence=min_blocking_confidence,
-            require_evidence=require_evidence_for_block,
-        ):
+        if not _result_can_block(result, min_confidence=min_blocking_confidence, require_evidence=require_evidence_for_block):
             continue
-        analyzer = str(result.get("analyzer") or "PromptJsonAnalyzer")
+        analyzer = str(result.get("analyzer") or "ChapterReviewForm")
         for issue in result.get("issues") or []:
             if not isinstance(issue, dict):
                 continue
             refs.append(f"{analyzer}:{issue.get('issue_id') or issue.get('type') or 'issue'}")
     return refs
+
+
+def _result_can_block(result: dict, *, min_confidence: float, require_evidence: bool) -> bool:
+    if not bool(result.get("blocking", False)):
+        return False
+    if float(result.get("confidence") or 0.0) < float(min_confidence or 0.0):
+        return False
+    if not require_evidence:
+        return True
+    for issue in result.get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        if issue.get("evidence_quote") or issue.get("evidence_refs"):
+            return True
+    return False
 
 
 def _obligation_blocking_reasons(

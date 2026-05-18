@@ -41,6 +41,7 @@ git diff --check
 - `forwin/canon_quality/chapter_review_form/cost_estimator.py`: per-chapter token/cost estimates, usage extraction from LLM attempt events, cap decisions.
 - `forwin/canon_quality/chapter_review_form/replay_diff.py`: candidate/existing row normalization and add/remove/change diff computation.
 - `docs/operations/canon_replay.md`: operator documentation and worked command examples.
+- `tests/helpers/canon_replay.py`: shared replay test fixtures and fake LLM clients; no tests live in this helper module.
 - `tests/test_canon_replay_reconstruction.py`: accepted draft lookup, writer output reconstruction, preflight checks.
 - `tests/test_canon_replay_single_chapter.py`: one-chapter replay behavior, dry-run and persist behavior.
 - `tests/test_canon_replay_resume.py`: range state, resume, force restart, force rerun, abort-on-error.
@@ -50,11 +51,12 @@ git diff --check
 
 ## Shared Test Fixtures
 
-Use the helper pattern below in replay tests instead of duplicating raw setup in every test file. Put it in `tests/test_canon_replay_reconstruction.py` first; later tasks may move it to `tests/helpers/canon_replay.py` only if duplication becomes real across three or more files.
+Create the helper module below in `tests/helpers/canon_replay.py` during Task 1. Replay tests must import fixtures from this helper instead of importing from other test modules.
 
 ```python
 from __future__ import annotations
 
+from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.models import ArcPlanVersion, CandidateDraftRecord, ChapterDraft, ChapterPlan, ChapterReview, Project
 
 
@@ -113,6 +115,54 @@ def seed_accepted_chapter(session, *, project: Project, arc: ArcPlanVersion, cha
     )
     session.flush()
     return plan, draft
+
+
+class FakeCountdownClient:
+    def __init__(self, project_id: str, chapter_number: int) -> None:
+        self.project_id = project_id
+        self.chapter_number = chapter_number
+        self.llm_attempt_events = [
+            {
+                "status": "succeeded",
+                "input_text": "Replay prompt: 主倒计时还有59分钟。",
+                "output_text": "Replay answer: 主倒计时还有59分钟。",
+                "duration_ms": 10,
+            }
+        ]
+
+    def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
+        quote = "主倒计时还有59分钟。"
+        return {
+            "project_id": self.project_id,
+            "chapter_number": self.chapter_number,
+            "form_schema_version": FORM_SCHEMA_VERSION,
+            "characters": [],
+            "countdowns": [
+                {
+                    "key": "main",
+                    "mentioned_in_chapter": True,
+                    "status_in_this_chapter": {
+                        "value": "active",
+                        "evidence_quote": quote,
+                        "subject_of_quote": "主倒计时",
+                        "confidence": 0.95,
+                    },
+                    "new_value_minutes": 59,
+                    "new_value_evidence": {
+                        "value": "59",
+                        "evidence_quote": quote,
+                        "subject_of_quote": "主倒计时",
+                        "confidence": 0.95,
+                    },
+                    "consistent_with_prior": {"value": "true", "confidence": 0.95},
+                    "inconsistency_kind": "",
+                }
+            ],
+            "obligations": [],
+            "open_signals": [],
+            "new_observations": {},
+            "chapter_summary": "主倒计时继续。",
+        }
 ```
 
 ## Task 1: Foundation, Profile Resolver, And Reconstruction
@@ -120,12 +170,13 @@ def seed_accepted_chapter(session, *, project: Project, arc: ArcPlanVersion, cha
 **Files:**
 - Create: `scripts/canon_replay.py`
 - Create: `forwin/canon_quality/chapter_review_form/replay.py`
+- Create: `tests/helpers/canon_replay.py`
 - Test: `tests/test_canon_replay_reconstruction.py`
 - Test: `tests/test_canon_replay_cli.py`
 
-- [ ] **Step 1: Write reconstruction tests**
+- [ ] **Step 1: Write shared helpers and reconstruction tests**
 
-Create `tests/test_canon_replay_reconstruction.py` with these tests:
+Create `tests/helpers/canon_replay.py` using the code from the Shared Test Fixtures section, then create `tests/test_canon_replay_reconstruction.py` with these tests:
 
 ```python
 from __future__ import annotations
@@ -139,9 +190,8 @@ from forwin.canon_quality.chapter_review_form.replay import (
 )
 from forwin.models import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.base import get_engine, get_session_factory, init_db
+from tests.helpers.canon_replay import seed_accepted_chapter, seed_project_with_accepted_chapter
 from tests.postgres import postgres_test_url
-
-# Include seed_project_with_accepted_chapter from the Shared Test Fixtures section here.
 
 
 def test_reconstruct_writer_output_uses_accepted_draft_body() -> None:
@@ -166,7 +216,7 @@ def test_reconstruct_writer_output_uses_accepted_draft_body() -> None:
         assert output.body == draft.body_text
         assert output.char_count == len(draft.body_text)
         assert output.end_of_chapter_summary == draft.summary
-        assert output.prompt_revision_hash == "canon_replay"
+        assert output.prompt_revision_hash == "replay"
         assert output.generation_meta["source"] == "canon_replay"
     finally:
         engine.dispose()
@@ -352,7 +402,7 @@ def reconstruct_writer_output(*, session: Session, project_id: str, chapter_numb
         body=draft.body,
         char_count=draft.char_count,
         end_of_chapter_summary=draft.summary,
-        prompt_revision_hash="canon_replay",
+        prompt_revision_hash="replay",
         generation_meta={
             "source": "canon_replay",
             "draft_id": draft.draft_id,
@@ -401,6 +451,29 @@ import pytest
 from scripts import canon_replay
 
 
+class FakeReplayClient:
+    def __init__(self, profiles):
+        self.profiles = profiles
+        self.api_key = "primary-key"
+        self.base_url = "https://primary.example/v1"
+        self.model = "primary-model"
+        self.profile_id = ""
+        self.profile_name = ""
+        self.fallback_profiles = list(profiles)
+
+    def _request_profiles(self):
+        return [
+            {
+                "id": "",
+                "name": "default",
+                "api_key": self.api_key,
+                "base_url": self.base_url,
+                "model": self.model,
+            },
+            *self.profiles,
+        ]
+
+
 def test_parse_args_defaults_to_dry_run() -> None:
     args = canon_replay.parse_args(["--project-id", "p1", "--from-chapter", "1"])
 
@@ -424,6 +497,56 @@ def test_emit_json_line_prints_one_json_object(capsys) -> None:
     captured = capsys.readouterr()
     assert json.loads(captured.out) == {"status": "ok", "chapter_number": 1}
     assert captured.out.endswith("\n")
+
+
+def test_build_llm_client_for_replay_selects_complete_profile() -> None:
+    client = canon_replay.build_llm_client_for_replay(
+        object(),
+        requested_profile="env-deepseek",
+        client_builder=lambda _config: FakeReplayClient(
+            [
+                {
+                    "id": "env-deepseek",
+                    "name": "DeepSeek",
+                    "api_key": "key",
+                    "base_url": "https://api.deepseek.com/v1",
+                    "model": "deepseek-chat",
+                }
+            ]
+        ),
+    )
+
+    assert client.profile_id == "env-deepseek"
+    assert client.api_key == "key"
+    assert client.base_url == "https://api.deepseek.com/v1"
+    assert client.model == "deepseek-chat"
+    assert client.fallback_profiles == []
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [
+        {"id": "bad", "name": "bad", "api_key": "", "base_url": "https://api.example/v1", "model": "m"},
+        {"id": "bad", "name": "bad", "api_key": "key", "base_url": "", "model": "m"},
+        {"id": "bad", "name": "bad", "api_key": "key", "base_url": "https://api.example/v1", "model": ""},
+    ],
+)
+def test_build_llm_client_for_replay_rejects_incomplete_profile(profile) -> None:  # noqa: ANN001
+    with pytest.raises(SystemExit, match="LLM profile not found or incomplete"):
+        canon_replay.build_llm_client_for_replay(
+            object(),
+            requested_profile="bad",
+            client_builder=lambda _config: FakeReplayClient([profile]),
+        )
+
+
+def test_build_llm_client_for_replay_rejects_unknown_profile() -> None:
+    with pytest.raises(SystemExit, match="LLM profile not found or incomplete"):
+        canon_replay.build_llm_client_for_replay(
+            object(),
+            requested_profile="missing",
+            client_builder=lambda _config: FakeReplayClient([]),
+        )
 ```
 
 - [ ] **Step 6: Verify CLI tests fail**
@@ -448,6 +571,38 @@ import argparse
 import json
 import sys
 from typing import Any
+
+
+def build_llm_client_for_replay(config, requested_profile: str = "", client_builder=None):  # noqa: ANN001, ANN201
+    if client_builder is None:
+        from forwin.runtime.container import ServiceContainer
+
+        client_builder = ServiceContainer._build_llm_client
+    client = client_builder(config)
+    if not requested_profile:
+        return client
+    profiles = getattr(client, "_request_profiles", lambda: [])()
+    requested = requested_profile.strip().lower()
+    selected = [
+        profile for profile in profiles
+        if requested in {
+            str(profile.get("id", "")).strip().lower(),
+            str(profile.get("name", "")).strip().lower(),
+        }
+        and str(profile.get("api_key", "")).strip()
+        and str(profile.get("base_url", "")).strip()
+        and str(profile.get("model", "")).strip()
+    ]
+    if not selected:
+        raise SystemExit(f"LLM profile not found or incomplete: {requested_profile}")
+    profile = selected[0]
+    client.api_key = str(profile["api_key"]).strip()
+    client.base_url = str(profile["base_url"]).strip().rstrip("/")
+    client.model = str(profile["model"]).strip()
+    client.profile_id = str(profile.get("id", "")).strip()
+    client.profile_name = str(profile.get("name", "")).strip()
+    client.fallback_profiles = []
+    return client
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -498,6 +653,8 @@ if __name__ == "__main__":
     sys.exit(main())
 ```
 
+When later tasks wire real execution into `main()`, call `build_llm_client_for_replay()` during preflight before any replay DB write. Profile errors must exit before any LLM call and before any canon rows can be written.
+
 - [ ] **Step 8: Verify Task 1 tests pass**
 
 Run:
@@ -511,7 +668,7 @@ Expected: all tests pass.
 - [ ] **Step 9: Commit Task 1**
 
 ```bash
-git add scripts/canon_replay.py forwin/canon_quality/chapter_review_form/replay.py tests/test_canon_replay_reconstruction.py tests/test_canon_replay_cli.py
+git add scripts/canon_replay.py forwin/canon_quality/chapter_review_form/replay.py tests/helpers/canon_replay.py tests/test_canon_replay_reconstruction.py tests/test_canon_replay_cli.py
 git commit -m "feat: add canon replay reconstruction foundation"
 ```
 
@@ -533,55 +690,11 @@ import json
 
 import pytest
 
-from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.canon_quality.chapter_review_form.replay import ReplayLLMUnavailable, replay_single_chapter
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.canon_quality import CountdownLedgerRow
+from tests.helpers.canon_replay import FakeCountdownClient, seed_project_with_accepted_chapter
 from tests.postgres import postgres_test_url
-from tests.test_canon_replay_reconstruction import seed_project_with_accepted_chapter
-
-
-class FakeCountdownClient:
-    def __init__(self, project_id: str, chapter_number: int) -> None:
-        self.project_id = project_id
-        self.chapter_number = chapter_number
-        self.llm_attempt_events = [
-            {"status": "succeeded", "input_chars": 500, "output_chars": 250, "duration_ms": 10}
-        ]
-
-    def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
-        quote = "主倒计时还有59分钟。"
-        return {
-            "project_id": self.project_id,
-            "chapter_number": self.chapter_number,
-            "form_schema_version": FORM_SCHEMA_VERSION,
-            "characters": [],
-            "countdowns": [
-                {
-                    "key": "main",
-                    "mentioned_in_chapter": True,
-                    "status_in_this_chapter": {
-                        "value": "active",
-                        "evidence_quote": quote,
-                        "subject_of_quote": "主倒计时",
-                        "confidence": 0.95,
-                    },
-                    "new_value_minutes": 59,
-                    "new_value_evidence": {
-                        "value": "59",
-                        "evidence_quote": quote,
-                        "subject_of_quote": "主倒计时",
-                        "confidence": 0.95,
-                    },
-                    "consistent_with_prior": {"value": "true", "confidence": 0.95},
-                    "inconsistency_kind": "",
-                }
-            ],
-            "obligations": [],
-            "open_signals": [],
-            "new_observations": {},
-            "chapter_summary": "主倒计时继续。",
-        }
 
 
 def test_replay_single_chapter_dry_run_returns_candidate_rows_without_writing() -> None:
@@ -796,34 +909,23 @@ Expected: all tests pass.
 
 - [ ] **Step 5: Wire CLI single-chapter execution**
 
-Update `scripts/canon_replay.py` so `main()` resolves config, engine, session factory, LLM client, and runs one chapter when `from_chapter == to_chapter` or `to_chapter` is omitted. Add a helper with this signature:
+Update `scripts/canon_replay.py` so `main()` resolves config, engine, session factory, LLM client via the Task 1 `build_llm_client_for_replay()` helper, and runs one chapter when `from_chapter == to_chapter` or `to_chapter` is omitted.
 
 ```python
-def build_llm_client_for_replay(config, requested_profile: str = ""):
-    from forwin.runtime.container import ServiceContainer
-
-    client = ServiceContainer._build_llm_client(config)
-    if not requested_profile:
-        return client
-    profiles = getattr(client, "_request_profiles", lambda: [])()
-    requested = requested_profile.strip().lower()
-    selected = [
-        profile for profile in profiles
-        if requested in {
-            str(profile.get("id", "")).strip().lower(),
-            str(profile.get("name", "")).strip().lower(),
-        }
-    ]
-    if not selected:
-        raise SystemExit(f"LLM profile not found or incomplete: {requested_profile}")
-    profile = selected[0]
-    client.api_key = profile["api_key"]
-    client.base_url = profile["base_url"].rstrip("/")
-    client.model = profile["model"]
-    client.profile_id = str(profile.get("id", ""))
-    client.profile_name = str(profile.get("name", ""))
-    client.fallback_profiles = []
-    return client
+with session_factory() as session:
+    result = replay_single_chapter(
+        session=session,
+        project_id=args.project_id,
+        chapter_number=args.from_chapter,
+        llm_client=build_llm_client_for_replay(config, args.llm_profile),
+        persist=args.persist,
+        mode="primary" if args.persist else "dry_run",
+    )
+    if args.persist:
+        session.commit()
+    else:
+        session.rollback()
+emit_json_line(result.model_dump(mode="json"))
 ```
 
 - [ ] **Step 6: Verify CLI help and direct parse**
@@ -864,12 +966,11 @@ from pathlib import Path
 
 import pytest
 
-from forwin.canon_quality.chapter_review_form.replay_state import ReplayState, state_file_path, write_state_atomic
+from forwin.canon_quality.chapter_review_form.replay_state import ReplayRangeOptions, ReplayState, state_file_path, write_state_atomic
 from forwin.canon_quality.chapter_review_form.replay import replay_chapter_range
 from forwin.models.base import get_engine, get_session_factory, init_db
+from tests.helpers.canon_replay import FakeCountdownClient, seed_accepted_chapter, seed_project_with_accepted_chapter
 from tests.postgres import postgres_test_url
-from tests.test_canon_replay_reconstruction import seed_accepted_chapter, seed_project_with_accepted_chapter
-from tests.test_canon_replay_single_chapter import FakeCountdownClient
 
 
 def test_state_file_path_is_range_scoped(tmp_path: Path) -> None:
@@ -910,13 +1011,15 @@ def test_range_replay_resumes_after_completed_chapter(tmp_path: Path) -> None:
             from_chapter=1,
             to_chapter=2,
             llm_client_factory=lambda chapter: FakeCountdownClient(project.id, chapter),
-            persist=False,
-            mode="dry_run",
             state_root=tmp_path,
-            resume=True,
-            force_restart=False,
-            force_rerun=False,
-            abort_on_error=True,
+            options=ReplayRangeOptions(
+                persist=False,
+                mode="dry_run",
+                resume=True,
+                force_restart=False,
+                force_rerun=False,
+                abort_on_error=True,
+            ),
         )
 
         assert [result.chapter_number for result in results] == [2]
@@ -1044,6 +1147,17 @@ class ReplayState(BaseModel):
         return ReplayState(project_id=project_id, from_chapter=from_chapter, to_chapter=to_chapter)
 
 
+class ReplayRangeOptions(BaseModel):
+    persist: bool = False
+    mode: str = "dry_run"
+    resume: bool = False
+    force_restart: bool = False
+    force_rerun: bool = False
+    abort_on_error: bool = True
+    cost_cap_usd: float | None = None
+    no_cost_cap: bool = False
+
+
 def state_file_path(*, root: Path, project_id: str, from_chapter: int, to_chapter: int) -> Path:
     return root / "canon_replay" / project_id / f"{from_chapter}-{to_chapter}.state.json"
 
@@ -1062,7 +1176,7 @@ Add `replay_chapter_range()` to `replay.py`:
 ```python
 from pathlib import Path
 
-from .replay_state import ReplayState, state_file_path, write_state_atomic
+from .replay_state import ReplayRangeOptions, ReplayState, state_file_path, write_state_atomic
 
 
 def replay_chapter_range(
@@ -1072,14 +1186,15 @@ def replay_chapter_range(
     from_chapter: int,
     to_chapter: int,
     llm_client_factory,
-    persist: bool,
-    mode: str,
     state_root: Path,
-    resume: bool,
-    force_restart: bool,
-    force_rerun: bool,
-    abort_on_error: bool,
+    options: ReplayRangeOptions,
 ) -> list[ReplayChapterResult]:
+    """Replay a range sequentially.
+
+    `llm_client_factory` is intentionally chapter-aware: production may return
+    the same client for every chapter, while tests can return chapter-specific
+    fake responses without changing production behavior.
+    """
     path = state_file_path(
         root=state_root,
         project_id=project_id,
@@ -1091,12 +1206,12 @@ def replay_chapter_range(
         project_id=project_id,
         from_chapter=from_chapter,
         to_chapter=to_chapter,
-        resume=resume,
-        force_restart=force_restart,
+        resume=options.resume,
+        force_restart=options.force_restart,
     )
     results: list[ReplayChapterResult] = []
     for chapter_number in range(int(from_chapter), int(to_chapter) + 1):
-        if state.should_skip_completed(chapter_number, force_rerun=force_rerun):
+        if state.should_skip_completed(chapter_number, force_rerun=options.force_rerun):
             continue
         try:
             with session_factory() as session:
@@ -1105,8 +1220,8 @@ def replay_chapter_range(
                     project_id=project_id,
                     chapter_number=chapter_number,
                     llm_client=llm_client_factory(chapter_number),
-                    persist=persist,
-                    mode=mode,
+                    persist=options.persist,
+                    mode=options.mode,
                 )
                 session.commit()
             results.append(result)
@@ -1117,7 +1232,7 @@ def replay_chapter_range(
                 session.rollback()
             state = state.mark_error(chapter_number, str(exc))
             write_state_atomic(path, state)
-            if abort_on_error:
+            if options.abort_on_error:
                 break
     return results
 ```
@@ -1138,20 +1253,22 @@ Update `scripts/canon_replay.py` so:
 
 ```python
 state_root = Path(config.artifact_root)
-mode = "primary" if args.persist else "dry_run"
+options = ReplayRangeOptions(
+    persist=args.persist,
+    mode="primary" if args.persist else "dry_run",
+    resume=args.resume,
+    force_restart=args.force_restart,
+    force_rerun=args.force_rerun,
+    abort_on_error=args.abort_on_error,
+)
 results = replay_chapter_range(
     session_factory=session_factory,
     project_id=args.project_id,
     from_chapter=args.from_chapter,
     to_chapter=resolved_to_chapter,
     llm_client_factory=lambda _chapter: build_llm_client_for_replay(config, args.llm_profile),
-    persist=args.persist,
-    mode=mode,
     state_root=state_root,
-    resume=args.resume,
-    force_restart=args.force_restart,
-    force_rerun=args.force_rerun,
-    abort_on_error=args.abort_on_error,
+    options=options,
 )
 for result in results:
     emit_json_line(result.model_dump(mode="json"))
@@ -1192,7 +1309,11 @@ from forwin.canon_quality.chapter_review_form.cost_estimator import (
 
 class ClientWithAttempts:
     llm_attempt_events = [
-        {"status": "succeeded", "input_chars": 1000, "output_chars": 400},
+        {
+            "status": "succeeded",
+            "input_text": "ASCII prompt with 主倒计时",
+            "output_text": "JSON answer with 主倒计时",
+        },
         {"status": "failed", "input_chars": 9999, "output_chars": 9999},
     ]
 
@@ -1204,8 +1325,8 @@ def test_estimate_tokens_for_chinese_text_uses_half_char_ratio() -> None:
 def test_usage_from_llm_client_uses_last_successful_attempt() -> None:
     usage = usage_from_llm_client(ClientWithAttempts())
 
-    assert usage.input_tokens == 500
-    assert usage.output_tokens == 200
+    assert usage.input_tokens == estimate_tokens_for_text("ASCII prompt with 主倒计时")
+    assert usage.output_tokens == estimate_tokens_for_text("JSON answer with 主倒计时")
     assert usage.estimated is True
 
 
@@ -1281,9 +1402,17 @@ def usage_from_llm_client(llm_client: object) -> ReplayTokenUsage:
     if not successes:
         return ReplayTokenUsage(estimated=True)
     last = successes[-1]
+    input_tokens = last.get("input_tokens")
+    output_tokens = last.get("output_tokens")
+    if input_tokens is None:
+        input_text = str(last.get("input_text") or "")
+        input_tokens = estimate_tokens_for_text(input_text) if input_text else int(float(last.get("input_chars") or 0) * 0.5)
+    if output_tokens is None:
+        output_text = str(last.get("output_text") or "")
+        output_tokens = estimate_tokens_for_text(output_text) if output_text else int(float(last.get("output_chars") or 0) * 0.5)
     return ReplayTokenUsage(
-        input_tokens=max(0, int(float(last.get("input_tokens") or last.get("input_chars") or 0) * 0.5)),
-        output_tokens=max(0, int(float(last.get("output_tokens") or last.get("output_chars") or 0) * 0.5)),
+        input_tokens=max(0, int(input_tokens or 0)),
+        output_tokens=max(0, int(output_tokens or 0)),
         estimated=not bool(last.get("input_tokens") or last.get("output_tokens")),
     )
 
@@ -1301,14 +1430,7 @@ def should_abort_for_cost_cap(*, current_cost: CostEstimate, next_chapter_estima
 
 - [ ] **Step 4: Integrate usage and cap into range replay**
 
-Update `replay_chapter_range()` to accept:
-
-```python
-cost_cap_usd: float | None = None
-no_cost_cap: bool = False
-```
-
-Before each chapter, reconstruct body once for estimate and call `should_abort_for_cost_cap()`. If it aborts, mark that chapter skipped with `state.mark_skipped(chapter_number, "cost_cap")`, write state, and raise `RuntimeError("cost cap reached before chapter X")`. After each replay, set `result.token_usage = usage_from_llm_client(llm_client)`.
+Use `ReplayRangeOptions.cost_cap_usd` and `ReplayRangeOptions.no_cost_cap`; do not add more boolean parameters to `replay_chapter_range()`. Before each chapter, reconstruct body once for estimate and call `should_abort_for_cost_cap()`. If it aborts, mark that chapter skipped with `state.mark_skipped(chapter_number, "cost_cap")`, write state, and raise `RuntimeError("cost cap reached before chapter X")`. After each replay, set `result.token_usage = usage_from_llm_client(llm_client)`.
 
 - [ ] **Step 5: Add CLI estimate-only behavior**
 
@@ -1610,6 +1732,31 @@ def test_missing_cost_cap_returns_structured_error() -> None:
         "error": "missing_cost_cap",
         "message": "Pass --cost-cap-usd <N> or --no-cost-cap.",
     }
+
+
+def test_schema_version_warning_when_pinned_version_differs() -> None:
+    warning = canon_replay.schema_version_warning(
+        requested_schema_version="chapter_review_form.v2",
+        current_schema_version="chapter_review_form.v1",
+    )
+
+    assert warning == {
+        "status": "warning",
+        "warning": "schema_version_mismatch",
+        "requested_schema_version": "chapter_review_form.v2",
+        "current_schema_version": "chapter_review_form.v1",
+    }
+
+
+def test_schema_version_warning_empty_when_unpinned_or_matching() -> None:
+    assert canon_replay.schema_version_warning(
+        requested_schema_version="",
+        current_schema_version="chapter_review_form.v1",
+    ) == {}
+    assert canon_replay.schema_version_warning(
+        requested_schema_version="chapter_review_form.v1",
+        current_schema_version="chapter_review_form.v1",
+    ) == {}
 ```
 
 - [ ] **Step 2: Verify safety tests fail**
@@ -1648,6 +1795,19 @@ def validate_cost_cap_args(*, cost_cap_usd: float | None, no_cost_cap: bool) -> 
             "message": "Pass --cost-cap-usd <N> or --no-cost-cap.",
         }
     return {"status": "ok"}
+
+
+def schema_version_warning(*, requested_schema_version: str, current_schema_version: str) -> dict[str, str]:
+    requested = str(requested_schema_version or "").strip()
+    current = str(current_schema_version or "").strip()
+    if not requested or requested == current:
+        return {}
+    return {
+        "status": "warning",
+        "warning": "schema_version_mismatch",
+        "requested_schema_version": requested,
+        "current_schema_version": current,
+    }
 ```
 
 - [ ] **Step 4: Add final summary and latest accepted chapter lookup**
@@ -1681,7 +1841,7 @@ def summarize_replay_results(results: list[ReplayChapterResult]) -> dict[str, ob
     }
 ```
 
-Use `latest_accepted_chapter()` in CLI when `--to-chapter` is omitted.
+Use `latest_accepted_chapter()` in CLI when `--to-chapter` is omitted. Also call `schema_version_warning(requested_schema_version=args.schema_version, current_schema_version=FORM_SCHEMA_VERSION)` before any LLM call; emit the warning to stderr as one JSON line and include it in the final summary. This flag pins operator intent and observability only; it must not change `FORM_SCHEMA_VERSION` or mutate the form schema implementation.
 
 - [ ] **Step 5: Write operator documentation**
 
@@ -1848,4 +2008,5 @@ Expected: clean working tree on the current implementation branch.
 
 - Spec coverage: Tasks 1-2 cover reconstruction and single-chapter replay; Task 3 covers range, resume, and per-chapter commit; Task 4 covers estimate-only and cost cap; Task 5 covers dry-run candidate rows and diff mode; Task 6 covers operator polish, explicit cost-cap safety, state clearing, schema flag, latest accepted range, and docs; Task 7 covers verification and staging smoke.
 - Scope check: This plan keeps replay as a standalone CLI and does not add UI, API, generation queue integration, parallel processing, or legacy migration behavior.
+- Review fixes applied: `prompt_revision_hash` follows the design value `"replay"`; shared fixtures live in `tests/helpers/canon_replay.py`; range options use `ReplayRangeOptions`; `--schema-version` has explicit tests and warning behavior; profile resolver failures are tested before replay writes; cost usage falls back through the shared token estimator when prompt/response text is available.
 - Ambiguity resolved: final CLI requires `--cost-cap-usd` or `--no-cost-cap` before LLM calls, and `--llm-profile` resolves against Config primary plus environment fallback profiles.

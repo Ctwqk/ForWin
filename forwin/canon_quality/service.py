@@ -71,6 +71,7 @@ def analyze_writer_output_quality(
         min_blocking_confidence=min_blocking_confidence,
         token_budget_chars=token_budget_chars,
         max_schema_retries=max_schema_retries,
+        blocking_policy=config.form_blocking_policy,
     )
     if persist:
         repo.supersede_chapter_signals(project_id, chapter_number)

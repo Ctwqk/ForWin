@@ -19,6 +19,7 @@ class FormAnswer(BaseModel):
 class CharacterReviewAsk(BaseModel):
     name: str
     aliases: list[str] = Field(default_factory=list)
+    descriptive_aliases: list[str] = Field(default_factory=list)
     prior_life_state: Literal["alive", "wounded", "dead", "unknown"]
     prior_custody_state: Literal["free", "captured", "unknown"]
     last_seen_chapter: int

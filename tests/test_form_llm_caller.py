@@ -200,6 +200,27 @@ def test_call_form_accepts_flat_form_answer_shapes() -> None:
     assert answers.countdowns[0].new_value_evidence.value == "50"
 
 
+def test_system_prompt_instructs_canonical_name_resolution() -> None:
+    client = FakeClient()
+    form = ChapterReviewForm(
+        project_id="p1",
+        chapter_number=1,
+        form_schema_version=FORM_SCHEMA_VERSION,
+        characters=[],
+        countdowns=[],
+        obligations=[],
+        open_signals=[],
+    )
+
+    call_form(form=form, chapter_text="正文", prior_canon_summary="", llm_client=client)
+
+    system_content = client.calls[0]["messages"][0]["content"]
+    assert "descriptive reference" in system_content
+    assert "pronoun" in system_content
+    assert "canonical name" in system_content
+    assert "subject_of_quote" in system_content
+
+
 def test_call_form_requires_compatible_client() -> None:
     form = ChapterReviewForm(
         project_id="p1",

@@ -6,6 +6,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from forwin.config import FormBlockingPolicy
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.signals import (
     CanonQualitySignal,
@@ -59,6 +60,7 @@ def review_chapter_with_form(
     min_blocking_confidence: float = 0.8,
     token_budget_chars: int = 8000,
     max_schema_retries: int = 1,
+    blocking_policy: FormBlockingPolicy | None = None,
 ) -> ChapterReviewFormResult:
     repo = CanonQualityRepository(session) if session is not None else None
     project = session.get(Project, project_id) if session is not None else None
@@ -122,6 +124,7 @@ def review_chapter_with_form(
         validation_report=validation_report,
         draft_id=draft_id,
         min_blocking_confidence=min_blocking_confidence,
+        blocking_policy=blocking_policy,
     )
     signals = list(projection.signals)
     return ChapterReviewFormResult(

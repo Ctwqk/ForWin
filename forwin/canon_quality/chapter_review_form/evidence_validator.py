@@ -27,12 +27,47 @@ OBLIGATION_BLOCKING_VALUES = {"unaddressed", "partial"}
 SIGNAL_BLOCKING_VALUES = {"persisting", "worsened"}
 FINAL_BLOCKING_VALUES = {"left_dangling", "denied_or_avoided"}
 
+# Quote matching normalizes only cosmetic variants. Fullwidth and curly
+# punctuation are translated to their ASCII equivalents before substring checks.
+PUNCTUATION_EQUIVALENTS = str.maketrans(
+    {
+        "＂": '"',
+        "“": '"',
+        "”": '"',
+        "「": '"',
+        "」": '"',
+        "『": '"',
+        "』": '"',
+        "‘": "'",
+        "’": "'",
+        "（": "(",
+        "）": ")",
+        "【": "[",
+        "】": "]",
+        "［": "[",
+        "］": "]",
+        "，": ",",
+        "。": ".",
+        "！": "!",
+        "？": "?",
+        "；": ";",
+        "：": ":",
+        "－": "-",
+        "—": "-",
+        "–": "-",
+        "…": ".",
+        "·": ".",
+    }
+)
+
 
 class RejectedAnswer(BaseModel):
     path: str
     reason: str
     message: str = ""
     blocking: bool = False
+    value: str = ""
+    confidence: float = 0.0
 
 
 class ValidationReport(BaseModel):
@@ -54,7 +89,11 @@ def validate_answers(
 ) -> ValidationReport:
     report = ValidationReport()
     known_character_subjects = {
-        ask.name: {ask.name, *[alias for alias in ask.aliases if alias]}
+        ask.name: {
+            ask.name,
+            *[alias for alias in ask.aliases if alias],
+            *[alias for alias in ask.descriptive_aliases if alias],
+        }
         for ask in form.characters
     }
     chapter_norm = _normalize_text(chapter_text)
@@ -197,27 +236,52 @@ def _validate_form_answer(
 ) -> None:
     quote = answer.evidence_quote.strip()
     value = str(answer.value or "").strip()
-    blocking = value in (blocking_values or set()) and answer.is_bindable(min_blocking_confidence)
+    high_confidence = answer.confidence >= float(min_blocking_confidence)
+    blocking = value in (blocking_values or set()) and high_confidence
+    if value in (binding_values or set()) and high_confidence and not quote:
+        report.rejected.append(
+            _rejection(
+                path=path,
+                reason="missing_evidence",
+                message="binding answer requires evidence_quote",
+                blocking=blocking,
+                answer=answer,
+            )
+        )
+        return
     if quote:
         if _normalize_text(quote) not in chapter_norm:
             report.rejected.append(
-                RejectedAnswer(path=path, reason="quote_not_found", message="evidence_quote is absent", blocking=blocking)
+                _rejection(
+                    path=path,
+                    reason="quote_not_found",
+                    message="evidence_quote is absent from chapter text",
+                    blocking=blocking,
+                    answer=answer,
+                )
             )
             return
     if allowed_subjects is not None and value in (binding_values or set()) and quote:
         subject = answer.subject_of_quote.strip()
         if subject in PRONOUN_SUBJECTS:
             report.rejected.append(
-                RejectedAnswer(path=path, reason="pronoun_subject", message="subject_of_quote is a pronoun", blocking=blocking)
+                _rejection(
+                    path=path,
+                    reason="pronoun_subject",
+                    message="subject_of_quote is a pronoun",
+                    blocking=blocking,
+                    answer=answer,
+                )
             )
             return
         if subject not in allowed_subjects:
             report.rejected.append(
-                RejectedAnswer(
+                _rejection(
                     path=path,
                     reason="subject_mismatch",
                     message="subject_of_quote does not match judged entity",
                     blocking=blocking,
+                    answer=answer,
                 )
             )
             return
@@ -244,6 +308,7 @@ def _validate_quote_only(
             reason="quote_not_found",
             message="bridge event evidence_quote is absent",
             blocking=confidence >= min_blocking_confidence,
+            confidence=confidence,
         )
     )
 
@@ -267,4 +332,29 @@ def _validate_observation_quotes(report: ValidationReport, payload: Any, chapter
 
 
 def _normalize_text(value: str) -> str:
-    return re.sub(r"\s+", "", str(value or ""))
+    normalized = str(value or "").translate(PUNCTUATION_EQUIVALENTS).lower()
+    normalized = re.sub(r"\.{2,}", ".", normalized)
+    return re.sub(r"\s+", "", normalized)
+
+
+def _rejection(
+    *,
+    path: str,
+    reason: str,
+    message: str,
+    blocking: bool = False,
+    answer: FormAnswer | None = None,
+) -> RejectedAnswer:
+    if answer is None:
+        return RejectedAnswer(path=path, reason=reason, message=message, blocking=blocking)
+    value = str(answer.value or "").strip()
+    confidence = float(answer.confidence or 0.0)
+    details = f"{message}; value={value}; confidence={confidence:.2f}"
+    return RejectedAnswer(
+        path=path,
+        reason=reason,
+        message=details,
+        blocking=blocking,
+        value=value,
+        confidence=confidence,
+    )

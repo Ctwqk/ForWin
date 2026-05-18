@@ -16,6 +16,10 @@ SYSTEM_PROMPT = (
     "You are a strict canon reviewer for a long-form Chinese web novel. "
     "Read the chapter and answer the form. Every binding answer requires an exact quote "
     "from the chapter text and an explicit subject_of_quote. Do not invent facts. "
+    "When a quote uses a descriptive reference, pronoun, role title, or other indirect reference "
+    "to a tracked entity, resolve subject_of_quote to that entity's canonical name from the form's "
+    "name field, or to one of that entity's aliases. Example: if the form asks for name='角色A' "
+    "and the chapter says '那个穿白衣的人倒下', return subject_of_quote='角色A', not '那个穿白衣的人'. "
     "If uncertain, set confidence below 0.5 and explain."
 )
 

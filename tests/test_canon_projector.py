@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
+from forwin.config import FormBlockingPolicy
 from forwin.canon_quality.chapter_review_form.canon_projector import project_validated_answers
 from forwin.canon_quality.chapter_review_form.evidence_validator import RejectedAnswer, ValidationReport
 from forwin.canon_quality.chapter_review_form.form_schema import (
@@ -9,6 +10,7 @@ from forwin.canon_quality.chapter_review_form.form_schema import (
     CountdownReviewAnswer,
     FormAnswer,
     NewObservations,
+    ObligationReviewAnswer,
 )
 
 
@@ -131,6 +133,41 @@ def test_projector_blocks_closed_countdown_regression_without_bridge() -> None:
     assert projection.countdown_entries[0].normalized_remaining_minutes == 50
     assert projection.signals[0].signal_type == "form_countdown_inconsistency"
     assert projection.signals[0].severity == "error"
+
+
+def test_projector_uses_form_blocking_policy_for_warning_category() -> None:
+    obligation = ObligationReviewAnswer(
+        id="义务-1",
+        addressed=FormAnswer(
+            value="partial",
+            evidence_quote="角色A只完成了第一步。",
+            subject_of_quote="义务-1",
+            confidence=0.93,
+        ),
+    )
+    answers = ChapterReviewAnswers(
+        project_id="p1",
+        chapter_number=2,
+        form_schema_version=FORM_SCHEMA_VERSION,
+        characters=[],
+        countdowns=[],
+        obligations=[obligation],
+        open_signals=[],
+        new_observations=NewObservations(),
+    )
+
+    projection = project_validated_answers(
+        answers=answers,
+        validation_report=ValidationReport(
+            validated=["obligations[0].addressed"],
+            blocking_paths=["obligations[0].addressed"],
+        ),
+        blocking_policy=FormBlockingPolicy(obligation_partial="warning"),
+    )
+
+    assert projection.signals[0].signal_type == "form_obligation_unresolved"
+    assert projection.signals[0].severity == "warning"
+    assert projection.review_issues[0]["severity"] == "warning"
 
 
 def _answers(

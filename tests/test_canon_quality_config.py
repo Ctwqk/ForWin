@@ -45,3 +45,12 @@ def test_canon_quality_config_reads_env(monkeypatch) -> None:  # noqa: ANN001
     assert config.band_checkpoint_mode == "shadow"
     assert config.final_completion_gate == "off"
     assert config.style_telemetry_mode == "shadow"
+
+
+def test_form_blocking_policy_can_be_loaded_from_env(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("FORWIN_FORM_BLOCKING_OBLIGATION_PARTIAL", "error")
+
+    config = Config.from_env()
+
+    assert config.form_blocking_policy.obligation_partial == "error"
+    assert config.form_blocking_policy.character_wounded == "warning"

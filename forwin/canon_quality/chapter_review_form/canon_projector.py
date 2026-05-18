@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from forwin.config import FormBlockingPolicy
 from forwin.canon_quality.signals import (
     CanonQualitySignal,
     CharacterStateTransition,
@@ -28,8 +29,10 @@ def project_validated_answers(
     validation_report: ValidationReport,
     draft_id: str = "",
     min_blocking_confidence: float = 0.8,
+    blocking_policy: FormBlockingPolicy | None = None,
 ) -> ProjectionResult:
     result = ProjectionResult()
+    policy = blocking_policy or FormBlockingPolicy()
     validated = set(validation_report.validated)
     blocking_paths = set(validation_report.blocking_paths)
     for index, rejected in enumerate(validation_report.rejected, start=1):
@@ -87,16 +90,23 @@ def project_validated_answers(
                     },
                 )
             )
-        if consistency_path in blocking_paths:
+        if consistency_path in blocking_paths or status_path in blocking_paths:
+            answer = countdown.consistent_with_prior if consistency_path in blocking_paths else countdown.status_in_this_chapter
+            answer_path = consistency_path if consistency_path in blocking_paths else status_path
             signal = _blocking_signal(
                 answers=answers,
                 signal_type="form_countdown_inconsistency",
                 subject_key=countdown.key,
-                answer=countdown.consistent_with_prior,
-                answer_path=consistency_path,
+                answer=answer,
+                answer_path=answer_path,
                 description=f"Countdown {countdown.key} is inconsistent with prior canon.",
                 draft_id=draft_id,
                 index=index + 1,
+                severity=_severity_for_answer(
+                    policy=policy,
+                    signal_type="form_countdown_inconsistency",
+                    answer=answer,
+                ),
             )
             result.signals.append(signal)
             result.review_issues.append(_issue_from_signal(signal))
@@ -106,6 +116,7 @@ def project_validated_answers(
         answers=answers,
         blocking_paths=blocking_paths,
         draft_id=draft_id,
+        policy=policy,
     )
     return result
 
@@ -165,6 +176,8 @@ def _rejection_signal(
             "validation_status": "rejected",
             "reason": rejected.reason,
             "message": rejected.message,
+            "value": rejected.value,
+            "confidence": rejected.confidence,
         },
     )
 
@@ -179,13 +192,14 @@ def _blocking_signal(
     description: str,
     draft_id: str,
     index: int,
+    severity: str,
 ) -> CanonQualitySignal:
     return CanonQualitySignal(
         signal_id=make_signal_id(answers.project_id, answers.chapter_number, signal_type, subject_key, index),
         project_id=answers.project_id,
         chapter_number=answers.chapter_number,
         signal_type=signal_type,
-        severity="error",
+        severity=severity,
         target_scope="chapter",
         subject_key=subject_key,
         description=description,
@@ -213,6 +227,7 @@ def _project_blocking_section_answers(
     answers: ChapterReviewAnswers,
     blocking_paths: set[str],
     draft_id: str,
+    policy: FormBlockingPolicy,
 ) -> None:
     for index, obligation in enumerate(answers.obligations):
         path = f"obligations[{index}].addressed"
@@ -226,6 +241,11 @@ def _project_blocking_section_answers(
                 description=f"Obligation {obligation.id} is unresolved.",
                 draft_id=draft_id,
                 index=index + 1,
+                severity=_severity_for_answer(
+                    policy=policy,
+                    signal_type="form_obligation_unresolved",
+                    answer=obligation.addressed,
+                ),
             )
             result.signals.append(signal)
             result.review_issues.append(_issue_from_signal(signal))
@@ -241,6 +261,11 @@ def _project_blocking_section_answers(
                 description=f"Open signal {open_signal.id} is still unresolved.",
                 draft_id=draft_id,
                 index=index + 1,
+                severity=_severity_for_answer(
+                    policy=policy,
+                    signal_type="form_open_signal_persisting",
+                    answer=open_signal.status,
+                ),
             )
             result.signals.append(signal)
             result.review_issues.append(_issue_from_signal(signal))
@@ -254,6 +279,11 @@ def _project_blocking_section_answers(
             description="Final chapter did not close the main crisis.",
             draft_id=draft_id,
             index=1,
+            severity=_severity_for_answer(
+                policy=policy,
+                signal_type="form_final_chapter_unresolved",
+                answer=answers.final_chapter.main_crisis_status,
+            ),
         )
         result.signals.append(signal)
         result.review_issues.append(_issue_from_signal(signal))
@@ -278,6 +308,27 @@ def _issue_from_signal(signal: CanonQualitySignal) -> dict[str, Any]:
         "blocking_origin": payload.get("blocking_origin", "chapter_review_form"),
         "confidence": payload.get("original_confidence", 0.0),
     }
+
+
+def _severity_for_answer(*, policy: FormBlockingPolicy, signal_type: str, answer: FormAnswer) -> str:
+    value = str(answer.value or "").strip()
+    if signal_type == "form_countdown_inconsistency":
+        if value in {"reset", "reopened"}:
+            return policy.countdown_reset
+        if value == "advanced":
+            return policy.countdown_advanced
+        return policy.countdown_inconsistent
+    if signal_type == "form_obligation_unresolved":
+        return policy.obligation_partial if value == "partial" else policy.obligation_unaddressed
+    if signal_type == "form_open_signal_persisting":
+        return policy.signal_worsened if value == "worsened" else policy.signal_persisting
+    if signal_type == "form_final_chapter_unresolved":
+        return policy.final_denied if value == "denied_or_avoided" else policy.final_dangling
+    if value == "wounded":
+        return policy.character_wounded
+    if value == "captured":
+        return policy.character_captured
+    return policy.character_dead
 
 
 def _evidence_quote(answer: FormAnswer | None) -> str:

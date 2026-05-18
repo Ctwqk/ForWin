@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -56,6 +57,21 @@ class GovernanceConfig(BaseModel):
     progression_mode: str = "serial_canon_band_guard"
     review_interval_chapters: int = 0
     future_constraints_enabled: bool = True
+
+
+class FormBlockingPolicy(BaseModel):
+    character_dead: Literal["error", "warning"] = "error"
+    character_wounded: Literal["error", "warning"] = "warning"
+    character_captured: Literal["error", "warning"] = "error"
+    countdown_inconsistent: Literal["error", "warning"] = "error"
+    countdown_reset: Literal["error", "warning"] = "warning"
+    countdown_advanced: Literal["error", "warning"] = "warning"
+    obligation_unaddressed: Literal["error", "warning"] = "error"
+    obligation_partial: Literal["error", "warning"] = "warning"
+    signal_persisting: Literal["error", "warning"] = "error"
+    signal_worsened: Literal["error", "warning"] = "error"
+    final_dangling: Literal["error", "warning"] = "error"
+    final_denied: Literal["error", "warning"] = "error"
 
 
 class CodexConfig(BaseModel):
@@ -404,6 +420,18 @@ def _env_values() -> dict[str, object]:
         ),
         "chapter_review_form_max_llm_retries": _env_int(env, "FORWIN_CHAPTER_REVIEW_FORM_MAX_LLM_RETRIES", 1),
         "chapter_review_form_token_budget_chars": _env_int(env, "FORWIN_CHAPTER_REVIEW_FORM_TOKEN_BUDGET_CHARS", 8000),
+        "form_blocking_character_dead": _env_str(env, "FORWIN_FORM_BLOCKING_CHARACTER_DEAD", "error"),
+        "form_blocking_character_wounded": _env_str(env, "FORWIN_FORM_BLOCKING_CHARACTER_WOUNDED", "warning"),
+        "form_blocking_character_captured": _env_str(env, "FORWIN_FORM_BLOCKING_CHARACTER_CAPTURED", "error"),
+        "form_blocking_countdown_inconsistent": _env_str(env, "FORWIN_FORM_BLOCKING_COUNTDOWN_INCONSISTENT", "error"),
+        "form_blocking_countdown_reset": _env_str(env, "FORWIN_FORM_BLOCKING_COUNTDOWN_RESET", "warning"),
+        "form_blocking_countdown_advanced": _env_str(env, "FORWIN_FORM_BLOCKING_COUNTDOWN_ADVANCED", "warning"),
+        "form_blocking_obligation_unaddressed": _env_str(env, "FORWIN_FORM_BLOCKING_OBLIGATION_UNADDRESSED", "error"),
+        "form_blocking_obligation_partial": _env_str(env, "FORWIN_FORM_BLOCKING_OBLIGATION_PARTIAL", "warning"),
+        "form_blocking_signal_persisting": _env_str(env, "FORWIN_FORM_BLOCKING_SIGNAL_PERSISTING", "error"),
+        "form_blocking_signal_worsened": _env_str(env, "FORWIN_FORM_BLOCKING_SIGNAL_WORSENED", "error"),
+        "form_blocking_final_dangling": _env_str(env, "FORWIN_FORM_BLOCKING_FINAL_DANGLING", "error"),
+        "form_blocking_final_denied": _env_str(env, "FORWIN_FORM_BLOCKING_FINAL_DENIED", "error"),
         "reviewer_quality_mode": _env_str(env, "FORWIN_REVIEWER_QUALITY_MODE", "hybrid"),
         "planning_audit_mode": _env_str(env, "FORWIN_PLANNING_AUDIT_MODE", "hybrid"),
         "plan_patch_validation_mode": _env_str(env, "FORWIN_PLAN_PATCH_VALIDATION_MODE", "hybrid"),
@@ -538,6 +566,18 @@ class _ConfigFields:
     chapter_review_form_min_blocking_confidence: float = 0.8
     chapter_review_form_max_llm_retries: int = 1
     chapter_review_form_token_budget_chars: int = 8000
+    form_blocking_character_dead: str = "error"
+    form_blocking_character_wounded: str = "warning"
+    form_blocking_character_captured: str = "error"
+    form_blocking_countdown_inconsistent: str = "error"
+    form_blocking_countdown_reset: str = "warning"
+    form_blocking_countdown_advanced: str = "warning"
+    form_blocking_obligation_unaddressed: str = "error"
+    form_blocking_obligation_partial: str = "warning"
+    form_blocking_signal_persisting: str = "error"
+    form_blocking_signal_worsened: str = "error"
+    form_blocking_final_dangling: str = "error"
+    form_blocking_final_denied: str = "error"
     reviewer_quality_mode: str = "hybrid"
     planning_audit_mode: str = "hybrid"
     plan_patch_validation_mode: str = "hybrid"
@@ -686,6 +726,23 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
             progression_mode=self.progression_mode,
             review_interval_chapters=self.review_interval_chapters,
             future_constraints_enabled=self.future_constraints_enabled,
+        )
+
+    @property
+    def form_blocking_policy(self) -> FormBlockingPolicy:
+        return FormBlockingPolicy(
+            character_dead=self.form_blocking_character_dead,
+            character_wounded=self.form_blocking_character_wounded,
+            character_captured=self.form_blocking_character_captured,
+            countdown_inconsistent=self.form_blocking_countdown_inconsistent,
+            countdown_reset=self.form_blocking_countdown_reset,
+            countdown_advanced=self.form_blocking_countdown_advanced,
+            obligation_unaddressed=self.form_blocking_obligation_unaddressed,
+            obligation_partial=self.form_blocking_obligation_partial,
+            signal_persisting=self.form_blocking_signal_persisting,
+            signal_worsened=self.form_blocking_signal_worsened,
+            final_dangling=self.form_blocking_final_dangling,
+            final_denied=self.form_blocking_final_denied,
         )
 
     @property

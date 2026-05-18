@@ -68,11 +68,15 @@ def _character_ask(row: Any) -> CharacterReviewAsk:
     aliases = []
     if isinstance(payload, dict) and isinstance(payload.get("aliases"), list):
         aliases = [str(item).strip() for item in payload.get("aliases", []) if str(item).strip()]
+    descriptive_aliases = []
+    if isinstance(payload, dict) and isinstance(payload.get("descriptive_aliases"), list):
+        descriptive_aliases = [str(item).strip() for item in payload.get("descriptive_aliases", []) if str(item).strip()]
     state = _life_state(row_value(row, "to_state") or row_value(row, "life_state") or "unknown")
     custody = _custody_state(row_value(row, "to_state") or row_value(row, "custody_state") or "unknown")
     return CharacterReviewAsk(
         name=name,
         aliases=aliases,
+        descriptive_aliases=descriptive_aliases,
         prior_life_state=state,
         prior_custody_state=custody,
         last_seen_chapter=int(row_value(row, "chapter_number", 0) or 0),

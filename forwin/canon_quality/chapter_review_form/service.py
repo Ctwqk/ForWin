@@ -26,6 +26,7 @@ from .evidence_validator import ValidationReport, validate_answers
 from .form_builder import build_form
 from .form_schema import ChapterReviewAnswers, ChapterReviewForm
 from .llm_caller import call_form
+from .pruning import FormBudgetExceeded
 
 DRY_RUN_RESULT_MODE = "dry_run"
 DRY_RUN_SOURCE_MODE = "chapter_review_form_dry_run"
@@ -77,19 +78,37 @@ def review_chapter_with_form(
     project = session.get(Project, project_id) if session is not None else None
     resolved_target_total = int(target_total_chapters or getattr(project, "target_total_chapters", 0) or 0)
     body = str(writer_output.body or "")
-    form = build_form(
-        project_id=project_id,
-        chapter_number=chapter_number,
-        chapter_text=body,
-        character_rows=character_rows if character_rows is not None else _safe_list(repo, "list_character_transitions", project_id, before_chapter=chapter_number),
-        countdown_rows=countdown_rows if countdown_rows is not None else _safe_list(repo, "list_countdown_entries", project_id, before_chapter=chapter_number, include_details=True),
-        open_signal_rows=open_signal_rows if open_signal_rows is not None else _safe_list(repo, "list_open_signals", project_id, before_chapter=chapter_number, limit=20),
-        obligations=obligations or [],
-        target_total_chapters=resolved_target_total,
-        token_budget_chars=token_budget_chars,
-    )
+    budget_warning_signals: list[CanonQualitySignal] = []
+    budget_warning_issues: list[dict[str, Any]] = []
+    try:
+        form = build_form(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            chapter_text=body,
+            character_rows=character_rows if character_rows is not None else _safe_list(repo, "list_character_transitions", project_id, before_chapter=chapter_number),
+            countdown_rows=countdown_rows if countdown_rows is not None else _safe_list(repo, "list_countdown_entries", project_id, before_chapter=chapter_number, include_details=True),
+            open_signal_rows=open_signal_rows if open_signal_rows is not None else _safe_list(repo, "list_open_signals", project_id, before_chapter=chapter_number, limit=20),
+            obligations=obligations or [],
+            target_total_chapters=resolved_target_total,
+            token_budget_chars=token_budget_chars,
+        )
+    except FormBudgetExceeded as exc:
+        if exc.form is None:
+            raise
+        form = exc.form
+        warning = _budget_exceeded_signal(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            draft_id=draft_id,
+            source_mode=source_mode,
+            protected_counts=exc.protected_counts,
+            max_chars=exc.max_chars,
+            actual_chars=exc.actual_chars,
+        )
+        budget_warning_signals.append(warning)
+        budget_warning_issues.append(_issue_from_signal(warning, blocking=False))
     if llm_client is None:
-        return _failure_result(
+        result = _failure_result(
             project_id=project_id,
             chapter_number=chapter_number,
             draft_id=draft_id,
@@ -101,6 +120,7 @@ def review_chapter_with_form(
             mode=result_mode,
             source_mode=source_mode,
         )
+        return _with_budget_warnings(result, budget_warning_signals, budget_warning_issues)
     try:
         answers = call_form(
             form=form,
@@ -110,7 +130,7 @@ def review_chapter_with_form(
             max_schema_retries=max_schema_retries,
         )
     except ChapterReviewFormSchemaInvalid as exc:
-        return _failure_result(
+        result = _failure_result(
             project_id=project_id,
             chapter_number=chapter_number,
             draft_id=draft_id,
@@ -122,8 +142,9 @@ def review_chapter_with_form(
             mode=result_mode,
             source_mode=source_mode,
         )
+        return _with_budget_warnings(result, budget_warning_signals, budget_warning_issues)
     except ChapterReviewFormUnavailable as exc:
-        return _failure_result(
+        result = _failure_result(
             project_id=project_id,
             chapter_number=chapter_number,
             draft_id=draft_id,
@@ -135,6 +156,7 @@ def review_chapter_with_form(
             mode=result_mode,
             source_mode=source_mode,
         )
+        return _with_budget_warnings(result, budget_warning_signals, budget_warning_issues)
 
     validation_report = validate_answers(
         form=form,
@@ -150,13 +172,12 @@ def review_chapter_with_form(
         blocking_policy=blocking_policy,
     )
     if dry_run:
-        signals = [_dry_run_signal(signal) for signal in projection.signals]
-        review_issues = [_dry_run_issue(issue) for issue in projection.review_issues]
-        summary_projection = projection.model_copy(update={"signals": signals, "review_issues": review_issues})
+        signals = [*budget_warning_signals, *[_dry_run_signal(signal) for signal in projection.signals]]
+        review_issues = [*budget_warning_issues, *[_dry_run_issue(issue) for issue in projection.review_issues]]
     else:
-        signals = list(projection.signals)
-        review_issues = list(projection.review_issues)
-        summary_projection = projection
+        signals = [*budget_warning_signals, *list(projection.signals)]
+        review_issues = [*budget_warning_issues, *list(projection.review_issues)]
+    summary_projection = projection.model_copy(update={"signals": signals, "review_issues": review_issues})
     projection_summary = summarize_form_run(
         answers=answers,
         validation_report=validation_report,
@@ -264,6 +285,32 @@ def _failure_result(
     )
 
 
+def _with_budget_warnings(
+    result: ChapterReviewFormResult,
+    signals: list[CanonQualitySignal],
+    issues: list[dict[str, Any]],
+) -> ChapterReviewFormResult:
+    if not signals and not issues:
+        return result
+    combined_signals = [*signals, *result.signals]
+    combined_issues = [*issues, *result.review_issues]
+    raw_results = list(result.raw_analyzer_results)
+    if raw_results:
+        first = dict(raw_results[0])
+        first["issues"] = [*issues, *list(first.get("issues") or [])]
+        if result.blocking is False:
+            first["verdict"] = _verdict_for_signals(combined_signals)
+        raw_results[0] = first
+    return result.model_copy(
+        update={
+            "signals": combined_signals,
+            "projection_summary": _merge_budget_projection_summary(result.projection_summary, signals),
+            "review_issues": combined_issues,
+            "raw_analyzer_results": raw_results,
+        }
+    )
+
+
 def persist_form_artifact(root: str | Path, result: ChapterReviewFormResult) -> Path:
     artifact_path = _artifact_path(root, result.project_id, result.chapter_number)
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
@@ -304,6 +351,74 @@ def _failure_projection_summary(signal: CanonQualitySignal) -> dict[str, Any]:
     }
 
 
+def _merge_budget_projection_summary(
+    summary: dict[str, Any],
+    signals: list[CanonQualitySignal],
+) -> dict[str, Any]:
+    if not signals:
+        return summary
+    payload = dict(summary)
+    severity_counts = dict(payload.get("signals_by_severity") or {})
+    blocking_eligible = list(payload.get("blocking_eligible") or [])
+    for signal in signals:
+        severity_counts[signal.severity] = int(severity_counts.get(signal.severity, 0) or 0) + 1
+        blocking_eligible.append(signal.model_dump(mode="json"))
+    payload["signals_by_severity"] = severity_counts
+    payload["blocking_eligible"] = blocking_eligible
+    return payload
+
+
+def _budget_exceeded_signal(
+    *,
+    project_id: str,
+    chapter_number: int,
+    draft_id: str,
+    source_mode: str,
+    protected_counts: dict[str, int],
+    max_chars: int,
+    actual_chars: int,
+) -> CanonQualitySignal:
+    return CanonQualitySignal(
+        signal_id=make_signal_id(project_id, chapter_number, "form_budget_exceeded", source_mode),
+        project_id=project_id,
+        chapter_number=chapter_number,
+        signal_type="form_budget_exceeded",
+        severity="warning",
+        target_scope="chapter",
+        subject_key="chapter_review_form",
+        description="Chapter review form protected items exceed budget; proceeding without pruning protected canon inputs.",
+        payload={
+            "source_layer": "canon_quality",
+            "source_mode": source_mode,
+            "source": "chapter_review_form",
+            "form_schema_version": FORM_SCHEMA_VERSION,
+            "validation_status": "unverified",
+            "blocking_origin": source_mode,
+            "draft_id": draft_id,
+            "protected_counts": protected_counts,
+            "max_chars": max_chars,
+            "actual_chars": actual_chars,
+        },
+    )
+
+
+def _issue_from_signal(signal: CanonQualitySignal, *, blocking: bool) -> dict[str, Any]:
+    return {
+        "issue_id": signal.signal_id,
+        "rule_name": signal.signal_type,
+        "type": signal.signal_type,
+        "severity": signal.severity,
+        "description": signal.description,
+        "source_layer": "canon_quality",
+        "source_mode": signal.payload.get("source_mode", PRIMARY_SOURCE_MODE),
+        "source_analyzer": "ChapterReviewForm",
+        "form_schema_version": FORM_SCHEMA_VERSION,
+        "validation_status": signal.payload.get("validation_status", "unverified"),
+        "blocking_origin": signal.payload.get("blocking_origin", ""),
+        "blocking": blocking,
+    }
+
+
 def _safe_list(repo: CanonQualityRepository | None, method_name: str, *args: Any, **kwargs: Any) -> list[Any]:
     if repo is None:
         return []
@@ -336,7 +451,7 @@ def _raw_result(
     effective_signals = list(signals) if signals is not None else list(projection.signals)
     effective_issues = list(review_issues) if review_issues is not None else list(projection.review_issues)
     blocking = any(signal.severity == "error" for signal in effective_signals)
-    verdict = "warn" if source_mode == DRY_RUN_SOURCE_MODE and effective_signals else "fail" if effective_signals else "pass"
+    verdict = _verdict_for_signals(effective_signals)
     return {
         "analyzer": "ChapterReviewForm",
         "version": FORM_SCHEMA_VERSION,
@@ -355,6 +470,14 @@ def _raw_result(
             "rejected_paths": [item.model_dump(mode="json") for item in validation_report.rejected],
         },
     }
+
+
+def _verdict_for_signals(signals: list[CanonQualitySignal]) -> str:
+    if not signals:
+        return "pass"
+    if any(signal.severity == "error" for signal in signals):
+        return "fail"
+    return "warn"
 
 
 def _artifact_path(root: str | Path, project_id: str, chapter_number: int) -> Path:

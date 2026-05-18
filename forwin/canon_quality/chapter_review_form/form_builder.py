@@ -12,6 +12,7 @@ from .form_schema import (
     OpenSignalReviewAsk,
 )
 from .pruning import (
+    fit_form_budget,
     row_value,
     select_characters_to_ask,
     select_countdowns_to_ask,
@@ -59,7 +60,7 @@ def build_form(
         open_signals=open_signals,
         final_chapter=final_chapter,
     )
-    return _fit_budget(form, max_chars=max(1000, int(token_budget_chars or 8000)))
+    return fit_form_budget(form, max_chars=max(1000, int(token_budget_chars or 8000)))
 
 
 def _character_rows_for_form(rows: list[Any]) -> list[Any]:
@@ -159,19 +160,6 @@ def _obligation_ask(obligation: Any, *, current_chapter: int) -> ObligationRevie
         must_resolve_now=bool(row_value(obligation, "must_resolve_now", False)) or deadline <= int(current_chapter or 0),
         payoff_test=str(row_value(obligation, "payoff_test") or "").strip(),
     )
-
-
-def _fit_budget(form: ChapterReviewForm, *, max_chars: int) -> ChapterReviewForm:
-    while len(form.model_dump_json()) > max_chars and form.open_signals:
-        form.open_signals.pop()
-    while len(form.model_dump_json()) > max_chars and form.obligations:
-        form.obligations.pop()
-    while len(form.model_dump_json()) > max_chars and form.countdowns:
-        form.countdowns.pop()
-    while len(form.model_dump_json()) > max_chars and form.characters:
-        removable = next((index for index, item in enumerate(form.characters) if not item.must_track), len(form.characters) - 1)
-        form.characters.pop(removable)
-    return form
 
 
 def _life_state(value: Any) -> str:

@@ -147,7 +147,121 @@ def _normalize_answer_payload(raw: dict[str, Any], *, form: ChapterReviewForm) -
     payload["project_id"] = form.project_id
     payload["chapter_number"] = form.chapter_number
     payload["form_schema_version"] = form.form_schema_version
+    _normalize_form_answer_shapes(payload)
     return payload
+
+
+def _normalize_form_answer_shapes(payload: dict[str, Any]) -> None:
+    for item in _list_items(payload.get("characters")):
+        fallback_evidence = _first_string(item, "evidence_quote", "quote", "supporting_quote")
+        fallback_subject = _first_string(item, "subject_of_quote", "subject", "name")
+        fallback_confidence = item.get("confidence")
+        for key in ("life_state", "custody_state", "participation"):
+            if key in item:
+                item[key] = _coerce_form_answer(
+                    item[key],
+                    fallback_evidence=fallback_evidence,
+                    fallback_subject=fallback_subject,
+                    fallback_confidence=fallback_confidence,
+                )
+
+    for item in _list_items(payload.get("countdowns")):
+        fallback_evidence = _first_string(item, "evidence_quote", "quote", "new_value_quote")
+        fallback_subject = _first_string(item, "subject_of_quote", "subject", "key", "label")
+        fallback_confidence = item.get("confidence")
+        for key in ("status_in_this_chapter", "consistent_with_prior", "new_value_evidence"):
+            if key in item and item[key] is not None:
+                item[key] = _coerce_form_answer(
+                    item[key],
+                    fallback_evidence=fallback_evidence,
+                    fallback_subject=fallback_subject,
+                    fallback_confidence=fallback_confidence,
+                )
+
+    for item in _list_items(payload.get("obligations")):
+        fallback_evidence = _first_string(item, "evidence_quote", "quote", "payoff_quote")
+        fallback_subject = _first_string(item, "subject_of_quote", "subject", "id")
+        fallback_confidence = item.get("confidence")
+        for key in ("addressed", "payoff_evidence"):
+            if key in item and item[key] is not None:
+                item[key] = _coerce_form_answer(
+                    item[key],
+                    fallback_evidence=fallback_evidence,
+                    fallback_subject=fallback_subject,
+                    fallback_confidence=fallback_confidence,
+                )
+
+    for item in _list_items(payload.get("open_signals")):
+        fallback_evidence = _first_string(item, "evidence_quote", "quote", "resolution_quote")
+        fallback_subject = _first_string(item, "subject_of_quote", "subject", "id")
+        fallback_confidence = item.get("confidence")
+        for key in ("status", "resolution_evidence"):
+            if key in item and item[key] is not None:
+                item[key] = _coerce_form_answer(
+                    item[key],
+                    fallback_evidence=fallback_evidence,
+                    fallback_subject=fallback_subject,
+                    fallback_confidence=fallback_confidence,
+                )
+
+    final_chapter = payload.get("final_chapter")
+    if isinstance(final_chapter, dict):
+        fallback_evidence = _first_string(final_chapter, "evidence_quote", "quote", "closure_quote")
+        fallback_subject = _first_string(final_chapter, "subject_of_quote", "subject")
+        fallback_confidence = final_chapter.get("confidence")
+        for key in ("main_crisis_status", "closure_evidence"):
+            if key in final_chapter and final_chapter[key] is not None:
+                final_chapter[key] = _coerce_form_answer(
+                    final_chapter[key],
+                    fallback_evidence=fallback_evidence,
+                    fallback_subject=fallback_subject,
+                    fallback_confidence=fallback_confidence,
+                )
+
+
+def _coerce_form_answer(
+    value: Any,
+    *,
+    fallback_evidence: str = "",
+    fallback_subject: str = "",
+    fallback_confidence: Any = None,
+) -> dict[str, Any]:
+    if isinstance(value, dict):
+        answer = dict(value)
+    else:
+        answer = {"value": _scalar_answer_value(value)}
+    answer.setdefault("evidence_quote", fallback_evidence)
+    answer.setdefault("subject_of_quote", fallback_subject)
+    if "confidence" not in answer:
+        answer["confidence"] = _coerce_confidence(fallback_confidence)
+    return answer
+
+
+def _list_items(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _first_string(item: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _coerce_confidence(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _scalar_answer_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value or "")
 
 
 def _repair_messages(

@@ -52,6 +52,28 @@ class RepairingClient:
         return FakeClient().complete_json(**kwargs)
 
 
+class FlatClient:
+    def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
+        return {
+            "characters": [
+                {
+                    "name": "林青",
+                    "appears_in_chapter": True,
+                    "life_state": "dead",
+                    "custody_state": "free",
+                    "participation": "major",
+                    "evidence_quote": "林青倒下，再无呼吸。",
+                    "confidence": 0.95,
+                }
+            ],
+            "countdowns": [],
+            "obligations": [],
+            "open_signals": [],
+            "new_observations": {},
+            "chapter_summary": "flat but usable",
+        }
+
+
 def test_form_service_projects_validated_answer() -> None:
     result = review_chapter_with_form(
         session=None,
@@ -95,6 +117,28 @@ def test_form_service_retries_schema_invalid_answer() -> None:
     assert client.calls == 2
     assert result.summary == "林青死亡。"
     assert result.character_transitions[0].to_state == "dead"
+
+
+def test_form_service_accepts_flat_answer_shapes() -> None:
+    result = review_chapter_with_form(
+        session=None,
+        project_id="p1",
+        chapter_number=2,
+        writer_output=WriterOutput(
+            project_id="p1",
+            chapter_number=2,
+            title="二",
+            body="林青倒下，再无呼吸。",
+            end_of_chapter_summary="",
+        ),
+        draft_id="d1",
+        llm_client=FlatClient(),
+        character_rows=[{"character_name": "林青", "to_state": "alive", "chapter_number": 1}],
+    )
+
+    assert result.summary == "flat but usable"
+    assert result.character_transitions[0].to_state == "dead"
+    assert not any(issue["type"] == "form_schema_invalid" for issue in result.review_issues)
 
 
 def test_form_service_llm_unavailable_blocks_without_writes() -> None:

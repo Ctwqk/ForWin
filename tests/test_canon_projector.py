@@ -68,6 +68,25 @@ def test_projector_rejected_answer_does_not_write_state() -> None:
     assert projection.signals[0].severity == "error"
 
 
+def test_projector_does_not_write_state_without_evidence() -> None:
+    answer = CharacterReviewAnswer(
+        name="林青",
+        appears_in_chapter=True,
+        life_state=FormAnswer(value="dead", confidence=0.95),
+        custody_state=FormAnswer(value="unknown"),
+        participation=FormAnswer(value="mentioned_only"),
+    )
+
+    projection = project_validated_answers(
+        answers=_answers(characters=[answer]),
+        validation_report=ValidationReport(validated=["characters[0].life_state"], rejected=[]),
+        draft_id="d1",
+        min_blocking_confidence=0.8,
+    )
+
+    assert projection.character_transitions == []
+
+
 def test_projector_blocks_closed_countdown_regression_without_bridge() -> None:
     countdown = CountdownReviewAnswer(
         key="main",

@@ -37,7 +37,7 @@ def project_validated_answers(
 
     for index, character in enumerate(answers.characters):
         life_path = f"characters[{index}].life_state"
-        if life_path in validated and character.life_state.value in {"alive", "wounded", "dead"}:
+        if life_path in validated and character.life_state.value in {"alive", "wounded", "dead"} and _evidence_quote(character.life_state):
             result.character_transitions.append(
                 _character_transition(
                     answers=answers,
@@ -48,7 +48,7 @@ def project_validated_answers(
                 )
             )
         custody_path = f"characters[{index}].custody_state"
-        if custody_path in validated and character.custody_state.value in {"free", "captured"}:
+        if custody_path in validated and character.custody_state.value in {"free", "captured"} and _evidence_quote(character.custody_state):
             result.character_transitions.append(
                 _character_transition(
                     answers=answers,
@@ -63,7 +63,9 @@ def project_validated_answers(
         status_path = f"countdowns[{index}].status_in_this_chapter"
         value_path = f"countdowns[{index}].new_value_evidence"
         consistency_path = f"countdowns[{index}].consistent_with_prior"
-        if countdown.new_value_minutes is not None and (status_path in validated or value_path in validated):
+        if countdown.new_value_minutes is not None and (status_path in validated or value_path in validated) and (
+            _evidence_quote(countdown.new_value_evidence) or _evidence_quote(countdown.status_in_this_chapter)
+        ):
             result.countdown_entries.append(
                 CountdownLedgerEntry(
                     project_id=answers.project_id,

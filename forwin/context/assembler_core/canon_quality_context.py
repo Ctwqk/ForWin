@@ -242,6 +242,24 @@ def _truthy(value: object) -> bool:
     return bool(value)
 
 
+_RECENT_CANON_CUSTODY_RELEASE_MARKERS = ("救出", "救下", "营救", "解救", "脱困", "释放", "获救")
+_RECENT_CANON_POST_NAME_RELEASE_MARKERS = ("获救", "脱困", "被释放", "已释放", "被救出", "被救下", "被解救")
+_RECENT_CANON_CUSTODY_CAPTURE_MARKERS = (
+    "被关押",
+    "被关在",
+    "被关进",
+    "被扣押",
+    "被捕",
+    "被固定",
+    "被束缚",
+    "被锁在",
+    "关在",
+    "锁在",
+    "束缚",
+    "固定在",
+)
+
+
 def _recent_canon_custody_constraints(*, session, project_id: str, before_chapter: int) -> list[dict[str, Any]]:
     rows = session.execute(
         select(CandidateDraftRecord, ChapterDraft)

@@ -38,7 +38,6 @@ def test_giant_module_public_imports_remain_available() -> None:
     assert callable(api_project_ops.get_chapter_review)
 
 
-@pytest.mark.skip(reason="enable after first-batch decomposition tasks complete")
 def test_first_batch_giant_files_stay_small() -> None:
     for relative_path, max_lines in FIRST_BATCH_LIMITS.items():
         path = REPO_ROOT / relative_path
@@ -50,6 +49,7 @@ def test_first_batch_giant_files_stay_small() -> None:
 def test_new_decomposition_modules_stay_context_sized() -> None:
     roots = [
         REPO_ROOT / "forwin" / "book_genesis_core",
+        REPO_ROOT / "forwin" / "orchestrator_loop_core",
         REPO_ROOT / "forwin" / "project_ops",
         REPO_ROOT / "forwin" / "genesis_pipeline",
         REPO_ROOT / "forwin" / "planning" / "future_plan_audit",

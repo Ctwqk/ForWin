@@ -166,6 +166,7 @@ def review_chapter_with_form(
     )
     projection: ProjectionResult = project_validated_answers(
         answers=answers,
+        form=form,
         validation_report=validation_report,
         draft_id=draft_id,
         min_blocking_confidence=min_blocking_confidence,

@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -95,3 +99,33 @@ def test_migration_marks_only_non_form_rows() -> None:
         "already_superseded": 0,
         "total": 2,
     }
+
+
+def test_migration_rejects_unimplemented_rebuild_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    import scripts.migrate_legacy_canon_to_form as migration
+
+    class _Engine:
+        def dispose(self) -> None:
+            pass
+
+    class _Session:
+        def __enter__(self) -> "_Session":
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            pass
+
+        def commit(self) -> None:
+            pass
+
+        def rollback(self) -> None:
+            pass
+
+    monkeypatch.setattr(migration.Config, "from_env", staticmethod(lambda: SimpleNamespace(database_url="sqlite://")))
+    monkeypatch.setattr(migration, "get_engine", lambda _: _Engine())
+    monkeypatch.setattr(migration, "init_db", lambda _: None)
+    monkeypatch.setattr(migration, "get_session_factory", lambda _: lambda: _Session())
+    monkeypatch.setattr(migration, "_load_rows", lambda *_args, **_kwargs: [])
+
+    with pytest.raises(SystemExit):
+        migration.main(["--dry-run", "--rebuild-from-chapter", "3", "--confirm-rebuild"])

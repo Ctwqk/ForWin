@@ -12,7 +12,7 @@ from forwin.canon_quality.signals import (
     make_signal_id,
 )
 
-from .form_schema import ChapterReviewAnswers, FormAnswer
+from .form_schema import ChapterReviewAnswers, ChapterReviewForm, CountdownReviewAnswer, CountdownReviewAsk, FormAnswer
 from .evidence_validator import RejectedAnswer, ValidationReport
 
 
@@ -26,6 +26,7 @@ class ProjectionResult(BaseModel):
 def project_validated_answers(
     *,
     answers: ChapterReviewAnswers,
+    form: ChapterReviewForm | None = None,
     validation_report: ValidationReport,
     draft_id: str = "",
     min_blocking_confidence: float = 0.8,
@@ -104,6 +105,7 @@ def project_validated_answers(
                 index=index + 1,
                 patch_kind="countdown_drift",
                 suppression_key=f"countdown:{countdown.key}",
+                extra_payload=_countdown_prior_payload(form=form, answer=countdown, index=index),
                 severity=_severity_for_answer(
                     policy=policy,
                     signal_type="form_countdown_inconsistency",
@@ -197,8 +199,28 @@ def _blocking_signal(
     severity: str,
     patch_kind: str = "",
     suppression_key: str = "",
+    extra_payload: dict[str, Any] | None = None,
 ) -> CanonQualitySignal:
     plan_patchable = bool(patch_kind and suppression_key)
+    payload = {
+        "source_layer": "canon_quality",
+        "source_mode": "chapter_review_form",
+        "source": "chapter_review_form",
+        "form_schema_version": answers.form_schema_version,
+        "answer_path": answer_path,
+        "validation_status": "validated",
+        "evidence_quote": answer.evidence_quote,
+        "subject_of_quote": answer.subject_of_quote,
+        "original_verdict": answer.value,
+        "original_confidence": answer.confidence,
+        "blocking_origin": "chapter_review_form",
+        "draft_id": draft_id,
+        "plan_patchable": plan_patchable,
+        "patch_kind": patch_kind,
+        "suppression_key": suppression_key,
+    }
+    if extra_payload:
+        payload.update(extra_payload)
     return CanonQualitySignal(
         signal_id=make_signal_id(answers.project_id, answers.chapter_number, signal_type, subject_key, index),
         project_id=answers.project_id,
@@ -209,24 +231,43 @@ def _blocking_signal(
         subject_key=subject_key,
         description=description,
         evidence_refs=[answer.evidence_quote] if answer.evidence_quote else [],
-        payload={
-            "source_layer": "canon_quality",
-            "source_mode": "chapter_review_form",
-            "source": "chapter_review_form",
-            "form_schema_version": answers.form_schema_version,
-            "answer_path": answer_path,
-            "validation_status": "validated",
-            "evidence_quote": answer.evidence_quote,
-            "subject_of_quote": answer.subject_of_quote,
-            "original_verdict": answer.value,
-            "original_confidence": answer.confidence,
-            "blocking_origin": "chapter_review_form",
-            "draft_id": draft_id,
-            "plan_patchable": plan_patchable,
-            "patch_kind": patch_kind,
-            "suppression_key": suppression_key,
-        },
+        payload=payload,
     )
+
+
+def _countdown_prior_payload(
+    *,
+    form: ChapterReviewForm | None,
+    answer: CountdownReviewAnswer,
+    index: int,
+) -> dict[str, Any]:
+    ask = _matching_countdown_ask(form=form, answer=answer, index=index)
+    if ask is None:
+        return {}
+    payload: dict[str, Any] = {
+        "countdown_label": ask.label,
+        "prior_status": ask.prior_status,
+        "prior_chapter": ask.last_updated_chapter,
+    }
+    if ask.prior_value_minutes is not None:
+        payload["prior_value_minutes"] = int(ask.prior_value_minutes)
+    return payload
+
+
+def _matching_countdown_ask(
+    *,
+    form: ChapterReviewForm | None,
+    answer: CountdownReviewAnswer,
+    index: int,
+) -> CountdownReviewAsk | None:
+    if form is None:
+        return None
+    if 0 <= index < len(form.countdowns) and form.countdowns[index].key == answer.key:
+        return form.countdowns[index]
+    for ask in form.countdowns:
+        if ask.key == answer.key:
+            return ask
+    return None
 
 
 def _project_blocking_section_answers(

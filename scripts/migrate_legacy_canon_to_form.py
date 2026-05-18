@@ -49,14 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Print counts without writing. This is the default unless --apply is set.")
     parser.add_argument("--project-id", default="", help="Limit migration to one project id.")
     parser.add_argument("--apply", action="store_true", help="Persist supersede markers.")
-    parser.add_argument("--rebuild-from-chapter", type=int, default=0)
-    parser.add_argument("--confirm-rebuild", action="store_true")
     args = parser.parse_args(argv)
-
-    if args.confirm_rebuild and not args.rebuild_from_chapter:
-        parser.error("--confirm-rebuild requires --rebuild-from-chapter N")
-    if args.rebuild_from_chapter and not args.confirm_rebuild:
-        parser.error("--rebuild-from-chapter requires --confirm-rebuild")
 
     config = Config.from_env()
     engine = get_engine(config.database_url)
@@ -83,7 +76,6 @@ def main(argv: list[str] | None = None) -> int:
                     {
                         "mode": "apply" if args.apply else "dry-run",
                         "project_id": args.project_id,
-                        "rebuild_from_chapter": int(args.rebuild_from_chapter or 0),
                         "before": before,
                         "changed": changed,
                         "after": after,

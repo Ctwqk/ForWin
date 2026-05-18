@@ -5,6 +5,8 @@ from forwin.canon_quality.chapter_review_form.canon_projector import project_val
 from forwin.canon_quality.chapter_review_form.evidence_validator import ValidationReport
 from forwin.canon_quality.chapter_review_form.form_schema import (
     ChapterReviewAnswers,
+    ChapterReviewForm,
+    CountdownReviewAsk,
     CountdownReviewAnswer,
     FinalChapterAnswer,
     FormAnswer,
@@ -57,6 +59,23 @@ def test_form_signals_are_plan_patchable() -> None:
 
     projection = project_validated_answers(
         answers=answers,
+        form=ChapterReviewForm(
+            project_id="p1",
+            chapter_number=12,
+            form_schema_version=FORM_SCHEMA_VERSION,
+            characters=[],
+            countdowns=[
+                CountdownReviewAsk(
+                    key="倒计时甲",
+                    label="倒计时甲",
+                    prior_value_minutes=12,
+                    prior_status="active",
+                    last_updated_chapter=11,
+                )
+            ],
+            obligations=[],
+            open_signals=[],
+        ),
         validation_report=ValidationReport(
             validated=[
                 "countdowns[0].status_in_this_chapter",
@@ -81,6 +100,8 @@ def test_form_signals_are_plan_patchable() -> None:
     assert payload_by_type["form_countdown_inconsistency"]["plan_patchable"] is True
     assert payload_by_type["form_countdown_inconsistency"]["patch_kind"] == "countdown_drift"
     assert payload_by_type["form_countdown_inconsistency"]["suppression_key"] == "countdown:倒计时甲"
+    assert payload_by_type["form_countdown_inconsistency"]["prior_value_minutes"] == 12
+    assert payload_by_type["form_countdown_inconsistency"]["prior_status"] == "active"
     assert payload_by_type["form_obligation_unresolved"]["plan_patchable"] is True
     assert payload_by_type["form_obligation_unresolved"]["patch_kind"] == "obligation_unresolved"
     assert payload_by_type["form_obligation_unresolved"]["suppression_key"] == "obligation:义务-1"
@@ -108,6 +129,7 @@ def test_countdown_drift_signal_creates_next_chapter_plan_patch() -> None:
                     "plan_patchable": True,
                     "patch_kind": "countdown_drift",
                     "suppression_key": "countdown:倒计时甲",
+                    "prior_value_minutes": 12,
                 },
             }
         ]
@@ -117,9 +139,10 @@ def test_countdown_drift_signal_creates_next_chapter_plan_patch() -> None:
         {
             "patch_kind": "countdown_drift",
             "suppression_key": "countdown:倒计时甲",
+            "prior_value_minutes": 12,
             "task": (
-                "本章必须明确处理 倒计时甲 的当前状态。"
-                "如继续，必须不大于既有值；如已 closed，不得再次出现正数剩余时间；"
+                "本章必须明确处理 倒计时甲 的当前状态：12 分钟。"
+                "如继续，必须 ≤ 该值；如已 closed，不得再次出现正数剩余时间；"
                 "如确实重新开启，必须显式写出 reopen 事件并命名为新的局部窗口。"
             ),
             "source_signal_id": "sig-countdown",

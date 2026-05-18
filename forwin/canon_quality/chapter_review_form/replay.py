@@ -133,6 +133,22 @@ def find_missing_accepted_chapters(
     return missing
 
 
+def latest_accepted_chapter(*, session: Session, project_id: str) -> int:
+    value = session.execute(
+        select(CandidateDraftRecord.chapter_number)
+        .where(
+            CandidateDraftRecord.project_id == project_id,
+            CandidateDraftRecord.status == "canon_committed",
+            CandidateDraftRecord.canon_status == "canon",
+        )
+        .order_by(CandidateDraftRecord.chapter_number.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if value is None:
+        raise ChapterDraftNotFound(f"no accepted chapters found for project={project_id}")
+    return int(value)
+
+
 def replay_single_chapter(
     *,
     session: Session,
@@ -211,6 +227,16 @@ def _candidate_countdown_rows(result: Any) -> list[dict[str, Any]]:
         return rows
     metrics = (result.deterministic_quality_report or {}).get("full_body_metrics") or {}
     return [dict(item) for item in metrics.get("countdown_mentions") or []]
+
+
+def summarize_replay_results(results: list[ReplayChapterResult]) -> dict[str, object]:
+    return {
+        "chapters_completed": sum(1 for item in results if item.status == "success"),
+        "chapters_failed": sum(1 for item in results if item.status == "error"),
+        "total_input_tokens": sum(item.token_usage.input_tokens for item in results),
+        "total_output_tokens": sum(item.token_usage.output_tokens for item in results),
+        "blocking_chapters": [item.chapter_number for item in results if item.blocking],
+    }
 
 
 def replay_chapter_range(

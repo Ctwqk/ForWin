@@ -463,6 +463,12 @@ def _raw_result(
         "issues": effective_issues,
         "accepted_facts": [],
         "uncertainties": [],
+        "character_transitions": [
+            item.model_dump(mode="json") for item in projection.character_transitions
+        ],
+        "countdown_entries": [
+            item.model_dump(mode="json") for item in projection.countdown_entries
+        ],
         "metadata": {
             "source_layer": "canon_quality",
             "source_mode": source_mode,

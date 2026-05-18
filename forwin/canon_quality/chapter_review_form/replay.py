@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.models import CandidateDraftRecord, ChapterDraft, ChapterPlan
 from forwin.protocol.writer import WriterOutput
 
 
 class ChapterDraftNotFound(RuntimeError):
     """Raised when canon replay cannot find an accepted draft for a chapter."""
+
+
+class ReplayLLMUnavailable(RuntimeError):
+    """Raised before replay when no LLM client is configured."""
 
 
 @dataclass(frozen=True)
@@ -23,6 +30,26 @@ class AcceptedDraftRef:
     body: str
     summary: str
     char_count: int
+
+
+class ReplayTokenUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated: bool = True
+
+
+class ReplayChapterResult(BaseModel):
+    chapter_number: int
+    mode: str
+    status: str
+    blocking: bool = False
+    signal_counts_by_severity: dict[str, int] = Field(default_factory=dict)
+    character_transitions_written: int = 0
+    countdown_entries_written: int = 0
+    validation_report_summary: dict[str, Any] = Field(default_factory=dict)
+    candidate_rows: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    token_usage: ReplayTokenUsage = Field(default_factory=ReplayTokenUsage)
+    error_message: str = ""
 
 
 def load_accepted_draft_ref(*, session: Session, project_id: str, chapter_number: int) -> AcceptedDraftRef:
@@ -99,3 +126,83 @@ def find_missing_accepted_chapters(
         except ChapterDraftNotFound:
             missing.append(chapter_number)
     return missing
+
+
+def replay_single_chapter(
+    *,
+    session: Session,
+    project_id: str,
+    chapter_number: int,
+    llm_client: object | None,
+    persist: bool,
+    mode: str,
+) -> ReplayChapterResult:
+    if llm_client is None:
+        raise ReplayLLMUnavailable("No LLM client configured for canon replay.")
+
+    accepted = load_accepted_draft_ref(
+        session=session,
+        project_id=project_id,
+        chapter_number=chapter_number,
+    )
+    writer_output = reconstruct_writer_output(
+        session=session,
+        project_id=project_id,
+        chapter_number=chapter_number,
+    )
+    resolved_mode = "dry_run" if str(mode or "").strip().lower().replace("-", "_") == "dry_run" else "primary"
+    result = analyze_writer_output_quality(
+        session=session,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        writer_output=writer_output,
+        draft_id=accepted.draft_id,
+        persist=persist,
+        mode=resolved_mode,
+        llm_client=llm_client,
+        return_raw_analyzer_results=True,
+    )
+
+    counts: dict[str, int] = {}
+    for signal in result.signals:
+        counts[signal.severity] = counts.get(signal.severity, 0) + 1
+    report = dict(result.deterministic_quality_report or {})
+    character_rows = _candidate_character_rows(result)
+    countdown_rows = _candidate_countdown_rows(result)
+    return ReplayChapterResult(
+        chapter_number=int(chapter_number),
+        mode=resolved_mode,
+        status="success",
+        blocking=bool(result.blocking),
+        signal_counts_by_severity=counts,
+        character_transitions_written=len(character_rows) if persist else 0,
+        countdown_entries_written=len(countdown_rows) if persist else 0,
+        validation_report_summary={
+            "blocking": bool(report.get("blocking")),
+            "review_issue_count": len(report.get("review_issues") or []),
+        },
+        candidate_rows={
+            "signals": [signal.model_dump(mode="json") for signal in result.signals],
+            "characters": character_rows,
+            "countdowns": countdown_rows,
+        },
+    )
+
+
+def _candidate_character_rows(result: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for raw in result.raw_analyzer_results or []:
+        for item in raw.get("character_transitions") or []:
+            rows.append(dict(item))
+    return rows
+
+
+def _candidate_countdown_rows(result: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for raw in result.raw_analyzer_results or []:
+        for item in raw.get("countdown_entries") or []:
+            rows.append(dict(item))
+    if rows:
+        return rows
+    metrics = (result.deterministic_quality_report or {}).get("full_body_metrics") or {}
+    return [dict(item) for item in metrics.get("countdown_mentions") or []]

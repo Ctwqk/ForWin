@@ -173,6 +173,8 @@ def _normalize_form_answer_shapes(payload: dict[str, Any]) -> None:
         fallback_evidence = _first_string(item, "evidence_quote", "quote", "new_value_quote")
         fallback_subject = _first_string(item, "subject_of_quote", "subject", "key", "label")
         fallback_confidence = item.get("confidence")
+        if not str(item.get("inconsistency_kind") or "").strip():
+            item["inconsistency_kind"] = "none"
         for key in ("status_in_this_chapter", "consistent_with_prior", "new_value_evidence"):
             if key in item and item[key] is not None:
                 item[key] = _coerce_form_answer(

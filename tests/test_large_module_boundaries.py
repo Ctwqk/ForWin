@@ -49,6 +49,7 @@ def test_first_batch_giant_files_stay_small() -> None:
 
 def test_new_decomposition_modules_stay_context_sized() -> None:
     roots = [
+        REPO_ROOT / "forwin" / "book_genesis_core",
         REPO_ROOT / "forwin" / "project_ops",
         REPO_ROOT / "forwin" / "genesis_pipeline",
         REPO_ROOT / "forwin" / "planning" / "future_plan_audit",

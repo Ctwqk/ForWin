@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from forwin.config import Config
 from forwin.protocol.writer import WriterOutput
 
-from .chapter_review_form.service import review_chapter_with_form
+from .chapter_review_form.service import DRY_RUN_RESULT_MODE, persist_form_artifact, review_chapter_with_form
 from .repository import CanonQualityRepository
 from .signals import CanonQualitySignal
 
@@ -72,12 +72,19 @@ def analyze_writer_output_quality(
         token_budget_chars=token_budget_chars,
         max_schema_retries=max_schema_retries,
         blocking_policy=config.form_blocking_policy,
+        mode=resolved_mode,
     )
     if persist:
-        repo.supersede_chapter_signals(project_id, chapter_number)
-        repo.save_signals(form_result.signals)
-        repo.save_character_transitions(form_result.character_transitions)
-        repo.save_countdown_entries(form_result.countdown_entries)
+        if resolved_mode == DRY_RUN_RESULT_MODE:
+            artifact_path = persist_form_artifact(config.artifact_root, form_result)
+        else:
+            repo.supersede_chapter_signals(project_id, chapter_number)
+            repo.save_signals(form_result.signals)
+            repo.save_character_transitions(form_result.character_transitions)
+            repo.save_countdown_entries(form_result.countdown_entries)
+            artifact_path = None
+    else:
+        artifact_path = None
 
     report = _quality_report(
         signals=form_result.signals,
@@ -85,7 +92,10 @@ def analyze_writer_output_quality(
         review_issues=form_result.review_issues,
         raw_results=form_result.raw_analyzer_results,
         summary=form_result.summary,
+        mode=resolved_mode,
     )
+    if artifact_path is not None:
+        report["chapter_review_form_artifact"] = str(artifact_path)
     report["residual_open_signals"] = [
         signal.model_dump(mode="json")
         for signal in repo.list_open_signals(project_id, before_chapter=chapter_number, limit=20)
@@ -96,7 +106,7 @@ def analyze_writer_output_quality(
         draft_id=draft_id,
         signals=form_result.signals,
         deterministic_quality_report=report,
-        mode="chapter_review_form",
+        mode=resolved_mode if resolved_mode == DRY_RUN_RESULT_MODE else "chapter_review_form",
         summary=form_result.summary,
         review_issues=form_result.review_issues,
         raw_analyzer_results=form_result.raw_analyzer_results if return_raw_analyzer_results else [],
@@ -106,9 +116,11 @@ def analyze_writer_output_quality(
 
 
 def _normalize_form_mode(value: str | None) -> str:
-    normalized = str(value or "primary").strip().lower()
+    normalized = str(value or "primary").strip().lower().replace("-", "_")
     if normalized in {"off", "disabled"}:
         return "off"
+    if normalized in {"dry_run", "dryrun", "shadow"}:
+        return DRY_RUN_RESULT_MODE
     return "primary"
 
 
@@ -119,6 +131,7 @@ def _quality_report(
     review_issues: list[dict[str, Any]],
     raw_results: list[dict[str, Any]],
     summary: str,
+    mode: str = "primary",
 ) -> dict[str, Any]:
     blocking = [
         signal.model_dump(mode="json")
@@ -131,7 +144,7 @@ def _quality_report(
         if signal.severity == "warning" and signal.status == "open"
     ]
     return {
-        "mode": "chapter_review_form",
+        "mode": mode if mode == DRY_RUN_RESULT_MODE else "chapter_review_form",
         "summary": summary,
         "blocking": bool(blocking),
         "blocking_signals": blocking,

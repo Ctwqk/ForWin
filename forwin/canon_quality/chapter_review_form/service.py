@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -19,11 +20,16 @@ from forwin.protocol.writer import WriterOutput
 
 from . import FORM_SCHEMA_VERSION
 from .canon_projector import ProjectionResult, project_validated_answers
+from .comparison_report import summarize_form_run
 from .errors import ChapterReviewFormSchemaInvalid, ChapterReviewFormUnavailable
 from .evidence_validator import ValidationReport, validate_answers
 from .form_builder import build_form
 from .form_schema import ChapterReviewAnswers, ChapterReviewForm
 from .llm_caller import call_form
+
+DRY_RUN_RESULT_MODE = "dry_run"
+DRY_RUN_SOURCE_MODE = "chapter_review_form_dry_run"
+PRIMARY_SOURCE_MODE = "chapter_review_form"
 
 
 class ChapterReviewFormResult(BaseModel):
@@ -37,6 +43,7 @@ class ChapterReviewFormResult(BaseModel):
     signals: list[CanonQualitySignal] = Field(default_factory=list)
     character_transitions: list[CharacterStateTransition] = Field(default_factory=list)
     countdown_entries: list[CountdownLedgerEntry] = Field(default_factory=list)
+    projection_summary: dict[str, Any] = Field(default_factory=dict)
     review_issues: list[dict[str, Any]] = Field(default_factory=list)
     raw_analyzer_results: list[dict[str, Any]] = Field(default_factory=list)
     blocking: bool = False
@@ -61,7 +68,11 @@ def review_chapter_with_form(
     token_budget_chars: int = 8000,
     max_schema_retries: int = 1,
     blocking_policy: FormBlockingPolicy | None = None,
+    mode: str = "primary",
 ) -> ChapterReviewFormResult:
+    dry_run = _is_dry_run_mode(mode)
+    result_mode = DRY_RUN_RESULT_MODE if dry_run else PRIMARY_SOURCE_MODE
+    source_mode = DRY_RUN_SOURCE_MODE if dry_run else PRIMARY_SOURCE_MODE
     repo = CanonQualityRepository(session) if session is not None else None
     project = session.get(Project, project_id) if session is not None else None
     resolved_target_total = int(target_total_chapters or getattr(project, "target_total_chapters", 0) or 0)
@@ -85,6 +96,10 @@ def review_chapter_with_form(
             form=form,
             signal_type="form_llm_unavailable",
             reason="No LLM client configured for chapter review form.",
+            severity="warning" if dry_run else "error",
+            blocking=not dry_run,
+            mode=result_mode,
+            source_mode=source_mode,
         )
     try:
         answers = call_form(
@@ -102,6 +117,10 @@ def review_chapter_with_form(
             form=form,
             signal_type="form_schema_invalid",
             reason=str(exc),
+            severity="warning" if dry_run else "error",
+            blocking=not dry_run,
+            mode=result_mode,
+            source_mode=source_mode,
         )
     except ChapterReviewFormUnavailable as exc:
         return _failure_result(
@@ -111,6 +130,10 @@ def review_chapter_with_form(
             form=form,
             signal_type="form_llm_unavailable",
             reason=str(exc),
+            severity="warning" if dry_run else "error",
+            blocking=not dry_run,
+            mode=result_mode,
+            source_mode=source_mode,
         )
 
     validation_report = validate_answers(
@@ -126,20 +149,43 @@ def review_chapter_with_form(
         min_blocking_confidence=min_blocking_confidence,
         blocking_policy=blocking_policy,
     )
-    signals = list(projection.signals)
+    if dry_run:
+        signals = [_dry_run_signal(signal) for signal in projection.signals]
+        review_issues = [_dry_run_issue(issue) for issue in projection.review_issues]
+        summary_projection = projection.model_copy(update={"signals": signals, "review_issues": review_issues})
+    else:
+        signals = list(projection.signals)
+        review_issues = list(projection.review_issues)
+        summary_projection = projection
+    projection_summary = summarize_form_run(
+        answers=answers,
+        validation_report=validation_report,
+        projection=summary_projection,
+    )
     return ChapterReviewFormResult(
         project_id=project_id,
         chapter_number=chapter_number,
         draft_id=draft_id,
+        mode=result_mode,
         form=form,
         answers=answers,
         validation_report=validation_report,
         signals=signals,
         character_transitions=projection.character_transitions,
         countdown_entries=projection.countdown_entries,
-        review_issues=projection.review_issues,
-        raw_analyzer_results=[_raw_result(answers=answers, validation_report=validation_report, projection=projection)],
-        blocking=any(signal.severity == "error" and signal.status == "open" for signal in signals),
+        projection_summary=projection_summary,
+        review_issues=review_issues,
+        raw_analyzer_results=[
+            _raw_result(
+                answers=answers,
+                validation_report=validation_report,
+                projection=projection,
+                signals=signals,
+                review_issues=review_issues,
+                source_mode=source_mode,
+            )
+        ],
+        blocking=False if dry_run else any(signal.severity == "error" and signal.status == "open" for signal in signals),
         confidence=_max_confidence(answers),
         summary=answers.chapter_summary,
     )
@@ -153,23 +199,27 @@ def _failure_result(
     form: ChapterReviewForm,
     signal_type: str,
     reason: str,
+    severity: str = "error",
+    blocking: bool = True,
+    mode: str = PRIMARY_SOURCE_MODE,
+    source_mode: str = PRIMARY_SOURCE_MODE,
 ) -> ChapterReviewFormResult:
     signal = CanonQualitySignal(
-        signal_id=make_signal_id(project_id, chapter_number, signal_type, "chapter_review_form"),
+        signal_id=make_signal_id(project_id, chapter_number, signal_type, source_mode),
         project_id=project_id,
         chapter_number=chapter_number,
         signal_type=signal_type,
-        severity="error",
+        severity=severity,  # type: ignore[arg-type]
         target_scope="chapter",
         subject_key="chapter_review_form",
         description=reason or signal_type,
         payload={
             "source_layer": "canon_quality",
-            "source_mode": "chapter_review_form",
+            "source_mode": source_mode,
             "source": "chapter_review_form",
             "form_schema_version": FORM_SCHEMA_VERSION,
             "validation_status": "unverified",
-            "blocking_origin": "chapter_review_form",
+            "blocking_origin": source_mode,
             "draft_id": draft_id,
             "reason": reason,
         },
@@ -178,38 +228,80 @@ def _failure_result(
         "issue_id": signal.signal_id,
         "rule_name": signal.signal_type,
         "type": signal.signal_type,
-        "severity": "error",
+        "severity": severity,
         "description": signal.description,
         "source_layer": "canon_quality",
-        "source_mode": "chapter_review_form",
+        "source_mode": source_mode,
         "source_analyzer": "ChapterReviewForm",
         "form_schema_version": FORM_SCHEMA_VERSION,
         "validation_status": "unverified",
-        "blocking_origin": "chapter_review_form",
-        "blocking": True,
+        "blocking_origin": source_mode,
+        "blocking": blocking,
     }
     return ChapterReviewFormResult(
         project_id=project_id,
         chapter_number=chapter_number,
         draft_id=draft_id,
+        mode=mode,
         form=form,
         signals=[signal],
+        projection_summary=_failure_projection_summary(signal),
         review_issues=[issue],
         raw_analyzer_results=[
             {
                 "analyzer": "ChapterReviewForm",
-                "verdict": "fail",
-                "blocking": True,
+                "verdict": "fail" if blocking else "warn",
+                "blocking": blocking,
                 "confidence": 1.0,
                 "summary": reason,
                 "issues": [issue],
                 "metadata": signal.payload,
             }
         ],
-        blocking=True,
+        blocking=blocking,
         confidence=1.0,
         summary=reason,
     )
+
+
+def persist_form_artifact(root: str | Path, result: ChapterReviewFormResult) -> Path:
+    artifact_path = _artifact_path(root, result.project_id, result.chapter_number)
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "mode": result.mode,
+        "project_id": result.project_id,
+        "chapter_number": result.chapter_number,
+        "draft_id": result.draft_id,
+        "form": result.form.model_dump(mode="json") if result.form is not None else None,
+        "answers": result.answers.model_dump(mode="json") if result.answers is not None else None,
+        "validation_report": result.validation_report.model_dump(mode="json"),
+        "projection_summary": result.projection_summary,
+        "signals": [signal.model_dump(mode="json") for signal in result.signals],
+        "review_issues": list(result.review_issues),
+        "raw_analyzer_results": list(result.raw_analyzer_results),
+        "blocking": result.blocking,
+        "confidence": result.confidence,
+        "summary": result.summary,
+    }
+    tmp_path = artifact_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    tmp_path.replace(artifact_path)
+    return artifact_path
+
+
+def load_form_artifact(root: str | Path, project_id: str, chapter_number: int) -> dict[str, Any]:
+    artifact_path = _artifact_path(root, project_id, chapter_number)
+    return json.loads(artifact_path.read_text(encoding="utf-8"))
+
+
+def _failure_projection_summary(signal: CanonQualitySignal) -> dict[str, Any]:
+    return {
+        "validated_count": 0,
+        "rejected_count": 0,
+        "signals_by_severity": {signal.severity: 1},
+        "blocking_eligible": [signal.model_dump(mode="json")],
+        "top_rejections": [],
+    }
 
 
 def _safe_list(repo: CanonQualityRepository | None, method_name: str, *args: Any, **kwargs: Any) -> list[Any]:
@@ -237,25 +329,72 @@ def _raw_result(
     answers: ChapterReviewAnswers,
     validation_report: ValidationReport,
     projection: ProjectionResult,
+    signals: list[CanonQualitySignal] | None = None,
+    review_issues: list[dict[str, Any]] | None = None,
+    source_mode: str = PRIMARY_SOURCE_MODE,
 ) -> dict[str, Any]:
+    effective_signals = list(signals) if signals is not None else list(projection.signals)
+    effective_issues = list(review_issues) if review_issues is not None else list(projection.review_issues)
+    blocking = any(signal.severity == "error" for signal in effective_signals)
+    verdict = "warn" if source_mode == DRY_RUN_SOURCE_MODE and effective_signals else "fail" if effective_signals else "pass"
     return {
         "analyzer": "ChapterReviewForm",
         "version": FORM_SCHEMA_VERSION,
-        "verdict": "fail" if projection.signals else "pass",
-        "blocking": any(signal.severity == "error" for signal in projection.signals),
+        "verdict": verdict,
+        "blocking": blocking,
         "confidence": _max_confidence(answers),
         "summary": answers.chapter_summary,
-        "issues": list(projection.review_issues),
+        "issues": effective_issues,
         "accepted_facts": [],
         "uncertainties": [],
         "metadata": {
             "source_layer": "canon_quality",
-            "source_mode": "chapter_review_form",
+            "source_mode": source_mode,
             "form_schema_version": answers.form_schema_version,
             "validated_paths": list(validation_report.validated),
             "rejected_paths": [item.model_dump(mode="json") for item in validation_report.rejected],
         },
     }
+
+
+def _artifact_path(root: str | Path, project_id: str, chapter_number: int) -> Path:
+    return Path(root) / "chapter_review_form" / str(project_id) / f"{int(chapter_number or 0)}.json"
+
+
+def _is_dry_run_mode(mode: str | None) -> bool:
+    return str(mode or "").strip().lower().replace("-", "_") in {"dry_run", "dryrun", "shadow"}
+
+
+def _dry_run_signal(signal: CanonQualitySignal) -> CanonQualitySignal:
+    payload = dict(signal.payload or {})
+    payload.update(
+        {
+            "source_mode": DRY_RUN_SOURCE_MODE,
+            "dry_run": True,
+            "original_severity": signal.severity,
+            "blocking_origin": DRY_RUN_SOURCE_MODE,
+        }
+    )
+    return signal.model_copy(
+        update={
+            "signal_id": f"{signal.signal_id}:dry_run",
+            "severity": "warning",
+            "payload": payload,
+        }
+    )
+
+
+def _dry_run_issue(issue: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(issue)
+    issue_id = str(issue.get("issue_id") or "")
+    if issue_id:
+        payload["issue_id"] = f"{issue_id}:dry_run"
+    payload["original_severity"] = issue.get("severity", "")
+    payload["severity"] = "warning"
+    payload["source_mode"] = DRY_RUN_SOURCE_MODE
+    payload["blocking_origin"] = DRY_RUN_SOURCE_MODE
+    payload["blocking"] = False
+    return payload
 
 
 def _max_confidence(answers: ChapterReviewAnswers) -> float:

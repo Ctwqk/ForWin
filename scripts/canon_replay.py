@@ -77,7 +77,11 @@ def main(argv: list[str] | None = None) -> int:
     resolved_to_chapter = args.to_chapter if args.to_chapter is not None else args.from_chapter
 
     from forwin.config import Config
-    from forwin.canon_quality.chapter_review_form.replay import replay_chapter_range, replay_single_chapter
+    from forwin.canon_quality.chapter_review_form.replay import (
+        replay_chapter_range,
+        replay_single_chapter,
+        replay_single_chapter_diff,
+    )
     from forwin.canon_quality.chapter_review_form.replay_state import ReplayRangeOptions
     from forwin.models.base import get_engine, get_session_factory, init_db
 
@@ -108,6 +112,25 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
         llm_client = build_llm_client_for_replay(config, args.llm_profile)
+        if args.diff_mode:
+            for chapter_number in range(int(args.from_chapter), int(resolved_to_chapter) + 1):
+                with session_factory() as session:
+                    differences = replay_single_chapter_diff(
+                        session=session,
+                        project_id=args.project_id,
+                        chapter_number=chapter_number,
+                        llm_client=llm_client,
+                    )
+                    session.rollback()
+                emit_json_line(
+                    {
+                        "chapter_number": chapter_number,
+                        "status": "diff_completed",
+                        "differences": differences,
+                    }
+                )
+            return 0
+
         if int(resolved_to_chapter) == int(args.from_chapter):
             with session_factory() as session:
                 result = replay_single_chapter(

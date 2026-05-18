@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.models import CandidateDraftRecord, ChapterDraft, ChapterPlan
+from forwin.models.canon_quality import CharacterStateTransitionRow, CountdownLedgerRow
 from forwin.protocol.writer import WriterOutput
 
 from .replay_state import ReplayRangeOptions, ReplayState, state_file_path, write_state_atomic
@@ -313,6 +315,86 @@ def replay_chapter_range(
     return results
 
 
+def replay_single_chapter_diff(
+    *,
+    session: Session,
+    project_id: str,
+    chapter_number: int,
+    llm_client: object,
+) -> list[dict[str, Any]]:
+    from .replay_diff import compute_diff
+
+    result = replay_single_chapter(
+        session=session,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        llm_client=llm_client,
+        persist=False,
+        mode="dry_run",
+    )
+    existing = load_existing_form_sourced_rows(
+        session=session,
+        project_id=project_id,
+        chapter_number=chapter_number,
+    )
+    candidate = result.candidate_rows.get("characters", []) + result.candidate_rows.get("countdowns", [])
+    return [
+        item.model_dump(mode="json")
+        for item in compute_diff(existing_rows=existing, candidate_rows=candidate)
+    ]
+
+
+def load_existing_form_sourced_rows(
+    *,
+    session: Session,
+    project_id: str,
+    chapter_number: int,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    character_rows = session.execute(
+        select(CharacterStateTransitionRow).where(
+            CharacterStateTransitionRow.project_id == project_id,
+            CharacterStateTransitionRow.chapter_number == int(chapter_number),
+        )
+    ).scalars().all()
+    for row in character_rows:
+        payload = _json_payload(row.payload_json)
+        if payload.get("source") != "chapter_review_form":
+            continue
+        rows.append(
+            {
+                "kind": "character_state",
+                "chapter_number": row.chapter_number,
+                "character_name": row.character_name,
+                "to_state": row.to_state,
+                "terminality": row.terminality,
+                "payload": payload,
+            }
+        )
+
+    countdown_rows = session.execute(
+        select(CountdownLedgerRow).where(
+            CountdownLedgerRow.project_id == project_id,
+            CountdownLedgerRow.chapter_number == int(chapter_number),
+        )
+    ).scalars().all()
+    for row in countdown_rows:
+        payload = _json_payload(row.payload_json)
+        if payload.get("source") != "chapter_review_form":
+            continue
+        rows.append(
+            {
+                "kind": "countdown",
+                "chapter_number": row.chapter_number,
+                "countdown_key": row.countdown_key,
+                "normalized_remaining_minutes": row.normalized_remaining_minutes,
+                "status": row.status,
+                "payload": payload,
+            }
+        )
+    return rows
+
+
 def _state_cost_summary(state: ReplayState):
     from .cost_estimator import CostEstimate
 
@@ -336,3 +418,11 @@ def _add_cost(current, chapter):
             "chapters": {**current.chapters, **chapter.chapters},
         }
     )
+
+
+def _json_payload(value: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(value or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}

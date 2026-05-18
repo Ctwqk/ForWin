@@ -4,6 +4,7 @@ import importlib
 import importlib.util
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 class ApiSplitModuleTests(unittest.TestCase):
@@ -76,10 +77,43 @@ class ApiSplitModuleTests(unittest.TestCase):
             for name in names:
                 self.assertTrue(callable(getattr(module, name, None)), f"expected {module.__name__}.{name}")
 
+    def test_api_proxy_preserves_private_patch_points(self) -> None:
+        api_module = self._import_required_module("forwin.api")
+        api_app = self._import_required_module("forwin.api_core.app")
+        api_state = self._import_required_module("forwin.api_core.state")
+        api_tasks = self._import_required_module("forwin.api_core.tasks")
+
+        old_session_factory = api_module._SessionFactory
+        marker = object()
+        try:
+            api_module._SessionFactory = marker
+            self.assertIs(api_state._SessionFactory, marker)
+            self.assertIs(api_module._SessionFactory, marker)
+        finally:
+            api_module._SessionFactory = old_session_factory
+
+        original_db_write = api_tasks._run_generation_task_db_write
+        with patch.object(api_module, "_run_generation_task_db_write", return_value=True):
+            self.assertIs(api_tasks._run_generation_task_db_write, api_module._run_generation_task_db_write)
+        self.assertIs(api_tasks._run_generation_task_db_write, original_db_write)
+
+        original_continue = api_app._create_continue_generation_task
+        with patch("forwin.api._create_continue_generation_task", return_value="task-api-split"):
+            self.assertIs(api_app._create_continue_generation_task, api_module._create_continue_generation_task)
+        self.assertIs(api_app._create_continue_generation_task, original_continue)
+
     def test_api_files_stay_split_instead_of_regressing_into_giants(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         line_limits = {
-            "forwin/api.py": 2200,
+            "forwin/api.py": 700,
+            "forwin/api_core/app.py": 700,
+            "forwin/api_core/automation.py": 450,
+            "forwin/api_core/exports.py": 120,
+            "forwin/api_core/generation.py": 700,
+            "forwin/api_core/project_helpers.py": 700,
+            "forwin/api_core/runtime.py": 500,
+            "forwin/api_core/state.py": 120,
+            "forwin/api_core/tasks.py": 1000,
             "forwin/api_pages.py": 80,
             "forwin/api_pages_home.py": 300,
             "forwin/api_pages_publishers.py": 250,

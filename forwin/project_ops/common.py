@@ -133,6 +133,13 @@ def _latest_active_generation_task(session, project_id: str) -> GenerationTask |
         .limit(1)
     ).scalar_one_or_none()
 
+def latest_rewrite_attempts_by_chapter(
+    session,
+    project_id: str,
+    chapter_numbers: list[int] | None = None,
+) -> dict[int, ChapterRewriteAttempt]:
+    return load_latest_rewrite_attempts_by_chapter(session, project_id, chapter_numbers)
+
 def _overlay_active_generation_task(detail: ProjectDetail, task: GenerationTask | None) -> ProjectDetail:
     if task is None:
         return detail

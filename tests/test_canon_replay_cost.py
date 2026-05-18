@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from forwin.canon_quality.chapter_review_form.cost_estimator import (
     CostEstimate,
     estimate_tokens_for_text,
@@ -19,6 +21,27 @@ class ClientWithAttempts:
     ]
 
 
+class ClientWithRawPayloadAttempts:
+    request_payload = {
+        "messages": [
+            {
+                "role": "system",
+                "content": "ASCII-heavy system prompt with 主倒计时",
+            }
+        ]
+    }
+    response_text = "ASCII-heavy JSON answer with 主倒计时"
+    llm_attempt_events = [
+        {
+            "status": "succeeded",
+            "input_chars": 9999,
+            "output_chars": 9999,
+            "_raw_request_payload": request_payload,
+            "_raw_response_text": response_text,
+        }
+    ]
+
+
 def test_estimate_tokens_for_chinese_text_uses_half_char_ratio() -> None:
     assert estimate_tokens_for_text("主倒计时还有五十九分钟。") >= 6
 
@@ -29,6 +52,17 @@ def test_usage_from_llm_client_uses_last_successful_attempt() -> None:
     assert usage.input_tokens == estimate_tokens_for_text("ASCII prompt with 主倒计时")
     assert usage.output_tokens == estimate_tokens_for_text("JSON answer with 主倒计时")
     assert usage.estimated is True
+
+
+def test_usage_from_llm_client_prefers_raw_payload_over_char_count() -> None:
+    usage = usage_from_llm_client(ClientWithRawPayloadAttempts())
+
+    assert usage.input_tokens == estimate_tokens_for_text(
+        json.dumps(ClientWithRawPayloadAttempts.request_payload, ensure_ascii=False, sort_keys=True)
+    )
+    assert usage.output_tokens == estimate_tokens_for_text(ClientWithRawPayloadAttempts.response_text)
+    assert usage.input_tokens < int(9999 * 0.5)
+    assert usage.output_tokens < int(9999 * 0.5)
 
 
 def test_cost_cap_aborts_before_next_chapter_estimate_exceeds_cap() -> None:

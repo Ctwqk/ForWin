@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from pydantic import BaseModel, Field
 
 from .replay import ReplayTokenUsage, load_accepted_draft_ref
@@ -93,24 +95,41 @@ def usage_from_llm_client(llm_client: object) -> ReplayTokenUsage:
     input_tokens = raw_input_tokens
     output_tokens = raw_output_tokens
     if input_tokens is None:
-        input_text = str(last.get("input_text") or "")
-        input_tokens = (
-            estimate_tokens_for_text(input_text)
-            if input_text
-            else int(float(last.get("input_chars") or 0) * 0.5)
+        input_tokens = _estimate_attempt_tokens(
+            last,
+            text_key="input_text",
+            raw_key="_raw_request_payload",
+            chars_key="input_chars",
         )
     if output_tokens is None:
-        output_text = str(last.get("output_text") or "")
-        output_tokens = (
-            estimate_tokens_for_text(output_text)
-            if output_text
-            else int(float(last.get("output_chars") or 0) * 0.5)
+        output_tokens = _estimate_attempt_tokens(
+            last,
+            text_key="output_text",
+            raw_key="_raw_response_text",
+            chars_key="output_chars",
         )
     return ReplayTokenUsage(
         input_tokens=max(0, int(input_tokens or 0)),
         output_tokens=max(0, int(output_tokens or 0)),
         estimated=raw_input_tokens is None or raw_output_tokens is None,
     )
+
+
+def _estimate_attempt_tokens(
+    attempt: dict,
+    *,
+    text_key: str,
+    raw_key: str,
+    chars_key: str,
+) -> int:
+    text = str(attempt.get(text_key) or "")
+    if text:
+        return estimate_tokens_for_text(text)
+    raw = attempt.get(raw_key)
+    if raw:
+        raw_text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False, sort_keys=True)
+        return estimate_tokens_for_text(raw_text)
+    return int(float(attempt.get(chars_key) or 0) * 0.5)
 
 
 def should_abort_for_cost_cap(

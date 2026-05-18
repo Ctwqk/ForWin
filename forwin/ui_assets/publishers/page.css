@@ -1,21 +1,24 @@
+    @import url("https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700;8..60,800&family=Noto+Serif+SC:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
     :root {
-      --bg:#f2eadf;
-      --card:#fffaf3;
+      --bg:#efe4d4;
+      --card:#fffaf2;
       --card-strong:#fffdf9;
-      --ink:#17211d;
-      --accent:#b64b2a;
-      --accent-2:#284d46;
-      --line:#ddceb7;
-      --muted:#725f49;
-      --ok:#226b37;
-      --warn:#a25920;
-      --ui:"Inter","SF Pro Display","Segoe UI","PingFang SC","Noto Sans SC",sans-serif;
-      --serif:"Iowan Old Style","Palatino Linotype","Noto Serif SC","Source Han Serif SC",serif;
+      --ink:#18211e;
+      --accent:#b24b31;
+      --accent-2:#1f5b54;
+      --line:#ddcbb4;
+      --muted:#6d6255;
+      --ok:#216841;
+      --warn:#9b5a1d;
+      --ui:"Plus Jakarta Sans","Avenir Next","Segoe UI","PingFang SC","Noto Sans SC",sans-serif;
+      --serif:"Source Serif 4","Iowan Old Style","Palatino Linotype","Noto Serif SC","Source Han Serif SC",serif;
+      --mono:"JetBrains Mono","SFMono-Regular","Consolas",monospace;
     }
     * { box-sizing:border-box; }
     body {
       margin:0;
-      font-family:var(--serif);
+      font-family:var(--ui);
       background:
         radial-gradient(circle at top left,#fff6df 0,transparent 32%),
         radial-gradient(circle at 92% 8%, rgba(182,75,42,.12), transparent 18%),
@@ -85,9 +88,14 @@
       margin-bottom:22px;
       border-bottom:1px solid rgba(114,95,73,.16);
     }
+    .masthead > div:first-child {
+      flex:1 1 520px;
+      min-width:360px;
+    }
     .masthead-note {
       font:500 13px/1.6 var(--ui);
       color:var(--muted);
+      flex:0 1 44ch;
       max-width:44ch;
     }
     .hero {
@@ -127,10 +135,34 @@
       background:rgba(182,75,42,.06);
       font:600 12px/1 var(--ui);
       text-transform:uppercase;
-      letter-spacing:.14em;
+      letter-spacing:0;
     }
-    h1 { margin:18px 0 10px; font-size:52px; line-height:.98; letter-spacing:-.03em; max-width:10ch; }
-    h2 { margin:0 0 8px; font-size:28px; line-height:1.08; }
+    .brand-mark {
+      display:inline-flex;
+      align-items:center;
+      gap:10px;
+      padding:8px 14px;
+      border-radius:999px;
+      border:1px solid rgba(178,75,49,.18);
+      color:var(--accent);
+      background:rgba(178,75,49,.06);
+      font:800 12px/1 var(--ui);
+      text-transform:uppercase;
+      letter-spacing:0;
+    }
+    .fw-logo {
+      display:inline-grid;
+      place-items:center;
+      width:22px;
+      height:22px;
+      border-radius:7px;
+      background:var(--accent);
+      color:var(--card);
+      font:800 9px/1 var(--serif);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.28);
+    }
+    h1 { margin:18px 0 10px; font-family:var(--serif); font-size:52px; line-height:.98; letter-spacing:0; max-width:none; }
+    h2 { margin:0 0 8px; font-family:var(--serif); font-size:28px; line-height:1.08; letter-spacing:0; }
     p { line-height:1.75; color:var(--muted); }
     .hero-copy { max-width:56ch; }
     .hero-actions, .actions { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
@@ -165,7 +197,7 @@
       font:600 12px/1.2 var(--ui);
       color:var(--muted);
       text-transform:uppercase;
-      letter-spacing:.08em;
+      letter-spacing:0;
     }
     input, textarea, select {
       width:100%;
@@ -207,7 +239,7 @@
     }
     .task-item strong { display:block; margin-bottom:8px; font-size:18px; line-height:1.2; }
     .task-item a { color:var(--accent); }
-    code { font-family:"SFMono-Regular","Consolas",monospace; font-size:13px; overflow-wrap:anywhere; }
+    code { font-family:var(--mono); font-size:13px; overflow-wrap:anywhere; }
     .card-title { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; margin-bottom:12px; }
     .section-note { font:500 13px/1.6 var(--ui); color:var(--muted); }
     @media (max-width: 980px) {

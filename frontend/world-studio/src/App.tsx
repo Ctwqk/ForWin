@@ -761,8 +761,14 @@ export default function App() {
             <a className="nav-tab" href="/publishers">发布</a>
             <a className="nav-tab" href="/#config">配置</a>
           </nav>
-          <p className="eyebrow">ForWin Archive</p>
+          <div className="brand-mark">
+            <span className="fw-logo" aria-hidden="true">FW</span>
+            <span>ForWin Archive</span>
+          </div>
           <h1>世界档案</h1>
+          <p className="masthead-copy">
+            Canon、Graph、Proposal、人物性格 loadout 都在一个工作台里。每次写作前回到这里同步一次世界模型。
+          </p>
         </div>
         <div className="topbar-actions">
           <label className="project-picker">

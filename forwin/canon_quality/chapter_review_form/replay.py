@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -10,6 +11,8 @@ from sqlalchemy.orm import Session
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.models import CandidateDraftRecord, ChapterDraft, ChapterPlan
 from forwin.protocol.writer import WriterOutput
+
+from .replay_state import ReplayRangeOptions, ReplayState, state_file_path, write_state_atomic
 
 
 class ChapterDraftNotFound(RuntimeError):
@@ -206,3 +209,61 @@ def _candidate_countdown_rows(result: Any) -> list[dict[str, Any]]:
         return rows
     metrics = (result.deterministic_quality_report or {}).get("full_body_metrics") or {}
     return [dict(item) for item in metrics.get("countdown_mentions") or []]
+
+
+def replay_chapter_range(
+    *,
+    session_factory,
+    project_id: str,
+    from_chapter: int,
+    to_chapter: int,
+    llm_client_factory,
+    state_root: Path,
+    options: ReplayRangeOptions,
+) -> list[ReplayChapterResult]:
+    """Replay a range sequentially.
+
+    ``llm_client_factory`` is intentionally chapter-aware: production may return
+    the same client for every chapter, while tests can return chapter-specific
+    fake responses without changing production behavior.
+    """
+    path = state_file_path(
+        root=state_root,
+        project_id=project_id,
+        from_chapter=from_chapter,
+        to_chapter=to_chapter,
+    )
+    state = ReplayState.prepare_existing_state(
+        path=path,
+        project_id=project_id,
+        from_chapter=from_chapter,
+        to_chapter=to_chapter,
+        resume=options.resume,
+        force_restart=options.force_restart,
+    )
+    results: list[ReplayChapterResult] = []
+    for chapter_number in range(int(from_chapter), int(to_chapter) + 1):
+        if state.should_skip_completed(chapter_number, force_rerun=options.force_rerun):
+            continue
+        try:
+            with session_factory() as session:
+                result = replay_single_chapter(
+                    session=session,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    llm_client=llm_client_factory(chapter_number),
+                    persist=options.persist,
+                    mode=options.mode,
+                )
+                session.commit()
+            results.append(result)
+            state = state.mark_completed(chapter_number, result.model_dump(mode="json"))
+            write_state_atomic(path, state)
+        except Exception as exc:  # noqa: BLE001
+            with session_factory() as session:
+                session.rollback()
+            state = state.mark_error(chapter_number, str(exc))
+            write_state_atomic(path, state)
+            if options.abort_on_error:
+                break
+    return results

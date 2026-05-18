@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 
@@ -73,18 +74,20 @@ def emit_json_line(payload: dict[str, Any]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    to_chapter = args.to_chapter if args.to_chapter is not None else args.from_chapter
-    if int(to_chapter) == int(args.from_chapter):
-        from forwin.config import Config
-        from forwin.canon_quality.chapter_review_form.replay import replay_single_chapter
-        from forwin.models.base import get_engine, get_session_factory, init_db
+    resolved_to_chapter = args.to_chapter if args.to_chapter is not None else args.from_chapter
 
-        config = Config.from_env()
-        llm_client = build_llm_client_for_replay(config, args.llm_profile)
-        engine = get_engine(config.database_url)
-        try:
-            init_db(engine)
-            session_factory = get_session_factory(engine)
+    from forwin.config import Config
+    from forwin.canon_quality.chapter_review_form.replay import replay_chapter_range, replay_single_chapter
+    from forwin.canon_quality.chapter_review_form.replay_state import ReplayRangeOptions
+    from forwin.models.base import get_engine, get_session_factory, init_db
+
+    config = Config.from_env()
+    llm_client = build_llm_client_for_replay(config, args.llm_profile)
+    engine = get_engine(config.database_url)
+    try:
+        init_db(engine)
+        session_factory = get_session_factory(engine)
+        if int(resolved_to_chapter) == int(args.from_chapter):
             with session_factory() as session:
                 result = replay_single_chapter(
                     session=session,
@@ -100,18 +103,28 @@ def main(argv: list[str] | None = None) -> int:
                     session.rollback()
             emit_json_line(result.model_dump(mode="json"))
             return 0
-        finally:
-            engine.dispose()
 
-    emit_json_line(
-        {
-            "status": "parsed",
-            "project_id": args.project_id,
-            "from_chapter": args.from_chapter,
-            "to_chapter": args.to_chapter,
-            "mode": "persist" if args.persist else "dry_run",
-        }
-    )
+        options = ReplayRangeOptions(
+            persist=args.persist,
+            mode="primary" if args.persist else "dry_run",
+            resume=args.resume,
+            force_restart=args.force_restart,
+            force_rerun=args.force_rerun,
+            abort_on_error=args.abort_on_error,
+        )
+        results = replay_chapter_range(
+            session_factory=session_factory,
+            project_id=args.project_id,
+            from_chapter=args.from_chapter,
+            to_chapter=resolved_to_chapter,
+            llm_client_factory=lambda _chapter: llm_client,
+            state_root=Path(config.artifact_root),
+            options=options,
+        )
+        for result in results:
+            emit_json_line(result.model_dump(mode="json"))
+    finally:
+        engine.dispose()
     return 0
 
 

@@ -74,6 +74,16 @@ class FlatClient:
         }
 
 
+class NonFinalChapterClient:
+    def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
+        payload = FakeClient().complete_json(**kwargs)
+        payload["final_chapter"] = {
+            "is_final_chapter": False,
+            "resolution_status": "unresolved",
+        }
+        return payload
+
+
 def test_form_service_projects_validated_answer() -> None:
     result = review_chapter_with_form(
         session=None,
@@ -138,6 +148,27 @@ def test_form_service_accepts_flat_answer_shapes() -> None:
 
     assert result.summary == "flat but usable"
     assert result.character_transitions[0].to_state == "dead"
+    assert not any(issue["type"] == "form_schema_invalid" for issue in result.review_issues)
+
+
+def test_form_service_drops_unrequested_final_chapter_payload() -> None:
+    result = review_chapter_with_form(
+        session=None,
+        project_id="p1",
+        chapter_number=2,
+        writer_output=WriterOutput(
+            project_id="p1",
+            chapter_number=2,
+            title="二",
+            body="林青倒下，再无呼吸。",
+            end_of_chapter_summary="",
+        ),
+        draft_id="d1",
+        llm_client=NonFinalChapterClient(),
+        character_rows=[{"character_name": "林青", "to_state": "alive", "chapter_number": 1}],
+    )
+
+    assert result.summary == "林青死亡。"
     assert not any(issue["type"] == "form_schema_invalid" for issue in result.review_issues)
 
 

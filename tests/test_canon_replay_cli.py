@@ -28,7 +28,21 @@ class FakeReplayClient:
                 "model": self.model,
             },
             *self.profiles,
+            *self.fallback_profiles,
         ]
+
+
+class FakeConfigWithProfiles:
+    llm_env_profiles = [
+        {
+            "id": "env-deepseek",
+            "name": "DeepSeek",
+            "api_key": "key",
+            "base_url": "https://api.deepseek.com/v1",
+            "model": "deepseek-chat",
+        }
+    ]
+    llm_fallback_profiles = []
 
 
 def test_parse_args_defaults_to_dry_run() -> None:
@@ -78,6 +92,27 @@ def test_build_llm_client_for_replay_selects_complete_profile() -> None:
     assert client.base_url == "https://api.deepseek.com/v1"
     assert client.model == "deepseek-chat"
     assert client.fallback_profiles == []
+
+
+def test_build_llm_client_for_replay_merges_config_env_profiles() -> None:
+    client = canon_replay.build_llm_client_for_replay(
+        FakeConfigWithProfiles(),
+        requested_profile="env-deepseek",
+        client_builder=lambda _config: FakeReplayClient([]),
+    )
+
+    assert client.profile_id == "env-deepseek"
+    assert client.api_key == "key"
+    assert client.fallback_profiles == []
+
+
+def test_build_llm_client_for_replay_uses_runtime_container_default_builder(monkeypatch) -> None:  # noqa: ANN001
+    from forwin.runtime.container import RuntimeContainer
+
+    sentinel = object()
+    monkeypatch.setattr(RuntimeContainer, "_build_llm_client", staticmethod(lambda _config: sentinel))
+
+    assert canon_replay.build_llm_client_for_replay(object()) is sentinel
 
 
 @pytest.mark.parametrize(

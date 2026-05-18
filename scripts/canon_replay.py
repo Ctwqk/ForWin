@@ -7,13 +7,18 @@ import sys
 from pathlib import Path
 from typing import Any
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 
 def build_llm_client_for_replay(config, requested_profile: str = "", client_builder=None):  # noqa: ANN001, ANN201
     if client_builder is None:
-        from forwin.runtime.container import ServiceContainer
+        from forwin.runtime.container import RuntimeContainer
 
-        client_builder = ServiceContainer._build_llm_client
+        client_builder = RuntimeContainer._build_llm_client
     client = client_builder(config)
+    _merge_config_fallback_profiles(client, config)
     if not requested_profile:
         return client
     profiles = getattr(client, "_request_profiles", lambda: [])()
@@ -40,6 +45,35 @@ def build_llm_client_for_replay(config, requested_profile: str = "", client_buil
     client.profile_name = str(profile.get("name", "")).strip()
     client.fallback_profiles = []
     return client
+
+
+def _merge_config_fallback_profiles(client, config) -> None:  # noqa: ANN001
+    existing = list(getattr(client, "fallback_profiles", []) or [])
+    merged = list(existing)
+    seen = {
+        (
+            str(profile.get("api_key", "")).strip(),
+            str(profile.get("base_url", "")).strip().rstrip("/"),
+            str(profile.get("model", "")).strip(),
+        )
+        for profile in existing
+    }
+    for attr_name in ("llm_fallback_profiles", "llm_env_profiles"):
+        for profile in list(getattr(config, attr_name, []) or []):
+            normalized = {
+                "id": str(profile.get("id", "")).strip(),
+                "name": str(profile.get("name", "")).strip(),
+                "api_key": str(profile.get("api_key", "")).strip(),
+                "base_url": str(profile.get("base_url", "")).strip().rstrip("/"),
+                "model": str(profile.get("model", "")).strip(),
+            }
+            key = (normalized["api_key"], normalized["base_url"], normalized["model"])
+            if not all(key) or key in seen:
+                continue
+            seen.add(key)
+            merged.append(normalized)
+    if merged != existing or hasattr(client, "fallback_profiles"):
+        client.fallback_profiles = merged
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -117,7 +151,6 @@ def main(argv: list[str] | None = None) -> int:
     from forwin.canon_quality.chapter_review_form.replay import (
         latest_accepted_chapter,
         replay_chapter_range,
-        replay_single_chapter,
         replay_single_chapter_diff,
         summarize_replay_results,
     )
@@ -199,25 +232,6 @@ def main(argv: list[str] | None = None) -> int:
                         "differences": differences,
                     }
                 )
-            if schema_warning:
-                emit_json_line({"status": "summary", "schema_warning": schema_warning})
-            return 0
-
-        if int(resolved_to_chapter) == int(args.from_chapter):
-            with session_factory() as session:
-                result = replay_single_chapter(
-                    session=session,
-                    project_id=args.project_id,
-                    chapter_number=args.from_chapter,
-                    llm_client=llm_client,
-                    persist=args.persist,
-                    mode="primary" if args.persist else "dry_run",
-                )
-                if args.persist:
-                    session.commit()
-                else:
-                    session.rollback()
-            emit_json_line(result.model_dump(mode="json"))
             if schema_warning:
                 emit_json_line({"status": "summary", "schema_warning": schema_warning})
             return 0

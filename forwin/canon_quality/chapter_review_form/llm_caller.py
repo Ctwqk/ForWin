@@ -152,6 +152,8 @@ def _normalize_answer_payload(raw: dict[str, Any], *, form: ChapterReviewForm) -
     payload["chapter_number"] = form.chapter_number
     payload["form_schema_version"] = form.form_schema_version
     _normalize_form_answer_shapes(payload)
+    if form.final_chapter is None:
+        payload["final_chapter"] = None
     return payload
 
 

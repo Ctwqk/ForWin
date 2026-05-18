@@ -16,6 +16,7 @@ from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.planning.band_plan_patcher import BandPlanPatcher
+from forwin.planning.countdown_drift_pre_audit import select_countdown_drift_targets
 from forwin.planning.obligation_pre_audit import select_urgent_obligation_targets
 from forwin.planning.plan_patch_validator import PlanPatchValidator
 from forwin.planning.signal_pre_audit import select_stale_signal_targets
@@ -37,11 +38,23 @@ class FuturePlanObligationMixin:
         include_current: bool,
     ) -> list[tuple[FuturePlanAuditIssue, NarrativePlanPatch]]:
         result: list[tuple[FuturePlanAuditIssue, NarrativePlanPatch]] = []
+        for candidate in select_countdown_drift_targets(_open_signal_constraints(canon_quality_context)):
+            plan = _first_eligible_plan(plans, current_chapter=current_chapter, include_current=include_current)
+            if plan is None:
+                continue
+            issue, patch = self._countdown_drift_patch(
+                project_id=project_id,
+                current_chapter=current_chapter,
+                plan=plan,
+                candidate=candidate,
+            )
+            result.append((issue, patch))
         for candidate in select_urgent_obligation_targets(
             obligations=obligations,
             plans=plans,
             current_chapter=current_chapter,
             include_current=include_current,
+            form_signals=_open_signal_constraints(canon_quality_context),
         ):
             obligation = candidate["obligation"]
             plan = candidate["plan"]
@@ -73,6 +86,76 @@ class FuturePlanObligationMixin:
             result.append((issue, patch))
         return result
 
+    def _countdown_drift_patch(
+        self,
+        *,
+        project_id: str,
+        current_chapter: int,
+        plan: ChapterPlan,
+        candidate: dict[str, Any],
+    ) -> tuple[FuturePlanAuditIssue, NarrativePlanPatch]:
+        chapter_number = int(plan.chapter_number or 0)
+        task = str(candidate.get("task") or "").strip()
+        suppression_key = str(candidate.get("suppression_key") or "").strip()
+        source_signal_id = str(candidate.get("source_signal_id") or "").strip()
+        metadata = {
+            "patch_kind": "countdown_drift",
+            "current_chapter": current_chapter,
+            "suppression_key": suppression_key,
+            "source_signal_id": source_signal_id,
+            "source_mode": str(candidate.get("source_mode") or "chapter_review_form"),
+            "plan_patchable": True,
+        }
+        issue = FuturePlanAuditIssue(
+            issue_type="countdown_drift_pre_write_required",
+            severity="error",
+            target_chapter=chapter_number,
+            target_plan_id=str(plan.id or ""),
+            description=task,
+            evidence_refs=[f"signal:{source_signal_id}", f"chapter_plan:{chapter_number}"] if source_signal_id else [
+                f"chapter_plan:{chapter_number}"
+            ],
+            patch_type="countdown_drift_pre_write",
+            metadata=metadata,
+        )
+        patch = NarrativePlanPatch(
+            id=new_id(),
+            project_id=project_id,
+            patch_type="countdown_drift_pre_write",
+            target_scope="chapter",
+            target_plan_id=str(plan.id or ""),
+            target_arc_id=str(plan.arc_plan_id or ""),
+            affected_chapters=[chapter_number],
+            source_signal_ids=[source_signal_id] if source_signal_id else [],
+            old_contract=_chapter_plan_contract(plan),
+            new_contract={
+                "countdown_drift_task": task,
+                "suppression_key": suppression_key,
+            },
+            diff_summary=task,
+            must_preserve=[str(plan.title or ""), str(plan.one_line or "")],
+            must_not_change=["drop countdown drift handling without explicit evidence"],
+            writer_context_injections=[
+                {
+                    "type": "countdown_drift_resolution",
+                    "instruction": task,
+                    "suppression_key": suppression_key,
+                    "source_signal_id": source_signal_id,
+                }
+            ],
+            reviewer_context_injections=[
+                {
+                    "type": "countdown_drift_resolution",
+                    "payoff_test": task,
+                    "source_signal_id": source_signal_id,
+                }
+            ],
+            expected_resolution_tests=[task],
+            validation_status="pending",
+            metadata=metadata,
+        )
+        return issue, patch
+
     def _must_resolve_obligation_patch(
         self,
         *,
@@ -94,6 +177,7 @@ class FuturePlanObligationMixin:
             "must_resolve_now": True,
             "suppression_key": suppression_key,
         }
+        metadata.update(_source_metadata(obligation.metadata))
         issue = FuturePlanAuditIssue(
             issue_type="obligation_pre_write_required",
             severity="error",
@@ -173,6 +257,7 @@ class FuturePlanObligationMixin:
             "current_chapter": current_chapter,
             "suppression_key": suppression_key,
         }
+        metadata.update(_signal_source_metadata(signal))
         issue = FuturePlanAuditIssue(
             issue_type="stale_open_signal_pre_write_required",
             severity="error",
@@ -339,3 +424,41 @@ class FuturePlanObligationMixin:
 
 
 __all__ = ["FuturePlanObligationMixin"]
+
+
+def _first_eligible_plan(
+    plans: list[ChapterPlan],
+    *,
+    current_chapter: int,
+    include_current: bool,
+) -> ChapterPlan | None:
+    eligible = [
+        plan
+        for plan in plans
+        if (include_current or int(plan.chapter_number or 0) > int(current_chapter or 0))
+        and str(plan.status or "") != "accepted"
+    ]
+    return min(eligible, key=lambda plan: int(plan.chapter_number or 0), default=None)
+
+
+def _source_metadata(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    allowed = {"source_mode", "source_signal_id", "plan_patchable", "patch_kind"}
+    return {key: raw[key] for key in allowed if key in raw}
+
+
+def _signal_source_metadata(signal: dict[str, Any]) -> dict[str, Any]:
+    payload = signal.get("payload", {}) if isinstance(signal, dict) else {}
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            payload = {}
+    if not isinstance(payload, dict):
+        return {}
+    source_signal_id = str(signal.get("signal_id") or "").strip()
+    metadata = _source_metadata(payload)
+    if source_signal_id and "source_signal_id" not in metadata:
+        metadata["source_signal_id"] = source_signal_id
+    return metadata

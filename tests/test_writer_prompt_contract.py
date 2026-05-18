@@ -333,6 +333,46 @@ def test_writer_prompt_suppresses_constraints_already_promoted_to_plan_patches()
     assert "第14章必须给出门禁来源证据" not in content
 
 
+def test_writer_prompt_suppresses_countdown_constraint_promoted_to_plan_patch() -> None:
+    context = ChapterContextPack(
+        project_id="p1",
+        project_title="灰城遗档",
+        premise="主角：陆明，旧城档案修复师。",
+        genre="悬疑科幻",
+        setting_summary="核心系统维持公共档案秩序。",
+        chapter_number=14,
+        chapter_plan_title="倒计时修正",
+        chapter_plan_one_line="陆明确认局部窗口。",
+        chapter_goals=["兑现计划补丁"],
+        canon_quality_context={
+            "suppressed_prompt_constraint_keys": ["countdown:倒计时甲"],
+            "countdown_constraints": [
+                {
+                    "countdown_key": "倒计时甲",
+                    "label": "倒计时甲",
+                    "latest_remaining_minutes": 10,
+                    "latest_chapter": 13,
+                    "raw_mention": "倒计时甲剩余十分钟。",
+                },
+                {
+                    "countdown_key": "倒计时乙",
+                    "label": "倒计时乙",
+                    "latest_remaining_minutes": 5,
+                    "latest_chapter": 13,
+                    "raw_mention": "倒计时乙剩余五分钟。",
+                },
+            ],
+        },
+    )
+
+    prompt = build_single_chapter_draft_prompt(context)
+    content = "\n".join(message["content"] for message in prompt)
+
+    assert "倒计时甲" not in content
+    assert "倒计时乙" in content
+    assert "剩余 5 分钟" in content
+
+
 def test_writer_prompt_includes_band_obligation_contract() -> None:
     context = ChapterContextPack(
         project_id="p1",

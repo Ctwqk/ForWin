@@ -67,13 +67,25 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
     )):
         return None
     suppressed = _suppressed_prompt_constraint_keys(quality)
+    countdown_constraints = _visible_countdown_constraints(countdown_constraints, suppressed=suppressed)
+    open_signals = _visible_open_signal_constraints(open_signals, suppressed=suppressed)
+    active_obligations = _visible_obligation_constraints(active_obligations, suppressed=suppressed)
+    _record_prompt_constraint_counts(
+        quality,
+        original_countdowns=quality.get("countdown_constraints", []) or [],
+        original_open_signals=quality.get("open_signals", []) or [],
+        original_obligations=quality.get("active_narrative_obligations", []) or [],
+        visible_countdowns=countdown_constraints,
+        visible_open_signals=open_signals,
+        visible_obligations=active_obligations,
+    )
     sections = [
         *_final_chapter_constraint_section(is_final_chapter),
         *_countdown_constraint_sections(countdown_constraints, profiles=countdown_profiles),
         *_character_state_constraint_sections(character_state_constraints),
-        *_open_signal_constraint_sections(open_signals, suppressed=suppressed),
+        *_open_signal_constraint_sections(open_signals, suppressed=set()),
         *_future_plan_audit_sections(future_plan_audit_summary),
-        *_active_obligation_constraint_sections(active_obligations, suppressed=suppressed),
+        *_active_obligation_constraint_sections(active_obligations, suppressed=set()),
     ]
     return _render_constraint_sections(
         sections,
@@ -276,6 +288,50 @@ def _suppressed_prompt_constraint_keys(quality: dict) -> set[str]:
     return {str(item).strip() for item in raw_values if str(item).strip()}
 
 
+def _visible_countdown_constraints(items: list[dict], *, suppressed: set[str]) -> list[dict]:
+    return [
+        item
+        for item in items
+        if _constraint_identity("countdown", str(item.get("countdown_key") or item.get("key") or "")) not in suppressed
+    ]
+
+
+def _visible_open_signal_constraints(items: list[dict], *, suppressed: set[str]) -> list[dict]:
+    return [
+        item
+        for item in items
+        if _constraint_identity("signal", str(item.get("signal_id") or item.get("subject_key") or "")) not in suppressed
+    ]
+
+
+def _visible_obligation_constraints(items: list[dict], *, suppressed: set[str]) -> list[dict]:
+    return [
+        item
+        for item in items
+        if _constraint_identity("obligation", str(item.get("id") or "")) not in suppressed
+    ]
+
+
+def _record_prompt_constraint_counts(
+    quality: dict,
+    *,
+    original_countdowns: list,
+    original_open_signals: list,
+    original_obligations: list,
+    visible_countdowns: list,
+    visible_open_signals: list,
+    visible_obligations: list,
+) -> None:
+    original_count = (
+        len([item for item in original_countdowns if isinstance(item, dict)])
+        + len([item for item in original_open_signals if isinstance(item, dict)])
+        + len([item for item in original_obligations if isinstance(item, dict)])
+    )
+    remaining_count = len(visible_countdowns) + len(visible_open_signals) + len(visible_obligations)
+    quality["form_prompt_constraints_suppressed"] = max(original_count - remaining_count, 0)
+    quality["form_prompt_constraints_remaining"] = remaining_count
+
+
 def _constraint_identity(kind: str, value: str) -> str:
     return f"{kind}:{str(value or '').strip()}"
 
@@ -295,6 +351,9 @@ __all__ = [
     '_future_plan_audit_sections',
     '_active_obligation_constraint_sections',
     '_suppressed_prompt_constraint_keys',
+    '_visible_countdown_constraints',
+    '_visible_open_signal_constraints',
+    '_visible_obligation_constraints',
     '_constraint_identity',
     '_display_countdown_label',
 ]

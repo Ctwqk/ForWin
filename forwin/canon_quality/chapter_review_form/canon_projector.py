@@ -102,6 +102,8 @@ def project_validated_answers(
                 description=f"Countdown {countdown.key} is inconsistent with prior canon.",
                 draft_id=draft_id,
                 index=index + 1,
+                patch_kind="countdown_drift",
+                suppression_key=f"countdown:{countdown.key}",
                 severity=_severity_for_answer(
                     policy=policy,
                     signal_type="form_countdown_inconsistency",
@@ -193,7 +195,10 @@ def _blocking_signal(
     draft_id: str,
     index: int,
     severity: str,
+    patch_kind: str = "",
+    suppression_key: str = "",
 ) -> CanonQualitySignal:
+    plan_patchable = bool(patch_kind and suppression_key)
     return CanonQualitySignal(
         signal_id=make_signal_id(answers.project_id, answers.chapter_number, signal_type, subject_key, index),
         project_id=answers.project_id,
@@ -217,6 +222,9 @@ def _blocking_signal(
             "original_confidence": answer.confidence,
             "blocking_origin": "chapter_review_form",
             "draft_id": draft_id,
+            "plan_patchable": plan_patchable,
+            "patch_kind": patch_kind,
+            "suppression_key": suppression_key,
         },
     )
 
@@ -241,6 +249,8 @@ def _project_blocking_section_answers(
                 description=f"Obligation {obligation.id} is unresolved.",
                 draft_id=draft_id,
                 index=index + 1,
+                patch_kind="obligation_unresolved",
+                suppression_key=f"obligation:{obligation.id}",
                 severity=_severity_for_answer(
                     policy=policy,
                     signal_type="form_obligation_unresolved",
@@ -261,6 +271,8 @@ def _project_blocking_section_answers(
                 description=f"Open signal {open_signal.id} is still unresolved.",
                 draft_id=draft_id,
                 index=index + 1,
+                patch_kind="signal_persisting",
+                suppression_key=f"signal:{open_signal.id}",
                 severity=_severity_for_answer(
                     policy=policy,
                     signal_type="form_open_signal_persisting",
@@ -279,6 +291,8 @@ def _project_blocking_section_answers(
             description="Final chapter did not close the main crisis.",
             draft_id=draft_id,
             index=1,
+            patch_kind="final_dangling",
+            suppression_key="final:main_crisis",
             severity=_severity_for_answer(
                 policy=policy,
                 signal_type="form_final_chapter_unresolved",

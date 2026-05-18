@@ -78,6 +78,7 @@ class FuturePlanAuditor(
         countdowns = _countdown_constraints(canon_quality_context)
         character_state_constraints = _character_state_constraints(canon_quality_context)
         suppressed_prompt_constraint_keys: set[str] = set()
+        form_plan_patch_signals_consumed = 0
         for plan in plans:
             chapter_number = int(plan.chapter_number or 0)
             if not include_current and chapter_number <= int(current_chapter or 0):
@@ -138,6 +139,8 @@ class FuturePlanAuditor(
             suppression_key = str(issue.metadata.get("suppression_key") or "").strip()
             if suppression_key:
                 suppressed_prompt_constraint_keys.add(suppression_key)
+            if issue.metadata.get("source_mode") == "chapter_review_form" and issue.metadata.get("plan_patchable") is True:
+                form_plan_patch_signals_consumed += 1
 
         plans_by_chapter = {int(plan.chapter_number or 0): plan for plan in plans}
         for obligation in obligations:
@@ -180,6 +183,7 @@ class FuturePlanAuditor(
             metadata={
                 "suppressed_prompt_constraint_keys": sorted(suppressed_prompt_constraint_keys),
                 "pre_write_patch_count": len(suppressed_prompt_constraint_keys),
+                "form_plan_patch_signals_consumed": form_plan_patch_signals_consumed,
             },
         )
 

@@ -21,11 +21,18 @@ def select_stale_signal_targets(
     for signal in open_signals:
         if not isinstance(signal, dict):
             continue
+        payload = _payload(signal)
+        signal_type = str(signal.get("signal_type") or "").strip()
+        is_form_plan_patchable = (
+            signal_type == "form_open_signal_persisting"
+            and payload.get("plan_patchable") is True
+            and payload.get("patch_kind") == "signal_persisting"
+        )
         severity = str(signal.get("severity") or "").strip().lower()
-        if severity not in {"error", "fail", "critical", "blocker"}:
+        if not is_form_plan_patchable and severity not in {"error", "fail", "critical", "blocker"}:
             continue
         signal_chapter = int(signal.get("chapter_number") or 0)
-        if int(current_chapter or 0) - signal_chapter < int(min_age_chapters or 0):
+        if not is_form_plan_patchable and int(current_chapter or 0) - signal_chapter < int(min_age_chapters or 0):
             continue
         signal_id = str(signal.get("signal_id") or signal.get("subject_key") or "").strip()
         description = str(signal.get("description") or "").strip()
@@ -35,7 +42,7 @@ def select_stale_signal_targets(
             {
                 "signal": signal,
                 "plan": target_plan,
-                "suppression_key": f"signal:{signal_id}",
+                "suppression_key": str(payload.get("suppression_key") or f"signal:{signal_id}"),
             }
         )
     return result
@@ -80,3 +87,16 @@ def _loads(raw: str, default: Any) -> Any:
     except (TypeError, json.JSONDecodeError):
         return default
     return value if value is not None else default
+
+
+def _payload(signal: dict[str, Any]) -> dict[str, Any]:
+    payload = signal.get("payload", {}) or {}
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, str):
+        try:
+            value = json.loads(payload)
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}
+    return {}

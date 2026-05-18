@@ -61,3 +61,38 @@ def test_builder_marks_final_chapter_ask() -> None:
     )
 
     assert form.final_chapter is not None
+
+
+def test_builder_treats_superseded_character_prior_as_unknown() -> None:
+    form = build_form(
+        project_id="p1",
+        chapter_number=7,
+        chapter_text="林青回到档案室。",
+        character_rows=[
+            {
+                "character_name": "林青",
+                "to_state": "dead",
+                "chapter_number": 3,
+                "payload": {"must_track": True, "superseded_by": "chapter_review_form_migration"},
+            }
+        ],
+        countdown_rows=[
+            {
+                "countdown_key": "main",
+                "label": "主倒计时",
+                "normalized_remaining_minutes": 50,
+                "status": "consistent",
+                "chapter_number": 6,
+                "payload": {"superseded_by": "chapter_review_form_migration"},
+            }
+        ],
+        open_signal_rows=[],
+        obligations=[],
+        target_total_chapters=12,
+        token_budget_chars=4000,
+    )
+
+    assert len(form.characters) == 1
+    assert form.characters[0].prior_life_state == "unknown"
+    assert form.characters[0].prior_custody_state == "unknown"
+    assert form.countdowns == []

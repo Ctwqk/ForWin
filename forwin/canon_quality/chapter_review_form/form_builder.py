@@ -34,11 +34,11 @@ def build_form(
 ) -> ChapterReviewForm:
     characters = [
         _character_ask(row)
-        for row in select_characters_to_ask(rows=list(character_rows or []), chapter_text=chapter_text)
+        for row in select_characters_to_ask(rows=_character_rows_for_form(list(character_rows or [])), chapter_text=chapter_text)
     ]
     countdowns = [
         _countdown_ask(row)
-        for row in select_countdowns_to_ask(rows=list(countdown_rows or []), chapter_text=chapter_text)
+        for row in select_countdowns_to_ask(rows=_active_rows(list(countdown_rows or [])), chapter_text=chapter_text)
     ]
     open_signals = [
         _signal_ask(row, current_chapter=chapter_number)
@@ -60,6 +60,49 @@ def build_form(
         final_chapter=final_chapter,
     )
     return _fit_budget(form, max_chars=max(1000, int(token_budget_chars or 8000)))
+
+
+def _character_rows_for_form(rows: list[Any]) -> list[Any]:
+    active_rows = _active_rows(rows)
+    active_names = {_row_name(row) for row in active_rows if _row_name(row)}
+    superseded_latest_by_name: dict[str, Any] = {}
+    for row in rows:
+        if not _is_superseded(row):
+            continue
+        name = _row_name(row)
+        if not name or name in active_names:
+            continue
+        previous = superseded_latest_by_name.get(name)
+        if previous is None or int(row_value(row, "chapter_number", 0) or 0) >= int(row_value(previous, "chapter_number", 0) or 0):
+            superseded_latest_by_name[name] = row
+    placeholders = [_unknown_character_prior(row) for row in superseded_latest_by_name.values()]
+    return [*active_rows, *placeholders]
+
+
+def _active_rows(rows: list[Any]) -> list[Any]:
+    return [row for row in rows if not _is_superseded(row)]
+
+
+def _is_superseded(row: Any) -> bool:
+    payload = row_value(row, "payload", {}) or {}
+    return isinstance(payload, dict) and bool(payload.get("superseded_by"))
+
+
+def _row_name(row: Any) -> str:
+    return str(row_value(row, "character_name") or row_value(row, "name") or "").strip()
+
+
+def _unknown_character_prior(row: Any) -> dict[str, Any]:
+    payload = row_value(row, "payload", {}) or {}
+    if isinstance(payload, dict):
+        payload = {key: value for key, value in payload.items() if key != "superseded_by"}
+    else:
+        payload = {}
+    return {
+        "character_name": _row_name(row),
+        "chapter_number": int(row_value(row, "chapter_number", 0) or 0),
+        "payload": payload,
+    }
 
 
 def _character_ask(row: Any) -> CharacterReviewAsk:

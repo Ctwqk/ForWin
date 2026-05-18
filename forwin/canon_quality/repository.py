@@ -146,7 +146,13 @@ class CanonQualityRepository:
         self.session.flush()
         return rows
 
-    def list_character_transitions(self, project_id: str, *, before_chapter: int | None = None) -> list[dict[str, Any]]:
+    def list_character_transitions(
+        self,
+        project_id: str,
+        *,
+        before_chapter: int | None = None,
+        include_superseded: bool = False,
+    ) -> list[dict[str, Any]]:
         query = select(CharacterStateTransitionRow).where(CharacterStateTransitionRow.project_id == project_id)
         if before_chapter is not None:
             query = query.where(CharacterStateTransitionRow.chapter_number < int(before_chapter))
@@ -156,6 +162,8 @@ class CanonQualityRepository:
             project_id=project_id,
             before_chapter=before_chapter,
         )
+        if not include_superseded:
+            rows = [row for row in rows if not _is_superseded_payload(getattr(row, "payload_json", "{}"))]
         return [
             {
                 "id": row.id,
@@ -205,6 +213,7 @@ class CanonQualityRepository:
         *,
         before_chapter: int | None = None,
         include_details: bool = False,
+        include_superseded: bool = False,
     ) -> list[dict[str, Any]]:
         query = select(CountdownLedgerRow).where(CountdownLedgerRow.project_id == project_id)
         if before_chapter is not None:
@@ -215,6 +224,8 @@ class CanonQualityRepository:
             project_id=project_id,
             before_chapter=before_chapter,
         )
+        if not include_superseded:
+            rows = [row for row in rows if not _is_superseded_payload(getattr(row, "payload_json", "{}"))]
         result: list[dict[str, Any]] = []
         for row in rows:
             item: dict[str, Any] = {
@@ -377,3 +388,8 @@ def _loads(raw: str, default: Any) -> Any:
     except (TypeError, json.JSONDecodeError):
         return default
     return value
+
+
+def _is_superseded_payload(raw: str) -> bool:
+    payload = _loads(raw, {})
+    return isinstance(payload, dict) and bool(payload.get("superseded_by"))

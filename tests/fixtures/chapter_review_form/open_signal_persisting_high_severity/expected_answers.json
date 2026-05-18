@@ -1,0 +1,24 @@
+{
+  "project_id": "p1",
+  "chapter_number": 2,
+  "form_schema_version": "chapter_review_form.v1",
+  "characters": [],
+  "countdowns": [],
+  "obligations": [],
+  "open_signals": [
+    {
+      "id": "信号-1",
+      "status": {
+        "value": "persisting",
+        "evidence_quote": "信号-1继续存在",
+        "subject_of_quote": "信号-1",
+        "confidence": 0.95,
+        "explanation": ""
+      },
+      "resolution_evidence": null
+    }
+  ],
+  "new_observations": {},
+  "final_chapter": null,
+  "chapter_summary": "事件-1推进。"
+}

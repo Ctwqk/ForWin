@@ -1,0 +1,7 @@
+[
+  {
+    "signal_type": "form_obligation_unresolved",
+    "severity": "warning",
+    "subject_key": "义务-1"
+  }
+]

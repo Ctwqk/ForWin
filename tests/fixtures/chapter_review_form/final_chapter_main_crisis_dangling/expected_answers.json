@@ -1,0 +1,24 @@
+{
+  "project_id": "p1",
+  "chapter_number": 2,
+  "form_schema_version": "chapter_review_form.v1",
+  "characters": [],
+  "countdowns": [],
+  "obligations": [],
+  "open_signals": [],
+  "new_observations": {},
+  "final_chapter": {
+    "main_crisis_status": {
+      "value": "left_dangling",
+      "evidence_quote": "主危机仍然悬着",
+      "subject_of_quote": "事件-1",
+      "confidence": 0.96,
+      "explanation": ""
+    },
+    "closure_evidence": null,
+    "unresolved_promises": [
+      "事件-1"
+    ]
+  },
+  "chapter_summary": "事件-1推进。"
+}

@@ -1,0 +1,53 @@
+{
+  "project_id": "p1",
+  "chapter_number": 2,
+  "form_schema_version": "chapter_review_form.v1",
+  "characters": [
+    {
+      "name": "角色A",
+      "aliases": [],
+      "descriptive_aliases": [],
+      "prior_life_state": "alive",
+      "prior_custody_state": "free",
+      "last_seen_chapter": 1,
+      "must_track": true
+    },
+    {
+      "name": "角色B",
+      "aliases": [],
+      "descriptive_aliases": [],
+      "prior_life_state": "dead",
+      "prior_custody_state": "free",
+      "last_seen_chapter": 1,
+      "must_track": false
+    }
+  ],
+  "countdowns": [
+    {
+      "key": "倒计时甲",
+      "label": "倒计时甲",
+      "prior_value_minutes": 10,
+      "prior_status": "active",
+      "last_updated_chapter": 1,
+      "aliases": []
+    }
+  ],
+  "obligations": [
+    {
+      "id": "义务-1",
+      "summary": "处理义务-1",
+      "deadline_chapter": 2,
+      "must_resolve_now": true,
+      "payoff_test": "章节必须给出义务-1是否完成的证据。"
+    }
+  ],
+  "open_signals": [
+    {
+      "id": "信号-1",
+      "description": "信号-1仍需复核。",
+      "severity": "warning",
+      "age_chapters": 2
+    }
+  ],
+  "final_chapter": null
+}

@@ -1,0 +1,8 @@
+[
+  {
+    "character_name": "角色A",
+    "transition_type": "life_state",
+    "to_state": "dead",
+    "terminality": "hard_terminal"
+  }
+]

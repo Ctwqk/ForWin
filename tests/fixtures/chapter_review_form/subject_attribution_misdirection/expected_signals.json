@@ -1,0 +1,7 @@
+[
+  {
+    "signal_type": "form_answer_rejected",
+    "severity": "error",
+    "subject_key": "characters[0].life_state"
+  }
+]

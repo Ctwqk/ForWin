@@ -1,0 +1,17 @@
+{
+  "project_id": "p1",
+  "chapter_number": 2,
+  "form_schema_version": "chapter_review_form.v1",
+  "characters": [],
+  "countdowns": [],
+  "obligations": [],
+  "open_signals": [],
+  "final_chapter": {
+    "main_crisis_descriptors": [
+      "事件-1"
+    ],
+    "expected_closure_kinds": [
+      "关闭主危机"
+    ]
+  }
+}

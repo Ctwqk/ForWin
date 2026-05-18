@@ -1,0 +1,28 @@
+{
+  "project_id": "p1",
+  "chapter_number": 2,
+  "form_schema_version": "chapter_review_form.v1",
+  "characters": [],
+  "countdowns": [],
+  "obligations": [],
+  "open_signals": [],
+  "new_observations": {},
+  "final_chapter": {
+    "main_crisis_status": {
+      "value": "closed",
+      "evidence_quote": "主危机被关闭",
+      "subject_of_quote": "事件-1",
+      "confidence": 0.95,
+      "explanation": ""
+    },
+    "closure_evidence": {
+      "value": "closed",
+      "evidence_quote": "所有核心威胁停止",
+      "subject_of_quote": "事件-1",
+      "confidence": 0.92,
+      "explanation": ""
+    },
+    "unresolved_promises": []
+  },
+  "chapter_summary": "事件-1推进。"
+}

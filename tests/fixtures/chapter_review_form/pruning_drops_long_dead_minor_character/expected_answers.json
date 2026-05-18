@@ -1,0 +1,39 @@
+{
+  "project_id": "p1",
+  "chapter_number": 2,
+  "form_schema_version": "chapter_review_form.v1",
+  "characters": [
+    {
+      "name": "角色B",
+      "appears_in_chapter": false,
+      "life_state": {
+        "value": "unknown",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "custody_state": {
+        "value": "unknown",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "participation": {
+        "value": "absent",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "bridge_events": []
+    }
+  ],
+  "countdowns": [],
+  "obligations": [],
+  "open_signals": [],
+  "new_observations": {},
+  "final_chapter": null,
+  "chapter_summary": "事件-1推进。"
+}

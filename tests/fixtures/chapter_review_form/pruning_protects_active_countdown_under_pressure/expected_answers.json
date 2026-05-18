@@ -1,0 +1,40 @@
+{
+  "project_id": "p1",
+  "chapter_number": 2,
+  "form_schema_version": "chapter_review_form.v1",
+  "characters": [],
+  "countdowns": [
+    {
+      "key": "倒计时甲",
+      "mentioned_in_chapter": true,
+      "status_in_this_chapter": {
+        "value": "active",
+        "evidence_quote": "倒计时甲剩余十分钟",
+        "subject_of_quote": "倒计时甲",
+        "confidence": 0.91,
+        "explanation": ""
+      },
+      "new_value_minutes": 10,
+      "new_value_evidence": {
+        "value": "10",
+        "evidence_quote": "倒计时甲剩余十分钟",
+        "subject_of_quote": "倒计时甲",
+        "confidence": 0.91,
+        "explanation": ""
+      },
+      "consistent_with_prior": {
+        "value": "true",
+        "evidence_quote": "倒计时甲剩余十分钟",
+        "subject_of_quote": "倒计时甲",
+        "confidence": 0.91,
+        "explanation": ""
+      },
+      "inconsistency_kind": "none"
+    }
+  ],
+  "obligations": [],
+  "open_signals": [],
+  "new_observations": {},
+  "final_chapter": null,
+  "chapter_summary": "事件-1推进。"
+}

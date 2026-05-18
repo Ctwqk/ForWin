@@ -1,0 +1,39 @@
+{
+  "project_id": "p1",
+  "chapter_number": 2,
+  "form_schema_version": "chapter_review_form.v1",
+  "characters": [
+    {
+      "name": "角色A",
+      "appears_in_chapter": true,
+      "life_state": {
+        "value": "alive",
+        "evidence_quote": "角色A说：“完成了……”",
+        "subject_of_quote": "角色A",
+        "confidence": 0.9,
+        "explanation": ""
+      },
+      "custody_state": {
+        "value": "unknown",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "participation": {
+        "value": "present_acting",
+        "evidence_quote": "角色A说：“完成了……”",
+        "subject_of_quote": "角色A",
+        "confidence": 0.9,
+        "explanation": ""
+      },
+      "bridge_events": []
+    }
+  ],
+  "countdowns": [],
+  "obligations": [],
+  "open_signals": [],
+  "new_observations": {},
+  "final_chapter": null,
+  "chapter_summary": "事件-1推进。"
+}

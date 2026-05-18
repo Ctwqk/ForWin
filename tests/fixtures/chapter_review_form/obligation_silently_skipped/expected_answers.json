@@ -1,0 +1,24 @@
+{
+  "project_id": "p1",
+  "chapter_number": 2,
+  "form_schema_version": "chapter_review_form.v1",
+  "characters": [],
+  "countdowns": [],
+  "obligations": [
+    {
+      "id": "义务-1",
+      "addressed": {
+        "value": "unaddressed",
+        "evidence_quote": "义务-1没有被完成。",
+        "subject_of_quote": "义务-1",
+        "confidence": 0.95,
+        "explanation": ""
+      },
+      "payoff_evidence": null
+    }
+  ],
+  "open_signals": [],
+  "new_observations": {},
+  "final_chapter": null,
+  "chapter_summary": "事件-1推进。"
+}

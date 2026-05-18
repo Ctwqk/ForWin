@@ -1,0 +1,111 @@
+{
+  "project_id": "p1",
+  "chapter_number": 2,
+  "form_schema_version": "chapter_review_form.v1",
+  "characters": [
+    {
+      "name": "角色A",
+      "appears_in_chapter": false,
+      "life_state": {
+        "value": "unknown",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "custody_state": {
+        "value": "unknown",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "participation": {
+        "value": "absent",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "bridge_events": []
+    },
+    {
+      "name": "角色B",
+      "appears_in_chapter": false,
+      "life_state": {
+        "value": "unknown",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "custody_state": {
+        "value": "unknown",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "participation": {
+        "value": "absent",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "bridge_events": []
+    }
+  ],
+  "countdowns": [
+    {
+      "key": "倒计时甲",
+      "mentioned_in_chapter": true,
+      "status_in_this_chapter": {
+        "value": "unchanged",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "new_value_minutes": null,
+      "new_value_evidence": null,
+      "consistent_with_prior": {
+        "value": "true",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "inconsistency_kind": "none"
+    }
+  ],
+  "obligations": [
+    {
+      "id": "义务-1",
+      "addressed": {
+        "value": "unknown",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "payoff_evidence": null
+    }
+  ],
+  "open_signals": [
+    {
+      "id": "信号-1",
+      "status": {
+        "value": "unknown",
+        "evidence_quote": "",
+        "subject_of_quote": "",
+        "confidence": 0.0,
+        "explanation": ""
+      },
+      "resolution_evidence": null
+    }
+  ],
+  "new_observations": {},
+  "final_chapter": null,
+  "chapter_summary": "事件-1推进。"
+}

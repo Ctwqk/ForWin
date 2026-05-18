@@ -1,0 +1,7 @@
+[
+  {
+    "signal_type": "form_countdown_inconsistency",
+    "severity": "error",
+    "subject_key": "倒计时甲"
+  }
+]

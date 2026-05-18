@@ -1,0 +1,18 @@
+{
+  "project_id": "p1",
+  "chapter_number": 2,
+  "form_schema_version": "chapter_review_form.v1",
+  "characters": [],
+  "countdowns": [],
+  "obligations": [
+    {
+      "id": "义务-1",
+      "summary": "处理义务-1",
+      "deadline_chapter": 2,
+      "must_resolve_now": true,
+      "payoff_test": "章节必须给出义务-1是否完成的证据。"
+    }
+  ],
+  "open_signals": [],
+  "final_chapter": null
+}

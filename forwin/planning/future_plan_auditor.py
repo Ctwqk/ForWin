@@ -9,6 +9,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.canon_quality.prompt_json.normalization import prompt_issue_evidence_refs
+from forwin.canon_quality.prompt_json.schemas import PromptJsonMode, normalize_prompt_json_mode
+from forwin.canon_quality.prompt_json.validation import issue_can_block
 from forwin.models.base import new_id
 from forwin.models.narrative_obligation import FuturePlanAuditRunRow
 from forwin.models.phase import BandExperiencePlan
@@ -16,7 +19,10 @@ from forwin.models.project import ChapterPlan
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.planning.band_plan_patcher import BandPlanPatcher
+from forwin.planning.obligation_pre_audit import select_urgent_obligation_targets
 from forwin.planning.plan_patch_validator import PlanPatchValidator
+from forwin.planning.prompt_json.future_plan_auditor_prompt import FuturePlanPromptAuditor
+from forwin.planning.signal_pre_audit import select_stale_signal_targets
 from forwin.protocol.experience import BandDelightSchedule
 
 
@@ -102,6 +108,22 @@ class FuturePlanAuditRepository:
 
 
 class FuturePlanAuditor:
+    def __init__(
+        self,
+        *,
+        mode: PromptJsonMode | str = "deterministic",
+        plan_patch_validation_mode: PromptJsonMode | str = "deterministic",
+        llm_client: object | None = None,
+        min_blocking_confidence: float = 0.8,
+    ) -> None:
+        self.mode = normalize_prompt_json_mode(str(mode), default="deterministic")
+        self.plan_patch_validation_mode = normalize_prompt_json_mode(
+            str(plan_patch_validation_mode),
+            default="deterministic",
+        )
+        self.llm_client = llm_client
+        self.min_blocking_confidence = float(min_blocking_confidence)
+
     def audit_plans(
         self,
         *,
@@ -115,6 +137,19 @@ class FuturePlanAuditor:
         include_current: bool,
         band_rows: list[BandExperiencePlan] | None = None,
     ) -> FuturePlanAuditRun:
+        if self.mode in {"hybrid", "prompt_json", "shadow"}:
+            return self._audit_plans_prompt_json(
+                project_id=project_id,
+                current_chapter=current_chapter,
+                trigger_stage=trigger_stage,
+                plans=plans,
+                canon_quality_context=canon_quality_context,
+                obligations=obligations,
+                target_total_chapters=target_total_chapters,
+                include_current=include_current,
+                band_rows=band_rows,
+            )
+
         inspected = [
             int(plan.chapter_number or 0)
             for plan in plans
@@ -129,6 +164,7 @@ class FuturePlanAuditor:
         patches: list[NarrativePlanPatch] = []
         countdowns = _countdown_constraints(canon_quality_context)
         character_state_constraints = _character_state_constraints(canon_quality_context)
+        suppressed_prompt_constraint_keys: set[str] = set()
         for plan in plans:
             chapter_number = int(plan.chapter_number or 0)
             if not include_current and chapter_number <= int(current_chapter or 0):
@@ -176,9 +212,25 @@ class FuturePlanAuditor:
             issues.append(issue)
             patches.append(patch)
 
+        for issue, patch in self._audit_pre_write_obligations_and_signals(
+            project_id=project_id,
+            current_chapter=int(current_chapter or 0),
+            plans=plans,
+            canon_quality_context=canon_quality_context,
+            obligations=obligations,
+            include_current=include_current,
+        ):
+            issues.append(issue)
+            patches.append(patch)
+            suppression_key = str(issue.metadata.get("suppression_key") or "").strip()
+            if suppression_key:
+                suppressed_prompt_constraint_keys.add(suppression_key)
+
         plans_by_chapter = {int(plan.chapter_number or 0): plan for plan in plans}
         for obligation in obligations:
             if obligation.id in band_covered_obligation_ids or _minimum_scope_for_obligation(obligation) == "band":
+                continue
+            if obligation.must_resolve_now:
                 continue
             plan = plans_by_chapter.get(int(obligation.deadline_chapter or 0))
             if plan is None or str(plan.status or "") == "accepted":
@@ -212,6 +264,129 @@ class FuturePlanAuditor:
                 for issue in issues
                 if issue.blocking
             ],
+            metadata={
+                "suppressed_prompt_constraint_keys": sorted(suppressed_prompt_constraint_keys),
+                "pre_write_patch_count": len(suppressed_prompt_constraint_keys),
+            },
+        )
+
+    def _audit_plans_prompt_json(
+        self,
+        *,
+        project_id: str,
+        current_chapter: int,
+        trigger_stage: str,
+        plans: list[ChapterPlan],
+        canon_quality_context: dict[str, Any],
+        obligations: list[NarrativeObligation],
+        target_total_chapters: int,
+        include_current: bool,
+        band_rows: list[BandExperiencePlan] | None,
+    ) -> FuturePlanAuditRun:
+        inspected = _inspected_chapters(
+            plans=plans,
+            band_rows=band_rows,
+            current_chapter=current_chapter,
+            include_current=include_current,
+        )
+        result = FuturePlanPromptAuditor(
+            llm_client=self.llm_client,
+            min_blocking_confidence=self.min_blocking_confidence,
+        ).analyze(
+            _future_plan_prompt_payload(
+                plans=plans,
+                canon_quality_context=canon_quality_context,
+                obligations=obligations,
+                target_total_chapters=target_total_chapters,
+                current_chapter=current_chapter,
+                include_current=include_current,
+                band_rows=band_rows,
+            )
+        )
+        plans_by_id = {str(plan.id or ""): plan for plan in plans if str(plan.id or "").strip()}
+        impacts_by_id = {
+            str(item.get("plan_item_id") or ""): item
+            for item in result.get("plan_impacts", [])
+            if isinstance(item, dict)
+        }
+        fallback_plan = _first_prompt_target_plan(
+            plans=plans,
+            current_chapter=current_chapter,
+            include_current=include_current,
+        )
+        issues: list[FuturePlanAuditIssue] = []
+        patches: list[NarrativePlanPatch] = []
+        for index, raw_issue in enumerate(result.get("issues", []) or [], start=1):
+            if not isinstance(raw_issue, dict):
+                continue
+            plan_id = _prompt_issue_plan_id(raw_issue=raw_issue, impacts_by_id=impacts_by_id)
+            plan = plans_by_id.get(plan_id) or fallback_plan
+            impact = impacts_by_id.get(plan_id) if plan_id else None
+            audit_issue = _prompt_issue_to_future_plan_issue(
+                issue=raw_issue,
+                result=result,
+                current_chapter=current_chapter,
+                plan=plan,
+                plan_id=plan_id,
+                impact=impact,
+                min_blocking_confidence=self.min_blocking_confidence,
+            )
+            issues.append(audit_issue)
+            patch = _prompt_issue_to_plan_patch(
+                project_id=project_id,
+                issue=raw_issue,
+                result=result,
+                plan=plan,
+                plan_id=audit_issue.target_plan_id,
+                target_chapter=audit_issue.target_chapter,
+                index=index,
+                impact=impact,
+            )
+            if patch is not None:
+                patches.append(patch)
+
+        suppressed_prompt_constraint_keys: set[str] = set()
+        for issue, patch in self._audit_pre_write_obligations_and_signals(
+            project_id=project_id,
+            current_chapter=int(current_chapter or 0),
+            plans=plans,
+            canon_quality_context=canon_quality_context,
+            obligations=obligations,
+            include_current=include_current,
+        ):
+            issues.append(issue)
+            patches.append(patch)
+            suppression_key = str(issue.metadata.get("suppression_key") or "").strip()
+            if suppression_key:
+                suppressed_prompt_constraint_keys.add(suppression_key)
+
+        status: AuditStatus = "pass"
+        if any(issue.severity == "error" and issue.blocking for issue in issues):
+            status = "fail"
+        elif issues or patches or str(result.get("verdict") or "") in {"warn", "fail", "uncertain"}:
+            status = "warn"
+        return FuturePlanAuditRun(
+            project_id=project_id,
+            current_chapter=int(current_chapter or 0),
+            trigger_stage=trigger_stage,
+            inspected_chapters=inspected,
+            status=status,
+            issues=issues,
+            plan_patches=patches,
+            blocking_reasons=[
+                f"{issue.issue_type}:{issue.target_chapter}"
+                for issue in issues
+                if issue.blocking
+            ],
+            metadata={
+                "source_analyzer": str(result.get("analyzer") or "FuturePlanPromptAuditor"),
+                "source_mode": "prompt_json",
+                "original_verdict": str(result.get("verdict") or ""),
+                "original_confidence": float(result.get("confidence") or 0.0),
+                "prompt_json_summary": str(result.get("summary") or ""),
+                "suppressed_prompt_constraint_keys": sorted(suppressed_prompt_constraint_keys),
+                "pre_write_patch_count": len(suppressed_prompt_constraint_keys),
+            },
         )
 
     def audit_and_apply(
@@ -255,7 +430,11 @@ class FuturePlanAuditor:
             for obligation in obligations
             if obligation.status not in {"resolved", "waived"}
         ]
-        validator = PlanPatchValidator()
+        validator = PlanPatchValidator(
+            mode=self.plan_patch_validation_mode,
+            llm_client=self.llm_client,
+            min_blocking_confidence=self.min_blocking_confidence,
+        )
         for patch in result.plan_patches:
             plan = None
             band_row = None
@@ -330,8 +509,11 @@ class FuturePlanAuditor:
             else:
                 self._apply_countdown_patch(plan, patch)
             return
-        if patch.patch_type in {"obligation_plan_binding", "defer_acceptance"}:
+        if patch.patch_type in {"obligation_plan_binding", "obligation_pre_write", "defer_acceptance"}:
             self._apply_obligation_patch(plan, patch)
+            return
+        if patch.patch_type in {"future_plan_prompt_update", "signal_pre_write"}:
+            self._apply_prompt_plan_patch(plan, patch)
 
     def _audit_character_state_plan(
         self,
@@ -709,6 +891,205 @@ class FuturePlanAuditor:
             metadata=metadata,
         )
 
+    def _audit_pre_write_obligations_and_signals(
+        self,
+        *,
+        project_id: str,
+        current_chapter: int,
+        plans: list[ChapterPlan],
+        canon_quality_context: dict[str, Any],
+        obligations: list[NarrativeObligation],
+        include_current: bool,
+    ) -> list[tuple[FuturePlanAuditIssue, NarrativePlanPatch]]:
+        result: list[tuple[FuturePlanAuditIssue, NarrativePlanPatch]] = []
+        for candidate in select_urgent_obligation_targets(
+            obligations=obligations,
+            plans=plans,
+            current_chapter=current_chapter,
+            include_current=include_current,
+        ):
+            obligation = candidate["obligation"]
+            plan = candidate["plan"]
+            suppression_key = str(candidate.get("suppression_key") or "").strip()
+            issue, patch = self._must_resolve_obligation_patch(
+                project_id=project_id,
+                current_chapter=current_chapter,
+                plan=plan,
+                obligation=obligation,
+                suppression_key=suppression_key,
+            )
+            result.append((issue, patch))
+        for candidate in select_stale_signal_targets(
+            open_signals=_open_signal_constraints(canon_quality_context),
+            plans=plans,
+            current_chapter=current_chapter,
+            include_current=include_current,
+        ):
+            signal = candidate["signal"]
+            plan = candidate["plan"]
+            suppression_key = str(candidate.get("suppression_key") or "").strip()
+            issue, patch = self._stale_signal_patch(
+                project_id=project_id,
+                current_chapter=current_chapter,
+                plan=plan,
+                signal=signal,
+                suppression_key=suppression_key,
+            )
+            result.append((issue, patch))
+        return result
+
+    def _must_resolve_obligation_patch(
+        self,
+        *,
+        project_id: str,
+        current_chapter: int,
+        plan: ChapterPlan,
+        obligation: NarrativeObligation,
+        suppression_key: str,
+    ) -> tuple[FuturePlanAuditIssue, NarrativePlanPatch]:
+        chapter_number = int(plan.chapter_number or 0)
+        description = (
+            f"第{chapter_number}章写作前必须偿还叙事义务 {obligation.id}: "
+            f"{obligation.payoff_test}"
+        )
+        metadata = {
+            "obligation_id": obligation.id,
+            "priority": obligation.priority,
+            "payoff_test": obligation.payoff_test,
+            "must_resolve_now": True,
+            "suppression_key": suppression_key,
+        }
+        issue = FuturePlanAuditIssue(
+            issue_type="obligation_pre_write_required",
+            severity="error",
+            target_chapter=chapter_number,
+            target_plan_id=str(plan.id or ""),
+            description=description,
+            evidence_refs=[f"obligation:{obligation.id}", f"chapter_plan:{chapter_number}"],
+            patch_type="obligation_pre_write",
+            metadata=metadata,
+        )
+        patch = NarrativePlanPatch(
+            id=new_id(),
+            project_id=project_id,
+            patch_type="obligation_pre_write",
+            target_scope="chapter",
+            target_plan_id=str(plan.id or ""),
+            target_arc_id=str(plan.arc_plan_id or ""),
+            affected_chapters=[chapter_number],
+            source_obligation_ids=[obligation.id],
+            old_contract=_chapter_plan_contract(plan),
+            new_contract={
+                "obligations_to_resolve": [obligation.id],
+                "payoff_test": obligation.payoff_test,
+                "summary": obligation.summary,
+                "must_resolve_now": True,
+            },
+            diff_summary=description,
+            must_preserve=[str(plan.title or ""), str(plan.one_line or "")],
+            must_not_change=[f"remove must_resolve_now obligation {obligation.id}"],
+            writer_context_injections=[
+                {
+                    "type": "narrative_obligation",
+                    "obligation_id": obligation.id,
+                    "priority": obligation.priority,
+                    "summary": obligation.summary,
+                    "payoff_test": obligation.payoff_test,
+                    "deadline_chapter": obligation.deadline_chapter,
+                    "must_resolve_now": True,
+                }
+            ],
+            reviewer_context_injections=[
+                {
+                    "type": "narrative_obligation",
+                    "obligation_id": obligation.id,
+                    "payoff_test": obligation.payoff_test,
+                    "must_resolve_now": True,
+                }
+            ],
+            expected_resolution_tests=[obligation.payoff_test],
+            validation_status="pending",
+            metadata=metadata,
+        )
+        return issue, patch
+
+    def _stale_signal_patch(
+        self,
+        *,
+        project_id: str,
+        current_chapter: int,
+        plan: ChapterPlan,
+        signal: dict[str, Any],
+        suppression_key: str,
+    ) -> tuple[FuturePlanAuditIssue, NarrativePlanPatch]:
+        chapter_number = int(plan.chapter_number or 0)
+        signal_id = str(signal.get("signal_id") or signal.get("subject_key") or "").strip()
+        signal_chapter = int(signal.get("chapter_number") or 0)
+        signal_type = str(signal.get("signal_type") or "quality_signal").strip()
+        description_text = str(signal.get("description") or "").strip()
+        instruction = (
+            f"修复第{signal_chapter}章遗留质量信号 {signal_type}"
+            f"{f'({signal_id})' if signal_id else ''}：{description_text}"
+        ).strip()
+        metadata = {
+            "signal_id": signal_id,
+            "signal_type": signal_type,
+            "origin_chapter": signal_chapter,
+            "current_chapter": current_chapter,
+            "suppression_key": suppression_key,
+        }
+        issue = FuturePlanAuditIssue(
+            issue_type="stale_open_signal_pre_write_required",
+            severity="error",
+            target_chapter=chapter_number,
+            target_plan_id=str(plan.id or ""),
+            description=instruction,
+            evidence_refs=[f"signal:{signal_id}", f"chapter_plan:{chapter_number}"],
+            patch_type="signal_pre_write",
+            metadata=metadata,
+        )
+        patch = NarrativePlanPatch(
+            id=new_id(),
+            project_id=project_id,
+            patch_type="signal_pre_write",
+            target_scope="chapter",
+            target_plan_id=str(plan.id or ""),
+            target_arc_id=str(plan.arc_plan_id or ""),
+            affected_chapters=[chapter_number],
+            source_signal_ids=[signal_id] if signal_id else [],
+            old_contract=_chapter_plan_contract(plan),
+            new_contract={
+                "prompt_json_instruction": instruction,
+                "signal_id": signal_id,
+                "signal_type": signal_type,
+                "origin_chapter": signal_chapter,
+            },
+            diff_summary=instruction,
+            must_preserve=[str(plan.title or ""), str(plan.one_line or "")],
+            must_not_change=["drop stale open quality signal without resolution evidence"],
+            writer_context_injections=[
+                {
+                    "type": "open_quality_signal_resolution",
+                    "signal_id": signal_id,
+                    "signal_type": signal_type,
+                    "description": description_text,
+                    "origin_chapter": signal_chapter,
+                    "instruction": instruction,
+                }
+            ],
+            reviewer_context_injections=[
+                {
+                    "type": "open_quality_signal_resolution",
+                    "signal_id": signal_id,
+                    "payoff_test": instruction,
+                }
+            ],
+            expected_resolution_tests=[instruction],
+            validation_status="pending",
+            metadata=metadata,
+        )
+        return issue, patch
+
     def _audit_obligation_binding(
         self,
         *,
@@ -962,6 +1343,24 @@ class FuturePlanAuditor:
         experience["rule_anchors"] = rule_anchors[:8]
         plan.experience_plan_json = _json(experience)
 
+    @staticmethod
+    def _apply_prompt_plan_patch(plan: ChapterPlan, patch: NarrativePlanPatch) -> None:
+        instruction = str(patch.new_contract.get("prompt_json_instruction") or patch.diff_summary or "").strip()
+        if not instruction:
+            return
+        goals = [str(item).strip() for item in _loads(plan.goals_json, []) if str(item).strip()]
+        if instruction not in goals:
+            goals.insert(0, instruction)
+        plan.goals_json = _json(goals[:5])
+        experience = _loads(plan.experience_plan_json, {})
+        if not isinstance(experience, dict):
+            experience = {}
+        progress_markers = [str(item) for item in experience.get("progress_markers", []) if str(item).strip()]
+        if instruction not in progress_markers:
+            progress_markers.insert(0, instruction)
+        experience["progress_markers"] = progress_markers[:5]
+        plan.experience_plan_json = _json(experience)
+
 
 def _countdown_constraints(canon_quality_context: dict[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(canon_quality_context, dict):
@@ -979,6 +1378,16 @@ def _character_state_constraints(canon_quality_context: dict[str, Any]) -> list[
     return [
         item
         for item in canon_quality_context.get("character_state_constraints", []) or []
+        if isinstance(item, dict)
+    ]
+
+
+def _open_signal_constraints(canon_quality_context: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(canon_quality_context, dict):
+        return []
+    return [
+        item
+        for item in canon_quality_context.get("open_signals", []) or []
         if isinstance(item, dict)
     ]
 
@@ -1551,6 +1960,214 @@ def _strip_countdown_instruction_text(text: str) -> str:
     result = re.sub(r"\s{2,}", " ", result)
     result = re.sub(r"^\s*[。；;，,]\s*", "", result)
     return result.strip()
+
+
+def _inspected_chapters(
+    *,
+    plans: list[ChapterPlan],
+    band_rows: list[BandExperiencePlan] | None,
+    current_chapter: int,
+    include_current: bool,
+) -> list[int]:
+    inspected = [
+        int(plan.chapter_number or 0)
+        for plan in plans
+        if include_current or int(plan.chapter_number or 0) > int(current_chapter or 0)
+    ]
+    for row in band_rows or []:
+        for chapter in range(int(row.chapter_start or 0), int(row.chapter_end or 0) + 1):
+            if (include_current or chapter > int(current_chapter or 0)) and chapter not in inspected:
+                inspected.append(chapter)
+    inspected.sort()
+    return inspected
+
+
+def _future_plan_prompt_payload(
+    *,
+    plans: list[ChapterPlan],
+    canon_quality_context: dict[str, Any],
+    obligations: list[NarrativeObligation],
+    target_total_chapters: int,
+    current_chapter: int,
+    include_current: bool,
+    band_rows: list[BandExperiencePlan] | None,
+) -> dict[str, Any]:
+    return {
+        "writer_output": str(canon_quality_context.get("writer_output") or ""),
+        "current_future_plan": [
+            _chapter_plan_prompt_item(plan)
+            for plan in plans
+            if include_current or int(plan.chapter_number or 0) > int(current_chapter or 0)
+        ],
+        "canon_context": canon_quality_context.get("canon_context", []),
+        "newly_extracted_facts": canon_quality_context.get("accepted_facts", []),
+        "obligations": [obligation.model_dump(mode="json") for obligation in obligations],
+        "target_total_chapters": int(target_total_chapters or 0),
+        "band_context": [_band_prompt_item(row) for row in band_rows or []],
+        "heuristic_hints": canon_quality_context.get("heuristic_hints", []),
+    }
+
+
+def _chapter_plan_prompt_item(plan: ChapterPlan) -> dict[str, Any]:
+    return {
+        "plan_item_id": str(plan.id or ""),
+        "chapter_number": int(plan.chapter_number or 0),
+        "title": str(plan.title or ""),
+        "one_line": str(plan.one_line or ""),
+        "goals": _loads(str(plan.goals_json or "[]"), []),
+        "task_contract": _loads(str(plan.task_contract_json or "[]"), []),
+        "experience_plan": _loads(str(plan.experience_plan_json or "{}"), {}),
+        "status": str(plan.status or ""),
+        "lock_level": "locked" if str(plan.status or "") == "accepted" else "soft",
+    }
+
+
+def _band_prompt_item(row: BandExperiencePlan) -> dict[str, Any]:
+    return {
+        "band_id": str(row.band_id or row.id or ""),
+        "chapter_start": int(row.chapter_start or 0),
+        "chapter_end": int(row.chapter_end or 0),
+        "status": str(getattr(row, "status", "") or ""),
+    }
+
+
+def _first_prompt_target_plan(
+    *,
+    plans: list[ChapterPlan],
+    current_chapter: int,
+    include_current: bool,
+) -> ChapterPlan | None:
+    candidates = [
+        plan
+        for plan in plans
+        if include_current or int(plan.chapter_number or 0) > int(current_chapter or 0)
+    ]
+    return sorted(candidates, key=lambda item: int(item.chapter_number or 0))[0] if candidates else None
+
+
+def _prompt_issue_plan_id(
+    *,
+    raw_issue: dict[str, Any],
+    impacts_by_id: dict[str, dict[str, Any]],
+) -> str:
+    for key in ("plan_item_id", "target_plan_id", "target_id"):
+        value = str(raw_issue.get(key) or "").strip()
+        if value:
+            return value
+    if len(impacts_by_id) == 1:
+        return next(iter(impacts_by_id))
+    for evidence in raw_issue.get("evidence", []) or []:
+        if not isinstance(evidence, dict):
+            continue
+        location = str(evidence.get("location") or "")
+        for plan_id in impacts_by_id:
+            if plan_id and plan_id in location:
+                return plan_id
+    return ""
+
+
+def _prompt_issue_to_future_plan_issue(
+    *,
+    issue: dict[str, Any],
+    result: dict[str, Any],
+    current_chapter: int,
+    plan: ChapterPlan | None,
+    plan_id: str,
+    impact: dict[str, Any] | None,
+    min_blocking_confidence: float,
+) -> FuturePlanAuditIssue:
+    blocking = issue_can_block(issue, min_confidence=min_blocking_confidence)
+    target_chapter = int(getattr(plan, "chapter_number", 0) or current_chapter + 1)
+    target_plan_id = str(plan_id or getattr(plan, "id", "") or "")
+    evidence_refs = prompt_issue_evidence_refs(issue)
+    if not evidence_refs and issue.get("issue_id"):
+        evidence_refs = [f"prompt_json:{issue.get('issue_id')}"]
+    return FuturePlanAuditIssue(
+        issue_type=str(issue.get("type") or "future_plan_prompt_issue"),
+        severity="error" if blocking else "warning",
+        target_chapter=target_chapter,
+        target_plan_id=target_plan_id,
+        description=str(issue.get("claim") or result.get("summary") or "Future plan prompt issue."),
+        evidence_refs=evidence_refs,
+        patch_type="future_plan_prompt_update",
+        blocking=blocking,
+        metadata={
+            "source_analyzer": str(result.get("analyzer") or "FuturePlanPromptAuditor"),
+            "source_mode": "prompt_json",
+            "original_verdict": str(result.get("verdict") or ""),
+            "original_confidence": float(result.get("confidence") or 0.0),
+            "blocking_origin": "prompt_json" if blocking else "non_blocking_prompt_json",
+            "prompt_json_issue": issue,
+            "plan_impact": impact or {},
+        },
+    )
+
+
+def _prompt_issue_to_plan_patch(
+    *,
+    project_id: str,
+    issue: dict[str, Any],
+    result: dict[str, Any],
+    plan: ChapterPlan | None,
+    plan_id: str,
+    target_chapter: int,
+    index: int,
+    impact: dict[str, Any] | None,
+) -> NarrativePlanPatch | None:
+    issue_type = str(issue.get("type") or "")
+    if issue_type not in {
+        "plan_needs_update",
+        "soft_plan_mismatch",
+        "future_beat_made_impossible",
+        "locked_plan_contradiction",
+    }:
+        return None
+    suggested_fix = str(issue.get("suggested_fix") or "").strip()
+    recommended_patch = str((impact or {}).get("recommended_plan_patch") or "").strip()
+    instruction = suggested_fix or recommended_patch or str(issue.get("claim") or result.get("summary") or "").strip()
+    if not instruction:
+        instruction = "Update the future plan to reflect the prompt-json audit result."
+    return NarrativePlanPatch(
+        id="",
+        project_id=project_id,
+        patch_type="future_plan_prompt_update",
+        target_scope="chapter",
+        target_plan_id=str(plan_id or getattr(plan, "id", "") or ""),
+        target_arc_id=str(getattr(plan, "arc_plan_id", "") or ""),
+        affected_chapters=[int(target_chapter or getattr(plan, "chapter_number", 0) or 0)],
+        source_signal_ids=[str(issue.get("issue_id") or f"prompt_json_issue:{index}")],
+        old_contract=_chapter_plan_contract(plan) if plan is not None else {},
+        new_contract={
+            "prompt_json_instruction": instruction,
+            "source_analyzer": str(result.get("analyzer") or "FuturePlanPromptAuditor"),
+            "issue_type": issue_type,
+        },
+        diff_summary=str(issue.get("claim") or result.get("summary") or issue_type),
+        writer_context_injections=[
+            {
+                "type": "future_plan_prompt_update",
+                "instruction": instruction,
+                "source": str(result.get("analyzer") or "FuturePlanPromptAuditor"),
+            }
+        ],
+        reviewer_context_injections=[
+            {
+                "type": "future_plan_prompt_update",
+                "payoff_test": instruction,
+                "source": str(result.get("analyzer") or "FuturePlanPromptAuditor"),
+            }
+        ],
+        expected_resolution_tests=[instruction],
+        validation_status="pending",
+        metadata={
+            "source_analyzer": str(result.get("analyzer") or "FuturePlanPromptAuditor"),
+            "source_mode": "prompt_json",
+            "original_verdict": str(result.get("verdict") or ""),
+            "original_confidence": float(result.get("confidence") or 0.0),
+            "prompt_json_issue_id": str(issue.get("issue_id") or ""),
+            "plan_impact": impact or {},
+        },
+    )
 
 
 def _json(value: object) -> str:

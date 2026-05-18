@@ -73,6 +73,14 @@ class ContinuityIssue(BaseModel):
     issue_group: str = ""
     evidence_refs: list[str] = Field(default_factory=list)
     suggested_fix: str = ""
+    source_layer: str = ""
+    source_analyzer: str = ""
+    source_mode: str = ""
+    original_verdict: str = ""
+    original_confidence: float = 0.0
+    blocking_origin: str = ""
+    blocking: bool = False
+    original_result: dict[str, object] = Field(default_factory=dict)
 
 
 class RepairInstruction(BaseModel):

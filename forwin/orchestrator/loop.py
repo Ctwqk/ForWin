@@ -28,9 +28,11 @@ from sqlalchemy.orm import Session
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.canon_quality.gate import evaluate_canon_admission
 from forwin.canon_quality.placeholder import extract_expected_protagonist_names
+from forwin.canon_quality.prompt_json.obligation_verifier_prompt import ObligationVerifierPromptAnalyzer
+from forwin.canon_quality.prompt_json.schemas import normalize_prompt_json_mode
+from forwin.canon_quality.prompt_json.validation import issue_can_block
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.service import analyze_writer_output_quality
-from forwin.canon_quality.temporal_semantics import LLMTemporalReconciler
 from forwin.canon_names import is_plausible_person_name
 from forwin.checker.rules import ContinuityChecker
 from forwin.config import Config
@@ -57,6 +59,7 @@ from forwin.governance_checks import (
     evaluate_resource_closure_risk,
     evaluate_task_contract,
 )
+from forwin.gate.prompt_json.band_checkpoint_prompt import BandCheckpointPromptEvaluator
 from forwin.models import BookGenesisRevision, ProvisionalBandExecution, ProvisionalChapterLedger, new_id
 from forwin.models.governance import BandCheckpoint
 from forwin.models.draft import ChapterDraft, ChapterReview
@@ -109,6 +112,101 @@ from forwin.world_model.compiler import WorldModelCompiler as LegacyWorldModelCo
 logger = logging.getLogger(__name__)
 
 RuntimeContainer: Any = None
+
+
+def _configured_prompt_json_mode(value: str | None, *, enabled: bool) -> str:
+    if not enabled:
+        return "deterministic"
+    return normalize_prompt_json_mode(value, default="hybrid")
+
+
+def _chapter_plan_prompt_text(plan: ChapterPlan | None) -> str:
+    if plan is None:
+        return ""
+    goals = _loads_json_list(str(plan.goals_json or "[]"))
+    contract = _loads_json_list(str(plan.task_contract_json or "[]"))
+    return "\n".join(
+        part
+        for part in (
+            str(plan.title or ""),
+            str(plan.one_line or ""),
+            json.dumps(goals, ensure_ascii=False),
+            json.dumps(contract, ensure_ascii=False),
+        )
+        if part and part != "[]"
+    )
+
+
+def _loads_json_list(raw: str) -> list[Any]:
+    try:
+        value = json.loads(raw or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _obligation_prompt_item(obligation: NarrativeObligation, *, current_chapter: int) -> dict[str, Any]:
+    due_now = bool(obligation.must_resolve_now) or (
+        obligation.status == "active"
+        and int(obligation.deadline_chapter or 0) <= int(current_chapter or 0)
+    )
+    status = "open"
+    if obligation.status == "resolved":
+        status = "fulfilled"
+    elif obligation.status == "expired":
+        status = "failed"
+    elif obligation.status == "waived":
+        status = "deferred"
+    elif due_now:
+        status = "due_now"
+    return {
+        "obligation_id": obligation.id,
+        "description": obligation.summary,
+        "holder": ",".join(str(item) for item in obligation.subject_refs) or obligation.created_by,
+        "target": obligation.payoff_test,
+        "status": status,
+        "must_address_in_current_output": due_now,
+        "failure_condition": obligation.deadline_policy or obligation.blocking_policy,
+        "source": ",".join(str(item) for item in obligation.evidence_refs),
+    }
+
+
+def _band_checkpoint_issue_hint(issue: BandCheckpointIssueInfo) -> dict[str, str]:
+    return {
+        "hint_type": str(issue.code or "band_checkpoint_issue"),
+        "message": str(issue.description or ""),
+        "matched_text": str(issue.detail or ""),
+        "legacy_severity": str(issue.severity or ""),
+    }
+
+
+def _band_prompt_result_to_checkpoint_issues(
+    result: dict[str, Any],
+    *,
+    min_blocking_confidence: float,
+) -> list[BandCheckpointIssueInfo]:
+    output: list[BandCheckpointIssueInfo] = []
+    analyzer = str(result.get("analyzer") or "BandCheckpointPromptEvaluator")
+    for issue in result.get("issues", []) or []:
+        if not isinstance(issue, dict):
+            continue
+        can_block = issue_can_block(issue, min_confidence=min_blocking_confidence)
+        evidence = issue.get("evidence") if isinstance(issue.get("evidence"), list) else []
+        detail = "; ".join(
+            str(item.get("location") or item.get("quote") or "")
+            for item in evidence
+            if isinstance(item, dict) and str(item.get("location") or item.get("quote") or "").strip()
+        )
+        output.append(
+            BandCheckpointIssueInfo(
+                code=str(issue.get("type") or "band_prompt_issue"),
+                severity="error" if can_block else "warning",
+                issue_group=issue_group_for_issue(code=str(issue.get("type") or "band_prompt_issue")),
+                description=str(issue.get("claim") or issue.get("reasoning_summary") or result.get("summary") or ""),
+                detail=detail or f"{analyzer}:{issue.get('issue_id') or issue.get('type') or 'issue'}",
+            )
+        )
+    return output
 
 
 def _positive_int(value: object) -> int:
@@ -1360,7 +1458,18 @@ class WritingOrchestrator:
         chapter_number = int(chapter_plan.chapter_number or 0)
         canon_quality_context = dict(getattr(context, "canon_quality_context", {}) or {})
         obligation_repo = NarrativeObligationRepository(session)
-        result = FuturePlanAuditor().audit_and_apply(
+        result = FuturePlanAuditor(
+            mode=_configured_prompt_json_mode(
+                getattr(self.config, "planning_audit_mode", "deterministic"),
+                enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
+            ),
+            plan_patch_validation_mode=_configured_prompt_json_mode(
+                getattr(self.config, "plan_patch_validation_mode", "deterministic"),
+                enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
+            ),
+            llm_client=self.llm_client,
+            min_blocking_confidence=float(getattr(self.config, "prompt_json_min_blocking_confidence", 0.8) or 0.8),
+        ).audit_and_apply(
             session=session,
             project_id=project_id,
             current_chapter=chapter_number,
@@ -1422,7 +1531,18 @@ class WritingOrchestrator:
             chapter_number=chapter_number + 1,
             target_total_chapters=target_total_chapters,
         )
-        result = FuturePlanAuditor().audit_and_apply(
+        result = FuturePlanAuditor(
+            mode=_configured_prompt_json_mode(
+                getattr(self.config, "planning_audit_mode", "deterministic"),
+                enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
+            ),
+            plan_patch_validation_mode=_configured_prompt_json_mode(
+                getattr(self.config, "plan_patch_validation_mode", "deterministic"),
+                enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
+            ),
+            llm_client=self.llm_client,
+            min_blocking_confidence=float(getattr(self.config, "prompt_json_min_blocking_confidence", 0.8) or 0.8),
+        ).audit_and_apply(
             session=session,
             project_id=project_id,
             current_chapter=chapter_number,
@@ -2106,6 +2226,41 @@ class WritingOrchestrator:
                         detail="; ".join(issue.evidence_refs),
                     )
                 )
+        band_prompt_result: dict[str, Any] | None = None
+        band_prompt_mode = _configured_prompt_json_mode(
+            getattr(self.config, "band_checkpoint_mode", "deterministic"),
+            enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
+        )
+        if band_prompt_mode != "deterministic":
+            band_prompt_result = BandCheckpointPromptEvaluator(
+                llm_client=self.llm_client,
+                min_blocking_confidence=float(getattr(self.config, "prompt_json_min_blocking_confidence", 0.8) or 0.8),
+            ).analyze(
+                {
+                    "writer_output": combined_text,
+                    "current_band_definition": {
+                        "band_id": str(band_row.band_id or ""),
+                        "chapter_start": int(band_row.chapter_start or 0),
+                        "chapter_end": int(band_row.chapter_end or 0),
+                        "schedule": schedule_payload,
+                    },
+                    "chapter_plan": [_chapter_plan_prompt_text(plan) for plan in band_plans],
+                    "canon_context": [
+                        getattr(item, "model_dump", lambda **_: {})(mode="json")
+                        for item in future_constraints
+                    ],
+                    "heuristic_hints": [_band_checkpoint_issue_hint(issue) for issue in issues],
+                }
+            )
+            prompt_issues = _band_prompt_result_to_checkpoint_issues(
+                band_prompt_result,
+                min_blocking_confidence=float(getattr(self.config, "prompt_json_min_blocking_confidence", 0.8) or 0.8),
+            )
+            if band_prompt_mode == "prompt_json":
+                issues = prompt_issues
+                status = "pass"
+            else:
+                issues.extend(prompt_issues)
         if status != "fail" and any(issue.severity == "error" for issue in issues):
             status = "fail"
         elif status == "pass" and any(issue.severity == "warning" for issue in issues):
@@ -2137,7 +2292,11 @@ class WritingOrchestrator:
             summary=summary,
             related_object_type="band_checkpoint",
             related_object_id=row.id,
-            payload={"status": status},
+            payload={
+                "status": status,
+                "prompt_json_result": band_prompt_result or {},
+                "band_checkpoint_mode": band_prompt_mode,
+            },
         )
         return row
 
@@ -2915,7 +3074,7 @@ class WritingOrchestrator:
         if instruction is None:
             return ""
         requested_scope = str(getattr(instruction, "repair_scope", "") or "").strip()
-        if requested_scope in {"draft", "scene"} and WritingOrchestrator._review_has_structural_repair_issue(review):
+        if WritingOrchestrator._review_has_structural_repair_issue(review):
             return ""
         return requested_scope
 
@@ -5473,7 +5632,12 @@ class WritingOrchestrator:
             writer_output=writer_output,
             draft_id=draft_id,
             persist=True,
-            temporal_reconciler=LLMTemporalReconciler(self.llm_client) if self.llm_client is not None else None,
+            mode=_configured_prompt_json_mode(
+                getattr(self.config, "canon_quality_mode", "deterministic"),
+                enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
+            ),
+            llm_client=self.llm_client,
+            return_raw_analyzer_results=True,
         )
         deferred_acceptance_errors = self._prepare_deferred_acceptance_if_needed(
             session=session,
@@ -5513,6 +5677,18 @@ class WritingOrchestrator:
         )
         project = session.get(Project, project_id)
         target_total_chapters = int(getattr(project, "target_total_chapters", 0) or 0)
+        gate_analyzer_results = [
+            item for item in analysis.raw_analyzer_results if isinstance(item, dict)
+        ]
+        gate_analyzer_results.extend(
+            self._run_obligation_prompt_json_gate(
+                session=session,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                writer_output=writer_output,
+                obligations=gate_obligations,
+            )
+        )
         gate_result = evaluate_canon_admission(
             project_id=project_id,
             chapter_number=chapter_number,
@@ -5524,6 +5700,9 @@ class WritingOrchestrator:
             plan_patches=obligation_repo.list_patches_by_ids(patch_ids),
             mode=str(getattr(self.config, "canon_quality_gate", "strict") or "strict"),
             is_final_chapter=bool(target_total_chapters and chapter_number >= target_total_chapters),
+            analyzer_results=gate_analyzer_results,
+            min_blocking_confidence=float(getattr(self.config, "prompt_json_min_blocking_confidence", 0.8) or 0.8),
+            require_evidence_for_block=bool(getattr(self.config, "prompt_json_require_evidence_for_block", True)),
         )
         CanonQualityRepository(session).save_admission_run(gate_result, signals=analysis.signals)
         self._record_decision_event(
@@ -5553,6 +5732,7 @@ class WritingOrchestrator:
                     "canon_quality_signals": [
                         signal.model_dump(mode="json") for signal in analysis.signals
                     ],
+                    "prompt_json_analyzer_results": gate_analyzer_results,
                 },
             )
         self._record_decision_event(
@@ -5567,6 +5747,62 @@ class WritingOrchestrator:
             payload=gate_result.model_dump(mode="json"),
         )
         return frozen_path or "canon-quality-gate-blocked"
+
+    def _run_obligation_prompt_json_gate(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+        chapter_number: int,
+        writer_output: WriterOutput,
+        obligations: list[NarrativeObligation],
+    ) -> list[dict[str, Any]]:
+        mode = _configured_prompt_json_mode(
+            getattr(self.config, "canon_quality_mode", "deterministic"),
+            enabled=bool(getattr(self.config, "prompt_json_analysis_enabled", True)),
+        )
+        if mode == "deterministic" or not obligations:
+            return []
+        chapter_plan = (
+            session.execute(
+                select(ChapterPlan)
+                .where(
+                    ChapterPlan.project_id == project_id,
+                    ChapterPlan.chapter_number == int(chapter_number or 0),
+                )
+                .limit(1)
+            )
+            .scalars()
+            .first()
+        )
+        result = ObligationVerifierPromptAnalyzer(
+            llm_client=self.llm_client,
+            min_blocking_confidence=float(getattr(self.config, "prompt_json_min_blocking_confidence", 0.8) or 0.8),
+        ).analyze(
+            {
+                "writer_output": "\n".join(
+                    part
+                    for part in (
+                        str(writer_output.title or ""),
+                        str(writer_output.body or ""),
+                        str(writer_output.end_of_chapter_summary or ""),
+                    )
+                    if part
+                ),
+                "obligation_ledger": [
+                    _obligation_prompt_item(obligation, current_chapter=chapter_number)
+                    for obligation in obligations
+                ],
+                "chapter_plan": _chapter_plan_prompt_text(chapter_plan),
+                "canon_context": [],
+                "heuristic_hints": [],
+            }
+        )
+        metadata = dict(result.get("metadata") or {})
+        metadata.setdefault("source_mode", "prompt_json")
+        metadata["source_layer"] = "canon_quality"
+        result["metadata"] = metadata
+        return [result]
 
     def _prepare_deferred_acceptance_if_needed(
         self,

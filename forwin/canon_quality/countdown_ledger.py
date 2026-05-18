@@ -108,7 +108,7 @@ def analyze_countdowns(
             countdown_key=countdown_key,
             context=mention_context,
         )
-        is_reset = _is_reset_context(mention_context)
+        is_reset = _is_reset_context_for_mention(text, start, end)
         is_resolution = text_has_resolution or _is_resolution_context(mention_context)
         last_is_reset = is_reset
         last_is_resolution = is_resolution
@@ -173,13 +173,7 @@ def analyze_countdowns(
                 previous_remaining_minutes=previous_minutes,
                 status=status,  # type: ignore[arg-type]
                 evidence_refs=[f"body:{start}-{end}"],
-                payload={
-                    "draft_id": draft_id,
-                    "is_final_chapter": is_final_chapter,
-                    "span_start": start,
-                    "span_end": end,
-                    "mention_context": mention_context,
-                },
+                payload={"draft_id": draft_id, "is_final_chapter": is_final_chapter},
             )
         )
         previous_by_key[countdown_key] = minutes
@@ -343,6 +337,8 @@ def _iter_countdown_mentions(text: str) -> list[dict[str, Any]]:
     for match in re.finditer(clock_pattern, text):
         if _overlaps(match.start(), match.end(), consumed):
             continue
+        if _looks_like_wall_clock_reading(text, match.start(), match.end()):
+            continue
         if _looks_like_local_tactical_window(text, match.start(), match.end()):
             continue
         context = _mention_context(text, match.start(), match.end())
@@ -501,6 +497,45 @@ def _looks_like_local_tactical_window(text: str, start: int, end: int) -> bool:
             "封锁圈",
             "搜索范围",
         )
+    )
+
+
+def _looks_like_wall_clock_reading(text: str, start: int, end: int) -> bool:
+    raw = str(text[start:end] or "")
+    if not re.fullmatch(r"[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?", raw):
+        return False
+    parts = [int(part) for part in raw.split(":")]
+    if len(parts) >= 2 and parts[1] >= 60:
+        return False
+    if len(parts) == 3 and parts[2] >= 60:
+        return False
+    immediate_before = str(text[max(0, start - 18) : start])
+    immediate_after = str(text[end : min(len(text), end + 8)])
+    for marker in (
+        "时间跳到",
+        "时间跳至",
+        "时间显示",
+        "屏幕时间",
+        "当前时间",
+        "时间是",
+        "时间为",
+        "时刻是",
+        "时刻为",
+        "凌晨",
+        "上午",
+        "下午",
+        "晚上",
+        "夜里",
+    ):
+        marker_index = immediate_before.rfind(marker)
+        if marker_index < 0:
+            continue
+        tail = immediate_before[marker_index + len(marker) :]
+        if not any(countdown_marker in tail for countdown_marker in ("倒计时", "剩余", "窗口", "计时器")):
+            return True
+    return bool(
+        immediate_before.rstrip().endswith(("时间", "时刻"))
+        and immediate_after.startswith(("。", "，", ",", "；", ";"))
     )
 
 
@@ -1290,9 +1325,37 @@ def _looks_like_retrospective_day_reference(text: str, start: int, end: int) -> 
     )
 
 
+def _is_reset_context_for_mention(text: str, start: int, end: int) -> bool:
+    context = _mention_context(text, start, end)
+    if _is_reset_context(context):
+        return True
+    before = str(text[max(0, start - 56) : start])
+    if not any(marker in before for marker in ("倒计时", "计时器", "剩余", "窗口", "调度窗口")):
+        return False
+    action_markers = (
+        "修正",
+        "修订",
+        "调整",
+        "改为",
+        "改成",
+        "修改",
+        "延长",
+        "重设",
+        "校准",
+        "回拨",
+        "覆盖为",
+        "设置为",
+    )
+    action_index = max(before.rfind(marker) for marker in action_markers)
+    if action_index < 0:
+        return False
+    tail = before[action_index:]
+    return any(marker in tail for marker in ("至", "到", "为", "成"))
+
+
 def _is_reset_context(text: str) -> bool:
     lowered = str(text or "").lower()
-    return any(
+    if any(
         keyword in lowered
         for keyword in (
             "倒计时重置",
@@ -1303,7 +1366,9 @@ def _is_reset_context(text: str) -> bool:
             "clock reset",
             "timer reset",
         )
-    )
+    ):
+        return True
+    return False
 
 
 def _is_countdown_context(text: str) -> bool:
@@ -1456,6 +1521,8 @@ def _short_clock_has_explicit_key_label(countdown_key: str, context: str) -> boo
         "memory_reset": (
             "记忆重置窗口",
             "记忆重置倒计时",
+            "主线清理倒计时",
+            "主线清理",
             "重置窗口",
             "重置倒计时",
             "记忆熔铸倒计时",
@@ -1509,6 +1576,13 @@ def _normalize_ambiguous_clock_minutes(
     first = int(match.group(1))
     if first < 60:
         return minutes
+    if (
+        previous_minutes is None
+        and first <= 180
+        and _explicit_minute_second_countdown_context(countdown_key, context)
+        and ("分钟" in str(context or "") or "分" in str(context or ""))
+    ):
+        return first
     if previous_minutes is not None and previous_minutes <= 180 and first <= previous_minutes:
         return first
     if countdown_key == "memory_reset" and first <= 180 and "分钟" in str(context or "") and "小时" not in str(context or ""):
@@ -1585,6 +1659,8 @@ def _countdown_key_for_mention(text: str, start: int, end: int) -> str:
     local_after = str(text[end : min(len(text), end + 56)])
     local_after_label = re.split(r"[。！？!?；;\n]", local_after, maxsplit=1)[0]
     local_memory_markers = (
+        "主线清理倒计时",
+        "主线清理",
         "记忆重置",
         "重置记忆",
         "重置一次记忆",
@@ -1731,6 +1807,8 @@ def _looks_like_forced_memory_calibration_context(context: str) -> bool:
 def _explicit_countdown_label_key(context: str) -> str:
     labels = {
         "memory_reset": (
+            "主线清理倒计时",
+            "主线清理",
             "记忆重置",
             "记忆重置窗口",
             "记忆重置倒计时",
@@ -1782,6 +1860,8 @@ def _nearest_countdown_key(context: str) -> str:
             "反向锁定",
         ),
         "memory_reset": (
+            "主线清理倒计时",
+            "主线清理",
             "记忆重置",
             "记忆校准",
             "记忆熔铸",

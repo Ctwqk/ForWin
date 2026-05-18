@@ -28,6 +28,36 @@ def test_writer_prompt_includes_protagonist_naming_contract() -> None:
     assert "不要把多个备选版本的同一场景拼接进正文" in content
 
 
+def test_writer_prompt_does_not_inject_current_book_countdown_labels_without_profile() -> None:
+    context = ChapterContextPack(
+        project_id="p1",
+        project_title="通用项目",
+        premise="主角：陈星，调查一座失联空间站。",
+        genre="科幻",
+        setting_summary="空间站事故调查。",
+        chapter_number=1,
+        chapter_plan_title="失联信号",
+        chapter_plan_one_line="陈星收到异常信号。",
+        chapter_goals=["进入空间站"],
+        canon_quality_context={
+            "countdown_constraints": [
+                {
+                    "countdown_key": "memory_reset",
+                    "latest_remaining_minutes": 30,
+                    "latest_chapter": 0,
+                }
+            ],
+        },
+    )
+
+    prompt = build_single_chapter_draft_prompt(context)
+    content = "\n".join(message["content"] for message in prompt)
+
+    assert "memory_reset 倒计时" in content
+    assert "记忆重置周期" not in content
+    assert "终端审计窗口" not in content
+
+
 def test_writer_prompt_preserves_existing_character_identity_and_gender() -> None:
     context = ChapterContextPack(
         project_id="p1",
@@ -80,8 +110,8 @@ def test_writer_prompt_includes_canon_quality_countdown_constraints() -> None:
     assert "archive_cleanup" not in content
     assert "第11章已剩余 180 分钟" in content
     assert "必须小于等于 180 分钟" in content
-    assert "终端审计/授权窗口硬性规则" in content
-    assert "不得写成四小时、五小时、一天或任何更大的剩余时间" in content
+    assert "终端审计窗口硬性规则" in content
+    assert "不得写成任何大于最新 ledger 的旧尺度" in content
 
 
 def test_writer_prompt_marks_closed_countdown_windows_as_not_reopenable() -> None:
@@ -114,8 +144,7 @@ def test_writer_prompt_marks_closed_countdown_windows_as_not_reopenable() -> Non
 
     assert "终端审计窗口：第32章已剩余 0 分钟" in content
     assert "已经归零、关闭或解决" in content
-    assert "不得再写成 10 分钟、三小时、一天等正数剩余时间" in content
-    assert "不得写“终端审计窗口还剩/只有/显示/跳到”加任何正数时间" in content
+    assert "不得再写成正数剩余时间" in content
 
 
 def test_memory_reset_countdown_constraint_overrides_older_summaries() -> None:
@@ -153,7 +182,8 @@ def test_memory_reset_countdown_constraint_overrides_older_summaries() -> None:
     assert "ledger 上限优先于前情摘要、章节计划和旧设定" in content
     assert content.index("Canon 质量连续性约束") < content.index("本章计划")
     assert "若【Canon 质量连续性约束】与本章计划、前情摘要或旧设定冲突，必须以 Canon 约束为准" in content
-    assert "不得把记忆重置周期写回五天、七天、三十多天" in content
+    assert "记忆重置周期硬性规则" in content
+    assert "不得写成任何大于最新 ledger 的旧尺度" in content
     assert "只能写小于等于 1440 分钟" in content
 
 
@@ -184,14 +214,10 @@ def test_minute_level_memory_reset_constraint_marks_day_scale_plan_as_stale() ->
     prompt = build_single_chapter_draft_prompt(context)
     content = "\n".join(message["content"] for message in prompt)
 
-    assert "计划覆盖：当前记忆重置周期已经进入 90 分钟级危机" in content
-    assert "若出现“不到十天”“九天”“八天”“七天”“三天后”等天级安排" in content
-    assert "三小时”“四十八小时”“两天" in content
-    assert "系统日志原本还有三天" in content
+    assert "计划覆盖：当前记忆重置周期已进入 90 分钟级危机" in content
     assert "必须改写为小于等于 90 分钟的连续倒计时" in content
-    assert "章内单调规则：本章如果多次写记忆重置剩余时间，必须按出现顺序严格不增加" in content
-    assert "巡逻间隔、认证窗口、解除窗口等局部时长必须明确命名为局部时长" in content
-    assert "不要另造“主线倒计时”" in content
+    assert "章内单调规则：本章如果多次写记忆重置周期剩余时间，必须按出现顺序严格不增加" in content
+    assert "局部时长必须明确命名为局部时长" in content
     assert "memory_reset" not in content
 
 
@@ -261,6 +287,52 @@ def test_writer_prompt_includes_future_plan_audit_summary() -> None:
     assert "patch-24" in content
 
 
+def test_writer_prompt_suppresses_constraints_already_promoted_to_plan_patches() -> None:
+    context = ChapterContextPack(
+        project_id="p1",
+        project_title="灰城遗档",
+        premise="主角：陆明，旧城档案修复师。",
+        genre="悬疑科幻",
+        setting_summary="核心系统维持公共档案秩序。",
+        chapter_number=14,
+        chapter_plan_title="门禁来源",
+        chapter_plan_one_line="陆明确认终端门禁来源。",
+        chapter_goals=["兑现计划补丁"],
+        canon_quality_context={
+            "suppressed_prompt_constraint_keys": ["obligation:obl-now", "signal:sig-1"],
+            "active_narrative_obligations": [
+                {
+                    "id": "obl-now",
+                    "type": "reader_promise_payoff",
+                    "priority": "P1",
+                    "summary": "偿还前文承诺。",
+                    "deadline_chapter": 14,
+                    "payoff_test": "第14章必须给出门禁来源证据。",
+                    "must_resolve_now": True,
+                }
+            ],
+            "open_signals": [
+                {
+                    "signal_id": "sig-1",
+                    "signal_type": "placeholder_leakage",
+                    "severity": "error",
+                    "chapter_number": 11,
+                    "subject_key": "placeholder",
+                    "description": "第11章残留占位符，必须替换为具体证据。",
+                }
+            ],
+        },
+    )
+
+    prompt = build_single_chapter_draft_prompt(context)
+    content = "\n".join(message["content"] for message in prompt)
+
+    assert "obl-now" not in content
+    assert "sig-1" not in content
+    assert "第11章残留占位符" not in content
+    assert "第14章必须给出门禁来源证据" not in content
+
+
 def test_writer_prompt_includes_band_obligation_contract() -> None:
     context = ChapterContextPack(
         project_id="p1",
@@ -322,7 +394,7 @@ def test_writer_prompt_changes_hook_contract_for_final_chapter() -> None:
     content = "\n".join(message["content"] for message in prompt)
 
     assert "本章是全书终章或当前目标终章" in content
-    assert "不要留下追兵、被困、钥匙损坏、准备公开、正要关闭" in content
+    assert "不要留下追兵、被困、关键道具损坏、准备公开、正要关闭" in content
     assert "本章结尾必须留下明确钩子" not in content
 
 
@@ -343,11 +415,9 @@ def test_final_writer_prompt_requires_executed_resolution_not_new_prerequisites(
     prompt = build_single_chapter_draft_prompt(context)
     content = "\n".join(message["content"] for message in prompt)
 
-    assert "如果写到关闭方法、钥匙、坐标、芯片或锁孔" in content
+    assert "如果写到关闭方法、关键道具、坐标或入口" in content
     assert "必须在本章完成使用、关闭或公开" in content
-    assert "不要新增需要下一章解决的三把钥匙、下一层入口、未知坐标或新倒计时" in content
-    assert "不要把“去指定机构交最后一段记录”" in content
-    assert "最后一段记录、剩余证据、最后一份档案" in content
+    assert "不要只把它们作为下一步任务" in content
 
 
 def test_final_writer_prompt_forbids_unresolved_trapped_sacrifice() -> None:
@@ -367,6 +437,6 @@ def test_final_writer_prompt_forbids_unresolved_trapped_sacrifice() -> None:
     prompt = build_single_chapter_draft_prompt(context)
     content = "\n".join(message["content"] for message in prompt)
 
-    assert "不要把“被困在机房/地下设施/系统核心内”当作终章结局" in content
+    assert "不要把“被困在最终设施内”当作终章结局" in content
     assert "牺牲必须写成已完成的终局代价" in content
     assert "被救出、死亡/牺牲确认、或后日谈确认主线已结清" in content

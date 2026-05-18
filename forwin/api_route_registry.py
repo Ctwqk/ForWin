@@ -101,27 +101,29 @@ from forwin.api_schemas import (
 
 
 @dataclass(frozen=True)
-class ApiRouteDeps:
+class CoreDeps:
     get_config: Callable[[], Any]
     get_runtime_settings: Callable[[], Any]
-    get_publisher_manager: Callable[[], Any]
     get_orchestrator: Callable[[], Any]
     get_session: Callable[[], Any]
     render_home_page: Callable[..., str]
-    render_publishers_page: Callable[..., str]
     build_home_page_settings: Callable[..., dict[str, object]]
     build_runtime_config: Callable[..., Any]
     copy_config: Callable[..., Any]
+    serialize_llm_settings: Callable[..., Any]
+    active_generation_task_error_cls: type[Exception]
+    display_datetime: Callable[[Any], str]
+    json_load_object: Callable[[str | None], dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class TaskDeps:
     create_generation_task: Callable[..., str]
     serialize_task: Callable[[str, dict[str, Any]], Any]
     get_generation_task_or_404: Callable[[str], dict[str, Any]]
     project_has_active_generation_task: Callable[..., bool]
     active_generation_task_ids: Callable[[str], list[str]]
     generation_task_conflict_message: Callable[[str], str]
-    resolve_project_governance: Callable[..., Any]
-    governance_request_payload: Callable[[object], dict[str, object]]
-    serialize_llm_settings: Callable[..., Any]
-    active_generation_task_error_cls: type[Exception]
     list_generation_tasks: Callable[[int], list[tuple[str, dict[str, Any]]]]
     serialize_generation_task_center_item: Callable[[str, dict[str, Any]], Any]
     serialize_upload_task_center_item: Callable[[dict[str, Any]], Any]
@@ -132,10 +134,13 @@ class ApiRouteDeps:
     task_is_terminable: Callable[[dict[str, Any]], bool]
     task_is_pausable: Callable[[dict[str, Any]], bool]
     task_is_deletable: Callable[[dict[str, Any]], bool]
-    latest_related_decision_event: Callable[..., Any]
-    log_decision_event: Callable[..., Any]
     update_task: Callable[..., None]
-    display_datetime: Callable[[Any], str]
+    create_continue_generation_task: Callable[..., str]
+    get_task_timeline: Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class ProjectDeps:
     build_genesis_service: Callable[..., Any]
     close_genesis_service: Callable[..., None]
     require_genesis_project: Callable[[Any], None]
@@ -145,9 +150,16 @@ class ApiRouteDeps:
     project_delete_blockers: Callable[..., list[str]]
     project_delete_conflict_message: Callable[[list[str]], str]
     saved_runtime_config_or_default: Callable[..., Any]
-    create_continue_generation_task: Callable[..., str]
     persist_project_automation: Callable[..., Any]
     require_reason: Callable[[str], str]
+
+
+@dataclass(frozen=True)
+class GovernanceDeps:
+    resolve_project_governance: Callable[..., Any]
+    governance_request_payload: Callable[[object], dict[str, object]]
+    latest_related_decision_event: Callable[..., Any]
+    log_decision_event: Callable[..., Any]
     decision_refs_for_chapter_review: Callable[..., list[Any]]
     validate_constraint_payload: Callable[..., tuple[str, str, str]]
     serialize_band_checkpoint: Callable[..., Any]
@@ -158,8 +170,10 @@ class ApiRouteDeps:
     build_governance_insights: Callable[..., Any]
     latest_band_checkpoint_row: Callable[..., Any]
     persist_project_governance: Callable[..., Any]
-    json_load_object: Callable[[str | None], dict[str, Any]]
-    get_task_timeline: Callable[..., Any]
+
+
+@dataclass(frozen=True)
+class ObservabilityDeps:
     get_chapter_observability_ledger: Callable[..., Any]
     get_prompt_trace_detail: Callable[..., Any]
     read_artifact_preview: Callable[..., Any]
@@ -171,6 +185,53 @@ class ApiRouteDeps:
     get_db_performance_report: Callable[..., Any]
 
 
+@dataclass(frozen=True)
+class PublisherDeps:
+    get_publisher_manager: Callable[[], Any]
+    render_publishers_page: Callable[..., str]
+
+
+@dataclass(frozen=True, init=False)
+class ApiRouteDeps:
+    core: CoreDeps
+    task: TaskDeps
+    project: ProjectDeps
+    governance: GovernanceDeps
+    observability: ObservabilityDeps
+    publisher: PublisherDeps
+
+    def __init__(
+        self,
+        *,
+        core: CoreDeps | None = None,
+        task: TaskDeps | None = None,
+        project: ProjectDeps | None = None,
+        governance: GovernanceDeps | None = None,
+        observability: ObservabilityDeps | None = None,
+        publisher: PublisherDeps | None = None,
+        **legacy: Any,
+    ) -> None:
+        object.__setattr__(self, "core", core or CoreDeps(**{name: legacy.pop(name) for name in CoreDeps.__annotations__}))
+        object.__setattr__(self, "task", task or TaskDeps(**{name: legacy.pop(name) for name in TaskDeps.__annotations__}))
+        object.__setattr__(self, "project", project or ProjectDeps(**{name: legacy.pop(name) for name in ProjectDeps.__annotations__}))
+        object.__setattr__(self, "governance", governance or GovernanceDeps(**{name: legacy.pop(name) for name in GovernanceDeps.__annotations__}))
+        object.__setattr__(self, "observability", observability or ObservabilityDeps(**{name: legacy.pop(name) for name in ObservabilityDeps.__annotations__}))
+        object.__setattr__(
+            self,
+            "publisher",
+            publisher or PublisherDeps(**{name: legacy.pop(name) for name in PublisherDeps.__annotations__}),
+        )
+        if legacy:
+            raise TypeError(f"Unexpected ApiRouteDeps fields: {', '.join(sorted(legacy))}")
+
+    def __getattr__(self, name: str) -> Any:
+        for group_name in ("core", "task", "project", "governance", "observability", "publisher"):
+            group = object.__getattribute__(self, group_name)
+            if hasattr(group, name):
+                return getattr(group, name)
+        raise AttributeError(name)
+
+
 def register_api_routes(
     app: FastAPI,
     *,
@@ -178,11 +239,11 @@ def register_api_routes(
 ) -> dict[str, Callable[..., Any]]:
     get_config = deps.get_config
     get_runtime_settings = deps.get_runtime_settings
-    get_publisher_manager = deps.get_publisher_manager
+    get_publisher_manager = deps.publisher.get_publisher_manager
     get_orchestrator = deps.get_orchestrator
     get_session = deps.get_session
     render_home_page = deps.render_home_page
-    render_publishers_page = deps.render_publishers_page
+    render_publishers_page = deps.publisher.render_publishers_page
     build_home_page_settings = deps.build_home_page_settings
     build_runtime_config = deps.build_runtime_config
     copy_config = deps.copy_config

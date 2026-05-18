@@ -54,6 +54,7 @@ class WriterOutput(BaseModel):
     timeline_hints: list[TimelineHint] = Field(default_factory=list)
     writer_notes: list[WriterNote] = Field(default_factory=list)
     entity_mentions: list[EntityMention] = Field(default_factory=list)
+    prompt_revision_hash: str = ""
     generation_meta: dict[str, object] = Field(default_factory=dict)
     world_deltas: list[WorldDelta] = Field(default_factory=list)
     belief_updates: list[Belief] = Field(default_factory=list)

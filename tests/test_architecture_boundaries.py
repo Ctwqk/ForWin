@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import importlib
 import inspect
+import sys
+from dataclasses import fields
 from pathlib import Path
+
+import pytest
 
 import forwin.book_state as book_state
 import forwin.map as book_map
@@ -9,9 +14,31 @@ import forwin.reviewer as reviewer
 import forwin.reviewer_v4 as reviewer_v4
 import forwin.world_model as world_model
 import forwin.world_model_v4 as world_model_v4
+from forwin.api_route_registry import (
+    ApiRouteDeps,
+    CoreDeps,
+    GovernanceDeps,
+    ObservabilityDeps,
+    ProjectDeps,
+    PublisherDeps,
+    TaskDeps,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+LEGACY_ALIAS_IMPORT_ALLOWLIST = {
+    "forwin/api_route_registry.py",
+    "forwin/api_world_model_v4_routes.py",
+    "forwin/book_state/legacy_import.py",
+    "forwin/world_model_v4/__init__.py",
+    "forwin/world_model_v4/bootstrap.py",
+    "forwin/world_model_v4/compiler.py",
+    "forwin/world_model_v4/export.py",
+    "forwin/world_model_v4/projection.py",
+    "forwin/world_model_v4/provisional.py",
+    "forwin/world_model_v4/repository.py",
+}
 
 
 def _read(rel_path: str) -> str:
@@ -95,3 +122,113 @@ def test_skill_runtime_stays_instruction_only_and_traceable() -> None:
     assert "不直接写 `Canon`" in skill_doc
     assert "PromptTrace" in skill_doc
     assert "instruction_only" in runtime_source
+
+
+def test_new_production_code_does_not_expand_legacy_v4_alias_imports() -> None:
+    forbidden = (
+        "from forwin.world_model_v4",
+        "import forwin.world_model_v4",
+        "from forwin.reviewer_v4",
+        "import forwin.reviewer_v4",
+    )
+    offenders: list[str] = []
+    for path in sorted((ROOT / "forwin").rglob("*.py")):
+        relative = path.relative_to(ROOT).as_posix()
+        if relative in LEGACY_ALIAS_IMPORT_ALLOWLIST:
+            continue
+        text = path.read_text(encoding="utf-8")
+        if any(marker in text for marker in forbidden):
+            offenders.append(relative)
+
+    assert offenders == []
+
+
+def test_api_route_deps_are_grouped_by_domain() -> None:
+    assert [field.name for field in fields(ApiRouteDeps)] == [
+        "core",
+        "task",
+        "project",
+        "governance",
+        "observability",
+        "publisher",
+    ]
+    assert "get_publisher_manager" not in CoreDeps.__annotations__
+    assert "render_publishers_page" not in CoreDeps.__annotations__
+    assert "get_publisher_manager" in PublisherDeps.__annotations__
+    assert "render_publishers_page" in PublisherDeps.__annotations__
+
+
+def test_api_route_deps_legacy_flat_publisher_fields_resolve_to_publisher_group() -> None:
+    def noop(*args, **kwargs):
+        return None
+
+    def noop_str(*args, **kwargs) -> str:
+        return ""
+
+    legacy_kwargs = {
+        name: noop
+        for group in (CoreDeps, TaskDeps, ProjectDeps, GovernanceDeps, ObservabilityDeps, PublisherDeps)
+        for name in group.__annotations__
+    }
+    legacy_kwargs.update(
+        {
+            "render_home_page": noop_str,
+            "render_publishers_page": noop_str,
+            "build_home_page_settings": lambda *args, **kwargs: {},
+            "active_generation_task_error_cls": RuntimeError,
+            "display_datetime": lambda value: "",
+            "json_load_object": lambda value: {},
+            "serialize_task": lambda task_id, task: {},
+            "get_generation_task_or_404": lambda task_id: {},
+            "active_generation_task_ids": lambda project_id: [],
+            "generation_task_conflict_message": lambda project_id: "",
+            "list_generation_tasks": lambda limit: [],
+            "serialize_generation_task_center_item": lambda task_id, task: {},
+            "serialize_upload_task_center_item": lambda task: {},
+            "list_project_backed_task_items": lambda limit: [],
+            "parse_project_task_id": lambda task_id: None,
+            "get_project_backed_task_item_or_404": lambda task_id: {},
+            "task_is_terminal": lambda status: False,
+            "task_is_terminable": lambda task: False,
+            "task_is_pausable": lambda task: False,
+            "task_is_deletable": lambda task: False,
+            "require_genesis_project": lambda project: None,
+            "genesis_patch_payload": lambda revision: {},
+            "project_delete_blockers": lambda *args, **kwargs: [],
+            "project_delete_conflict_message": lambda blockers: "",
+            "require_reason": lambda reason: reason,
+            "governance_request_payload": lambda payload: {},
+            "decision_refs_for_chapter_review": lambda *args, **kwargs: [],
+            "validate_constraint_payload": lambda *args, **kwargs: ("", "", ""),
+            "serialize_constraint": lambda value: {},
+            "list_decision_event_rows": lambda *args, **kwargs: [],
+            "serialize_decision_event": lambda value: {},
+        }
+    )
+
+    deps = ApiRouteDeps(**legacy_kwargs)
+
+    assert deps.get_publisher_manager is deps.publisher.get_publisher_manager
+    assert deps.render_publishers_page is deps.publisher.render_publishers_page
+
+
+def test_design_status_contains_deprecation_matrix() -> None:
+    status_doc = _read("Design-docs/DESIGN_STATUS.md")
+
+    assert "兼容 / 弃用矩阵" in status_doc
+    assert "`forwin.world_model_v4` | deprecated | `forwin.world_v4_compat`" in status_doc
+    assert "`forwin.reviewer_v4` | deprecated | `forwin.world_v4_review_gate`" in status_doc
+    assert "`forwin.planning.scenario_rehearsal` | deprecated" in status_doc
+    assert "v5.0" in status_doc
+
+
+def test_deprecated_legacy_modules_emit_deprecation_warning() -> None:
+    for module_name in (
+        "forwin.world_model",
+        "forwin.world_model_v4",
+        "forwin.reviewer_v4",
+        "forwin.planning.scenario_rehearsal",
+    ):
+        sys.modules.pop(module_name, None)
+        with pytest.warns(DeprecationWarning, match="DESIGN_STATUS"):
+            importlib.import_module(module_name)

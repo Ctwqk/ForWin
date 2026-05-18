@@ -19,6 +19,7 @@ from forwin.protocol.context import (
 )
 from forwin.characters.events import CHARACTER_INTEGRITY_CHECK_FAILED
 from forwin.canon_quality.character_state import extract_candidate_character_names
+from forwin.canon_quality.rule_profile import CanonGlossary
 from forwin.governance import DecisionEventInfo
 from forwin.observability.context import OperationContext
 from forwin.observability.ports import NullObservability
@@ -717,6 +718,8 @@ def _build_canon_quality_context(
     base = {
         "target_total_chapters": int(target_total_chapters or 0),
         "is_final_chapter": is_final_chapter,
+        "canon_glossary": CanonGlossary().model_dump(mode="json"),
+        "countdown_rule_profiles": {},
         "countdown_constraints": [],
         "character_state_constraints": [],
         "open_signals": [],
@@ -727,8 +730,24 @@ def _build_canon_quality_context(
         return base
     try:
         from forwin.canon_quality.repository import CanonQualityRepository
+        from forwin.governance import normalize_project_governance
         from forwin.narrative_obligations.repository import NarrativeObligationRepository
+        from forwin.models.project import Project
         from forwin.planning.future_plan_auditor import FuturePlanAuditRepository
+
+        project = session.get(Project, project_id)
+        if project is not None:
+            governance = normalize_project_governance(
+                getattr(project, "governance_json", "") or "{}",
+                fallback_operation_mode="blackbox",
+                fallback_review_interval=0,
+                treat_empty_as_legacy=False,
+            )
+            base["canon_glossary"] = governance.canon_glossary.model_dump(mode="json")
+            base["countdown_rule_profiles"] = {
+                key: profile.model_dump(mode="json")
+                for key, profile in governance.canon_glossary.countdowns.items()
+            }
 
         repo = CanonQualityRepository(session)
         obligation_repo = NarrativeObligationRepository(session)
@@ -809,6 +828,7 @@ def _build_canon_quality_context(
         ]
         open_signals = [
             {
+                "signal_id": signal.signal_id,
                 "signal_type": signal.signal_type,
                 "severity": signal.severity,
                 "chapter_number": signal.chapter_number,
@@ -848,7 +868,15 @@ def _build_canon_quality_context(
                     "issues": [issue.model_dump(mode="json") for issue in latest_audit.issues[:5]],
                     "applied_plan_patch_ids": list(latest_audit.applied_plan_patch_ids),
                     "blocking_reasons": list(latest_audit.blocking_reasons),
+                    "metadata": dict(latest_audit.metadata),
                 }
+                suppressed_keys = latest_audit.metadata.get("suppressed_prompt_constraint_keys", [])
+                if isinstance(suppressed_keys, list):
+                    future_plan_audit_summary["suppressed_prompt_constraint_keys"] = [
+                        str(item)
+                        for item in suppressed_keys
+                        if str(item).strip()
+                    ]
         except Exception:  # noqa: BLE001
             logger.debug("Future plan audit summary unavailable.", exc_info=True)
         return {
@@ -858,6 +886,9 @@ def _build_canon_quality_context(
             "open_signals": open_signals,
             "active_narrative_obligations": active_narrative_obligations,
             "future_plan_audit_summary": future_plan_audit_summary,
+            "suppressed_prompt_constraint_keys": list(
+                future_plan_audit_summary.get("suppressed_prompt_constraint_keys", [])
+            ),
         }
     except Exception:  # noqa: BLE001
         logger.exception(

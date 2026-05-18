@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import re
 
+from .rule_profile import (
+    LEGACY_CURRENT_BOOK_GLOSSARY,
+    CanonGlossary,
+    canon_glossary_from_payload,
+)
 from .signals import CanonQualitySignal, make_signal_id
 
 FINAL_RESOLUTION_KEYWORDS = (
-    "记忆重置系统失效",
-    "记忆重置系统已经失效",
     "系统关闭",
     "系统已关闭",
     "系统已终止",
     "核心关闭",
     "主控程序已终止",
     "重置停止",
-    "记忆重置停止",
-    "记忆重置已取消",
-    "记忆重置被阻止",
     "重置已取消",
     "倒计时结束",
     "倒计时归零",
@@ -24,7 +24,6 @@ FINAL_RESOLUTION_KEYWORDS = (
     "重置被中止",
     "重置程序终止",
     "终止重置程序",
-    "不再有记忆重置",
     "核心停摆",
     "系统停摆",
     "核心停止",
@@ -92,13 +91,10 @@ SOFT_UNRESOLVED_FINAL_HOOK_PATTERNS = (
 )
 
 FINAL_CRISIS_KEYWORDS = (
-    "记忆重置",
     "重置",
     "倒计时",
-    "遗忘之井",
-    "父亲封存",
-    "记忆芯片",
-    "巡检员",
+    "主线危机",
+    "危机",
     "真相",
 )
 
@@ -123,6 +119,7 @@ def analyze_final_completion(
     title: str = "",
     summary: str = "",
     is_final_chapter: bool = False,
+    canon_glossary: CanonGlossary | dict | None = None,
 ) -> list[CanonQualitySignal]:
     if not is_final_chapter:
         return []
@@ -130,19 +127,26 @@ def analyze_final_completion(
     title_text = str(title or "")
     summary_text = str(summary or "")
     combined_text = "\n".join(item for item in (title_text, summary_text, text) if item)
+    resolution_keywords = _final_resolution_keywords(canon_glossary)
+    crisis_keywords = _final_crisis_keywords(canon_glossary)
     if not combined_text:
         return []
     tail_start = max(0, len(text) - 700)
     tail = text[tail_start:]
     unresolved_context = "\n".join(item for item in (title_text, summary_text, tail) if item)
     scan_context = unresolved_context
-    if _has_final_resolution(unresolved_context):
-        scan_context = unresolved_context[_last_final_resolution_end(unresolved_context) :]
-    post_resolution_scan_context = ""
-    first_tail_resolution_end = _first_final_resolution_end(tail)
+    if _has_final_resolution(unresolved_context, keywords=resolution_keywords):
+        scan_context = unresolved_context[_last_final_resolution_end(unresolved_context, keywords=resolution_keywords) :]
+    post_resolution_scan_context = tail if _has_final_resolution(combined_text, keywords=resolution_keywords) else ""
+    first_tail_resolution_end = _first_final_resolution_end(tail, keywords=resolution_keywords)
+    post_resolution_candidates = [post_resolution_scan_context]
     if first_tail_resolution_end:
-        post_resolution_scan_context = tail[first_tail_resolution_end:]
-    post_resolution_task = _first_pattern_match(post_resolution_scan_context, POST_RESOLUTION_UNFINISHED_PATTERNS)
+        post_resolution_candidates.insert(0, tail[first_tail_resolution_end:])
+    post_resolution_task = ""
+    for candidate in post_resolution_candidates:
+        post_resolution_task = _first_pattern_match(candidate, POST_RESOLUTION_UNFINISHED_PATTERNS)
+        if post_resolution_task:
+            break
     matched = [keyword for keyword in UNRESOLVED_FINAL_HOOK_KEYWORDS if keyword in scan_context]
     if post_resolution_task:
         matched.append(post_resolution_task)
@@ -156,7 +160,7 @@ def analyze_final_completion(
     subject = "book:finale"
     repair_hint = (
         "终章不能以主线危机、追杀、未知装置或新谜团收尾。"
-        "请明确写出系统/记忆重置主危机如何被关闭、倒计时如何解除，以及核心真相如何已经公开或付清代价。"
+        "请明确写出主线危机如何被关闭、倒计时如何解除，以及核心真相如何已经公开或付清代价。"
     )
     if matched:
         evidence_ref, span_start, span_end = _first_evidence(
@@ -183,7 +187,7 @@ def analyze_final_completion(
             )
         ]
 
-    if pending_match and not _has_final_resolution(unresolved_context):
+    if pending_match and not _has_final_resolution(unresolved_context, keywords=resolution_keywords):
         evidence_ref, span_start, span_end = _pending_evidence(
             text=text,
             summary=summary_text,
@@ -212,9 +216,9 @@ def analyze_final_completion(
             )
         ]
 
-    if _has_final_resolution(combined_text):
+    if _has_final_resolution(combined_text, keywords=resolution_keywords):
         return []
-    crisis_matched = [keyword for keyword in FINAL_CRISIS_KEYWORDS if keyword in combined_text]
+    crisis_matched = [keyword for keyword in crisis_keywords if keyword in combined_text]
     if not crisis_matched:
         return []
     evidence_ref, span_start, span_end = _first_evidence(
@@ -234,7 +238,7 @@ def analyze_final_completion(
             target_scope="book",
             subject_key=subject,
             description=(
-                "终章涉及主线危机，但没有明确关闭系统/记忆重置、解除倒计时或公开核心真相。"
+                "终章涉及主线危机，但没有明确关闭主危机、解除倒计时或公开核心真相。"
                 f"修复要求：{repair_hint}"
             ),
             evidence_refs=[evidence_ref],
@@ -245,14 +249,34 @@ def analyze_final_completion(
     ]
 
 
-def _has_final_resolution(text: str) -> bool:
-    return _last_final_resolution_end(text) > 0
+def _final_resolution_keywords(canon_glossary: CanonGlossary | dict | None) -> tuple[str, ...]:
+    glossary = canon_glossary_from_payload(canon_glossary or {})
+    phrases: list[str] = list(FINAL_RESOLUTION_KEYWORDS)
+    for profile in glossary.countdowns.values():
+        phrases.extend(str(item).strip() for item in profile.resolution_phrases if str(item).strip())
+    if not glossary.countdowns and not glossary.final_crisis_terms:
+        for profile in LEGACY_CURRENT_BOOK_GLOSSARY.countdowns.values():
+            phrases.extend(str(item).strip() for item in profile.resolution_phrases if str(item).strip())
+    return tuple(dict.fromkeys(item for item in phrases if item))
 
 
-def _last_final_resolution_end(text: str) -> int:
+def _final_crisis_keywords(canon_glossary: CanonGlossary | dict | None) -> tuple[str, ...]:
+    glossary = canon_glossary_from_payload(canon_glossary or {})
+    phrases = [*FINAL_CRISIS_KEYWORDS, *glossary.final_crisis_terms]
+    if not glossary.countdowns and not glossary.final_crisis_terms:
+        phrases.extend(LEGACY_CURRENT_BOOK_GLOSSARY.final_crisis_terms)
+        phrases.extend(LEGACY_CURRENT_BOOK_GLOSSARY.mechanism_terms)
+    return tuple(dict.fromkeys(item for item in phrases if item))
+
+
+def _has_final_resolution(text: str, *, keywords: tuple[str, ...] | None = None) -> bool:
+    return _last_final_resolution_end(text, keywords=keywords) > 0
+
+
+def _last_final_resolution_end(text: str, *, keywords: tuple[str, ...] | None = None) -> int:
     pending_spans = _pending_resolution_spans(text)
     last_end = -1
-    for keyword in FINAL_RESOLUTION_KEYWORDS:
+    for keyword in keywords or FINAL_RESOLUTION_KEYWORDS:
         start = 0
         while True:
             index = text.find(keyword, start)
@@ -265,10 +289,10 @@ def _last_final_resolution_end(text: str) -> int:
     return max(0, last_end)
 
 
-def _first_final_resolution_end(text: str) -> int:
+def _first_final_resolution_end(text: str, *, keywords: tuple[str, ...] | None = None) -> int:
     pending_spans = _pending_resolution_spans(text)
     first: tuple[int, int] | None = None
-    for keyword in FINAL_RESOLUTION_KEYWORDS:
+    for keyword in keywords or FINAL_RESOLUTION_KEYWORDS:
         start = 0
         while True:
             index = text.find(keyword, start)

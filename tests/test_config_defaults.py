@@ -7,6 +7,27 @@ def test_world_v4_compat_write_is_disabled_by_default() -> None:
     assert Config().world_v4_compat_write_enabled is False
 
 
+def test_config_exposes_domain_writer_profile_without_removing_flat_fields() -> None:
+    config = Config(
+        temperature=0.6,
+        default_scene_count=2,
+        max_scene_count=5,
+        min_chapter_chars=1000,
+        target_chapter_chars=1500,
+        max_chapter_chars=2000,
+        prompt_budget_chars=9000,
+    )
+
+    assert config.temperature == 0.6
+    assert config.writer.temperature == 0.6
+    assert config.writer.default_scene_count == 2
+    assert config.writer.max_scene_count == 5
+    assert config.writer.target_chapter_chars == 1500
+    assert config.writer.prompt_budget_chars == 9000
+    assert config.llm.max_tokens == config.max_tokens
+    assert config.storage.database_url == config.database_url
+
+
 def test_lan_bind_requires_basic_auth_or_explicit_unauthenticated_override() -> None:
     try:
         Config(http_bind="192.168.1.10")

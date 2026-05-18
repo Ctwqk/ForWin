@@ -20,6 +20,8 @@ from forwin.skills import serialize_prompt_layers
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 from forwin.observability.context import OperationContext
 from forwin.observability.ports import NullObservability
+from forwin.writer.prompt_budget import prompt_revision_hash
+from forwin.writer.profile import WriterProfile
 from .prompts import (
     build_preview_chapter_prompt,
     build_lore_timeline_notes_extraction_prompt,
@@ -63,19 +65,26 @@ class ChapterWriter:
         single_call_timeout_seconds: float = 90.0,
         scene_call_timeout_seconds: float = 90.0,
         observability=None,
+        profile: WriterProfile | None = None,
     ) -> None:
-        self.llm_client = llm_client
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.writer_mode = writer_mode
-        self.default_scene_count = default_scene_count
-        self.max_scene_count = max_scene_count
-        self.min_chapter_chars = min_chapter_chars
-        self.max_chapter_chars = max_chapter_chars
-        self.target_chapter_chars = max(
-            self.min_chapter_chars,
-            min(int(target_chapter_chars), self.max_chapter_chars),
+        self.profile = profile or WriterProfile.from_values(
+            temperature=temperature,
+            max_tokens=max_tokens,
+            default_scene_count=default_scene_count,
+            max_scene_count=max_scene_count,
+            min_chapter_chars=min_chapter_chars,
+            max_chapter_chars=max_chapter_chars,
+            target_chapter_chars=target_chapter_chars,
         )
+        self.llm_client = llm_client
+        self.temperature = self.profile.temperature
+        self.max_tokens = self.profile.max_tokens
+        self.writer_mode = writer_mode
+        self.default_scene_count = self.profile.default_scene_count
+        self.max_scene_count = self.profile.max_scene_count
+        self.min_chapter_chars = self.profile.min_chapter_chars
+        self.max_chapter_chars = self.profile.max_chapter_chars
+        self.target_chapter_chars = self.profile.target_chapter_chars
         self.single_call_timeout_seconds = max(10.0, float(single_call_timeout_seconds))
         self.scene_call_timeout_seconds = max(10.0, float(scene_call_timeout_seconds))
         self._chat_signature = inspect.signature(self.llm_client.chat)
@@ -220,14 +229,15 @@ class ChapterWriter:
             min_chars=self.min_chapter_chars,
             max_chars=self.max_chapter_chars,
         )
+        actual_messages = build_preview_chapter_prompt(
+            context,
+            target_chars=target_chars,
+            min_chars=self.min_chapter_chars,
+            max_chars=self.max_chapter_chars,
+            skill_layers=skill_layers,
+        )
         preview_text = self._chat_preview_text(
-            build_preview_chapter_prompt(
-                context,
-                target_chars=target_chars,
-                min_chars=self.min_chapter_chars,
-                max_chars=self.max_chapter_chars,
-                skill_layers=skill_layers,
-            ),
+            actual_messages,
             temperature=min(self.temperature, 0.7),
             max_tokens=max_output_tokens,
             timeout_seconds=timeout_seconds or self.single_call_timeout_seconds,
@@ -276,6 +286,7 @@ class ChapterWriter:
                 ),
             },
         )
+        self._attach_prompt_revision(output, actual_messages)
         self._attach_llm_fallback_events(output)
         logger.info(
             "write_preview_chapter: done – chapter=%d char_count=%d",
@@ -313,14 +324,15 @@ class ChapterWriter:
             min_chars=self.min_chapter_chars,
             max_chars=self.max_chapter_chars,
         )
+        actual_messages = build_single_chapter_draft_prompt(
+            context,
+            target_chars=target_chars,
+            min_chars=self.min_chapter_chars,
+            max_chars=self.max_chapter_chars,
+            skill_layers=skill_layers,
+        )
         raw_draft = self._chat_preview_text(
-            build_single_chapter_draft_prompt(
-                context,
-                target_chars=target_chars,
-                min_chars=self.min_chapter_chars,
-                max_chars=self.max_chapter_chars,
-                skill_layers=skill_layers,
-            ),
+            actual_messages,
             temperature=self.temperature,
             max_tokens=max_output_tokens,
             timeout_seconds=timeout_seconds or self.single_call_timeout_seconds,
@@ -362,6 +374,7 @@ class ChapterWriter:
                 ),
             }
         )
+        self._attach_prompt_revision(output, actual_messages)
         return output
 
     def _write_scene_chapter(
@@ -421,6 +434,7 @@ class ChapterWriter:
                     ),
                 }
             )
+            self._attach_prompt_revision(output, base_messages)
             return output
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -1119,6 +1133,12 @@ class ChapterWriter:
         events = drain()
         if events:
             output.generation_meta["model_fallbacks"] = events
+
+    @staticmethod
+    def _attach_prompt_revision(output: WriterOutput, messages: list[dict[str, object]]) -> None:
+        revision_hash = prompt_revision_hash(messages)
+        output.prompt_revision_hash = revision_hash
+        output.generation_meta["prompt_revision_hash"] = revision_hash
 
     def _build_prompt_trace(
         self,

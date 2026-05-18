@@ -786,3 +786,83 @@ def test_future_plan_auditor_skips_chapter_binding_when_band_contract_covers_obl
     assert result.status == "pass"
     assert result.issues == []
     assert result.plan_patches == []
+
+
+def test_future_plan_auditor_promotes_must_resolve_now_obligation_to_pre_write_patch() -> None:
+    plan = _plan(12, one_line="陆明准备进入终端大厅。")
+    obligation = NarrativeObligation(
+        id="obl-now",
+        project_id="project-1",
+        origin_chapter_number=10,
+        obligation_type="reader_promise_payoff",
+        priority="P1",
+        status="active",
+        summary="偿还前文承诺。",
+        hardness="canon_risk",
+        deadline_chapter=12,
+        payoff_test="第12章必须给出终端门禁来源证据。",
+        must_resolve_now=True,
+    )
+
+    result = FuturePlanAuditor().audit_plans(
+        project_id="project-1",
+        current_chapter=11,
+        trigger_stage="pre_write",
+        plans=[plan],
+        canon_quality_context={},
+        obligations=[obligation],
+        target_total_chapters=20,
+        include_current=False,
+    )
+
+    assert result.status == "fail"
+    assert [issue.issue_type for issue in result.issues] == ["obligation_pre_write_required"]
+    assert result.plan_patches[0].patch_type == "obligation_pre_write"
+    assert result.metadata["suppressed_prompt_constraint_keys"] == ["obligation:obl-now"]
+
+    FuturePlanAuditor().apply_plan_patch(plan, result.plan_patches[0])
+    serialized = json.dumps(
+        {"goals": json.loads(plan.goals_json), "experience": json.loads(plan.experience_plan_json)},
+        ensure_ascii=False,
+    )
+    assert "obl-now" in serialized
+    assert "第12章必须给出终端门禁来源证据" in serialized
+
+
+def test_future_plan_auditor_promotes_stale_open_signal_to_pre_write_patch() -> None:
+    plan = _plan(14, one_line="陆明进入下一处证据点。")
+
+    result = FuturePlanAuditor().audit_plans(
+        project_id="project-1",
+        current_chapter=13,
+        trigger_stage="pre_write",
+        plans=[plan],
+        canon_quality_context={
+            "open_signals": [
+                {
+                    "signal_id": "sig-1",
+                    "signal_type": "placeholder_leakage",
+                    "severity": "error",
+                    "chapter_number": 10,
+                    "subject_key": "placeholder",
+                    "description": "第10章残留占位符，必须替换为具体证据。",
+                }
+            ]
+        },
+        obligations=[],
+        target_total_chapters=20,
+        include_current=False,
+    )
+
+    assert result.status == "fail"
+    assert [issue.issue_type for issue in result.issues] == ["stale_open_signal_pre_write_required"]
+    assert result.plan_patches[0].patch_type == "signal_pre_write"
+    assert result.metadata["suppressed_prompt_constraint_keys"] == ["signal:sig-1"]
+
+    FuturePlanAuditor().apply_plan_patch(plan, result.plan_patches[0])
+    serialized = json.dumps(
+        {"goals": json.loads(plan.goals_json), "experience": json.loads(plan.experience_plan_json)},
+        ensure_ascii=False,
+    )
+    assert "sig-1" in serialized
+    assert "第10章残留占位符" in serialized

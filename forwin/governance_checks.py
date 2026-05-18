@@ -9,27 +9,22 @@ from forwin.governance import (
     is_derived_goal_control_instruction,
     issue_group_for_issue,
 )
+from forwin.governance_keywords import constraint_keywords, first_unnegated_keyword, text_has_unnegated_keyword
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.protocol.experience import BandDelightSchedule
 from forwin.protocol.review import ContinuityIssue
 from forwin.protocol.state_change import EventCandidate, StateChangeCandidate, ThreadBeatCandidate
 from forwin.protocol.writer import WriterOutput
 
-_DEATH_KEYWORDS = ("死", "死亡", "身亡", "阵亡", "牺牲", "杀死", "写死")
-_REVEAL_KEYWORDS = ("真相", "秘密", "身份", "揭露", "公开", "坦白", "曝光")
-_RELATION_BREAK_KEYWORDS = ("决裂", "断绝", "反目", "分手", "离婚", "背叛")
-_LOCATION_DESTROY_KEYWORDS = ("毁灭", "坍塌", "封锁", "不可进入", "失守", "焚毁")
-_RULE_BREAK_KEYWORDS = ("失效", "崩坏", "破除", "废除", "不可逆", "解除")
-_RESOURCE_CLOSURE_KEYWORDS = (
-    "彻底解决",
-    "完全结束",
-    "永远离开",
-    "彻底公开",
-    "永久失去",
-    "不可逆",
-)
-_THREAD_CLOSURE_KEYWORDS = ("结案", "了结", "落幕", "终结", "收束", "完结")
-_GROWTH_COMPLETION_KEYWORDS = ("完成成长", "彻底成熟", "终于成为", "再无成长空间", "终极形态", "圆满毕业")
+_KEYWORDS = constraint_keywords()
+_DEATH_KEYWORDS = _KEYWORDS.death
+_REVEAL_KEYWORDS = _KEYWORDS.reveal
+_RELATION_BREAK_KEYWORDS = _KEYWORDS.relation_break
+_LOCATION_DESTROY_KEYWORDS = _KEYWORDS.location_destroy
+_RULE_BREAK_KEYWORDS = _KEYWORDS.rule_break
+_RESOURCE_CLOSURE_KEYWORDS = _KEYWORDS.resource_closure
+_THREAD_CLOSURE_KEYWORDS = _KEYWORDS.thread_closure
+_GROWTH_COMPLETION_KEYWORDS = _KEYWORDS.growth_completion
 
 
 def chapter_combined_text(writer_output: WriterOutput) -> str:
@@ -601,15 +596,17 @@ def _constraint_triggered(
             new_value = str(change.new_value or "")
             if any(keyword in new_value for keyword in _DEATH_KEYWORDS):
                 return True, f"state_change={change.entity_name}:{change.field}->{new_value}"
-        if subject and subject in combined_text and any(keyword in combined_text for keyword in _DEATH_KEYWORDS):
+        if subject and subject in combined_text and text_has_unnegated_keyword(combined_text, _DEATH_KEYWORDS):
             return True, f"subject={subject}"
     elif constraint.constraint_type == "secret_withhold":
-        if payload_keywords and any(keyword in combined_text for keyword in payload_keywords):
-            return True, f"keyword={next(keyword for keyword in payload_keywords if keyword in combined_text)}"
-        if subject and subject in combined_text and any(keyword in combined_text for keyword in _REVEAL_KEYWORDS):
+        if payload_keywords:
+            keyword = first_unnegated_keyword(combined_text, tuple(payload_keywords))
+            if keyword:
+                return True, f"keyword={keyword}"
+        if subject and subject in combined_text and text_has_unnegated_keyword(combined_text, _REVEAL_KEYWORDS):
             return True, f"subject={subject}"
     elif constraint.constraint_type == "relationship_preserve":
-        if subject and subject in combined_text and any(keyword in combined_text for keyword in _RELATION_BREAK_KEYWORDS):
+        if subject and subject in combined_text and text_has_unnegated_keyword(combined_text, _RELATION_BREAK_KEYWORDS):
             return True, f"subject={subject}"
     elif constraint.constraint_type == "thread_keep_open":
         for beat in thread_beats:
@@ -623,7 +620,7 @@ def _constraint_triggered(
                 continue
             if any(keyword in str(change.new_value or "") for keyword in _LOCATION_DESTROY_KEYWORDS):
                 return True, f"state_change={change.entity_name}:{change.field}"
-        if subject and subject in combined_text and any(keyword in combined_text for keyword in _LOCATION_DESTROY_KEYWORDS):
+        if subject and subject in combined_text and text_has_unnegated_keyword(combined_text, _LOCATION_DESTROY_KEYWORDS):
             return True, f"subject={subject}"
     elif constraint.constraint_type == "rule_preserve":
         for change in state_changes:
@@ -631,11 +628,14 @@ def _constraint_triggered(
                 continue
             if any(keyword in str(change.new_value or "") for keyword in _RULE_BREAK_KEYWORDS):
                 return True, f"state_change={change.entity_name}:{change.field}"
-    if payload_keywords and any(keyword.lower() in lower_text for keyword in payload_keywords):
-        return True, f"keyword={next(keyword for keyword in payload_keywords if keyword.lower() in lower_text)}"
+    if payload_keywords:
+        keyword = first_unnegated_keyword(combined_text, tuple(payload_keywords))
+        if keyword:
+            return True, f"keyword={keyword}"
     if subject and any(subject == name for event in events for name in event.involved_entity_names):
-        if constraint.constraint_type in {"character_availability", "secret_withhold"} and any(
-            keyword in combined_text for keyword in (*_DEATH_KEYWORDS, *_REVEAL_KEYWORDS)
+        if constraint.constraint_type in {"character_availability", "secret_withhold"} and text_has_unnegated_keyword(
+            combined_text,
+            (*_DEATH_KEYWORDS, *_REVEAL_KEYWORDS),
         ):
             return True, f"event_subject={subject}"
     return False, ""

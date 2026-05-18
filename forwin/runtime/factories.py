@@ -6,6 +6,7 @@ from typing import Any
 from forwin.config import Config
 from forwin.production.scheduler import ProductionScheduler
 from forwin.writer.chapter_writer import ChapterWriter
+from forwin.writer.profile import WriterProfile
 
 
 @dataclass(slots=True)
@@ -26,17 +27,11 @@ class ProductionSchedulerFactory:
 def build_writer(config: Config, llm_client, observability=None) -> ChapterWriter:
     return ChapterWriter(
         llm_client=llm_client,
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
         writer_mode=config.writer_mode,
-        default_scene_count=config.default_scene_count,
-        max_scene_count=config.max_scene_count,
-        min_chapter_chars=config.min_chapter_chars,
-        max_chapter_chars=config.max_chapter_chars,
-        target_chapter_chars=config.target_chapter_chars,
         single_call_timeout_seconds=config.llm_timeout_seconds,
         scene_call_timeout_seconds=config.scene_call_timeout_seconds,
         observability=observability,
+        profile=config.writer,
     )
 
 
@@ -57,15 +52,18 @@ def build_provisional_writer(config: Config, llm_client, observability=None) -> 
     )
     return ChapterWriter(
         llm_client=llm_client,
-        temperature=min(config.temperature, 0.7),
-        max_tokens=min(config.max_tokens, 2400),
         writer_mode="single",
-        default_scene_count=1,
-        max_scene_count=1,
-        min_chapter_chars=provisional_min_chars,
-        max_chapter_chars=provisional_max_chars,
-        target_chapter_chars=provisional_target_chars,
         single_call_timeout_seconds=provisional_timeout_seconds,
         scene_call_timeout_seconds=provisional_timeout_seconds,
         observability=observability,
+        profile=WriterProfile.from_values(
+            temperature=min(config.temperature, 0.7),
+            max_tokens=min(config.max_tokens, 2400),
+            default_scene_count=1,
+            max_scene_count=1,
+            min_chapter_chars=provisional_min_chars,
+            max_chapter_chars=provisional_max_chars,
+            target_chapter_chars=provisional_target_chars,
+            prompt_budget_chars=getattr(config, "prompt_budget_chars", 12000),
+        ),
     )

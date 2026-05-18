@@ -48,6 +48,27 @@
 | `provisional_mechanism_check.md` | legacy-compatibility | legacy provisional 边界说明；当前判断路径是 Scenario Rehearsal、Candidate Draft Review 和 BookState gate。 |
 | `review_fix_log_2026-04-15.md` | legacy-compatibility | 历史 review 修复记录。 |
 
+## 兼容 / 弃用矩阵
+
+本矩阵是代码迁移的当前权威入口。新增调用方不得再引入 `deprecated` 模块；保留调用方必须通过对应的 current/compat 模块收束。
+
+| 模块 | 状态 | 当前替代 | 删除 / 复核目标 | 说明 |
+|---|---|---|---|---|
+| `forwin.world_model` | deprecated | `forwin.book_state` + `forwin.world_v4_compat` 投影 | v5.0 删除直接业务依赖 | 仅保留 legacy projection / wiki / export 兼容入口，不是 canon。 |
+| `forwin.world_model_v4` | deprecated | `forwin.world_v4_compat` | v5.0 删除 alias 包 | 仅作为旧导入路径 alias；新代码必须导入 `world_v4_compat`。 |
+| `forwin.world_v4_compat` | legacy-compatibility | `forwin.book_state` | v5.0 复核是否仍需 projection/debug bridge | 兼容投影层，不能成为新的 source of truth。 |
+| `forwin.reviewer_v4` | deprecated | `forwin.world_v4_review_gate` | v5.0 删除 alias 包 | 仅作为旧导入路径 alias；新代码必须导入 `world_v4_review_gate`。 |
+| `forwin.world_v4_review_gate` | legacy-compatibility | `forwin.reviewer` 主 facade | v5.0 复核是否仍需 extraction gate | 兼容 gate，不是主 chapter reviewer。 |
+| `forwin.planning.scenario_rehearsal` | deprecated | `forwin.planning.scenario_rehearsal_service` | v5.0 删除直接业务依赖 | 旧 monolith 仅保留历史 API 兼容；新增 orchestration 必须走 service。 |
+| `forwin.planning.scenario_rehearsal_service` | active-current | 无 | 无 | 当前 Scenario Rehearsal service 入口。 |
+
+## 已知限制
+
+- `canon_quality` 仍以 countdown/state-kind 为主要组织形态，短期内通过 project-level rule profile 降低故事硬编码；完整 schema 化 state projection 是后续大改。
+- 中文否定识别目前使用轻量前缀窗口和规则 registry，能挡住明显的“不要/避免/禁止 X”误判，但不是完整句法 scope 分析。
+- 质量闭环已开始从 review-time 反应式扫描前移到 plan-time patch；遗留 reviewer signal 仍会保留兜底提示，但必须避免重复注入同一约束。
+- Prompt 回归测试固定 deterministic fixture 和 revision hash，不替代真实 LLM A/B 评估。
+
 ## 历史实施计划
 
 | 文档 | 状态 | 说明 |

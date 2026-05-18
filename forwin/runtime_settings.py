@@ -7,6 +7,7 @@ from pathlib import Path
 
 from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
 from forwin.skills.policy import normalize_skill_strictness
+from forwin.writer.profile import WriterProfile
 
 
 class RuntimeSettingsStore:
@@ -33,6 +34,7 @@ class RuntimeSettingsStore:
         default_skill_strictness: str = "normal",
         default_enabled_skill_groups: list[str] | None = None,
         default_disabled_skill_ids: list[str] | None = None,
+        default_writer_profile: dict[str, object] | None = None,
         env_llm_profiles: list[dict[str, str]] | None = None,
     ) -> None:
         self.path = Path(path)
@@ -65,6 +67,7 @@ class RuntimeSettingsStore:
             "skill_strictness": normalize_skill_strictness(default_skill_strictness),
             "enabled_skill_groups": self._normalize_string_list(default_enabled_skill_groups),
             "disabled_skill_ids": self._normalize_string_list(default_disabled_skill_ids),
+            "writer_profile": self._normalize_writer_profile(default_writer_profile),
         }
         self._env_profiles = self._normalize_env_profiles(env_llm_profiles)
         self._cache: dict[str, object] | None = None
@@ -117,6 +120,12 @@ class RuntimeSettingsStore:
             for item in text.split(",")
             if item.strip()
         ]
+
+    @staticmethod
+    def _normalize_writer_profile(value: object) -> dict[str, object]:
+        if isinstance(value, dict):
+            return WriterProfile.from_values(**value).model_dump(mode="json")
+        return WriterProfile().model_dump(mode="json")
 
     def _normalize_profile(self, raw: object, fallback_name: str) -> dict[str, str]:
         data = raw if isinstance(raw, dict) else {}
@@ -344,6 +353,9 @@ class RuntimeSettingsStore:
             payload["disabled_skill_ids"] = self._normalize_string_list(
                 raw.get("disabled_skill_ids", payload["disabled_skill_ids"])
             )
+            payload["writer_profile"] = self._normalize_writer_profile(
+                raw.get("writer_profile", payload["writer_profile"])
+            )
         profiles = [dict(item) for item in payload.get("profiles", []) if isinstance(item, dict)]
         default_profile_id = str(payload.get("default_profile_id", "")).strip()
         profiles, default_profile_id = self._merge_env_profiles(profiles, default_profile_id)
@@ -378,6 +390,7 @@ class RuntimeSettingsStore:
         skill_strictness: str | None = None,
         enabled_skill_groups: list[str] | None = None,
         disabled_skill_ids: list[str] | None = None,
+        writer_profile: dict[str, object] | None = None,
     ) -> dict[str, object]:
         with self._lock:
             payload = self._load_unlocked()
@@ -437,6 +450,8 @@ class RuntimeSettingsStore:
                 payload["enabled_skill_groups"] = self._normalize_string_list(enabled_skill_groups)
             if disabled_skill_ids is not None:
                 payload["disabled_skill_ids"] = self._normalize_string_list(disabled_skill_ids)
+            if writer_profile is not None:
+                payload["writer_profile"] = self._normalize_writer_profile(writer_profile)
             return self._persist_unlocked(payload)
 
     def save_profile(

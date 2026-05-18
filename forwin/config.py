@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import os
 
+from pydantic import BaseModel
+
+from forwin.writer.profile import WriterProfile
+
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_MINIMAX_MODEL = "MiniMax-M2.7"
 LEGACY_DATABASE_PATH_ENV = "FORWIN_" + "DB_PATH"
@@ -17,6 +21,47 @@ DEFAULT_HTTP_BASIC_EXEMPT_PATHS = (
     "/api/publisher/extension/",
     "/api/publishers/extension/",
 )
+
+
+class LLMConfig(BaseModel):
+    minimax_api_key: str = ""
+    minimax_base_url: str = DEFAULT_MINIMAX_BASE_URL
+    minimax_model: str = DEFAULT_MINIMAX_MODEL
+    timeout_seconds: float = 90.0
+    retry_attempts: int = 2
+    max_tokens: int = 16384
+
+
+class StorageConfig(BaseModel):
+    database_url: str = DEFAULT_DATABASE_URL
+    artifact_backend: str = "local"
+    artifact_root: str = "data/artifacts"
+    retrieval_backend: str = "qdrant"
+    qdrant_url: str = DEFAULT_QDRANT_URL
+
+
+class PublisherConfig(BaseModel):
+    extension_api_key: str = ""
+    session_secret: str = ""
+    session_encryption_required: bool = False
+
+
+class ObservabilityConfig(BaseModel):
+    enabled: bool = True
+    performance_enabled: bool = True
+    span_sample_rate: float = 1.0
+
+
+class GovernanceConfig(BaseModel):
+    progression_mode: str = "serial_canon_band_guard"
+    review_interval_chapters: int = 0
+    future_constraints_enabled: bool = True
+
+
+class CodexConfig(BaseModel):
+    enabled: bool = False
+    bridge_url: str = "http://host.docker.internal:8897"
+    max_concurrent: int = 1
 
 try:
     from pydantic_settings import BaseSettings as _ConfigBaseModel
@@ -281,6 +326,7 @@ def _env_values() -> dict[str, object]:
         "max_chapter_chars": _env_int(env, "MAX_CHAPTER_CHARS", 3200),
         "min_chapter_chars": _env_int(env, "MIN_CHAPTER_CHARS", 2500),
         "target_chapter_chars": _env_int(env, "TARGET_CHAPTER_CHARS", 2800),
+        "prompt_budget_chars": _env_int(env, "PROMPT_BUDGET_CHARS", 12000),
         "writer_mode": _env_str(env, "WRITER_MODE", "scene"),
         "operation_mode": _env_str(env, "OPERATION_MODE", "blackbox"),
         "freeze_failed_candidates": _env_bool(
@@ -352,6 +398,20 @@ def _env_values() -> dict[str, object]:
             "gpt-5.3-codex-spark",
         ],
         "canon_quality_gate": _env_str(env, "FORWIN_CANON_QUALITY_GATE", "strict"),
+        "prompt_json_analysis_enabled": _env_bool(env, "FORWIN_PROMPT_JSON_ANALYSIS_ENABLED", True),
+        "canon_quality_mode": _env_str(env, "FORWIN_CANON_QUALITY_MODE", "hybrid"),
+        "reviewer_quality_mode": _env_str(env, "FORWIN_REVIEWER_QUALITY_MODE", "hybrid"),
+        "planning_audit_mode": _env_str(env, "FORWIN_PLANNING_AUDIT_MODE", "hybrid"),
+        "plan_patch_validation_mode": _env_str(env, "FORWIN_PLAN_PATCH_VALIDATION_MODE", "hybrid"),
+        "final_gate_mode": _env_str(env, "FORWIN_FINAL_GATE_MODE", "hybrid"),
+        "band_checkpoint_mode": _env_str(env, "FORWIN_BAND_CHECKPOINT_MODE", "hybrid"),
+        "prompt_json_min_blocking_confidence": _env_float(env, "FORWIN_PROMPT_JSON_MIN_BLOCKING_CONFIDENCE", 0.8),
+        "prompt_json_require_evidence_for_block": _env_bool(env, "FORWIN_PROMPT_JSON_REQUIRE_EVIDENCE_FOR_BLOCK", True),
+        "prompt_json_allow_uncertain_to_block": _env_bool(env, "FORWIN_PROMPT_JSON_ALLOW_UNCERTAIN_TO_BLOCK", False),
+        "prompt_json_allow_warn_to_block": _env_bool(env, "FORWIN_PROMPT_JSON_ALLOW_WARN_TO_BLOCK", False),
+        "prompt_json_shadow_compare_legacy": _env_bool(env, "FORWIN_PROMPT_JSON_SHADOW_COMPARE_LEGACY", True),
+        "prompt_json_log_raw": _env_bool(env, "FORWIN_PROMPT_JSON_LOG_RAW", True),
+        "prompt_json_persist_results": _env_bool(env, "FORWIN_PROMPT_JSON_PERSIST_RESULTS", False),
         "final_completion_gate": _env_str(env, "FORWIN_FINAL_COMPLETION_GATE", "strict"),
         "style_telemetry_mode": _env_str(env, "FORWIN_STYLE_TELEMETRY_MODE", "warn"),
         "phase4_use_llm": _env_bool(env, "PHASE4_USE_LLM", True),
@@ -432,6 +492,7 @@ class _ConfigFields:
     max_chapter_chars: int = 3200
     min_chapter_chars: int = 2500
     target_chapter_chars: int = 2800
+    prompt_budget_chars: int = 12000
     writer_mode: str = "scene"
     operation_mode: str = "blackbox"
     freeze_failed_candidates: bool = True
@@ -476,6 +537,20 @@ class _ConfigFields:
         "gpt-5.3-codex-spark",
     ]
     canon_quality_gate: str = "strict"
+    prompt_json_analysis_enabled: bool = True
+    canon_quality_mode: str = "hybrid"
+    reviewer_quality_mode: str = "hybrid"
+    planning_audit_mode: str = "hybrid"
+    plan_patch_validation_mode: str = "hybrid"
+    final_gate_mode: str = "hybrid"
+    band_checkpoint_mode: str = "hybrid"
+    prompt_json_min_blocking_confidence: float = 0.8
+    prompt_json_require_evidence_for_block: bool = True
+    prompt_json_allow_uncertain_to_block: bool = False
+    prompt_json_allow_warn_to_block: bool = False
+    prompt_json_shadow_compare_legacy: bool = True
+    prompt_json_log_raw: bool = True
+    prompt_json_persist_results: bool = False
     final_completion_gate: str = "strict"
     style_telemetry_mode: str = "warn"
     phase4_use_llm: bool = True
@@ -562,3 +637,69 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
                 "FORWIN_PUBLISHER_SESSION_SECRET must be set when "
                 "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED=true"
             )
+
+    @property
+    def writer(self) -> WriterProfile:
+        return WriterProfile.from_values(
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            default_scene_count=self.default_scene_count,
+            max_scene_count=self.max_scene_count,
+            min_chapter_chars=self.min_chapter_chars,
+            target_chapter_chars=self.target_chapter_chars,
+            max_chapter_chars=self.max_chapter_chars,
+            prompt_budget_chars=self.prompt_budget_chars,
+        )
+
+    @property
+    def llm(self) -> LLMConfig:
+        return LLMConfig(
+            minimax_api_key=self.minimax_api_key,
+            minimax_base_url=self.minimax_base_url,
+            minimax_model=self.minimax_model,
+            timeout_seconds=self.llm_timeout_seconds,
+            retry_attempts=self.llm_retry_attempts,
+            max_tokens=self.max_tokens,
+        )
+
+    @property
+    def storage(self) -> StorageConfig:
+        return StorageConfig(
+            database_url=self.database_url,
+            artifact_backend=self.artifact_backend,
+            artifact_root=self.artifact_root,
+            retrieval_backend=self.retrieval_backend,
+            qdrant_url=self.qdrant_url,
+        )
+
+    @property
+    def publisher(self) -> PublisherConfig:
+        return PublisherConfig(
+            extension_api_key=self.publisher_extension_api_key,
+            session_secret=self.publisher_session_secret,
+            session_encryption_required=self.publisher_session_encryption_required,
+        )
+
+    @property
+    def observability(self) -> ObservabilityConfig:
+        return ObservabilityConfig(
+            enabled=self.observability_enabled,
+            performance_enabled=self.observability_performance_enabled,
+            span_sample_rate=self.observability_span_sample_rate,
+        )
+
+    @property
+    def governance(self) -> GovernanceConfig:
+        return GovernanceConfig(
+            progression_mode=self.progression_mode,
+            review_interval_chapters=self.review_interval_chapters,
+            future_constraints_enabled=self.future_constraints_enabled,
+        )
+
+    @property
+    def codex(self) -> CodexConfig:
+        return CodexConfig(
+            enabled=self.codex_enabled,
+            bridge_url=self.codex_bridge_url,
+            max_concurrent=self.codex_max_concurrent,
+        )

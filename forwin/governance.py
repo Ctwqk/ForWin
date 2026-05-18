@@ -5,6 +5,9 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
+from forwin.canon_quality.rule_profile import CanonGlossary
+from forwin.governance_keywords import constraint_keywords, keyword_is_prefix_negated
+
 if TYPE_CHECKING:
     from forwin.protocol.experience import BandDelightSchedule
 
@@ -386,6 +389,7 @@ class ProjectGovernanceSettings(BaseModel):
     future_constraints_enabled: bool = False
     generation_audit_interval_chapters: int = 0
     generation_audit_pause_enabled: bool = False
+    canon_glossary: CanonGlossary = Field(default_factory=CanonGlossary)
 
 
 class BlockingReasonInfo(BaseModel):

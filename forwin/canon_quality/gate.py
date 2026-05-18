@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
+from forwin.canon_quality.prompt_json.validation import result_can_block
 
 from .signals import CanonAdmissionGateResult, CanonQualitySignal
 
@@ -31,6 +32,9 @@ def evaluate_canon_admission(
     open_terminal_obligation_count: int = 0,
     over_budget: bool = False,
     is_final_chapter: bool = False,
+    analyzer_results: list[dict] | None = None,
+    min_blocking_confidence: float = 0.8,
+    require_evidence_for_block: bool = True,
 ) -> CanonAdmissionGateResult:
     resolved_mode = normalize_gate_mode(mode)
     quality_signals = list(signals or [])
@@ -47,6 +51,11 @@ def evaluate_canon_admission(
         if signal.status == "open" and signal.severity == "warning"
     ]
     deterministic_refs = [signal.signal_id for signal in blocking]
+    prompt_blocking_refs = _prompt_blocking_refs(
+        analyzer_results=analyzer_results or [],
+        min_blocking_confidence=float(min_blocking_confidence or 0.8),
+        require_evidence_for_block=bool(require_evidence_for_block),
+    )
     obligation_reasons = _obligation_blocking_reasons(
         obligations=active_obligations,
         plan_patches=available_patches,
@@ -89,6 +98,7 @@ def evaluate_canon_admission(
     else:
         commit_allowed = (
             not blocking
+            and not prompt_blocking_refs
             and open_terminal_obligation_count <= 0
             and not obligation_reasons
         )
@@ -124,9 +134,32 @@ def evaluate_canon_admission(
         warning_issue_count=len(warnings),
         open_terminal_obligation_count=max(0, int(open_terminal_obligation_count or 0)),
         deterministic_issue_refs=deterministic_refs,
+        llm_issue_refs=prompt_blocking_refs,
         required_repair_scope="draft" if blocking else None,
         gate_summary=summary,
     )
+
+
+def _prompt_blocking_refs(
+    *,
+    analyzer_results: list[dict],
+    min_blocking_confidence: float,
+    require_evidence_for_block: bool,
+) -> list[str]:
+    refs: list[str] = []
+    for result in analyzer_results:
+        if not result_can_block(
+            result,
+            min_confidence=min_blocking_confidence,
+            require_evidence=require_evidence_for_block,
+        ):
+            continue
+        analyzer = str(result.get("analyzer") or "PromptJsonAnalyzer")
+        for issue in result.get("issues") or []:
+            if not isinstance(issue, dict):
+                continue
+            refs.append(f"{analyzer}:{issue.get('issue_id') or issue.get('type') or 'issue'}")
+    return refs
 
 
 def _obligation_blocking_reasons(

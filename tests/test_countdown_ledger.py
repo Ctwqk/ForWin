@@ -10,6 +10,32 @@ def test_chinese_countdown_mentions_are_normalized() -> None:
     assert parse_countdown_minutes("三十多天") == 30 * 24 * 60
 
 
+def test_three_part_minute_style_countdown_does_not_expand_to_hours_without_previous_entry() -> None:
+    signals, ledger_entries = analyze_countdowns(
+        project_id="p1",
+        chapter_number=1,
+        draft_id="d1",
+        body=(
+            "倒计时窗口弹出：89:47:32。"
+            "89分钟47秒32毫秒，而且还在跳动。"
+            "倒计时还剩82分钟。"
+            "屏幕右上角又显示00:83:47。"
+        ),
+        previous_entries=[],
+        is_final_chapter=False,
+    )
+
+    assert [entry.raw_mention for entry in ledger_entries] == [
+        "89:47:32",
+        "89分钟",
+        "82分钟",
+        "00:83:47",
+    ]
+    assert [entry.normalized_remaining_minutes for entry in ledger_entries] == [89, 89, 82, 83]
+    assert not any("5387" in signal.description for signal in signals)
+    assert any(signal.signal_type == "countdown_non_monotonic" for signal in signals)
+
+
 def test_countdown_increase_without_reset_is_error() -> None:
     signals, ledger_entries = analyze_countdowns(
         project_id="p1",
@@ -146,6 +172,57 @@ def test_countdown_reset_allows_increase() -> None:
         is_final_chapter=True,
     )
 
+    assert not [signal for signal in signals if signal.signal_type == "countdown_non_monotonic"]
+
+
+def test_terminal_audit_explicit_correction_allows_window_increase() -> None:
+    signals, ledger_entries = analyze_countdowns(
+        project_id="p1",
+        chapter_number=3,
+        draft_id="d3",
+        body=(
+            "终端审计窗口剩余：00:68:12。"
+            "她调出工程后门程序，程序反馈：修正终端审计窗口剩余时间至 00:72:00。"
+            "系统立刻警告检测到未授权权限修改。"
+        ),
+        previous_entries=[],
+        is_final_chapter=False,
+    )
+
+    assert [
+        (entry.countdown_key, entry.raw_mention, entry.is_reset_event)
+        for entry in ledger_entries
+    ] == [
+        ("terminal_audit_window", "00:68:12", False),
+        ("terminal_audit_window", "00:72:00", True),
+    ]
+    assert not [signal for signal in signals if signal.signal_type == "countdown_non_monotonic"]
+
+
+def test_main_cleanup_countdown_is_memory_reset_near_terminal_audit_window() -> None:
+    signals, ledger_entries = analyze_countdowns(
+        project_id="p1",
+        chapter_number=3,
+        draft_id="d3",
+        body=(
+            "【主线清理倒计时：00:77:12】"
+            "【终端审计窗口：00:76:08】"
+            "屏幕上的时间跳到03:04。主线清理倒计时：00:72:18。"
+            "终端审计窗口剩余：00:71:09。"
+        ),
+        previous_entries=[],
+        is_final_chapter=False,
+    )
+
+    assert [
+        (entry.countdown_key, entry.raw_mention)
+        for entry in ledger_entries
+    ] == [
+        ("memory_reset", "00:77:12"),
+        ("terminal_audit_window", "00:76:08"),
+        ("memory_reset", "00:72:18"),
+        ("terminal_audit_window", "00:71:09"),
+    ]
     assert not [signal for signal in signals if signal.signal_type == "countdown_non_monotonic"]
 
 

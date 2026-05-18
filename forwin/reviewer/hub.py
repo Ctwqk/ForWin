@@ -11,8 +11,9 @@ from forwin.protocol.review import (
     normalize_repair_scope,
 )
 from forwin.protocol.writer import WriterOutput
+from forwin.config import Config
+from forwin.canon_quality.prompt_json.normalization import normalize_prompt_json_results_to_review_issues
 from forwin.canon_quality.service import analyze_writer_output_quality
-from forwin.canon_quality.temporal_semantics import LLMTemporalReconciler
 from forwin.skills import serialize_prompt_layers
 from .context_builder import build_review_context_pack
 from .experience import ExperienceReviewer
@@ -52,11 +53,6 @@ class HistoricalReviewHub:
         self.llm_webnovel_reviewer = llm_webnovel_reviewer
         self.llm_client = llm_client
         self.llm_enabled = bool(llm_client) if llm_enabled is None else bool(llm_enabled)
-        self.temporal_reconciler = (
-            LLMTemporalReconciler(llm_client)
-            if self.llm_enabled and llm_client is not None
-            else None
-        )
         self.observability = observability or NullObservability()
 
     def review(
@@ -116,7 +112,9 @@ class HistoricalReviewHub:
                     chapter_number=int(getattr(context, "chapter_number", 0) or 0),
                     writer_output=writer_output,
                     persist=False,
-                    temporal_reconciler=self.temporal_reconciler,
+                    mode=Config.from_env().reviewer_quality_mode,
+                    llm_client=self.llm_client if self.llm_enabled else None,
+                    return_raw_analyzer_results=True,
                 )
                 deterministic_quality_report = quality.deterministic_quality_report
                 span.metric("signal_count", len(quality.signals))
@@ -398,20 +396,52 @@ class HistoricalReviewHub:
     def _canon_quality_issues(deterministic_quality_report: dict | None) -> list[ContinuityIssue]:
         if not isinstance(deterministic_quality_report, dict):
             return []
+        prompt_review_issues = normalize_prompt_json_results_to_review_issues(
+            [
+                item for item in deterministic_quality_report.get("prompt_json_results", [])
+                if isinstance(item, dict)
+            ],
+            source_layer="canon_quality",
+        )
+        prompt_issues: list[ContinuityIssue] = []
+        for item in prompt_review_issues:
+            severity = "error" if item.get("blocking_origin") == "prompt_json" else "warning"
+            prompt_issues.append(
+                ContinuityIssue(
+                    rule_name=str(item.get("source_analyzer") or item.get("reviewer_issue_type") or "canon_quality"),
+                    severity=severity,  # type: ignore[arg-type]
+                    description=str(item.get("claim") or item.get("reviewer_issue_type") or "canon quality issue"),
+                    reviewer="canon_quality",
+                    issue_type=str(item.get("reviewer_issue_type") or "canon_quality"),
+                    target_scope="chapter",
+                    evidence_refs=[str(ref) for ref in item.get("evidence_refs", []) if str(ref).strip()],
+                    suggested_fix=str(item.get("suggested_fix") or ""),
+                    source_layer=str(item.get("source_layer") or "canon_quality"),
+                    source_analyzer=str(item.get("source_analyzer") or ""),
+                    source_mode=str(item.get("source_mode") or "prompt_json"),
+                    original_verdict=str(item.get("original_verdict") or ""),
+                    original_confidence=float(item.get("original_confidence") or 0.0),
+                    blocking_origin=str(item.get("blocking_origin") or ""),
+                    blocking=bool(item.get("blocking", False)),
+                    original_result=item.get("original_result") if isinstance(item.get("original_result"), dict) else {},
+                )
+            )
         raw_signals = [
             *list(deterministic_quality_report.get("blocking_signals", []) or []),
             *list(deterministic_quality_report.get("warning_signals", []) or []),
         ]
-        issues: list[ContinuityIssue] = []
+        issues: list[ContinuityIssue] = [*prompt_issues]
         for signal in raw_signals:
             if not isinstance(signal, dict):
+                continue
+            payload = signal.get("payload") if isinstance(signal.get("payload"), dict) else {}
+            if prompt_issues and str(payload.get("source_mode") or "") == "prompt_json":
                 continue
             signal_id = str(signal.get("signal_id") or "").strip()
             signal_type = str(signal.get("signal_type") or "canon_quality_signal").strip()
             severity = str(signal.get("severity") or "warning").strip()
             if severity not in {"error", "warning", "info"}:
                 severity = "warning"
-            payload = signal.get("payload") if isinstance(signal.get("payload"), dict) else {}
             suggested_fix = str(payload.get("repair_hint") or signal.get("description") or "").strip()
             issues.append(
                 ContinuityIssue(
@@ -423,6 +453,14 @@ class HistoricalReviewHub:
                     target_scope=str(signal.get("target_scope") or "chapter"),
                     evidence_refs=[f"canon_quality:{signal_id}"] if signal_id else [],
                     suggested_fix=suggested_fix,
+                    source_layer="canon_quality",
+                    source_analyzer=signal_type,
+                    source_mode=str(payload.get("source_mode") or "deterministic"),
+                    original_verdict="fail" if severity == "error" else "warn" if severity == "warning" else "pass",
+                    original_confidence=float(payload.get("confidence") or 1.0),
+                    blocking_origin=str(payload.get("blocking_origin") or "deterministic"),
+                    blocking=severity == "error",
+                    original_result=signal,
                 )
             )
         return issues

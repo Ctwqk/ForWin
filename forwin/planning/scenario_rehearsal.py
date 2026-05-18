@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 import json
+import warnings
 from collections import OrderedDict
 from typing import Iterable
+
+warnings.warn(
+    "forwin.planning.scenario_rehearsal is deprecated; use "
+    "forwin.planning.scenario_rehearsal_service for new orchestration. "
+    "See Design-docs/DESIGN_STATUS.md.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session

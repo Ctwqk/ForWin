@@ -84,6 +84,47 @@ class NonFinalChapterClient:
         return payload
 
 
+class DecreasedCountdownKindClient:
+    def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
+        quote = "主线倒计时还剩74分钟。"
+        return {
+            "project_id": "p1",
+            "chapter_number": 7,
+            "form_schema_version": FORM_SCHEMA_VERSION,
+            "characters": [],
+            "countdowns": [
+                {
+                    "key": "main",
+                    "mentioned_in_chapter": True,
+                    "status_in_this_chapter": {
+                        "value": "active",
+                        "evidence_quote": quote,
+                        "subject_of_quote": "main",
+                        "confidence": 0.95,
+                    },
+                    "new_value_minutes": 74,
+                    "new_value_evidence": {
+                        "value": "74",
+                        "evidence_quote": quote,
+                        "subject_of_quote": "main",
+                        "confidence": 0.95,
+                    },
+                    "consistent_with_prior": {
+                        "value": "true",
+                        "evidence_quote": quote,
+                        "subject_of_quote": "main",
+                        "confidence": 0.95,
+                    },
+                    "inconsistency_kind": "decreased",
+                }
+            ],
+            "obligations": [],
+            "open_signals": [],
+            "new_observations": {},
+            "chapter_summary": "倒计时继续推进。",
+        }
+
+
 def test_form_service_projects_validated_answer() -> None:
     result = review_chapter_with_form(
         session=None,
@@ -169,6 +210,37 @@ def test_form_service_drops_unrequested_final_chapter_payload() -> None:
     )
 
     assert result.summary == "林青死亡。"
+    assert not any(issue["type"] == "form_schema_invalid" for issue in result.review_issues)
+
+
+def test_form_service_normalizes_decreased_countdown_kind() -> None:
+    result = review_chapter_with_form(
+        session=None,
+        project_id="p1",
+        chapter_number=7,
+        writer_output=WriterOutput(
+            project_id="p1",
+            chapter_number=7,
+            title="七",
+            body="主线倒计时还剩74分钟。",
+            end_of_chapter_summary="倒计时继续推进。",
+        ),
+        draft_id="d7",
+        llm_client=DecreasedCountdownKindClient(),
+        countdown_rows=[
+            {
+                "countdown_key": "main",
+                "label": "main",
+                "normalized_remaining_minutes": 79,
+                "status": "active",
+                "chapter_number": 6,
+            }
+        ],
+    )
+
+    assert result.blocking is False
+    assert result.countdown_entries[0].normalized_remaining_minutes == 74
+    assert result.countdown_entries[0].payload["inconsistency_kind"] == "none"
     assert not any(issue["type"] == "form_schema_invalid" for issue in result.review_issues)
 
 

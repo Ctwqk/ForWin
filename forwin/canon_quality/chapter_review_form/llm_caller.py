@@ -12,6 +12,35 @@ from .errors import ChapterReviewFormSchemaInvalid, ChapterReviewFormUnavailable
 from .form_schema import ChapterReviewAnswers, ChapterReviewForm
 
 
+_ALLOWED_INCONSISTENCY_KINDS = {
+    "regression",
+    "magnitude_mismatch",
+    "reopened_after_close",
+    "other",
+    "none",
+}
+
+_INCONSISTENCY_KIND_ALIASES = {
+    "": "none",
+    "consistent": "none",
+    "decrease": "none",
+    "decreased": "none",
+    "decremented": "none",
+    "counted_down": "none",
+    "normal_decrease": "none",
+    "no_inconsistency": "none",
+    "no_issue": "none",
+    "unchanged": "none",
+    "increased": "regression",
+    "increase": "regression",
+    "went_up": "regression",
+    "larger": "regression",
+    "reopened": "reopened_after_close",
+    "reopen": "reopened_after_close",
+    "mismatch": "magnitude_mismatch",
+    "value_mismatch": "magnitude_mismatch",
+}
+
 SYSTEM_PROMPT = (
     "You are a strict canon reviewer for a long-form Chinese web novel. "
     "Read the chapter and answer the form. Every binding answer requires an exact quote "
@@ -175,8 +204,7 @@ def _normalize_form_answer_shapes(payload: dict[str, Any]) -> None:
         fallback_evidence = _first_string(item, "evidence_quote", "quote", "new_value_quote")
         fallback_subject = _first_string(item, "subject_of_quote", "subject", "key", "label")
         fallback_confidence = item.get("confidence")
-        if not str(item.get("inconsistency_kind") or "").strip():
-            item["inconsistency_kind"] = "none"
+        item["inconsistency_kind"] = _normalize_inconsistency_kind(item.get("inconsistency_kind"))
         for key in ("status_in_this_chapter", "consistent_with_prior", "new_value_evidence"):
             if key in item and item[key] is not None:
                 item[key] = _coerce_form_answer(
@@ -270,6 +298,14 @@ def _scalar_answer_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value or "")
+
+
+def _normalize_inconsistency_kind(value: Any) -> str:
+    raw = str(value or "").strip()
+    normalized = raw.lower().replace("-", "_").replace(" ", "_")
+    if normalized in _ALLOWED_INCONSISTENCY_KINDS:
+        return normalized
+    return _INCONSISTENCY_KIND_ALIASES.get(normalized, "other")
 
 
 def _repair_messages(

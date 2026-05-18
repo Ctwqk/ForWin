@@ -59,6 +59,7 @@ def analyze_writer_output_quality(
         )
     min_blocking_confidence = float(config.chapter_review_form_min_blocking_confidence or 0.8)
     token_budget_chars = int(config.chapter_review_form_token_budget_chars or 8000)
+    max_schema_retries = int(config.chapter_review_form_max_llm_retries or 1)
     repo = CanonQualityRepository(session)
     form_result = review_chapter_with_form(
         session=session,
@@ -69,6 +70,7 @@ def analyze_writer_output_quality(
         llm_client=llm_client,
         min_blocking_confidence=min_blocking_confidence,
         token_budget_chars=token_budget_chars,
+        max_schema_retries=max_schema_retries,
     )
     if persist:
         repo.supersede_chapter_signals(project_id, chapter_number)

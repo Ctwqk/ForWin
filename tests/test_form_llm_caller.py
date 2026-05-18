@@ -39,6 +39,50 @@ class MissingEnvelopeClient:
         }
 
 
+class RepairingClient:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
+        self.calls.append(kwargs)
+        if len(self.calls) == 1:
+            return {
+                "characters": [
+                    {
+                        "name": "林青",
+                        "evidence_quote": "林青站在门口。",
+                        "confidence": 1.0,
+                    }
+                ],
+                "countdowns": [],
+                "obligations": [],
+                "open_signals": [],
+                "new_observations": {},
+                "chapter_summary": "bad shape",
+            }
+        return {
+            "characters": [
+                {
+                    "name": "林青",
+                    "appears_in_chapter": True,
+                    "life_state": {
+                        "value": "alive",
+                        "evidence_quote": "林青站在门口。",
+                        "subject_of_quote": "林青",
+                        "confidence": 0.95,
+                    },
+                    "custody_state": {"value": "free", "evidence_quote": "林青站在门口。", "subject_of_quote": "林青", "confidence": 0.8},
+                    "participation": {"value": "present", "evidence_quote": "林青站在门口。", "subject_of_quote": "林青", "confidence": 0.95},
+                }
+            ],
+            "countdowns": [],
+            "obligations": [],
+            "open_signals": [],
+            "new_observations": {},
+            "chapter_summary": "ok after repair",
+        }
+
+
 def test_call_form_uses_single_structured_json_call() -> None:
     client = FakeClient()
     form = ChapterReviewForm(
@@ -74,6 +118,26 @@ def test_call_form_fills_schema_envelope_from_form() -> None:
     assert answers.project_id == "p1"
     assert answers.chapter_number == 7
     assert answers.form_schema_version == FORM_SCHEMA_VERSION
+
+
+def test_call_form_repairs_schema_invalid_payload_once() -> None:
+    client = RepairingClient()
+    form = ChapterReviewForm(
+        project_id="p1",
+        chapter_number=7,
+        form_schema_version=FORM_SCHEMA_VERSION,
+        characters=[],
+        countdowns=[],
+        obligations=[],
+        open_signals=[],
+    )
+
+    answers = call_form(form=form, chapter_text="林青站在门口。", prior_canon_summary="", llm_client=client)
+
+    assert answers.chapter_summary == "ok after repair"
+    assert answers.characters[0].appears_in_chapter is True
+    assert len(client.calls) == 2
+    assert "previous JSON did not match" in client.calls[1]["messages"][-1]["content"]
 
 
 def test_call_form_requires_compatible_client() -> None:

@@ -58,6 +58,7 @@ def review_chapter_with_form(
     target_total_chapters: int = 0,
     min_blocking_confidence: float = 0.8,
     token_budget_chars: int = 8000,
+    max_schema_retries: int = 1,
 ) -> ChapterReviewFormResult:
     repo = CanonQualityRepository(session) if session is not None else None
     project = session.get(Project, project_id) if session is not None else None
@@ -89,6 +90,7 @@ def review_chapter_with_form(
             chapter_text=body,
             prior_canon_summary=_prior_canon_summary(form),
             llm_client=llm_client,
+            max_schema_retries=max_schema_retries,
         )
     except ChapterReviewFormSchemaInvalid as exc:
         return _failure_result(

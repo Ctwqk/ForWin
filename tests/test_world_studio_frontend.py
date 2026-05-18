@@ -26,6 +26,19 @@ class WorldStudioFrontendTests(unittest.TestCase):
         self.assertNotIn("studio-nav", app_source)
         self.assertNotIn(".studio-nav", css_source)
 
+    def test_world_studio_uses_forwin_design_system_baseline(self) -> None:
+        app_source = (REPO_ROOT / "frontend/world-studio/src/App.tsx").read_text(encoding="utf-8")
+        css_source = (REPO_ROOT / "frontend/world-studio/src/styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("fw-logo", app_source)
+        self.assertIn("brand-mark", app_source)
+        self.assertIn("ForWin Archive", app_source)
+        self.assertIn("Canon、Graph、Proposal、人物性格 loadout", app_source)
+        self.assertIn("--paper: #efe4d4", css_source)
+        self.assertIn("--accent: #b24b31", css_source)
+        self.assertIn("Source Serif 4", css_source)
+        self.assertIn("Plus Jakarta Sans", css_source)
+
     def test_world_studio_exposes_personality_loadout_editor(self) -> None:
         app_source = (REPO_ROOT / "frontend/world-studio/src/App.tsx").read_text(encoding="utf-8")
         css_source = (REPO_ROOT / "frontend/world-studio/src/styles.css").read_text(encoding="utf-8")

@@ -71,7 +71,6 @@ def test_first_batch_giant_files_stay_small() -> None:
         assert line_count <= max_lines, f"{relative_path} has {line_count} lines; expected <= {max_lines}"
 
 
-@pytest.mark.skip(reason="enable after second-batch decomposition tasks complete")
 def test_second_batch_compatibility_shells_stay_small() -> None:
     for relative_path, max_lines in SECOND_BATCH_SHELL_LIMITS.items():
         path = REPO_ROOT / relative_path

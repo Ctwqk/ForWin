@@ -241,23 +241,67 @@ def replay_chapter_range(
         resume=options.resume,
         force_restart=options.force_restart,
     )
+    current_cost = _state_cost_summary(state)
     results: list[ReplayChapterResult] = []
     for chapter_number in range(int(from_chapter), int(to_chapter) + 1):
         if state.should_skip_completed(chapter_number, force_rerun=options.force_rerun):
             continue
+        if options.cost_cap_usd is not None and not options.no_cost_cap:
+            from .cost_estimator import estimate_chapter_cost, should_abort_for_cost_cap
+
+            with session_factory() as session:
+                accepted = load_accepted_draft_ref(
+                    session=session,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                )
+                next_estimate = estimate_chapter_cost(
+                    chapter_number=chapter_number,
+                    body=accepted.body,
+                )
+            decision = should_abort_for_cost_cap(
+                current_cost=current_cost,
+                next_chapter_estimate=next_estimate,
+                cap_usd=options.cost_cap_usd,
+            )
+            if decision.abort:
+                state = state.mark_skipped(chapter_number, decision.reason)
+                state.summary["cost"] = {
+                    "total_usd": current_cost.total_usd,
+                    "projected_total_usd": decision.projected_total_usd,
+                    "cap_usd": options.cost_cap_usd,
+                }
+                write_state_atomic(path, state)
+                raise RuntimeError(f"cost cap reached before chapter {chapter_number}")
         try:
+            llm_client = llm_client_factory(chapter_number)
             with session_factory() as session:
                 result = replay_single_chapter(
                     session=session,
                     project_id=project_id,
                     chapter_number=chapter_number,
-                    llm_client=llm_client_factory(chapter_number),
+                    llm_client=llm_client,
                     persist=options.persist,
                     mode=options.mode,
                 )
                 session.commit()
+            from .cost_estimator import estimate_chapter_cost, usage_from_llm_client
+
+            result.token_usage = usage_from_llm_client(llm_client)
+            with session_factory() as session:
+                accepted = load_accepted_draft_ref(
+                    session=session,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                )
+                chapter_cost = estimate_chapter_cost(
+                    chapter_number=chapter_number,
+                    body=accepted.body,
+                )
+            current_cost = _add_cost(current_cost, chapter_cost)
             results.append(result)
             state = state.mark_completed(chapter_number, result.model_dump(mode="json"))
+            state.summary["cost"] = current_cost.model_dump(mode="json")
             write_state_atomic(path, state)
         except Exception as exc:  # noqa: BLE001
             with session_factory() as session:
@@ -267,3 +311,28 @@ def replay_chapter_range(
             if options.abort_on_error:
                 break
     return results
+
+
+def _state_cost_summary(state: ReplayState):
+    from .cost_estimator import CostEstimate
+
+    raw = dict(state.summary.get("cost") or {})
+    if not raw:
+        return CostEstimate()
+    return CostEstimate(
+        total_input_tokens=int(raw.get("total_input_tokens") or 0),
+        total_output_tokens=int(raw.get("total_output_tokens") or 0),
+        total_usd=float(raw.get("total_usd") or 0.0),
+        chapters=dict(raw.get("chapters") or {}),
+    )
+
+
+def _add_cost(current, chapter):
+    return current.model_copy(
+        update={
+            "total_input_tokens": current.total_input_tokens + chapter.total_input_tokens,
+            "total_output_tokens": current.total_output_tokens + chapter.total_output_tokens,
+            "total_usd": current.total_usd + chapter.total_usd,
+            "chapters": {**current.chapters, **chapter.chapters},
+        }
+    )

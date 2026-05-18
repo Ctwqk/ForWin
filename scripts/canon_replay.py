@@ -82,11 +82,32 @@ def main(argv: list[str] | None = None) -> int:
     from forwin.models.base import get_engine, get_session_factory, init_db
 
     config = Config.from_env()
-    llm_client = build_llm_client_for_replay(config, args.llm_profile)
     engine = get_engine(config.database_url)
     try:
         init_db(engine)
         session_factory = get_session_factory(engine)
+        if args.estimate_only:
+            from forwin.canon_quality.chapter_review_form.cost_estimator import estimate_run
+
+            estimate = estimate_run(
+                session_factory=session_factory,
+                project_id=args.project_id,
+                from_chapter=args.from_chapter,
+                to_chapter=resolved_to_chapter,
+            )
+            emit_json_line({"status": "estimate", **estimate.model_dump(mode="json")})
+            return 0
+        if args.cost_cap_usd is None and not args.no_cost_cap:
+            emit_json_line(
+                {
+                    "status": "error",
+                    "error": "missing_cost_cap",
+                    "message": "Pass --cost-cap-usd <N> or --no-cost-cap.",
+                }
+            )
+            return 2
+
+        llm_client = build_llm_client_for_replay(config, args.llm_profile)
         if int(resolved_to_chapter) == int(args.from_chapter):
             with session_factory() as session:
                 result = replay_single_chapter(
@@ -111,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
             force_restart=args.force_restart,
             force_rerun=args.force_rerun,
             abort_on_error=args.abort_on_error,
+            cost_cap_usd=args.cost_cap_usd,
+            no_cost_cap=args.no_cost_cap,
         )
         results = replay_chapter_range(
             session_factory=session_factory,

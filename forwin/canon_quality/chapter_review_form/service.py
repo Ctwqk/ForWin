@@ -181,6 +181,7 @@ def _failure_result(
         "form_schema_version": FORM_SCHEMA_VERSION,
         "validation_status": "unverified",
         "blocking_origin": "chapter_review_form",
+        "blocking": True,
     }
     return ChapterReviewFormResult(
         project_id=project_id,

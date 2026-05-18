@@ -32,12 +32,15 @@ def call_form(
     messages = _messages(form=form, chapter_text=chapter_text, prior_canon_summary=prior_canon_summary)
     output_schema = ChapterReviewAnswers.model_json_schema()
     try:
-        raw = _complete_json(
-            llm_client=llm_client,
-            messages=messages,
-            output_schema=output_schema,
-            max_tokens=max_tokens,
-            timeout_seconds=timeout_seconds,
+        raw = _normalize_answer_payload(
+            _complete_json(
+                llm_client=llm_client,
+                messages=messages,
+                output_schema=output_schema,
+                max_tokens=max_tokens,
+                timeout_seconds=timeout_seconds,
+            ),
+            form=form,
         )
     except ChapterReviewFormUnavailable:
         raise
@@ -100,11 +103,37 @@ def _messages(*, form: ChapterReviewForm, chapter_text: str, prior_canon_summary
         {
             "role": "user",
             "content": (
-                "Answer the chapter review form as one valid JSON object matching the schema.\n\n"
+                "Answer the chapter review form as one valid JSON object matching the schema. "
+                "Return only the answer object; do not echo the input payload. "
+                "Include project_id, chapter_number, and form_schema_version exactly as provided in form.\n\n"
                 f"{json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2)}"
             ),
         },
     ]
+
+
+def _normalize_answer_payload(raw: dict[str, Any], *, form: ChapterReviewForm) -> dict[str, Any]:
+    if isinstance(raw.get("answers"), dict):
+        payload = dict(raw["answers"])
+    else:
+        payload = dict(raw)
+
+    answer_keys = {
+        "characters",
+        "countdowns",
+        "obligations",
+        "open_signals",
+        "new_observations",
+        "final_chapter",
+        "chapter_summary",
+    }
+    if not any(key in payload for key in answer_keys):
+        raise ChapterReviewFormSchemaInvalid("LLM response did not contain chapter review answers.")
+
+    payload["project_id"] = form.project_id
+    payload["chapter_number"] = form.chapter_number
+    payload["form_schema_version"] = form.form_schema_version
+    return payload
 
 
 def _coerce_json_object(value: Any) -> dict[str, Any]:

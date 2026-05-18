@@ -76,3 +76,4 @@ def test_form_service_llm_unavailable_blocks_without_writes() -> None:
     assert result.blocking is True
     assert result.character_transitions == []
     assert result.signals[0].signal_type == "form_llm_unavailable"
+    assert result.review_issues[0]["blocking"] is True

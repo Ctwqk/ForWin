@@ -27,6 +27,18 @@ class FakeClient:
         }
 
 
+class MissingEnvelopeClient:
+    def complete_json(self, **kwargs):  # noqa: ANN001, ANN201
+        return {
+            "characters": [],
+            "countdowns": [],
+            "obligations": [],
+            "open_signals": [],
+            "new_observations": {},
+            "chapter_summary": "ok",
+        }
+
+
 def test_call_form_uses_single_structured_json_call() -> None:
     client = FakeClient()
     form = ChapterReviewForm(
@@ -44,6 +56,24 @@ def test_call_form_uses_single_structured_json_call() -> None:
     assert answers.chapter_summary == "ok"
     assert len(client.calls) == 1
     assert client.calls[0]["output_schema"]["title"] == "ChapterReviewAnswers"
+
+
+def test_call_form_fills_schema_envelope_from_form() -> None:
+    form = ChapterReviewForm(
+        project_id="p1",
+        chapter_number=7,
+        form_schema_version=FORM_SCHEMA_VERSION,
+        characters=[],
+        countdowns=[],
+        obligations=[],
+        open_signals=[],
+    )
+
+    answers = call_form(form=form, chapter_text="正文", prior_canon_summary="", llm_client=MissingEnvelopeClient())
+
+    assert answers.project_id == "p1"
+    assert answers.chapter_number == 7
+    assert answers.form_schema_version == FORM_SCHEMA_VERSION
 
 
 def test_call_form_requires_compatible_client() -> None:

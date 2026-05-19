@@ -56,6 +56,7 @@ class BandPlanService:
         chapter_planner: ChapterExperiencePlanner | None = None,
         persistence: ExperiencePersistence | None = None,
         window_resolver: BandWindowResolver | None = None,
+        trope_cost_ceiling: int = 3,
     ) -> None:
         if subworld_manager is None:
             from forwin.subworld_manager import SubWorldManager
@@ -68,6 +69,7 @@ class BandPlanService:
         self.chapter_planner = chapter_planner or ChapterExperiencePlanner()
         self.persistence = persistence or ExperiencePersistence()
         self.window_resolver = window_resolver or BandWindowResolver()
+        self.trope_cost_ceiling = _normalize_trope_cost_ceiling(trope_cost_ceiling)
 
     def ensure_current_band_plan(
         self,
@@ -92,6 +94,7 @@ class BandPlanService:
             arc_experience=request.arc_experience,
             active_band=window.active_band,
             calibration=calibration,
+            cost_ceiling=self.trope_cost_ceiling,
         )
         role = classify_band_role(
             band_index=_band_index(window.chapter_start, request.detailed_band_size),
@@ -205,3 +208,10 @@ def _total_bands(target_total_chapters: int, band_size: int) -> int:
         return 0
     size = max(1, int(band_size or 1))
     return (target + size - 1) // size
+
+
+def _normalize_trope_cost_ceiling(value: object) -> int:
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 3

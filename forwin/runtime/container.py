@@ -176,6 +176,7 @@ class RuntimeContainer:
             subworld_manager=subworld_manager,
             world_contract_service=world_contract_service,
             experience_service=experience_planning_service,
+            trope_cost_ceiling=2 if config.quality_profile == "pulp" else 3,
         )
         arc_envelope_manager = ArcEnvelopeManager(
             director=arc_director,

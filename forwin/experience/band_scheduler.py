@@ -10,7 +10,7 @@ from forwin.protocol.experience import (
     BandRewardItem,
     CuriosityBeat,
 )
-from forwin.protocol.trope_library import TROPE_TEMPLATE_LIBRARY, trope_templates_by_category
+from forwin.protocol.trope_library import load_trope_template_library, trope_templates_by_category
 
 
 class BandExperienceScheduler:
@@ -24,8 +24,10 @@ class BandExperienceScheduler:
         arc_experience: ArcExperienceBundle,
         active_band: list[ChapterPlan],
         calibration: AudienceCalibrationProfile | None = None,
+        cost_ceiling: int = 3,
     ) -> BandDelightSchedule:
         calibration = calibration or AudienceCalibrationProfile()
+        normalized_cost_ceiling = _normalize_cost_ceiling(cost_ceiling)
         band_length = max(1, chapter_end - chapter_start + 1)
         stall_guard_max_gap = max(1, min(2, band_length - 1 if band_length > 1 else 1))
         scheduled_rewards: list[BandRewardItem] = []
@@ -38,6 +40,7 @@ class BandExperienceScheduler:
             for item in payoff_map.macro_payoffs
             if item.category not in {"emotion"}
         }
+        used_template_ids: set[str] = set()
 
         def chapter_for(slot: str) -> int:
             if slot == "early":
@@ -48,14 +51,38 @@ class BandExperienceScheduler:
                 return chapter_start + max(0, (band_length - 1) // 2)
             return chapter_start
 
-        def template_for(category: str, fallback_index: int) -> str:
+        def template_for(category: str) -> str:
             macro = macro_by_category.get(category)
-            if macro is not None and macro.template_id:
+            if macro is not None and macro.template_id and macro.template_id not in used_template_ids:
+                used_template_ids.add(macro.template_id)
                 return macro.template_id
-            template_candidates = trope_templates_by_category(category)
-            if template_candidates:
-                return template_candidates[fallback_index % len(template_candidates)].template_id
-            return TROPE_TEMPLATE_LIBRARY[fallback_index % len(TROPE_TEMPLATE_LIBRARY)].template_id
+
+            category_templates = _sorted_templates(trope_templates_by_category(category))
+            under_ceiling = [
+                template
+                for template in category_templates
+                if template.template_id not in used_template_ids
+                and template.cost_weight <= normalized_cost_ceiling
+            ]
+            fallback_same_category = [
+                template
+                for template in category_templates
+                if template.template_id not in used_template_ids
+            ]
+            library_templates = _sorted_templates(load_trope_template_library())
+            fallback_library = [
+                template
+                for template in library_templates
+                if template.template_id not in used_template_ids
+            ]
+
+            for candidates in (under_ceiling, fallback_same_category, fallback_library, library_templates):
+                if candidates:
+                    selected = candidates[0].template_id
+                    if selected:
+                        used_template_ids.add(selected)
+                    return selected
+            return ""
 
         blueprint: list[tuple[str, str, str]] = [
             ("power", "early", "micro_progress_power"),
@@ -76,12 +103,12 @@ class BandExperienceScheduler:
         elif calibration.protect_character_heat:
             blueprint.append(("emotion", "late", "emotion_knife"))
 
-        for index, (category, slot, intent) in enumerate(blueprint):
+        for category, slot, intent in blueprint:
             scheduled_rewards.append(
                 BandRewardItem(
                     chapter_hint=chapter_for(slot),
                     category=category,
-                    template_id=template_for(category, index),
+                    template_id=template_for(category),
                     intent=intent,
                 )
             )
@@ -97,7 +124,7 @@ class BandExperienceScheduler:
                 BandRewardItem(
                     chapter_hint=cursor,
                     category=category,
-                    template_id=template_for(category, cursor - chapter_start),
+                    template_id=template_for(category),
                     intent="stall_guard_cover",
                 )
             )
@@ -206,3 +233,19 @@ class BandExperienceScheduler:
             curiosity_beats=curiosity_beats,
             ambiguity_payoffs=ambiguity_payoffs,
         )
+
+
+def _normalize_cost_ceiling(value: object) -> int:
+    if value is None:
+        return 3
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _sorted_templates(templates: object) -> list:
+    return sorted(
+        list(templates or []),
+        key=lambda template: (int(getattr(template, "cost_weight", 2) or 0), str(template.template_id)),
+    )

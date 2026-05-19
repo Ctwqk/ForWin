@@ -492,6 +492,30 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
             "FORWIN_REVIEW_ENGINE_AUTO_APPROVE_ENABLED",
             False,
         ),
+        "review_engine_local_rewrite_enabled": tracked_bool(
+            "review_engine_local_rewrite_enabled",
+            "FORWIN_REVIEW_ENGINE_LOCAL_REWRITE_ENABLED",
+            False,
+        ),
+        "review_engine_commit_with_obligation_enabled": tracked_bool(
+            "review_engine_commit_with_obligation_enabled",
+            "FORWIN_REVIEW_ENGINE_COMMIT_WITH_OBLIGATION_ENABLED",
+            False,
+        ),
+        "review_engine_arc_book_budget_enabled": tracked_bool(
+            "review_engine_arc_book_budget_enabled",
+            "FORWIN_REVIEW_ENGINE_ARC_BOOK_BUDGET_ENABLED",
+            False,
+        ),
+        "review_engine_live_cutover_enabled": tracked_bool(
+            "review_engine_live_cutover_enabled",
+            "FORWIN_REVIEW_ENGINE_LIVE_CUTOVER_ENABLED",
+            False,
+        ),
+        "review_engine_live_cutover_project_allowlist": _env_csv(
+            env,
+            "FORWIN_REVIEW_ENGINE_LIVE_CUTOVER_PROJECT_ALLOWLIST",
+        ),
         "repair_model_sequence": _env_csv(
             env,
             "FORWIN_REPAIR_MODEL_SEQUENCE",
@@ -724,6 +748,11 @@ class _ConfigFields:
     review_engine_book_patcher_enabled: bool = False
     review_engine_obligation_verifier_enabled: bool = False
     review_engine_auto_approve_enabled: bool = False
+    review_engine_local_rewrite_enabled: bool = False
+    review_engine_commit_with_obligation_enabled: bool = False
+    review_engine_arc_book_budget_enabled: bool = False
+    review_engine_live_cutover_enabled: bool = False
+    review_engine_live_cutover_project_allowlist: list[str] = []
     repair_model_sequence: list[str] = [
         "deepseek-reasoner",
         "deepseek-reasoner",

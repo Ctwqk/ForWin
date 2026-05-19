@@ -155,8 +155,8 @@ def trope_registry_summary() -> TropeRegistrySummary:
 
 
 def trope_templates_by_category(category: RewardTag) -> list[TropeTemplate]:
-    return [item for item in TROPE_TEMPLATE_LIBRARY if item.category == category]
+    return [item for item in load_trope_template_library() if item.category == category]
 
 
 def trope_template_index() -> dict[str, TropeTemplate]:
-    return {item.template_id: item for item in TROPE_TEMPLATE_LIBRARY}
+    return {item.template_id: item for item in load_trope_template_library()}

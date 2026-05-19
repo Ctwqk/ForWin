@@ -52,7 +52,7 @@ from forwin.planning.scenario_rehearsal_resolution import ScenarioRehearsalCoord
 from forwin.protocol.scenario_rehearsal import ScenarioPlanPatch, ScenarioRehearsalReport
 from forwin.protocol.experience import BandDelightSchedule
 from forwin.protocol.trope_library import (
-    TROPE_TEMPLATE_LIBRARY,
+    load_trope_template_library,
     trope_registry_summary,
     validate_trope_template_payload,
 )
@@ -851,7 +851,7 @@ def get_trope_templates(
 ) -> list[TropeTemplateInfo]:
     normalized_category = str(category or "").strip()
     normalized_query = str(q or "").strip().lower()
-    templates = list(TROPE_TEMPLATE_LIBRARY)
+    templates = list(load_trope_template_library())
     if normalized_category:
         templates = [
             template

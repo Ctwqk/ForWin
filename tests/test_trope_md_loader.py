@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from forwin import api_governance_ops
 from forwin.protocol import trope_library
 from forwin.protocol.trope_md_loader import load_trope_templates_from_md
 
@@ -58,6 +59,22 @@ def test_markdown_override_summary_has_no_json_validation_error(monkeypatch: pyt
     assert summary.validation_errors == []
     assert summary.total_count == len(templates)
     assert summary.total_count >= 8
+
+    trope_library.load_trope_template_library.cache_clear()
+
+
+def test_markdown_override_drives_helpers_and_api_without_global_patch(monkeypatch: pytest.MonkeyPatch) -> None:
+    trope_library.load_trope_template_library.cache_clear()
+    monkeypatch.setenv("FORWIN_TROPE_TEMPLATE_PATH", str(PULP_LIBRARY_PATH))
+
+    templates = trope_library.load_trope_template_library()
+    summary = trope_library.trope_registry_summary()
+    power_templates = trope_library.trope_templates_by_category("power")
+    api_power_templates = api_governance_ops.get_trope_templates(category="power")
+
+    assert len(templates) == summary.total_count
+    assert any(template.template_id == "power-level-up" for template in power_templates)
+    assert any(template.template_id == "power-level-up" for template in api_power_templates)
 
     trope_library.load_trope_template_library.cache_clear()
 

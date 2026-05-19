@@ -4,7 +4,15 @@ import pytest
 
 from forwin.canon_quality.gate import evaluate_canon_admission, normalize_gate_mode
 from forwin.canon_quality.signals import CanonQualitySignal
+from forwin.extractor.book_state_graph_delta import _filter_graph_delta_layers
 from forwin.orchestrator_loop_core import quality_gates
+from forwin.protocol.book_state import (
+    CognitionPatch,
+    GraphDelta,
+    GraphDeltaType,
+    MapPatch,
+    NarrativePatch,
+)
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
@@ -375,3 +383,47 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
         )
 
     assert captured["llm_client"] is (None if passes_none else sentinel_llm_client)
+
+
+def test_world_only_layer_filter_removes_non_world_patches() -> None:
+    delta = GraphDelta(
+        id="delta-1",
+        project_id="project-1",
+        chapter_number=1,
+        delta_type=GraphDeltaType.WORLD_STATE,
+        summary="测试 delta",
+        map_patches=[
+            MapPatch(
+                target_type="location",
+                target_id="loc-a",
+                op="set",
+                field_path="x",
+                new_value="y",
+            )
+        ],
+        cognition_patches=[
+            CognitionPatch(
+                observer_type="character",
+                observer_id="a",
+                op="set",
+                field_path="belief",
+                new_value="b",
+            )
+        ],
+        narrative_patches=[
+            NarrativePatch(
+                target_ref="thread:a",
+                op="set",
+                field_path="status",
+                new_value="active",
+            )
+        ],
+    )
+
+    filtered = _filter_graph_delta_layers([delta], {"world"})
+
+    assert filtered[0].map_patches == []
+    assert filtered[0].cognition_patches == []
+    assert filtered[0].narrative_patches == []
+    assert filtered[0].metadata["requested_book_state_layers"] == ["world"]
+    assert filtered[0].metadata["filtered_patch_counts"]["map"] == 1

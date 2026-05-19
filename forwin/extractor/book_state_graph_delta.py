@@ -6,8 +6,44 @@ from forwin.book_state.extraction_contract import (
     BookStateExtractionRequest,
     BookStateExtractionResult,
 )
+from forwin.protocol.book_state import GraphDelta
 from forwin.extractor.world_v4 import WorldDeltaExtractor
 from forwin.world_v4_review_gate import V4ReviewGate
+
+
+DEFAULT_BOOK_STATE_LAYERS = {"world", "map", "cognition", "narrative"}
+
+
+def _filter_graph_delta_layers(
+    graph_deltas: list[GraphDelta],
+    layers: set[str],
+) -> list[GraphDelta]:
+    requested = sorted(str(layer) for layer in layers)
+    filtered: list[GraphDelta] = []
+    for delta in graph_deltas:
+        update: dict[str, object] = {}
+        counts = {
+            "map": len(delta.map_patches),
+            "cognition": len(delta.cognition_patches),
+            "narrative": len(delta.narrative_patches),
+        }
+        if "map" not in layers:
+            update["map_patches"] = []
+        if "cognition" not in layers:
+            update["cognition_patches"] = []
+        if "narrative" not in layers:
+            update["narrative_patches"] = []
+        update["metadata"] = {
+            **dict(delta.metadata),
+            "requested_book_state_layers": requested,
+            "filtered_patch_counts": {
+                key: value
+                for key, value in counts.items()
+                if key not in layers and value > 0
+            },
+        }
+        filtered.append(delta.model_copy(update=update))
+    return filtered
 
 
 class BookStateGraphDeltaExtractor:
@@ -18,6 +54,9 @@ class BookStateGraphDeltaExtractor:
     GraphDelta candidates. The orchestrator no longer treats the world_v4
     compiler as the canon success condition.
     """
+
+    def __init__(self, *, layers: set[str] | None = None) -> None:
+        self.layers = set(layers or DEFAULT_BOOK_STATE_LAYERS)
 
     def extract(self, request: BookStateExtractionRequest) -> BookStateExtractionResult:
         writer_output = request.writer_output.model_copy(update={"project_id": request.project_id})
@@ -74,6 +113,7 @@ class BookStateGraphDeltaExtractor:
             )
             for delta in changes.graph_deltas
         ]
+        graph_deltas = _filter_graph_delta_layers(graph_deltas, self.layers)
         changes = changes.model_copy(update={"graph_deltas": graph_deltas})
         return BookStateExtractionResult(
             project_id=request.project_id,

@@ -78,7 +78,14 @@ def _apply_world_v4_gate(
         "review": review_pack.model_dump(mode="json"),
         "compiler": compiler_pack.model_dump(mode="json"),
     }
-    extraction = BookStateGraphDeltaExtractor().extract(
+    default_book_state_layers = ["world", "map", "cognition", "narrative"]
+    extractor = BookStateGraphDeltaExtractor(
+        layers=set(
+            getattr(self.config, "book_state_layers", default_book_state_layers)
+            or default_book_state_layers
+        )
+    )
+    extraction = extractor.extract(
         BookStateExtractionRequest(
             project_id=project_id,
             chapter_number=chapter_number,

@@ -9,6 +9,7 @@ from .repair_v2 import (
     decide_repair_v2,
 )
 from .review_outcome import build_review_outcome_rules
+from .structural_patch import decide_structural_patch
 
 __all__ = [
     "build_final_acceptance_rules",
@@ -18,5 +19,6 @@ __all__ = [
     "build_scope_driven_repair_rules",
     "compare_repair_v2_shadow",
     "decide_repair_v2",
+    "decide_structural_patch",
     "decision_from_obligation_scope",
 ]

@@ -147,6 +147,31 @@ class NarrativeObligationRepository:
         ).scalars().all()
         return [self._patch_from_row(row) for row in rows]
 
+    def list_active_structural_patches(
+        self,
+        project_id: str,
+        *,
+        chapter_number: int,
+    ) -> list[NarrativePlanPatch]:
+        rows = self.session.execute(
+            select(NarrativePlanPatchRow)
+            .where(
+                NarrativePlanPatchRow.project_id == project_id,
+                NarrativePlanPatchRow.target_scope.in_(("arc", "book")),
+                NarrativePlanPatchRow.applied.is_(True),
+            )
+            .order_by(NarrativePlanPatchRow.created_at.asc(), NarrativePlanPatchRow.id.asc())
+        ).scalars().all()
+        current = int(chapter_number or 0)
+        result: list[NarrativePlanPatch] = []
+        for row in rows:
+            patch = self._patch_from_row(row)
+            affected = [int(item) for item in patch.affected_chapters if int(item or 0) > 0]
+            if affected and current > max(affected):
+                continue
+            result.append(patch)
+        return result
+
     def list_planned_for_chapter(self, project_id: str, *, origin_chapter_number: int) -> list[NarrativeObligation]:
         rows = self.session.execute(
             select(NarrativeObligationRow).where(

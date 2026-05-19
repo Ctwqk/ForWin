@@ -502,7 +502,10 @@ def _prepare_deferred_acceptance_if_needed(
                 review=verdict,
                 signals=list(signals),
                 open_obligations=[],
-                operation_mode=str(getattr(self.config, "operation_mode", "blackbox") or "blackbox"),
+                operation_mode=str(
+                    getattr(getattr(self, "config", None), "operation_mode", "blackbox")
+                    or "blackbox"
+                ),
                 attempts_completed=0,
                 prior_scope_history=[],
                 budget=None,

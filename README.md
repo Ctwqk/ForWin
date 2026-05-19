@@ -88,6 +88,13 @@ pointed to by `FORWIN_ENV_FILE`, or `.env` when unset, then overlays the real
 process environment. Real environment variables always win over values from the
 file.
 
+- `FORWIN_QUALITY_PROFILE`: `standard`, `pulp`, or `premium`. Defaults to
+  `standard`. `pulp` applies low-cost defaults unless the same field is
+  explicitly configured by env.
+- `FORWIN_TROPE_TEMPLATE_PATH`: optional JSON or markdown trope template
+  library path. Markdown libraries use the section format in
+  `Design-docs/trope_library_pulp_v1.md`.
+
 Docker Compose uses `.env` as the default env file. Copy `.env.example` to
 `.env`, set server paths, storage settings, and any API keys, then start the
 stack. If you use a different file, set `FORWIN_ENV_FILE` for the services and

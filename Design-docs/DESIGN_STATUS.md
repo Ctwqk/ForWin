@@ -25,6 +25,7 @@
 | `map_scheme_c.md` | active-current | Scheme C BookMap 最终语义。 |
 | `writing_flow_state_machine.md` | active-current | 当前写作任务状态机。 |
 | `V4.6_knowledge_system.md` | active-current | BookState DB Canon -> Obsidian -> LLM KB 权威关系。 |
+| `pulp_profile_upgrade_plan.md` | active-current | Pulp quality profile 当前实现计划；implementation tracked by `docs/superpowers/specs/2026-05-18-pulp-profile-upgrade-design.md` and `docs/superpowers/plans/2026-05-19-pulp-profile-upgrade.md`. |
 
 ## 维护文档
 

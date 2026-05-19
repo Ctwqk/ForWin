@@ -28,6 +28,14 @@ Genesis / Writer / Review 主链
 - review 主链：`reviewer.HistoricalReviewHub` 聚合章节文本、体验、治理、地图、人格和 lint；`BookStateReviewGate` 是 GraphDelta 入 canon 前的 deterministic guardrail。
 - skill runtime：仅作为 prompt / workflow instruction layer，参与 PromptTrace，不写 canon，不绕过 DecisionEvent 或 BookState gate。
 
+## Quality Profile
+
+ForWin supports `quality_profile=standard|pulp|premium`.
+
+`standard` is the default and preserves the existing long-form quality path.
+`pulp` derives a low-cost runtime profile from config: single-call writer mode, deterministic review, fatal-only canon admission, hard floor checks, world-only BookState extraction, context recency truncation, and low-cost trope selection.
+`premium` is reserved for future defaults and currently behaves like standard unless explicit config fields override it.
+
 ## Canon Commit Path
 
 新章节 accepted 后，canon success 只以 BookState direct path 为准：

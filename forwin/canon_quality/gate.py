@@ -264,6 +264,8 @@ def _form_blocking_refs(
                 signal_type = _issue_signal_type(issue)
                 if signal_type not in allowed_signal_types:
                     continue
+                if not _issue_is_blocking_severity(issue):
+                    continue
                 if require_evidence_for_block and not _issue_has_evidence(issue):
                     continue
             refs.append(f"{analyzer}:{issue.get('issue_id') or issue.get('type') or 'issue'}")
@@ -283,6 +285,21 @@ def _issue_signal_type(issue: dict) -> str:
 
 def _issue_has_evidence(issue: dict) -> bool:
     return bool(issue.get("evidence_quote") or issue.get("evidence_refs"))
+
+
+def _issue_is_blocking_severity(issue: dict) -> bool:
+    severity = str(issue.get("severity") or "").strip().lower()
+    if severity:
+        return severity in {"error", "fatal", "blocking"}
+    status = str(
+        issue.get("status")
+        or issue.get("verdict")
+        or issue.get("result")
+        or ""
+    ).strip().lower()
+    if status:
+        return status in {"error", "fail", "failed", "blocking", "conflict"}
+    return bool(issue.get("blocking"))
 
 
 def _result_can_block(result: dict, *, min_confidence: float, require_evidence: bool) -> bool:

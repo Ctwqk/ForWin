@@ -254,6 +254,66 @@ def test_fatal_only_does_not_block_non_fatal_form_analyzer_issue() -> None:
     assert result.required_repair_scope is None
 
 
+def test_fatal_only_does_not_block_mixed_form_result_with_fatal_warning() -> None:
+    result = evaluate_canon_admission(
+        project_id="project-1",
+        chapter_number=1,
+        analyzer_results=[
+            {
+                "analyzer": "ChapterReviewForm",
+                "blocking": True,
+                "confidence": 1.0,
+                "issues": [
+                    {
+                        "issue_id": "form-obligation",
+                        "type": "form_obligation_unresolved",
+                        "severity": "error",
+                        "evidence_quote": "义务-1没有被完成。",
+                    },
+                    {
+                        "issue_id": "form-countdown-warning",
+                        "type": "form_countdown_inconsistency",
+                        "severity": "warning",
+                        "evidence_quote": "倒计时描述存在不确定性。",
+                    },
+                ],
+            }
+        ],
+        mode="fatal_only",
+    )
+
+    assert result.commit_allowed is True
+    assert result.verdict == "pass"
+    assert result.llm_issue_refs == []
+
+
+def test_fatal_only_blocks_fatal_form_analyzer_error_with_evidence() -> None:
+    result = evaluate_canon_admission(
+        project_id="project-1",
+        chapter_number=1,
+        analyzer_results=[
+            {
+                "analyzer": "ChapterReviewForm",
+                "blocking": True,
+                "confidence": 1.0,
+                "issues": [
+                    {
+                        "issue_id": "form-countdown-error",
+                        "type": "form_countdown_inconsistency",
+                        "severity": "error",
+                        "evidence_quote": "倒计时从三分钟回到六十八分钟。",
+                    }
+                ],
+            }
+        ],
+        mode="fatal_only",
+    )
+
+    assert result.commit_allowed is False
+    assert result.verdict == "fail"
+    assert result.llm_issue_refs == ["ChapterReviewForm:form-countdown-error"]
+
+
 @pytest.mark.parametrize(
     ("gate_mode", "passes_none"),
     [

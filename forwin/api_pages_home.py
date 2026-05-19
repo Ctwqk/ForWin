@@ -91,7 +91,7 @@ def _render_review_engine_breakdown(items: list[dict[str, object]]) -> str:
                 [
                     '<div class="chapter-row">',
                     f"<strong>{rule_id}</strong>",
-                    f'<span class="status-chip">{status_chip}</span>',
+                    f'<span class="status-chip" data-chip="{status_chip}">{status_chip}</span>',
                     f'<div class="meta-line">outcome={outcome} | count={count}</div>',
                     f'<div class="meta-line">{reason}</div>' if reason else "",
                     "</div>",

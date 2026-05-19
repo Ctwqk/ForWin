@@ -13,6 +13,9 @@ def build_decision_event_payload(
     decision: Decision,
     input_digest: str,
     shadow_mismatch: bool,
+    live_or_shadow: str = "shadow",
+    legacy_outcome: str = "",
+    engine_outcome: str = "",
 ) -> dict[str, object]:
     return {
         "rule_id": decision.rule_id,
@@ -23,6 +26,9 @@ def build_decision_event_payload(
         "sub_action": dict(decision.sub_action),
         "input_digest": input_digest,
         "shadow_mismatch": bool(shadow_mismatch),
+        "live_or_shadow": str(live_or_shadow or "shadow"),
+        "legacy_outcome": str(legacy_outcome or ""),
+        "engine_outcome": str(engine_outcome or ""),
     }
 
 

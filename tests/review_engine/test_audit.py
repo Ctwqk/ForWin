@@ -17,6 +17,22 @@ def test_decision_event_payload_contains_rule_and_digest() -> None:
     assert payload["missing_evidence"] == ["deadline"]
 
 
+def test_decision_event_payload_records_live_shadow_sources() -> None:
+    payload = build_decision_event_payload(
+        decision=Decision("manual_review", "needs human", "rule-1", ["deadline"], "router", {}),
+        input_digest="abc123",
+        shadow_mismatch=True,
+        live_or_shadow="live",
+        legacy_outcome="manual_review",
+        engine_outcome="auto_approve",
+    )
+
+    assert payload["live_or_shadow"] == "live"
+    assert payload["legacy_outcome"] == "manual_review"
+    assert payload["engine_outcome"] == "auto_approve"
+    assert payload["shadow_mismatch"] is True
+
+
 def test_policy_disabled_decision_event_explains_auto_approve_flag() -> None:
     payload = build_decision_event_payload(
         decision=Decision(

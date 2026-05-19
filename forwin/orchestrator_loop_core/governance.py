@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from forwin.orchestrator_loop_core.common import *
+from forwin.review_engine.audit import build_decision_event_payload, digest_decision_input
+from forwin.review_engine.types import Decision, DecisionInput
 
 def _project_governance(self, project: Project):
     return normalize_project_governance(
@@ -52,6 +54,52 @@ def _record_decision_event(
     if not self._governance_root_event_id:
         self._governance_root_event_id = str(row.causal_root_id or row.id or "")
     return row
+
+def _record_engine_decision_event(
+    self,
+    *,
+    updater: StateUpdater,
+    decision: Decision,
+    decision_input: DecisionInput,
+    shadow_mismatch: bool = False,
+    live_or_shadow: str = "shadow",
+    legacy_outcome: str = "",
+    engine_outcome: str = "",
+    related_object_type: str = "",
+    related_object_id: str = "",
+    parent_event_id: str = "",
+) -> None:
+    try:
+        payload = build_decision_event_payload(
+            decision=decision,
+            input_digest=digest_decision_input(decision_input),
+            shadow_mismatch=shadow_mismatch,
+            live_or_shadow=live_or_shadow,
+            legacy_outcome=legacy_outcome,
+            engine_outcome=engine_outcome,
+        )
+        self._record_decision_event(
+            updater=updater,
+            project_id=decision_input.project_id,
+            chapter_number=decision_input.chapter_number,
+            event_family="review_engine",
+            event_type=DecisionEventType.REVIEW_ENGINE_DECISION,
+            scope="chapter",
+            summary=f"engine decided {decision.outcome} via {decision.rule_id}",
+            reason=decision.reason,
+            related_object_type=related_object_type,
+            related_object_id=related_object_id,
+            payload=payload,
+            parent_event_id=parent_event_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Failed to record review engine decision event project=%s chapter=%s rule=%s: %s",
+            decision_input.project_id,
+            decision_input.chapter_number,
+            decision.rule_id,
+            exc,
+        )
 
 def _audit_current_plan_before_write(
     self,
@@ -885,4 +933,4 @@ def _filter_supported_state_changes(changes):
 
 
 
-__all__ = ['_project_governance', '_record_decision_event', '_audit_current_plan_before_write', '_audit_future_plans_after_acceptance', '_future_plan_audit_plans', '_future_plan_audit_band_rows', '_record_future_plan_audit_events', '_record_generation_audit_checkpoint_if_due', '_generation_audit_checkpoint_payload', '_previous_band_row', '_manual_boundary_checkpoint', '_strict_progression_block', '_create_auto_band_checkpoint', '_filter_supported_state_changes']
+__all__ = ['_project_governance', '_record_decision_event', '_record_engine_decision_event', '_audit_current_plan_before_write', '_audit_future_plans_after_acceptance', '_future_plan_audit_plans', '_future_plan_audit_band_rows', '_record_future_plan_audit_events', '_record_generation_audit_checkpoint_if_due', '_generation_audit_checkpoint_payload', '_previous_band_row', '_manual_boundary_checkpoint', '_strict_progression_block', '_create_auto_band_checkpoint', '_filter_supported_state_changes']

@@ -118,6 +118,7 @@ class DecisionEventType:
     TERMINATE_REACHED = "terminate_reached"
 
     REVIEW_VERDICT_RECORDED = "review_verdict_recorded"
+    REVIEW_ENGINE_DECISION = "review_engine_decision"
     REPAIR_STARTED = "repair_started"
     REPAIR_FAILED = "repair_failed"
     REPAIR_SUCCEEDED = "repair_succeeded"

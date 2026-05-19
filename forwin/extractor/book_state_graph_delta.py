@@ -14,19 +14,52 @@ from forwin.world_v4_review_gate import V4ReviewGate
 DEFAULT_BOOK_STATE_LAYERS = {"world", "map", "cognition", "narrative"}
 
 
+def _normalize_book_state_layers(layers: set[str] | None) -> set[str]:
+    if layers is None:
+        return set(DEFAULT_BOOK_STATE_LAYERS)
+    normalized = {str(layer).strip().lower() for layer in layers if str(layer).strip()}
+    unknown = normalized - DEFAULT_BOOK_STATE_LAYERS
+    if unknown:
+        raise ValueError(
+            "unknown BookState extraction layers: " + ", ".join(sorted(unknown))
+        )
+    return normalized or set(DEFAULT_BOOK_STATE_LAYERS)
+
+
+def _has_meaningful_graph_delta_content(delta: GraphDelta) -> bool:
+    return bool(
+        delta.node_patches
+        or delta.edge_patches
+        or delta.fact_patches
+        or delta.map_patches
+        or delta.cognition_patches
+        or delta.narrative_patches
+    )
+
+
 def _filter_graph_delta_layers(
     graph_deltas: list[GraphDelta],
     layers: set[str],
 ) -> list[GraphDelta]:
+    layers = _normalize_book_state_layers(layers)
     requested = sorted(str(layer) for layer in layers)
     filtered: list[GraphDelta] = []
     for delta in graph_deltas:
         update: dict[str, object] = {}
         counts = {
+            "world": (
+                len(delta.node_patches)
+                + len(delta.edge_patches)
+                + len(delta.fact_patches)
+            ),
             "map": len(delta.map_patches),
             "cognition": len(delta.cognition_patches),
             "narrative": len(delta.narrative_patches),
         }
+        if "world" not in layers:
+            update["node_patches"] = []
+            update["edge_patches"] = []
+            update["fact_patches"] = []
         if "map" not in layers:
             update["map_patches"] = []
         if "cognition" not in layers:
@@ -42,7 +75,9 @@ def _filter_graph_delta_layers(
                 if key not in layers and value > 0
             },
         }
-        filtered.append(delta.model_copy(update=update))
+        filtered_delta = delta.model_copy(update=update)
+        if _has_meaningful_graph_delta_content(filtered_delta):
+            filtered.append(filtered_delta)
     return filtered
 
 
@@ -56,7 +91,7 @@ class BookStateGraphDeltaExtractor:
     """
 
     def __init__(self, *, layers: set[str] | None = None) -> None:
-        self.layers = set(layers or DEFAULT_BOOK_STATE_LAYERS)
+        self.layers = _normalize_book_state_layers(layers)
 
     def extract(self, request: BookStateExtractionRequest) -> BookStateExtractionResult:
         writer_output = request.writer_output.model_copy(update={"project_id": request.project_id})

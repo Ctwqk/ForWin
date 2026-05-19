@@ -328,18 +328,19 @@ def test_fatal_only_blocks_fatal_form_analyzer_error_with_evidence() -> None:
 
 
 @pytest.mark.parametrize(
-    ("gate_mode", "passes_none"),
+    ("gate_mode", "passes_none", "expected_analysis_mode"),
     [
-        ("off", True),
-        ("fatal_only", True),
-        ("shadow", False),
-        ("strict", False),
+        ("off", True, "off"),
+        ("fatal_only", True, "off"),
+        ("shadow", False, "primary"),
+        ("strict", False, "primary"),
     ],
 )
 def test_apply_canon_quality_gate_llm_client_by_gate_mode(
     monkeypatch,
     gate_mode: str,
     passes_none: bool,
+    expected_analysis_mode: str,
 ) -> None:
     class StopAfterAnalysis(Exception):
         pass
@@ -367,6 +368,7 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
 
     def fake_analyze_writer_output_quality(**kwargs):  # noqa: ANN003
         captured["llm_client"] = kwargs.get("llm_client")
+        captured["mode"] = kwargs.get("mode")
         raise StopAfterAnalysis
 
     monkeypatch.setattr(
@@ -388,6 +390,7 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
         )
 
     assert captured["llm_client"] is (None if passes_none else sentinel_llm_client)
+    assert captured["mode"] == expected_analysis_mode
 
 
 def test_world_only_layer_filter_removes_non_world_patches() -> None:

@@ -198,9 +198,47 @@ cutover 推进仍按阶段执行:
 - flag-on:fixture identity_ambiguity issue 首次 repair 直接 `arc_plan`,不走 draft→chapter→band 阶梯。
 - `tests/review_engine/test_repair_v2.py` + 新 `tests/review_engine/test_repair_v2_integration.py`,覆盖 5 类 issue × {first attempt, retry, exhausted}。
 
+### `MAX_ATTEMPTS_PER_SCOPE` (locked)
+
+```python
+MAX_ATTEMPTS_PER_SCOPE: dict[IssueScope, int] = {
+    "draft": 2,           # local 便宜,2 次修不好就不是 local 问题
+    "chapter_plan": 2,
+    "band_plan": 2,
+    "arc_plan": 1,        # arc patch 贵,单次失败直接升 book 或 manual
+    "book_plan": 1,
+    "subworld": 2,
+    "active_rules": 1,    # 规则违反通常是确定性的,重试无意义
+    "operator": 0,        # operator 错误直接 manual
+}
+```
+
+升级路径(`_escalate`):
+
+```
+draft → chapter_plan → band_plan → arc_plan → book_plan → manual_review
+subworld → manual_review
+active_rules → manual_review
+operator → manual_review
+```
+
+`decide_repair_v2` 内嵌检查:
+```python
+if input.attempts_completed >= MAX_ATTEMPTS_PER_SCOPE.get(primary.scope, 2):
+    next_scope = _escalate(primary.scope)
+    if next_scope == "manual_review":
+        return Decision(outcome="manual_review", rule_id="repair_v2_attempts_exhausted", ...)
+    return Decision(
+        outcome=_SCOPE_TO_OUTCOME[next_scope],
+        rule_id=f"repair_v2_escalated_from_{primary.scope}_to_{next_scope}",
+        ...,
+    )
+```
+
 ### Risk
 
-- legacy `RepairPolicy.decide()` 的 attempt-count "限流"作用 v2 没继承——可能某些循环失败 chapter 缺少 max_attempts 截断。**缓解**:`decide_repair_v2` 内部加 `attempts_completed >= MAX_PER_SCOPE` 检查,达上限升一级 scope 或转 `manual_review`。
+- legacy `RepairPolicy.decide()` 的 attempt-count "限流"作用 v2 没继承——可能某些循环失败 chapter 缺少 max_attempts 截断。**缓解**:上面的 `MAX_ATTEMPTS_PER_SCOPE` + `_escalate` 序列。
+- 重 scope(arc/book)只给 1 次可能在边界情况误升 manual。**缓解**:Gap 6 budget 通过时 arc/book 已经是"系统认为最小可控 scope",1 次失败仍然升级是设计意图,不算误升。
 
 ## Gap 2 — Persist engine DecisionEvent
 

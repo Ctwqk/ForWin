@@ -1,6 +1,5 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import "./topbar-runtime";
 import App from "./App";
 import "./styles.css";
 

@@ -6,9 +6,12 @@ from pathlib import Path
 from fastapi import HTTPException
 from fastapi.responses import HTMLResponse, Response
 
+from forwin.api_pages_shared import join_page_assets
 from forwin.api_schemas import WorldEditProposalReviewRequest, WorldModelExportRequest, WorldModelImportRequest
-from forwin.world_studio.search_service import WorldStudioSearchService
 from forwin.world_model import api as world_model_api
+
+
+_WORLD_STUDIO_TOPBAR_ASSET_ID = "forwin-world-studio-shared-topbar"
 
 
 def build_handlers(
@@ -77,6 +80,8 @@ def build_handlers(
         section_type: str = "",
         limit: int = 10,
     ):
+        from forwin.world_studio.search_service import WorldStudioSearchService
+
         with get_session() as session:
             world_model_api._ensure_project(session, project_id)
             config = get_config() if get_config is not None else None
@@ -122,19 +127,39 @@ def _world_studio_root():
 def _world_studio_html() -> str:
     dist_index = _world_studio_root() / "dist" / "index.html"
     if dist_index.exists():
-        return dist_index.read_text(encoding="utf-8")
-    return """<!doctype html>
+        return _inject_world_studio_shared_topbar(dist_index.read_text(encoding="utf-8"))
+    return f"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ForWin 世界档案</title>
+{_world_studio_shared_topbar_assets()}
 </head>
 <body>
+  <forwin-topbar active="world"></forwin-topbar>
   <div id="root">世界档案尚未构建。运行 npm --prefix frontend/world-studio run build。</div>
 </body>
 </html>
 """
+
+
+def _world_studio_shared_topbar_assets() -> str:
+    return f"""  <style id="{_WORLD_STUDIO_TOPBAR_ASSET_ID}">
+{join_page_assets("shared/topbar.css")}
+  </style>
+  <script>
+{join_page_assets("shared/i18n.js", "shared/forwin-topbar.js")}
+  </script>"""
+
+
+def _inject_world_studio_shared_topbar(html: str) -> str:
+    if _WORLD_STUDIO_TOPBAR_ASSET_ID in html:
+        return html
+    assets = _world_studio_shared_topbar_assets()
+    if "</head>" not in html:
+        return f"{assets}\n{html}"
+    return html.replace("</head>", f"{assets}\n</head>", 1)
 
 
 def _world_studio_asset(asset_path: str) -> tuple[bytes, str]:

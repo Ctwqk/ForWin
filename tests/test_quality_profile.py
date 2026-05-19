@@ -115,6 +115,33 @@ def test_explicit_env_wins_over_pulp_profile(
     assert config.hard_floor_gate_enabled is False
 
 
+@pytest.mark.parametrize(
+    ("env_key", "field", "expected"),
+    [
+        ("WRITER_MODE", "writer_mode", "single"),
+        ("FORWIN_HARD_FLOOR_GATE_ENABLED", "hard_floor_gate_enabled", True),
+        ("FORWIN_BOOK_STATE_LAYERS", "book_state_layers", ["world"]),
+    ],
+)
+def test_blank_env_values_do_not_suppress_pulp_profile_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    env_key: str,
+    field: str,
+    expected: object,
+) -> None:
+    config = config_from_env(
+        monkeypatch,
+        tmp_path,
+        {
+            "FORWIN_QUALITY_PROFILE": "pulp",
+            env_key: "",
+        },
+    )
+
+    assert getattr(config, field) == expected
+
+
 def test_standard_profile_keeps_representative_defaults(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -134,6 +161,18 @@ def test_standard_profile_keeps_representative_defaults(
     assert config.map_movement_review_enabled is True
     assert config.personality_review_enabled is True
     assert config.canon_quality_review_in_hub_enabled is True
+
+
+def test_pulp_profile_book_state_layers_are_not_shared_between_configs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first = config_from_env(monkeypatch, tmp_path, {"FORWIN_QUALITY_PROFILE": "pulp"})
+    first.book_state_layers.append("map")
+
+    second = config_from_env(monkeypatch, tmp_path, {"FORWIN_QUALITY_PROFILE": "pulp"})
+
+    assert second.book_state_layers == ["world"]
 
 
 def test_premium_profile_is_currently_identity(

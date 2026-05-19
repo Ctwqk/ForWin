@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import os
 from typing import Literal
 
@@ -222,7 +223,7 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
     explicit_keys: set[str] = set()
 
     def mark(field: str, *env_keys: str) -> None:
-        if any(key in env for key in env_keys):
+        if any(_env_str(env, key, "") != "" for key in env_keys):
             explicit_keys.add(field)
 
     def tracked_str(field: str, key: str, default: str = "") -> str:
@@ -584,7 +585,7 @@ def apply_quality_profile(config: "Config", *, explicit_keys: set[str]) -> "Conf
     else:
         return config
     update = {
-        key: value
+        key: deepcopy(value)
         for key, value in overrides.items()
         if key not in explicit_keys
     }

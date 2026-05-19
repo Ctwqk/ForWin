@@ -12,6 +12,17 @@ from forwin.world_v4_review_gate import V4ReviewGate
 
 
 DEFAULT_BOOK_STATE_LAYERS = {"world", "map", "cognition", "narrative"}
+_FILTER_METADATA_KEYS = {"requested_book_state_layers", "filtered_patch_counts"}
+_WORLD_CONTEXT_FIELDS = (
+    "story_time",
+    "operation",
+    "target_type",
+    "target_id",
+    "source_type",
+    "source_id",
+    "world_line_id",
+    "summary",
+)
 
 
 def _normalize_book_state_layers(layers: set[str] | None) -> set[str]:
@@ -26,15 +37,50 @@ def _normalize_book_state_layers(layers: set[str] | None) -> set[str]:
     return normalized or set(DEFAULT_BOOK_STATE_LAYERS)
 
 
-def _has_meaningful_graph_delta_content(delta: GraphDelta) -> bool:
-    return bool(
+def _has_meaningful_graph_delta_content(delta: GraphDelta, layers: set[str]) -> bool:
+    if (
         delta.node_patches
         or delta.edge_patches
         or delta.fact_patches
         or delta.map_patches
         or delta.cognition_patches
         or delta.narrative_patches
-    )
+    ):
+        return True
+    if "world" not in layers or str(delta.delta_type) != "world_state":
+        return False
+    if any(str(getattr(delta, field, "") or "").strip() for field in _WORLD_CONTEXT_FIELDS):
+        return True
+    if delta.evidence_refs:
+        return True
+    metadata = {
+        key: value
+        for key, value in dict(delta.metadata).items()
+        if key not in _FILTER_METADATA_KEYS
+    }
+    return bool(metadata)
+
+
+def _merge_filtered_patch_counts(
+    existing: object,
+    removed_counts: dict[str, int],
+) -> dict[str, int]:
+    merged: dict[str, int] = {}
+    if isinstance(existing, dict):
+        for key, value in existing.items():
+            layer = str(key)
+            if layer not in DEFAULT_BOOK_STATE_LAYERS:
+                continue
+            try:
+                count = int(value)
+            except (TypeError, ValueError):
+                continue
+            if count > 0:
+                merged[layer] = count
+    for key, value in removed_counts.items():
+        if value > 0:
+            merged[key] = merged.get(key, 0) + value
+    return merged
 
 
 def _filter_graph_delta_layers(
@@ -66,17 +112,22 @@ def _filter_graph_delta_layers(
             update["cognition_patches"] = []
         if "narrative" not in layers:
             update["narrative_patches"] = []
+        metadata = dict(delta.metadata)
+        removed_counts = {
+            key: value
+            for key, value in counts.items()
+            if key not in layers and value > 0
+        }
         update["metadata"] = {
-            **dict(delta.metadata),
+            **metadata,
             "requested_book_state_layers": requested,
-            "filtered_patch_counts": {
-                key: value
-                for key, value in counts.items()
-                if key not in layers and value > 0
-            },
+            "filtered_patch_counts": _merge_filtered_patch_counts(
+                metadata.get("filtered_patch_counts"),
+                removed_counts,
+            ),
         }
         filtered_delta = delta.model_copy(update=update)
-        if _has_meaningful_graph_delta_content(filtered_delta):
+        if _has_meaningful_graph_delta_content(filtered_delta, layers):
             filtered.append(filtered_delta)
     return filtered
 

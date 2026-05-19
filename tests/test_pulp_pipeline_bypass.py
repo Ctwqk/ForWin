@@ -558,15 +558,90 @@ def test_layer_filter_drops_patchless_delta() -> None:
         project_id="project-1",
         chapter_number=1,
         delta_type=GraphDeltaType.WORLD_STATE,
-        operation="noop",
-        target_type="world_delta",
-        target_id="noop",
-        summary="没有实际 patch",
     )
 
     filtered = _filter_graph_delta_layers([delta], BookStateGraphDeltaExtractor().layers)
 
     assert filtered == []
+
+
+def test_world_layer_filter_preserves_summary_only_world_delta() -> None:
+    delta = GraphDelta(
+        id="delta-summary-only",
+        project_id="project-1",
+        chapter_number=1,
+        delta_type=GraphDeltaType.WORLD_STATE,
+        operation="legacy_summary",
+        target_type="world_delta",
+        target_id="legacy-1",
+        source_type="legacy_import",
+        source_id="legacy-1",
+        world_line_id="main",
+        summary="旧版 world delta 摘要。",
+        metadata={"legacy_summary_only": True},
+    )
+
+    filtered = _filter_graph_delta_layers([delta], {"world"})
+
+    assert len(filtered) == 1
+    assert filtered[0].id == "delta-summary-only"
+    assert filtered[0].metadata["legacy_summary_only"] is True
+    assert filtered[0].metadata["filtered_patch_counts"] == {}
+
+
+def test_layer_filter_is_idempotent_and_preserves_filtered_counts() -> None:
+    delta = GraphDelta(
+        id="delta-idempotent",
+        project_id="project-1",
+        chapter_number=1,
+        delta_type=GraphDeltaType.WORLD_STATE,
+        node_patches=[
+            NodePatch(
+                node_id="event-a",
+                node_type="event",
+                op="set",
+                field_path="state.status",
+                new_value="active",
+            )
+        ],
+        map_patches=[
+            MapPatch(
+                target_type="location",
+                target_id="loc-a",
+                op="set",
+                field_path="status",
+                new_value="open",
+            )
+        ],
+        cognition_patches=[
+            CognitionPatch(
+                observer_type="character",
+                observer_id="a",
+                op="set",
+                field_path="visible_refs",
+                new_value=["fact:a"],
+            )
+        ],
+        narrative_patches=[
+            NarrativePatch(
+                target_ref="thread:a",
+                op="set",
+                field_path="status",
+                new_value="active",
+            )
+        ],
+    )
+
+    first_pass = _filter_graph_delta_layers([delta], {"world"})
+    second_pass = _filter_graph_delta_layers(first_pass, {"world"})
+
+    assert len(first_pass) == 1
+    assert second_pass[0].model_dump(mode="json") == first_pass[0].model_dump(mode="json")
+    assert first_pass[0].metadata["filtered_patch_counts"] == {
+        "map": 1,
+        "cognition": 1,
+        "narrative": 1,
+    }
 
 
 def test_book_state_layer_constructor_normalizes_known_layer_names() -> None:

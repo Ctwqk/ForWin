@@ -4,10 +4,13 @@
       var DICT = {
         cn: {
           "nav.books": "书本",
+          "nav.book": "书本",
           "nav.tasks": "任务",
+          "nav.task": "任务",
           "nav.archive": "世界档案",
           "nav.publish": "发布",
           "nav.settings": "配置",
+          "nav.config": "配置",
           "brand.workspace": "ForWin Workspace",
           "brand.publisher": "ForWin Publisher",
           "home.title": "工作台",
@@ -39,10 +42,13 @@
         },
         en: {
           "nav.books": "Books",
+          "nav.book": "Books",
           "nav.tasks": "Tasks",
+          "nav.task": "Tasks",
           "nav.archive": "Archive",
           "nav.publish": "Publish",
           "nav.settings": "Settings",
+          "nav.config": "Settings",
           "brand.workspace": "ForWin Workspace",
           "brand.publisher": "ForWin Publisher",
           "home.title": "Workspace",

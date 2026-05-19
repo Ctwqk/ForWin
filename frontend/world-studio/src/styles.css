@@ -200,9 +200,28 @@ h3 {
 .app-shell {
   position: relative;
   z-index: 1;
-  width: min(1380px, calc(100vw - 32px));
+  width: min(1380px, 100%);
   margin: 0 auto;
-  padding: 24px 0 48px;
+  padding: 0 22px 48px;
+}
+
+.forwin-topbar-wrap {
+  max-width: 1380px;
+  margin: 0 auto;
+  padding: 24px 22px 0;
+  box-sizing: border-box;
+}
+
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.top-bar .nav-tabs {
+  margin-bottom: 0;
 }
 
 .nav-tabs {
@@ -1176,8 +1195,8 @@ pre,
 
 @media (max-width: 640px) {
   .app-shell {
-    width: min(100vw - 20px, 1380px);
-    padding-top: 12px;
+    width: min(100vw, 1380px);
+    padding: 0 10px 48px;
   }
 
   h1 {
@@ -1199,6 +1218,15 @@ pre,
   .topbar-controls,
   .project-picker {
     width: 100%;
+  }
+
+  .top-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .lang-toggle {
+    width: max-content;
   }
 
   dl {

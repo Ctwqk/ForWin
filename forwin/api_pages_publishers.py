@@ -9,6 +9,7 @@ _PUBLISHERS_CSS_PATHS = ("publishers/page.css", "shared/i18n.css")
 _PUBLISHERS_BODY_PATHS = ("publishers/body.html",)
 _PUBLISHERS_SCRIPT_PATHS = (
     "shared/i18n.js",
+    "shared/forwin-topbar.js",
     "publishers/app_bridge.js",
     "publishers/app_uploads.js",
     "publishers/app_extension_events.js",

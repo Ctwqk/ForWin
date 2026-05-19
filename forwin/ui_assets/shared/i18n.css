@@ -5,6 +5,12 @@
       gap:12px;
       margin-bottom:16px;
     }
+    .forwin-topbar-wrap {
+      max-width:1380px;
+      margin:0 auto;
+      padding:24px 22px 0;
+      box-sizing:border-box;
+    }
     .top-bar .nav-tabs {
       margin-bottom:0;
     }

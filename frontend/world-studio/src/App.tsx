@@ -20,14 +20,8 @@ type Language = "cn" | "en";
 const LANGUAGE_STORAGE_KEY = "forwin-lang";
 
 const TRANSLATIONS = {
-  navBooks: { cn: "书本", en: "Books" },
-  navTasks: { cn: "任务", en: "Tasks" },
-  navArchive: { cn: "世界档案", en: "Archive" },
-  navPublish: { cn: "发布", en: "Publish" },
-  navSettings: { cn: "配置", en: "Settings" },
   archiveBrand: { cn: "ForWin Archive", en: "ForWin Archive" },
   archiveTitle: { cn: "世界档案", en: "World archive" },
-  languageToggle: { cn: "切换语言", en: "Switch Language" },
   project: { cn: "项目", en: "Project" },
   projectSelect: { cn: "选择项目", en: "Select project" },
   refresh: { cn: "刷新", en: "Refresh" },
@@ -345,27 +339,6 @@ function snapshotTitle(snapshot: WorldModelSnapshotInfo | null): string {
   return `第 ${snapshot.as_of_chapter} 章后 · v${snapshot.version}`;
 }
 
-function LanguageToggle({
-  language,
-  onChange,
-  t
-}: {
-  language: Language;
-  onChange: (language: Language) => void;
-  t: (key: TranslationKey) => string;
-}) {
-  return (
-    <div className="lang-toggle" role="group" aria-label={t("languageToggle")}>
-      <button className={language === "cn" ? "active" : ""} type="button" aria-pressed={language === "cn"} onClick={() => onChange("cn")}>
-        中
-      </button>
-      <button className={language === "en" ? "active" : ""} type="button" aria-pressed={language === "en"} onClick={() => onChange("en")}>
-        EN
-      </button>
-    </div>
-  );
-}
-
 export default function App() {
   const [language, setLanguage] = useState<Language>(readStoredLanguage);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -417,6 +390,16 @@ export default function App() {
     }
     window.dispatchEvent(new CustomEvent("forwin-langchange", { detail: { lang: language } }));
   }, [language]);
+
+  useEffect(() => {
+    const handleGlobalLanguageChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ lang?: string }>).detail;
+      const nextLanguage = normalizeLanguage(detail?.lang ?? readStoredLanguage());
+      setLanguage((current) => (current === nextLanguage ? current : nextLanguage));
+    };
+    window.addEventListener("forwin-langchange", handleGlobalLanguageChange);
+    return () => window.removeEventListener("forwin-langchange", handleGlobalLanguageChange);
+  }, []);
 
   useEffect(() => {
     void loadProjects();
@@ -839,40 +822,28 @@ export default function App() {
     <main className="app-shell">
       <header className="topbar topbar-shell">
         <div>
-          <nav className="nav-tabs nav-tabs--primary" aria-label="ForWin primary navigation">
-            <a className="nav-tab" href="/">{t("navBooks")}</a>
-            <a className="nav-tab" href="/#task">{t("navTasks")}</a>
-            <a className="nav-tab" href="/world-studio" aria-current="page">
-              {t("navArchive")}
-            </a>
-            <a className="nav-tab" href="/publishers">{t("navPublish")}</a>
-            <a className="nav-tab" href="/#config">{t("navSettings")}</a>
-          </nav>
           <div className="brand-mark">
             <span className="fw-logo" aria-hidden="true">FW</span>
             <span>{t("archiveBrand")}</span>
           </div>
           <h1>{t("archiveTitle")}</h1>
         </div>
-        <div className="topbar-controls">
-          <LanguageToggle language={language} onChange={setLanguage} t={t} />
-          <div className="topbar-actions">
-            <label className="project-picker">
-              <span>{t("project")}</span>
-              <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
-                <option value="">{t("projectSelect")}</option>
-                {projects.map((project) => (
-                  <option key={project.id} value={project.id}>
-                    {project.title || project.id}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button className="icon-button" type="button" onClick={() => refreshWorldModel()} disabled={busy || !projectId}>
-              <RefreshCw size={16} />
-              {t("refresh")}
-            </button>
-          </div>
+        <div className="topbar-actions">
+          <label className="project-picker">
+            <span>{t("project")}</span>
+            <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+              <option value="">{t("projectSelect")}</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.title || project.id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button className="icon-button" type="button" onClick={() => refreshWorldModel()} disabled={busy || !projectId}>
+            <RefreshCw size={16} />
+            {t("refresh")}
+          </button>
         </div>
       </header>
 

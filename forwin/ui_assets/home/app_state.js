@@ -1029,17 +1029,28 @@
       });
     }
 
+    function setLegacyTabState(id, active) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.classList.toggle('active', active);
+      el.setAttribute('aria-selected', active ? 'true' : 'false');
+    }
+
+    function syncPrimaryTopbar(tab) {
+      document.querySelectorAll('forwin-topbar').forEach((node) => {
+        node.setAttribute('active', tab);
+      });
+    }
+
     function switchTab(tab) {
       currentHomeTab = ['book', 'task', 'config'].includes(tab) ? tab : 'book';
       const bookActive = currentHomeTab === 'book';
       const taskActive = currentHomeTab === 'task';
       const configActive = currentHomeTab === 'config';
-      document.getElementById('tab_book').classList.toggle('active', bookActive);
-      document.getElementById('tab_book').setAttribute('aria-selected', bookActive ? 'true' : 'false');
-      document.getElementById('tab_task').classList.toggle('active', taskActive);
-      document.getElementById('tab_task').setAttribute('aria-selected', taskActive ? 'true' : 'false');
-      document.getElementById('tab_config').classList.toggle('active', configActive);
-      document.getElementById('tab_config').setAttribute('aria-selected', configActive ? 'true' : 'false');
+      syncPrimaryTopbar(currentHomeTab);
+      setLegacyTabState('tab_book', bookActive);
+      setLegacyTabState('tab_task', taskActive);
+      setLegacyTabState('tab_config', configActive);
       document.getElementById('panel_book').classList.toggle('active', bookActive);
       document.getElementById('panel_task').classList.toggle('active', taskActive);
       document.getElementById('panel_config').classList.toggle('active', configActive);
@@ -1054,6 +1065,13 @@
         void ensureFreshPlatforms({ maxAgeMs: 1500, reason: 'config_tab' });
       }
     }
+
+    window.addEventListener('forwin-tab-change', (event) => {
+      const key = event?.detail?.key;
+      if (['book', 'task', 'config'].includes(key)) {
+        switchTab(key);
+      }
+    });
 
     function initialHomeTabFromLocation() {
       const fragment = String(window.location.hash || '').replace(/^#/, '');

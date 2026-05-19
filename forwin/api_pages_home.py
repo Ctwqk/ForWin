@@ -14,6 +14,7 @@ _HOME_CSS_PATHS = ("home/page.css", "shared/i18n.css")
 _HOME_BODY_PATHS = ("home/body.html",)
 _HOME_SCRIPT_PATHS = (
     "shared/i18n.js",
+    "shared/forwin-topbar.js",
     "home/app_state.js",
     "home/app_genesis.js",
     "home/app_library.js",

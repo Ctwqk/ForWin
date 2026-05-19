@@ -136,9 +136,18 @@ def trope_registry_summary() -> TropeRegistrySummary:
     version = "starter"
     templates = TROPE_TEMPLATE_LIBRARY
     if override_path:
+        path = Path(override_path)
         try:
-            payload = json.loads(Path(override_path).read_text(encoding="utf-8"))
-            _, validation_errors = validate_trope_template_payload(payload, require_full=True)
+            if path.suffix.lower() == ".md":
+                from .trope_md_loader import load_trope_templates_from_md
+
+                validation_templates = load_trope_templates_from_md(path)
+                validation_errors = []
+            else:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                validation_templates, validation_errors = validate_trope_template_payload(payload, require_full=True)
+            if validation_templates:
+                templates = validation_templates
             if not validation_errors and len(templates) == FULL_LIBRARY_EXPECTED_COUNT:
                 version = "full"
         except Exception as exc:  # noqa: BLE001

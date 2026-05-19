@@ -114,4 +114,6 @@ def load_trope_templates_from_md(path: str | Path) -> tuple[TropeTemplate, ...]:
             section_lines.append(lines[index])
             index += 1
         templates.append(_parse_template_section(template_id, display_name, section_lines))
+    if not templates:
+        raise ValueError(f"no trope templates found in markdown library: {markdown_path}")
     return tuple(templates)

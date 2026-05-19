@@ -4,6 +4,17 @@
 
 闭合 `codex/review-engine-upgrade` 分支与原始设计(`docs/designs/review-engine-plan.md`)之间的实际差距,并把第一版被划为 out-of-scope 但现在已经成为瓶颈的几项提级。最终目标:engine 真正驱动决策,manual review 占比由"兜底"变成"显式分类",且每个决策都有审计追踪。
 
+## Implementation Status
+
+- Audit event persistence: implemented behind non-blocking event recording.
+- Dashboard three-state chip: implemented from real `REVIEW_ENGINE_DECISION` payloads.
+- Repair v2 orchestrator wiring: implemented with legacy-live shadow mode by default.
+- Local rewrite executor: implemented behind `review_engine_local_rewrite_enabled`.
+- Commit with obligation: implemented behind `review_engine_commit_with_obligation_enabled`.
+- Arc/book budget: implemented behind `review_engine_arc_book_budget_enabled`; run `scripts/audit_obligation_distribution.py` before enabling.
+- Live cutover: implemented behind `review_engine_live_cutover_enabled` and `review_engine_live_cutover_project_allowlist`; production phase advancement still requires elapsed observation windows.
+- Legacy removal: not started; requires global cutover stability and separate PRs.
+
 ## Scope
 
 ### 包含

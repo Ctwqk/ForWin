@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.checker.hard_floor import run_hard_floor
 from forwin.orchestrator_loop_core.common import *
 
 def _run_project_chapters(
@@ -266,6 +267,55 @@ def _run_project_chapters(
                     frozen_artifacts=frozen_artifacts,
                     current_chapter=chapter_num,
                 )
+
+            if self.config.hard_floor_gate_enabled:
+                hard_floor = run_hard_floor(
+                    writer_output=writer_output,
+                    context_pack=context,
+                    repo=repo,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                    config=self.config,
+                )
+                if not hard_floor.passed:
+                    hard_floor_issues = [
+                        {
+                            "reviewer": "hard_floor",
+                            "rule_name": reason,
+                            "severity": "error",
+                            "message": f"hard floor failed: {reason}",
+                        }
+                        for reason in hard_floor.fail_reasons
+                    ]
+                    hard_floor_reason = "; ".join(hard_floor.fail_reasons)
+                    summary = f"第{chapter_num}章 hard floor failed"
+                    if hard_floor_reason:
+                        summary = f"{summary}: {hard_floor_reason}"
+                    updater.mark_chapter_status(
+                        project_id,
+                        chapter_num,
+                        "failed",
+                        repair_attempt_count=repair_attempt_count,
+                        residual_review_issues=[
+                            *residual_review_issues,
+                            *hard_floor_issues,
+                        ],
+                        canon_risk_level="high",
+                    )
+                    self._record_decision_event(
+                        updater=updater,
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                        event_family="evaluation_verdict",
+                        event_type=DecisionEventType.HARD_GATE_HIT,
+                        scope="chapter",
+                        summary=summary,
+                        reason=hard_floor_reason,
+                        payload=hard_floor.model_dump(mode="json"),
+                    )
+                    session.commit()
+                    failed_chapters.append(chapter_num)
+                    continue
 
             if self.config.operation_mode == "checkpoint":
                 updater.mark_chapter_status(

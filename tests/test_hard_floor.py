@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from forwin.checker.hard_floor import HardFloorResult
 from forwin.checker.hard_floor import run_hard_floor
 from forwin.config import Config
+from forwin.governance import DecisionEventType
+from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.orchestrator_loop_core import project_chapters
+from forwin.orchestrator_loop_core.common import RunResult
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.state_change import EventCandidate
 from forwin.protocol.writer import WriterOutput
@@ -41,6 +46,241 @@ def context(**updates) -> ChapterContextPack:
 
 def config() -> Config:
     return Config(min_chapter_chars=20, hard_floor_gate_enabled=True)
+
+
+class FakeSession:
+    def __init__(self) -> None:
+        self.commit_count = 0
+        self.rollback_count = 0
+
+    def commit(self) -> None:
+        self.commit_count += 1
+
+    def rollback(self) -> None:
+        self.rollback_count += 1
+
+
+class FakeRepo:
+    def __init__(self) -> None:
+        self.project = SimpleNamespace(id="project-1", governance_json="{}")
+        self.chapter_plan = SimpleNamespace(id="plan-1", chapter_number=1)
+
+    def get_project(self, project_id: str):
+        return self.project if project_id == "project-1" else None
+
+    def get_chapter_plan(self, project_id: str, chapter_number: int):
+        if project_id == "project-1" and chapter_number == 1:
+            return self.chapter_plan
+        return None
+
+    def list_chapter_rewrite_attempts(self, project_id: str, chapter_number: int):
+        return [SimpleNamespace(id="rewrite-1"), SimpleNamespace(id="rewrite-2")]
+
+
+class FakeUpdater:
+    def __init__(self) -> None:
+        self.status_calls: list[tuple[str, int, str, dict[str, object]]] = []
+
+    def mark_chapter_status(self, project_id: str, chapter_number: int, status: str, **kwargs) -> None:
+        self.status_calls.append((project_id, chapter_number, status, kwargs))
+
+
+class FakeChapterLoop:
+    def __init__(self, *, hard_floor_gate_enabled: bool = True) -> None:
+        self.config = SimpleNamespace(
+            hard_floor_gate_enabled=hard_floor_gate_enabled,
+            operation_mode="checkpoint",
+            review_interval_chapters=0,
+        )
+        self.retrieval_broker = SimpleNamespace(
+            last_observability_summary={},
+            build_chapter_context=lambda *args, **kwargs: context(),
+        )
+        self.decision_events: list[dict[str, object]] = []
+
+    def _abort_requested(self) -> bool:
+        return False
+
+    def _pause_requested(self) -> bool:
+        return False
+
+    def _project_governance(self, project):
+        return SimpleNamespace()
+
+    def _strict_progression_block(self, **kwargs):
+        return "", "", ""
+
+    def _manual_boundary_checkpoint(self, *args, **kwargs):
+        return None
+
+    def _emit_progress(self, *args, **kwargs) -> None:
+        return None
+
+    def _audit_current_plan_before_write(self, **kwargs):
+        return kwargs["context"]
+
+    def _write_chapter_with_attention_fallback(self, **kwargs):
+        return writer("角色A推开门，看见证据。他当场拿出证据，反派失去资格。门外忽然传来第二封密令？")
+
+    def _review_and_maybe_rewrite(self, **kwargs):
+        return kwargs["writer_output"], SimpleNamespace(verdict="pass", issues=[]), False
+
+    def _review_issue_payloads(self, verdict):
+        return [
+            {
+                "reviewer": "continuity",
+                "rule_name": "existing_review_issue",
+                "severity": "warning",
+                "message": "existing issue",
+            }
+        ]
+
+    def _review_canon_risk(self, verdict) -> str:
+        return ""
+
+    def _record_decision_event(self, **kwargs):
+        self.decision_events.append(kwargs)
+
+    def _paused_result(
+        self,
+        project_id: str,
+        requested_chapters: int,
+        *,
+        completed_chapters,
+        failed_chapters,
+        paused_chapters,
+        frozen_artifacts,
+        current_chapter,
+    ) -> RunResult:
+        return RunResult(
+            project_id=project_id,
+            requested_chapters=requested_chapters,
+            completed_chapters=list(completed_chapters),
+            failed_chapters=list(failed_chapters),
+            paused_chapters=list(paused_chapters),
+            frozen_artifacts=list(frozen_artifacts),
+            paused=True,
+        )
+
+    def _cancelled_result(
+        self,
+        project_id: str,
+        requested_chapters: int,
+        *,
+        completed_chapters,
+        failed_chapters,
+        paused_chapters,
+        frozen_artifacts,
+        current_chapter,
+    ) -> RunResult:
+        return RunResult(
+            project_id=project_id,
+            requested_chapters=requested_chapters,
+            completed_chapters=list(completed_chapters),
+            failed_chapters=list(failed_chapters),
+            paused_chapters=list(paused_chapters),
+            frozen_artifacts=list(frozen_artifacts),
+            cancelled=True,
+        )
+
+
+def test_project_chapter_loop_hard_floor_failure_marks_failed_and_records_event(monkeypatch) -> None:
+    hard_floor = HardFloorResult(
+        passed=False,
+        fail_reasons=["chapter_length", "no_garbage"],
+        checks={"chapter_length": False, "no_garbage": False},
+        metadata={"body_char_count": 10},
+    )
+    hard_floor_calls = []
+
+    def fake_run_hard_floor(**kwargs):
+        hard_floor_calls.append(kwargs)
+        return hard_floor
+
+    monkeypatch.setattr(project_chapters, "run_hard_floor", fake_run_hard_floor, raising=False)
+
+    chapter_loop = FakeChapterLoop(hard_floor_gate_enabled=True)
+    session = FakeSession()
+    repo = FakeRepo()
+    updater = FakeUpdater()
+
+    result = WritingOrchestrator._run_project_chapters(
+        chapter_loop,
+        session=session,
+        repo=repo,
+        updater=updater,
+        checker=SimpleNamespace(),
+        project_id="project-1",
+        chapter_numbers=[1],
+        requested_chapters=1,
+    )
+
+    assert result.failed_chapters == [1]
+    assert result.paused_chapters == []
+    assert result.completed_chapters == []
+    assert len(hard_floor_calls) == 1
+    assert hard_floor_calls[0]["project_id"] == "project-1"
+    assert hard_floor_calls[0]["chapter_number"] == 1
+    assert hard_floor_calls[0]["repo"] is repo
+    assert hard_floor_calls[0]["config"] is chapter_loop.config
+
+    assert len(updater.status_calls) == 1
+    project_id, chapter_number, status, status_kwargs = updater.status_calls[0]
+    assert (project_id, chapter_number, status) == ("project-1", 1, "failed")
+    assert status_kwargs["repair_attempt_count"] == 2
+    assert status_kwargs["canon_risk_level"] == "high"
+    assert status_kwargs["residual_review_issues"] == [
+        {
+            "reviewer": "continuity",
+            "rule_name": "existing_review_issue",
+            "severity": "warning",
+            "message": "existing issue",
+        },
+        {
+            "reviewer": "hard_floor",
+            "rule_name": "chapter_length",
+            "severity": "error",
+            "message": "hard floor failed: chapter_length",
+        },
+        {
+            "reviewer": "hard_floor",
+            "rule_name": "no_garbage",
+            "severity": "error",
+            "message": "hard floor failed: no_garbage",
+        },
+    ]
+
+    assert len(chapter_loop.decision_events) == 1
+    event = chapter_loop.decision_events[0]
+    assert event["event_family"] == "evaluation_verdict"
+    assert event["event_type"] == DecisionEventType.HARD_GATE_HIT
+    assert event["scope"] == "chapter"
+    assert event["reason"] == "chapter_length; no_garbage"
+    assert "hard floor failed" in event["summary"]
+    assert event["payload"] == hard_floor.model_dump(mode="json")
+    assert session.commit_count >= 1
+
+
+def test_project_chapter_loop_skips_hard_floor_when_disabled(monkeypatch) -> None:
+    def fake_run_hard_floor(**kwargs):
+        raise AssertionError("hard floor should not run when disabled")
+
+    monkeypatch.setattr(project_chapters, "run_hard_floor", fake_run_hard_floor, raising=False)
+
+    chapter_loop = FakeChapterLoop(hard_floor_gate_enabled=False)
+    result = WritingOrchestrator._run_project_chapters(
+        chapter_loop,
+        session=FakeSession(),
+        repo=FakeRepo(),
+        updater=FakeUpdater(),
+        checker=SimpleNamespace(),
+        project_id="project-1",
+        chapter_numbers=[1],
+        requested_chapters=1,
+    )
+
+    assert result.status == "needs_review"
+    assert result.paused_chapters == [1]
 
 
 def test_short_chapter_fails() -> None:

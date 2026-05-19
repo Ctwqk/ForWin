@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.governance import DecisionEventType, ensure_decision_event_type
 from forwin.protocol.review import ReviewVerdict
 from forwin.review_engine.audit import build_decision_event_payload, digest_decision_input
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
@@ -31,6 +32,13 @@ def test_decision_event_payload_records_live_shadow_sources() -> None:
     assert payload["legacy_outcome"] == "manual_review"
     assert payload["engine_outcome"] == "auto_approve"
     assert payload["shadow_mismatch"] is True
+
+
+def test_review_engine_decision_event_type_is_registered() -> None:
+    assert (
+        ensure_decision_event_type(DecisionEventType.REVIEW_ENGINE_DECISION)
+        == DecisionEventType.REVIEW_ENGINE_DECISION
+    )
 
 
 def test_policy_disabled_decision_event_explains_auto_approve_flag() -> None:

@@ -257,6 +257,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.TERMINATE_REQUESTED,
     DecisionEventType.TERMINATE_REACHED,
     DecisionEventType.REVIEW_VERDICT_RECORDED,
+    DecisionEventType.REVIEW_ENGINE_DECISION,
     DecisionEventType.REPAIR_STARTED,
     DecisionEventType.REPAIR_FAILED,
     DecisionEventType.REPAIR_SUCCEEDED,

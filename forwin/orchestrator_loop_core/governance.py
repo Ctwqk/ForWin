@@ -82,7 +82,7 @@ def _record_engine_decision_event(
             updater=updater,
             project_id=decision_input.project_id,
             chapter_number=decision_input.chapter_number,
-            event_family="review_engine",
+            event_family="evaluation_verdict",
             event_type=DecisionEventType.REVIEW_ENGINE_DECISION,
             scope="chapter",
             summary=f"engine decided {decision.outcome} via {decision.rule_id}",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from forwin.governance import DecisionEventType, ensure_decision_event_type
+from forwin.governance import DecisionEventInfo, DecisionEventType, ensure_decision_event_type
+from forwin.orchestrator_loop_core.governance import _record_engine_decision_event
 from forwin.protocol.review import ReviewVerdict
 from forwin.review_engine.audit import build_decision_event_payload, digest_decision_input
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
@@ -39,6 +40,51 @@ def test_review_engine_decision_event_type_is_registered() -> None:
         ensure_decision_event_type(DecisionEventType.REVIEW_ENGINE_DECISION)
         == DecisionEventType.REVIEW_ENGINE_DECISION
     )
+
+
+def test_review_engine_decision_event_uses_valid_event_family() -> None:
+    class Recorder:
+        def __init__(self) -> None:
+            self.events: list[DecisionEventInfo] = []
+
+        def _record_decision_event(self, **kwargs) -> None:
+            self.events.append(
+                DecisionEventInfo(
+                    project_id=kwargs["project_id"],
+                    chapter_number=kwargs["chapter_number"],
+                    scope=kwargs["scope"],
+                    event_family=kwargs["event_family"],
+                    event_type=kwargs["event_type"],
+                    summary=kwargs["summary"],
+                    reason=kwargs["reason"],
+                    payload=kwargs["payload"],
+                )
+            )
+
+    recorder = Recorder()
+    decision_input = DecisionInput(
+        project_id="project-1",
+        chapter_number=1,
+        review=ReviewVerdict(verdict="warn"),
+        signals=[],
+        open_obligations=[],
+        operation_mode="copilot",
+        attempts_completed=0,
+        prior_scope_history=[],
+        budget=None,
+        target_total_chapters=10,
+        plan_layer_health=PlanLayerHealth(),
+    )
+
+    _record_engine_decision_event(
+        recorder,
+        updater=object(),
+        decision=Decision("auto_approve", "ok", "rule-1", [], "router", {}),
+        decision_input=decision_input,
+    )
+
+    assert recorder.events[0].event_family == "evaluation_verdict"
+    assert recorder.events[0].event_type == DecisionEventType.REVIEW_ENGINE_DECISION
 
 
 def test_policy_disabled_decision_event_explains_auto_approve_flag() -> None:

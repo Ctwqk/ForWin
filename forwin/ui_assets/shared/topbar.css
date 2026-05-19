@@ -1,0 +1,144 @@
+    html {
+      scrollbar-gutter: stable;
+    }
+
+    forwin-topbar {
+      display:block;
+      position:relative;
+      z-index:1;
+      --forwin-topbar-ui:"Plus Jakarta Sans","Avenir Next","Segoe UI","PingFang SC","Noto Sans SC",sans-serif;
+    }
+
+    forwin-topbar .forwin-topbar-wrap {
+      max-width:1380px;
+      margin:0 auto;
+      padding:24px 22px 0;
+      box-sizing:border-box;
+    }
+
+    forwin-topbar .top-bar {
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      margin-bottom:16px;
+    }
+
+    forwin-topbar .nav-tabs {
+      display:flex;
+      align-items:center;
+      gap:4px;
+      max-width:100%;
+      margin-bottom:0;
+      padding:4px;
+      border:1px solid rgba(109,98,85,.14);
+      border-radius:8px;
+      background:rgba(255,255,255,.48);
+      font:700 12px/1 var(--forwin-topbar-ui);
+      flex-wrap:nowrap;
+      overflow-x:auto;
+      white-space:nowrap;
+      scrollbar-width:none;
+    }
+
+    forwin-topbar .nav-tabs::-webkit-scrollbar {
+      display:none;
+    }
+
+    forwin-topbar .nav-tabs--primary {
+      width:max-content;
+    }
+
+    forwin-topbar .nav-tabs .nav-tab {
+      appearance:none;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:6px;
+      flex:0 0 auto;
+      min-height:32px;
+      padding:0 12px;
+      border:1px solid transparent;
+      border-radius:6px;
+      background:transparent;
+      color:var(--muted, #6d6255);
+      text-decoration:none;
+      box-shadow:none;
+      cursor:pointer;
+      font:700 12px/1 var(--forwin-topbar-ui);
+      transition:transform .16s ease, box-shadow .16s ease, background .16s ease, border-color .16s ease, color .16s ease, opacity .16s ease;
+    }
+
+    forwin-topbar .nav-tabs .nav-tab:hover {
+      border-color:rgba(109,98,85,.14);
+      background:rgba(255,255,255,.78);
+      transform:none;
+    }
+
+    forwin-topbar .nav-tabs .nav-tab.active,
+    forwin-topbar .nav-tabs .nav-tab[aria-current="page"],
+    forwin-topbar .nav-tabs .nav-tab[aria-selected="true"] {
+      border-color:rgba(178,75,49,.24);
+      background:rgba(255,255,255,.92);
+      color:var(--ink, #18211e);
+      box-shadow:0 1px 2px rgba(56,36,17,.08);
+    }
+
+    forwin-topbar .lang-toggle {
+      display:inline-flex;
+      align-items:center;
+      gap:4px;
+      flex:0 0 auto;
+      padding:4px;
+      border:1px solid rgba(109,98,85,.14);
+      border-radius:8px;
+      background:rgba(255,255,255,.52);
+      box-shadow:0 1px 2px rgba(56,36,17,.06);
+      font:700 12px/1 var(--forwin-topbar-ui);
+    }
+
+    forwin-topbar .lang-toggle button {
+      appearance:none;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-width:32px;
+      min-height:32px;
+      padding:0 9px;
+      border:1px solid transparent;
+      border-radius:6px;
+      background:transparent;
+      color:var(--muted, #6d6255);
+      box-shadow:none;
+      font:800 12px/1 var(--forwin-topbar-ui);
+      cursor:pointer;
+      transform:none;
+    }
+
+    forwin-topbar .lang-toggle button:hover {
+      border-color:rgba(109,98,85,.14);
+      background:rgba(255,255,255,.78);
+      transform:none;
+    }
+
+    forwin-topbar .lang-toggle button.active,
+    forwin-topbar .lang-toggle button[aria-pressed="true"] {
+      border-color:rgba(178,75,49,.24);
+      background:rgba(255,255,255,.94);
+      color:var(--ink, #18211e);
+    }
+
+    @media (max-width: 720px) {
+      forwin-topbar .forwin-topbar-wrap {
+        padding:16px 10px 0;
+      }
+
+      forwin-topbar .top-bar {
+        align-items:stretch;
+        flex-direction:column;
+      }
+
+      forwin-topbar .lang-toggle {
+        width:max-content;
+      }
+    }

@@ -178,7 +178,21 @@ def test_fatal_only_blocks_fatal_signal_with_evidence() -> None:
     assert result.verdict == "fail"
     assert result.blocking_issue_count == 1
     assert result.deterministic_issue_refs == ["sig-countdown_non_monotonic"]
-    assert result.required_repair_scope == "draft"
+    assert result.required_repair_scope is None
+
+
+def test_fatal_only_routes_chapter_plan_fatal_signal_repair_scope() -> None:
+    result = evaluate_canon_admission(
+        project_id="project-1",
+        chapter_number=1,
+        signals=[canon_signal("terminal_state_active_conflict")],
+        mode="fatal_only",
+    )
+
+    assert result.commit_allowed is False
+    assert result.verdict == "fail"
+    assert result.deterministic_issue_refs == ["sig-terminal_state_active_conflict"]
+    assert result.required_repair_scope == "chapter_plan"
 
 
 def test_fatal_only_does_not_block_warning_signal() -> None:
@@ -205,13 +219,55 @@ def test_fatal_only_does_not_block_error_signal_with_no_evidence() -> None:
     )
 
     assert result.commit_allowed is True
-    assert result.verdict == "pass"
+    assert result.verdict == "warn"
     assert result.blocking_issue_count == 0
     assert result.deterministic_issue_refs == []
+    assert result.residual_issue_refs == ["sig-countdown_non_monotonic"]
     assert result.required_repair_scope is None
 
 
-def test_apply_canon_quality_gate_passes_no_llm_client_in_fatal_only(monkeypatch) -> None:
+def test_fatal_only_does_not_block_non_fatal_form_analyzer_issue() -> None:
+    result = evaluate_canon_admission(
+        project_id="project-1",
+        chapter_number=1,
+        analyzer_results=[
+            {
+                "analyzer": "ChapterReviewForm",
+                "blocking": True,
+                "confidence": 1.0,
+                "issues": [
+                    {
+                        "issue_id": "form-1",
+                        "type": "form_obligation_unresolved",
+                        "severity": "error",
+                        "evidence_quote": "义务-1没有被完成。",
+                    }
+                ],
+            }
+        ],
+        mode="fatal_only",
+    )
+
+    assert result.commit_allowed is True
+    assert result.verdict == "pass"
+    assert result.llm_issue_refs == []
+    assert result.required_repair_scope is None
+
+
+@pytest.mark.parametrize(
+    ("gate_mode", "passes_none"),
+    [
+        ("off", True),
+        ("fatal_only", True),
+        ("shadow", False),
+        ("strict", False),
+    ],
+)
+def test_apply_canon_quality_gate_llm_client_by_gate_mode(
+    monkeypatch,
+    gate_mode: str,
+    passes_none: bool,
+) -> None:
     class StopAfterAnalysis(Exception):
         pass
 
@@ -222,12 +278,14 @@ def test_apply_canon_quality_gate_passes_no_llm_client_in_fatal_only(monkeypatch
         id = "review-1"
 
     class Config:
-        canon_quality_gate = "fatal_only"
+        canon_quality_gate = gate_mode
         chapter_review_form_mode = "primary"
+
+    sentinel_llm_client = object()
 
     class Orchestrator:
         config = Config()
-        llm_client = object()
+        llm_client = sentinel_llm_client
 
         def _latest_draft_and_review_for_chapter(self, **kwargs):  # noqa: ANN003
             return Draft(), Review()
@@ -256,4 +314,4 @@ def test_apply_canon_quality_gate_passes_no_llm_client_in_fatal_only(monkeypatch
             verdict=ReviewVerdict(verdict="pass", issues=[]),
         )
 
-    assert captured["llm_client"] is None
+    assert captured["llm_client"] is (None if passes_none else sentinel_llm_client)

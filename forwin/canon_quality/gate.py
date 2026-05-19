@@ -41,6 +41,36 @@ def _fatal_only_blocking(signals: list[CanonQualitySignal]) -> list[CanonQuality
     ]
 
 
+def _fatal_only_residual_refs(signals: list[CanonQualitySignal]) -> list[str]:
+    return [
+        signal.signal_id
+        for signal in signals
+        if signal.status == "open"
+        and signal.severity == "error"
+        and str(signal.signal_type) in _FATAL_ONLY_SIGNAL_TYPES
+        and not signal.evidence_refs
+    ]
+
+
+def _fatal_only_required_repair_scope(
+    signals: list[CanonQualitySignal],
+) -> Literal["draft", "chapter_plan", "band", "arc", "book"] | None:
+    from forwin.reviewer.repair_scope_router import RepairScopeKind, route_signal_kind
+
+    routed_scopes: list[Literal["draft", "chapter_plan"]] = []
+    for signal in signals:
+        routed = route_signal_kind(str(signal.signal_type or ""))
+        if routed == RepairScopeKind.CHAPTER_PLAN:
+            routed_scopes.append("chapter_plan")
+        elif routed == RepairScopeKind.DRAFT:
+            routed_scopes.append("draft")
+    if not routed_scopes:
+        return None
+    if "chapter_plan" in routed_scopes:
+        return "chapter_plan"
+    return "draft"
+
+
 def evaluate_canon_admission(
     *,
     project_id: str,
@@ -74,12 +104,22 @@ def evaluate_canon_admission(
         if signal.status == "open" and signal.severity == "warning"
     ]
     fatal_blocking = _fatal_only_blocking(quality_signals)
+    fatal_residual_refs = _fatal_only_residual_refs(quality_signals)
     deterministic_refs = [signal.signal_id for signal in blocking]
     form_blocking_refs = _form_blocking_refs(
         analyzer_results=analyzer_results or [],
         min_blocking_confidence=float(min_blocking_confidence or 0.8),
         require_evidence_for_block=bool(require_evidence_for_block),
     )
+    fatal_form_blocking_refs = _form_blocking_refs(
+        analyzer_results=analyzer_results or [],
+        min_blocking_confidence=float(min_blocking_confidence or 0.8),
+        require_evidence_for_block=bool(require_evidence_for_block),
+        allowed_signal_types=_FATAL_ONLY_SIGNAL_TYPES,
+    )
+    llm_issue_refs = form_blocking_refs
+    residual_issue_refs: list[str] = []
+    required_repair_scope: Literal["draft", "chapter_plan", "band", "arc", "book"] | None = None
     obligation_reasons = _obligation_blocking_reasons(
         obligations=active_obligations,
         plan_patches=available_patches,
@@ -127,9 +167,11 @@ def evaluate_canon_admission(
             f"narrative_obligations={len(active_obligations)}"
         )
     elif resolved_mode == "fatal_only":
+        llm_issue_refs = fatal_form_blocking_refs
+        residual_issue_refs = fatal_residual_refs
         commit_allowed = (
             not fatal_blocking
-            and not form_blocking_refs
+            and not fatal_form_blocking_refs
             and not review_failed
             and open_terminal_obligation_count <= 0
             and not obligation_reasons
@@ -140,13 +182,17 @@ def evaluate_canon_admission(
             else ("with_obligation" if active_obligations else "clean")
         )
         verdict = "fail" if not commit_allowed else (
-            "warn" if warnings or active_obligations or str(review_verdict) == "warn" else "pass"
+            "warn"
+            if warnings or fatal_residual_refs or active_obligations or str(review_verdict) == "warn"
+            else "pass"
         )
         blocking = fatal_blocking
         deterministic_refs = [signal.signal_id for signal in fatal_blocking]
+        required_repair_scope = _fatal_only_required_repair_scope(fatal_blocking)
         summary = (
             f"canon quality gate fatal_only: commit_allowed={commit_allowed}, "
-            f"fatal_blocking={len(fatal_blocking)}, warnings={len(warnings)}, "
+            f"fatal_blocking={len(fatal_blocking)}, form_blocking={len(fatal_form_blocking_refs)}, "
+            f"warnings={len(warnings)}, residual={len(fatal_residual_refs)}, "
             f"open_obligations={open_terminal_obligation_count}, "
             f"narrative_obligations={len(active_obligations)}"
         )
@@ -172,6 +218,8 @@ def evaluate_canon_admission(
             f"open_obligations={open_terminal_obligation_count}, "
             f"narrative_obligations={len(active_obligations)}"
         )
+    if resolved_mode != "fatal_only":
+        required_repair_scope = "draft" if blocking else None
 
     return CanonAdmissionGateResult(
         project_id=project_id,
@@ -190,8 +238,9 @@ def evaluate_canon_admission(
         warning_issue_count=len(warnings),
         open_terminal_obligation_count=max(0, int(open_terminal_obligation_count or 0)),
         deterministic_issue_refs=deterministic_refs,
-        llm_issue_refs=form_blocking_refs,
-        required_repair_scope="draft" if blocking else None,
+        llm_issue_refs=llm_issue_refs,
+        residual_issue_refs=residual_issue_refs,
+        required_repair_scope=required_repair_scope,
         gate_summary=summary,
     )
 
@@ -201,6 +250,7 @@ def _form_blocking_refs(
     analyzer_results: list[dict],
     min_blocking_confidence: float,
     require_evidence_for_block: bool,
+    allowed_signal_types: set[str] | None = None,
 ) -> list[str]:
     refs: list[str] = []
     for result in analyzer_results:
@@ -210,8 +260,29 @@ def _form_blocking_refs(
         for issue in result.get("issues") or []:
             if not isinstance(issue, dict):
                 continue
+            if allowed_signal_types is not None:
+                signal_type = _issue_signal_type(issue)
+                if signal_type not in allowed_signal_types:
+                    continue
+                if require_evidence_for_block and not _issue_has_evidence(issue):
+                    continue
             refs.append(f"{analyzer}:{issue.get('issue_id') or issue.get('type') or 'issue'}")
     return refs
+
+
+def _issue_signal_type(issue: dict) -> str:
+    return str(
+        issue.get("signal_type")
+        or issue.get("issue_type")
+        or issue.get("type")
+        or issue.get("kind")
+        or issue.get("rule_name")
+        or ""
+    ).strip()
+
+
+def _issue_has_evidence(issue: dict) -> bool:
+    return bool(issue.get("evidence_quote") or issue.get("evidence_refs"))
 
 
 def _result_can_block(result: dict, *, min_confidence: float, require_evidence: bool) -> bool:
@@ -224,7 +295,7 @@ def _result_can_block(result: dict, *, min_confidence: float, require_evidence: 
     for issue in result.get("issues") or []:
         if not isinstance(issue, dict):
             continue
-        if issue.get("evidence_quote") or issue.get("evidence_refs"):
+        if _issue_has_evidence(issue):
             return True
     return False
 

@@ -8,8 +8,9 @@ from forwin.planning.arc_plan_patcher import ArcPlanPatcher
 from forwin.planning.book_patch_validator import BookPatchValidator
 from forwin.planning.book_plan_patcher import BookPlanPatcher
 from forwin.narrative_obligations.budget import evaluate_obligation_budget
+from forwin.review_engine.cutover import select_cutover_pair
 from forwin.review_engine.engine import AutoDecisionEngine
-from forwin.review_engine.parity import compare_shadow_decisions
+from forwin.review_engine.parity import compare_shadow_decisions, severe_shadow_mismatch
 from forwin.review_engine.rules.review_outcome import (
     build_review_outcome_rules,
     decision_from_review_outcome,
@@ -17,6 +18,29 @@ from forwin.review_engine.rules.review_outcome import (
 from forwin.review_engine.rules.commit_with_obligation import decide_commit_with_obligation
 from forwin.review_engine.rules.structural_patch import decide_structural_patch
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
+
+_ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION = {
+    "auto_approve": "commit_clean",
+    "local_repair": "local_rewrite",
+    "chapter_patch": "defer_with_chapter_plan_patch",
+    "band_patch": "defer_with_band_plan_patch",
+    "arc_patch": "defer_with_arc_plan_patch",
+    "book_patch": "book_replan_required",
+    "commit_with_obligation": "commit_with_obligation",
+    "manual_review": "manual_review",
+    "system_block": "block",
+}
+
+
+def _review_action_for_cutover_decision(decision: Decision, fallback_action: str) -> str:
+    legacy_action = str(decision.sub_action.get("legacy_action") or "").strip()
+    if legacy_action:
+        return legacy_action
+    return _ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION.get(
+        str(decision.outcome or "").strip(),
+        str(fallback_action or "").strip(),
+    )
+
 
 @staticmethod
 def _is_timeout_like(exc: Exception) -> bool:
@@ -525,15 +549,49 @@ def _prepare_deferred_acceptance_if_needed(
             ),
         ),
     )
-    shadow_comparison = compare_shadow_decisions(
-        live=decision_from_review_outcome(outcome),
-        shadow=AutoDecisionEngine(build_review_outcome_rules()).decide(decision_input),
+    legacy_decision = decision_from_review_outcome(outcome)
+    engine_decision = AutoDecisionEngine(build_review_outcome_rules()).decide(decision_input)
+    selection = select_cutover_pair(
+        project_id=project_id,
+        legacy_decision=legacy_decision,
+        engine_decision=engine_decision,
+        config=getattr(self, "config", None),
     )
+    selected_review_action = _review_action_for_cutover_decision(
+        selection.live,
+        outcome.action,
+    )
+    selected_review_reason = str(selection.live.reason or outcome.reason or "")
+    selected_primary_issue_class = str(
+        selection.live.sub_action.get("primary_issue_class")
+        or outcome.primary_issue_class
+        or ""
+    ).strip()
+    shadow_comparison = compare_shadow_decisions(
+        live=selection.live,
+        shadow=selection.shadow,
+    )
+    record_engine_decision = getattr(self, "_record_engine_decision_event", None)
+    if callable(record_engine_decision):
+        record_engine_decision(
+            updater=StateUpdater(session),
+            decision=selection.live,
+            decision_input=decision_input,
+            shadow_mismatch=shadow_comparison.shadow_mismatch,
+            live_or_shadow="live",
+            legacy_outcome=legacy_decision.outcome,
+            engine_outcome=engine_decision.outcome,
+            related_object_type="chapter_review",
+            related_object_id=review_id,
+        )
     if shadow_comparison.shadow_mismatch:
         logger.warning(
-            "Review engine shadow mismatch project=%s chapter=%s live=%s shadow=%s",
+            "Review engine shadow mismatch project=%s chapter=%s live_source=%s shadow_source=%s severe=%s live=%s shadow=%s",
             project_id,
             chapter_number,
+            selection.live_source,
+            selection.shadow_source,
+            severe_shadow_mismatch(shadow_comparison),
             shadow_comparison.live,
             shadow_comparison.shadow,
         )
@@ -557,7 +615,7 @@ def _prepare_deferred_acceptance_if_needed(
             signals=signals,
             target_total_chapters=target_total_chapters,
             decision=structural_decision,
-            outcome_reason=outcome.reason,
+            outcome_reason=selected_review_reason,
             arc_book_budget_enabled=bool(
                 getattr(
                     getattr(self, "config", None),
@@ -575,9 +633,9 @@ def _prepare_deferred_acceptance_if_needed(
         )
     if structural_decision.rule_id in {"arc_patcher_disabled", "book_patcher_disabled"}:
         return [structural_decision.reason]
-    if outcome.action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
+    if selected_review_action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
         return []
-    issue_type = str(outcome.primary_issue_class or "").strip()
+    issue_type = selected_primary_issue_class
     if not issue_type:
         return []
     existing = session.execute(
@@ -651,7 +709,11 @@ def _prepare_deferred_acceptance_if_needed(
             return [commit_decision.reason]
 
     obligation_id = new_id()
-    summary = _summary_for_deferred_issue(verdict=verdict, issue_type=issue_type, outcome_reason=outcome.reason)
+    summary = _summary_for_deferred_issue(
+        verdict=verdict,
+        issue_type=issue_type,
+        outcome_reason=selected_review_reason,
+    )
     payoff_test = _payoff_test_for_deferred_issue(
         verdict=verdict,
         issue_type=issue_type,
@@ -674,7 +736,7 @@ def _prepare_deferred_acceptance_if_needed(
         priority=_priority_for_deferred_issue(issue_type),
         status="proposed",
         summary=summary,
-        deferral_reason=scope_decision.reason or outcome.reason,
+        deferral_reason=scope_decision.reason or selected_review_reason,
         hardness="design_debt",
         deadline_chapter=int(scope_decision.deadline_chapter or 0),
         payoff_test=payoff_test,

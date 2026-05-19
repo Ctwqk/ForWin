@@ -1,6 +1,18 @@
 from __future__ import annotations
 
 from forwin.orchestrator_loop_core.common import *
+from forwin.planning.arc_patch_validator import ArcPatchValidator
+from forwin.planning.arc_plan_patcher import ArcPlanPatcher
+from forwin.planning.book_patch_validator import BookPatchValidator
+from forwin.planning.book_plan_patcher import BookPlanPatcher
+from forwin.review_engine.engine import AutoDecisionEngine
+from forwin.review_engine.parity import compare_shadow_decisions
+from forwin.review_engine.rules.review_outcome import (
+    build_review_outcome_rules,
+    decision_from_review_outcome,
+)
+from forwin.review_engine.rules.structural_patch import decide_structural_patch
+from forwin.review_engine.types import DecisionInput, PlanLayerHealth
 
 @staticmethod
 def _is_timeout_like(exc: Exception) -> bool:
@@ -486,6 +498,58 @@ def _prepare_deferred_acceptance_if_needed(
         current_chapter=chapter_number,
         target_total_chapters=target_total_chapters,
     )
+    decision_input = DecisionInput(
+        project_id=project_id,
+        chapter_number=chapter_number,
+        review=verdict,
+        signals=list(signals),
+        open_obligations=[],
+        operation_mode=str(
+            getattr(getattr(self, "config", None), "operation_mode", "blackbox")
+            or "blackbox"
+        ),
+        attempts_completed=0,
+        prior_scope_history=[],
+        budget=None,
+        target_total_chapters=target_total_chapters,
+        plan_layer_health=PlanLayerHealth(),
+    )
+    shadow_comparison = compare_shadow_decisions(
+        live=decision_from_review_outcome(outcome),
+        shadow=AutoDecisionEngine(build_review_outcome_rules()).decide(decision_input),
+    )
+    if shadow_comparison.shadow_mismatch:
+        logger.warning(
+            "Review engine shadow mismatch project=%s chapter=%s live=%s shadow=%s",
+            project_id,
+            chapter_number,
+            shadow_comparison.live,
+            shadow_comparison.shadow,
+        )
+    structural_decision = decide_structural_patch(
+        input=decision_input,
+        arc_patcher_enabled=bool(
+            getattr(getattr(self, "config", None), "review_engine_arc_patcher_enabled", False)
+        ),
+        book_patcher_enabled=bool(
+            getattr(getattr(self, "config", None), "review_engine_book_patcher_enabled", False)
+        ),
+    )
+    if structural_decision.outcome in {"arc_patch", "book_patch"}:
+        return _persist_structural_patch_outcome(
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            draft_id=draft_id,
+            review_id=review_id,
+            verdict=verdict,
+            signals=signals,
+            target_total_chapters=target_total_chapters,
+            decision=structural_decision,
+            outcome_reason=outcome.reason,
+        )
+    if structural_decision.rule_id in {"arc_patcher_disabled", "book_patcher_disabled"}:
+        return [structural_decision.reason]
     if outcome.action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
         return []
     issue_type = str(outcome.primary_issue_class or "").strip()
@@ -620,6 +684,230 @@ def _prepare_deferred_acceptance_if_needed(
         target_total_chapters=target_total_chapters,
     )
     return [] if result.success else list(result.errors)
+
+
+def _persist_structural_patch_outcome(
+    *,
+    session: Session,
+    project_id: str,
+    chapter_number: int,
+    draft_id: str,
+    review_id: str,
+    verdict: ReviewVerdict,
+    signals: list[Any],
+    target_total_chapters: int,
+    decision,
+    outcome_reason: str,
+) -> list[str]:
+    issue_type = str(decision.sub_action.get("issue_kind") or "").strip()
+    if not issue_type:
+        return ["missing_structural_issue_kind"]
+    existing = session.execute(
+        select(NarrativeObligationRow)
+        .where(
+            NarrativeObligationRow.project_id == project_id,
+            NarrativeObligationRow.origin_chapter_number == int(chapter_number or 0),
+            NarrativeObligationRow.obligation_type == issue_type,
+            NarrativeObligationRow.status.in_(("planned", "active")),
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    if existing is not None:
+        return []
+
+    affected: list[int]
+    target_arc_id = ""
+    if decision.outcome == "arc_patch":
+        target_arc = _arc_for_chapter(
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_number,
+        )
+        if target_arc is None:
+            return [f"target_arc_not_found:{chapter_number}"]
+        target_arc_id = str(target_arc.id or "")
+        affected = _future_chapters_for_arc(
+            session=session,
+            project_id=project_id,
+            target_arc_id=target_arc_id,
+            current_chapter=chapter_number,
+            arc_end=int(target_arc.chapter_end or 0),
+        )
+    else:
+        affected = _future_chapters_for_book(
+            session=session,
+            project_id=project_id,
+            current_chapter=chapter_number,
+            target_total_chapters=target_total_chapters,
+        )
+    if not affected:
+        return [f"no_future_structural_patch_chapters:{issue_type}"]
+
+    obligation_id = new_id()
+    deadline_chapter = max(affected)
+    summary = _summary_for_deferred_issue(
+        verdict=verdict,
+        issue_type=issue_type,
+        outcome_reason=outcome_reason or decision.reason,
+    )
+    payoff_test = _payoff_test_for_deferred_issue(
+        verdict=verdict,
+        issue_type=issue_type,
+        deadline_chapter=deadline_chapter,
+        summary=summary,
+    )
+    source_signal_ids = _source_signal_ids_for_issue(signals=signals, issue_type=issue_type)
+    target_scope = "arc" if decision.outcome == "arc_patch" else "book"
+    obligation = NarrativeObligation(
+        id=obligation_id,
+        project_id=project_id,
+        origin_chapter_number=int(chapter_number or 0),
+        origin_draft_id=draft_id,
+        origin_review_id=review_id,
+        origin_signal_ids=source_signal_ids,
+        obligation_type=issue_type,
+        priority=_priority_for_deferred_issue(issue_type),
+        status="proposed",
+        summary=summary,
+        deferral_reason=decision.reason,
+        hardness="design_debt",
+        deadline_chapter=deadline_chapter,
+        payoff_test=payoff_test,
+        evidence_refs=[f"review:{review_id}"] if review_id else [],
+        metadata={"minimum_scope": target_scope, "review_engine_rule_id": decision.rule_id},
+    )
+    if decision.outcome == "arc_patch":
+        plan_patch = ArcPlanPatcher().build_patch(
+            project_id=project_id,
+            origin_chapter_number=chapter_number,
+            target_arc_id=target_arc_id,
+            issue_kind=issue_type,
+            summary=summary,
+            source_signal_ids=source_signal_ids,
+            source_obligation_ids=[obligation_id],
+            payoff_test=payoff_test,
+            affected_chapters=affected,
+        )
+        validation = ArcPatchValidator().validate(plan_patch)
+    else:
+        plan_patch = BookPlanPatcher().build_patch(
+            project_id=project_id,
+            origin_chapter_number=chapter_number,
+            issue_kind=issue_type,
+            summary=summary,
+            source_signal_ids=source_signal_ids,
+            source_obligation_ids=[obligation_id],
+            payoff_test=payoff_test,
+            affected_chapters=affected,
+        )
+        validation = BookPatchValidator().validate(plan_patch)
+    if not validation.passed:
+        return list(validation.errors)
+    result = DeferAcceptanceTransaction(session).run(
+        obligation=obligation,
+        plan_patch=plan_patch,
+        current_chapter=chapter_number,
+        target_total_chapters=target_total_chapters,
+    )
+    return [] if result.success else list(result.errors)
+
+
+def _arc_for_chapter(
+    *,
+    session: Session,
+    project_id: str,
+    chapter_number: int,
+) -> ArcPlanVersion | None:
+    return session.execute(
+        select(ArcPlanVersion)
+        .where(
+            ArcPlanVersion.project_id == project_id,
+            ArcPlanVersion.chapter_start <= int(chapter_number or 0),
+            ArcPlanVersion.chapter_end >= int(chapter_number or 0),
+        )
+        .order_by(ArcPlanVersion.created_at.desc(), ArcPlanVersion.id.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+
+
+def _future_chapters_for_arc(
+    *,
+    session: Session,
+    project_id: str,
+    target_arc_id: str,
+    current_chapter: int,
+    arc_end: int,
+) -> list[int]:
+    rows = session.execute(
+        select(ChapterPlan.chapter_number)
+        .where(
+            ChapterPlan.project_id == project_id,
+            ChapterPlan.arc_plan_id == target_arc_id,
+            ChapterPlan.chapter_number > int(current_chapter or 0),
+            ChapterPlan.status.in_(("planned", "failed")),
+        )
+        .order_by(ChapterPlan.chapter_number.asc())
+    ).scalars().all()
+    if rows:
+        return [int(chapter) for chapter in rows]
+    end = int(arc_end or 0)
+    current = int(current_chapter or 0)
+    return list(range(current + 1, end + 1)) if end > current else []
+
+
+def _future_chapters_for_book(
+    *,
+    session: Session,
+    project_id: str,
+    current_chapter: int,
+    target_total_chapters: int,
+) -> list[int]:
+    rows = session.execute(
+        select(ChapterPlan.chapter_number)
+        .where(
+            ChapterPlan.project_id == project_id,
+            ChapterPlan.chapter_number > int(current_chapter or 0),
+            ChapterPlan.status.in_(("planned", "failed")),
+        )
+        .order_by(ChapterPlan.chapter_number.asc())
+    ).scalars().all()
+    if rows:
+        return [int(chapter) for chapter in rows]
+    total = int(target_total_chapters or 0)
+    current = int(current_chapter or 0)
+    return list(range(current + 1, total + 1)) if total > current else []
+
+
+def _source_signal_ids_for_issue(*, signals: list[Any], issue_type: str) -> list[str]:
+    return [
+        str(getattr(signal, "signal_id", "") or "")
+        for signal in signals
+        if str(getattr(signal, "signal_type", "") or "") == issue_type
+        and str(getattr(signal, "signal_id", "") or "")
+    ]
+
+
+def evaluate_structural_patch_completion_debt(
+    *,
+    project_id: str,
+    chapter_number: int,
+    is_arc_final_chapter: bool,
+    is_book_final_chapter: bool,
+    active_patch_debt: list[dict[str, Any]],
+) -> dict[str, Any]:
+    del project_id
+    reasons: list[str] = []
+    for item in active_patch_debt:
+        patch_id = str(item.get("patch_id") or item.get("id") or "").strip()
+        target_scope = str(item.get("target_scope") or item.get("scope") or "").strip()
+        if target_scope == "arc" and is_arc_final_chapter:
+            reasons.append(f"unresolved_arc_patch_debt:{patch_id or chapter_number}")
+        if target_scope == "book" and is_book_final_chapter:
+            reasons.append(f"unresolved_book_patch_debt:{patch_id or chapter_number}")
+    return {
+        "commit_allowed": not reasons,
+        "blocking_reasons": reasons,
+    }
 
 @staticmethod
 def _band_scope_candidates(
@@ -854,4 +1142,4 @@ def _apply_canon_candidate(
 
 
 
-__all__ = ['_is_timeout_like', '_is_transient_llm_like', '_transient_retry_delay', '_current_model_identity', '_audit_operation_id', '_drain_llm_attempt_events', '_safe_prompt_trace_attempts', '_error_category_from_attempts', '_diagnostic_kind_for_failure', '_record_failure_prompt_trace', '_record_model_fallback_payloads', '_apply_canon_quality_gate', '_run_obligation_form_gate', '_prepare_deferred_acceptance_if_needed', '_band_scope_candidates', '_band_row_by_id', '_latest_draft_and_review_for_chapter', '_apply_canon_candidate']
+__all__ = ['_is_timeout_like', '_is_transient_llm_like', '_transient_retry_delay', '_current_model_identity', '_audit_operation_id', '_drain_llm_attempt_events', '_safe_prompt_trace_attempts', '_error_category_from_attempts', '_diagnostic_kind_for_failure', '_record_failure_prompt_trace', '_record_model_fallback_payloads', '_apply_canon_quality_gate', '_run_obligation_form_gate', '_prepare_deferred_acceptance_if_needed', '_band_scope_candidates', '_band_row_by_id', '_latest_draft_and_review_for_chapter', '_apply_canon_candidate', 'evaluate_structural_patch_completion_debt']

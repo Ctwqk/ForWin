@@ -627,14 +627,13 @@ class HistoricalReviewHub:
         )
         merged_scope = normalize_repair_scope(
             merged_scope,
-            preserve_v4=(merged_scope == "world_model"),
+            preserve_v4=(merged_scope in {"arc", "world_model"}),
         )
         merged_failure_type = (
             base_instruction.failure_type
             if base_instruction.failure_type == webnovel_instruction.failure_type
             else "mixed"
         )
-        merged_scope = "band" if merged_scope == "arc" else merged_scope
         merged_design_patch = dict(base_instruction.design_patch)
         for key, value in webnovel_instruction.design_patch.items():
             if key in merged_design_patch and isinstance(merged_design_patch[key], list) and isinstance(value, list):

@@ -9,6 +9,7 @@ ACTION_ACTIVE_TASK = "active_task"
 ACTION_WAITING_REVIEW = "waiting_review"
 ACTION_STARTED_INITIAL_GENERATION = "started_initial_generation"
 ACTION_STARTED_CONTINUE_GENERATION = "started_continue_generation"
+ACTION_RAN_REVIEW_JOBS = "ran_review_jobs"
 ACTION_STARTED_PUBLISH_JOBS = "started_publish_jobs"
 ACTION_IDLE = "idle"
 ACTION_BLOCKED = "blocked"
@@ -47,6 +48,8 @@ def message_for_action(
         return f"已按计划启动首批 {max(0, int(chapter_count or 0))} 章生成。"
     if action == ACTION_STARTED_CONTINUE_GENERATION:
         return f"已按计划继续生成，今日最多处理 {max(0, int(chapter_count or 0))} 章。"
+    if action == ACTION_RAN_REVIEW_JOBS:
+        return f"已按计划处理 {max(0, int(chapter_count or 0))} 个 review 任务。"
     if action == ACTION_STARTED_PUBLISH_JOBS:
         return f"已按计划创建 {max(0, int(publish_job_count or 0))} 个发布上传任务。"
     if action == ACTION_IDLE:

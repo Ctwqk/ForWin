@@ -53,6 +53,8 @@ def test_governance_actions_review_and_chapter_operations(page, browser_test_bas
     message = review_dialog.value.message
     review_dialog.value.accept()
     assert "Verdict" in message
+    assert "arc_patcher_disabled" in message
+    assert "arc_patch" in message
 
     page.get_by_role("button", name="Review 决策链").first.click()
     expect(page.locator("#global_status")).to_contain_text("已跳到")

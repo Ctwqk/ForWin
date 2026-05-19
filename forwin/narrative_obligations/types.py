@@ -82,6 +82,9 @@ class ObligationResolutionCandidate(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
     explanation: str = ""
     verifier_result: Literal["pass", "warn", "fail"] = "fail"
+    status: Literal["pass", "warn", "fail"] = "fail"
+    matched_markers: list[str] = Field(default_factory=list)
+    reason: str = ""
 
 
 class ReviewOutcome(BaseModel):

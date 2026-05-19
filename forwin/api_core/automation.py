@@ -220,6 +220,16 @@ def _load_automation_scheduler_metrics(
     )
 
 
+def _run_scheduled_review_action(project_id: str, chapter_number: int) -> Any:
+    if api_state._orchestrator is None:
+        return None
+    return api_state._orchestrator.accept_review(
+        project_id,
+        int(chapter_number),
+        reason="production_scheduler_review_quota",
+    )
+
+
 def _run_automation_scheduler_pass() -> None:
     production_scheduler_factory = None
     if api_state._runtime_container is not None:
@@ -237,6 +247,8 @@ def _run_automation_scheduler_pass() -> None:
         create_continue_generation_task=_create_continue_generation_task,
         active_generation_task_error_cls=ActiveGenerationTaskError,
         terminal_statuses=api_state._GENERATION_TERMINAL_STATUSES,
+        review_chapter=_run_scheduled_review_action,
+        approve_chapter_review=_run_scheduled_review_action,
         production_scheduler_factory=production_scheduler_factory,
     )
 

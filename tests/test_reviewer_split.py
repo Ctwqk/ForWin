@@ -141,3 +141,30 @@ def test_historical_review_hub_accepts_split_reviewer_ports() -> None:
     assert map_movement.calls == 1
     assert governance.calls == 1
     assert personality.calls == 1
+
+
+def test_historical_review_hub_merge_preserves_arc_repair_scope() -> None:
+    from forwin.protocol.review import RepairInstruction
+    from forwin.reviewer.hub import HistoricalReviewHub
+
+    base = RepairInstruction(
+        repair_scope="chapter_plan",
+        failure_type="mixed",
+        must_fix=["chapter pacing"],
+        scope_reason="chapter-level issue",
+    )
+    arc = RepairInstruction(
+        repair_scope="arc",
+        failure_type="mixed",
+        must_fix=["identity ambiguity"],
+        scope_reason="arc-level issue",
+    )
+
+    merged = HistoricalReviewHub._merge_repair_instructions(
+        continuity_instruction=base,
+        governance_instruction=None,
+        webnovel_instruction=arc,
+    )
+
+    assert merged is not None
+    assert merged.repair_scope == "arc"

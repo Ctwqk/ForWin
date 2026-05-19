@@ -316,6 +316,15 @@
       font:500 13px/1.7 var(--ui);
       white-space:pre-wrap;
     }
+    .review-engine-breakdown .status-chip {
+      width:max-content;
+      border:1px solid rgba(31,91,84,.24);
+      border-radius:999px;
+      padding:4px 9px;
+      background:rgba(31,91,84,.08);
+      color:var(--accent);
+      font:700 12px/1.2 var(--ui);
+    }
     .badge-row, .action-row, .inline-fields {
       display:flex;
       gap:8px;

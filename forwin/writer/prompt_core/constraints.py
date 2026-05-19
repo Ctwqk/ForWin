@@ -46,6 +46,11 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
         for item in quality.get("active_narrative_obligations", []) or []
         if isinstance(item, dict)
     ]
+    structural_patch_debt = [
+        item
+        for item in quality.get("active_structural_patch_debt", []) or []
+        if isinstance(item, dict)
+    ]
     future_plan_audit_summary = quality.get("future_plan_audit_summary", {})
     if not isinstance(future_plan_audit_summary, dict):
         future_plan_audit_summary = {}
@@ -62,6 +67,7 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
         character_state_constraints,
         open_signals,
         active_obligations,
+        structural_patch_debt,
         future_plan_audit_summary,
         is_final_chapter,
     )):
@@ -86,6 +92,7 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
         *_open_signal_constraint_sections(open_signals, suppressed=set()),
         *_future_plan_audit_sections(future_plan_audit_summary),
         *_active_obligation_constraint_sections(active_obligations, suppressed=set()),
+        *_structural_patch_debt_sections(structural_patch_debt),
     ]
     return _render_constraint_sections(
         sections,
@@ -283,6 +290,39 @@ def _active_obligation_constraint_sections(items: list[dict], *, suppressed: set
     return [ConstraintSection(key="active_obligations", priority=60, must_inject=False, text="\n".join(lines), max_chars=1100)]
 
 
+def _structural_patch_debt_sections(items: list[dict]) -> list[ConstraintSection]:
+    if not items:
+        return []
+    lines = ["  · 结构性计划补丁债务，后续章节必须偿还对应 payoff_tests："]
+    for item in items[:6]:
+        patch_id = str(item.get("patch_id") or "").strip()
+        scope = str(item.get("scope") or "").strip()
+        payoff_tests = [
+            str(test).strip()
+            for test in item.get("payoff_tests", []) or []
+            if str(test).strip()
+        ]
+        injections = [
+            raw for raw in item.get("writer_context_injections", []) or [] if isinstance(raw, dict)
+        ]
+        instruction = ""
+        if injections:
+            instruction = str(injections[0].get("instruction") or "").strip()
+        payoff = "；".join(payoff_tests[:3])
+        lines.append(
+            f"    · {scope} patch {patch_id}：{instruction[:140]}；payoff_tests={payoff[:180]}"
+        )
+    return [
+        ConstraintSection(
+            key="structural_patch_debt",
+            priority=55,
+            must_inject=True,
+            text="\n".join(lines),
+            max_chars=1200,
+        )
+    ]
+
+
 def _suppressed_prompt_constraint_keys(quality: dict) -> set[str]:
     raw_values = quality.get("suppressed_prompt_constraint_keys", []) or []
     return {str(item).strip() for item in raw_values if str(item).strip()}
@@ -350,6 +390,7 @@ __all__ = [
     '_open_signal_constraint_sections',
     '_future_plan_audit_sections',
     '_active_obligation_constraint_sections',
+    '_structural_patch_debt_sections',
     '_suppressed_prompt_constraint_keys',
     '_visible_countdown_constraints',
     '_visible_open_signal_constraints',

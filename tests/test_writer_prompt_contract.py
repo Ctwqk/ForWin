@@ -416,6 +416,43 @@ def test_writer_prompt_includes_band_obligation_contract() -> None:
     assert "本 band 结束前必须清偿" in content
 
 
+def test_writer_prompt_includes_active_structural_patch_debt() -> None:
+    context = ChapterContextPack(
+        project_id="p1",
+        project_title="灰城遗档",
+        premise="主角：陆明，旧城档案修复师。",
+        genre="悬疑科幻",
+        setting_summary="核心系统记忆系统维持公共档案秩序。",
+        chapter_number=13,
+        chapter_plan_title="审计窗口回响",
+        chapter_plan_one_line="陆明继续追查审计窗口真相。",
+        chapter_goals=["推进审计窗口真相"],
+        canon_quality_context={
+            "active_structural_patch_debt": [
+                {
+                    "patch_id": "patch-arc",
+                    "scope": "arc",
+                    "payoff_tests": ["本 arc 结束前必须解释身份线索。"],
+                    "writer_context_injections": [
+                        {
+                            "scope": "arc",
+                            "issue_kind": "identity_ambiguity",
+                            "instruction": "身份线索需要在本 arc 内澄清。",
+                        }
+                    ],
+                }
+            ],
+        },
+    )
+
+    prompt = build_single_chapter_draft_prompt(context)
+    content = "\n".join(message["content"] for message in prompt)
+
+    assert "结构性计划补丁债务" in content
+    assert "patch-arc" in content
+    assert "本 arc 结束前必须解释身份线索" in content
+
+
 def test_writer_prompt_changes_hook_contract_for_final_chapter() -> None:
     context = ChapterContextPack(
         project_id="p1",

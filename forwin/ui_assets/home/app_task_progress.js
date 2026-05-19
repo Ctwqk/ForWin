@@ -507,6 +507,9 @@
           Array.isArray(data.decision_refs) && data.decision_refs.length
             ? `决策链：${data.decision_refs.map((ref) => `${ref.event_type || 'event'}#${ref.id || ref.decision_event_id || '?'}`).join(', ')}`
             : '',
+          data.review_engine_decision?.rule_id
+            ? `Review Engine：${data.review_engine_decision.rule_id} -> ${data.review_engine_decision.outcome || '-'}\nreason：${data.review_engine_decision.reason || '-'}\nmissing：${Array.isArray(data.review_engine_decision.missing_evidence) ? data.review_engine_decision.missing_evidence.join(', ') : '-'}`
+            : '',
         ];
         window.alert(lines.join('\\n'));
       } catch (error) {

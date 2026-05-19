@@ -235,3 +235,80 @@ def test_defer_acceptance_transaction_applies_band_plan_patch_and_allows_commit(
             assert "narrative_obligation" in updated_band.task_contract_json
     finally:
         engine.dispose()
+
+
+def test_defer_acceptance_transaction_blocks_when_obligation_budget_is_exceeded() -> None:
+    engine = get_engine(postgres_test_url("defer_acceptance_budget_exceeded"))
+    init_db(engine)
+    session_factory = get_session_factory(engine)
+    try:
+        with session_factory() as session:
+            project = Project(title="预算阻断", premise="测试", genre="悬疑", target_total_chapters=20)
+            session.add(project)
+            session.flush()
+            arc = ArcPlanVersion(
+                project_id=project.id,
+                arc_synopsis="测试 arc",
+                chapter_start=1,
+                chapter_end=20,
+            )
+            session.add(arc)
+            session.flush()
+            deadline_plan = ChapterPlan(
+                project_id=project.id,
+                arc_plan_id=arc.id,
+                chapter_number=11,
+                title="身份回收",
+                one_line="解释身份疑点。",
+                goals_json="[]",
+                experience_plan_json="{}",
+                status="planned",
+            )
+            session.add(deadline_plan)
+            for index in range(2):
+                session.add(
+                    NarrativeObligationRow(
+                        id=f"existing-structural-{index}",
+                        project_id=project.id,
+                        origin_chapter_number=8 + index,
+                        origin_draft_id=f"draft-{index}",
+                        origin_review_id=f"review-{index}",
+                        obligation_type="identity_ambiguity",
+                        priority="P1",
+                        status="planned",
+                        summary="已有结构级身份疑点。",
+                        deferral_reason="等待后文解释。",
+                        hardness="design_debt",
+                        deadline_chapter=12,
+                        payoff_test="必须解释身份疑点。",
+                    )
+                )
+            session.flush()
+            obligation = _obligation(project.id).model_copy(
+                update={
+                    "id": "obl-budget",
+                    "obligation_type": "identity_ambiguity",
+                    "priority": "P1",
+                    "summary": "新增结构级身份疑点。",
+                }
+            )
+            patch = _patch(project.id, obligation_id="obl-budget").model_copy(
+                update={"target_plan_id": deadline_plan.id}
+            )
+
+            result = DeferAcceptanceTransaction(session).run(
+                obligation=obligation,
+                plan_patch=patch,
+                current_chapter=10,
+                target_total_chapters=20,
+            )
+            session.commit()
+
+        assert result.success is False
+        assert "obligation_budget_exceeded" in result.errors
+
+        with session_factory() as session:
+            stored = session.get(NarrativeObligationRow, "obl-budget")
+            assert stored is None
+    finally:
+        engine.dispose()

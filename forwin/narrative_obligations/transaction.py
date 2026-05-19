@@ -7,12 +7,14 @@ from sqlalchemy.orm import Session
 from forwin.canon_quality.gate import evaluate_canon_admission
 from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.models.base import new_id
+from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.phase import BandExperiencePlan
-from forwin.models.project import ChapterPlan
+from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.planning.band_plan_patcher import BandPlanPatcher
 from forwin.planning.future_plan_auditor import FuturePlanAuditor
 from forwin.planning.plan_patch_validator import PlanPatchValidator
 
+from .budget import evaluate_obligation_budget
 from .repository import NarrativeObligationRepository
 from .types import NarrativeObligation, NarrativePlanPatch
 
@@ -115,6 +117,16 @@ class DeferAcceptanceTransaction:
                 )
 
         repo = NarrativeObligationRepository(self.session)
+        budget_result = _evaluate_transaction_budget(
+            session=self.session,
+            repo=repo,
+            obligation=prepared_obligation,
+            plan_patch=prepared_patch,
+            current_chapter=current_chapter,
+            target_total_chapters=target_total_chapters,
+            target_plan=target_plan,
+            target_band=target_band,
+        )
         try:
             with self.session.begin_nested():
                 stored_obligation = repo.create_obligation(prepared_obligation)
@@ -147,6 +159,7 @@ class DeferAcceptanceTransaction:
                     obligations=[planned],
                     plan_patches=[stored_patch],
                     mode="strict",
+                    over_budget=budget_result.over_budget,
                     is_final_chapter=current_chapter >= int(target_total_chapters or 0)
                     if int(target_total_chapters or 0)
                     else False,
@@ -162,3 +175,118 @@ class DeferAcceptanceTransaction:
             plan_patch=stored_patch,
             gate_result=gate_result,
         )
+
+
+def _evaluate_transaction_budget(
+    *,
+    session: Session,
+    repo: NarrativeObligationRepository,
+    obligation: NarrativeObligation,
+    plan_patch: NarrativePlanPatch,
+    current_chapter: int,
+    target_total_chapters: int,
+    target_plan: ChapterPlan | None,
+    target_band: BandExperiencePlan | None,
+):
+    open_obligations = _open_obligations_for_project(
+        session=session,
+        repo=repo,
+        project_id=obligation.project_id,
+        exclude_obligation_id=obligation.id,
+    )
+    band_start, band_end = _budget_band_bounds(
+        plan_patch=plan_patch,
+        target_band=target_band,
+        current_chapter=current_chapter,
+    )
+    arc_start, arc_end = _budget_arc_bounds(
+        session=session,
+        plan_patch=plan_patch,
+        target_plan=target_plan,
+        target_band=target_band,
+        current_chapter=current_chapter,
+        target_total_chapters=target_total_chapters,
+    )
+    return evaluate_obligation_budget(
+        open_obligations=open_obligations,
+        new_obligations=[obligation],
+        current_chapter=current_chapter,
+        band_start=band_start,
+        band_end=band_end,
+        arc_start=arc_start,
+        arc_end=arc_end,
+    )
+
+
+def _open_obligations_for_project(
+    *,
+    session: Session,
+    repo: NarrativeObligationRepository,
+    project_id: str,
+    exclude_obligation_id: str,
+) -> list[NarrativeObligation]:
+    rows = session.execute(
+        select(NarrativeObligationRow).where(
+            NarrativeObligationRow.project_id == project_id,
+            NarrativeObligationRow.status.in_(["proposed", "planned", "active", "expired"]),
+        )
+    ).scalars().all()
+    return [
+        repo._obligation_from_row(row)
+        for row in rows
+        if str(row.id or "") != str(exclude_obligation_id or "")
+    ]
+
+
+def _budget_band_bounds(
+    *,
+    plan_patch: NarrativePlanPatch,
+    target_band: BandExperiencePlan | None,
+    current_chapter: int,
+) -> tuple[int, int]:
+    if target_band is not None:
+        return int(target_band.chapter_start or current_chapter), int(target_band.chapter_end or current_chapter)
+    affected = [int(chapter) for chapter in plan_patch.affected_chapters if int(chapter or 0) > 0]
+    if affected:
+        return min(affected), max(affected)
+    current = int(current_chapter or 0)
+    return current, current
+
+
+def _budget_arc_bounds(
+    *,
+    session: Session,
+    plan_patch: NarrativePlanPatch,
+    target_plan: ChapterPlan | None,
+    target_band: BandExperiencePlan | None,
+    current_chapter: int,
+    target_total_chapters: int,
+) -> tuple[int, int]:
+    arc_id = (
+        str(getattr(target_plan, "arc_plan_id", "") or "")
+        or str(getattr(target_band, "arc_id", "") or "")
+        or str(plan_patch.target_arc_id or "")
+    )
+    arc = session.get(ArcPlanVersion, arc_id) if arc_id else None
+    if arc is None:
+        probe_chapter = int(current_chapter or 0)
+        affected = [int(chapter) for chapter in plan_patch.affected_chapters if int(chapter or 0) > 0]
+        if affected:
+            probe_chapter = min(affected)
+        arc = session.execute(
+            select(ArcPlanVersion)
+            .where(
+                ArcPlanVersion.project_id == plan_patch.project_id,
+                ArcPlanVersion.chapter_start <= probe_chapter,
+                ArcPlanVersion.chapter_end >= probe_chapter,
+            )
+            .order_by(ArcPlanVersion.created_at.desc(), ArcPlanVersion.id.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+    if arc is not None:
+        start = int(arc.chapter_start or 0)
+        end = int(arc.chapter_end or 0)
+        if start > 0 and end >= start:
+            return start, end
+    total = int(target_total_chapters or 0)
+    return 1, total if total > 0 else max(1, int(current_chapter or 0))

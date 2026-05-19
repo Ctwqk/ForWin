@@ -59,6 +59,7 @@ def _build_canon_quality_context(
         "character_state_constraints": [],
         "open_signals": [],
         "active_narrative_obligations": [],
+        "active_structural_patch_debt": [],
         "future_plan_audit_summary": {},
     }
     if session is None:
@@ -189,6 +190,21 @@ def _build_canon_quality_context(
                 chapter_number=int(chapter_number or 0),
             )
         ]
+        active_structural_patch_debt = [
+            {
+                "patch_id": patch.id,
+                "scope": patch.target_scope,
+                "target_arc_id": patch.target_arc_id,
+                "target_band_id": patch.target_band_id,
+                "affected_chapters": list(patch.affected_chapters),
+                "payoff_tests": list(patch.expected_resolution_tests),
+                "writer_context_injections": list(patch.writer_context_injections),
+            }
+            for patch in obligation_repo.list_active_structural_patches(
+                project_id,
+                chapter_number=int(chapter_number or 0),
+            )
+        ]
         future_plan_audit_summary: dict[str, Any] = {}
         try:
             recent_future_plan_audits = future_plan_audit_repo.list_recent(project_id, limit=1)
@@ -220,6 +236,7 @@ def _build_canon_quality_context(
             "character_state_constraints": character_state_constraints,
             "open_signals": open_signals,
             "active_narrative_obligations": active_narrative_obligations,
+            "active_structural_patch_debt": active_structural_patch_debt,
             "future_plan_audit_summary": future_plan_audit_summary,
             "suppressed_prompt_constraint_keys": list(
                 future_plan_audit_summary.get("suppressed_prompt_constraint_keys", [])

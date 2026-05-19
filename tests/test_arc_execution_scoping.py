@@ -11,6 +11,7 @@ from forwin.config import Config
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.orchestrator.loop import RunResult, WritingOrchestrator
+from forwin.orchestrator_loop_core.quality_gates import evaluate_structural_patch_completion_debt
 from forwin.orchestrator.phase24 import ArcEnvelopeManager
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
@@ -29,6 +30,30 @@ def _chapter_payloads(total: int) -> list[dict]:
 
 
 class ArcExecutionScopingTests(unittest.TestCase):
+    def test_arc_completion_blocks_unresolved_arc_patch_debt(self) -> None:
+        result = evaluate_structural_patch_completion_debt(
+            project_id="project-1",
+            chapter_number=20,
+            is_arc_final_chapter=True,
+            is_book_final_chapter=False,
+            active_patch_debt=[{"patch_id": "patch-arc", "target_scope": "arc"}],
+        )
+
+        self.assertFalse(result["commit_allowed"])
+        self.assertIn("unresolved_arc_patch_debt:patch-arc", result["blocking_reasons"])
+
+    def test_book_completion_blocks_unresolved_book_patch_debt(self) -> None:
+        result = evaluate_structural_patch_completion_debt(
+            project_id="project-1",
+            chapter_number=30,
+            is_arc_final_chapter=True,
+            is_book_final_chapter=True,
+            active_patch_debt=[{"patch_id": "patch-book", "target_scope": "book"}],
+        )
+
+        self.assertFalse(result["commit_allowed"])
+        self.assertIn("unresolved_book_patch_debt:patch-book", result["blocking_reasons"])
+
     def test_seed_state_distributes_chapters_across_arc_outlines(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = postgres_test_url("seed-state")

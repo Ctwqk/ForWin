@@ -93,3 +93,104 @@ def test_repository_persists_obligation_and_plan_patch_lifecycle() -> None:
             assert active[0].must_resolve_now is True
     finally:
         engine.dispose()
+
+
+def _active_obligation(project_id: str, obligation_id: str = "") -> NarrativeObligation:
+    return NarrativeObligation(
+        id=obligation_id,
+        project_id=project_id,
+        origin_chapter_number=10,
+        origin_draft_id="draft-10",
+        origin_review_id="review-10",
+        obligation_type="motivation_gap",
+        priority="P1",
+        status="active",
+        summary="韩砚协助陆明的动机尚未解释。",
+        hardness="design_debt",
+        deadline_chapter=12,
+        payoff_test="第12章必须给出韩砚协助陆明的明确动机证据。",
+        blocking_policy="block_at_deadline",
+    )
+
+
+def test_mark_obligation_resolved_records_evidence() -> None:
+    engine = get_engine(postgres_test_url("narrative_obligation_resolved"))
+    init_db(engine)
+    session_factory = get_session_factory(engine)
+    try:
+        with session_factory() as session:
+            project = Project(title="义务状态", premise="测试", genre="悬疑", target_total_chapters=20)
+            session.add(project)
+            session.flush()
+            repo = NarrativeObligationRepository(session)
+            created = repo.create_obligation(_active_obligation(project.id))
+
+            resolved = repo.mark_obligation_resolved(
+                created.id,
+                verifier_result={"status": "pass", "matched_markers": ["marker-1"]},
+                evidence_refs=["chapter:12"],
+                resolution_chapter=12,
+            )
+            session.commit()
+
+        assert resolved is not None
+        assert resolved.status == "resolved"
+        assert resolved.resolution_chapter == 12
+        assert resolved.resolution_evidence_refs == ["chapter:12"]
+        assert resolved.metadata["verifier_result"]["status"] == "pass"
+    finally:
+        engine.dispose()
+
+
+def test_obligation_expire_block_and_waive_transitions() -> None:
+    engine = get_engine(postgres_test_url("narrative_obligation_transitions"))
+    init_db(engine)
+    session_factory = get_session_factory(engine)
+    try:
+        with session_factory() as session:
+            project = Project(title="义务状态", premise="测试", genre="悬疑", target_total_chapters=20)
+            session.add(project)
+            session.flush()
+            repo = NarrativeObligationRepository(session)
+            expired_source = repo.create_obligation(_active_obligation(project.id))
+            waived_source = repo.create_obligation(_active_obligation(project.id))
+
+            expired = repo.expire_obligation(expired_source.id, reason="deadline passed")
+            blocked = repo.block_expired_obligation(expired_source.id)
+            waived = repo.waive_obligation(waived_source.id, reason="human exception", actor="operator")
+            session.commit()
+
+        assert expired is not None
+        assert expired.status == "expired"
+        assert expired.metadata["expire_reason"] == "deadline passed"
+        assert blocked is not None
+        assert blocked.status == "blocked"
+        assert waived is not None
+        assert waived.status == "waived"
+        assert waived.waive_reason == "human exception"
+        assert waived.metadata["waived_by"] == "operator"
+    finally:
+        engine.dispose()
+
+
+def test_waive_obligation_rejects_missing_or_system_actor() -> None:
+    engine = get_engine(postgres_test_url("narrative_obligation_waive_guard"))
+    init_db(engine)
+    session_factory = get_session_factory(engine)
+    try:
+        with session_factory() as session:
+            project = Project(title="义务状态", premise="测试", genre="悬疑", target_total_chapters=20)
+            session.add(project)
+            session.flush()
+            repo = NarrativeObligationRepository(session)
+            created = repo.create_obligation(_active_obligation(project.id))
+
+            for actor in ("", "system"):
+                try:
+                    repo.waive_obligation(created.id, reason="unsafe", actor=actor)
+                except ValueError as exc:
+                    assert "human actor" in str(exc)
+                else:  # pragma: no cover
+                    raise AssertionError(f"actor={actor!r} should be rejected")
+    finally:
+        engine.dispose()

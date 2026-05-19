@@ -15,6 +15,7 @@ class ProductionPlan(BaseModel):
     plan_chapters: list[int] = Field(default_factory=list)
     write_chapters: list[int] = Field(default_factory=list)
     review_chapters: list[int] = Field(default_factory=list)
+    review_chapter_statuses: dict[int, str] = Field(default_factory=dict)
     publish_chapters: list[int] = Field(default_factory=list)
     blocked_reason: str = ""
     notes: list[str] = Field(default_factory=list)
@@ -47,6 +48,20 @@ class ProductionPlanner:
         if policy.quota.review > 0:
             review_candidates = [*backlog.needs_review, *backlog.drafted_unreviewed]
             plan.review_chapters.extend(review_candidates[: policy.quota.review])
+            plan.review_chapter_statuses.update(
+                {
+                    chapter_number: "needs_review"
+                    for chapter_number in backlog.needs_review
+                    if chapter_number in plan.review_chapters
+                }
+            )
+            plan.review_chapter_statuses.update(
+                {
+                    chapter_number: "drafted"
+                    for chapter_number in backlog.drafted_unreviewed
+                    if chapter_number in plan.review_chapters
+                }
+            )
 
         write_quota = max(0, int(policy.quota.write or 0))
         has_existing_chapter_plans = backlog.has_existing_chapter_plans or backlog.chapter_plan_count > 0

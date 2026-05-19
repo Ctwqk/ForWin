@@ -7,6 +7,28 @@ def test_world_v4_compat_write_is_disabled_by_default() -> None:
     assert Config().world_v4_compat_write_enabled is False
 
 
+def test_review_engine_repair_v2_is_disabled_by_default() -> None:
+    assert Config().review_engine_repair_v2_enabled is False
+    assert Config().review_engine_arc_patcher_enabled is False
+    assert Config().review_engine_book_patcher_enabled is False
+    assert Config().review_engine_obligation_verifier_enabled is False
+    assert Config().review_engine_auto_approve_enabled is False
+
+
+def test_review_engine_repair_v2_can_be_enabled_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("FORWIN_REVIEW_ENGINE_REPAIR_V2_ENABLED", "true")
+    monkeypatch.setenv("FORWIN_REVIEW_ENGINE_ARC_PATCHER_ENABLED", "true")
+    monkeypatch.setenv("FORWIN_REVIEW_ENGINE_BOOK_PATCHER_ENABLED", "true")
+    monkeypatch.setenv("FORWIN_REVIEW_ENGINE_OBLIGATION_VERIFIER_ENABLED", "true")
+    monkeypatch.setenv("FORWIN_REVIEW_ENGINE_AUTO_APPROVE_ENABLED", "true")
+
+    assert Config.from_env().review_engine_repair_v2_enabled is True
+    assert Config.from_env().review_engine_arc_patcher_enabled is True
+    assert Config.from_env().review_engine_book_patcher_enabled is True
+    assert Config.from_env().review_engine_obligation_verifier_enabled is True
+    assert Config.from_env().review_engine_auto_approve_enabled is True
+
+
 def test_config_exposes_domain_writer_profile_without_removing_flat_fields() -> None:
     config = Config(
         temperature=0.6,

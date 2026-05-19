@@ -335,7 +335,7 @@ def _review_and_maybe_rewrite(
                 draft=current_output,
                 issue_kind=issue_kind,
                 signals=[],
-                context_pack={},
+                context_pack=current_context,
             )
             design_patch = {
                 **design_patch,

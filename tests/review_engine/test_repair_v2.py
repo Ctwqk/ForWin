@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.review_engine.engine import AutoDecisionEngine
 from forwin.review_engine.rules.repair import build_scope_driven_repair_rules
@@ -69,11 +71,45 @@ def test_book_level_issue_routes_to_book_patch_scope() -> None:
     assert decision.sub_action["scope"] == "book_plan"
 
 
-def test_operator_issue_routes_to_system_block() -> None:
+def test_operator_issue_routes_to_manual_review_without_retry() -> None:
     decision = decide_repair_v2(_input_with_issue("form_schema_invalid"))
 
-    assert decision.outcome == "system_block"
+    assert decision.outcome == "manual_review"
     assert decision.sub_action["scope"] == "operator"
+    assert decision.sub_action["max_attempts_for_scope"] == 0
+
+
+def test_draft_issue_stays_draft_until_two_draft_attempts_are_spent() -> None:
+    first_retry = _input_with_issue("body_truncated")
+    second_retry = replace(_input_with_issue("body_truncated"), prior_scope_history=["draft"])
+
+    assert decide_repair_v2(first_retry).sub_action["scope"] == "draft"
+    assert decide_repair_v2(second_retry).sub_action["scope"] == "draft"
+
+
+def test_draft_issue_escalates_to_chapter_plan_after_two_draft_attempts() -> None:
+    input_payload = replace(
+        _input_with_issue("body_truncated"),
+        prior_scope_history=["draft", "draft"],
+    )
+
+    decision = decide_repair_v2(input_payload)
+
+    assert decision.outcome == "chapter_patch"
+    assert decision.sub_action["scope"] == "chapter_plan"
+    assert decision.sub_action["escalated_from"] == "draft"
+
+
+def test_arc_scope_escalates_after_one_arc_attempt() -> None:
+    input_payload = replace(
+        _input_with_issue("identity_ambiguity"),
+        prior_scope_history=["arc_plan"],
+    )
+
+    decision = decide_repair_v2(input_payload)
+
+    assert decision.outcome == "book_patch"
+    assert decision.sub_action["scope"] == "book_plan"
 
 
 def test_engine_uses_repair_v2_when_enabled() -> None:

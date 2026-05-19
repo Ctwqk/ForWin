@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from forwin.orchestrator_loop_core.common import *
+from forwin.review_engine.cutover import engine_live_enabled
+from forwin.review_engine.rules.repair_v2 import compare_repair_v2_shadow, decide_repair_v2
+from forwin.review_engine.types import DecisionInput, PlanLayerHealth
 
 def _review_and_maybe_rewrite(
     self,
@@ -115,6 +118,75 @@ def _review_and_maybe_rewrite(
             attempts_completed=len(existing_attempts),
             requested_scope=self._repair_policy_requested_scope(current_review),
         )
+        repair_v2_input = DecisionInput(
+            project_id=project_id,
+            chapter_number=chapter_plan.chapter_number,
+            review=current_review,
+            signals=[],
+            open_obligations=[],
+            operation_mode=self.config.operation_mode,
+            attempts_completed=len(existing_attempts),
+            prior_scope_history=[
+                str(getattr(attempt, "repair_scope", "") or "")
+                for attempt in existing_attempts
+            ],
+            budget=None,
+            target_total_chapters=0,
+            plan_layer_health=PlanLayerHealth(),
+        )
+        repair_v2_decision = decide_repair_v2(repair_v2_input)
+        v2_scope = str(repair_v2_decision.sub_action.get("scope") or "")
+        repair_v2_live = bool(
+            getattr(self.config, "review_engine_repair_v2_enabled", False)
+        ) and engine_live_enabled(self.config, project_id)
+        repair_shadow = compare_repair_v2_shadow(
+            old_scope=repair_decision.scope,
+            new_scope=v2_scope,
+            enabled=repair_v2_live,
+        )
+        self._record_engine_decision_event(
+            updater=updater,
+            decision=repair_v2_decision,
+            decision_input=repair_v2_input,
+            shadow_mismatch=repair_decision.scope != v2_scope,
+            live_or_shadow="live" if repair_v2_live else "shadow",
+            legacy_outcome=repair_decision.scope,
+            engine_outcome=v2_scope,
+            related_object_type="chapter_review",
+            related_object_id=current_review_row.id,
+            parent_event_id=str(current_review_event.id or ""),
+        )
+        if repair_v2_live and repair_v2_decision.outcome in {
+            "local_repair",
+            "chapter_patch",
+            "band_patch",
+        }:
+            repair_decision = repair_decision.__class__(
+                kind="repair",
+                scope=repair_shadow.live_scope,
+                attempt_no=len(existing_attempts) + 1,
+                max_attempts=max(
+                    int(getattr(repair_decision, "max_attempts", 0) or 0),
+                    len(existing_attempts) + 1,
+                ),
+                reason="repair-v2-live",
+                preferred_provider_kind=getattr(
+                    repair_decision,
+                    "preferred_provider_kind",
+                    "",
+                ),
+                preferred_model=getattr(repair_decision, "preferred_model", ""),
+            )
+        elif repair_v2_live and repair_v2_decision.outcome in {
+            "arc_patch",
+            "book_patch",
+            "manual_review",
+            "system_block",
+        }:
+            repair_decision = repair_decision.__class__(
+                kind="pause_for_review",
+                reason=f"repair-v2-nonlocal-outcome:{repair_v2_decision.outcome}",
+            )
         if repair_decision.kind != "repair":
             final_gate = self.final_acceptance_gate.evaluate(
                 operation_mode=self.config.operation_mode,

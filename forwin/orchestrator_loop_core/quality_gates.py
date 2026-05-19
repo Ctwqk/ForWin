@@ -7,6 +7,7 @@ from forwin.planning.arc_patch_validator import ArcPatchValidator
 from forwin.planning.arc_plan_patcher import ArcPlanPatcher
 from forwin.planning.book_patch_validator import BookPatchValidator
 from forwin.planning.book_plan_patcher import BookPlanPatcher
+from forwin.narrative_obligations.budget import evaluate_obligation_budget
 from forwin.review_engine.engine import AutoDecisionEngine
 from forwin.review_engine.parity import compare_shadow_decisions
 from forwin.review_engine.rules.review_outcome import (
@@ -15,7 +16,7 @@ from forwin.review_engine.rules.review_outcome import (
 )
 from forwin.review_engine.rules.commit_with_obligation import decide_commit_with_obligation
 from forwin.review_engine.rules.structural_patch import decide_structural_patch
-from forwin.review_engine.types import DecisionInput, PlanLayerHealth
+from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
 
 @staticmethod
 def _is_timeout_like(exc: Exception) -> bool:
@@ -557,6 +558,20 @@ def _prepare_deferred_acceptance_if_needed(
             target_total_chapters=target_total_chapters,
             decision=structural_decision,
             outcome_reason=outcome.reason,
+            arc_book_budget_enabled=bool(
+                getattr(
+                    getattr(self, "config", None),
+                    "review_engine_arc_book_budget_enabled",
+                    False,
+                )
+            ),
+            updater=StateUpdater(session),
+            decision_input=decision_input,
+            record_engine_decision_event=getattr(
+                self,
+                "_record_engine_decision_event",
+                None,
+            ),
         )
     if structural_decision.rule_id in {"arc_patcher_disabled", "book_patcher_disabled"}:
         return [structural_decision.reason]
@@ -750,6 +765,10 @@ def _persist_structural_patch_outcome(
     target_total_chapters: int,
     decision,
     outcome_reason: str,
+    arc_book_budget_enabled: bool = False,
+    updater: StateUpdater | None = None,
+    decision_input: DecisionInput | None = None,
+    record_engine_decision_event: Any | None = None,
 ) -> list[str]:
     issue_type = str(decision.sub_action.get("issue_kind") or "").strip()
     if not issue_type:
@@ -828,6 +847,56 @@ def _persist_structural_patch_outcome(
         evidence_refs=[f"review:{review_id}"] if review_id else [],
         metadata={"minimum_scope": target_scope, "review_engine_rule_id": decision.rule_id},
     )
+    if arc_book_budget_enabled:
+        budget = evaluate_obligation_budget(
+            open_obligations=_open_obligations_for_project(
+                session=session,
+                project_id=project_id,
+            ),
+            new_obligations=[obligation],
+            current_chapter=chapter_number,
+            band_start=chapter_number,
+            band_end=deadline_chapter,
+            arc_start=(
+                int(getattr(target_arc, "chapter_start", 0) or 0)
+                if decision.outcome == "arc_patch"
+                else 1
+            ),
+            arc_end=(
+                int(getattr(target_arc, "chapter_end", 0) or 0)
+                if decision.outcome == "arc_patch"
+                else target_total_chapters
+            ),
+        )
+        if budget.over_budget:
+            if (
+                callable(record_engine_decision_event)
+                and updater is not None
+                and decision_input is not None
+            ):
+                record_engine_decision_event(
+                    updater=updater,
+                    decision=Decision(
+                        outcome="system_block",
+                        reason=";".join(budget.reasons),
+                        rule_id="arc_book_obligation_budget_exceeded",
+                        missing_evidence=[],
+                        routed_from="AutoDecisionEngine",
+                        sub_action={
+                            "budget_reasons": list(budget.reasons),
+                            "scope": target_scope,
+                            "arc_id": target_arc_id,
+                            "threshold_source": "ObligationBudgetPolicy",
+                        },
+                    ),
+                    decision_input=decision_input,
+                    live_or_shadow="live",
+                    legacy_outcome=decision.outcome,
+                    engine_outcome="system_block",
+                    related_object_type="chapter_review",
+                    related_object_id=review_id,
+                )
+            return list(budget.reasons)
     if decision.outcome == "arc_patch":
         plan_patch = ArcPlanPatcher().build_patch(
             project_id=project_id,
@@ -862,6 +931,36 @@ def _persist_structural_patch_outcome(
         target_total_chapters=target_total_chapters,
     )
     return [] if result.success else list(result.errors)
+
+
+def _open_obligations_for_project(
+    *,
+    session: Session,
+    project_id: str,
+) -> list[NarrativeObligation]:
+    rows = session.execute(
+        select(NarrativeObligationRow).where(
+            NarrativeObligationRow.project_id == project_id,
+            NarrativeObligationRow.status.in_(("proposed", "planned", "active", "expired")),
+        )
+    ).scalars().all()
+    return [
+        NarrativeObligation(
+            id=str(row.id or ""),
+            project_id=str(row.project_id or ""),
+            origin_chapter_number=int(row.origin_chapter_number or 0),
+            origin_draft_id=str(row.origin_draft_id or ""),
+            origin_review_id=str(row.origin_review_id or ""),
+            obligation_type=str(row.obligation_type or ""),
+            priority=str(row.priority or "P1"),  # type: ignore[arg-type]
+            status=str(row.status or "active"),  # type: ignore[arg-type]
+            summary=str(row.summary or ""),
+            hardness=str(row.hardness or "design_debt"),
+            deadline_chapter=int(row.deadline_chapter or 0),
+            payoff_test=str(row.payoff_test or ""),
+        )
+        for row in rows
+    ]
 
 
 def _arc_for_chapter(

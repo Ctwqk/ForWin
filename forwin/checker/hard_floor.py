@@ -13,7 +13,7 @@ from .hard_floor_dict import ENDING_HOOK_MARKERS, MODEL_ARTIFACT_MARKERS
 
 
 _GARBAGE_BLOCK_RE = re.compile(
-    r"[^\u4e00-\u9fff，。！？；：、“”‘’（）《》\sA-Za-z0-9_-]{12,}"
+    r"[^\u4e00-\u9fff，。！？；：、“”‘’（）《》…—\sA-Za-z0-9_-]{12,}"
 )
 
 
@@ -39,10 +39,17 @@ def run_hard_floor(
     warning_reasons: list[str] = []
     checks: dict[str, bool] = {}
     body = str(writer_output.body or "")
+    body_char_count = len(body)
+    writer_char_count = int(writer_output.char_count or 0)
+    min_chapter_chars = int(config.min_chapter_chars or 0)
 
-    checks["chapter_length"] = len(body) >= int(config.min_chapter_chars or 0)
+    checks["chapter_length"] = body_char_count >= min_chapter_chars
     if not checks["chapter_length"]:
         fail_reasons.append("chapter_length")
+
+    checks["char_count_consistent"] = writer_char_count == body_char_count
+    if not checks["char_count_consistent"]:
+        fail_reasons.append("char_count_consistent")
 
     checks["no_garbage"] = _no_garbage(body)
     if not checks["no_garbage"]:
@@ -73,6 +80,9 @@ def run_hard_floor(
         metadata={
             "project_id": project_id,
             "chapter_number": int(chapter_number or 0),
+            "body_char_count": body_char_count,
+            "writer_char_count": writer_char_count,
+            "min_chapter_chars": min_chapter_chars,
             "must_not_reveal_hits": hidden_hits,
         },
     )
@@ -81,10 +91,14 @@ def run_hard_floor(
 def _no_garbage(body: str) -> bool:
     if not body.strip():
         return False
-    lowered = body.lower()
+    lowered = _artifact_scan_text(body)
     if any(marker.lower() in lowered for marker in MODEL_ARTIFACT_MARKERS):
         return False
     return _GARBAGE_BLOCK_RE.search(body) is None
+
+
+def _artifact_scan_text(body: str) -> str:
+    return body.lower().replace("：", ":")
 
 
 def _must_not_reveal_hits(body: str, items: list[str]) -> list[str]:

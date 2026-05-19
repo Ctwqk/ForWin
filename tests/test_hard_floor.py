@@ -58,6 +58,25 @@ def test_short_chapter_fails() -> None:
     assert result.checks["chapter_length"] is False
 
 
+def test_inconsistent_char_count_fails_even_when_body_is_long_enough() -> None:
+    body = "角色A推开门，看见证据。他当场拿出证据，反派失去资格。门外忽然传来第二封密令？"
+    result = run_hard_floor(
+        writer_output=writer(body, char_count=0),
+        context_pack=context(),
+        repo=None,
+        project_id="project-1",
+        chapter_number=1,
+        config=config(),
+    )
+
+    assert result.passed is False
+    assert "char_count_consistent" in result.fail_reasons
+    assert result.checks["char_count_consistent"] is False
+    assert result.metadata["body_char_count"] == len(body)
+    assert result.metadata["writer_char_count"] == 0
+    assert result.metadata["min_chapter_chars"] == 20
+
+
 def test_model_artifact_fails() -> None:
     result = run_hard_floor(
         writer_output=writer("角色A推开门，看见证据。assistant: 模型分析。章末问题出现。"),
@@ -71,6 +90,36 @@ def test_model_artifact_fails() -> None:
     assert result.passed is False
     assert "no_garbage" in result.fail_reasons
     assert result.checks["no_garbage"] is False
+
+
+def test_full_width_assistant_artifact_fails_no_garbage() -> None:
+    result = run_hard_floor(
+        writer_output=writer("角色A推开门，看见证据。assistant：模型分析。门外忽然传来密令？"),
+        context_pack=context(),
+        repo=None,
+        project_id="project-1",
+        chapter_number=1,
+        config=config(),
+    )
+
+    assert result.passed is False
+    assert "no_garbage" in result.fail_reasons
+    assert result.checks["no_garbage"] is False
+
+
+def test_chinese_dramatic_punctuation_is_not_garbage() -> None:
+    result = run_hard_floor(
+        writer_output=writer("角色A怔住……——……——……——忽然听见门外传来第二封密令？"),
+        context_pack=context(),
+        repo=None,
+        project_id="project-1",
+        chapter_number=1,
+        config=config(),
+    )
+
+    assert result.passed is True
+    assert result.fail_reasons == []
+    assert result.checks["no_garbage"] is True
 
 
 def test_must_not_reveal_fails_on_direct_match() -> None:

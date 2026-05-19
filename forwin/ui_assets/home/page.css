@@ -1048,6 +1048,22 @@
       .nav-tabs .nav-tab { padding:0 10px; }
       .tab-panel { padding:14px; }
       .status-bar { padding:14px; }
+      .task-toolbar {
+        align-items:flex-start;
+        flex-direction:column;
+      }
+      .task-toolbar > div,
+      .task-toolbar .section-head {
+        width:100%;
+      }
+      .task-toolbar .action-row {
+        justify-content:flex-start;
+        width:100%;
+      }
+      .task-toolbar .section-head h2 {
+        min-width:3em;
+        white-space:nowrap;
+      }
       .progress-grid { grid-template-columns:minmax(0, 1fr); }
       .macro-flow, .chapter-steps { grid-template-columns:minmax(0, 1fr); }
       .drawer { padding:16px; }

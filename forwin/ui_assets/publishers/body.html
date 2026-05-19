@@ -12,16 +12,14 @@
           <span class="fw-logo" aria-hidden="true">FW</span>
           <span>ForWin Publisher</span>
         </div>
-        <h1>平台发布管理</h1>
+        <h1>发布</h1>
       </div>
-      <div class="masthead-note">这一页只负责扩展安装、平台登录和上传排障。日常的项目生成与一键发布已经回到首页控制台。</div>
     </header>
 
     <section class="hero">
       <article class="hero-card">
         <div class="hero-copy">
-          <h2>让浏览器扩展接管真实平台操作</h2>
-          <p>ForWin 把登录、上传和后续评论采集都交给浏览器扩展执行。后端只保存任务、接收心跳并持久化结果，不再在服务器里偷偷跑浏览器。</p>
+          <h2>扩展</h2>
         </div>
         <div class="hero-actions">
           <a class="button secondary" href="/">返回首页控制台</a>
@@ -33,13 +31,13 @@
       <aside class="card">
         <div class="card-title">
           <div>
-            <h2 style="margin-top:0;">安装提示</h2>
-            <div class="section-note">如果你通过 Mac 或笔记本访问这台 Linux 后端，请在本机浏览器安装扩展。</div>
+            <h2 style="margin-top:0;">安装</h2>
+            <div class="section-note">本机浏览器安装扩展，填写后端 URL 和共享 API Key。</div>
           </div>
         </div>
-        <p class="muted">不要直接把 Linux 服务器路径当成本机路径使用。Chrome/Edge 下载后解压并加载 forwin-publisher；Firefox 下载后在 about:debugging 里临时加载 forwin-publisher-firefox/manifest.json。</p>
+        <p class="muted">Chrome/Edge 下载后解压并加载 forwin-publisher；Firefox 在 about:debugging 里临时加载 forwin-publisher-firefox/manifest.json。</p>
         <p><code>@@EXTENSION_INSTALL_PATH@@</code></p>
-        <p class="muted">扩展里要填当前 ForWin 后端 URL 和共享 API Key。首次安装时，请先在浏览器扩展管理页手动打开扩展选项；页面里的“打开扩展设置”按钮要等扩展已经完成首次配置后才会生效。</p>
+        <p class="muted">首次安装时从浏览器扩展管理页打开选项；完成配置后，页面按钮可直接唤起扩展设置。</p>
       </aside>
     </section>
 
@@ -49,7 +47,7 @@
           <div class="card-title">
             <div>
               <h2 style="margin-top:0;">扩展状态</h2>
-              <div class="section-note">确认桥接是否在线、后端地址是否一致。</div>
+              <div class="section-note">桥接在线状态 · 后端地址一致性。</div>
             </div>
           </div>
           <div id="extension_summary" class="status">正在检测浏览器扩展...</div>
@@ -61,8 +59,8 @@
         <div class="card">
           <div class="card-title">
             <div>
-              <h2 style="margin-top:0;">上传任务</h2>
-              <div class="section-note">这里仍然保留手动上传入口，适合直接验证平台链路。</div>
+              <h2 style="margin-top:0;">上传</h2>
+              <div class="section-note">手动上传入口 · 平台链路验证。</div>
             </div>
           </div>
       <label>平台</label>
@@ -104,7 +102,7 @@
       <label>正文</label>
       <textarea id="body" placeholder="粘贴章节正文"></textarea>
       <label>可选上传页 URL</label>
-      <input id="upload_url" placeholder="如果你知道某个平台的具体章节编辑页，可以填这里">
+      <input id="upload_url" placeholder="可选。平台章节编辑页 URL">
       <div class="actions">
         <button onclick="upload(true)">直接发布</button>
         <button class="secondary" onclick="upload(false)">保存草稿</button>
@@ -114,8 +112,8 @@
         <div class="card">
           <div class="card-title">
             <div>
-              <h2 style="margin-top:0;">最近上传任务</h2>
-              <div class="section-note">这里会自动刷新排队和执行中的任务。</div>
+              <h2 style="margin-top:0;">最近任务</h2>
+              <div class="section-note">排队中与执行中的上传任务。</div>
             </div>
           </div>
           <div id="upload_jobs_status" class="status">正在加载任务列表...</div>

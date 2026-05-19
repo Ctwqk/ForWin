@@ -62,6 +62,19 @@ def _compile_world_model_after_acceptance(
         scope="chapter",
         summary=f"第{chapter_number}章 WorldModel compile 开始。",
     )
+    record_compat = getattr(self, "_record_legacy_compatibility_event", None)
+    if callable(record_compat):
+        record_compat(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            compat_layer="projection",
+            compat_feature="projection.legacy_world_model_projection",
+            usage_kind="projection_compat",
+            source_module="forwin.orchestrator_loop_core.finalization",
+            usage_reason="legacy WorldModel projection compile path invoked",
+            related_stage="world_model_compile",
+        )
     try:
         snapshot = LegacyWorldModelCompiler(session).compile_after_chapter(project_id, chapter_number)
     except Exception as exc:

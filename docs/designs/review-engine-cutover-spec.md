@@ -153,6 +153,60 @@ python3 scripts/audit_review_engine_cutover.py --project-id <project_id> --expec
 - `review_engine.rules.obligation_scope` 已经是 engine-native policy,orchestrator 不再直接调用 `ObligationScopeRouter`。
 - `ReviewOutcomeRouter` 和 `RepairPolicy` 在 60 章 pilot 前仍可作为 flag-off fallback / reverse shadow 参考;pilot 审计通过后再删除这些 safety-net 入口。
 
+### 6. Legacy compatibility usage 审计
+
+非 review safety-net 的 legacy compatibility 走独立事件:
+
+```text
+DecisionEventType.LEGACY_COMPATIBILITY_USED
+```
+
+单条事件只记录运行事实,不写删除结论。payload 字段:
+
+```text
+compat_layer
+compat_feature
+usage_kind
+source_module
+usage_reason
+compat_key
+legacy_identifier
+canonical_identifier
+related_stage
+metadata
+```
+
+`delete_candidate` 和 `blocking_for_removal` 不允许出现在单条事件里;它们只能由审计脚本汇总完整 60 章事件后得出。
+
+60 章审计可加:
+
+```bash
+python3 scripts/audit_review_engine_cutover.py \
+  --project-id <project_id> \
+  --expected-chapters 60 \
+  --include-legacy-compat
+```
+
+输出中的 `legacy_compat` 单独包含:
+
+- `total_events`
+- `by_layer`
+- `by_feature`
+- `removal_assessment.delete_candidates`
+- `removal_assessment.blocking_for_removal`
+- `removal_assessment.keep_for_import_only`
+- `removal_assessment.out_of_scope`
+
+当前首批埋点:
+
+- `governance.legacy_relaxed_fallback`
+- `projection.legacy_world_model_projection`
+- `book_state.state.location_patch_warning`
+- `subworld.legacy_entity_id_bridge`
+- `subworld.create_legacy_entity`
+
+这些事件不影响 review cutover pass/fail。review safety-net 删除仍看 `legacy_safety_net_used=false` 和 `severe_shadow_mismatch=false`;compatibility 删除候选只看 `legacy_compat.removal_assessment`。
+
 ## Scope
 
 ### 包含

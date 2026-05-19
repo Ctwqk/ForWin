@@ -180,6 +180,7 @@ class DecisionEventType:
     PERSONALITY_ASSIGNMENT_BACKFILL_COMPLETED = "personality_assignment_backfill_completed"
     PERSONALITY_RELATIONSHIP_ENRICHED = "personality_relationship_enriched"
     CHARACTER_INTEGRITY_CHECK_FAILED = "character_integrity_check_failed"
+    LEGACY_COMPATIBILITY_USED = "legacy_compatibility_used"
     LEGACY_PROJECTION_FAILED = "legacy_projection_failed"
     LEGACY_REGION_PROMOTION_STARTED = "legacy_region_promotion_started"
     LEGACY_REGION_PROMOTION_SUCCEEDED = "legacy_region_promotion_succeeded"
@@ -306,6 +307,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.BOOK_STATE_COMPILE_SUCCEEDED,
     DecisionEventType.BOOK_STATE_COMPILE_FAILED,
     DecisionEventType.PERSONALITY_LOADOUT_UPDATED,
+    DecisionEventType.LEGACY_COMPATIBILITY_USED,
     DecisionEventType.LEGACY_PROJECTION_FAILED,
     DecisionEventType.LEGACY_REGION_PROMOTION_STARTED,
     DecisionEventType.LEGACY_REGION_PROMOTION_SUCCEEDED,

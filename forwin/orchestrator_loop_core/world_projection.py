@@ -148,6 +148,26 @@ def _apply_world_v4_gate(
     )
     commit_service = BookStateDirectCommitService(session)
     book_state_verdict = commit_service.review(book_state_changes)
+    record_compat = getattr(self, "_record_legacy_compatibility_event", None)
+    if callable(record_compat):
+        for issue in book_state_verdict.issues:
+            compat_payload = getattr(issue, "legacy_compatibility", {}) or {}
+            if not isinstance(compat_payload, dict) or not compat_payload:
+                continue
+            record_compat(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                compat_layer=str(compat_payload.get("compat_layer") or "book_state"),
+                compat_feature=str(compat_payload.get("compat_feature") or ""),
+                usage_kind=str(compat_payload.get("usage_kind") or "read_fallback"),
+                source_module=str(compat_payload.get("source_module") or "forwin.book_state.reviewer"),
+                usage_reason=str(compat_payload.get("usage_reason") or issue.message),
+                compat_key=str(compat_payload.get("compat_key") or ""),
+                legacy_identifier=str(compat_payload.get("legacy_identifier") or ""),
+                canonical_identifier=str(compat_payload.get("canonical_identifier") or ""),
+                related_stage=str(compat_payload.get("related_stage") or "book_state_review"),
+            )
     if not book_state_verdict.accepted or book_state_verdict.approved_changes is None:
         self._record_decision_event(
             updater=updater,
@@ -302,6 +322,19 @@ def _apply_world_v4_gate(
         return frozen_path or "book-state-compile-blocked"
 
     if self.config.world_v4_compat_write_enabled and gate_verdict is not None:
+        record_compat = getattr(self, "_record_legacy_compatibility_event", None)
+        if callable(record_compat):
+            record_compat(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                compat_layer="projection",
+                compat_feature="projection.legacy_world_model_projection",
+                usage_kind="projection_compat",
+                source_module="forwin.orchestrator_loop_core.world_projection",
+                usage_reason="world_v4 compatibility projection path invoked",
+                related_stage="legacy_projection",
+            )
         legacy_nested = session.begin_nested()
         try:
             compiler_result = WorldModelCompilerV4(session).compile_gate_verdict(

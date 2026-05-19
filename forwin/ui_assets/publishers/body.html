@@ -1,37 +1,43 @@
   <div class="wrap">
-    <nav class="nav-tabs nav-tabs--primary" aria-label="ForWin primary navigation">
-      <a class="nav-tab" href="/">书本</a>
-      <a class="nav-tab" href="/#task">任务</a>
-      <a class="nav-tab" href="/world-studio">世界档案</a>
-      <a class="nav-tab" href="/publishers" aria-current="page">发布</a>
-      <a class="nav-tab" href="/#config">配置</a>
-    </nav>
+    <div class="top-bar">
+      <nav class="nav-tabs nav-tabs--primary" aria-label="ForWin primary navigation">
+        <a class="nav-tab" href="/" data-i18n="nav.books">书本</a>
+        <a class="nav-tab" href="/#task" data-i18n="nav.tasks">任务</a>
+        <a class="nav-tab" href="/world-studio" data-i18n="nav.archive">世界档案</a>
+        <a class="nav-tab" href="/publishers" aria-current="page" data-i18n="nav.publish">发布</a>
+        <a class="nav-tab" href="/#config" data-i18n="nav.settings">配置</a>
+      </nav>
+      <div class="lang-toggle" role="group" aria-label="切换语言" data-i18n-aria-label="lang.toggle">
+        <button class="active" type="button" data-lang="cn" aria-pressed="true" onclick="setLang('cn')">中</button>
+        <button type="button" data-lang="en" aria-pressed="false" onclick="setLang('en')">EN</button>
+      </div>
+    </div>
     <header class="masthead">
       <div>
         <div class="brand-mark">
           <span class="fw-logo" aria-hidden="true">FW</span>
-          <span>ForWin Publisher</span>
+          <span data-i18n="brand.publisher">ForWin Publisher</span>
         </div>
-        <h1>发布</h1>
+        <h1 data-i18n="publish.title">发布</h1>
       </div>
     </header>
 
     <section class="hero">
       <article class="hero-card">
         <div class="hero-copy">
-          <h2>扩展</h2>
+          <h2 data-i18n="publish.extension">扩展</h2>
         </div>
         <div class="hero-actions">
-          <a class="button secondary" href="/">返回首页控制台</a>
-          <button class="secondary" onclick="openExtensionOptions()">打开扩展设置</button>
-          <a class="button secondary" href="/api/publishers/extension-package">下载扩展包（Chrome/Edge）</a>
-          <a class="button secondary" href="/api/publishers/extension-package/firefox">下载 Firefox 扩展包</a>
+          <a class="button secondary" href="/" data-i18n="publish.back_home">返回首页控制台</a>
+          <button class="secondary" onclick="openExtensionOptions()" data-i18n="publish.open_extension">打开扩展设置</button>
+          <a class="button secondary" href="/api/publishers/extension-package" data-i18n="publish.download_chromium">下载扩展包（Chrome/Edge）</a>
+          <a class="button secondary" href="/api/publishers/extension-package/firefox" data-i18n="publish.download_firefox">下载 Firefox 扩展包</a>
         </div>
       </article>
       <aside class="card">
         <div class="card-title">
           <div>
-            <h2 style="margin-top:0;">安装</h2>
+            <h2 style="margin-top:0;" data-i18n="publish.install">安装</h2>
             <div class="section-note">本机浏览器安装扩展，填写后端 URL 和共享 API Key。</div>
           </div>
         </div>
@@ -46,7 +52,7 @@
         <div class="card">
           <div class="card-title">
             <div>
-              <h2 style="margin-top:0;">扩展状态</h2>
+              <h2 style="margin-top:0;" data-i18n="publish.extension_status">扩展状态</h2>
               <div class="section-note">桥接在线状态 · 后端地址一致性。</div>
             </div>
           </div>
@@ -59,7 +65,7 @@
         <div class="card">
           <div class="card-title">
             <div>
-              <h2 style="margin-top:0;">上传</h2>
+              <h2 style="margin-top:0;" data-i18n="publish.upload">上传</h2>
               <div class="section-note">手动上传入口 · 平台链路验证。</div>
             </div>
           </div>
@@ -112,7 +118,7 @@
         <div class="card">
           <div class="card-title">
             <div>
-              <h2 style="margin-top:0;">最近任务</h2>
+              <h2 style="margin-top:0;" data-i18n="publish.recent_jobs">最近任务</h2>
               <div class="section-note">排队中与执行中的上传任务。</div>
             </div>
           </div>

@@ -10,9 +10,10 @@ from forwin.api_pages_shared import (
 )
 
 
-_HOME_CSS_PATHS = ("home/page.css",)
+_HOME_CSS_PATHS = ("home/page.css", "shared/i18n.css")
 _HOME_BODY_PATHS = ("home/body.html",)
 _HOME_SCRIPT_PATHS = (
+    "shared/i18n.js",
     "home/app_state.js",
     "home/app_genesis.js",
     "home/app_library.js",

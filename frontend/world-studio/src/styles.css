@@ -271,6 +271,10 @@ h3 {
   padding: 0 0 18px;
 }
 
+.topbar-shell {
+  width: 100%;
+}
+
 .brand-mark {
   display: inline-flex;
   align-items: center;
@@ -317,6 +321,53 @@ h3 {
   gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.topbar-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.lang-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  padding: 4px;
+  border: 1px solid var(--line-divider);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.52);
+  box-shadow: 0 1px 2px rgba(56, 36, 17, 0.06);
+}
+
+.lang-toggle button {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 9px;
+  border-color: transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 800;
+  transform: none;
+}
+
+.lang-toggle button:hover {
+  border-color: var(--line-divider);
+  background: rgba(255, 255, 255, 0.78);
+  transform: none;
+}
+
+.lang-toggle button.active,
+.lang-toggle button[aria-pressed="true"] {
+  border-color: rgba(178, 75, 49, 0.24);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--ink);
 }
 
 .project-picker {
@@ -1085,6 +1136,10 @@ pre,
     justify-content: flex-start;
   }
 
+  .topbar-controls {
+    justify-content: flex-start;
+  }
+
   .workspace {
     grid-template-columns: 1fr;
   }
@@ -1141,6 +1196,7 @@ pre,
   }
 
   .topbar-actions,
+  .topbar-controls,
   .project-picker {
     width: 100%;
   }

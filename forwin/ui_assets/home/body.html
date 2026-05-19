@@ -1,25 +1,31 @@
   <div class="wrap">
-    <nav class="nav-tabs nav-tabs--primary" aria-label="ForWin primary navigation">
-      <button id="tab_book" class="nav-tab active" type="button" aria-selected="true" onclick="switchTab('book')">书本</button>
-      <button id="tab_task" class="nav-tab" type="button" aria-selected="false" onclick="switchTab('task')">任务</button>
-      <a class="nav-tab" href="/world-studio">世界档案</a>
-      <a class="nav-tab" href="/publishers">发布</a>
-      <button id="tab_config" class="nav-tab" type="button" aria-selected="false" onclick="switchTab('config')">配置</button>
-    </nav>
+    <div class="top-bar">
+      <nav class="nav-tabs nav-tabs--primary" aria-label="ForWin primary navigation">
+        <button id="tab_book" class="nav-tab active" type="button" aria-selected="true" onclick="switchTab('book')" data-i18n="nav.books">书本</button>
+        <button id="tab_task" class="nav-tab" type="button" aria-selected="false" onclick="switchTab('task')" data-i18n="nav.tasks">任务</button>
+        <a class="nav-tab" href="/world-studio" data-i18n="nav.archive">世界档案</a>
+        <a class="nav-tab" href="/publishers" data-i18n="nav.publish">发布</a>
+        <button id="tab_config" class="nav-tab" type="button" aria-selected="false" onclick="switchTab('config')" data-i18n="nav.settings">配置</button>
+      </nav>
+      <div class="lang-toggle" role="group" aria-label="切换语言" data-i18n-aria-label="lang.toggle">
+        <button class="active" type="button" data-lang="cn" aria-pressed="true" onclick="setLang('cn')">中</button>
+        <button type="button" data-lang="en" aria-pressed="false" onclick="setLang('en')">EN</button>
+      </div>
+    </div>
     <section class="masthead">
       <div>
         <div class="brand-mark">
           <span class="fw-logo" aria-hidden="true">FW</span>
-          <span>ForWin Workspace</span>
+          <span data-i18n="brand.workspace">ForWin Workspace</span>
         </div>
-        <h1>工作台</h1>
+        <h1 data-i18n="home.title">工作台</h1>
       </div>
     </section>
 
     <section class="surface shell">
       <div class="status-bar">
         <div>
-          <strong id="global_status_title">系统状态</strong>
+          <strong id="global_status_title" data-i18n="home.status">系统状态</strong>
           <div id="global_status" class="meta">等待加载首页数据。</div>
         </div>
         <div class="badge-row">
@@ -34,15 +40,15 @@
           <div>
             <div class="section-head" style="margin:0;">
               <div>
-                <h2>书本</h2>
+                <h2 data-i18n="home.books">书本</h2>
               </div>
             </div>
           </div>
           <div class="action-row">
-            <button class="secondary" type="button" onclick="loadBooks(true)">刷新</button>
-            <button id="book_select_all_btn" class="ghost" type="button" onclick="toggleSelectAllBooks()">全选</button>
-            <button id="book_bulk_delete_btn" class="danger" type="button" onclick="bulkDeleteBooks()" disabled>批量删除</button>
-            <button class="primary" type="button" onclick="openBookModal()">新建书本</button>
+            <button class="secondary" type="button" onclick="loadBooks(true)" data-i18n="action.refresh">刷新</button>
+            <button id="book_select_all_btn" class="ghost" type="button" onclick="toggleSelectAllBooks()" data-i18n="action.select_all">全选</button>
+            <button id="book_bulk_delete_btn" class="danger" type="button" onclick="bulkDeleteBooks()" disabled data-i18n="action.bulk_delete">批量删除</button>
+            <button class="primary" type="button" onclick="openBookModal()" data-i18n="action.create_book">新建书本</button>
           </div>
         </div>
         <div id="book_list" class="task-list"></div>
@@ -53,15 +59,15 @@
           <div>
             <div class="section-head" style="margin:0;">
               <div>
-                <h2>任务</h2>
+                <h2 data-i18n="home.tasks">任务</h2>
               </div>
             </div>
           </div>
           <div class="action-row">
-            <button class="secondary" type="button" onclick="loadTaskCenter(true)">刷新</button>
-            <button id="task_select_all_btn" class="ghost" type="button" onclick="toggleSelectAllTasks()">全选可删</button>
-            <button id="task_bulk_delete_btn" class="danger" type="button" onclick="bulkDeleteTasks()" disabled>批量删除</button>
-            <button class="primary" type="button" onclick="openTaskModal('generation')">新建任务</button>
+            <button class="secondary" type="button" onclick="loadTaskCenter(true)" data-i18n="action.refresh">刷新</button>
+            <button id="task_select_all_btn" class="ghost" type="button" onclick="toggleSelectAllTasks()" data-i18n="action.select_deletable">全选可删</button>
+            <button id="task_bulk_delete_btn" class="danger" type="button" onclick="bulkDeleteTasks()" disabled data-i18n="action.bulk_delete">批量删除</button>
+            <button class="primary" type="button" onclick="openTaskModal('generation')" data-i18n="action.create_task">新建任务</button>
           </div>
         </div>
         <div id="task_list" class="task-list"></div>
@@ -76,7 +82,7 @@
                   <h2>Codex Bridge</h2>
                   <p>Pro 订阅通过宿主机 bridge 接入；失败时按路由策略回退普通模型。</p>
                 </div>
-                <button class="secondary" type="button" onclick="loadCodexBridgeStatus()">刷新</button>
+                <button class="secondary" type="button" onclick="loadCodexBridgeStatus()" data-i18n="action.refresh">刷新</button>
               </div>
               <div id="codex_bridge_panel" class="list">
                 <div class="empty">等待检查 Codex Bridge 状态。</div>
@@ -85,11 +91,11 @@
             <section class="card">
               <div class="section-head">
                 <div>
-                  <h2>模型</h2>
+                  <h2 data-i18n="home.models">模型</h2>
                 </div>
                 <div class="action-row">
-                  <button class="secondary" type="button" onclick="loadSettings()">刷新</button>
-                  <button class="primary" type="button" onclick="openModelModal('')">添加模型</button>
+                  <button class="secondary" type="button" onclick="loadSettings()" data-i18n="action.refresh">刷新</button>
+                  <button class="primary" type="button" onclick="openModelModal('')" data-i18n="action.add_model">添加模型</button>
                 </div>
               </div>
               <div id="profile_list" class="list"></div>
@@ -97,9 +103,9 @@
             <section class="card">
               <div class="section-head">
                 <div>
-                  <h2>生成默认值</h2>
+                  <h2 data-i18n="home.generation">生成默认值</h2>
                 </div>
-                <button class="primary" type="button" onclick="saveGenerationPreferences()">保存</button>
+                <button class="primary" type="button" onclick="saveGenerationPreferences()" data-i18n="action.save">保存</button>
               </div>
               <div class="field-grid">
                 <div>
@@ -143,7 +149,7 @@
             <section class="card">
               <div class="section-head">
                 <div>
-                  <h2>平台</h2>
+                  <h2 data-i18n="home.platform">平台</h2>
                 </div>
                 <button class="secondary" type="button" onclick="loadPlatforms()">刷新</button>
               </div>

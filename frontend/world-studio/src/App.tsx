@@ -12,8 +12,45 @@ import {
   UserRound,
   X
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
+
+type Language = "cn" | "en";
+
+const LANGUAGE_STORAGE_KEY = "forwin-lang";
+
+const TRANSLATIONS = {
+  navBooks: { cn: "书本", en: "Books" },
+  navTasks: { cn: "任务", en: "Tasks" },
+  navArchive: { cn: "世界档案", en: "Archive" },
+  navPublish: { cn: "发布", en: "Publish" },
+  navSettings: { cn: "配置", en: "Settings" },
+  archiveBrand: { cn: "ForWin Archive", en: "ForWin Archive" },
+  archiveTitle: { cn: "世界档案", en: "World archive" },
+  languageToggle: { cn: "切换语言", en: "Switch Language" },
+  project: { cn: "项目", en: "Project" },
+  projectSelect: { cn: "选择项目", en: "Select project" },
+  refresh: { cn: "刷新", en: "Refresh" },
+  snapshot: { cn: "快照", en: "Snapshot" },
+  pages: { cn: "页面", en: "Pages" },
+  conflicts: { cn: "冲突", en: "Conflicts" },
+  proposals: { cn: "Proposals", en: "Proposals" },
+  open: { cn: "open", en: "open" },
+  pending: { cn: "pending", en: "pending" },
+  pageTypes: { cn: "types", en: "types" },
+  vaultPath: { cn: "Vault path", en: "Vault path" },
+  vaultPlaceholder: { cn: "默认 data/world_vaults/{project_id}", en: "Default data/world_vaults/{project_id}" },
+  export: { cn: "导出", en: "Export" },
+  importProposal: { cn: "导入 proposal", en: "Import proposal" },
+  tabPages: { cn: "页面", en: "Pages" },
+  tabGraph: { cn: "图谱", en: "Graph" },
+  tabSearch: { cn: "搜索", en: "Search" },
+  tabProposals: { cn: "Proposal", en: "Proposals" },
+  tabPersonality: { cn: "人物性格", en: "Personality" },
+  sectionsAria: { cn: "世界档案 sections", en: "World archive sections" }
+} as const;
+
+type TranslationKey = keyof typeof TRANSLATIONS;
 
 type ProjectSummary = {
   id: string;
@@ -286,12 +323,51 @@ function defaultCharacterCreateDraft(): CharacterCreateDraft {
   };
 }
 
+function normalizeLanguage(value: string | null): Language {
+  return value === "en" ? "en" : "cn";
+}
+
+function readStoredLanguage(): Language {
+  if (typeof window === "undefined") return "cn";
+  try {
+    return normalizeLanguage(window.localStorage.getItem(LANGUAGE_STORAGE_KEY));
+  } catch {
+    return "cn";
+  }
+}
+
+function translate(language: Language, key: TranslationKey): string {
+  return TRANSLATIONS[key][language] || TRANSLATIONS[key].cn;
+}
+
 function snapshotTitle(snapshot: WorldModelSnapshotInfo | null): string {
   if (!snapshot) return "暂无快照";
   return `第 ${snapshot.as_of_chapter} 章后 · v${snapshot.version}`;
 }
 
+function LanguageToggle({
+  language,
+  onChange,
+  t
+}: {
+  language: Language;
+  onChange: (language: Language) => void;
+  t: (key: TranslationKey) => string;
+}) {
+  return (
+    <div className="lang-toggle" role="group" aria-label={t("languageToggle")}>
+      <button className={language === "cn" ? "active" : ""} type="button" aria-pressed={language === "cn"} onClick={() => onChange("cn")}>
+        中
+      </button>
+      <button className={language === "en" ? "active" : ""} type="button" aria-pressed={language === "en"} onClick={() => onChange("en")}>
+        EN
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
+  const [language, setLanguage] = useState<Language>(readStoredLanguage);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [projectId, setProjectId] = useState(() => new URLSearchParams(window.location.search).get("project_id") ?? "");
   const [snapshots, setSnapshots] = useState<WorldModelSnapshotInfo[]>([]);
@@ -330,6 +406,17 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const t = useCallback((key: TranslationKey) => translate(language, key), [language]);
+
+  useEffect(() => {
+    document.documentElement.lang = language === "en" ? "en" : "zh-CN";
+    try {
+      window.localStorage.setItem(LANGUAGE_STORAGE_KEY, language);
+    } catch {
+      /* ignore private browsing storage failures */
+    }
+    window.dispatchEvent(new CustomEvent("forwin-langchange", { detail: { lang: language } }));
+  }, [language]);
 
   useEffect(() => {
     void loadProjects();
@@ -750,47 +837,50 @@ export default function App() {
 
   return (
     <main className="app-shell">
-      <header className="topbar">
+      <header className="topbar topbar-shell">
         <div>
           <nav className="nav-tabs nav-tabs--primary" aria-label="ForWin primary navigation">
-            <a className="nav-tab" href="/">书本</a>
-            <a className="nav-tab" href="/#task">任务</a>
+            <a className="nav-tab" href="/">{t("navBooks")}</a>
+            <a className="nav-tab" href="/#task">{t("navTasks")}</a>
             <a className="nav-tab" href="/world-studio" aria-current="page">
-              世界档案
+              {t("navArchive")}
             </a>
-            <a className="nav-tab" href="/publishers">发布</a>
-            <a className="nav-tab" href="/#config">配置</a>
+            <a className="nav-tab" href="/publishers">{t("navPublish")}</a>
+            <a className="nav-tab" href="/#config">{t("navSettings")}</a>
           </nav>
           <div className="brand-mark">
             <span className="fw-logo" aria-hidden="true">FW</span>
-            <span>ForWin Archive</span>
+            <span>{t("archiveBrand")}</span>
           </div>
-          <h1>世界档案</h1>
+          <h1>{t("archiveTitle")}</h1>
         </div>
-        <div className="topbar-actions">
-          <label className="project-picker">
-            <span>Project</span>
-            <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
-              <option value="">选择项目</option>
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.title || project.id}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button className="icon-button" type="button" onClick={() => refreshWorldModel()} disabled={busy || !projectId}>
-            <RefreshCw size={16} />
-            刷新
-          </button>
+        <div className="topbar-controls">
+          <LanguageToggle language={language} onChange={setLanguage} t={t} />
+          <div className="topbar-actions">
+            <label className="project-picker">
+              <span>{t("project")}</span>
+              <select value={projectId} onChange={(event) => setProjectId(event.target.value)}>
+                <option value="">{t("projectSelect")}</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.title || project.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="icon-button" type="button" onClick={() => refreshWorldModel()} disabled={busy || !projectId}>
+              <RefreshCw size={16} />
+              {t("refresh")}
+            </button>
+          </div>
         </div>
       </header>
 
       <section className="status-grid">
-        <Metric icon={<Database size={18} />} label="Snapshot" value={snapshotTitle(latest)} detail={shortDigest(latest?.source_digest ?? "")} />
-        <Metric icon={<FileText size={18} />} label="Pages" value={String(pages.length)} detail={`${pageTypes.length - 1} types`} />
-        <Metric icon={<ShieldAlert size={18} />} label="Conflicts" value={String(openConflicts.length)} detail="open" tone={openConflicts.length ? "warn" : "ok"} />
-        <Metric icon={<GitBranch size={18} />} label="Proposals" value={String(pendingProposals.length)} detail="pending" tone={pendingProposals.length ? "warn" : "ok"} />
+        <Metric icon={<Database size={18} />} label={t("snapshot")} value={snapshotTitle(latest)} detail={shortDigest(latest?.source_digest ?? "")} />
+        <Metric icon={<FileText size={18} />} label={t("pages")} value={String(pages.length)} detail={`${pageTypes.length - 1} ${t("pageTypes")}`} />
+        <Metric icon={<ShieldAlert size={18} />} label={t("conflicts")} value={String(openConflicts.length)} detail={t("open")} tone={openConflicts.length ? "warn" : "ok"} />
+        <Metric icon={<GitBranch size={18} />} label={t("proposals")} value={String(pendingProposals.length)} detail={t("pending")} tone={pendingProposals.length ? "warn" : "ok"} />
       </section>
 
       {selectedProject ? (
@@ -805,21 +895,21 @@ export default function App() {
 
       <section className="toolbar">
         <form className="vault-form" onSubmit={exportVault}>
-          <label htmlFor="vault_root">Vault path</label>
+          <label htmlFor="vault_root">{t("vaultPath")}</label>
           <input
             id="vault_root"
             value={vaultRoot}
             onChange={(event) => setVaultRoot(event.target.value)}
-            placeholder="默认 data/world_vaults/{project_id}"
+            placeholder={t("vaultPlaceholder")}
             spellCheck={false}
           />
           <button type="submit" disabled={busy || !projectId}>
             <Download size={16} />
-            导出
+            {t("export")}
           </button>
           <button type="button" onClick={importVault} disabled={busy || !projectId}>
             <Upload size={16} />
-            导入 proposal
+            {t("importProposal")}
           </button>
         </form>
       </section>
@@ -829,7 +919,7 @@ export default function App() {
 
       <div className="workspace">
         <aside className="sidebar">
-          <div className="nav-tabs nav-tabs--secondary" role="tablist" aria-label="世界档案 sections">
+          <div className="nav-tabs nav-tabs--secondary" role="tablist" aria-label={t("sectionsAria")}>
             <button
               className={tab === "pages" ? "nav-tab active" : "nav-tab"}
               type="button"
@@ -838,7 +928,7 @@ export default function App() {
               onClick={() => setTab("pages")}
             >
               <BookOpen size={16} />
-              页面
+              {t("tabPages")}
             </button>
             <button
               className={tab === "graph" ? "nav-tab active" : "nav-tab"}
@@ -848,7 +938,7 @@ export default function App() {
               onClick={() => setTab("graph")}
             >
               <GitBranch size={16} />
-              图谱
+              {t("tabGraph")}
             </button>
             <button
               className={tab === "search" ? "nav-tab active" : "nav-tab"}
@@ -858,7 +948,7 @@ export default function App() {
               onClick={() => setTab("search")}
             >
               <Search size={16} />
-              搜索
+              {t("tabSearch")}
             </button>
             <button
               className={tab === "proposals" ? "nav-tab active" : "nav-tab"}
@@ -868,7 +958,7 @@ export default function App() {
               onClick={() => setTab("proposals")}
             >
               <FileText size={16} />
-              Proposal
+              {t("tabProposals")}
             </button>
             <button
               className={tab === "personality" ? "nav-tab active" : "nav-tab"}
@@ -878,7 +968,7 @@ export default function App() {
               onClick={() => setTab("personality")}
             >
               <UserRound size={16} />
-              人物性格
+              {t("tabPersonality")}
             </button>
           </div>
 

@@ -5,9 +5,10 @@ import json
 from forwin.api_pages_shared import PAGE_DOM_HELPERS_JS, render_page_document
 
 
-_PUBLISHERS_CSS_PATHS = ("publishers/page.css",)
+_PUBLISHERS_CSS_PATHS = ("publishers/page.css", "shared/i18n.css")
 _PUBLISHERS_BODY_PATHS = ("publishers/body.html",)
 _PUBLISHERS_SCRIPT_PATHS = (
+    "shared/i18n.js",
     "publishers/app_bridge.js",
     "publishers/app_uploads.js",
     "publishers/app_extension_events.js",

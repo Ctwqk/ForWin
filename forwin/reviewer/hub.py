@@ -95,7 +95,7 @@ class HistoricalReviewHub:
             lint_signals = [*self.lint_collector.collect(writer_output)]
             span.metric("issue_count", len(lint_signals))
         personality_collect = getattr(self.personality_reviewer, "collect", None)
-        if callable(personality_collect):
+        if self.personality_review_enabled and callable(personality_collect):
             with self.observability.span(
                 obs_context,
                 "review.personality.collect",
@@ -377,6 +377,46 @@ class HistoricalReviewHub:
         review: ReviewVerdict,
         repair_attempts: list[dict[str, object]] | None = None,
     ) -> RepairInstruction:
+        if not self.experience_review_enabled:
+            base_instruction = review.repair_instruction
+            return RepairInstruction(
+                repair_scope="scene",
+                failure_type=(
+                    base_instruction.failure_type
+                    if base_instruction is not None
+                    else "mixed"
+                ),
+                must_fix=(
+                    list(base_instruction.must_fix)
+                    if base_instruction is not None
+                    else [item.description for item in review.issues if item.severity == "error"]
+                ),
+                must_preserve=(
+                    list(base_instruction.must_preserve)
+                    if base_instruction is not None
+                    else [
+                        context.chapter_plan_title,
+                        context.chapter_plan_one_line,
+                        *(context.chapter_goals[:2]),
+                    ]
+                ),
+                must_not_reveal=(
+                    list(base_instruction.must_not_reveal)
+                    if base_instruction is not None
+                    else []
+                ),
+                scope_reason="experience reviewer disabled; no repair escalation requested",
+                design_patch=(
+                    dict(base_instruction.design_patch)
+                    if base_instruction is not None
+                    else {}
+                ),
+                evidence_refs=(
+                    list(base_instruction.evidence_refs)
+                    if base_instruction is not None
+                    else list(review.evidence_refs)
+                ),
+            )
         review_context = build_review_context_pack(
             repo=repo,
             context=context,

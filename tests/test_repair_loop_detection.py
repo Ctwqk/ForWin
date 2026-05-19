@@ -15,14 +15,14 @@ def test_loop_detector_triggers_on_second_same_scope_overlapping_signals() -> No
         RepairAttemptRecord(
             attempt_no=1,
             scope=RepairScopeKind.DRAFT.value,
-            signals=[_signal("personality_drift", "韩青")],
+            signals=[_signal("personality_drift", "角色B")],
             result_verdict="fail",
         )
     ]
 
     result = detector.detect(
         scope=RepairScopeKind.DRAFT.value,
-        signals=[_signal("personality_drift", "韩青")],
+        signals=[_signal("personality_drift", "角色B")],
         history=history,
     )
 
@@ -43,7 +43,7 @@ def test_loop_detector_does_not_trigger_for_disjoint_scope_or_signal() -> None:
 
     result = detector.detect(
         scope=RepairScopeKind.DRAFT.value,
-        signals=[_signal("personality_drift", "韩青")],
+        signals=[_signal("personality_drift", "角色B")],
         history=history,
     )
 

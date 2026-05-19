@@ -48,6 +48,9 @@ FORBIDDEN_FIXTURE_TERMS = [
     "\u6863\u6848\u516c\u4f1a",
     "\u5b88\u4ed3\u9619\u5fae\u9611",
     "\u793c\u5ddd\u8bf8\u5dde",
+    "\u97e9\u9752",
+    "\u88f4\u661f\u91ce",
+    "\u9690\u85cf\u5b50\u7a0b\u5e8f\u5012\u8ba1\u65f6",
 ]
 
 REPAIR_TIME_CANON_STATE_FILES = [

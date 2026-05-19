@@ -27,8 +27,8 @@ def test_active_rules_handler_registers_valid_prior_trigger_patch() -> None:
         chapter_number=18,
         patches=[
             ActiveRulePatch(
-                rule=ActiveRule(rule_key="hidden_timer", summary="隐藏子程序倒计时活跃", valid_from_chapter=17),
-                trigger_quote=TriggerQuote(chapter_number=17, quote="隐藏子程序倒计时开始跳动。"),
+                rule=ActiveRule(rule_key="hidden_timer", summary="局部倒计时甲活跃", valid_from_chapter=17),
+                trigger_quote=TriggerQuote(chapter_number=17, quote="局部倒计时甲开始跳动。"),
             )
         ],
         store=store,
@@ -46,7 +46,7 @@ def test_active_rules_handler_rejects_ambiguous_or_future_trigger_patch() -> Non
         chapter_number=18,
         patches=[
             ActiveRulePatch(
-                rule=ActiveRule(rule_key="hidden_timer", summary="隐藏子程序倒计时活跃", valid_from_chapter=18),
+                rule=ActiveRule(rule_key="hidden_timer", summary="局部倒计时甲活跃", valid_from_chapter=18),
                 trigger_quote=TriggerQuote(chapter_number=18, quote=""),
             )
         ],

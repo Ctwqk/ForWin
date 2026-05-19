@@ -26,6 +26,9 @@ BANNED_CURRENT_BOOK_TERMS = (
     "档案公会",
     "白塔巡检员",
     "林氏",
+    "守仓阙微阑",
+    "礼川诸州",
+    "裴星野",
 )
 
 BANNED_CURRENT_BOOK_MECHANISM_TERMS = (
@@ -35,7 +38,26 @@ BANNED_CURRENT_BOOK_MECHANISM_TERMS = (
     "档案清理",
     "记忆熔铸",
     "熔铸协议",
+    "隐藏子程序倒计时",
 )
+
+CHAPTER_REPAIR_STORY_TERMS = BANNED_CURRENT_BOOK_TERMS + (
+    # This name still appears in older generic-story fixtures. Keep the chapter
+    # repair guard strict without broadening this follow-up into a legacy
+    # fixture migration.
+    "韩青",
+)
+
+CHAPTER_REPAIR_TEST_PATHS = [
+    REPO_ROOT / "tests" / "fixtures" / "repair_routing",
+    REPO_ROOT / "tests" / "test_active_rule_store.py",
+    REPO_ROOT / "tests" / "test_active_rules_auto_registration.py",
+    REPO_ROOT / "tests" / "test_chapter18_repair_routing_regression.py",
+    REPO_ROOT / "tests" / "test_form_coercion_dict_bool.py",
+    REPO_ROOT / "tests" / "test_repair_loop_detection.py",
+    REPO_ROOT / "tests" / "test_repair_scope_router_dispatch.py",
+    REPO_ROOT / "tests" / "test_subworld_admission_auto_population.py",
+]
 
 ALLOWED_PRODUCTION_FILES: set[str] = set()
 
@@ -61,9 +83,10 @@ def _python_files(paths: list[Path]) -> list[Path]:
 def _files_with_suffixes(paths: list[Path], suffixes: set[str]) -> list[Path]:
     files: list[Path] = []
     for root in paths:
+        candidates = [root] if root.is_file() else root.rglob("*")
         files.extend(
             path
-            for path in root.rglob("*")
+            for path in candidates
             if path.is_file()
             and path.suffix in suffixes
             and "__pycache__" not in path.parts
@@ -118,3 +141,10 @@ def test_extension_tests_do_not_reintroduce_current_book_fixture() -> None:
         {".js", ".ts", ".tsx"},
     )
     assert _violations(inspected_files, terms=BANNED_CURRENT_BOOK_TERMS) == []
+
+
+def test_chapter_repair_tests_do_not_reintroduce_case_specific_terms() -> None:
+    inspected_files = _files_with_suffixes(CHAPTER_REPAIR_TEST_PATHS, {".json", ".md", ".py"})
+
+    assert _violations(inspected_files, terms=CHAPTER_REPAIR_STORY_TERMS) == []
+    assert _violations(inspected_files, terms=BANNED_CURRENT_BOOK_MECHANISM_TERMS) == []

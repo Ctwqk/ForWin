@@ -4,6 +4,8 @@ Date: 2026-05-18
 
 Status: approved for implementation planning
 
+Note: Investigation Evidence sections quote real project entity and mechanism names to preserve the chapter-18 debugging record. Implementation tests and fixtures must use generic placeholders such as `角色A`, `组织甲`, and `局部倒计时甲`; guard tests enforce that repair-routing artifacts do not copy those real names.
+
 ## Scope
 
 A 30-chapter generation run stuck at chapter 18 exposed a structural mismatch between what the review-form catches and what the repair scope router can fix. The router escalates within the writer-output stack (draft → chapter_plan → band_plan) but does not touch the canon-state stack (subworld admission roster, active_rules, countdown ledger) or the validation infrastructure stack (form normalization, schema coercion). Three repair rounds therefore edited the wrong layer and produced a fail-loop with no progress.

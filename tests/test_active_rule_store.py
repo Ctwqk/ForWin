@@ -19,8 +19,8 @@ def test_active_rule_store_register_query_revoke_cycle() -> None:
         store = CanonQualityActiveRuleStore(session)
         result = store.register_rule(
             project_id="p1",
-            rule=ActiveRule(rule_key="hidden_timer", summary="隐藏子程序倒计时活跃", valid_from_chapter=17),
-            trigger_quote=TriggerQuote(chapter_number=17, quote="隐藏子程序倒计时开始跳动。"),
+            rule=ActiveRule(rule_key="hidden_timer", summary="局部倒计时甲活跃", valid_from_chapter=17),
+            trigger_quote=TriggerQuote(chapter_number=17, quote="局部倒计时甲开始跳动。"),
         )
         assert result.applied is True
         assert [rule.rule_key for rule in store.query_active_as_of(project_id="p1", chapter_number=18)] == ["hidden_timer"]

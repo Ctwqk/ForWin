@@ -1029,8 +1029,6 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertIn("临潮", map_names)
         self.assertIn("旧城区", map_names)
         self.assertIn("民间记忆馆", map_names)
-        self.assertNotIn("守仓阙微阑", cast_names)
-        self.assertNotIn("礼川诸州", faction_names)
 
     def test_refine_stage_target_path_only_updates_selected_item(self) -> None:
         created = api_module.create_project(

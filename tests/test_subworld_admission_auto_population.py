@@ -61,7 +61,7 @@ def test_unknown_entity_blocks_unless_code_pattern_matches() -> None:
     )
 
     code_signal = classify_admission_signal(admission, entity_name="PS-07", entity_kind="code")
-    unknown_signal = classify_admission_signal(admission, entity_name="韩青", entity_kind="character")
+    unknown_signal = classify_admission_signal(admission, entity_name="角色B", entity_kind="character")
 
     assert code_signal.signal_kind == ""
     assert code_signal.blocking is False

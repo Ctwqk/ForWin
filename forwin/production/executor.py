@@ -10,6 +10,7 @@ from forwin.models.project import Project
 from .events import (
     ACTION_ACTIVE_TASK,
     ACTION_IDLE,
+    ACTION_RAN_REVIEW_JOBS,
     ACTION_STARTED_CONTINUE_GENERATION,
     ACTION_STARTED_INITIAL_GENERATION,
     ACTION_STARTED_PUBLISH_JOBS,
@@ -23,6 +24,7 @@ class ProductionExecutionResult(BaseModel):
     action: str = ACTION_IDLE
     message: str = ""
     task_id: str = ""
+    review_job_count: int = 0
     publish_job_count: int = 0
 
 
@@ -36,6 +38,8 @@ class ProductionExecutor:
         publisher_manager_factory: Callable[[], Any] | None = None,
         session_factory: Callable[[], Any] | None = None,
         config: Any = None,
+        review_chapter: Callable[[str, int], Any] | None = None,
+        approve_chapter_review: Callable[[str, int], Any] | None = None,
     ) -> None:
         self.create_generation_task = create_generation_task
         self.create_continue_generation_task = create_continue_generation_task
@@ -43,6 +47,8 @@ class ProductionExecutor:
         self.publisher_manager_factory = publisher_manager_factory
         self.session_factory = session_factory
         self.config = config
+        self.review_chapter = review_chapter
+        self.approve_chapter_review = approve_chapter_review
 
     def execute(
         self,
@@ -83,6 +89,10 @@ class ProductionExecutor:
                 message=message_for_action(ACTION_ACTIVE_TASK),
             )
 
+        review_job_count = self._execute_review_jobs(plan=plan, project=project)
+        if action == ACTION_IDLE and review_job_count > 0:
+            action = ACTION_RAN_REVIEW_JOBS
+
         publish_job_count = self._enqueue_publish_jobs(
             plan=plan,
             project=project,
@@ -99,12 +109,35 @@ class ProductionExecutor:
             action=action,
             message=message_for_action(
                 action,
-                chapter_count=message_chapter_count,
+                chapter_count=review_job_count if action == ACTION_RAN_REVIEW_JOBS else message_chapter_count,
                 publish_job_count=publish_job_count,
             ),
             task_id=task_id,
+            review_job_count=review_job_count,
             publish_job_count=publish_job_count,
         )
+
+    def _execute_review_jobs(
+        self,
+        *,
+        plan: ProductionPlan,
+        project: Project,
+    ) -> int:
+        total = 0
+        for chapter_number in plan.review_chapters:
+            normalized_chapter = int(chapter_number or 0)
+            if normalized_chapter <= 0:
+                continue
+            status = str(plan.review_chapter_statuses.get(normalized_chapter, "") or "").strip()
+            if status == "needs_review":
+                callback = self.approve_chapter_review
+            else:
+                callback = self.review_chapter
+            if callback is None:
+                continue
+            callback(str(project.id), normalized_chapter)
+            total += 1
+        return total
 
     def _enqueue_publish_jobs(
         self,

@@ -143,3 +143,35 @@ def test_executor_enqueues_publish_jobs_without_running_browser_worker() -> None
     assert result.publish_job_count == 1
     assert publish_calls[0]["platform"] == "fanqie"
     assert publish_calls[0]["jobs"] == [{"chapter_title": "第3章", "body": "正文"}]
+
+
+def test_executor_consumes_review_quota_jobs_before_reporting_idle() -> None:
+    review_calls: list[tuple[str, int]] = []
+    approve_calls: list[tuple[str, int]] = []
+    project = Project(id="project-1", title="测试书", premise="前提", genre="玄幻")
+    plan = ProductionPlan(
+        project_id=project.id,
+        date="2026-05-05",
+        review_chapters=[2, 3],
+        review_chapter_statuses={2: "needs_review", 3: "drafted"},
+    )
+
+    result = ProductionExecutor(
+        create_generation_task=lambda **_kwargs: "unexpected",
+        create_continue_generation_task=lambda **_kwargs: "unexpected",
+        active_generation_task_error_cls=ActiveGenerationTaskError,
+        review_chapter=lambda project_id, chapter_number: review_calls.append((project_id, chapter_number)),
+        approve_chapter_review=lambda project_id, chapter_number: approve_calls.append((project_id, chapter_number)),
+    ).execute(
+        plan=plan,
+        project=project,
+        policy=policy_from_automation(
+            normalize_project_automation({"daily_chapter_quota": 1, "daily_review_quota": 2})
+        ),
+        runtime_config=SimpleNamespace(),
+    )
+
+    assert result.action == "ran_review_jobs"
+    assert result.review_job_count == 2
+    assert approve_calls == [(project.id, 2)]
+    assert review_calls == [(project.id, 3)]

@@ -37,6 +37,26 @@ def test_planner_blocks_when_generation_task_is_active() -> None:
     assert plan.write_chapters == []
 
 
+def test_planner_records_review_candidate_statuses() -> None:
+    plan = ProductionPlanner().plan(
+        policy=ProductionPolicy(
+            enabled=True,
+            quota=ProductionQuota(write=0, review=3),
+            stop_when_review_pending=False,
+        ),
+        backlog=ProductionBacklog(
+            project_id="project-1",
+            needs_review=[2],
+            drafted_unreviewed=[3, 4],
+            chapter_plan_count=4,
+        ),
+        now=datetime(2026, 5, 5, tzinfo=timezone.utc),
+    )
+
+    assert plan.review_chapters == [2, 3, 4]
+    assert plan.review_chapter_statuses == {2: "needs_review", 3: "drafted", 4: "drafted"}
+
+
 def test_planner_prioritizes_planned_chapters_before_failed_chapters() -> None:
     plan = ProductionPlanner().plan(
         policy=ProductionPolicy(enabled=True, quota=ProductionQuota(write=3)),

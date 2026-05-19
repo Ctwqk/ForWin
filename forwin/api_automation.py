@@ -109,6 +109,8 @@ def run_automation_scheduler_pass(
     create_continue_generation_task: Callable[..., str],
     active_generation_task_error_cls: type[Exception],
     terminal_statuses: set[str],
+    review_chapter: Callable[[str, int], Any] | None = None,
+    approve_chapter_review: Callable[[str, int], Any] | None = None,
     production_scheduler_factory: Any = None,
 ) -> None:
     if session_factory is None or config is None:
@@ -125,6 +127,8 @@ def run_automation_scheduler_pass(
             upload_terminal_statuses={"succeeded", "failed", "cancelled"},
             display_tz=display_tz,
             get_session=get_session,
+            review_chapter=review_chapter,
+            approve_chapter_review=approve_chapter_review,
         )
         scheduler = (
             production_scheduler_factory.build(**scheduler_kwargs)

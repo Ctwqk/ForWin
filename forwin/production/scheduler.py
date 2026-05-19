@@ -54,6 +54,8 @@ class ProductionScheduler:
         display_tz: Any = None,
         get_session: Callable[[], Any] | None = None,
         publisher_manager_factory: Callable[[], Any] | None = None,
+        review_chapter: Callable[[str, int], Any] | None = None,
+        approve_chapter_review: Callable[[str, int], Any] | None = None,
         observability: Any | None = None,
     ) -> None:
         self.session_factory = session_factory
@@ -69,6 +71,8 @@ class ProductionScheduler:
         self.display_tz = display_tz
         self.get_session = get_session
         self.publisher_manager_factory = publisher_manager_factory
+        self.review_chapter = review_chapter
+        self.approve_chapter_review = approve_chapter_review
         self.planner = ProductionPlanner()
         self.observability = observability or NullObservability()
 
@@ -105,6 +109,8 @@ class ProductionScheduler:
                 publisher_manager_factory=self.publisher_manager_factory,
                 session_factory=self.session_factory,
                 config=self.config,
+                review_chapter=self.review_chapter,
+                approve_chapter_review=self.approve_chapter_review,
             )
             results: list[ProductionRunResult] = []
             for project, automation in ready_projects:

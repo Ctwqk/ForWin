@@ -185,11 +185,18 @@ class RuntimeContainer:
         arc_envelope_manager.services.world_contracts = world_contract_service
         arc_envelope_manager.services.experience = experience_planning_service
 
+        hub_llm_enabled = (
+            llm_available
+            and str(config.reviewer_quality_mode or "").strip().lower() != "deterministic"
+        )
         review_hub = HistoricalReviewHub(
             experience_review_enabled=config.experience_review_enabled,
             lint_review_enabled=config.lint_review_enabled,
-            llm_client=llm_client if llm_available else None,
-            llm_enabled=llm_available,
+            map_movement_review_enabled=config.map_movement_review_enabled,
+            personality_review_enabled=config.personality_review_enabled,
+            canon_quality_review_in_hub_enabled=config.canon_quality_review_in_hub_enabled,
+            llm_client=llm_client if hub_llm_enabled else None,
+            llm_enabled=hub_llm_enabled,
             observability=observability,
             chapter_review_form_mode=config.chapter_review_form_mode,
         )

@@ -28,6 +28,9 @@ class HistoricalReviewHub:
         *,
         experience_review_enabled: bool = True,
         lint_review_enabled: bool = True,
+        map_movement_review_enabled: bool = True,
+        personality_review_enabled: bool = True,
+        canon_quality_review_in_hub_enabled: bool = True,
         llm_client=None,
         llm_enabled: bool | None = None,
         continuity_reviewer=None,
@@ -40,6 +43,10 @@ class HistoricalReviewHub:
         observability=None,
         chapter_review_form_mode: str = "primary",
     ) -> None:
+        self.experience_review_enabled = bool(experience_review_enabled)
+        self.map_movement_review_enabled = bool(map_movement_review_enabled)
+        self.personality_review_enabled = bool(personality_review_enabled)
+        self.canon_quality_review_in_hub_enabled = bool(canon_quality_review_in_hub_enabled)
         self.continuity_reviewer = continuity_reviewer
         self.governance_reviewer = governance_reviewer or GovernanceReviewer()
         self.experience_reviewer = experience_reviewer or ExperienceReviewer(
@@ -100,7 +107,7 @@ class HistoricalReviewHub:
                 span.metric("issue_count", len(personality_signals))
         deterministic_quality_report = {}
         session = getattr(repo, "session", None) if repo is not None else None
-        if session is not None:
+        if session is not None and self.canon_quality_review_in_hub_enabled:
             with self.observability.span(
                 obs_context,
                 "review.canon_quality.collect",
@@ -138,12 +145,14 @@ class HistoricalReviewHub:
             span_kind="reviewer",
             component="reviewer",
         ) as span:
-            webnovel = self._call_with_compatible_kwargs(
-                self.experience_reviewer.review,
-                review_context,
-                writer_output,
-                reviewer_skill_layers=reviewer_skill_layers,
-            )
+            webnovel = ReviewVerdict(verdict="pass", issues=[])
+            if self.experience_review_enabled:
+                webnovel = self._call_with_compatible_kwargs(
+                    self.experience_reviewer.review,
+                    review_context,
+                    writer_output,
+                    reviewer_skill_layers=reviewer_skill_layers,
+                )
             span.metric("issue_count", len(getattr(webnovel, "issues", []) or []))
         with self.observability.span(
             obs_context,
@@ -157,21 +166,27 @@ class HistoricalReviewHub:
                 writer_output,
             )
             span.metric("issue_count", len(getattr(governance, "issues", []) or []))
-        with self.observability.span(
-            obs_context,
-            "review.map_movement",
-            span_kind="reviewer",
-            component="reviewer",
-        ) as span:
-            map_movement = self._call_with_compatible_kwargs(
-                self.map_movement_reviewer.review,
-                review_context,
-                writer_output,
-            )
-            span.metric("issue_count", len(getattr(map_movement, "issues", []) or []))
+        map_movement = ReviewVerdict(verdict="pass", issues=[])
+        if self.map_movement_review_enabled:
+            with self.observability.span(
+                obs_context,
+                "review.map_movement",
+                span_kind="reviewer",
+                component="reviewer",
+            ) as span:
+                map_movement = self._call_with_compatible_kwargs(
+                    self.map_movement_reviewer.review,
+                    review_context,
+                    writer_output,
+                )
+                span.metric("issue_count", len(getattr(map_movement, "issues", []) or []))
         personality_review = ReviewVerdict(verdict="pass", issues=[])
         personality_review_call = getattr(self.personality_reviewer, "review", None)
-        if callable(personality_review_call) and not callable(personality_collect):
+        if (
+            self.personality_review_enabled
+            and callable(personality_review_call)
+            and not callable(personality_collect)
+        ):
             with self.observability.span(
                 obs_context,
                 "review.personality",

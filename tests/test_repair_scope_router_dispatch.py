@@ -37,7 +37,7 @@ def test_subworld_then_draft_signals_keep_distinct_scopes() -> None:
             ContinuityIssue(
                 rule_name="subworld_admission_missing_canon_entity",
                 severity="error",
-                description="守仓阙微阑未准入。",
+                description="角色A未准入。",
                 issue_type="subworld_admission_missing_canon_entity",
             ),
             ContinuityIssue(

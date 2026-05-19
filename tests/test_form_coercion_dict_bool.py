@@ -47,7 +47,7 @@ def test_nested_dict_none_value_is_coerced_to_empty_schema_string() -> None:
     payload = {
         "characters": [
             {
-                "name": "守仓阙微阑",
+                "name": "角色A",
                 "appears_in_chapter": True,
                 "life_state": {"value": None, "evidence_quote": "她仍在仓阙。"},
                 "custody_state": {"value": "free", "evidence_quote": "她仍在仓阙。"},

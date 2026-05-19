@@ -36,7 +36,7 @@ def test_loop_detector_does_not_trigger_for_disjoint_scope_or_signal() -> None:
         RepairAttemptRecord(
             attempt_no=1,
             scope=RepairScopeKind.SUBWORLD.value,
-            signals=[_signal("subworld_admission_missing_canon_entity", "守仓阙微阑")],
+            signals=[_signal("subworld_admission_missing_canon_entity", "角色A")],
             result_verdict="fail",
         )
     ]

@@ -9,10 +9,17 @@ from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 
 
 class RepairScopeKind(StrEnum):
+    """Runtime repair scopes reached directly from signal-kind routing.
+
+    `band_plan` remains a valid legacy `RepairInstruction.repair_scope`, but it
+    is not a metadata-only runtime handler. Band contract problems are handled
+    during band-plan generation/regeneration and through existing plan rewrite
+    paths, not by this signal dispatch table.
+    """
+
     OPERATOR = "operator"
     ACTIVE_RULES = "active_rules"
     SUBWORLD = "subworld"
-    BAND_PLAN = "band_plan"
     CHAPTER_PLAN = "chapter_plan"
     DRAFT = "draft"
 
@@ -47,9 +54,8 @@ _SCOPE_PRIORITY = {
     RepairScopeKind.OPERATOR: 0,
     RepairScopeKind.ACTIVE_RULES: 1,
     RepairScopeKind.SUBWORLD: 2,
-    RepairScopeKind.BAND_PLAN: 3,
-    RepairScopeKind.CHAPTER_PLAN: 4,
-    RepairScopeKind.DRAFT: 5,
+    RepairScopeKind.CHAPTER_PLAN: 3,
+    RepairScopeKind.DRAFT: 4,
 }
 
 

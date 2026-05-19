@@ -24,14 +24,14 @@ def test_canon_person_missing_from_roster_is_auto_carried() -> None:
         project_id="p1",
         chapter_number=18,
         roster_items=[],
-        canon_entities=[_entity("守仓阙微阑", "character")],
+        canon_entities=[_entity("角色A", "character")],
     )
 
-    entry = admission.entries_by_name["守仓阙微阑"]
+    entry = admission.entries_by_name["角色A"]
     assert entry.kind == EntityKind.person
     assert entry.auto_carried is True
 
-    signal = classify_admission_signal(admission, entity_name="守仓阙微阑", entity_kind="character")
+    signal = classify_admission_signal(admission, entity_name="角色A", entity_kind="character")
     assert signal.signal_kind == "subworld_admission_missing_canon_entity"
     assert signal.blocking is False
 
@@ -42,13 +42,13 @@ def test_canon_organization_and_location_keep_their_kinds() -> None:
         chapter_number=18,
         roster_items=[],
         canon_entities=[
-            _entity("礼川诸州", "faction"),
-            _entity("旧城遗档", "location"),
+            _entity("组织A", "faction"),
+            _entity("地点A", "location"),
         ],
     )
 
-    assert admission.entries_by_name["礼川诸州"].kind == EntityKind.organization
-    assert admission.entries_by_name["旧城遗档"].kind == EntityKind.location
+    assert admission.entries_by_name["组织A"].kind == EntityKind.organization
+    assert admission.entries_by_name["地点A"].kind == EntityKind.location
 
 
 def test_unknown_entity_blocks_unless_code_pattern_matches() -> None:

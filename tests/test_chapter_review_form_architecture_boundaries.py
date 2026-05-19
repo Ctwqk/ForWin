@@ -6,6 +6,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION_ROOT = ROOT / "forwin"
 FIXTURE_ROOT = ROOT / "tests" / "fixtures" / "chapter_review_form"
+FIXTURE_ROOTS = [
+    ROOT / "tests" / "fixtures" / "chapter_review_form",
+    ROOT / "tests" / "fixtures" / "repair_routing",
+]
 
 
 DELETED_MODULE_PATHS = [
@@ -42,6 +46,8 @@ FORBIDDEN_FIXTURE_TERMS = [
     "\u9ec4\u94dc\u94a5\u5319",
     "\u6f6e\u6c50\u949f\u697c",
     "\u6863\u6848\u516c\u4f1a",
+    "\u5b88\u4ed3\u9619\u5fae\u9611",
+    "\u793c\u5ddd\u8bf8\u5dde",
 ]
 
 REPAIR_TIME_CANON_STATE_FILES = [
@@ -105,14 +111,15 @@ def test_chapter_review_form_fixture_notes_are_nonempty() -> None:
 
 
 def test_chapter_review_form_fixtures_do_not_use_story_specific_terms() -> None:
-    assert FIXTURE_ROOT.exists()
+    assert all(path.exists() for path in FIXTURE_ROOTS)
     offenders: list[str] = []
-    for path in FIXTURE_ROOT.rglob("*"):
-        if not path.is_file():
-            continue
-        text = path.read_text(encoding="utf-8")
-        if any(term in text for term in FORBIDDEN_FIXTURE_TERMS):
-            offenders.append(str(path.relative_to(ROOT)))
+    for root in FIXTURE_ROOTS:
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            if any(term in text for term in FORBIDDEN_FIXTURE_TERMS):
+                offenders.append(str(path.relative_to(ROOT)))
 
     assert offenders == []
 

@@ -476,10 +476,14 @@ End-to-end regression: replay the chapter-18 failure as a fixture under `tests/f
 ## Done Criteria
 
 - `_coerce_form_answer` handles `{"value": <scalar>}` dicts; Pydantic schema errors do not appear in writer-facing repair instructions.
-- Subworld admission auto-populates from the last 5 accepted chapters; entity-kind distinction (`named_person | archive_code | system_id | placeholder`) is enforced; code patterns are project-configurable.
-- Pre-write countdown audit reads from world-model live state; `ActiveRulePatch` can register new rules without invoking the writer; ambiguous-trigger patches route to operator.
+- Subworld admission auto-populates from the last 5 accepted chapters; the 7-kind `EntityKind` taxonomy (`person | organization | location | item | code | concept | placeholder`) is enforced; per-kind admission rules apply correctly; code patterns are project-configurable.
+- Pre-write countdown audit reads canonical state through `BookStateQueryInterface`, not directly from `world_model`; `ActiveRulePatch` registers new rules through `ActiveRuleStore` without invoking the writer; ambiguous-trigger patches route to operator.
+- `ActiveRuleStore` protocol is defined; the implementation step verified the canonical persistence location before coding (no orphan table invented).
 - Band plans are tagged by role and use role-appropriate contract templates; mid-arc band terminus does not trigger "close P0/P1" rules.
 - Repair scope router dispatches by signal kind; metadata-only scopes (`subworld`, `active_rules`) run without consuming writer LLM budget; infrastructure errors route to `operator` immediately.
+- Verdict reconciliation enforced: aggregator cannot synthesize a blocking verdict without at least one source signal at error+ severity; architecture boundary test asserts every `blocking=True` exit has a traceable source signal id.
+- `SIGNAL_KIND_TO_SCOPE` is exhaustive: every `SignalKind` enum value has a routing entry, enforced by CI test; unknown kinds default-fallback to `operator`, never to writer.
 - Repair loop detector exits to operator after one failed pass per scope; structured operator report includes signals, history, suspected layer, suggested actions.
 - Chapter-18 fail-loop fixture is part of the regression suite and resolves in at most one pass through each scope.
 - A new architecture boundary test forbids any code path that routes a signal whose kind matches `_INFRASTRUCTURE_ERROR_PATTERNS` into a writer-facing repair prompt.
+- A new architecture boundary test forbids any production code path (outside the `BookStateQueryInterface` implementation) from reading `world_model.*` for repair-time canonical state.

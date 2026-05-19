@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -7,6 +8,32 @@ from pydantic import BaseModel, Field
 
 SignalSeverity = Literal["info", "warning", "error"]
 SignalScope = Literal["body", "chapter", "character", "ledger", "book"]
+
+
+class SignalKind(StrEnum):
+    form_open_signal_persisting = "form_open_signal_persisting"
+    form_obligation_unresolved = "form_obligation_unresolved"
+    form_countdown_inconsistency = "form_countdown_inconsistency"
+    form_final_chapter_unresolved = "form_final_chapter_unresolved"
+    form_schema_invalid = "form_schema_invalid"
+    form_llm_unavailable = "form_llm_unavailable"
+    form_budget_exceeded = "form_budget_exceeded"
+    form_answer_rejected = "form_answer_rejected"
+    subworld_admission_missing_canon_entity = "subworld_admission_missing_canon_entity"
+    subworld_admission_unauthorized_new_entity = "subworld_admission_unauthorized_new_entity"
+    personality_drift = "personality_drift"
+    active_rule_missing = "active_rule_missing"
+    writer_prompt_assembly_error = "writer_prompt_assembly_error"
+    placeholder_leakage = "placeholder_leakage"
+    bare_role_placeholder_leakage = "bare_role_placeholder_leakage"
+    protagonist_placeholder_leakage = "protagonist_placeholder_leakage"
+    internal_state_key_leakage = "internal_state_key_leakage"
+    terminal_state_active_conflict = "terminal_state_active_conflict"
+    countdown_non_monotonic = "countdown_non_monotonic"
+    body_duplicate_span = "body_duplicate_span"
+    style_repetition = "style_repetition"
+    artifact_count_conflict = "artifact_count_conflict"
+    repeated_reveal_as_new = "repeated_reveal_as_new"
 
 
 class CanonQualitySignal(BaseModel):

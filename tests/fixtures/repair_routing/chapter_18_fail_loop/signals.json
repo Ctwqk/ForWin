@@ -1,0 +1,17 @@
+[
+  {
+    "kind": "form_schema_invalid",
+    "subject_key": "countdowns.0.consistent_with_prior.value",
+    "severity": "error"
+  },
+  {
+    "kind": "form_countdown_inconsistency",
+    "subject_key": "hidden_timer",
+    "severity": "error"
+  },
+  {
+    "kind": "subworld_admission_missing_canon_entity",
+    "subject_key": "守仓阙微阑",
+    "severity": "error"
+  }
+]

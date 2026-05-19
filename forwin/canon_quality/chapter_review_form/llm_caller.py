@@ -264,6 +264,8 @@ def _coerce_form_answer(
 ) -> dict[str, Any]:
     if isinstance(value, dict):
         answer = dict(value)
+        if "value" in answer:
+            answer["value"] = _scalar_answer_value(answer.get("value"))
     else:
         answer = {"value": _scalar_answer_value(value)}
     answer.setdefault("evidence_quote", fallback_evidence)

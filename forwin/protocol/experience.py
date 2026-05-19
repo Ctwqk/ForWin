@@ -201,6 +201,9 @@ class BandDelightSchedule(BaseModel):
     band_id: str
     chapter_start: int
     chapter_end: int
+    band_role: str = ""
+    band_role_reason: str = ""
+    band_contract_template: dict[str, Any] = Field(default_factory=dict)
     scheduled_rewards: list[BandRewardItem] = Field(default_factory=list)
     immersion_anchor_scene_goal: str = ""
     stall_guard_max_gap: int = 0

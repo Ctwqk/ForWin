@@ -62,6 +62,13 @@ def evaluate_canon_admission(
         over_budget=over_budget,
         is_final_chapter=is_final_chapter,
     )
+    review_failed = _review_verdict_to_gate_verdict(review_verdict) == "fail"
+    blocking_reasons = sorted(
+        {
+            *obligation_reasons,
+            *(["llm_review_fail"] if review_failed else []),
+        }
+    )
     obligation_ids = [item.id for item in active_obligations if item.id]
     required_plan_patch_ids = sorted(
         {
@@ -98,6 +105,7 @@ def evaluate_canon_admission(
         commit_allowed = (
             not blocking
             and not form_blocking_refs
+            and not review_failed
             and open_terminal_obligation_count <= 0
             and not obligation_reasons
         )
@@ -126,7 +134,7 @@ def evaluate_canon_admission(
         admission_mode=admission_mode,
         obligation_ids=obligation_ids,
         required_plan_patch_ids=required_plan_patch_ids,
-        blocking_reasons=obligation_reasons,
+        blocking_reasons=blocking_reasons,
         expired_obligation_ids=expired_obligation_ids,
         over_budget=bool(over_budget),
         blocking_issue_count=len(blocking),

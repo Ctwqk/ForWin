@@ -10,6 +10,9 @@ RepairScope = Literal[
     "draft",
     "chapter_plan",
     "band_plan",
+    "subworld",
+    "active_rules",
+    "operator",
     "scene",
     "chapter",
     "band",
@@ -44,7 +47,8 @@ _LEGACY_REPAIR_SCOPE_MAP = {
     "arc": "band_plan",
 }
 _V4_REPAIR_SCOPES = {"scene", "chapter", "band", "arc", "world_model"}
-_KNOWN_REPAIR_SCOPES = {"draft", "chapter_plan", "band_plan", *_V4_REPAIR_SCOPES}
+_METADATA_REPAIR_SCOPES = {"subworld", "active_rules", "operator"}
+_KNOWN_REPAIR_SCOPES = {"draft", "chapter_plan", "band_plan", *_METADATA_REPAIR_SCOPES, *_V4_REPAIR_SCOPES}
 
 
 def normalize_repair_scope(

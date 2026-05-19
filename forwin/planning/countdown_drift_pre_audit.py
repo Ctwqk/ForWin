@@ -4,7 +4,21 @@ import json
 from typing import Any
 
 
-def select_countdown_drift_targets(signals: list[Any]) -> list[dict[str, Any]]:
+def select_countdown_drift_targets(
+    signals: list[Any],
+    *,
+    project_id: str = "",
+    as_of_chapter: int = 0,
+    book_state_query: Any | None = None,
+) -> list[dict[str, Any]]:
+    live_countdowns = (
+        book_state_query.get_current_countdown_values(
+            project_id=project_id,
+            as_of_chapter=int(as_of_chapter or 0),
+        )
+        if book_state_query is not None and project_id and int(as_of_chapter or 0)
+        else {}
+    )
     targets: list[dict[str, Any]] = []
     for signal in signals:
         payload = _payload(signal)
@@ -17,6 +31,8 @@ def select_countdown_drift_targets(signals: list[Any]) -> list[dict[str, Any]]:
             continue
         source_signal_id = str(_row_value(signal, "signal_id") or "").strip()
         prior_value = _optional_int(payload.get("prior_value_minutes"))
+        if countdown_key in live_countdowns:
+            prior_value = _optional_int(getattr(live_countdowns[countdown_key], "remaining_minutes", None))
         targets.append(
             {
                 "patch_kind": "countdown_drift",

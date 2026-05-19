@@ -16,6 +16,7 @@ from forwin.skills import serialize_prompt_layers
 from .context_builder import build_review_context_pack
 from .experience import ExperienceReviewer
 from .governance import GovernanceReviewer
+from .infrastructure_errors import filter_writer_fixable_issues, infrastructure_issue_types
 from .lint import LintSignalCollector
 from .map_movement import MapMovementReviewer
 from .personality import PersonalityConsistencyReviewer
@@ -484,12 +485,14 @@ class HistoricalReviewHub:
         continuity_issues: list[ContinuityIssue],
         context: ChapterContextPack,
     ) -> RepairInstruction:
+        writer_fixable = filter_writer_fixable_issues(continuity_issues)
+        filtered_types = infrastructure_issue_types(continuity_issues)
         return RepairInstruction(
             repair_scope="draft",
             failure_type="continuity",
             must_fix=[
                 HistoricalReviewHub._issue_repair_text(issue)
-                for issue in continuity_issues
+                for issue in writer_fixable
                 if issue.severity == "error"
             ],
             must_preserve=[
@@ -499,7 +502,12 @@ class HistoricalReviewHub:
             ],
             scope_reason="continuity rule break needs local repair first",
             design_patch={
-                "continuity_focus": [issue.rule_name for issue in continuity_issues if issue.severity == "error"],
+                "continuity_focus": [issue.rule_name for issue in writer_fixable if issue.severity == "error"],
+                **(
+                    {"infrastructure_filtered_issue_types": filtered_types}
+                    if filtered_types
+                    else {}
+                ),
             },
             evidence_refs=[ref for issue in continuity_issues for ref in issue.evidence_refs],
         )
@@ -510,10 +518,12 @@ class HistoricalReviewHub:
         governance_issues: list[ContinuityIssue],
         context: ChapterContextPack,
     ) -> RepairInstruction:
+        writer_fixable = filter_writer_fixable_issues(governance_issues)
+        filtered_types = infrastructure_issue_types(governance_issues)
         return RepairInstruction(
             repair_scope="draft",
             failure_type="mixed",
-            must_fix=[issue.description for issue in governance_issues if issue.severity == "error"],
+            must_fix=[issue.description for issue in writer_fixable if issue.severity == "error"],
             must_preserve=[
                 context.chapter_plan_title,
                 context.chapter_plan_one_line,
@@ -521,7 +531,12 @@ class HistoricalReviewHub:
             ],
             scope_reason="governance issues should start with local repair",
             design_patch={
-                "governance_focus": [issue.rule_name for issue in governance_issues],
+                "governance_focus": [issue.rule_name for issue in writer_fixable],
+                **(
+                    {"infrastructure_filtered_issue_types": filtered_types}
+                    if filtered_types
+                    else {}
+                ),
             },
             evidence_refs=[ref for issue in governance_issues for ref in issue.evidence_refs],
         )

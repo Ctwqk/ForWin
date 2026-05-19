@@ -10,7 +10,9 @@ from forwin.experience.chapter_planner import ChapterExperiencePlanner
 from forwin.experience.persistence import ExperiencePersistence
 from forwin.experience.service import ExperiencePlanningService
 from forwin.experience.types import ArcExperienceBundle
-from forwin.models.project import ChapterPlan
+from forwin.models.project import ChapterPlan, Project
+from forwin.planning.band_plan.band_role import classify_band_role
+from forwin.planning.band_plan.contract_templates import contract_for_role
 from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.planning.band_window import BandWindowResolver
 from forwin.planning.world_contract_service import WorldContractPlanningService
@@ -91,6 +93,31 @@ class BandPlanService:
             active_band=window.active_band,
             calibration=calibration,
         )
+        role = classify_band_role(
+            band_index=_band_index(window.chapter_start, request.detailed_band_size),
+            total_bands=_total_bands(
+                _target_total_from_project_or_plans(
+                    session=session,
+                    project_id=request.project_id,
+                    chapter_plans=request.chapter_plans,
+                ),
+                request.detailed_band_size,
+            ),
+            target_total_chapters=_target_total_from_project_or_plans(
+                session=session,
+                project_id=request.project_id,
+                chapter_plans=request.chapter_plans,
+            ),
+            last_chapter_of_band=window.chapter_end,
+        )
+        contract = contract_for_role(role.role)
+        schedule = schedule.model_copy(
+            update={
+                "band_role": role.role.value,
+                "band_role_reason": role.reason,
+                "band_contract_template": contract.model_dump(mode="json"),
+            }
+        )
         activation_plan = self.subworld_manager.plan_band_activation(
             session=session,
             updater=StateUpdater(session),
@@ -153,3 +180,28 @@ class BandPlanService:
             schedule=schedule,
             updated_chapter_numbers=updated_numbers,
         )
+
+
+def _target_total_from_project_or_plans(
+    *,
+    session: Session,
+    project_id: str,
+    chapter_plans: list[ChapterPlan],
+) -> int:
+    project = session.get(Project, project_id)
+    if project is not None and int(project.target_total_chapters or 0) > 0:
+        return int(project.target_total_chapters or 0)
+    return max([int(plan.chapter_number or 0) for plan in chapter_plans] or [0])
+
+
+def _band_index(chapter_start: int, band_size: int) -> int:
+    size = max(1, int(band_size or 1))
+    return max(0, (int(chapter_start or 1) - 1) // size)
+
+
+def _total_bands(target_total_chapters: int, band_size: int) -> int:
+    target = int(target_total_chapters or 0)
+    if target <= 0:
+        return 0
+    size = max(1, int(band_size or 1))
+    return (target + size - 1) // size

@@ -44,6 +44,12 @@ FORBIDDEN_FIXTURE_TERMS = [
     "\u6863\u6848\u516c\u4f1a",
 ]
 
+REPAIR_TIME_CANON_STATE_FILES = [
+    "forwin/planning/countdown_drift_pre_audit.py",
+    "forwin/canon_quality/active_rules_handler.py",
+    "forwin/reviewer/repair_handlers/active_rules.py",
+]
+
 
 def test_deleted_legacy_analyzer_paths_are_gone() -> None:
     existing = [path for path in DELETED_MODULE_PATHS if (ROOT / path).exists()]
@@ -107,5 +113,16 @@ def test_chapter_review_form_fixtures_do_not_use_story_specific_terms() -> None:
         text = path.read_text(encoding="utf-8")
         if any(term in text for term in FORBIDDEN_FIXTURE_TERMS):
             offenders.append(str(path.relative_to(ROOT)))
+
+    assert offenders == []
+
+
+def test_repair_time_canonical_state_reads_do_not_bypass_bookstate_query_interface() -> None:
+    offenders: list[str] = []
+    for relative in REPAIR_TIME_CANON_STATE_FILES:
+        path = ROOT / relative
+        text = path.read_text(encoding="utf-8")
+        if "world_model" in text:
+            offenders.append(relative)
 
     assert offenders == []

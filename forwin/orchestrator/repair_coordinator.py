@@ -9,7 +9,12 @@ from forwin.models.draft import ChapterReview
 from forwin.models.project import ChapterPlan
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.canon_quality.active_rule_store import ActiveRulePatch, CanonQualityActiveRuleStore
+from forwin.reviewer.repair_loop_detector import RepairLoopDetector, attempt_record_from_history_item
 from forwin.reviewer.outcome import ReviewOutcomeRouter, merge_repair_scope, repair_scope_for_outcome
+from forwin.reviewer.repair_handlers.active_rules import apply_active_rules_repair
+from forwin.reviewer.repair_handlers.subworld import apply_subworld_admission_repairs
+from forwin.reviewer.repair_scope_router import RepairScopeKind, RoutedSignal, route_review_repair_scopes
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 
@@ -77,6 +82,68 @@ class ChapterRepairCoordinator:
             current_review_row.review_meta_json = self.host._review_meta_json(current_review)
             session.add(current_review_row)
             repair_scope = repair_instruction.repair_scope
+            if repair_scope in {RepairScopeKind.SUBWORLD.value, RepairScopeKind.ACTIVE_RULES.value}:
+                metadata_result = self._run_metadata_repair(
+                    session=session,
+                    project_id=project_id,
+                    chapter_plan=chapter_plan,
+                    repair_instruction=repair_instruction,
+                )
+                attempt_history.append(
+                    {
+                        "attempt_no": attempt_no,
+                        "repair_scope": repair_scope,
+                        "result_verdict": "pass" if metadata_result.get("applied") else "fail",
+                        "routed_signals": _routed_signals_from_instruction(repair_instruction),
+                    }
+                )
+                if not metadata_result.get("applied"):
+                    current_review = current_review.model_copy(
+                        update={
+                            "repair_instruction": repair_instruction.model_copy(
+                                update={
+                                    "repair_scope": RepairScopeKind.OPERATOR.value,
+                                    "scope_reason": str(metadata_result.get("reason") or "metadata repair could not apply"),
+                                }
+                            )
+                        }
+                    )
+                    chapter_plan.status = "needs_operator_review"
+                    session.add(chapter_plan)
+                    return current_output, current_review, False
+                current_review = self.host._review_current_output(
+                    repo=repo,
+                    checker=checker,
+                    project_id=project_id,
+                    context=current_context,
+                    writer_output=current_output,
+                )
+                if current_review.verdict != "fail":
+                    return current_output, current_review, False
+                continue
+            if repair_scope == RepairScopeKind.OPERATOR.value:
+                chapter_plan.status = "needs_operator_review"
+                chapter_plan.residual_review_issues_json = self.host._review_meta_json(current_review)
+                session.add(chapter_plan)
+                self.host._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_plan.chapter_number,
+                    event_family="evaluation_verdict",
+                    event_type=DecisionEventType.REPAIR_FAILED,
+                    scope="chapter",
+                    summary=f"第{chapter_plan.chapter_number}章 repair 转入 operator review。",
+                    related_object_type="chapter_review",
+                    related_object_id=current_review_row.id,
+                    payload={
+                        "attempt_no": attempt_no,
+                        "repair_scope": repair_scope,
+                        "scope_reason": repair_instruction.scope_reason,
+                        "operator_review": True,
+                    },
+                    parent_event_id=str(current_review_event.id or ""),
+                )
+                return current_output, current_review, False
             repair_started_event = self.host._record_decision_event(
                 updater=updater,
                 project_id=project_id,
@@ -162,6 +229,7 @@ class ChapterRepairCoordinator:
                         "attempt_no": attempt_no,
                         "repair_scope": repair_scope,
                         "result_verdict": "fail",
+                        "routed_signals": _routed_signals_from_instruction(repair_instruction),
                     }
                 )
                 continue
@@ -205,6 +273,7 @@ class ChapterRepairCoordinator:
                         "attempt_no": attempt_no,
                         "repair_scope": repair_scope,
                         "result_verdict": "fail",
+                        "routed_signals": _routed_signals_from_instruction(repair_instruction),
                     }
                 )
                 continue
@@ -300,6 +369,7 @@ class ChapterRepairCoordinator:
                     "attempt_no": attempt_no,
                     "repair_scope": repair_scope,
                     "result_verdict": rewritten_review.verdict,
+                    "routed_signals": _routed_signals_from_instruction(repair_instruction),
                 }
             )
             current_context = updated_context
@@ -329,7 +399,93 @@ class ChapterRepairCoordinator:
             current_chapter=int(getattr(context, "chapter_number", 0) or 0),
             target_total_chapters=int(getattr(context, "project_target_total_chapters", 0) or 0),
         )
+
+    def _run_metadata_repair(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+        chapter_plan: ChapterPlan,
+        repair_instruction: RepairInstruction,
+    ) -> dict[str, object]:
+        signals = _routed_signal_objects_from_instruction(repair_instruction)
+        if repair_instruction.repair_scope == RepairScopeKind.SUBWORLD.value:
+            report = apply_subworld_admission_repairs(
+                session=session,
+                project_id=project_id,
+                chapter_number=int(chapter_plan.chapter_number or 0),
+                signals=signals,
+            )
+            return {
+                "applied": report.applied > 0,
+                "report": report.__dict__,
+                "reason": "; ".join(report.rejection_reasons),
+            }
+        raw_patches = repair_instruction.design_patch.get("active_rule_patches")
+        patches: list[ActiveRulePatch] = []
+        if isinstance(raw_patches, list):
+            for raw in raw_patches:
+                if isinstance(raw, ActiveRulePatch):
+                    patches.append(raw)
+                elif isinstance(raw, dict):
+                    patches.append(ActiveRulePatch.model_validate(raw))
+        if not patches:
+            return {"applied": False, "reason": "active_rules repair requires active_rule_patches"}
+        report = apply_active_rules_repair(
+            project_id=project_id,
+            chapter_number=int(chapter_plan.chapter_number or 0),
+            patches=patches,
+            store=CanonQualityActiveRuleStore(session),
+        )
+        return {
+            "applied": report.applied > 0,
+            "report": report.__dict__,
+            "reason": "; ".join(report.rejection_reasons),
+        }
+        routed_scopes = route_review_repair_scopes(review)
+        loop_result = (
+            RepairLoopDetector().detect(
+                scope=routed_scopes[0].scope.value,
+                signals=routed_scopes[0].signals,
+                history=[attempt_record_from_history_item(item) for item in attempt_history],
+            )
+            if routed_scopes
+            else None
+        )
+        if loop_result is not None and loop_result.loop_detected:
+            return RepairInstruction(
+                repair_scope=RepairScopeKind.OPERATOR.value,  # type: ignore[arg-type]
+                failure_type="mixed",
+                must_fix=[],
+                must_preserve=[
+                    context.chapter_plan_title,
+                    context.chapter_plan_one_line,
+                    *(context.chapter_goals[:2]),
+                ],
+                scope_reason=loop_result.reason,
+                design_patch={
+                    "repair_loop_detected": True,
+                    "repair_loop_similarity": loop_result.similarity,
+                    "routed_repair_scopes": [
+                        {
+                            "scope": routed_scopes[0].scope.value,
+                            "signals": [
+                                {
+                                    "kind": signal.kind,
+                                    "severity": signal.severity,
+                                    "subject_key": signal.subject_key,
+                                    "source_signal_id": signal.source_signal_id,
+                                }
+                                for signal in routed_scopes[0].signals
+                            ],
+                        }
+                    ],
+                },
+            )
+        first_routed_scope = routed_scopes[0].scope.value if routed_scopes else ""
         deterministic_scope = repair_scope_for_outcome(outcome, attempt_no=attempt_no)
+        if first_routed_scope:
+            deterministic_scope = first_routed_scope
         base_instruction = review.repair_instruction or self.host._default_repair_instruction(
             repair_scope=deterministic_scope,
             context=context,
@@ -355,7 +511,30 @@ class ChapterRepairCoordinator:
             requested_scope=requested_scope,
             allow_arc=deterministic_scope == "arc",
         )
+        if first_routed_scope in {
+            RepairScopeKind.OPERATOR.value,
+            RepairScopeKind.ACTIVE_RULES.value,
+            RepairScopeKind.SUBWORLD.value,
+        }:
+            final_scope = first_routed_scope
+            downgrade_reason = ""
         design_patch = dict(requested_instruction.design_patch)
+        if routed_scopes:
+            design_patch["routed_repair_scopes"] = [
+                {
+                    "scope": scope.scope.value,
+                    "signals": [
+                        {
+                            "kind": signal.kind,
+                            "severity": signal.severity,
+                            "subject_key": signal.subject_key,
+                            "source_signal_id": signal.source_signal_id,
+                        }
+                        for signal in scope.signals
+                    ],
+                }
+                for scope in routed_scopes
+            ]
         if downgrade_reason:
             design_patch["downgrade_reason"] = downgrade_reason
         scope_reason = requested_instruction.scope_reason or outcome.reason
@@ -418,3 +597,34 @@ class ChapterRepairCoordinator:
             },
             parent_event_id=parent_event_id,
         )
+
+
+def _routed_signals_from_instruction(instruction: RepairInstruction) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    scopes = instruction.design_patch.get("routed_repair_scopes")
+    if not isinstance(scopes, list):
+        return result
+    for scope in scopes:
+        if not isinstance(scope, dict):
+            continue
+        if str(scope.get("scope") or "") != str(instruction.repair_scope or ""):
+            continue
+        raw_signals = scope.get("signals")
+        if isinstance(raw_signals, list):
+            result.extend(item for item in raw_signals if isinstance(item, dict))
+    return result
+
+
+def _routed_signal_objects_from_instruction(instruction: RepairInstruction) -> list[RoutedSignal]:
+    return [
+        RoutedSignal(
+            kind=str(item.get("kind") or ""),
+            severity=str(item.get("severity") or "warning"),
+            subject_key=str(item.get("subject_key") or ""),
+            description=str(item.get("description") or ""),
+            source_signal_id=str(item.get("source_signal_id") or ""),
+            source=str(item.get("source") or ""),
+            payload=item.get("payload") if isinstance(item.get("payload"), dict) else {},
+        )
+        for item in _routed_signals_from_instruction(instruction)
+    ]

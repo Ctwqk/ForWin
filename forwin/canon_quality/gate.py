@@ -7,14 +7,38 @@ from forwin.narrative_obligations.types import NarrativeObligation, NarrativePla
 from .signals import CanonAdmissionGateResult, CanonQualitySignal
 
 
-GateMode = Literal["off", "shadow", "strict"]
+GateMode = Literal["off", "shadow", "fatal_only", "strict"]
+
+_FATAL_ONLY_SIGNAL_TYPES = {
+    "character_dead_alive",
+    "character_teleport",
+    "closed_thread_reopened",
+    "final_dangling",
+    "final_denied",
+    "countdown_inconsistent",
+    "countdown_non_monotonic",
+    "terminal_state_active_conflict",
+    "form_countdown_inconsistency",
+    "form_final_chapter_unresolved",
+}
 
 
 def normalize_gate_mode(value: str | None, *, default: GateMode = "strict") -> GateMode:
     normalized = str(value or default).strip().lower()
-    if normalized in {"off", "shadow", "strict"}:
+    if normalized in {"off", "shadow", "fatal_only", "strict"}:
         return normalized  # type: ignore[return-value]
     return default
+
+
+def _fatal_only_blocking(signals: list[CanonQualitySignal]) -> list[CanonQualitySignal]:
+    return [
+        signal
+        for signal in signals
+        if signal.status == "open"
+        and signal.severity == "error"
+        and str(signal.signal_type) in _FATAL_ONLY_SIGNAL_TYPES
+        and bool(signal.evidence_refs)
+    ]
 
 
 def evaluate_canon_admission(
@@ -49,6 +73,7 @@ def evaluate_canon_admission(
         for signal in quality_signals
         if signal.status == "open" and signal.severity == "warning"
     ]
+    fatal_blocking = _fatal_only_blocking(quality_signals)
     deterministic_refs = [signal.signal_id for signal in blocking]
     form_blocking_refs = _form_blocking_refs(
         analyzer_results=analyzer_results or [],
@@ -99,6 +124,30 @@ def evaluate_canon_admission(
         summary = (
             f"canon quality gate shadow: blocking={len(blocking)}, "
             f"warnings={len(warnings)}, open_obligations={open_terminal_obligation_count}, "
+            f"narrative_obligations={len(active_obligations)}"
+        )
+    elif resolved_mode == "fatal_only":
+        commit_allowed = (
+            not fatal_blocking
+            and not form_blocking_refs
+            and not review_failed
+            and open_terminal_obligation_count <= 0
+            and not obligation_reasons
+        )
+        admission_mode = (
+            "blocked"
+            if not commit_allowed
+            else ("with_obligation" if active_obligations else "clean")
+        )
+        verdict = "fail" if not commit_allowed else (
+            "warn" if warnings or active_obligations or str(review_verdict) == "warn" else "pass"
+        )
+        blocking = fatal_blocking
+        deterministic_refs = [signal.signal_id for signal in fatal_blocking]
+        summary = (
+            f"canon quality gate fatal_only: commit_allowed={commit_allowed}, "
+            f"fatal_blocking={len(fatal_blocking)}, warnings={len(warnings)}, "
+            f"open_obligations={open_terminal_obligation_count}, "
             f"narrative_obligations={len(active_obligations)}"
         )
     else:

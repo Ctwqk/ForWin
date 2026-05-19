@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
+from forwin.canon_quality.gate import evaluate_canon_admission, normalize_gate_mode
+from forwin.canon_quality.signals import CanonQualitySignal
+from forwin.orchestrator_loop_core import quality_gates
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
@@ -139,3 +144,116 @@ def test_disabled_experience_reviewer_does_not_choose_repair_escalation() -> Non
 
     assert experience.choose_repair_escalation_calls == 0
     assert escalation.repair_scope == "scene"
+
+
+def canon_signal(
+    signal_type: str,
+    severity: str = "error",
+    evidence_refs: list[str] | None = None,
+) -> CanonQualitySignal:
+    return CanonQualitySignal(
+        signal_id=f"sig-{signal_type}",
+        project_id="project-1",
+        chapter_number=1,
+        signal_type=signal_type,
+        severity=severity,
+        description="测试信号",
+        evidence_refs=["body:证据"] if evidence_refs is None else evidence_refs,
+    )
+
+
+def test_fatal_only_mode_is_normalized() -> None:
+    assert normalize_gate_mode("fatal_only") == "fatal_only"
+
+
+def test_fatal_only_blocks_fatal_signal_with_evidence() -> None:
+    result = evaluate_canon_admission(
+        project_id="project-1",
+        chapter_number=1,
+        signals=[canon_signal("countdown_non_monotonic")],
+        mode="fatal_only",
+    )
+
+    assert result.commit_allowed is False
+    assert result.verdict == "fail"
+    assert result.blocking_issue_count == 1
+    assert result.deterministic_issue_refs == ["sig-countdown_non_monotonic"]
+    assert result.required_repair_scope == "draft"
+
+
+def test_fatal_only_does_not_block_warning_signal() -> None:
+    result = evaluate_canon_admission(
+        project_id="project-1",
+        chapter_number=1,
+        signals=[canon_signal("countdown_non_monotonic", severity="warning")],
+        mode="fatal_only",
+    )
+
+    assert result.commit_allowed is True
+    assert result.verdict == "warn"
+    assert result.blocking_issue_count == 0
+    assert result.deterministic_issue_refs == []
+    assert result.required_repair_scope is None
+
+
+def test_fatal_only_does_not_block_error_signal_with_no_evidence() -> None:
+    result = evaluate_canon_admission(
+        project_id="project-1",
+        chapter_number=1,
+        signals=[canon_signal("countdown_non_monotonic", evidence_refs=[])],
+        mode="fatal_only",
+    )
+
+    assert result.commit_allowed is True
+    assert result.verdict == "pass"
+    assert result.blocking_issue_count == 0
+    assert result.deterministic_issue_refs == []
+    assert result.required_repair_scope is None
+
+
+def test_apply_canon_quality_gate_passes_no_llm_client_in_fatal_only(monkeypatch) -> None:
+    class StopAfterAnalysis(Exception):
+        pass
+
+    class Draft:
+        id = "draft-1"
+
+    class Review:
+        id = "review-1"
+
+    class Config:
+        canon_quality_gate = "fatal_only"
+        chapter_review_form_mode = "primary"
+
+    class Orchestrator:
+        config = Config()
+        llm_client = object()
+
+        def _latest_draft_and_review_for_chapter(self, **kwargs):  # noqa: ANN003
+            return Draft(), Review()
+
+    captured: dict[str, object | None] = {}
+
+    def fake_analyze_writer_output_quality(**kwargs):  # noqa: ANN003
+        captured["llm_client"] = kwargs.get("llm_client")
+        raise StopAfterAnalysis
+
+    monkeypatch.setattr(
+        quality_gates,
+        "analyze_writer_output_quality",
+        fake_analyze_writer_output_quality,
+    )
+
+    with pytest.raises(StopAfterAnalysis):
+        quality_gates._apply_canon_quality_gate(
+            Orchestrator(),
+            session=None,
+            repo=None,
+            updater=None,
+            project_id="project-1",
+            chapter_number=1,
+            writer_output=writer(),
+            verdict=ReviewVerdict(verdict="pass", issues=[]),
+        )
+
+    assert captured["llm_client"] is None

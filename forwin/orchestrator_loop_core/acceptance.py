@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from forwin.canon_quality.obligation_verifier import (
+    expire_unresolved_obligations_after_acceptance,
+    verify_active_obligations_after_acceptance,
+)
 from forwin.orchestrator_loop_core.common import *
 
 def accept_review(self, project_id: str, chapter_number: int, *, reason: str = "") -> dict[str, str]:
@@ -87,6 +91,21 @@ def accept_review(self, project_id: str, chapter_number: int, *, reason: str = "
             chapter_number=chapter_number,
             trigger_stage="manual_acceptance",
         )
+        obligation_verifier_payload: dict[str, object] = {}
+        if bool(getattr(self.config, "review_engine_obligation_verifier_enabled", False)):
+            obligation_verifier_payload = {
+                "resolution": verify_active_obligations_after_acceptance(
+                    session=session,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                    accepted_text=writer_output.body,
+                ),
+                "expiry": expire_unresolved_obligations_after_acceptance(
+                    session=session,
+                    project_id=project_id,
+                    chapter_number=chapter_number,
+                ),
+            }
         self._compile_world_model_after_acceptance(
             session=session,
             updater=updater,
@@ -117,6 +136,7 @@ def accept_review(self, project_id: str, chapter_number: int, *, reason: str = "
                     for issue in verdict.issues
                 ],
                 "verdict": verdict.verdict,
+                "obligation_verifier": obligation_verifier_payload,
             },
         )
         session.commit()

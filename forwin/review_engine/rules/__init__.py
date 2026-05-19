@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .auto_approve import decide_auto_approve
 from .final_acceptance import build_final_acceptance_rules
 from .obligation_scope import decision_from_obligation_scope
 from .repair import build_repair_rules, build_scope_driven_repair_rules
@@ -18,6 +19,7 @@ __all__ = [
     "build_review_outcome_rules",
     "build_scope_driven_repair_rules",
     "compare_repair_v2_shadow",
+    "decide_auto_approve",
     "decide_repair_v2",
     "decide_structural_patch",
     "decision_from_obligation_scope",

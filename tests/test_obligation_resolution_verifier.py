@@ -1,56 +1,81 @@
 from __future__ import annotations
 
-from forwin.canon_quality.obligation_verifier import ObligationResolutionVerifier
+from forwin.canon_quality.obligation_verifier import (
+    ObligationResolutionVerifier,
+    verify_active_obligations_after_acceptance,
+)
+from forwin.models import Project
+from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.narrative_obligation import NarrativeObligationRow
+from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation
 
 
-def _obligation(obligation_type: str = "motivation_gap") -> NarrativeObligation:
+def _obligation(project_id: str = "project-1", *, payoff_test: str = "第12章必须解释钥匙来源") -> NarrativeObligation:
     return NarrativeObligation(
-        id="obl-verify",
-        project_id="p1",
+        project_id=project_id,
         origin_chapter_number=10,
-        obligation_type=obligation_type,
+        obligation_type="motivation_gap",
         priority="P1",
         status="active",
-        summary="韩砚协助陆明的动机尚未解释。",
+        summary="必须解释钥匙来源。",
         hardness="design_debt",
         deadline_chapter=12,
-        payoff_test="必须给出韩砚协助陆明的明确动机证据。",
+        payoff_test=payoff_test,
+        blocking_policy="block_at_deadline",
     )
 
 
-def test_obligation_verifier_rejects_self_claim_without_evidence() -> None:
+def test_verifier_passes_when_accepted_text_contains_payoff_marker() -> None:
+    verifier = ObligationResolutionVerifier()
+    result = verifier.verify(
+        obligation=_obligation(),
+        accepted_chapter_text="第12章解释了钥匙来源，并给出证据。",
+    )
+
+    assert result.status == "pass"
+    assert result.matched_markers == ["钥匙来源"]
+
+
+def test_verifier_warns_when_payoff_marker_is_missing() -> None:
     result = ObligationResolutionVerifier().verify(
         obligation=_obligation(),
-        chapter_number=12,
-        chapter_body="本章已经解释了韩砚的动机。",
-        evidence_refs=[],
+        accepted_chapter_text="第12章继续追逐，没有解释关键物件。",
     )
 
-    assert result.verifier_result == "fail"
-    assert result.evidence_refs == []
+    assert result.status == "warn"
 
 
-def test_obligation_verifier_accepts_motivation_gap_with_evidence_and_causal_text() -> None:
-    result = ObligationResolutionVerifier().verify(
-        obligation=_obligation(),
-        chapter_number=12,
-        chapter_body="韩砚低声承认，因为陆明握着能救回他妹妹的证据，所以他才冒险协助。",
-        evidence_refs=["chapter:12:paragraph:8"],
-    )
+def test_verify_active_obligations_after_acceptance_marks_passed_items_resolved() -> None:
+    engine = get_engine(postgres_test_url("obligation_verifier_acceptance"))
+    init_db(engine)
+    session_factory = get_session_factory(engine)
+    try:
+        with session_factory() as session:
+            project = Project(title="义务验证", premise="测试", genre="悬疑", target_total_chapters=20)
+            session.add(project)
+            session.flush()
+            repo = NarrativeObligationRepository(session)
+            created = repo.create_obligation(_obligation(project.id))
 
-    assert result.verifier_result == "pass"
-    assert result.obligation_id == "obl-verify"
-    assert result.resolution_type == "motivation_gap"
+            result = verify_active_obligations_after_acceptance(
+                session=session,
+                project_id=project.id,
+                chapter_number=12,
+                accepted_text="第12章解释了钥匙来源，并给出证据。",
+            )
+            session.commit()
 
+        assert result["resolved_obligation_ids"] == [created.id]
 
-def test_obligation_verifier_warns_when_countdown_resolution_lacks_ledger_confirmation() -> None:
-    result = ObligationResolutionVerifier().verify(
-        obligation=_obligation("countdown_explanation"),
-        chapter_number=12,
-        chapter_body="倒计时被重置，但正文没有给出 ledger 证据。",
-        evidence_refs=["chapter:12:paragraph:4"],
-    )
-
-    assert result.verifier_result == "warn"
-    assert "ledger" in result.explanation
+        with session_factory() as session:
+            stored = session.get(NarrativeObligationRow, created.id)
+            assert stored is not None
+            assert stored.status == "resolved"
+            resolved = NarrativeObligationRepository(session).list_active_for_context(
+                project.id,
+                chapter_number=13,
+            )
+            assert resolved == []
+    finally:
+        engine.dispose()

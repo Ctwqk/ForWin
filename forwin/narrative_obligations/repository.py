@@ -121,6 +121,74 @@ class NarrativeObligationRepository:
         self.session.flush()
         return [self._obligation_from_row(row) for row in rows]
 
+    def mark_obligation_resolved(
+        self,
+        obligation_id: str,
+        *,
+        verifier_result: dict[str, Any],
+        evidence_refs: list[str],
+        resolution_chapter: int = 0,
+    ) -> NarrativeObligation | None:
+        row = self.session.get(NarrativeObligationRow, obligation_id)
+        if row is None:
+            return None
+        row.status = "resolved"
+        row.resolved_at = datetime.now(UTC)
+        row.resolution_chapter = int(resolution_chapter or row.resolution_chapter or 0)
+        row.resolution_evidence_refs_json = _json(evidence_refs)
+        metadata = _loads(row.metadata_json, {})
+        metadata["verifier_result"] = dict(verifier_result or {})
+        row.metadata_json = _json(metadata)
+        self.session.add(row)
+        self.session.flush()
+        return self._obligation_from_row(row)
+
+    def expire_obligation(self, obligation_id: str, *, reason: str) -> NarrativeObligation | None:
+        row = self.session.get(NarrativeObligationRow, obligation_id)
+        if row is None:
+            return None
+        row.status = "expired"
+        metadata = _loads(row.metadata_json, {})
+        metadata["expire_reason"] = str(reason or "")
+        row.metadata_json = _json(metadata)
+        self.session.add(row)
+        self.session.flush()
+        return self._obligation_from_row(row)
+
+    def block_expired_obligation(self, obligation_id: str) -> NarrativeObligation | None:
+        row = self.session.get(NarrativeObligationRow, obligation_id)
+        if row is None:
+            return None
+        row.status = "blocked"
+        metadata = _loads(row.metadata_json, {})
+        metadata["blocked_after_expiry"] = True
+        row.metadata_json = _json(metadata)
+        self.session.add(row)
+        self.session.flush()
+        return self._obligation_from_row(row)
+
+    def waive_obligation(
+        self,
+        obligation_id: str,
+        *,
+        reason: str,
+        actor: str,
+    ) -> NarrativeObligation | None:
+        normalized_actor = str(actor or "").strip()
+        if not normalized_actor or normalized_actor == "system":
+            raise ValueError("waive_obligation requires a human actor")
+        row = self.session.get(NarrativeObligationRow, obligation_id)
+        if row is None:
+            return None
+        row.status = "waived"
+        row.waive_reason = str(reason or "").strip()
+        metadata = _loads(row.metadata_json, {})
+        metadata["waived_by"] = normalized_actor
+        row.metadata_json = _json(metadata)
+        self.session.add(row)
+        self.session.flush()
+        return self._obligation_from_row(row)
+
     def list_active_for_context(self, project_id: str, *, chapter_number: int) -> list[NarrativeObligation]:
         rows = self.session.execute(
             select(NarrativeObligationRow).where(

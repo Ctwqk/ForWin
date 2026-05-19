@@ -264,9 +264,32 @@ def get_chapter_review(
                 for item in reversed(rewrite_attempts)
             ],
             decision_refs=decision_refs,
+            review_engine_decision=_latest_review_engine_decision(decision_refs),
         )
     finally:
         session.close()
+
+
+def _latest_review_engine_decision(decision_refs: list[Any]) -> dict[str, Any]:
+    for event in reversed(decision_refs):
+        payload = getattr(event, "payload", {}) or {}
+        if not isinstance(payload, dict):
+            continue
+        rule_id = str(payload.get("rule_id") or "").strip()
+        if not rule_id:
+            continue
+        return {
+            "rule_id": rule_id,
+            "outcome": str(payload.get("outcome") or ""),
+            "reason": str(payload.get("reason") or getattr(event, "reason", "") or ""),
+            "missing_evidence": [
+                str(item)
+                for item in payload.get("missing_evidence", []) or []
+                if str(item).strip()
+            ],
+            "routed_from": str(payload.get("routed_from") or ""),
+        }
+    return {}
 
 def get_candidate_draft(
     project_id: str,

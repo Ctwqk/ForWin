@@ -17,6 +17,24 @@ def test_decision_event_payload_contains_rule_and_digest() -> None:
     assert payload["missing_evidence"] == ["deadline"]
 
 
+def test_policy_disabled_decision_event_explains_auto_approve_flag() -> None:
+    payload = build_decision_event_payload(
+        decision=Decision(
+            "manual_review",
+            "policy disabled: review_engine.auto_approve_enabled=false",
+            "auto_approve_policy_disabled",
+            [],
+            "AutoDecisionEngine",
+            {},
+        ),
+        input_digest="digest",
+        shadow_mismatch=False,
+    )
+
+    assert payload["reason"] == "policy disabled: review_engine.auto_approve_enabled=false"
+    assert payload["rule_id"] == "auto_approve_policy_disabled"
+
+
 def test_decision_input_digest_is_stable_for_same_facts() -> None:
     input_payload = DecisionInput(
         project_id="project-1",

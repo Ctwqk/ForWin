@@ -482,6 +482,16 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
             "FORWIN_REVIEW_ENGINE_BOOK_PATCHER_ENABLED",
             False,
         ),
+        "review_engine_obligation_verifier_enabled": tracked_bool(
+            "review_engine_obligation_verifier_enabled",
+            "FORWIN_REVIEW_ENGINE_OBLIGATION_VERIFIER_ENABLED",
+            False,
+        ),
+        "review_engine_auto_approve_enabled": tracked_bool(
+            "review_engine_auto_approve_enabled",
+            "FORWIN_REVIEW_ENGINE_AUTO_APPROVE_ENABLED",
+            False,
+        ),
         "repair_model_sequence": _env_csv(
             env,
             "FORWIN_REPAIR_MODEL_SEQUENCE",
@@ -712,6 +722,8 @@ class _ConfigFields:
     review_engine_repair_v2_enabled: bool = False
     review_engine_arc_patcher_enabled: bool = False
     review_engine_book_patcher_enabled: bool = False
+    review_engine_obligation_verifier_enabled: bool = False
+    review_engine_auto_approve_enabled: bool = False
     repair_model_sequence: list[str] = [
         "deepseek-reasoner",
         "deepseek-reasoner",

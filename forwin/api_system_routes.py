@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 
 from fastapi import HTTPException
 from fastapi.responses import HTMLResponse
+from sqlalchemy import select
 
 from forwin.api_schemas import (
     CodexBridgeStatusResponse,
@@ -14,7 +16,12 @@ from forwin.api_schemas import (
     LLMSettingsRequest,
 )
 from forwin.llm.codex_client import CodexBridgeClient
+from forwin.models.governance import DecisionEvent
 from forwin.models.project import Project
+from forwin.review_engine.dashboard import build_waiting_review_breakdown
+
+
+logger = logging.getLogger(__name__)
 
 
 def build_handlers(
@@ -63,6 +70,7 @@ def build_handlers(
                 review_interval_chapters=max(0, int(settings.get("review_interval_chapters", 0))),
                 extension_api_key_configured=bool(backend_ready.get("extension_api_key_configured")),
                 extension_install_path="browser_extension/forwin-publisher",
+                review_engine_breakdown=_load_review_engine_breakdown(get_session),
             )
         )
 
@@ -278,3 +286,21 @@ def build_handlers(
         "delete_llm_profile": delete_llm_profile,
         "get_codex_bridge_status": get_codex_bridge_status,
     }
+
+
+def _load_review_engine_breakdown(get_session: Callable[[], Any]) -> list[dict[str, object]]:
+    session = get_session()
+    try:
+        rows = session.execute(
+            select(DecisionEvent)
+            .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
+            .limit(500)
+        ).scalars().all()
+        return build_waiting_review_breakdown(rows)
+    except Exception as exc:
+        logger.warning("failed to load review engine decision breakdown: %s", exc)
+        return []
+    finally:
+        close = getattr(session, "close", None)
+        if callable(close):
+            close()

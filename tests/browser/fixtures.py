@@ -937,6 +937,13 @@ def sample_review(project_id: str, chapter_number: int) -> dict[str, Any]:
         "review_summary": "章节可接受，但需要人工确认伏笔密度。",
         "issues": [{"severity": "warn", "issue_group": "pacing", "issue_type": "delight_density", "description": "爽点密度偏低"}],
         "decision_refs": [{"id": "decision-2", "event_type": "review_verdict_recorded"}],
+        "review_engine_decision": {
+            "rule_id": "arc_patcher_disabled",
+            "reason": "arc patcher disabled",
+            "missing_evidence": ["arc_patch"],
+            "routed_from": "AutoDecisionEngine",
+            "outcome": "manual_review",
+        },
     }
 
 

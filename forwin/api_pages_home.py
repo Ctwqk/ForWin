@@ -37,6 +37,7 @@ def render_home_page(
     default_chapters: int = 3,
     extension_api_key_configured: bool = False,
     extension_install_path: str = "browser_extension/forwin-publisher",
+    review_engine_breakdown: list[dict[str, object]] | None = None,
 ) -> str:
     normalized_min_chars = max(500, int(min_chapter_chars))
     normalized_review_interval = max(0, int(review_interval_chapters))
@@ -66,6 +67,41 @@ def render_home_page(
             "@@EXTENSION_READY@@": json.dumps(bool(extension_api_key_configured)),
             "@@EXTENSION_INSTALL_PATH@@": json.dumps(extension_install_path, ensure_ascii=False),
             "@@EXTENSION_INSTALL_PATH_TEXT@@": html.escape(extension_install_path),
+            "@@REVIEW_ENGINE_BREAKDOWN_HTML@@": _render_review_engine_breakdown(
+                review_engine_breakdown or []
+            ),
             "@@PAGE_DOM_HELPERS_JS@@": PAGE_DOM_HELPERS_JS,
         },
+    )
+
+
+def _render_review_engine_breakdown(items: list[dict[str, object]]) -> str:
+    if not items:
+        return ""
+    rows: list[str] = []
+    for item in items[:12]:
+        outcome = html.escape(str(item.get("outcome") or "unknown"))
+        rule_id = html.escape(str(item.get("rule_id") or "unknown_rule"))
+        reason = html.escape(str(item.get("reason") or ""))
+        count = html.escape(str(item.get("count") or 0))
+        status_chip = html.escape(str(item.get("status_chip") or "需要人工判断"))
+        rows.append(
+            "\n".join(
+                [
+                    '<div class="chapter-row">',
+                    f"<strong>{rule_id}</strong>",
+                    f'<span class="status-chip">{status_chip}</span>',
+                    f'<div class="meta-line">outcome={outcome} | count={count}</div>',
+                    f'<div class="meta-line">{reason}</div>' if reason else "",
+                    "</div>",
+                ]
+            )
+        )
+    return "\n".join(
+        [
+            '<section class="card review-engine-breakdown">',
+            '<div class="section-head"><h2>Review Engine Decisions</h2></div>',
+            *rows,
+            "</section>",
+        ]
     )

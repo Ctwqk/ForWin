@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+from forwin.protocol.review import ReviewVerdict
+from forwin.review_engine.audit import build_decision_event_payload, digest_decision_input
+from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
+
+
+def test_decision_event_payload_contains_rule_and_digest() -> None:
+    payload = build_decision_event_payload(
+        decision=Decision("manual_review", "needs human", "rule-1", ["deadline"], "router", {}),
+        input_digest="abc123",
+        shadow_mismatch=False,
+    )
+
+    assert payload["rule_id"] == "rule-1"
+    assert payload["input_digest"] == "abc123"
+    assert payload["missing_evidence"] == ["deadline"]
+
+
+def test_decision_input_digest_is_stable_for_same_facts() -> None:
+    input_payload = DecisionInput(
+        project_id="project-1",
+        chapter_number=1,
+        review=ReviewVerdict(verdict="warn"),
+        signals=[],
+        open_obligations=[],
+        operation_mode="copilot",
+        attempts_completed=0,
+        prior_scope_history=[],
+        budget=None,
+        target_total_chapters=10,
+        plan_layer_health=PlanLayerHealth(),
+    )
+
+    assert digest_decision_input(input_payload) == digest_decision_input(input_payload)

@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 from forwin.orchestrator_loop_core.common import *
+from forwin.review_engine.engine import AutoDecisionEngine
+from forwin.review_engine.parity import compare_shadow_decisions
+from forwin.review_engine.rules.review_outcome import (
+    build_review_outcome_rules,
+    decision_from_review_outcome,
+)
+from forwin.review_engine.types import DecisionInput, PlanLayerHealth
 
 @staticmethod
 def _is_timeout_like(exc: Exception) -> bool:
@@ -486,6 +493,32 @@ def _prepare_deferred_acceptance_if_needed(
         current_chapter=chapter_number,
         target_total_chapters=target_total_chapters,
     )
+    shadow_comparison = compare_shadow_decisions(
+        live=decision_from_review_outcome(outcome),
+        shadow=AutoDecisionEngine(build_review_outcome_rules()).decide(
+            DecisionInput(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                review=verdict,
+                signals=list(signals),
+                open_obligations=[],
+                operation_mode=str(getattr(self.config, "operation_mode", "blackbox") or "blackbox"),
+                attempts_completed=0,
+                prior_scope_history=[],
+                budget=None,
+                target_total_chapters=target_total_chapters,
+                plan_layer_health=PlanLayerHealth(),
+            )
+        ),
+    )
+    if shadow_comparison.shadow_mismatch:
+        logger.warning(
+            "Review engine shadow mismatch project=%s chapter=%s live=%s shadow=%s",
+            project_id,
+            chapter_number,
+            shadow_comparison.live,
+            shadow_comparison.shadow,
+        )
     if outcome.action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
         return []
     issue_type = str(outcome.primary_issue_class or "").strip()

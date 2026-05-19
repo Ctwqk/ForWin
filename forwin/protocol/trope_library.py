@@ -5,6 +5,7 @@ import os
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -15,11 +16,26 @@ class TropeTemplate(BaseModel):
     template_id: str
     display_name: str = ""
     category: RewardTag
+    subcategory: str = ""
+    market_tier: Literal["sinking", "mainstream", "premium"] = "mainstream"
+    cost_weight: int = 2
+    genre_fit: list[str] = Field(default_factory=list)
     setup_requirement: str = ""
     payoff_shape: str = ""
     risk_flags: list[str] = Field(default_factory=list)
     best_window: str = ""
     recommended_hook_types: list[str] = Field(default_factory=list)
+    pressure_shape: str = ""
+    protagonist_action: str = ""
+    visible_payoff: str = ""
+    audience_reaction: str = ""
+    next_hook_shape: str = ""
+    anti_patterns: list[str] = Field(default_factory=list)
+    review_signals: list[str] = Field(default_factory=list)
+    desire_setup: str = ""
+    resistance: str = ""
+    payoff: str = ""
+    aftermath: str = ""
 
 
 REQUIRED_REWARD_CATEGORIES = {"power", "social", "justice", "mystery", "emotion"}
@@ -101,10 +117,12 @@ def load_trope_template_library() -> tuple[TropeTemplate, ...]:
         raise ValueError("; ".join(seed_errors))
     override_path = os.environ.get("FORWIN_TROPE_TEMPLATE_PATH", "").strip()
     if override_path:
-        try:
-            return load_trope_template_file(override_path, require_full=True)
-        except Exception:
-            return seed_templates
+        path = Path(override_path)
+        if path.suffix.lower() == ".md":
+            from .trope_md_loader import load_trope_templates_from_md
+
+            return load_trope_templates_from_md(path)
+        return load_trope_template_file(path, require_full=True)
     return seed_templates
 
 

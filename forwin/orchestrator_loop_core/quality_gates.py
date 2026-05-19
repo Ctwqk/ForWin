@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from forwin.orchestrator_loop_core.common import *
 from forwin.planning.arc_patch_validator import ArcPatchValidator
 from forwin.planning.arc_plan_patcher import ArcPlanPatcher
@@ -11,6 +13,7 @@ from forwin.review_engine.rules.review_outcome import (
     build_review_outcome_rules,
     decision_from_review_outcome,
 )
+from forwin.review_engine.rules.commit_with_obligation import decide_commit_with_obligation
 from forwin.review_engine.rules.structural_patch import decide_structural_patch
 from forwin.review_engine.types import DecisionInput, PlanLayerHealth
 
@@ -512,7 +515,14 @@ def _prepare_deferred_acceptance_if_needed(
         prior_scope_history=[],
         budget=None,
         target_total_chapters=target_total_chapters,
-        plan_layer_health=PlanLayerHealth(),
+        plan_layer_health=PlanLayerHealth(
+            active_chapter_patch_count=(
+                1 if outcome.action == "defer_with_chapter_plan_patch" else 0
+            ),
+            active_band_patch_count=(
+                1 if outcome.action == "defer_with_band_plan_patch" else 0
+            ),
+        ),
     )
     shadow_comparison = compare_shadow_decisions(
         live=decision_from_review_outcome(outcome),
@@ -582,6 +592,48 @@ def _prepare_deferred_acceptance_if_needed(
     )
     if scope_decision.action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
         return [scope_decision.reason or f"deferred_acceptance_scope_unavailable:{issue_type}"]
+    if bool(
+        getattr(
+            getattr(self, "config", None),
+            "review_engine_commit_with_obligation_enabled",
+            False,
+        )
+    ):
+        commit_decision_input = replace(
+            decision_input,
+            plan_layer_health=PlanLayerHealth(
+                active_chapter_patch_count=(
+                    1 if scope_decision.action == "defer_with_chapter_plan_patch" else 0
+                ),
+                active_band_patch_count=(
+                    1 if scope_decision.action == "defer_with_band_plan_patch" else 0
+                ),
+            ),
+        )
+        commit_decision = decide_commit_with_obligation(commit_decision_input)
+        record_engine = getattr(self, "_record_engine_decision_event", None)
+        if callable(record_engine):
+            record_engine(
+                updater=StateUpdater(session),
+                decision=commit_decision,
+                decision_input=commit_decision_input,
+                live_or_shadow=(
+                    "live"
+                    if commit_decision.outcome == "commit_with_obligation"
+                    else "shadow"
+                ),
+                legacy_outcome=outcome.action,
+                engine_outcome=commit_decision.outcome,
+                related_object_type="chapter_review",
+                related_object_id=review_id,
+            )
+        if commit_decision.outcome == "system_block":
+            return list(
+                commit_decision.sub_action.get("budget_reasons")
+                or [commit_decision.reason]
+            )
+        if commit_decision.outcome == "manual_review":
+            return [commit_decision.reason]
 
     obligation_id = new_id()
     summary = _summary_for_deferred_issue(verdict=verdict, issue_type=issue_type, outcome_reason=outcome.reason)

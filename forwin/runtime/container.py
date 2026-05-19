@@ -7,6 +7,7 @@ from typing import Callable
 from forwin.book_genesis import BookGenesisService
 from forwin.config import Config
 from forwin.context.assembler import ChapterContextAssembler
+from forwin.context.gates import RecencyTruncateGate
 from forwin.director import ArcDirector
 from forwin.experience.service import ExperiencePlanningService
 from forwin.llm.factory import maybe_wrap_with_codex_router
@@ -240,7 +241,16 @@ class RuntimeContainer:
                 observability=observability,
             ),
             publisher_runtime=publisher_runtime,
-            context_assembler=ChapterContextAssembler(observability=observability),
+            context_assembler=ChapterContextAssembler(
+                gates=[
+                    *ChapterContextAssembler._default_gates(),
+                    RecencyTruncateGate(
+                        window_chapters=config.context_recency_window_chapters,
+                        max_entities=config.retrieval_max_entities,
+                    ),
+                ],
+                observability=observability,
+            ),
             review_hub=review_hub,
             writer=writer,
             provisional_writer=provisional_writer,

@@ -37,7 +37,7 @@ from .canon_quality_context import _build_canon_quality_context
 class ChapterContextAssembler:
     def __init__(self, *, providers: list | None = None, gates: list | None = None, observability=None) -> None:
         self.providers = providers or self._default_providers()
-        self.gates = gates or self._default_gates()
+        self.gates = gates if gates is not None else self._default_gates()
         self.observability = observability or NullObservability()
 
     @property

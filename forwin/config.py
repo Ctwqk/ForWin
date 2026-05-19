@@ -217,14 +217,36 @@ def _env_llm_profiles(env: dict[str, str] | None = None) -> list[dict[str, str]]
     return profiles
 
 
-def _env_values() -> dict[str, object]:
+def _env_values() -> tuple[dict[str, object], set[str]]:
     env = _resolved_env()
+    explicit_keys: set[str] = set()
+
+    def mark(field: str, *env_keys: str) -> None:
+        if any(key in env for key in env_keys):
+            explicit_keys.add(field)
+
+    def tracked_str(field: str, key: str, default: str = "") -> str:
+        mark(field, key)
+        return _env_str(env, key, default)
+
+    def tracked_bool(field: str, key: str, default: bool = False) -> bool:
+        mark(field, key)
+        return _env_bool(env, key, default)
+
+    def tracked_int(field: str, key: str, default: int = 0) -> int:
+        mark(field, key)
+        return _env_int(env, key, default)
+
+    def tracked_csv(field: str, key: str) -> list[str]:
+        mark(field, key)
+        return _env_csv(env, key)
+
     database_url = (
         _env_str(env, "FORWIN_DATABASE_URL")
         or _env_str(env, LEGACY_DATABASE_PATH_ENV)
         or DEFAULT_DATABASE_URL
     )
-    return {
+    values: dict[str, object] = {
         "database_url": database_url,
         "db_path": database_url,
         "artifact_root": _env_str(env, "FORWIN_ARTIFACT_ROOT", "data/artifacts"),
@@ -339,38 +361,74 @@ def _env_values() -> dict[str, object]:
         "scene_call_timeout_seconds": _env_float(
             env, "SCENE_CALL_TIMEOUT_SECONDS", 90.0
         ),
-        "max_chapter_chars": _env_int(env, "MAX_CHAPTER_CHARS", 3200),
-        "min_chapter_chars": _env_int(env, "MIN_CHAPTER_CHARS", 2500),
-        "target_chapter_chars": _env_int(env, "TARGET_CHAPTER_CHARS", 2800),
-        "prompt_budget_chars": _env_int(env, "PROMPT_BUDGET_CHARS", 12000),
-        "writer_mode": _env_str(env, "WRITER_MODE", "scene"),
-        "operation_mode": _env_str(env, "OPERATION_MODE", "blackbox"),
-        "freeze_failed_candidates": _env_bool(
-            env, "FREEZE_FAILED_CANDIDATES", True
+        "quality_profile": tracked_str(
+            "quality_profile", "FORWIN_QUALITY_PROFILE", "standard"
         ),
-        "review_interval_chapters": _env_int(env, "REVIEW_INTERVAL_CHAPTERS", 0),
+        "max_chapter_chars": tracked_int(
+            "max_chapter_chars", "MAX_CHAPTER_CHARS", 3200
+        ),
+        "min_chapter_chars": tracked_int(
+            "min_chapter_chars", "MIN_CHAPTER_CHARS", 2500
+        ),
+        "target_chapter_chars": tracked_int(
+            "target_chapter_chars", "TARGET_CHAPTER_CHARS", 2800
+        ),
+        "prompt_budget_chars": _env_int(env, "PROMPT_BUDGET_CHARS", 12000),
+        "writer_mode": tracked_str("writer_mode", "WRITER_MODE", "scene"),
+        "operation_mode": tracked_str("operation_mode", "OPERATION_MODE", "blackbox"),
+        "book_state_layers": tracked_csv("book_state_layers", "FORWIN_BOOK_STATE_LAYERS")
+        or ["world", "map", "cognition", "narrative"],
+        "hard_floor_gate_enabled": tracked_bool(
+            "hard_floor_gate_enabled", "FORWIN_HARD_FLOOR_GATE_ENABLED", False
+        ),
+        "context_recency_window_chapters": tracked_int(
+            "context_recency_window_chapters",
+            "FORWIN_CONTEXT_RECENCY_WINDOW_CHAPTERS",
+            0,
+        ),
+        "map_movement_review_enabled": tracked_bool(
+            "map_movement_review_enabled", "FORWIN_MAP_MOVEMENT_REVIEW_ENABLED", True
+        ),
+        "personality_review_enabled": tracked_bool(
+            "personality_review_enabled", "FORWIN_PERSONALITY_REVIEW_ENABLED", True
+        ),
+        "canon_quality_review_in_hub_enabled": tracked_bool(
+            "canon_quality_review_in_hub_enabled",
+            "FORWIN_CANON_QUALITY_REVIEW_IN_HUB_ENABLED",
+            True,
+        ),
+        "freeze_failed_candidates": tracked_bool(
+            "freeze_failed_candidates", "FREEZE_FAILED_CANDIDATES", True
+        ),
+        "review_interval_chapters": tracked_int(
+            "review_interval_chapters", "REVIEW_INTERVAL_CHAPTERS", 0
+        ),
         "progression_mode": _env_str(
             env, "PROGRESSION_MODE", "serial_canon_band_guard"
         ),
-        "auto_band_checkpoint": _env_bool(env, "AUTO_BAND_CHECKPOINT", True),
+        "auto_band_checkpoint": tracked_bool(
+            "auto_band_checkpoint", "AUTO_BAND_CHECKPOINT", True
+        ),
         "band_warn_action": _env_str(env, "BAND_WARN_ACTION", "pause"),
-        "manual_checkpoints_enabled": _env_bool(
-            env, "MANUAL_CHECKPOINTS_ENABLED", True
+        "manual_checkpoints_enabled": tracked_bool(
+            "manual_checkpoints_enabled", "MANUAL_CHECKPOINTS_ENABLED", True
         ),
-        "future_constraints_enabled": _env_bool(
-            env, "FUTURE_CONSTRAINTS_ENABLED", True
+        "future_constraints_enabled": tracked_bool(
+            "future_constraints_enabled", "FUTURE_CONSTRAINTS_ENABLED", True
         ),
-        "generation_audit_interval_chapters": _env_int(
-            env, "GENERATION_AUDIT_INTERVAL_CHAPTERS", 0
+        "generation_audit_interval_chapters": tracked_int(
+            "generation_audit_interval_chapters",
+            "GENERATION_AUDIT_INTERVAL_CHAPTERS",
+            0,
         ),
-        "generation_audit_pause_enabled": _env_bool(
-            env, "GENERATION_AUDIT_PAUSE_ENABLED", False
+        "generation_audit_pause_enabled": tracked_bool(
+            "generation_audit_pause_enabled", "GENERATION_AUDIT_PAUSE_ENABLED", False
         ),
         "legacy_provisional_blocking": _env_bool(
             env, "FORWIN_LEGACY_PROVISIONAL_BLOCKING", False
         ),
-        "world_v4_compat_write_enabled": _env_bool(
-            env, "FORWIN_WORLD_V4_COMPAT_WRITE", False
+        "world_v4_compat_write_enabled": tracked_bool(
+            "world_v4_compat_write_enabled", "FORWIN_WORLD_V4_COMPAT_WRITE", False
         ),
         "enable_world_v4_debug_api": _env_bool(
             env, "FORWIN_ENABLE_COMPAT_DEBUG_API", False
@@ -399,11 +457,15 @@ def _env_values() -> dict[str, object]:
         "blackbox_writer_attention_retries": _env_int(
             env, "BLACKBOX_WRITER_ATTENTION_RETRIES", 3
         ),
-        "experience_review_enabled": _env_bool(
-            env, "EXPERIENCE_REVIEW_ENABLED", True
+        "experience_review_enabled": tracked_bool(
+            "experience_review_enabled", "EXPERIENCE_REVIEW_ENABLED", True
         ),
-        "lint_review_enabled": _env_bool(env, "LINT_REVIEW_ENABLED", True),
-        "review_fail_max_rewrites": _env_int(env, "REVIEW_FAIL_MAX_REWRITES", 3),
+        "lint_review_enabled": tracked_bool(
+            "lint_review_enabled", "LINT_REVIEW_ENABLED", True
+        ),
+        "review_fail_max_rewrites": tracked_int(
+            "review_fail_max_rewrites", "REVIEW_FAIL_MAX_REWRITES", 3
+        ),
         "repair_model_sequence": _env_csv(
             env,
             "FORWIN_REPAIR_MODEL_SEQUENCE",
@@ -413,7 +475,9 @@ def _env_values() -> dict[str, object]:
             "deepseek-reasoner",
             "gpt-5.3-codex-spark",
         ],
-        "canon_quality_gate": _env_str(env, "FORWIN_CANON_QUALITY_GATE", "strict"),
+        "canon_quality_gate": tracked_str(
+            "canon_quality_gate", "FORWIN_CANON_QUALITY_GATE", "strict"
+        ),
         "chapter_review_form_mode": _env_str(env, "FORWIN_CHAPTER_REVIEW_FORM_MODE", "primary"),
         "chapter_review_form_min_blocking_confidence": _env_float(
             env, "FORWIN_CHAPTER_REVIEW_FORM_MIN_BLOCKING_CONFIDENCE", 0.8
@@ -432,14 +496,24 @@ def _env_values() -> dict[str, object]:
         "form_blocking_signal_worsened": _env_str(env, "FORWIN_FORM_BLOCKING_SIGNAL_WORSENED", "error"),
         "form_blocking_final_dangling": _env_str(env, "FORWIN_FORM_BLOCKING_FINAL_DANGLING", "error"),
         "form_blocking_final_denied": _env_str(env, "FORWIN_FORM_BLOCKING_FINAL_DENIED", "error"),
-        "reviewer_quality_mode": _env_str(env, "FORWIN_REVIEWER_QUALITY_MODE", "hybrid"),
-        "planning_audit_mode": _env_str(env, "FORWIN_PLANNING_AUDIT_MODE", "hybrid"),
-        "plan_patch_validation_mode": _env_str(env, "FORWIN_PLAN_PATCH_VALIDATION_MODE", "hybrid"),
-        "final_gate_mode": _env_str(env, "FORWIN_FINAL_GATE_MODE", "hybrid"),
-        "band_checkpoint_mode": _env_str(env, "FORWIN_BAND_CHECKPOINT_MODE", "hybrid"),
+        "reviewer_quality_mode": tracked_str(
+            "reviewer_quality_mode", "FORWIN_REVIEWER_QUALITY_MODE", "hybrid"
+        ),
+        "planning_audit_mode": tracked_str(
+            "planning_audit_mode", "FORWIN_PLANNING_AUDIT_MODE", "hybrid"
+        ),
+        "plan_patch_validation_mode": tracked_str(
+            "plan_patch_validation_mode", "FORWIN_PLAN_PATCH_VALIDATION_MODE", "hybrid"
+        ),
+        "final_gate_mode": tracked_str(
+            "final_gate_mode", "FORWIN_FINAL_GATE_MODE", "hybrid"
+        ),
+        "band_checkpoint_mode": tracked_str(
+            "band_checkpoint_mode", "FORWIN_BAND_CHECKPOINT_MODE", "hybrid"
+        ),
         "final_completion_gate": _env_str(env, "FORWIN_FINAL_COMPLETION_GATE", "strict"),
         "style_telemetry_mode": _env_str(env, "FORWIN_STYLE_TELEMETRY_MODE", "warn"),
-        "phase4_use_llm": _env_bool(env, "PHASE4_USE_LLM", True),
+        "phase4_use_llm": tracked_bool("phase4_use_llm", "PHASE4_USE_LLM", True),
         "codex_enabled": _env_bool(env, "FORWIN_CODEX_ENABLED", False),
         "codex_bridge_url": _env_str(
             env, "FORWIN_CODEX_BRIDGE_URL", "http://host.docker.internal:8897"
@@ -459,6 +533,62 @@ def _env_values() -> dict[str, object]:
         "temperature": _env_float(env, "TEMPERATURE", 0.85),
         "max_tokens": _env_int(env, "MAX_TOKENS", 16384),
     }
+    return values, explicit_keys
+
+
+PULP_OVERRIDES: dict[str, object] = {
+    "writer_mode": "single",
+    "operation_mode": "blackbox",
+    "review_interval_chapters": 0,
+    "experience_review_enabled": False,
+    "lint_review_enabled": True,
+    "canon_quality_gate": "fatal_only",
+    "freeze_failed_candidates": False,
+    "review_fail_max_rewrites": 0,
+    "auto_band_checkpoint": False,
+    "manual_checkpoints_enabled": False,
+    "future_constraints_enabled": False,
+    "generation_audit_interval_chapters": 0,
+    "generation_audit_pause_enabled": False,
+    "world_v4_compat_write_enabled": False,
+    "phase4_use_llm": False,
+    "reviewer_quality_mode": "deterministic",
+    "planning_audit_mode": "off",
+    "plan_patch_validation_mode": "off",
+    "final_gate_mode": "off",
+    "band_checkpoint_mode": "off",
+    "min_chapter_chars": 1800,
+    "target_chapter_chars": 2400,
+    "max_chapter_chars": 3000,
+    "book_state_layers": ["world"],
+    "hard_floor_gate_enabled": True,
+    "context_recency_window_chapters": 50,
+    "map_movement_review_enabled": False,
+    "personality_review_enabled": False,
+    "canon_quality_review_in_hub_enabled": False,
+}
+
+PREMIUM_OVERRIDES: dict[str, object] = {}
+
+
+def apply_quality_profile(config: "Config", *, explicit_keys: set[str]) -> "Config":
+    profile = (
+        str(getattr(config, "quality_profile", "standard") or "standard")
+        .strip()
+        .lower()
+    )
+    if profile == "pulp":
+        overrides = PULP_OVERRIDES
+    elif profile == "premium":
+        overrides = PREMIUM_OVERRIDES
+    else:
+        return config
+    update = {
+        key: value
+        for key, value in overrides.items()
+        if key not in explicit_keys
+    }
+    return config.model_copy(update=update)
 
 
 class _ConfigFields:
@@ -514,12 +644,19 @@ class _ConfigFields:
     llm_retry_initial_delay_seconds: float = 2.0
     llm_retry_max_delay_seconds: float = 15.0
     scene_call_timeout_seconds: float = 90.0
+    quality_profile: Literal["pulp", "standard", "premium"] = "standard"
     max_chapter_chars: int = 3200
     min_chapter_chars: int = 2500
     target_chapter_chars: int = 2800
     prompt_budget_chars: int = 12000
     writer_mode: str = "scene"
     operation_mode: str = "blackbox"
+    book_state_layers: list[str] = ["world", "map", "cognition", "narrative"]
+    hard_floor_gate_enabled: bool = False
+    context_recency_window_chapters: int = 0
+    map_movement_review_enabled: bool = True
+    personality_review_enabled: bool = True
+    canon_quality_review_in_hub_enabled: bool = True
     freeze_failed_candidates: bool = True
     review_interval_chapters: int = 0
     progression_mode: str = "serial_canon_band_guard"
@@ -599,7 +736,9 @@ class _ConfigFields:
 
     @classmethod
     def from_env(cls) -> "Config":
-        return cls(**_env_values())
+        values, explicit_keys = _env_values()
+        config = cls(**values)
+        return apply_quality_profile(config, explicit_keys=explicit_keys)
 
 
 class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]

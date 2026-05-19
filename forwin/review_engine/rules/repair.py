@@ -3,6 +3,18 @@ from __future__ import annotations
 from forwin.reviser.policy import RepairDecision, RepairPolicy
 
 from ..types import Decision, DecisionInput, DecisionRule
+from .repair_v2 import build_repair_v2_rules
+
+
+def build_scope_driven_repair_rules(
+    *,
+    repair_v2_enabled: bool,
+    policy: RepairPolicy | None = None,
+) -> list[DecisionRule]:
+    return [
+        *build_repair_v2_rules(enabled=repair_v2_enabled),
+        *build_repair_rules(policy=policy),
+    ]
 
 
 def build_repair_rules(policy: RepairPolicy | None = None) -> list[DecisionRule]:

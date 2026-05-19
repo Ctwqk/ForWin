@@ -131,13 +131,60 @@ def _chapter_plan_section(context: ChapterContextPack, title: str) -> str:
     )
 
 
+def _clip_trope_text(text: str, limit: int = 260) -> str:
+    clipped = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(clipped) <= limit:
+        return clipped
+    return clipped[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _selected_trope_instruction_lines(template_ids: list[str]) -> list[str]:
+    if not template_ids:
+        return []
+
+    from forwin.protocol.trope_library import trope_template_index
+
+    template_by_id = trope_template_index()
+    lines = ["  · 本章爽点指令："]
+    emitted_count = 0
+    for template_id in template_ids:
+        if emitted_count >= 2:
+            break
+        template = template_by_id.get(template_id)
+        if template is None:
+            continue
+        emitted_count += 1
+        name = _clip_trope_text(getattr(template, "display_name", "") or template_id, limit=80)
+        lines.append(f"    · {name}")
+        for label, field_name in (
+            ("欲望建立", "desire_setup"),
+            ("阻力加压", "resistance"),
+            ("爽点兑现", "payoff"),
+            ("余波钩子", "aftermath"),
+        ):
+            value = _clip_trope_text(getattr(template, field_name, ""))
+            if value:
+                lines.append(f"      · {label}：{value}")
+        anti_patterns = []
+        for item in getattr(template, "anti_patterns", [])[:3]:
+            clipped_item = _clip_trope_text(item, limit=80)
+            if clipped_item:
+                anti_patterns.append(clipped_item)
+        if anti_patterns:
+            lines.append(f"      · 禁止：{'；'.join(anti_patterns)}")
+
+    if len(lines) == 1:
+        return []
+    return lines
+
+
 def _experience_overlay_section(context: ChapterContextPack) -> str | None:
     plan = getattr(context, "chapter_experience_plan", None)
     band = getattr(context, "band_delight_schedule", None)
     promise = getattr(context, "reader_promise", None)
     if not any((plan, band, promise)):
         return None
-    lines = ["【读者体验 Overlay】"]
+    lines: list[str] = []
     if promise is not None:
         if promise.genre_promise:
             lines.append(f"  · 题材承诺：{promise.genre_promise}")
@@ -187,7 +234,7 @@ def _experience_overlay_section(context: ChapterContextPack) -> str | None:
         if plan.planned_reward_tags:
             lines.append(f"  · 本章计划奖励：{'、'.join(plan.planned_reward_tags)}")
         if plan.selected_template_ids:
-            lines.append(f"  · 选用模板：{'、'.join(plan.selected_template_ids)}")
+            lines.extend(_selected_trope_instruction_lines(list(plan.selected_template_ids)))
         if plan.hook_type:
             lines.append(f"  · 钩子类型：{plan.hook_type}")
         if plan.question_hook:
@@ -205,7 +252,9 @@ def _experience_overlay_section(context: ChapterContextPack) -> str | None:
             lines.extend(f"    · {item}" for item in plan.rule_anchors[:8])
         if plan.relationship_or_status_shift:
             lines.append(f"  · 关系/地位变化：{plan.relationship_or_status_shift}")
-    return "\n".join(lines)
+    if not lines:
+        return None
+    return "\n".join(["【读者体验 Overlay】", *lines])
 
 
 def _world_model_v4_section(context: ChapterContextPack) -> str | None:

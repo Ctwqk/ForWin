@@ -7,6 +7,7 @@ from typing import Callable
 from forwin.book_genesis import BookGenesisService
 from forwin.config import Config
 from forwin.context.assembler import ChapterContextAssembler
+from forwin.context.gates import RecencyTruncateGate
 from forwin.director import ArcDirector
 from forwin.experience.service import ExperiencePlanningService
 from forwin.llm.factory import maybe_wrap_with_codex_router
@@ -175,6 +176,7 @@ class RuntimeContainer:
             subworld_manager=subworld_manager,
             world_contract_service=world_contract_service,
             experience_service=experience_planning_service,
+            trope_cost_ceiling=2 if config.quality_profile == "pulp" else 3,
         )
         arc_envelope_manager = ArcEnvelopeManager(
             director=arc_director,
@@ -185,11 +187,18 @@ class RuntimeContainer:
         arc_envelope_manager.services.world_contracts = world_contract_service
         arc_envelope_manager.services.experience = experience_planning_service
 
+        hub_llm_enabled = (
+            llm_available
+            and str(config.reviewer_quality_mode or "").strip().lower() != "deterministic"
+        )
         review_hub = HistoricalReviewHub(
             experience_review_enabled=config.experience_review_enabled,
             lint_review_enabled=config.lint_review_enabled,
-            llm_client=llm_client if llm_available else None,
-            llm_enabled=llm_available,
+            map_movement_review_enabled=config.map_movement_review_enabled,
+            personality_review_enabled=config.personality_review_enabled,
+            canon_quality_review_in_hub_enabled=config.canon_quality_review_in_hub_enabled,
+            llm_client=llm_client if hub_llm_enabled else None,
+            llm_enabled=hub_llm_enabled,
             observability=observability,
             chapter_review_form_mode=config.chapter_review_form_mode,
         )
@@ -233,7 +242,16 @@ class RuntimeContainer:
                 observability=observability,
             ),
             publisher_runtime=publisher_runtime,
-            context_assembler=ChapterContextAssembler(observability=observability),
+            context_assembler=ChapterContextAssembler(
+                gates=[
+                    *ChapterContextAssembler._default_gates(),
+                    RecencyTruncateGate(
+                        window_chapters=config.context_recency_window_chapters,
+                        max_entities=config.retrieval_max_entities,
+                    ),
+                ],
+                observability=observability,
+            ),
             review_hub=review_hub,
             writer=writer,
             provisional_writer=provisional_writer,

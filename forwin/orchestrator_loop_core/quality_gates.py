@@ -338,6 +338,14 @@ def _apply_canon_quality_gate(
     )
     draft_id = str(getattr(latest_draft, "id", "") or "")
     review_id = str(getattr(latest_review, "id", "") or "")
+    gate_mode = str(getattr(self.config, "canon_quality_gate", "strict") or "strict").strip().lower()
+    deterministic_gate_mode = gate_mode in {"off", "fatal_only"}
+    gate_llm_client = None if deterministic_gate_mode else self.llm_client
+    analysis_mode = (
+        "off"
+        if deterministic_gate_mode
+        else str(getattr(self.config, "chapter_review_form_mode", "primary") or "primary")
+    )
     analysis = analyze_writer_output_quality(
         session=session,
         project_id=project_id,
@@ -345,8 +353,8 @@ def _apply_canon_quality_gate(
         writer_output=writer_output,
         draft_id=draft_id,
         persist=True,
-        mode=str(getattr(self.config, "chapter_review_form_mode", "primary") or "primary"),
-        llm_client=self.llm_client,
+        mode=analysis_mode,
+        llm_client=gate_llm_client,
         return_raw_analyzer_results=True,
     )
     deferred_acceptance_errors = self._prepare_deferred_acceptance_if_needed(
@@ -399,7 +407,7 @@ def _apply_canon_quality_gate(
         signals=analysis.signals,
         obligations=gate_obligations,
         plan_patches=obligation_repo.list_patches_by_ids(patch_ids),
-        mode=str(getattr(self.config, "canon_quality_gate", "strict") or "strict"),
+        mode=gate_mode,
         is_final_chapter=bool(target_total_chapters and chapter_number >= target_total_chapters),
         analyzer_results=gate_analyzer_results,
         min_blocking_confidence=float(getattr(self.config, "chapter_review_form_min_blocking_confidence", 0.8) or 0.8),

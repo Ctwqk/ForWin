@@ -819,6 +819,7 @@ class ArcEnvelopeManager:
         structure: ArcStructureDraftData,
         active_band: list[ChapterPlan],
         calibration: AudienceCalibrationProfile | None = None,
+        cost_ceiling: int = 3,
     ) -> BandDelightSchedule:
         return self.services.band_scheduler.derive_band_delight_schedule(
             band_id=band_id,
@@ -828,6 +829,7 @@ class ArcEnvelopeManager:
             arc_experience=_experience_from_compat_structure(structure),
             active_band=active_band,
             calibration=calibration,
+            cost_ceiling=cost_ceiling,
         )
 
     def _derive_chapter_experience_plan(

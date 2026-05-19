@@ -3,7 +3,11 @@ from __future__ import annotations
 from forwin.governance import DecisionEventInfo, DecisionEventType, ensure_decision_event_type
 from forwin.orchestrator_loop_core.governance import _record_engine_decision_event
 from forwin.protocol.review import ReviewVerdict
-from forwin.review_engine.audit import build_decision_event_payload, digest_decision_input
+from forwin.review_engine.audit import (
+    build_decision_event_payload,
+    digest_decision_input,
+    summarize_live_cutover_audit,
+)
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
 
 
@@ -27,12 +31,121 @@ def test_decision_event_payload_records_live_shadow_sources() -> None:
         live_or_shadow="live",
         legacy_outcome="manual_review",
         engine_outcome="auto_approve",
+        live_source="engine",
+        shadow_source="legacy",
+        engine_live=True,
+        legacy_shadow_evaluated=True,
+        legacy_safety_net_used=False,
+        severe_shadow_mismatch=True,
     )
 
     assert payload["live_or_shadow"] == "live"
     assert payload["legacy_outcome"] == "manual_review"
     assert payload["engine_outcome"] == "auto_approve"
     assert payload["shadow_mismatch"] is True
+    assert payload["live_source"] == "engine"
+    assert payload["shadow_source"] == "legacy"
+    assert payload["engine_live"] is True
+    assert payload["legacy_shadow_evaluated"] is True
+    assert payload["legacy_safety_net_used"] is False
+    assert payload["severe_shadow_mismatch"] is True
+
+
+def test_live_cutover_audit_requires_engine_live_without_legacy_safety_net() -> None:
+    summary = summarize_live_cutover_audit(
+        [
+            {
+                "chapter_number": 1,
+                "payload": {
+                    "live_or_shadow": "live",
+                    "live_source": "engine",
+                    "engine_live": True,
+                    "legacy_safety_net_used": False,
+                    "severe_shadow_mismatch": False,
+                },
+            },
+            {
+                "chapter_number": 2,
+                "payload": {
+                    "live_or_shadow": "live",
+                    "live_source": "legacy",
+                    "engine_live": True,
+                    "legacy_safety_net_used": True,
+                    "severe_shadow_mismatch": False,
+                },
+            },
+            {
+                "chapter_number": 3,
+                "payload": {
+                    "live_or_shadow": "live",
+                    "live_source": "engine",
+                    "engine_live": True,
+                    "legacy_safety_net_used": False,
+                    "severe_shadow_mismatch": True,
+                },
+            },
+        ],
+        expected_chapters=3,
+    )
+
+    assert summary["passed"] is False
+    assert summary["engine_live_chapters"] == 2
+    assert summary["legacy_safety_net_chapters"] == [2]
+    assert summary["severe_mismatch_chapters"] == [3]
+
+
+def test_live_cutover_audit_passes_complete_60_chapter_engine_run() -> None:
+    summary = summarize_live_cutover_audit(
+        [
+            {
+                "chapter_number": chapter,
+                "payload": {
+                    "live_or_shadow": "live",
+                    "live_source": "engine",
+                    "engine_live": True,
+                    "legacy_safety_net_used": False,
+                    "severe_shadow_mismatch": False,
+                },
+            }
+            for chapter in range(1, 61)
+        ],
+        expected_chapters=60,
+    )
+
+    assert summary["passed"] is True
+    assert summary["observed_chapters"] == 60
+    assert summary["missing_chapters"] == []
+
+
+def test_live_cutover_audit_aggregates_multiple_events_per_chapter() -> None:
+    summary = summarize_live_cutover_audit(
+        [
+            {
+                "chapter_number": 1,
+                "payload": {
+                    "live_or_shadow": "live",
+                    "live_source": "engine",
+                    "engine_live": True,
+                    "legacy_safety_net_used": False,
+                    "severe_shadow_mismatch": False,
+                },
+            },
+            {
+                "chapter_number": 1,
+                "payload": {
+                    "live_or_shadow": "shadow",
+                    "live_source": "",
+                    "engine_live": False,
+                    "legacy_safety_net_used": False,
+                    "severe_shadow_mismatch": False,
+                },
+            },
+        ],
+        expected_chapters=1,
+    )
+
+    assert summary["passed"] is True
+    assert summary["engine_live_chapters"] == 1
 
 
 def test_review_engine_decision_event_type_is_registered() -> None:

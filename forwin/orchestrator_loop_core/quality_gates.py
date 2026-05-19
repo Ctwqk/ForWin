@@ -14,7 +14,9 @@ from forwin.review_engine.parity import compare_shadow_decisions, severe_shadow_
 from forwin.review_engine.rules.review_outcome import (
     build_review_outcome_rules,
     decision_from_review_outcome,
+    review_action_from_decision,
 )
+from forwin.review_engine.rules.obligation_scope import decide_obligation_scope
 from forwin.review_engine.rules.commit_with_obligation import decide_commit_with_obligation
 from forwin.review_engine.rules.structural_patch import decide_structural_patch
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
@@ -33,9 +35,9 @@ _ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION = {
 
 
 def _review_action_for_cutover_decision(decision: Decision, fallback_action: str) -> str:
-    legacy_action = str(decision.sub_action.get("legacy_action") or "").strip()
-    if legacy_action:
-        return legacy_action
+    review_action = review_action_from_decision(decision, fallback_action)
+    if review_action:
+        return review_action
     return _ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION.get(
         str(decision.outcome or "").strip(),
         str(fallback_action or "").strip(),
@@ -571,6 +573,7 @@ def _prepare_deferred_acceptance_if_needed(
         live=selection.live,
         shadow=selection.shadow,
     )
+    severe_mismatch = severe_shadow_mismatch(shadow_comparison)
     record_engine_decision = getattr(self, "_record_engine_decision_event", None)
     if callable(record_engine_decision):
         record_engine_decision(
@@ -581,6 +584,12 @@ def _prepare_deferred_acceptance_if_needed(
             live_or_shadow="live",
             legacy_outcome=legacy_decision.outcome,
             engine_outcome=engine_decision.outcome,
+            live_source=selection.live_source,
+            shadow_source=selection.shadow_source,
+            engine_live=selection.engine_live,
+            legacy_shadow_evaluated=selection.shadow_source == "legacy",
+            legacy_safety_net_used=selection.live_source == "legacy",
+            severe_mismatch=severe_mismatch,
             related_object_type="chapter_review",
             related_object_id=review_id,
         )
@@ -591,7 +600,7 @@ def _prepare_deferred_acceptance_if_needed(
             chapter_number,
             selection.live_source,
             selection.shadow_source,
-            severe_shadow_mismatch(shadow_comparison),
+            severe_mismatch,
             shadow_comparison.live,
             shadow_comparison.shadow,
         )
@@ -656,7 +665,7 @@ def _prepare_deferred_acceptance_if_needed(
         project_id=project_id,
         current_chapter=chapter_number,
     )
-    scope_decision = ObligationScopeRouter().route(
+    scope_decision = decide_obligation_scope(
         issue_type=issue_type,
         priority=_priority_for_deferred_issue(issue_type),
         current_chapter=chapter_number,
@@ -697,6 +706,19 @@ def _prepare_deferred_acceptance_if_needed(
                 ),
                 legacy_outcome=outcome.action,
                 engine_outcome=commit_decision.outcome,
+                live_source=(
+                    "engine"
+                    if commit_decision.outcome == "commit_with_obligation"
+                    else ""
+                ),
+                shadow_source=(
+                    ""
+                    if commit_decision.outcome == "commit_with_obligation"
+                    else "engine"
+                ),
+                engine_live=commit_decision.outcome == "commit_with_obligation",
+                legacy_shadow_evaluated=False,
+                legacy_safety_net_used=False,
                 related_object_type="chapter_review",
                 related_object_id=review_id,
             )
@@ -955,6 +977,11 @@ def _persist_structural_patch_outcome(
                     live_or_shadow="live",
                     legacy_outcome=decision.outcome,
                     engine_outcome="system_block",
+                    live_source="engine",
+                    shadow_source="",
+                    engine_live=True,
+                    legacy_shadow_evaluated=False,
+                    legacy_safety_net_used=False,
                     related_object_type="chapter_review",
                     related_object_id=review_id,
                 )

@@ -112,7 +112,46 @@ cutover 推进仍按阶段执行:
 | Phase 3 | 全部 small + medium(`<200` 章) | ≥7 天 0 严重 mismatch |
 | Phase 4 | all,含长篇;allowlist 可置空 | Phase 3 达标 |
 
-当前只完成 Phase 1 的单项目容器配置和 30 章 smoke。它**不满足**"历史 replay ≥1000 chapter 0 mismatch"或"生产 shadow 7 天 mismatch <0.1%"门槛,因此不能据此推进 Phase 2。
+当前只完成 Phase 1 的单项目容器配置和 30 章 smoke。它**不满足**"60 章 live pilot 0 legacy safety-net fallback / 0 severe mismatch"门槛,因此不能据此删除 review legacy safety net。
+
+### 5. 60 章 live pilot 审计字段
+
+`DecisionEventType.REVIEW_ENGINE_DECISION` 的 `payload_json` 必须记录以下字段,用于证明每章是否真正由 review engine live 决策:
+
+```text
+live_or_shadow
+live_source
+shadow_source
+engine_live
+legacy_shadow_evaluated
+legacy_safety_net_used
+shadow_mismatch
+severe_shadow_mismatch
+legacy_outcome
+engine_outcome
+```
+
+60 章测试的删除条件不是"项目跑完",而是审计脚本通过:
+
+```bash
+python3 scripts/audit_review_engine_cutover.py --project-id <project_id> --expected-chapters 60
+```
+
+脚本通过要求:
+
+- 1..60 每章都有 `review_engine_decision` 事件。
+- 每章 `live_or_shadow=live`。
+- 每章 `live_source=engine` 且 `engine_live=true`。
+- `legacy_safety_net_used=false`。
+- `severe_shadow_mismatch=false`。
+
+`legacy_shadow_evaluated=true` 只表示 legacy 被反向 shadow 用来审计 parity,不表示 legacy 接管 live 决策。真正禁止的是 `legacy_safety_net_used=true` 或 `live_source=legacy`。
+
+当前代码边界:
+
+- `review_engine.rules.review_outcome` 已经是 engine-native policy,不再包装 `ReviewOutcomeRouter`。
+- `review_engine.rules.obligation_scope` 已经是 engine-native policy,orchestrator 不再直接调用 `ObligationScopeRouter`。
+- `ReviewOutcomeRouter` 和 `RepairPolicy` 在 60 章 pilot 前仍可作为 flag-off fallback / reverse shadow 参考;pilot 审计通过后再删除这些 safety-net 入口。
 
 ## Scope
 
@@ -513,10 +552,11 @@ cutover 完成后如果保留两套并存,会出现:
 
 ### Trigger conditions
 
-`Gap 3` flag-on 上线后,满足全部条件即可启动删除 spec:
+`Gap 3` flag-on 上线后,满足全部条件即可启动 review legacy safety-net 删除:
 
-- 生产 ≥30 天 0 mismatch warning。
-- 历史 replay 全集 0 mismatch。
+- 一个完整 60 章 live pilot 通过 `scripts/audit_review_engine_cutover.py --expected-chapters 60`。
+- 60 章期间 0 `legacy_safety_net_used`。
+- 60 章期间 0 severe mismatch。
 - `tests/review_engine/test_rule_parity.py` 仍然全过。
 - `review_engine_live_cutover_enabled` 在所有项目稳定开启。
 

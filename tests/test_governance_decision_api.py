@@ -13,13 +13,14 @@ from forwin.config import Config
 from forwin.governance import (
     BandCheckpointDetail,
     BandCheckpointIssueInfo,
+    DecisionEventType,
     DecisionEventInfo,
     PlanTaskItem,
     governance_to_json,
     ProjectGovernanceSettings,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
-from forwin.models.governance import BandCheckpoint
+from forwin.models.governance import BandCheckpoint, DecisionEvent
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ArcPlanVersion, Project
 from forwin.protocol.review import ReviewVerdict
@@ -107,6 +108,19 @@ class GovernanceDecisionApiTests(unittest.TestCase):
             self.assertTrue(checkpoint.resolved_at)
             self.assertIsNotNone(project.latest_band_checkpoint)
             self.assertEqual(project.latest_band_checkpoint.status, "overridden")
+            with api_module._get_session() as session:
+                events = (
+                    session.query(DecisionEvent)
+                    .filter(
+                        DecisionEvent.project_id == project_id,
+                        DecisionEvent.event_type == DecisionEventType.LEGACY_COMPATIBILITY_USED,
+                        DecisionEvent.related_object_type == "band_checkpoint",
+                        DecisionEvent.related_object_id == "checkpoint-legacy-approved",
+                    )
+                    .all()
+                )
+            self.assertEqual(len(events), 1)
+            self.assertIn("api.legacy_checkpoint_status", events[0].payload_json)
 
     def test_approve_band_checkpoint_sets_resolved_at(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -14,6 +14,7 @@ from forwin.governance import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory
 from forwin.models.governance import DecisionEvent
 from forwin.review_engine.audit import (
+    collect_legacy_compatibility_static_counts,
     summarize_legacy_compatibility_audit,
     summarize_live_cutover_audit,
 )
@@ -81,6 +82,7 @@ def main() -> int:
                 }
                 for row in legacy_compat_rows
             ],
+            static_counts=collect_legacy_compatibility_static_counts(),
         )
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
     return 0 if summary["passed"] else 1

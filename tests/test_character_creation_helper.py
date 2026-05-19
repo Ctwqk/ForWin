@@ -112,6 +112,13 @@ def test_create_character_writes_book_state_loadout_metadata_legacy_and_audit(tm
     assert legacy is not None
     assert legacy.kind == "character"
     assert {event.event_type for event in events} >= {"character_created", "personality_loadout_auto_assigned"}
+    legacy_compat_events = [
+        event
+        for event in events
+        if event.event_type == "legacy_compatibility_used"
+        and "characters.create_legacy_entity_default_true" in event.payload_json
+    ]
+    assert len(legacy_compat_events) == 1
 
 
 def test_create_character_persists_identity_map_for_book_state_legacy_and_roster(tmp_path: Path) -> None:

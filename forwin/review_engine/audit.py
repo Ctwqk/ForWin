@@ -3,50 +3,100 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 import hashlib
 import json
+from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from .types import Decision, DecisionInput
 
-LEGACY_COMPATIBILITY_REGISTRY: dict[str, dict[str, str]] = {
+LEGACY_COMPATIBILITY_REGISTRY: dict[str, dict[str, Any]] = {
     "book_state.state.location_fallback": {
         "compat_layer": "book_state",
-        "default_assessment": "must_migrate_if_used",
+        "default_assessment": "candidate_if_unused",
+        "removal_mode": "candidate_if_unused",
+        "instrumentation_status": "instrumented",
+        "static_patterns": "book_state.state.location_fallback",
         "description": "Fallback from BookState runtime location to legacy state.location.",
     },
     "book_state.state.location_patch_warning": {
         "compat_layer": "book_state",
-        "default_assessment": "must_migrate_if_used",
+        "default_assessment": "candidate_if_unused",
+        "removal_mode": "candidate_if_unused",
+        "instrumentation_status": "instrumented",
+        "static_patterns": "book_state.state.location_patch_warning",
         "description": "Legacy state.location patches downgraded to warnings.",
     },
     "projection.legacy_world_model_projection": {
         "compat_layer": "projection",
         "default_assessment": "must_migrate_if_used",
+        "removal_mode": "must_migrate_if_used",
+        "instrumentation_status": "instrumented",
+        "static_patterns": "projection.legacy_world_model_projection",
         "description": "Legacy world model projection compatibility path.",
     },
     "subworld.legacy_entity_id_bridge": {
         "compat_layer": "subworld",
-        "default_assessment": "must_migrate_if_used",
+        "default_assessment": "candidate_if_unused",
+        "removal_mode": "candidate_if_unused",
+        "instrumentation_status": "instrumented",
+        "static_patterns": "subworld.legacy_entity_id_bridge",
         "description": "Bridge from SubWorld node metadata legacy_entity_id to canonical entity.",
     },
     "subworld.create_legacy_entity": {
         "compat_layer": "subworld",
         "default_assessment": "must_migrate_if_used",
+        "removal_mode": "must_migrate_if_used",
+        "instrumentation_status": "instrumented",
+        "static_patterns": "subworld.create_legacy_entity",
         "description": "Create legacy entity rows for SubWorld compatibility.",
     },
     "governance.legacy_relaxed_fallback": {
         "compat_layer": "governance",
         "default_assessment": "candidate_if_unused",
+        "removal_mode": "candidate_if_unused",
+        "instrumentation_status": "instrumented",
+        "static_patterns": "governance.legacy_relaxed_fallback",
         "description": "Project governance fallback to legacy_relaxed mode.",
     },
     "api.legacy_checkpoint_status": {
         "compat_layer": "api",
-        "default_assessment": "candidate_if_unused",
+        "default_assessment": "must_migrate_if_used",
+        "removal_mode": "must_migrate_if_used",
+        "instrumentation_status": "instrumented",
+        "static_patterns": "api.legacy_checkpoint_status",
         "description": "Normalize legacy checkpoint status strings in API responses.",
     },
     "migration.legacy_book_state_import": {
         "compat_layer": "migration",
         "default_assessment": "keep_for_import_only",
+        "removal_mode": "keep_for_import_only",
+        "instrumentation_status": "import_contract",
+        "static_patterns": "LegacyBookStateImporter",
         "description": "Legacy BookState import/migration compatibility.",
+    },
+    "project.creation_status_legacy": {
+        "compat_layer": "project",
+        "default_assessment": "must_migrate_if_used",
+        "removal_mode": "must_migrate_if_used",
+        "instrumentation_status": "static_only",
+        "static_patterns": [
+            'creation_status", "legacy',
+            'creation_status", "") or "legacy',
+            'creation_status == "legacy',
+            'creation_status: str = "legacy"',
+            'creation_status: Mapped[str] = mapped_column(String, default="legacy")',
+            'creation_status=str(raw.get("creation_status", "legacy"))',
+            'creation_status=str(getattr(project, "creation_status", "") or "legacy")',
+            'getattr(project, "creation_status", "") or "legacy"',
+        ],
+        "description": "Project-level legacy creation_status compatibility paths.",
+    },
+    "characters.create_legacy_entity_default_true": {
+        "compat_layer": "characters",
+        "default_assessment": "must_migrate_if_used",
+        "removal_mode": "must_migrate_if_used",
+        "instrumentation_status": "instrumented",
+        "static_patterns": "characters.create_legacy_entity_default_true",
+        "description": "Character creation path that materializes legacy Entity rows.",
     },
 }
 
@@ -125,7 +175,8 @@ def build_legacy_compatibility_payload(
 def summarize_legacy_compatibility_audit(
     rows: Iterable[Mapping[str, Any]],
     *,
-    registry: Mapping[str, Mapping[str, str]] = LEGACY_COMPATIBILITY_REGISTRY,
+    registry: Mapping[str, Mapping[str, Any]] = LEGACY_COMPATIBILITY_REGISTRY,
+    static_counts: Mapping[str, int] | None = None,
 ) -> dict[str, object]:
     events: list[Mapping[str, Any]] = []
     for row in rows:
@@ -146,52 +197,130 @@ def summarize_legacy_compatibility_audit(
         "blocking_for_removal": [],
         "keep_for_import_only": [],
         "out_of_scope": [],
+        "static_only_needs_targeted_test": [],
+        "uninstrumented_no_delete_signal": [],
+        "anomalous_runtime_without_static": [],
     }
     for feature, entry in sorted(registry.items()):
         count = int(by_feature.get(feature, 0))
-        mode = str(entry.get("default_assessment") or "").strip()
-        if mode == "candidate_if_unused" and count == 0:
-            assessment["delete_candidates"].append(
+        mode = str(entry.get("removal_mode") or entry.get("default_assessment") or "").strip()
+        instrumentation_status = str(entry.get("instrumentation_status") or "instrumented").strip()
+        static_count = (
+            int(static_counts.get(feature, 0))
+            if static_counts is not None
+            else None
+        )
+        common = {
+            "compat_feature": feature,
+            "events": count,
+            "static_callers": static_count,
+        }
+        if mode == "out_of_scope":
+            assessment["out_of_scope"].append(
                 {
-                    "compat_feature": feature,
-                    "reason": "unused during audit window",
-                }
-            )
-        elif mode == "must_migrate_if_used" and count > 0:
-            assessment["blocking_for_removal"].append(
-                {
-                    "compat_feature": feature,
-                    "reason": "used during audit window",
-                    "events": count,
+                    **common,
+                    "reason": "outside this removal audit",
                 }
             )
         elif mode == "keep_for_import_only":
             assessment["keep_for_import_only"].append(
                 {
-                    "compat_feature": feature,
+                    **common,
                     "reason": (
                         "used during audit window"
                         if count
                         else "import compatibility retained even when unused"
                     ),
-                    "events": count,
                 }
             )
-        elif mode == "out_of_scope":
-            assessment["out_of_scope"].append(
+        elif instrumentation_status == "uninstrumented" and count == 0:
+            assessment["uninstrumented_no_delete_signal"].append(
                 {
-                    "compat_feature": feature,
-                    "reason": "outside this removal audit",
-                    "events": count,
+                    **common,
+                    "reason": "runtime instrumentation is missing",
                 }
             )
-
+        elif static_count == 0 and count > 0:
+            assessment["anomalous_runtime_without_static"].append(
+                {
+                    **common,
+                    "reason": "runtime events exist but static scan found no callers",
+                }
+            )
+        elif count > 0:
+            assessment["blocking_for_removal"].append(
+                {
+                    **common,
+                    "reason": "used during audit window",
+                }
+            )
+        elif static_count is not None and static_count > 0:
+            assessment["static_only_needs_targeted_test"].append(
+                {
+                    **common,
+                    "reason": "static callers exist but runtime audit did not hit this path",
+                }
+            )
+        elif mode == "candidate_if_unused":
+            reason = (
+                "unused during audit window and no static callers"
+                if static_count == 0
+                else "unused during audit window"
+            )
+            assessment["delete_candidates"].append(
+                {
+                    **common,
+                    "reason": reason,
+                }
+            )
     return {
         "total_events": len(events),
         "by_layer": by_layer,
         "by_feature": by_feature,
+        "static_counts": dict(static_counts or {}),
         "removal_assessment": assessment,
     }
+
+
+def collect_legacy_compatibility_static_counts(
+    root: str | Path = "forwin",
+    *,
+    registry: Mapping[str, Mapping[str, Any]] = LEGACY_COMPATIBILITY_REGISTRY,
+) -> dict[str, int]:
+    root_path = Path(root)
+    counts = {feature: 0 for feature in registry}
+    if not root_path.exists():
+        return counts
+    for path in root_path.rglob("*.py"):
+        if _skip_static_compat_scan_path(path):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        for feature, entry in registry.items():
+            patterns = _static_patterns(feature, entry)
+            if any(pattern and pattern in text for pattern in patterns):
+                counts[feature] += 1
+    return counts
+
+
+def _skip_static_compat_scan_path(path: Path) -> bool:
+    parts = set(path.parts)
+    if "__pycache__" in parts:
+        return True
+    if path.name.startswith("test_") or path.name.endswith("_test.py"):
+        return True
+    normalized = path.as_posix()
+    return normalized.endswith("forwin/review_engine/audit.py")
+
+
+def _static_patterns(feature: str, entry: Mapping[str, Any]) -> list[str]:
+    raw_value = entry.get("static_patterns") or feature
+    if isinstance(raw_value, (list, tuple)):
+        return [str(part) for part in raw_value if str(part)]
+    raw = str(raw_value)
+    return [part for part in raw.split("|") if part]
 
 
 def summarize_live_cutover_audit(

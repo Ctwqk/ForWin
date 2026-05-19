@@ -187,23 +187,43 @@ python3 scripts/audit_review_engine_cutover.py \
   --include-legacy-compat
 ```
 
-输出中的 `legacy_compat` 单独包含:
+输出中的 `legacy_compat` 单独包含 runtime events 与 static scan 的合并结论:
 
 - `total_events`
 - `by_layer`
 - `by_feature`
+- `static_counts`
 - `removal_assessment.delete_candidates`
 - `removal_assessment.blocking_for_removal`
 - `removal_assessment.keep_for_import_only`
 - `removal_assessment.out_of_scope`
+- `removal_assessment.static_only_needs_targeted_test`
+- `removal_assessment.uninstrumented_no_delete_signal`
+- `removal_assessment.anomalous_runtime_without_static`
 
-当前首批埋点:
+删除结论必须按 runtime events + static callers 一起判断:
+
+| static callers | runtime events | 结论 |
+|---:|---:|---|
+| 0 | 0 | 只对 `candidate_if_unused` 这类可删模式输出 `delete_candidates` |
+| >0 | 0 | 输出 `static_only_needs_targeted_test`,说明 60 章窗口没覆盖到,不能删 |
+| >0 | >0 | 输出 `blocking_for_removal`,说明路径仍 live |
+| 0 | >0 | 输出 `anomalous_runtime_without_static`,先调查反射/动态调用 |
+
+`instrumentation_status=uninstrumented` 的 feature 不允许进入 `delete_candidates`;必须先补埋点或显式标成 `out_of_scope`。`must_migrate_if_used + 0 events` 也不能静默吞掉,有 static caller 时进入 targeted-test bucket。
+
+当前埋点/审计项:
 
 - `governance.legacy_relaxed_fallback`
 - `projection.legacy_world_model_projection`
+- `book_state.state.location_fallback`
 - `book_state.state.location_patch_warning`
 - `subworld.legacy_entity_id_bridge`
 - `subworld.create_legacy_entity`
+- `api.legacy_checkpoint_status`
+- `characters.create_legacy_entity_default_true`
+- `project.creation_status_legacy`(static-only)
+- `migration.legacy_book_state_import`(`keep_for_import_only`,因 API import route 仍调用 `LegacyBookStateImporter`)
 
 这些事件不影响 review cutover pass/fail。review safety-net 删除仍看 `legacy_safety_net_used=false` 和 `severe_shadow_mismatch=false`;compatibility 删除候选只看 `legacy_compat.removal_assessment`。
 

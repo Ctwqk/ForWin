@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .trope_library import TropeTemplate
+from .trope_library import TropeTemplate, validate_trope_template_payload
 
 
 _TEMPLATE_HEADING_RE = re.compile(r"^##\s+([A-Za-z0-9_-]+)\s+·\s+(.+?)\s*$")
@@ -24,7 +24,7 @@ _LIST_FIELD_BY_HEADING = {
     "review_signals": "review_signals",
 }
 
-_COMMA_LIST_FIELDS = {"genre_fit"}
+_COMMA_LIST_FIELDS = {"genre_fit", "risk_flags", "recommended_hook_types"}
 
 
 def _split_csv(value: str) -> list[str]:
@@ -61,7 +61,7 @@ def _section_bullets(lines: list[str]) -> list[str]:
     return bullets
 
 
-def _parse_template_section(template_id: str, display_name: str, lines: list[str]) -> TropeTemplate:
+def _parse_template_section(template_id: str, display_name: str, lines: list[str]) -> dict[str, object]:
     payload: dict[str, object] = {
         "template_id": template_id.strip(),
         "display_name": display_name.strip(),
@@ -93,13 +93,13 @@ def _parse_template_section(template_id: str, display_name: str, lines: list[str
         elif heading in _LIST_FIELD_BY_HEADING:
             payload[_LIST_FIELD_BY_HEADING[heading]] = _section_bullets(body_lines)
 
-    return TropeTemplate.model_validate(payload)
+    return payload
 
 
 def load_trope_templates_from_md(path: str | Path) -> tuple[TropeTemplate, ...]:
     markdown_path = Path(path)
     lines = markdown_path.read_text(encoding="utf-8").splitlines()
-    templates: list[TropeTemplate] = []
+    payloads: list[dict[str, object]] = []
     index = 0
     while index < len(lines):
         heading_match = _TEMPLATE_HEADING_RE.match(lines[index].strip())
@@ -113,7 +113,10 @@ def load_trope_templates_from_md(path: str | Path) -> tuple[TropeTemplate, ...]:
         while index < len(lines) and not _H2_RE.match(lines[index].strip()):
             section_lines.append(lines[index])
             index += 1
-        templates.append(_parse_template_section(template_id, display_name, section_lines))
-    if not templates:
+        payloads.append(_parse_template_section(template_id, display_name, section_lines))
+    if not payloads:
         raise ValueError(f"no trope templates found in markdown library: {markdown_path}")
+    templates, errors = validate_trope_template_payload(payloads)
+    if errors:
+        raise ValueError("; ".join(errors))
     return tuple(templates)

@@ -51,12 +51,129 @@ def test_markdown_override_summary_has_no_json_validation_error(monkeypatch: pyt
     trope_library.load_trope_template_library.cache_clear()
     monkeypatch.setenv("FORWIN_TROPE_TEMPLATE_PATH", str(PULP_LIBRARY_PATH))
     templates = trope_library.load_trope_template_library()
-    monkeypatch.setattr(trope_library, "TROPE_TEMPLATE_LIBRARY", templates)
 
     summary = trope_library.trope_registry_summary()
 
     assert summary.source == str(PULP_LIBRARY_PATH)
     assert summary.validation_errors == []
+    assert summary.total_count == len(templates)
     assert summary.total_count >= 8
 
     trope_library.load_trope_template_library.cache_clear()
+
+
+def test_markdown_override_summary_reports_effective_cached_library(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    library_path = tmp_path / "override_trope_library.md"
+    library_path.write_text(
+        """
+## cached-power · Cached Power
+
+- **category**: power
+
+## cached-social · Cached Social
+
+- **category**: social
+
+## cached-justice · Cached Justice
+
+- **category**: justice
+
+## cached-mystery · Cached Mystery
+
+- **category**: mystery
+
+## cached-emotion · Cached Emotion
+
+- **category**: emotion
+""".strip(),
+        encoding="utf-8",
+    )
+    trope_library.load_trope_template_library.cache_clear()
+    monkeypatch.setenv("FORWIN_TROPE_TEMPLATE_PATH", str(library_path))
+    templates = trope_library.load_trope_template_library()
+    library_path.write_text("# Corrupted after effective library load\n", encoding="utf-8")
+
+    summary = trope_library.trope_registry_summary()
+
+    assert summary.source == str(library_path)
+    assert summary.validation_errors == []
+    assert summary.total_count == len(templates)
+    assert summary.category_counts == {"power": 1, "social": 1, "justice": 1, "mystery": 1, "emotion": 1}
+
+    trope_library.load_trope_template_library.cache_clear()
+
+
+def test_markdown_loader_rejects_duplicate_template_ids(tmp_path: Path) -> None:
+    duplicate_library = tmp_path / "duplicate_trope_library.md"
+    duplicate_library.write_text(
+        """
+## dup-template · First
+
+- **category**: power
+
+## unique-social · Social
+
+- **category**: social
+
+## unique-justice · Justice
+
+- **category**: justice
+
+## unique-mystery · Mystery
+
+- **category**: mystery
+
+## unique-emotion · Emotion
+
+- **category**: emotion
+
+## dup-template · Duplicate
+
+- **category**: power
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="duplicate template_id: dup-template"):
+        load_trope_templates_from_md(duplicate_library)
+
+
+def test_markdown_loader_parses_comma_list_schema_fields(tmp_path: Path) -> None:
+    library_path = tmp_path / "list_fields_trope_library.md"
+    library_path.write_text(
+        """
+## list-power · List Power
+
+- **category**: power
+- **risk_flags**: power_creep, repetition
+- **recommended_hook_types**: advantage_reveal, status_flip
+- **genre_fit**: 玄幻, 都市
+
+## list-social · List Social
+
+- **category**: social
+
+## list-justice · List Justice
+
+- **category**: justice
+
+## list-mystery · List Mystery
+
+- **category**: mystery
+
+## list-emotion · List Emotion
+
+- **category**: emotion
+""".strip(),
+        encoding="utf-8",
+    )
+
+    templates = load_trope_templates_from_md(library_path)
+    list_power = {item.template_id: item for item in templates}["list-power"]
+
+    assert list_power.risk_flags == ["power_creep", "repetition"]
+    assert list_power.recommended_hook_types == ["advantage_reveal", "status_flip"]
+    assert list_power.genre_fit == ["玄幻", "都市"]

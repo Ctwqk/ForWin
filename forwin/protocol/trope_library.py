@@ -134,24 +134,13 @@ def trope_registry_summary() -> TropeRegistrySummary:
     source = override_path or "seed"
     validation_errors: list[str] = []
     version = "starter"
-    templates = TROPE_TEMPLATE_LIBRARY
-    if override_path:
-        path = Path(override_path)
-        try:
-            if path.suffix.lower() == ".md":
-                from .trope_md_loader import load_trope_templates_from_md
-
-                validation_templates = load_trope_templates_from_md(path)
-                validation_errors = []
-            else:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                validation_templates, validation_errors = validate_trope_template_payload(payload, require_full=True)
-            if validation_templates:
-                templates = validation_templates
-            if not validation_errors and len(templates) == FULL_LIBRARY_EXPECTED_COUNT:
-                version = "full"
-        except Exception as exc:  # noqa: BLE001
-            validation_errors = [str(exc)]
+    try:
+        templates = load_trope_template_library()
+    except Exception as exc:  # noqa: BLE001
+        templates = ()
+        validation_errors = [str(exc)]
+    if not validation_errors and len(templates) == FULL_LIBRARY_EXPECTED_COUNT:
+        version = "full"
     category_counts: dict[str, int] = {}
     for template in templates:
         category_counts[str(template.category)] = category_counts.get(str(template.category), 0) + 1

@@ -184,7 +184,7 @@ def _experience_overlay_section(context: ChapterContextPack) -> str | None:
     promise = getattr(context, "reader_promise", None)
     if not any((plan, band, promise)):
         return None
-    lines = ["【读者体验 Overlay】"]
+    lines: list[str] = []
     if promise is not None:
         if promise.genre_promise:
             lines.append(f"  · 题材承诺：{promise.genre_promise}")
@@ -252,7 +252,9 @@ def _experience_overlay_section(context: ChapterContextPack) -> str | None:
             lines.extend(f"    · {item}" for item in plan.rule_anchors[:8])
         if plan.relationship_or_status_shift:
             lines.append(f"  · 关系/地位变化：{plan.relationship_or_status_shift}")
-    return "\n".join(lines)
+    if not lines:
+        return None
+    return "\n".join(["【读者体验 Overlay】", *lines])
 
 
 def _world_model_v4_section(context: ChapterContextPack) -> str | None:

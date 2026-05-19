@@ -26,6 +26,22 @@ def _context_with_templates(template_ids: list[str]) -> ChapterContextPack:
     )
 
 
+def _base_context(**overrides: object) -> ChapterContextPack:
+    data = {
+        "project_id": "p1",
+        "project_title": "灰城遗档",
+        "premise": "主角：陆明，旧城档案修复师。",
+        "genre": "悬疑科幻",
+        "setting_summary": "核心系统记忆系统维持公共档案秩序。",
+        "chapter_number": 4,
+        "chapter_plan_title": "权限跃迁",
+        "chapter_plan_one_line": "陆明夺回被封锁的权限。",
+        "chapter_goals": ["让陆明完成一次可见升级"],
+    }
+    data.update(overrides)
+    return ChapterContextPack(**data)
+
+
 def test_experience_overlay_injects_selected_trope_instructions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -55,6 +71,19 @@ def test_experience_overlay_injects_selected_trope_instructions(
     assert "余波钩子：写出敌人、同伴、陆明自己的三层反应" in section
     assert "禁止：只报数值不写变化；升级无代价；旁观者没有反应" in section
     assert "结尾无钩子" not in section
+
+
+def test_experience_overlay_returns_none_when_unknown_trope_ids_render_no_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("forwin.protocol.trope_library.trope_template_index", lambda: {})
+    context = _base_context(
+        chapter_experience_plan=ChapterExperiencePlan(
+            selected_template_ids=["unknown-template"],
+        ),
+    )
+
+    assert _experience_overlay_section(context) is None
 
 
 def test_experience_overlay_skips_unknown_selected_trope_ids(

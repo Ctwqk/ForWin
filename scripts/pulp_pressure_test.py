@@ -33,11 +33,15 @@ def reward_gap_since_last(rows: list[ChapterMetric]) -> int | None:
     if not rows:
         return None
     current = rows[-1]
-    if current.reward_beats_in_plan is not None and current.reward_beats_in_plan > 0:
+    if current.reward_beats_in_plan is None:
+        return None
+    if current.reward_beats_in_plan > 0:
         return 0
     for index in range(len(rows) - 2, -1, -1):
         reward_count = rows[index].reward_beats_in_plan
-        if reward_count is not None and reward_count > 0:
+        if reward_count is None:
+            return None
+        if reward_count > 0:
             return len(rows) - 1 - index
     return None
 

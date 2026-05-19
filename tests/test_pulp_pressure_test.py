@@ -26,6 +26,25 @@ def test_reward_gap_since_last_counts_chapters_since_prior_reward() -> None:
     assert gaps == [0, 1, 2, 0]
 
 
+def test_reward_gap_since_last_returns_none_when_current_reward_metric_is_missing() -> None:
+    rows = [
+        ChapterMetric(chapter_number=1, reward_beats_in_plan=1),
+        ChapterMetric(chapter_number=2, reward_beats_in_plan=None),
+    ]
+
+    assert reward_gap_since_last(rows) is None
+
+
+def test_reward_gap_since_last_returns_none_when_intermediate_reward_metric_is_missing() -> None:
+    rows = [
+        ChapterMetric(chapter_number=1, reward_beats_in_plan=1),
+        ChapterMetric(chapter_number=2, reward_beats_in_plan=None),
+        ChapterMetric(chapter_number=3, reward_beats_in_plan=0),
+    ]
+
+    assert reward_gap_since_last(rows) is None
+
+
 def test_compute_summary_ignores_missing_values_but_not_zeroes() -> None:
     rows = [
         ChapterMetric(

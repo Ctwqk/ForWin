@@ -1,44 +1,24 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from forwin.config import Config
+from tests.test_config_env_resolution import CONFIG_ENV_KEYS
 
 
-PROFILE_ENV_KEYS = {
-    "AUTO_BAND_CHECKPOINT",
-    "EXPERIENCE_REVIEW_ENABLED",
+PROFILE_ENV_KEYS = CONFIG_ENV_KEYS | {
     "FORWIN_BAND_CHECKPOINT_MODE",
-    "FORWIN_BOOK_STATE_LAYERS",
     "FORWIN_CANON_QUALITY_GATE",
-    "FORWIN_CANON_QUALITY_REVIEW_IN_HUB_ENABLED",
-    "FORWIN_CONTEXT_RECENCY_WINDOW_CHAPTERS",
-    "FORWIN_ENV_FILE",
     "FORWIN_FINAL_GATE_MODE",
-    "FORWIN_HARD_FLOOR_GATE_ENABLED",
-    "FORWIN_MAP_MOVEMENT_REVIEW_ENABLED",
-    "FORWIN_PERSONALITY_REVIEW_ENABLED",
     "FORWIN_PLAN_PATCH_VALIDATION_MODE",
     "FORWIN_PLANNING_AUDIT_MODE",
-    "FORWIN_QUALITY_PROFILE",
     "FORWIN_REVIEWER_QUALITY_MODE",
     "FORWIN_WORLD_V4_COMPAT_WRITE",
-    "FREEZE_FAILED_CANDIDATES",
-    "FUTURE_CONSTRAINTS_ENABLED",
     "GENERATION_AUDIT_INTERVAL_CHAPTERS",
     "GENERATION_AUDIT_PAUSE_ENABLED",
-    "LINT_REVIEW_ENABLED",
-    "MANUAL_CHECKPOINTS_ENABLED",
-    "MAX_CHAPTER_CHARS",
-    "MIN_CHAPTER_CHARS",
-    "OPERATION_MODE",
-    "PHASE4_USE_LLM",
-    "REVIEW_FAIL_MAX_REWRITES",
-    "REVIEW_INTERVAL_CHAPTERS",
-    "TARGET_CHAPTER_CHARS",
-    "WRITER_MODE",
 }
 
 
@@ -49,12 +29,28 @@ def config_from_env(
 ) -> Config:
     env_file = tmp_path / "forwin.env"
     env_file.write_text("", encoding="utf-8")
+    for key in list(os.environ):
+        if key.startswith("FORWIN_"):
+            monkeypatch.delenv(key, raising=False)
     for key in PROFILE_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("FORWIN_ENV_FILE", str(env_file))
     for key, value in values.items():
         monkeypatch.setenv(key, value)
     return Config.from_env()
+
+
+def test_quality_profile_helper_scrubs_unrelated_forwin_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("FORWIN_HTTP_BIND", "0.0.0.0")
+    monkeypatch.setenv("FORWIN_PUBLISHER_EXTENSION_API_KEY", "test-key")
+
+    config = config_from_env(monkeypatch, tmp_path, {"FORWIN_QUALITY_PROFILE": "pulp"})
+
+    assert config.quality_profile == "pulp"
+    assert config.writer_mode == "single"
 
 
 def test_pulp_profile_derives_low_cost_defaults(

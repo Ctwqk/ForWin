@@ -53,7 +53,7 @@ def test_world_studio_empty_and_error_states(page, browser_test_base_url: str) -
     backend.install(page)
     page.goto(f"{browser_test_base_url}/world-studio", wait_until="domcontentloaded")
     expect(page.locator(".project-picker select")).to_have_value("")
-    expect(page.locator(".main-panel")).to_contain_text("还没有世界档案页面")
+    expect(page.locator(".main-panel")).to_contain_text("还没有页面")
 
     backend.fail["/api/projects"] = (500, "项目列表加载失败")
     page.reload(wait_until="domcontentloaded")

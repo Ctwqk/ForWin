@@ -204,7 +204,7 @@
       const head = createNode('div', '', 'task-map-head');
       const title = createNode('div', '', 'task-map-title');
       title.appendChild(createNode('strong', '任务主线'));
-      title.appendChild(createNode('span', '这里展示一次性 gate；逐章循环见下方章节流水线。'));
+      title.appendChild(createNode('span', '一次性 gate · 逐章循环见下方章节流水线。'));
       head.appendChild(title);
       head.appendChild(createNode('span', item.status || '', `badge ${badgeKindByStatus(item.status)}`));
       wrap.appendChild(head);

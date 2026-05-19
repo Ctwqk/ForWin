@@ -766,9 +766,6 @@ export default function App() {
             <span>ForWin Archive</span>
           </div>
           <h1>世界档案</h1>
-          <p className="masthead-copy">
-            Canon、Graph、Proposal、人物性格 loadout 都在一个工作台里。每次写作前回到这里同步一次世界模型。
-          </p>
         </div>
         <div className="topbar-actions">
           <label className="project-picker">
@@ -1076,7 +1073,7 @@ function PageDetail({
   busy: boolean;
 }) {
   if (!page) {
-    return <EmptyState title="还没有世界档案页面" text="锁定 Genesis 或导出 Obsidian 时会自动 bootstrap 第 0 章世界模型。" />;
+    return <EmptyState title="还没有页面" text="先去 Genesis 锁定一个阶段，第 0 章会自动建好。" />;
   }
   return (
     <>
@@ -1187,7 +1184,7 @@ function PageEditor({
     <section className="page-editor">
       <label className="field-stack">
         <span>Manual Notes</span>
-        <textarea value={manualNotesDraft} onChange={(event) => setManualNotesDraft(event.target.value)} />
+        <textarea placeholder="想记下的备注 · 提交后变成 NoteOnly proposal。" value={manualNotesDraft} onChange={(event) => setManualNotesDraft(event.target.value)} />
         <button type="button" disabled={busy || !manualNotesDraft.trim()} onClick={() => onCreateProposal("Manual Notes", manualNotesDraft)}>
           <GitBranch size={16} />
           生成 proposal
@@ -1195,7 +1192,7 @@ function PageEditor({
       </label>
       <label className="field-stack">
         <span>Human Questions</span>
-        <textarea value={humanQuestionsDraft} onChange={(event) => setHumanQuestionsDraft(event.target.value)} />
+        <textarea placeholder="想让 reviewer 或后续 AI 回答的问题。" value={humanQuestionsDraft} onChange={(event) => setHumanQuestionsDraft(event.target.value)} />
         <button type="button" disabled={busy || !humanQuestionsDraft.trim()} onClick={() => onCreateProposal("Human Questions", humanQuestionsDraft)}>
           <GitBranch size={16} />
           生成 proposal
@@ -1203,7 +1200,7 @@ function PageEditor({
       </label>
       <label className="field-stack">
         <span>Proposed Correction</span>
-        <textarea value={proposedCorrectionDraft} onChange={(event) => setProposedCorrectionDraft(event.target.value)} />
+        <textarea placeholder="改写 canon 的补丁 · 审核后才入主线。" value={proposedCorrectionDraft} onChange={(event) => setProposedCorrectionDraft(event.target.value)} />
         <button type="button" disabled={busy || !proposedCorrectionDraft.trim()} onClick={() => onCreateProposal("Proposed Correction", proposedCorrectionDraft)}>
           <GitBranch size={16} />
           生成 proposal
@@ -1396,7 +1393,7 @@ function GraphView({
 
 function SearchResultsPanel({ results }: { results: WorldStudioSearchResult[] }) {
   if (results.length === 0) {
-    return <EmptyState title="World Studio Search" text="选择 canon、LLM KB、human notes 或 skill 索引后执行搜索。" />;
+    return <EmptyState title="还没有搜索结果" text="先选索引范围，再输入关键词。" />;
   }
   return (
     <section className="search-results">
@@ -1442,7 +1439,7 @@ function ConflictList({ conflicts }: { conflicts: WorldModelConflictInfo[] }) {
 
 function ConflictDetail({ conflicts }: { conflicts: WorldModelConflictInfo[] }) {
   if (conflicts.length === 0) {
-    return <EmptyState title="Conflict List" text="WorldModel 编译后会在这里展示死亡后行动、地点冲突、秘密提前揭示等确定性问题。" />;
+    return <EmptyState title="没有冲突" text="确定性 conflict detector 暂未发现 open issue。" />;
   }
   return (
     <>
@@ -1480,7 +1477,7 @@ function ProposalList({
   onReview: (proposalId: string, status: "accepted" | "rejected") => void;
   busy: boolean;
 }) {
-  if (proposals.length === 0) return <EmptyState title="没有 proposal" text="Obsidian 导入不会直接改 canon，只会在这里生成待审记录。" compact />;
+  if (proposals.length === 0) return <EmptyState title="没有 proposal" text="导入后生成待审记录。" compact />;
   return (
     <div className="list-scroll">
       {proposals.map((proposal) => (
@@ -1505,7 +1502,7 @@ function ProposalList({
 
 function ProposalDetail({ proposals }: { proposals: WorldEditProposalInfo[] }) {
   if (proposals.length === 0) {
-    return <EmptyState title="Proposal Review" text="从 Obsidian 导入的页面修改会停在 proposal 层，必须人工 accept 或 reject。" />;
+    return <EmptyState title="没有 proposal" text="先导入 proposal，再人工 accept 或 reject。" />;
   }
   return (
     <>
@@ -1600,7 +1597,7 @@ function PersonalityCharacterList({
   onSelect: (character: CharacterPersonalityInfo) => void;
 }) {
   if (characters.length === 0) {
-    return <EmptyState title="没有角色" text="BookState character 节点出现后，可在这里设置人物性格 loadout。" compact />;
+    return <EmptyState title="没有角色" text="先在 BookState 建立 character 节点。" compact />;
   }
   return (
     <div className="list-scroll">
@@ -1748,7 +1745,7 @@ function PersonalityEditor({
   busy: boolean;
 }) {
   if (!character) {
-    return <EmptyState title="人物性格" text="选择一个 BookState character 后编辑 personality_loadout。" />;
+    return <EmptyState title="人物性格" text="先选择一个 character。" />;
   }
   const parsed = parseLoadoutDraft(draft);
   const dominant = parsed.ok ? dominantSkillName(parsed.value) : "";

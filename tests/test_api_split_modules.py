@@ -27,14 +27,14 @@ class ApiSplitModuleTests(unittest.TestCase):
             operation_mode="blackbox",
             freeze_failed_candidates=True,
         )
-        self.assertIn("ForWin 创作台", home_html)
+        self.assertIn("ForWin 工作台", home_html)
         self.assertIn("config_generation_min_chapter_chars", home_html)
 
         publishers_html = publishers.render_publishers_page(
             backend_ready={"extension_api_key_configured": True},
             extension_install_path="browser_extension/forwin-publisher",
         )
-        self.assertIn("平台发布管理", publishers_html)
+        self.assertIn("ForWin 发布", publishers_html)
         self.assertIn("下载扩展包", publishers_html)
         self.assertIn("function clearNode(node)", publishers_html)
 

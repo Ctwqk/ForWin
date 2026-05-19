@@ -41,7 +41,7 @@ def render_home_page(
     normalized_review_interval = max(0, int(review_interval_chapters))
     normalized_default_chapters = int(default_chapters)
     return render_page_document(
-        title="ForWin 创作台",
+        title="ForWin 工作台",
         css_paths=_HOME_CSS_PATHS,
         body_paths=_HOME_BODY_PATHS,
         script_paths=_HOME_SCRIPT_PATHS,

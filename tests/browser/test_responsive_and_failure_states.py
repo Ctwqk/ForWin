@@ -14,7 +14,7 @@ VIEWPORTS = [
 
 
 @pytest.mark.parametrize("label,viewport", VIEWPORTS)
-@pytest.mark.parametrize("path,marker", [("/", "ForWin Workspace"), ("/publishers", "平台发布管理"), ("/world-studio", "世界档案")])
+@pytest.mark.parametrize("path,marker", [("/", "ForWin Workspace"), ("/publishers", "ForWin Publisher"), ("/world-studio", "世界档案")])
 def test_primary_pages_render_without_console_errors_or_horizontal_overflow(
     browser,
     browser_test_base_url: str,

@@ -21,7 +21,7 @@ def render_publishers_page(
     extension_install_path: str,
 ) -> str:
     return render_page_document(
-        title="平台发布管理",
+        title="ForWin 发布",
         css_paths=_PUBLISHERS_CSS_PATHS,
         body_paths=_PUBLISHERS_BODY_PATHS,
         script_paths=_PUBLISHERS_SCRIPT_PATHS,

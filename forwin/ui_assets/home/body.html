@@ -12,8 +12,7 @@
           <span class="fw-logo" aria-hidden="true">FW</span>
           <span>ForWin Workspace</span>
         </div>
-        <h1>配置归配置，任务归任务。</h1>
-        <p>首页现在拆成书本、任务、配置三个视角。书本先进入 Genesis 创世，再启动写作；任务中心继续承接生成与上传执行流，配置页只保留模型与平台登录。</p>
+        <h1>工作台</h1>
       </div>
     </section>
 
@@ -35,8 +34,7 @@
           <div>
             <div class="section-head" style="margin:0;">
               <div>
-                <h2>书本管理</h2>
-                <p>这里看每本书的章节规划、已生成章节和已上传章节。建书和后续生成从这里发起。</p>
+                <h2>书本</h2>
               </div>
             </div>
           </div>
@@ -55,8 +53,7 @@
           <div>
             <div class="section-head" style="margin:0;">
               <div>
-                <h2>统一任务中心</h2>
-                <p>生成任务与上传任务按更新时间混排；右侧抽屉承接任务详情、章节查看和从章节直接派生上传任务。</p>
+                <h2>任务</h2>
               </div>
             </div>
           </div>
@@ -88,8 +85,7 @@
             <section class="card">
               <div class="section-head">
                 <div>
-                  <h2>模型列表</h2>
-                  <p>每条模型只展示必要元信息；新增和编辑都走同一个设置弹窗。</p>
+                  <h2>模型</h2>
                 </div>
                 <div class="action-row">
                   <button class="secondary" type="button" onclick="loadSettings()">刷新</button>
@@ -101,8 +97,7 @@
             <section class="card">
               <div class="section-head">
                 <div>
-                  <h2>生成设置</h2>
-                  <p>这些是新建生成任务的默认值；任务弹窗里仍可按单次任务覆盖。</p>
+                  <h2>生成默认值</h2>
                 </div>
                 <button class="primary" type="button" onclick="saveGenerationPreferences()">保存</button>
               </div>
@@ -148,8 +143,7 @@
             <section class="card">
               <div class="section-head">
                 <div>
-                  <h2>平台列表</h2>
-                  <p>这里直接看平台登录状态、扩展在线状态和当前执行端 Client ID。</p>
+                  <h2>平台</h2>
                 </div>
                 <button class="secondary" type="button" onclick="loadPlatforms()">刷新</button>
               </div>
@@ -358,7 +352,6 @@
       <div class="section-head" style="margin-bottom:0;">
         <div>
           <h3>新建书本</h3>
-          <p>创建后会立即进入 Genesis 工作台，先敲定整本书的根蓝图，再决定何时启动写作。</p>
         </div>
         <button class="ghost" type="button" onclick="closeBookModal()">关闭</button>
       </div>
@@ -471,7 +464,7 @@
       <div class="section-head" style="margin-bottom:0;">
         <div>
           <h3 id="genesis_modal_title">Book Genesis Workspace</h3>
-          <p id="genesis_modal_subtitle">创建书本后，先在这里锁定世界观、地图、故事引擎和整本书 Arc 蓝图。</p>
+          <p id="genesis_modal_subtitle" hidden></p>
         </div>
         <div class="action-row">
           <button id="genesis_start_writing_btn" class="primary" type="button" onclick="startWritingFromGenesis()" disabled>启动写作</button>
@@ -525,7 +518,7 @@
             <div class="section-head" style="margin-bottom:0;">
               <div>
                 <h3>最终 JSON / 高级编辑</h3>
-                <p>结构化字段改动会同步回这里；你仍然可以直接编辑 JSON。</p>
+                <p>结构化字段改动会同步最终 JSON。</p>
               </div>
             </div>
             <textarea id="genesis_stage_editor" class="genesis-editor" spellcheck="false" oninput="handleGenesisEditorInput()"></textarea>
@@ -536,7 +529,7 @@
               <label for="genesis_model_profile_id">Model Profile</label>
               <select id="genesis_model_profile_id" onchange="changeGenesisModelProfile(this.value)"></select>
             </div>
-            <textarea id="genesis_refine_instruction" class="genesis-refine-textarea" placeholder="像聊天一样告诉 AI 你想怎么改。可以改写整个阶段，也可以在选择子项后只改一个规则 / 历史 / 命名 / 禁区 / 小地图 / 角色 / 势力。"></textarea>
+            <textarea id="genesis_refine_instruction" class="genesis-refine-textarea" placeholder="告诉 AI 想怎么改。选中子项时只改那一条规则。"></textarea>
             <div id="genesis_refine_meta" class="meta-line">默认会改写整个阶段；如果选中了子项，也可以只改写那个对象。</div>
             <div class="action-row">
               <button id="genesis_refine_stage_btn" class="secondary" type="button" onclick="refineGenesisCurrentStage()">改写当前阶段</button>

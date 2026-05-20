@@ -1193,7 +1193,7 @@
 
     async function startWriting(projectId, sourceLabel = 'Genesis 工作台') {
       if (!projectId) return;
-      if (!window.confirm('启动写作后，系统会从 Genesis 根蓝图物化 Arc 骨架与当前 Arc 的章节计划，并立即创建写作任务。继续吗？')) return;
+      if (!window.confirm('启动写作后，系统会从 Genesis 根蓝图物化 Arc 骨架与章节计划，并默认自动续跑到目标章节；遇到 review、修复、预算或人工 gate 才会停。继续吗？')) return;
       try {
         const result = await requestJson(`/api/projects/${projectId}/start-writing`, {
           method: 'POST',

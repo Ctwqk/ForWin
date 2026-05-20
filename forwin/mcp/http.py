@@ -162,17 +162,37 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
 
     @register_write_tool(
         "project_start_writing",
-        "Start writing for a Genesis-ready project. Use this when Genesis is complete and there is no active generation task.",
+        "Start writing for a Genesis-ready project. Normal generation auto-continues until the target chapters unless blocked by review, repair, budget, or manual gates. Use auto_continue, run_until_chapter, or max_chapters only for limiting, debugging, or explicit control. Use this when Genesis is complete and there is no active generation task.",
     )
-    async def project_start_writing(project_id: str) -> MutationResult:
-        return await client.project_start_writing(project_id=project_id)
+    async def project_start_writing(
+        project_id: str,
+        auto_continue: bool | None = None,
+        run_until_chapter: int | None = None,
+        max_chapters: int | None = None,
+    ) -> MutationResult:
+        return await client.project_start_writing(
+            project_id=project_id,
+            auto_continue=auto_continue,
+            run_until_chapter=run_until_chapter,
+            max_chapters=max_chapters,
+        )
 
     @register_write_tool(
         "project_continue_generation",
-        "Continue chapter generation for an existing writing project. Use this when the project is already in writing state and no active generation task exists.",
+        "Continue chapter generation for an existing writing project. Normal generation auto-continues until the target chapters unless blocked by review, repair, budget, or manual gates. Use max_chapters, auto_continue, or run_until_chapter only for limiting, debugging, or explicit control. Use this when the project is already in writing state and no active generation task exists.",
     )
-    async def project_continue_generation(project_id: str, max_chapters: int | None = None) -> MutationResult:
-        return await client.project_continue_generation(project_id=project_id, max_chapters=max_chapters)
+    async def project_continue_generation(
+        project_id: str,
+        max_chapters: int | None = None,
+        auto_continue: bool | None = None,
+        run_until_chapter: int | None = None,
+    ) -> MutationResult:
+        return await client.project_continue_generation(
+            project_id=project_id,
+            max_chapters=max_chapters,
+            auto_continue=auto_continue,
+            run_until_chapter=run_until_chapter,
+        )
 
     @register_write_tool(
         "project_extend_generation",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -153,16 +154,19 @@ class GenerationAutoContinueController:
                     ),
                 )
 
-        next_task_id = self.create_continue_generation_task(
-            project_id=project_id,
-            runtime_config=runtime_config,
-            requested_chapters=workset.requested_chapters,
-            max_chapters=target.effective_max_chapters,
-            auto_continue=True,
-            run_until_chapter=target.run_until_chapter,
-            title=project_title,
-            subtitle=f"自动续跑 · {project_genre}",
-            message="前一批完成，无阻断，自动继续生成。",
+        next_task_id = _call_task_factory(
+            self.create_continue_generation_task,
+            {
+                "project_id": project_id,
+                "runtime_config": runtime_config,
+                "requested_chapters": workset.requested_chapters,
+                "max_chapters": target.effective_max_chapters,
+                "auto_continue": True,
+                "run_until_chapter": target.run_until_chapter,
+                "title": project_title,
+                "subtitle": f"自动续跑 · {project_genre}",
+                "message": "前一批完成，无阻断，自动继续生成。",
+            },
         )
         reason = (
             "future_arc_materialized"
@@ -232,3 +236,28 @@ class GenerationAutoContinueController:
             )
             session.commit()
         return decision
+
+
+def _call_task_factory(
+    create_continue_generation_task: Callable[..., str],
+    kwargs: dict[str, Any],
+) -> str:
+    try:
+        signature = inspect.signature(create_continue_generation_task)
+    except (TypeError, ValueError):
+        return create_continue_generation_task(**kwargs)
+
+    accepted_names: set[str] = set()
+    for parameter in signature.parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            return create_continue_generation_task(**kwargs)
+        if parameter.kind in {
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        }:
+            accepted_names.add(parameter.name)
+
+    filtered_kwargs = {
+        name: value for name, value in kwargs.items() if name in accepted_names
+    }
+    return create_continue_generation_task(**filtered_kwargs)

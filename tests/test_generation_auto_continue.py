@@ -119,6 +119,71 @@ def test_controller_continues_to_future_arc_when_no_blocker() -> None:
         engine.dispose()
 
 
+def test_controller_filters_task_kwargs_for_current_strict_factory_signature() -> None:
+    engine, Session = _session_factory("auto-continue-strict-factory")
+    calls: list[dict[str, object]] = []
+    runtime_config = object()
+
+    def create_task(
+        *,
+        project_id,
+        runtime_config,
+        requested_chapters,
+        max_chapters,
+        title,
+        subtitle,
+        message,
+    ):
+        calls.append(
+            {
+                "project_id": project_id,
+                "runtime_config": runtime_config,
+                "requested_chapters": requested_chapters,
+                "max_chapters": max_chapters,
+                "title": title,
+                "subtitle": subtitle,
+                "message": message,
+            }
+        )
+        return "task-strict"
+
+    try:
+        with Session.begin() as session:
+            project = _project(session)
+            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=3)
+            _arc(session, project_id=project.id, arc_id="arc-2", number=2, status="planned", start=4, end=6)
+            for number in range(1, 4):
+                _chapter(session, project_id=project.id, arc_id="arc-1", number=number, status="accepted")
+
+        controller = GenerationAutoContinueController(
+            session_factory=Session,
+            create_continue_generation_task=create_task,
+        )
+        decision = controller.after_task_completion(
+            ResultStub(project_id="project-auto", completed_chapters=[1, 2, 3]),
+            parent_task_id="task-prev",
+            run_until_chapter=6,
+            max_chapters=None,
+            auto_continue=True,
+            runtime_config=runtime_config,
+        )
+
+        assert decision.next_task_id == "task-strict"
+        assert calls == [
+            {
+                "project_id": "project-auto",
+                "runtime_config": runtime_config,
+                "requested_chapters": 3,
+                "max_chapters": 3,
+                "title": "Auto Book",
+                "subtitle": "自动续跑 · 玄幻",
+                "message": "前一批完成，无阻断，自动继续生成。",
+            }
+        ]
+    finally:
+        engine.dispose()
+
+
 def test_controller_stops_when_run_until_reached() -> None:
     engine, Session = _session_factory("auto-continue-until-reached")
     try:

@@ -211,6 +211,13 @@ def continue_project_generation(
             )
             if workset.requested_chapters <= 0:
                 raise _continue_workset_http_error(workset)
+        elif max_chapters is not None:
+            first_chapter = int(workset.chapter_numbers[0])
+            target_total = int(getattr(project, "target_total_chapters", 0) or 0)
+            batch_end_chapter = first_chapter + int(max_chapters) - 1
+            if target_total >= first_chapter:
+                batch_end_chapter = min(batch_end_chapter, target_total)
+            task_run_until_chapter = batch_end_chapter
         task_id = call_task_factory_with_supported_kwargs(
             create_continue_generation_task,
             {

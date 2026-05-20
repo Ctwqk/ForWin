@@ -1041,6 +1041,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(response.requested_chapters, 2)
         self.assertEqual(captured["requested_chapters"], 2)
         self.assertEqual(captured["max_chapters"], 2)
+        self.assertEqual(captured["run_until_chapter"], 32)
 
     def test_continue_generation_passes_auto_continue_target_to_task_creation(self) -> None:
         project = self._create_project(project_id="proj-continue-auto-target")

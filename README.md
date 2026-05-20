@@ -2,21 +2,31 @@
 
 AI-assisted long-form Chinese web novel generation and publishing system.
 
-ForWin is built around a FastAPI application, a CLI entrypoint, persistent project state, publishing workflows, and governance / review layers for managing long-running writing projects that span hundreds of chapters.
+ForWin is built around a FastAPI application, a CLI entrypoint, PostgreSQL-backed project state, publishing workflows, and governance / review layers for managing long-running writing projects that span hundreds of chapters.
+
+## Engineering Summary
+
+While the user-facing surface is a novel-generation platform, the engineering substance is a multi-stage **content governance pipeline** for LLM-produced text:
+
+- **Rule extraction → constraint checking → quality gate → LLM reviewer → automated repair → human override**, modeled as **6-state checkpoint transitions** (`pending` / `pass` / `warn` / `fail` / `error` / `overridden`) for full auditability.
+- A **rule engine** over **6 constraint families** (character availability, secret withhold, relationship preservation, thread keep-open, location availability, rule preservation) with hard / soft / hint severity levels, persisted via an active-rule store and an artifact ledger.
+- An **agentic remediation loop** with a repair-scope router and loop detector that automatically routes failed reviews to specialized handlers and escalates pathological repair cycles to human override.
+- An **MCP tool server** that lets LLM agents query project state, trigger reviews, and apply controlled overrides through a typed tool interface.
+- Backed by **FastAPI + PostgreSQL + Qdrant + MinIO + Alembic** with a substantial automated test suite covering the governance, review, repair, and publishing paths.
 
 ## Highlights
 
 - FastAPI web API for project management, runtime control, and publisher-facing workflows
-- CLI entrypoint for local operations
+- CLI entrypoint and MCP operator interface for local / Codex-assisted operations
 - Structured persistence with SQLAlchemy-backed state
-- Runtime generation pipeline with governance checks and checkpointing
+- Runtime generation pipeline with Genesis handoff, governance checks, checkpointing, and BookState canon admission
 - Browser / publisher tooling powered by Playwright
 - Optional vector and object-storage integrations via Qdrant and MinIO
 - A substantial automated test suite covering generation flow, governance, payload handling, and publishing behavior
 
 ## Tech Stack
 
-- Python 3.12
+- Python 3.12+
 - FastAPI
 - SQLAlchemy
 - Pydantic
@@ -31,16 +41,29 @@ ForWin is built around a FastAPI application, a CLI entrypoint, persistent proje
 
 ```text
 forwin/
-├── api.py                    # Main FastAPI application
+├── api.py                    # Compatibility entrypoint for the split FastAPI app
+├── api_core/                 # FastAPI app lifecycle, task, generation, and project helpers
+├── api_*_routes.py           # API route groups
 ├── cli.py                    # CLI entrypoint
-├── api_runtime.py            # Runtime and task orchestration helpers
-├── api_project_payloads.py   # Project payload builders
-├── governance.py             # Governance / checkpoint logic
-└── book_genesis.py           # Early-stage project setup flow
+├── runtime/                  # Runtime container and service wiring
+├── book_genesis_core/        # Genesis workspace and early project setup
+├── genesis_handoff/          # Genesis -> chapter production handoff
+├── generation/               # Generation task state and workset helpers
+├── production/               # Production planner / executor path
+├── book_state/               # BookState DB Canon runtime
+├── map/                      # Scheme C BookMap runtime
+├── reviewer/                 # Main review facade
+├── canon_quality/            # Deterministic canon-quality analyzers
+├── publisher_runtime/        # Browser-extension publishing runtime
+├── publishers/               # Publishing platform integration layer
+├── mcp/                      # ForWin MCP server
+└── codex_bridge/             # Optional Codex bridge runtime
 
-Design-docs/                  # Design notes and rollout plans
+Design-docs/                  # Current architecture docs, status, and maintenance log
+docs/                         # Operator docs and branch-scoped design specs
 scripts/                      # Browser / publisher operational probes
 tests/                        # Automated test suite
+frontend/world-studio/        # React / Vite World Studio frontend
 ```
 
 ## Getting Started
@@ -54,22 +77,47 @@ tests/                        # Automated test suite
 
 ```bash
 python -m pip install -e .[test]
-export FORWIN_DATABASE_URL=postgresql+psycopg://forwin:forwin@localhost:5432/forwin
+docker compose up -d postgres-test qdrant
+export FORWIN_DATABASE_URL=postgresql+psycopg://forwin:forwin@127.0.0.1:55432/forwin_test
 export FORWIN_TEST_DATABASE_URL=postgresql+psycopg://forwin:forwin@127.0.0.1:55432/forwin_test
-export FORWIN_QDRANT_URL=http://localhost:6333
+export FORWIN_QDRANT_URL=http://127.0.0.1:6335
+export FORWIN_ARTIFACT_BACKEND=local
+export FORWIN_PUBLISHER_EXTENSION_API_KEY=
+export FORWIN_PUBLISHER_SESSION_SECRET=
+export FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED=false
 uvicorn forwin.api:app --reload --host 127.0.0.1 --port 8899
 ```
+
+The Compose `postgres` service is internal-only by default. For host-side local
+development, use `postgres-test` on `127.0.0.1:55432` or explicitly expose your
+own PostgreSQL instance. Compose exposes Qdrant for debugging on
+`127.0.0.1:6335`.
 
 ### Docker workflow
 
 ```bash
 cp .env.example .env
-docker compose up --build
+# Edit .env before first start. Replace the MinIO and publisher placeholders, or
+# disable the publisher extension by clearing its key/secret and encryption flag.
+docker compose up -d --build forwin forwin-mcp
 ```
 
 By default the main web API is bound to `127.0.0.1:8899`, so it is reachable only from the server itself.
-The Compose stack includes `postgres:16-alpine` for runtime state, Qdrant for vector retrieval, and `postgres-test` on `127.0.0.1:55432` for tests.
+The Compose stack includes `postgres:16-alpine` for runtime state, Qdrant for vector retrieval, MinIO for object storage, `forwin-mcp` on `127.0.0.1:8896`, and `postgres-test` on `127.0.0.1:55432` for tests.
 SQLite files such as `data/novel.db` are no longer supported as a runtime database.
+
+The checked-in `.env.example` intentionally contains placeholder credentials.
+For a quick local-only run without the publisher extension, set:
+
+```env
+FORWIN_PUBLISHER_EXTENSION_API_KEY=
+FORWIN_PUBLISHER_SESSION_SECRET=
+FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED=false
+```
+
+For publisher-browser work, keep the extension enabled but replace
+`FORWIN_PUBLISHER_EXTENSION_API_KEY` and `FORWIN_PUBLISHER_SESSION_SECRET` with
+long random values before starting the backend.
 
 ### Personal LAN deployment
 
@@ -77,7 +125,7 @@ SQLite files such as `data/novel.db` are no longer supported as a runtime databa
 2. Set `FORWIN_HTTP_BIND` to your server LAN IP, for example `192.168.1.10`.
 3. Set MinIO credentials and LLM API keys.
 4. Optionally set `FORWIN_HTTP_BASIC_USER` and `FORWIN_HTTP_BASIC_PASSWORD`.
-5. Run `docker compose up -d --build`.
+5. Run `docker compose up -d --build forwin forwin-mcp`.
 
 Keep `FORWIN_HTTP_BIND=127.0.0.1` for local-only access. LAN access requires an explicit server LAN IP; do not use `0.0.0.0` unless you mean to listen on every network interface. Basic Auth is lightweight single-user protection for a trusted LAN, not a multi-user permission system.
 
@@ -113,11 +161,37 @@ secret is lost, encrypted sessions cannot be recovered and the publishing
 platform must be logged in again. Protect `.env` backups that contain this
 secret; without it, old encrypted cookies cannot be decrypted.
 
+### Codex / MCP operator
+
+When operating a running ForWin backend from Codex, use the repo-local ForWin
+MCP server for project, Genesis, task, chapter, and WorldModel workflows. Do not
+inspect raw database rows for those workflows when an equivalent MCP tool is
+available.
+
+```bash
+docker compose up -d forwin forwin-mcp
+python3 scripts/check_codex_operator_ready.py
+```
+
+See `docs/codex-forwin-mcp.md` and `AGENTS.md` for the operator workflow and
+safe generation-task rules.
+
 ## Testing
 
 ```bash
-pytest
+docker compose up -d postgres-test qdrant
+python -m pytest -q
 ```
+
+Browser tests require Playwright browsers:
+
+```bash
+python -m playwright install chromium
+python -m pytest tests/browser -q
+```
+
+Live backend / live LLM browser tests are opt-in through the `FORWIN_E2E_*`
+environment flags in `tests/browser/test_real_backend_e2e.py`.
 
 ## Backup and restore
 

@@ -46,6 +46,7 @@ from forwin.api_schemas import (
     ProjectSummary,
     PublisherUploadJobResponse,
     RepairVerificationInfo,
+    StartWritingRequest,
     StartWritingResponse,
     TaskResponse,
 )
@@ -97,6 +98,48 @@ def _continue_workset_http_error(workset: ContinueGenerationWorkset) -> HTTPExce
     if workset.reason == "project_completed":
         return HTTPException(400, "项目已完成，没有剩余章节需要继续生成")
     return HTTPException(400, "没有剩余章节需要继续生成")
+
+def call_task_factory_with_supported_kwargs(create_continue_generation_task, kwargs: dict[str, Any]) -> str:
+    try:
+        signature = inspect.signature(create_continue_generation_task)
+    except (TypeError, ValueError):
+        return _call_task_factory_filtering_unexpected_keywords(
+            create_continue_generation_task,
+            kwargs,
+        )
+
+    accepted_names: set[str] = set()
+    for parameter in signature.parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            return _call_task_factory_filtering_unexpected_keywords(
+                create_continue_generation_task,
+                kwargs,
+            )
+        if parameter.kind in {
+            inspect.Parameter.KEYWORD_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        }:
+            accepted_names.add(parameter.name)
+
+    return _call_task_factory_filtering_unexpected_keywords(
+        create_continue_generation_task,
+        {name: value for name, value in kwargs.items() if name in accepted_names},
+    )
+
+def _call_task_factory_filtering_unexpected_keywords(create_continue_generation_task, kwargs: dict[str, Any]) -> str:
+    remaining = dict(kwargs)
+    while True:
+        try:
+            return create_continue_generation_task(**remaining)
+        except TypeError as exc:
+            message = str(exc)
+            marker = "unexpected keyword argument "
+            if marker not in message:
+                raise
+            unsupported = message.split(marker, 1)[1].strip().strip("'\"")
+            if not unsupported or unsupported not in remaining:
+                raise
+            remaining.pop(unsupported)
 
 def _load_json_object(raw: str, default):
     try:
@@ -530,4 +573,6 @@ __all__ = [
     name
     for name, value in globals().items()
     if name.startswith("_") and callable(value)
+] + [
+    "call_task_factory_with_supported_kwargs",
 ]

@@ -46,6 +46,7 @@ from forwin.api_schemas import (
     ProjectSummary,
     PublisherUploadJobResponse,
     RepairVerificationInfo,
+    StartWritingRequest,
     StartWritingResponse,
     TaskResponse,
 )
@@ -90,6 +91,7 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
 }
 
 from .common import *
+from forwin.generation.run_target import resolve_generation_run_target
 
 
 def get_project_genesis(
@@ -397,6 +399,7 @@ def generate_project_genesis_name(
 
 def start_project_writing(
     project_id: str,
+    req: StartWritingRequest | None = None,
     *,
     get_session,
     config,
@@ -411,6 +414,9 @@ def start_project_writing(
 ) -> StartWritingResponse:
     if not config:
         raise HTTPException(503, "服务尚未初始化")
+    auto_continue = True if req is None or req.auto_continue is None else bool(req.auto_continue)
+    run_until_chapter = req.run_until_chapter if req is not None else None
+    max_chapters = req.max_chapters if req is not None else None
     runtime_config = saved_runtime_config_or_default()
     if not runtime_config.minimax_api_key and not bool(getattr(runtime_config, "codex_enabled", False)):
         raise HTTPException(400, "MINIMAX_API_KEY 未设置。请先配置模型，再启动写作。")
@@ -448,13 +454,35 @@ def start_project_writing(
             session.rollback()
             raise HTTPException(409, failure_summary) from exc
         try:
-            task_id = create_continue_generation_task(
-                project_id=project.id,
-                runtime_config=runtime_config,
-                requested_chapters=handoff_result.active_chapter_plan_count,
-                title=project.title,
-                subtitle=f"启动写作 · {project.genre}",
-                message="Genesis 完成，准备进入写作主链。",
+            requested_chapters = int(handoff_result.active_chapter_plan_count or 0)
+            task_max_chapters = max_chapters
+            task_run_until_chapter = run_until_chapter
+            if max_chapters is not None or run_until_chapter is not None:
+                try:
+                    target = resolve_generation_run_target(
+                        project,
+                        next_chapter=1,
+                        run_until_chapter=run_until_chapter,
+                        max_chapters=max_chapters,
+                    )
+                except ValueError as exc:
+                    raise HTTPException(400, str(exc)) from exc
+                requested_chapters = min(requested_chapters, target.effective_max_chapters)
+                task_max_chapters = target.effective_max_chapters
+                task_run_until_chapter = target.run_until_chapter
+            task_id = call_task_factory_with_supported_kwargs(
+                create_continue_generation_task,
+                {
+                    "project_id": project.id,
+                    "runtime_config": runtime_config,
+                    "requested_chapters": requested_chapters,
+                    "max_chapters": task_max_chapters,
+                    "auto_continue": auto_continue,
+                    "run_until_chapter": task_run_until_chapter,
+                    "title": project.title,
+                    "subtitle": f"启动写作 · {project.genre}",
+                    "message": "Genesis 完成，准备进入写作主链。",
+                },
             )
         except Exception:
             session.rollback()

@@ -90,6 +90,7 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
 }
 
 from .common import *
+from forwin.generation.run_target import resolve_generation_run_target
 
 
 def continue_project_generation(
@@ -177,6 +178,8 @@ def continue_project_generation(
             session.commit()
             raise HTTPException(409, project_detail.blocking_reason.message)
         max_chapters = req.max_chapters if req is not None else None
+        auto_continue = True if req is None or req.auto_continue is None else bool(req.auto_continue)
+        run_until_chapter = req.run_until_chapter if req is not None else None
         workset = build_continue_generation_workset(
             session,
             project_id,
@@ -185,14 +188,42 @@ def continue_project_generation(
         )
         if workset.requested_chapters <= 0:
             raise _continue_workset_http_error(workset)
-        task_id = create_continue_generation_task(
-            project_id=project_id,
-            runtime_config=runtime_config,
-            requested_chapters=workset.requested_chapters,
-            max_chapters=max_chapters,
-            title=project.title,
-            subtitle=f"继续生成 · {project.genre}",
-            message="准备继续生成剩余章节。",
+        task_max_chapters = max_chapters
+        task_run_until_chapter = run_until_chapter
+        if run_until_chapter is not None:
+            first_chapter = int(workset.chapter_numbers[0])
+            try:
+                target = resolve_generation_run_target(
+                    project,
+                    next_chapter=first_chapter,
+                    run_until_chapter=run_until_chapter,
+                    max_chapters=max_chapters,
+                )
+            except ValueError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            task_max_chapters = target.effective_max_chapters
+            task_run_until_chapter = target.run_until_chapter
+            workset = build_continue_generation_workset(
+                session,
+                project_id,
+                max_chapters=task_max_chapters,
+                source="direct_continue",
+            )
+            if workset.requested_chapters <= 0:
+                raise _continue_workset_http_error(workset)
+        task_id = call_task_factory_with_supported_kwargs(
+            create_continue_generation_task,
+            {
+                "project_id": project_id,
+                "runtime_config": runtime_config,
+                "requested_chapters": workset.requested_chapters,
+                "max_chapters": task_max_chapters,
+                "auto_continue": auto_continue,
+                "run_until_chapter": task_run_until_chapter,
+                "title": project.title,
+                "subtitle": f"继续生成 · {project.genre}",
+                "message": "准备继续生成剩余章节。",
+            },
         )
     except active_generation_task_error_cls as exc:
         raise HTTPException(409, str(exc)) from exc

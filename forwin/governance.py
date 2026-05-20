@@ -88,6 +88,7 @@ IssueGroup = Literal[
 class DecisionEventType:
     GENERATION_REQUESTED = "generation_requested"
     CONTINUE_REQUESTED = "continue_requested"
+    AUTO_CONTINUE_DECISION = "auto_continue_decision"
     RUN_STARTED = "run_started"
     RUN_COMPLETED = "run_completed"
     RUN_COMPLETED_WITH_FAILURES = "run_completed_with_failures"
@@ -231,6 +232,7 @@ class DecisionEventType:
 KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.GENERATION_REQUESTED,
     DecisionEventType.CONTINUE_REQUESTED,
+    DecisionEventType.AUTO_CONTINUE_DECISION,
     DecisionEventType.RUN_STARTED,
     DecisionEventType.RUN_COMPLETED,
     DecisionEventType.RUN_COMPLETED_WITH_FAILURES,

@@ -28,7 +28,9 @@ def resolve_generation_run_target(
     if normalized_next <= 0:
         raise ValueError("next_chapter must be positive")
 
-    normalized_until = int(run_until_chapter or target_total)
+    normalized_until = (
+        target_total if run_until_chapter is None else int(run_until_chapter)
+    )
     if normalized_until < normalized_next:
         raise ValueError("run_until_chapter must be >= next_chapter")
     if normalized_until > target_total:

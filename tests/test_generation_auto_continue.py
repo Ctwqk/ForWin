@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import forwin.api_core.generation as generation_api
+from forwin.config import Config as RuntimeConfig
 from forwin.generation.auto_continue import (
     AutoContinueDecision,
     GenerationAutoContinueController,
@@ -21,6 +23,74 @@ class ResultStub:
     paused_chapters: list[int] | None = None
     paused: bool = False
     cancelled: bool = False
+
+
+def test_completion_handler_schedules_next_task_after_success(monkeypatch) -> None:
+    observed: list[dict[str, object]] = []
+    runtime_config = RuntimeConfig()
+
+    class DummySession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def commit(self) -> None:
+            observed.append({"commit": True})
+
+    class ControllerStub:
+        def __init__(self, *, session_factory, create_continue_generation_task):
+            observed.append(
+                {
+                    "session_factory": session_factory,
+                    "create_continue_generation_task": create_continue_generation_task,
+                }
+            )
+            self.create_continue_generation_task = create_continue_generation_task
+
+        def after_task_completion(self, result, **kwargs):
+            observed.append({"result": result, **kwargs})
+            self.create_continue_generation_task(
+                project_id=result.project_id,
+                run_until_chapter=kwargs["run_until_chapter"],
+                runtime_config=kwargs["runtime_config"],
+            )
+
+    class Result:
+        project_id = "project-auto"
+        status = "completed"
+        completed_chapters = [1]
+        failed_chapters: list[int] = []
+        paused_chapters: list[int] = []
+
+    def fake_create_continue_generation_task(**kwargs):
+        observed.append({"scheduled": kwargs})
+        return "task-next"
+
+    monkeypatch.setattr(generation_api, "_get_session", lambda: DummySession())
+    monkeypatch.setattr(generation_api, "_log_decision_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(generation_api, "GenerationAutoContinueController", ControllerStub)
+
+    handler = generation_api._make_generation_completion_handler(
+        task_id="task-prev",
+        root_event_id="root-event",
+        runtime_config=runtime_config,
+        auto_continue=True,
+        run_until_chapter=2,
+        max_chapters=None,
+        create_continue_generation_task=fake_create_continue_generation_task,
+    )
+
+    handler(Result())
+
+    scheduled = next(item["scheduled"] for item in observed if "scheduled" in item)
+    call = next(item for item in observed if item.get("parent_task_id") == "task-prev")
+    assert scheduled["project_id"] == "project-auto"
+    assert scheduled["run_until_chapter"] == 2
+    assert scheduled["runtime_config"] is runtime_config
+    assert call["run_until_chapter"] == 2
+    assert call["runtime_config"] is runtime_config
 
 
 def _session_factory(name: str):

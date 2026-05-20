@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 import forwin.api_core.generation as generation_api
@@ -278,6 +279,39 @@ def test_controller_stops_when_run_until_reached() -> None:
         assert decision.decision == "stop"
         assert decision.reason == "run_until_reached"
         assert decision.next_task_id == ""
+    finally:
+        engine.dispose()
+
+
+def test_controller_audit_payload_contains_target_fields() -> None:
+    engine, Session = _session_factory("auto-continue-audit-payload")
+    try:
+        with Session.begin() as session:
+            project = _project(session, total=3)
+            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=3)
+            for number in range(1, 4):
+                _chapter(session, project_id=project.id, arc_id="arc-1", number=number, status="accepted")
+
+        controller = GenerationAutoContinueController(
+            session_factory=Session,
+            create_continue_generation_task=lambda **kwargs: "unexpected",
+        )
+        controller.after_task_completion(
+            ResultStub(project_id="project-auto", completed_chapters=[1, 2, 3]),
+            parent_task_id="task-prev",
+            run_until_chapter=3,
+            max_chapters=None,
+            auto_continue=True,
+        )
+
+        with Session() as session:
+            event = session.query(DecisionEvent).filter_by(event_type="auto_continue_decision").one()
+            payload = json.loads(event.payload_json)
+
+        assert payload["decision"] == "stop"
+        assert payload["reason"] == "target_total_reached"
+        assert payload["run_until_chapter"] == 3
+        assert payload["target_total_chapters"] == 3
     finally:
         engine.dispose()
 

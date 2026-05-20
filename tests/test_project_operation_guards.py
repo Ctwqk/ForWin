@@ -711,6 +711,92 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(captured["max_chapters"], 2)
         self.assertEqual(captured["run_until_chapter"], 2)
 
+    def test_start_writing_defaults_to_auto_continue_until_project_target(self) -> None:
+        project = self._create_project(project_id="proj-start-auto-continue")
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "genesis_ready"
+            project_row.target_total_chapters = 24
+            session.commit()
+
+        class FakeGenesisService:
+            class Handoff:
+                def start_writing(self, *, session, updater, command):
+                    project = session.get(Project, command.project_id)
+                    active_arc = ArcPlanVersion(
+                        id="arc-start-auto-continue-1",
+                        project_id=project.id,
+                        version=1,
+                        arc_number=1,
+                        arc_synopsis="当前弧线",
+                        status="active",
+                        chapter_start=1,
+                        chapter_end=12,
+                        planned_target_size=12,
+                    )
+                    future_arc = ArcPlanVersion(
+                        id="arc-start-auto-continue-2",
+                        project_id=project.id,
+                        version=1,
+                        arc_number=2,
+                        arc_synopsis="后续弧线",
+                        status="planned",
+                        chapter_start=13,
+                        chapter_end=24,
+                        planned_target_size=12,
+                    )
+                    session.add_all([active_arc, future_arc])
+                    session.flush()
+                    for chapter_number in range(1, 13):
+                        session.add(
+                            ChapterPlan(
+                                id=f"plan-start-auto-continue-{chapter_number}",
+                                project_id=project.id,
+                                arc_plan_id=active_arc.id,
+                                chapter_number=chapter_number,
+                                title=f"第{chapter_number}章",
+                                status="planned",
+                            )
+                        )
+                    project.creation_status = "writing"
+                    session.add(project)
+                    session.flush()
+                    return SimpleNamespace(
+                        active_chapter_plan_count=12,
+                        project_status="writing",
+                    )
+
+            def __init__(self):
+                self.handoff = self.Handoff()
+
+        captured: dict[str, object] = {}
+
+        def capture_task_creation(**kwargs):
+            captured.update(kwargs)
+            return "task-start-auto-continue"
+
+        response = api_project_ops.start_project_writing(
+            project.id,
+            get_session=self.session_factory,
+            config=api_module._config,
+            saved_runtime_config_or_default=lambda: Config(
+                database_url=api_module._config.database_url,
+                minimax_api_key="saved-key",
+            ),
+            build_genesis_service=lambda _runtime_config: FakeGenesisService(),
+            close_genesis_service=lambda _service: None,
+            require_genesis_project=lambda _project: None,
+            active_genesis_revision=lambda _session, _project: SimpleNamespace(id="revision-start-auto-continue"),
+            project_has_active_generation_task=lambda _project_id, *, session=None: False,
+            generation_task_conflict_message=lambda _project_id: "conflict",
+            create_continue_generation_task=capture_task_creation,
+        )
+
+        self.assertEqual(response.task_id, "task-start-auto-continue")
+        self.assertIs(captured["auto_continue"], True)
+        self.assertIsNone(captured["run_until_chapter"])
+        self.assertEqual(captured["requested_chapters"], 12)
+
     def test_delete_project_rejects_running_generation_task(self) -> None:
         project = self._create_project(project_id="proj-delete-generation")
         with self.session_factory() as session:

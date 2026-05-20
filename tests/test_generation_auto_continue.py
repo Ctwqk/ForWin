@@ -74,6 +74,7 @@ def _chapter(session, *, project_id: str, arc_id: str, number: int, status: str)
 def test_controller_continues_to_future_arc_when_no_blocker() -> None:
     engine, Session = _session_factory("auto-continue-future-arc")
     calls: list[dict[str, object]] = []
+    runtime_config = object()
     try:
         with Session.begin() as session:
             project = _project(session)
@@ -92,6 +93,7 @@ def test_controller_continues_to_future_arc_when_no_blocker() -> None:
             run_until_chapter=6,
             max_chapters=None,
             auto_continue=True,
+            runtime_config=runtime_config,
         )
 
         assert decision == AutoContinueDecision(
@@ -109,6 +111,10 @@ def test_controller_continues_to_future_arc_when_no_blocker() -> None:
         assert calls[0]["max_chapters"] == 3
         assert calls[0]["run_until_chapter"] == 6
         assert calls[0]["auto_continue"] is True
+        assert calls[0]["runtime_config"] is runtime_config
+        assert calls[0]["title"] == "Auto Book"
+        assert calls[0]["subtitle"] == "自动续跑 · 玄幻"
+        assert calls[0]["message"] == "前一批完成，无阻断，自动继续生成。"
     finally:
         engine.dispose()
 

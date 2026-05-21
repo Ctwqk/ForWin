@@ -31,7 +31,7 @@ class GenerationTask(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     task_kind: Mapped[str] = mapped_column(String, default="generation")
-    status: Mapped[str] = mapped_column(String, default="starting")
+    status: Mapped[str] = mapped_column(String, default="queued")
     title: Mapped[str] = mapped_column(String, default="")
     subtitle: Mapped[str] = mapped_column(String, default="")
     project_id: Mapped[str] = mapped_column(String, default="")
@@ -54,6 +54,7 @@ class GenerationTask(Base):
     resume_from_chapter: Mapped[int] = mapped_column(Integer, default=0)
     run_until_chapter: Mapped[int] = mapped_column(Integer, default=0)
     max_chapters: Mapped[int] = mapped_column(Integer, default=0)
+    execution_payload_json: Mapped[str] = mapped_column(Text, default="{}")
     paused_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

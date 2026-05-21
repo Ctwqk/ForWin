@@ -205,7 +205,7 @@ from forwin.api_core.runtime import *
 def _generation_task_from_row(row: GenerationTask) -> dict[str, Any]:
     return {
         "task_kind": str(row.task_kind or "generation"),
-        "status": str(row.status or "starting"),
+        "status": str(row.status or "queued"),
         "title": str(row.title or "").strip(),
         "subtitle": str(row.subtitle or "").strip(),
         "project_id": str(row.project_id or "").strip() or None,
@@ -232,6 +232,7 @@ def _generation_task_from_row(row: GenerationTask) -> dict[str, Any]:
         "resume_from_chapter": int(getattr(row, "resume_from_chapter", 0) or 0),
         "run_until_chapter": int(getattr(row, "run_until_chapter", 0) or 0),
         "max_chapters": int(getattr(row, "max_chapters", 0) or 0),
+        "execution_payload": _json_load_object(getattr(row, "execution_payload_json", "{}") or "{}"),
         "deleted": row.deleted_at is not None,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
@@ -251,7 +252,7 @@ def _apply_generation_task_to_row(
 ) -> None:
     timestamp = now or _utcnow()
     row.task_kind = str(task.get("task_kind", "generation") or "generation").strip() or "generation"
-    row.status = str(task.get("status", "starting") or "starting").strip() or "starting"
+    row.status = str(task.get("status", "queued") or "queued").strip() or "queued"
     row.title = str(task.get("title", "") or "").strip()
     row.subtitle = str(task.get("subtitle", "") or "").strip()
     row.project_id = str(task.get("project_id", "") or "").strip()
@@ -277,6 +278,10 @@ def _apply_generation_task_to_row(
     row.resume_from_chapter = int(task.get("resume_from_chapter", 0) or 0)
     row.run_until_chapter = int(task.get("run_until_chapter", 0) or 0)
     row.max_chapters = int(task.get("max_chapters", 0) or 0)
+    row.execution_payload_json = json.dumps(
+        task.get("execution_payload", {}) or {},
+        ensure_ascii=False,
+    )
     if row.created_at is None:
         row.created_at = task.get("created_at") or timestamp
     row.updated_at = task.get("updated_at") or timestamp
@@ -691,7 +696,7 @@ def _task_is_pausable(task: dict[str, Any]) -> bool:
         and not task.get("deleted")
         and not task.get("cancel_requested")
         and not task.get("pause_requested")
-        and str(task.get("status", "")) in {"starting", "running"}
+        and str(task.get("status", "")) in {"queued", "starting", "running"}
     )
 
 
@@ -742,7 +747,7 @@ def _create_task_record(
     _prune_tasks()
     return {
         "task_kind": task_kind,
-        "status": "starting",
+        "status": "queued",
         "title": title,
         "subtitle": subtitle,
         "project_id": None,
@@ -765,6 +770,7 @@ def _create_task_record(
         "resume_from_chapter": 0,
         "run_until_chapter": 0,
         "max_chapters": 0,
+        "execution_payload": {},
         "deleted": False,
         "persistence_degraded": False,
         "persistence_error": None,

@@ -592,6 +592,7 @@ def _upgrade_generation_task_leases(conn) -> None:
         ("resume_from_chapter", "INTEGER NOT NULL DEFAULT 0"),
         ("run_until_chapter", "INTEGER NOT NULL DEFAULT 0"),
         ("max_chapters", "INTEGER NOT NULL DEFAULT 0"),
+        ("execution_payload_json", "TEXT NOT NULL DEFAULT '{}'"),
     ):
         conn.execute(text(f"ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS {column} {ddl}"))
     conn.execute(

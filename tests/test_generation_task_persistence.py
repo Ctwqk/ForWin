@@ -56,6 +56,32 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertEqual(loaded["current_stage"], "writing_chapter")
         self.assertEqual([item[0] for item in listed], ["task-db-1"])
 
+    def test_task_record_defaults_to_queued_for_worker_cutover(self) -> None:
+        task = api_module._create_task_record(title="Queue 默认", requested_chapters=1)
+
+        self.assertEqual(task["status"], "queued")
+        self.assertEqual(task["current_stage"], "queued")
+        self.assertEqual(task["execution_payload"], {})
+
+    def test_generation_task_execution_payload_round_trips_to_database(self) -> None:
+        task = api_module._create_task_record(title="payload", requested_chapters=1)
+        task["execution_payload"] = {
+            "mode": "continue",
+            "root_event_id": "event-1",
+            "auto_continue": True,
+            "runtime_overrides": {"quality_profile": "pulp"},
+        }
+
+        api_module._persist_generation_task("task-payload-1", task)
+        loaded = api_module._get_generation_task_or_404("task-payload-1")
+
+        self.assertEqual(loaded["execution_payload"]["mode"], "continue")
+        self.assertEqual(loaded["execution_payload"]["root_event_id"], "event-1")
+        self.assertEqual(
+            loaded["execution_payload"]["runtime_overrides"]["quality_profile"],
+            "pulp",
+        )
+
     def test_recover_interrupted_generation_tasks_requeues_resumable_running_tasks(self) -> None:
         task = api_module._create_task_record(
             message="正在写作。",

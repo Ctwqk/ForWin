@@ -41,6 +41,30 @@ class ExperiencePersistence:
             schedule=schedule,
         )
 
+    def save_trope_usage_records(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+        arc_id: str,
+        schedule: BandDelightSchedule,
+    ) -> None:
+        from forwin.experience.trope_cooldown import save_trope_usage
+
+        for item in schedule.scheduled_rewards:
+            template_id = str(item.template_id or "").strip()
+            if not template_id:
+                continue
+            save_trope_usage(
+                session,
+                project_id=project_id,
+                arc_id=arc_id,
+                band_id=schedule.band_id,
+                chapter_number=int(item.chapter_hint or 0),
+                template_id=template_id,
+                category=str(item.category or ""),
+            )
+
     def save_chapter_experience_plan(
         self,
         *,

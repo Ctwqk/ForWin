@@ -666,6 +666,9 @@ entries:
       - forwin/models/base.py
     allow_patterns:
       - legacy_checkpoint_statuses_v1
+      - _drop_obsolete_character_identity_legacy_bridge
+      - DROP INDEX IF EXISTS ix_character_identity_project_legacy
+      - DROP COLUMN IF EXISTS legacy_entity_id
     reason: Current bootstrap no longer creates character identity legacy columns; the remaining legacy checkpoint version marker is retained as schema history until migration history is intentionally renamed.
     removal_phase: migration_history
     verification:

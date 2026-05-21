@@ -10,6 +10,7 @@ from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.writer import WriterOutput
 
 from .hard_floor_dict import ENDING_HOOK_MARKERS, MODEL_ARTIFACT_MARKERS
+from .pulp_beat import verify_pulp_beats
 
 
 _GARBAGE_BLOCK_RE = re.compile(
@@ -72,6 +73,14 @@ def run_hard_floor(
     if not checks["ending_hook"]:
         warning_reasons.append("ending_hook")
 
+    pulp_beats = verify_pulp_beats(body)
+    checks["pulp_visible_payoff"] = pulp_beats.visible_payoff_present
+    if (
+        str(getattr(config, "quality_profile", "") or "") == "pulp"
+        and not pulp_beats.visible_payoff_present
+    ):
+        warning_reasons.append("pulp_visible_payoff")
+
     return HardFloorResult(
         passed=not fail_reasons,
         fail_reasons=fail_reasons,
@@ -84,6 +93,7 @@ def run_hard_floor(
             "writer_char_count": writer_char_count,
             "min_chapter_chars": min_chapter_chars,
             "must_not_reveal_hits": hidden_hits,
+            "pulp_beat": pulp_beats.model_dump(mode="json"),
         },
     )
 

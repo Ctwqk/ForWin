@@ -86,6 +86,14 @@ class BandPlanService:
             session=session,
             project_id=request.project_id,
         )
+        from forwin.experience.trope_cooldown import recent_trope_usage
+
+        recent_template_ids, recent_categories = recent_trope_usage(
+            session,
+            project_id=request.project_id,
+        )
+        calibration.recent_template_ids = recent_template_ids
+        calibration.recent_trope_categories = recent_categories
         schedule = self.scheduler.derive_band_delight_schedule(
             band_id=window.band_id,
             chapter_start=window.chapter_start,
@@ -136,6 +144,12 @@ class BandPlanService:
             }
         )
         self.persistence.save_band_experience_plan(
+            session=session,
+            project_id=request.project_id,
+            arc_id=request.arc_id,
+            schedule=schedule,
+        )
+        self.persistence.save_trope_usage_records(
             session=session,
             project_id=request.project_id,
             arc_id=request.arc_id,

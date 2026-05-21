@@ -1,93 +1,75 @@
 from __future__ import annotations
 
-import csv
 import json
 
-from scripts.pulp_pressure_test import (
-    ChapterMetric,
-    compute_summary,
-    reward_gap_since_last,
-    write_reports,
-)
+from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.models.task import GenerationTask
+from scripts import pulp_pressure_test
+from tests.postgres import postgres_test_url
 
 
-def test_reward_gap_since_last_counts_chapters_since_prior_reward() -> None:
-    rows = [
-        ChapterMetric(chapter_number=1, reward_beats_in_plan=1),
-        ChapterMetric(chapter_number=2, reward_beats_in_plan=0),
-        ChapterMetric(chapter_number=3, reward_beats_in_plan=0),
-        ChapterMetric(chapter_number=4, reward_beats_in_plan=2),
-    ]
+def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
+    database_url = postgres_test_url("pulp-pressure-report")
+    engine = get_engine(database_url)
+    init_db(engine)
+    Session = get_session_factory(engine)
+    try:
+        with Session.begin() as session:
+            project = Project(
+                id="project-pressure",
+                title="P",
+                premise="p",
+                genre="都市",
+                creation_status="writing",
+                target_total_chapters=30,
+            )
+            session.add(project)
+            session.flush()
+            arc = ArcPlanVersion(
+                id="arc-1",
+                project_id=project.id,
+                arc_synopsis="arc",
+                status="active",
+            )
+            session.add(arc)
+            session.flush()
+            session.add(
+                ChapterPlan(
+                    id="plan-1",
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=1,
+                    title="第一章",
+                    status="accepted",
+                    one_line="summary",
+                )
+            )
+            session.add(
+                GenerationTask(
+                    id="task-1",
+                    task_kind="generation",
+                    project_id=project.id,
+                    status="completed",
+                    requested_chapters=1,
+                    completed_chapters_json="[1]",
+                )
+            )
 
-    gaps: list[int | None] = []
-    for index in range(len(rows)):
-        gaps.append(reward_gap_since_last(rows[: index + 1]))
+        monkeypatch.setenv("DATABASE_URL", database_url)
+        output = tmp_path / "report"
 
-    assert gaps == [0, 1, 2, 0]
-
-
-def test_reward_gap_since_last_returns_none_when_current_reward_metric_is_missing() -> None:
-    rows = [
-        ChapterMetric(chapter_number=1, reward_beats_in_plan=1),
-        ChapterMetric(chapter_number=2, reward_beats_in_plan=None),
-    ]
-
-    assert reward_gap_since_last(rows) is None
-
-
-def test_reward_gap_since_last_returns_none_when_intermediate_reward_metric_is_missing() -> None:
-    rows = [
-        ChapterMetric(chapter_number=1, reward_beats_in_plan=1),
-        ChapterMetric(chapter_number=2, reward_beats_in_plan=None),
-        ChapterMetric(chapter_number=3, reward_beats_in_plan=0),
-    ]
-
-    assert reward_gap_since_last(rows) is None
-
-
-def test_compute_summary_ignores_missing_values_but_not_zeroes() -> None:
-    rows = [
-        ChapterMetric(
-            chapter_number=1,
-            llm_call_count=2,
-            prompt_char_count=1000,
-            wall_time_seconds=10,
-        ),
-        ChapterMetric(
-            chapter_number=2,
-            llm_call_count=0,
-            prompt_char_count=None,
-            wall_time_seconds=20,
-        ),
-    ]
-
-    summary = compute_summary(rows)
-
-    assert summary["chapter_count"] == 2
-    assert summary["average_llm_call_count"] == 1
-    assert summary["average_wall_time_seconds"] == 15
-    assert "prompt_char_count" in summary["missing_metric_sources"]
-
-
-def test_write_reports_writes_expected_files_and_json_encodes_lists(tmp_path) -> None:
-    output_dir = tmp_path / "pressure"
-    rows = [
-        ChapterMetric(
-            chapter_number=1,
-            hard_floor_fail_reasons=["too_short", "missing_hook"],
-            selected_trope_ids=["mentor", "betrayal"],
+        assert (
+            pulp_pressure_test.main(
+                ["--project-id", "project-pressure", "--chapters", "1", "--output", str(output)]
+            )
+            == 0
         )
-    ]
 
-    write_reports(rows, output_dir)
-
-    metrics_path = output_dir / "metrics.csv"
-    assert metrics_path.exists()
-    assert (output_dir / "summary.json").exists()
-    assert (output_dir / "README.md").exists()
-
-    with metrics_path.open(newline="", encoding="utf-8") as handle:
-        row = next(csv.DictReader(handle))
-
-    assert json.loads(row["hard_floor_fail_reasons"]) == ["too_short", "missing_hook"]
-    assert json.loads(row["selected_trope_ids"]) == ["mentor", "betrayal"]
+        summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+        assert summary["chapter_count"] == 1
+        assert "future versions can replace" not in (
+            output / "README.md"
+        ).read_text(encoding="utf-8").lower()
+    finally:
+        engine.dispose()

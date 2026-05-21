@@ -13,6 +13,7 @@ from forwin.governance import (
     PlanTaskItem,
     ProjectGovernanceSettings,
 )
+from forwin.long_run_policy import LongRunPolicy
 from forwin.protocol.subworld import SubWorldSummary
 from .genesis import BookGenesisStageState
 from .publisher import PublisherBookMetaRequest
@@ -78,6 +79,7 @@ class ProjectAutomationSettings(BaseModel):
     auto_publish: bool = False
     publish: ProjectAutomationPublishSettings = Field(default_factory=ProjectAutomationPublishSettings)
     publish_bindings: list[ProjectAutomationPublishSettings] = Field(default_factory=list)
+    long_run_policy: LongRunPolicy = Field(default_factory=LongRunPolicy)
     last_scheduler_date: str = ""
     last_scheduler_at: str = ""
     last_scheduler_action: str = ""
@@ -91,7 +93,7 @@ class ProjectSummary(ProjectArcSnapshotFields):
     genre: str
     premise: str = ""
     created_at: str = ""
-    target_total_chapters: int = 3
+    target_total_chapters: int = 50
     chapter_count: int = 0
     generated_chapter_count: int = 0
     accepted_chapter_count: int = 0
@@ -165,7 +167,7 @@ class ProjectDetail(ProjectArcSnapshotFields):
     premise: str
     genre: str
     setting_summary: str
-    target_total_chapters: int = 3
+    target_total_chapters: int = 50
     creation_status: str = "creating"
     active_genesis_revision_id: str = ""
     genesis_stage_overview: list[BookGenesisStageState] = Field(default_factory=list)
@@ -214,7 +216,7 @@ class ProjectCreateRequest(BaseModel):
     premise: str
     genre: str = "玄幻"
     setting_summary: str = ""
-    target_total_chapters: int = Field(default=3, ge=1, le=200)
+    target_total_chapters: int = Field(default=50, ge=1, le=5000)
     audience_hint: str = ""
     core_emotion: str = ""
     core_delight: str = ""
@@ -231,7 +233,7 @@ class ProjectCreateResponse(BaseModel):
     ok: bool
     project_id: str
     title: str
-    target_total_chapters: int = 3
+    target_total_chapters: int = 50
     creation_status: str = "creating"
     active_genesis_revision_id: str = ""
     workspace_url: str = ""
@@ -254,7 +256,7 @@ class ProjectContinueGenerationRequest(BaseModel):
 
 
 class ProjectExtendGenerationRequest(BaseModel):
-    additional_chapters: int = Field(default=12, ge=1, le=100)
+    additional_chapters: int = Field(default=50, ge=1, le=500)
     arc_title: str = ""
     arc_synopsis: str = ""
     continuity_guard: str = ""

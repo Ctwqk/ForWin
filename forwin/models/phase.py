@@ -257,6 +257,22 @@ class BandExperiencePlan(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
+class TropeUsageRecord(Base):
+    __tablename__ = "trope_usage_records"
+    __table_args__ = (
+        Index("ix_trope_usage_project_band", "project_id", "band_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
+    arc_id: Mapped[str] = mapped_column(String, default="")
+    band_id: Mapped[str] = mapped_column(String, default="")
+    chapter_number: Mapped[int] = mapped_column(Integer, default=0)
+    template_id: Mapped[str] = mapped_column(String, nullable=False)
+    category: Mapped[str] = mapped_column(String, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+
 class ChapterRewriteAttempt(Base):
     __tablename__ = "chapter_rewrite_attempts"
     __table_args__ = (

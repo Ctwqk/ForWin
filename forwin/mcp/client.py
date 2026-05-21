@@ -94,8 +94,8 @@ class ForWinAPIClient:
             raise ValueError("title is required")
         if not premise.strip():
             raise ValueError("premise is required")
-        if target_total_chapters < 1 or target_total_chapters > 200:
-            raise ValueError("target_total_chapters must be between 1 and 200")
+        if target_total_chapters < 1 or target_total_chapters > 5000:
+            raise ValueError("target_total_chapters must be between 1 and 5000")
         payload = await self._request_json(
             "POST",
             "/api/projects",

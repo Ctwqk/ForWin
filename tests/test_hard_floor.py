@@ -80,9 +80,13 @@ class FakeRepo:
 class FakeUpdater:
     def __init__(self) -> None:
         self.status_calls: list[tuple[str, int, str, dict[str, object]]] = []
+        self.saved_events: list[dict[str, object]] = []
 
     def mark_chapter_status(self, project_id: str, chapter_number: int, status: str, **kwargs) -> None:
         self.status_calls.append((project_id, chapter_number, status, kwargs))
+
+    def save_decision_event(self, event) -> None:
+        self.saved_events.append(event.model_dump(mode="json"))
 
 
 class FakeChapterLoop:
@@ -261,6 +265,47 @@ def test_project_chapter_loop_hard_floor_failure_marks_failed_and_records_event(
     assert session.commit_count >= 1
 
 
+def test_project_chapter_loop_stops_after_hard_floor_failure(monkeypatch) -> None:
+    hard_floor = HardFloorResult(
+        passed=False,
+        fail_reasons=["chapter_length"],
+        checks={"chapter_length": False},
+        metadata={"body_char_count": 10},
+    )
+    monkeypatch.setattr(
+        project_chapters,
+        "run_hard_floor",
+        lambda **kwargs: hard_floor,
+        raising=False,
+    )
+
+    class TwoChapterRepo(FakeRepo):
+        def get_chapter_plan(self, project_id: str, chapter_number: int):
+            if project_id == "project-1" and chapter_number in {1, 2}:
+                return SimpleNamespace(id=f"plan-{chapter_number}", chapter_number=chapter_number)
+            return None
+
+    chapter_loop = FakeChapterLoop(hard_floor_gate_enabled=True)
+    session = FakeSession()
+    repo = TwoChapterRepo()
+    updater = FakeUpdater()
+
+    result = WritingOrchestrator._run_project_chapters(
+        chapter_loop,
+        session=session,
+        repo=repo,
+        updater=updater,
+        checker=SimpleNamespace(),
+        project_id="project-1",
+        chapter_numbers=[1, 2],
+        requested_chapters=2,
+    )
+
+    assert result.failed_chapters == [1]
+    assert result.completed_chapters == []
+    assert [call[1] for call in updater.status_calls] == [1]
+
+
 def test_project_chapter_loop_skips_hard_floor_when_disabled(monkeypatch) -> None:
     def fake_run_hard_floor(**kwargs):
         raise AssertionError("hard floor should not run when disabled")
@@ -281,6 +326,64 @@ def test_project_chapter_loop_skips_hard_floor_when_disabled(monkeypatch) -> Non
 
     assert result.status == "needs_review"
     assert result.paused_chapters == [1]
+
+
+def test_project_chapter_loop_defers_memory_upsert_failure_in_pulp() -> None:
+    class FailingMemoryIndex:
+        def upsert_chapter(self, **kwargs) -> None:
+            raise TimeoutError("qdrant timeout")
+
+    class AcceptedLoop(FakeChapterLoop):
+        def __init__(self) -> None:
+            super().__init__(hard_floor_gate_enabled=False)
+            self.config = SimpleNamespace(
+                hard_floor_gate_enabled=False,
+                operation_mode="blackbox",
+                review_interval_chapters=0,
+                quality_profile="pulp",
+            )
+            self.retrieval_broker = SimpleNamespace(
+                last_observability_summary={},
+                build_chapter_context=lambda *args, **kwargs: context(),
+                memory_index=FailingMemoryIndex(),
+            )
+
+        def _project_governance(self, project):
+            return SimpleNamespace(auto_band_checkpoint=False)
+
+        def _apply_canon_candidate(self, **kwargs):
+            return None
+
+        def _run_phase3_pass(self, **kwargs) -> None:
+            return None
+
+        def _audit_future_plans_after_acceptance(self, **kwargs):
+            return None
+
+        def _compile_world_model_after_acceptance(self, **kwargs) -> bool:
+            return True
+
+        def _record_generation_audit_checkpoint_if_due(self, **kwargs) -> bool:
+            return False
+
+    session = FakeSession()
+    updater = FakeUpdater()
+    result = WritingOrchestrator._run_project_chapters(
+        AcceptedLoop(),
+        session=session,
+        repo=FakeRepo(),
+        updater=updater,
+        checker=SimpleNamespace(),
+        project_id="project-1",
+        chapter_numbers=[1],
+        requested_chapters=1,
+    )
+
+    assert result.completed_chapters == [1]
+    assert result.failed_chapters == []
+    assert updater.status_calls[-1][2] == "accepted"
+    assert updater.saved_events[-1]["event_type"] == "deferred_maintenance_recorded"
+    assert updater.saved_events[-1]["payload"]["task_type"] == "memory_index_upsert"
 
 
 def test_short_chapter_fails() -> None:
@@ -429,3 +532,23 @@ def test_clean_chapter_passes() -> None:
     assert result.warning_reasons == []
     assert result.metadata["project_id"] == "project-1"
     assert result.metadata["chapter_number"] == 1
+
+
+def test_pulp_visible_payoff_missing_is_warning_only() -> None:
+    result = run_hard_floor(
+        writer_output=writer("角色A走在路上，想起很多前情。忽然门外传来第二封密令？"),
+        context_pack=context(),
+        repo=None,
+        project_id="project-1",
+        chapter_number=1,
+        config=Config(
+            min_chapter_chars=20,
+            hard_floor_gate_enabled=True,
+            quality_profile="pulp",
+        ),
+    )
+
+    assert result.passed is True
+    assert "pulp_visible_payoff" in result.warning_reasons
+    assert result.checks["pulp_visible_payoff"] is False
+    assert result.metadata["pulp_beat"]["visible_payoff_present"] is False

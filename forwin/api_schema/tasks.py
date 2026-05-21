@@ -69,6 +69,12 @@ class TaskResponse(BaseModel):
     paused_chapters: list[int] = Field(default_factory=list)
     frozen_artifacts: list[str] = Field(default_factory=list)
     pause_requested: bool = False
+    lease_owner: str = ""
+    lease_expires_at: str = ""
+    heartbeat_at: str = ""
+    resume_from_chapter: int = 0
+    run_until_chapter: int = 0
+    max_chapters: int = 0
     pausable: bool = False
     resumable: bool = False
     generation_control: GenerationControlInfo = Field(default_factory=GenerationControlInfo)
@@ -117,6 +123,12 @@ class TaskCenterItemResponse(BaseModel):
     finished_at: str = ""
     abort_requested: bool = False
     pause_requested: bool = False
+    lease_owner: str = ""
+    lease_expires_at: str = ""
+    heartbeat_at: str = ""
+    resume_from_chapter: int = 0
+    run_until_chapter: int = 0
+    max_chapters: int = 0
     pausable: bool = False
     resumable: bool = False
     generation_control: GenerationControlInfo = Field(default_factory=GenerationControlInfo)

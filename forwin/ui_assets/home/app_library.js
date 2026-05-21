@@ -614,8 +614,8 @@
           setGlobalStatus('新建书本必须填写 premise / prompt。', '书本管理');
           return;
         }
-        if (!Number.isFinite(payload.target_total_chapters) || payload.target_total_chapters < 1 || payload.target_total_chapters > 200) {
-          setGlobalStatus('总章节数必须是 1 到 200 之间的整数。', '书本管理');
+        if (!Number.isFinite(payload.target_total_chapters) || payload.target_total_chapters < 1 || payload.target_total_chapters > 5000) {
+          setGlobalStatus('总章节数必须是 1 到 5000 之间的整数。', '书本管理');
           return;
         }
         const created = await requestJson('/api/projects', {

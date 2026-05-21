@@ -228,11 +228,11 @@ def test_legacy_provisional_failure_no_longer_blocks_by_default_but_switch_can_r
             default_orchestrator.llm_client.close()
             default_orchestrator.engine.dispose()
 
-        legacy_orchestrator = WritingOrchestrator(
-            Config(database_url=postgres_test_url(), legacy_provisional_blocking=True)
+        provisional_orchestrator = WritingOrchestrator(
+            Config(database_url=postgres_test_url(), provisional_preview_enabled=True)
         )
         try:
-            gate = legacy_orchestrator._new_failed_provisional_gate(
+            gate = provisional_orchestrator._new_failed_provisional_gate(
                 session,
                 project_id=project_id,
                 previous_snapshot=None,
@@ -240,5 +240,5 @@ def test_legacy_provisional_failure_no_longer_blocks_by_default_but_switch_can_r
             assert gate is not None
             assert gate.aggregate_verdict == "fail"
         finally:
-            legacy_orchestrator.llm_client.close()
-            legacy_orchestrator.engine.dispose()
+            provisional_orchestrator.llm_client.close()
+            provisional_orchestrator.engine.dispose()

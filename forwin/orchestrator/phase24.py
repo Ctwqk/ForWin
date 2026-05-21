@@ -230,13 +230,13 @@ class PlanningServices:
     provisional_preview: ProvisionalPreviewService
 
     @classmethod
-    def from_legacy_args(
+    def build_default(
         cls,
         *,
         director: ArcDirector | None = None,
         provisional_executor: Any | None = None,
         subworld_manager: SubWorldManager | None = None,
-        legacy_preview_enabled: bool = False,
+        provisional_preview_enabled: bool = False,
         scenario_progress_callback: Any | None = None,
     ) -> "PlanningServices":
         resolved_subworld_manager = subworld_manager or SubWorldManager(director=director)
@@ -269,7 +269,7 @@ class PlanningServices:
             ),
             provisional_preview=ProvisionalPreviewService(
                 provisional_executor=provisional_executor,
-                legacy_preview_enabled=legacy_preview_enabled,
+                provisional_preview_enabled=provisional_preview_enabled,
             ),
         )
 
@@ -291,20 +291,20 @@ class ArcEnvelopeManager:
         director: ArcDirector | None = None,
         provisional_executor: Any | None = None,
         subworld_manager: SubWorldManager | None = None,
-        legacy_preview_enabled: bool = False,
+        provisional_preview_enabled: bool = False,
         scenario_progress_callback: Any | None = None,
         planning_services: PlanningServices | None = None,
     ) -> None:
         self.director = director
         self.provisional_executor = provisional_executor
         self.subworld_manager = subworld_manager or SubWorldManager(director=director)
-        self.legacy_preview_enabled = legacy_preview_enabled
+        self.provisional_preview_enabled = provisional_preview_enabled
         self.scenario_progress_callback = scenario_progress_callback
-        self.services = planning_services or PlanningServices.from_legacy_args(
+        self.services = planning_services or PlanningServices.build_default(
             director=director,
             provisional_executor=provisional_executor,
             subworld_manager=self.subworld_manager,
-            legacy_preview_enabled=legacy_preview_enabled,
+            provisional_preview_enabled=provisional_preview_enabled,
             scenario_progress_callback=scenario_progress_callback,
         )
 
@@ -890,7 +890,7 @@ class ArcEnvelopeManager:
     ) -> ProvisionalBandPreview | None:
         return ProvisionalPreviewService(
             provisional_executor=self.provisional_executor,
-            legacy_preview_enabled=True,
+            provisional_preview_enabled=True,
         ).execute(
             session=session,
             project_id=project_id,

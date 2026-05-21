@@ -229,7 +229,6 @@ def create_memory_index(
     *,
     backend: str = "qdrant",
     root_dir: str = "data/retrieval",  # noqa: ARG001 - kept for config compatibility.
-    database_url: str | None = None,  # noqa: ARG001 - retained for legacy call compatibility.
     qdrant_url: str = "",
     qdrant_collection: str = "chapter_memories",
     embedding_backend: str = "hash",

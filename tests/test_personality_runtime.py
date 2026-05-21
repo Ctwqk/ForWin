@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from forwin.api_book_state_routes import build_handlers
 from forwin.api_schemas import PersonalityLoadoutUpdateRequest
 from forwin.book_state import BookStateRepository
@@ -11,6 +13,7 @@ from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.protocol.book_state import WorldNode
 from forwin.protocol.context import ChapterContextPack, ReviewContextPack
+from forwin.personality.models import PersonalityLoadout
 from forwin.protocol.scene import ScenePlan
 from forwin.protocol.writer import WriterOutput
 from forwin.reviewer.webnovel import WebNovelExperienceReviewer
@@ -19,6 +22,11 @@ from tests.postgres import postgres_test_url
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_personality_loadout_rejects_removed_stress_mode_alias() -> None:
+    with pytest.raises(ValueError):
+        PersonalityLoadout(stress_mode=[{"skill": "stress-paranoid-controller"}])
 
 
 def _write_skill(root: Path, relative: str, *, skill_type: str, description: str) -> None:

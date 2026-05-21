@@ -20,10 +20,9 @@ from forwin.config import Config
 def _get_config(args: argparse.Namespace) -> Config:
     """Build Config from CLI args + environment."""
     kwargs: dict = {}
-    database_url = getattr(args, "database_url", None) or getattr(args, "db", None)
+    database_url = getattr(args, "database_url", None)
     if database_url:
         kwargs["database_url"] = database_url
-        kwargs["db_path"] = database_url
     if hasattr(args, "api_key") and args.api_key:
         kwargs["minimax_api_key"] = args.api_key
     elif os.environ.get("MINIMAX_API_KEY"):
@@ -226,7 +225,6 @@ def build_parser() -> argparse.ArgumentParser:
         description="ForWin – 长篇中文网文生成系统 (Phase 0.5)",
     )
     parser.add_argument("--database-url", default=None, help="PostgreSQL SQLAlchemy URL")
-    parser.add_argument("--db", default=None, help="已废弃；请改用 --database-url")
     parser.add_argument("--api-key", default=None, help="LLM API Key")
     parser.add_argument("--model", default=None, help="LLM 模型名称")
     parser.add_argument("--base-url", default=None, help="LLM API Base URL")

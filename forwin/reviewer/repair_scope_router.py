@@ -8,13 +8,7 @@ from forwin.canon_quality.signals import SignalKind
 
 
 class RepairScopeKind(StrEnum):
-    """Runtime repair scopes reached directly from signal-kind routing.
-
-    `band_plan` remains a valid legacy `RepairInstruction.repair_scope`, but it
-    is not a metadata-only runtime handler. Band contract problems are handled
-    during band-plan generation/regeneration and through existing plan rewrite
-    paths, not by this signal dispatch table.
-    """
+    """Runtime repair scopes reached directly from signal-kind routing."""
 
     OPERATOR = "operator"
     ACTIVE_RULES = "active_rules"

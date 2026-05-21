@@ -177,11 +177,11 @@
               : formatStageNote(scenarioEntry, '低风险跳过或已通过')),
         },
         {
-          key: 'legacy_preview',
-          label: 'Legacy Preview',
+          key: 'provisional_preview',
+          label: 'Provisional Preview',
           state: provisionalFailed ? 'failed' : (provisionalEntry ? 'completed' : 'upcoming'),
           note: provisionalFailed
-            ? formatStageNote(provisionalFailed, 'legacy preview 失败')
+            ? formatStageNote(provisionalFailed, 'provisional preview 失败')
             : formatStageNote(provisionalEntry, '默认关闭'),
         },
         {

@@ -94,8 +94,8 @@ def test_browser_session_sync_keeps_unverified_cookie_signal_logged_out() -> Non
         engine.dispose()
 
 
-def test_browser_session_legacy_plaintext_upgrade_stays_available_through_manager() -> None:
-    engine, plaintext_runtime = _runtime("publisher-runtime-browser-legacy")
+def test_browser_session_plaintext_read_does_not_upgrade_storage() -> None:
+    engine, plaintext_runtime = _runtime("publisher-runtime-browser-plaintext")
     try:
         plaintext_runtime.browser_sessions.record_browser_session(
             client_id="client-1",
@@ -108,7 +108,14 @@ def test_browser_session_legacy_plaintext_upgrade_stays_available_through_manage
             publisher_session_secret="session-secret",
         )
 
-        restored = manager.get_browser_session("qidian", upgrade_legacy=True)
+        try:
+            manager.get_browser_session("qidian", upgrade_legacy=True)
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("get_browser_session must reject upgrade_legacy")
+
+        restored = manager.get_browser_session("qidian")
         assert restored is not None
         assert restored["cookies"][0]["value"] == "token-secret-value"
 
@@ -118,8 +125,8 @@ def test_browser_session_legacy_plaintext_upgrade_stays_available_through_manage
                 {"client_id": "client-1", "platform_id": "qidian"},
             )
             assert entry is not None
-            upgraded_raw = entry.cookies_json
-        assert "token-secret-value" not in upgraded_raw
-        assert json.loads(upgraded_raw)["encoding"] == "fernet-v1"
+            stored_raw = entry.cookies_json
+        assert "token-secret-value" in stored_raw
+        assert isinstance(json.loads(stored_raw), list)
     finally:
         engine.dispose()

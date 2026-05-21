@@ -247,17 +247,7 @@ class RuntimeSettingsStore:
                 seen_ids.add(profile["id"])
                 profiles.append(profile)
         if not profiles:
-            legacy_profile = self._normalize_profile(
-                {
-                    "id": "default",
-                    "name": "MiniMax 默认",
-                    "api_key": raw.get("api_key", self._default_profile["api_key"]),
-                    "base_url": raw.get("base_url", self._default_profile["base_url"]),
-                    "model": raw.get("model", self._default_profile["model"]),
-                },
-                "MiniMax 默认",
-            )
-            profiles.append(legacy_profile)
+            profiles.append(self._normalize_profile(self._default_profile, "MiniMax 默认"))
         default_profile_id = str(raw.get("default_profile_id", "")).strip()
         if not default_profile_id:
             default_profile_id = profiles[0]["id"]

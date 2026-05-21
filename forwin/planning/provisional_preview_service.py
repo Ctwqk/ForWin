@@ -30,10 +30,10 @@ class ProvisionalPreviewService:
         self,
         *,
         provisional_executor: Any | None = None,
-        legacy_preview_enabled: bool = False,
+        provisional_preview_enabled: bool = False,
     ) -> None:
         self.provisional_executor = provisional_executor
-        self.legacy_preview_enabled = legacy_preview_enabled
+        self.provisional_preview_enabled = provisional_preview_enabled
 
     def execute(
         self,
@@ -44,7 +44,7 @@ class ProvisionalPreviewService:
         band_id: str,
         chapter_plans: list[ChapterPlan],
     ) -> ProvisionalBandPreview | None:
-        if not self.legacy_preview_enabled:
+        if not self.provisional_preview_enabled:
             return None
         if self.provisional_executor is None or not chapter_plans:
             return None

@@ -18,11 +18,9 @@ def test_get_engine_rejects_sqlite_paths(monkeypatch: pytest.MonkeyPatch) -> Non
         get_engine("data/novel.db")
 
 
-def test_legacy_db_path_config_is_rejected_by_engine() -> None:
-    config = Config(db_path="data/novel.db")
-
-    with pytest.raises(ValueError, match="PostgreSQL"):
-        get_engine(config.database_url)
+def test_removed_db_path_config_alias_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        Config(db_path="data/novel.db")
 
 
 def test_get_engine_accepts_postgresql_url() -> None:

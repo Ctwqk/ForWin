@@ -59,16 +59,7 @@ class TaskRouteDeps:
     active_generation_task_ids: Callable[[str], list[str]] | None = None
 
 
-def build_handlers(
-    *,
-    deps: TaskRouteDeps | None = None,
-    **legacy_deps: Any,
-) -> dict[str, Callable[..., Any]]:
-    if deps is None:
-        deps = TaskRouteDeps(**legacy_deps)
-    elif legacy_deps:
-        raise TypeError("build_handlers accepts either deps=TaskRouteDeps or legacy keyword dependencies, not both")
-
+def build_handlers(*, deps: TaskRouteDeps) -> dict[str, Callable[..., Any]]:
     def active_generation_task_check(project_id: str = "") -> ActiveGenerationTaskCheckResponse:
         normalized_project_id = str(project_id or "").strip()
         if deps.active_generation_task_ids is not None:

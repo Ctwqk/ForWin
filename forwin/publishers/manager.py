@@ -20,7 +20,6 @@ from forwin.publisher_runtime.auth import (
     PublisherExtensionAuthNotConfigured,
 )
 from forwin.publisher_runtime.browser_sessions import (
-    BrowserCookieCodec,
     PublisherBrowserSessionDecodeError,
     as_utc as _as_utc,
     browser_session_sort_key,
@@ -188,16 +187,8 @@ class PublisherManager:
             raw_state=raw_state,
         )
 
-    def get_browser_session(
-        self,
-        platform: str,
-        *,
-        upgrade_legacy: bool = False,
-    ) -> dict[str, Any] | None:
-        return self.runtime.browser_sessions.get_browser_session(
-            platform,
-            upgrade_legacy=upgrade_legacy,
-        )
+    def get_browser_session(self, platform: str) -> dict[str, Any] | None:
+        return self.runtime.browser_sessions.get_browser_session(platform)
 
     def get_browser_session_summary(self, platform: str) -> dict[str, Any] | None:
         return self.runtime.browser_sessions.get_browser_session_summary(platform)
@@ -459,10 +450,6 @@ class PublisherManager:
 
     def _cookie_names_from_json(self, cookies_json: str) -> list[str]:
         return self.runtime.browser_cookie_codec.cookie_names_from_json(cookies_json)
-
-    @staticmethod
-    def _legacy_cookie_names_from_json(cookies_json: str) -> list[str]:
-        return BrowserCookieCodec.legacy_cookie_names_from_json(cookies_json)
 
     def _spec(self, platform: str) -> PlatformSpec:
         return self.runtime.platform_catalog.get(platform)

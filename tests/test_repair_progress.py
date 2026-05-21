@@ -8,11 +8,16 @@ from tests.postgres import postgres_test_url
 from forwin.config import Config
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.protocol.experience import ChapterExperiencePlan
-from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
+from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict, normalize_repair_scope
 from forwin.protocol.writer import WriterOutput
 
 
 class RepairProgressTests(unittest.TestCase):
+    def test_repair_scope_normalization_no_longer_maps_removed_aliases(self) -> None:
+        self.assertEqual(normalize_repair_scope("scene"), "scene")
+        self.assertEqual(normalize_repair_scope("band"), "band")
+        self.assertEqual(normalize_repair_scope("arc"), "arc")
+
     def test_blackbox_repair_emits_repair_stages(self) -> None:
         class FailThenPassReviewHub:
             def __init__(self) -> None:

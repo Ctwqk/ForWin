@@ -10,6 +10,29 @@ from forwin.writer.chapter_writer import ChapterWriter
 
 
 class SplitWriterPipelineTests(unittest.TestCase):
+    def test_preview_generation_rejects_removed_json_preview_fallback(self) -> None:
+        class FakeClient:
+            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+                body = "林夜沿着旧站台继续追查异常报站声" * 40
+                return '{"title":"雨夜旧站","body":"' + body + '","micro_summary":"主角继续追查"}'
+
+        writer = ChapterWriter(
+            FakeClient(),
+            min_chapter_chars=500,
+            target_chapter_chars=500,
+            max_chapter_chars=800,
+        )
+
+        with self.assertRaises(ValueError):
+            writer._chat_preview_text(
+                [{"role": "user", "content": "写一段"}],
+                temperature=0.2,
+                max_tokens=1024,
+                max_attempts=1,
+                stage_key="scene_generation",
+            )
+        self.assertFalse(hasattr(ChapterWriter, "_legacy_json_preview_is_accepted"))
+
     def test_scene_reward_tags_from_llm_are_normalized_before_validation(self) -> None:
         plan = ScenePlan(
             scene_no=1,

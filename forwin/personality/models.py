@@ -46,13 +46,10 @@ class PersonalityLoadout(_PersonalityModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _accept_legacy_keys(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        payload = dict(data)
-        if "stress_modes" not in payload and "stress_mode" in payload:
-            payload["stress_modes"] = payload.get("stress_mode")
-        return payload
+    def _reject_removed_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "stress_mode" in data:
+            raise ValueError("stress_mode was removed; use stress_modes")
+        return data
 
     def active_skill_ids(self) -> set[str]:
         ids: set[str] = set()

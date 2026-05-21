@@ -193,7 +193,7 @@
 
     function normalizeProgressionMode(value) {
       const normalized = String(value || '').trim();
-      if (['legacy_relaxed', 'serial_canon', 'serial_canon_band_guard'].includes(normalized)) {
+      if (['serial_canon', 'serial_canon_band_guard'].includes(normalized)) {
         return normalized;
       }
       return '';

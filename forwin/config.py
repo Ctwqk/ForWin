@@ -11,7 +11,6 @@ from forwin.writer.profile import WriterProfile
 
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_MINIMAX_MODEL = "MiniMax-M2.7"
-LEGACY_DATABASE_PATH_ENV = "FORWIN_" + "DB_PATH"
 DEFAULT_DATABASE_URL = "postgresql+psycopg://forwin:forwin@localhost:5432/forwin"
 DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_MOONSHOT_MODEL = "kimi-k2.5"
@@ -268,14 +267,9 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         mark(field, key)
         return _env_csv(env, key)
 
-    database_url = (
-        _env_str(env, "FORWIN_DATABASE_URL")
-        or _env_str(env, LEGACY_DATABASE_PATH_ENV)
-        or DEFAULT_DATABASE_URL
-    )
+    database_url = _env_str(env, "FORWIN_DATABASE_URL") or DEFAULT_DATABASE_URL
     values: dict[str, object] = {
         "database_url": database_url,
-        "db_path": database_url,
         "artifact_root": _env_str(env, "FORWIN_ARTIFACT_ROOT", "data/artifacts"),
         "artifact_backend": _env_str(env, "FORWIN_ARTIFACT_BACKEND", "local"),
         "minio_endpoint": _env_str(env, "FORWIN_MINIO_ENDPOINT"),
@@ -451,8 +445,8 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         "generation_audit_pause_enabled": tracked_bool(
             "generation_audit_pause_enabled", "GENERATION_AUDIT_PAUSE_ENABLED", False
         ),
-        "legacy_provisional_blocking": _env_bool(
-            env, "FORWIN_LEGACY_PROVISIONAL_BLOCKING", False
+        "provisional_preview_enabled": _env_bool(
+            env, "FORWIN_PROVISIONAL_PREVIEW_ENABLED", False
         ),
         "skill_runtime_enabled": _env_bool(
             env, "FORWIN_SKILL_RUNTIME_ENABLED", True
@@ -662,7 +656,6 @@ def apply_quality_profile(config: "Config", *, explicit_keys: set[str]) -> "Conf
 
 class _ConfigFields:
     database_url: str = DEFAULT_DATABASE_URL
-    db_path: str = DEFAULT_DATABASE_URL
     artifact_root: str = "data/artifacts"
     artifact_backend: str = "local"
     minio_endpoint: str = ""
@@ -735,7 +728,7 @@ class _ConfigFields:
     future_constraints_enabled: bool = True
     generation_audit_interval_chapters: int = 0
     generation_audit_pause_enabled: bool = False
-    legacy_provisional_blocking: bool = False
+    provisional_preview_enabled: bool = False
     skill_runtime_enabled: bool = True
     skill_registry_path: str = "forwin_skills"
     skill_strictness: str = "normal"
@@ -829,15 +822,6 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
     def __init__(self, **data: object) -> None:
         super().__init__(**data)
         database_url = str(getattr(self, "database_url", "") or "").strip()
-        legacy_db_path = str(getattr(self, "db_path", "") or "").strip()
-        if (
-            legacy_db_path
-            and legacy_db_path != DEFAULT_DATABASE_URL
-            and database_url == DEFAULT_DATABASE_URL
-        ):
-            object.__setattr__(self, "database_url", legacy_db_path)
-        elif database_url:
-            object.__setattr__(self, "db_path", database_url)
         user = str(self.http_basic_user or "")
         password = str(self.http_basic_password or "")
         if bool(user) != bool(password):

@@ -1001,8 +1001,6 @@ class ChapterWriter:
                 body = str(parsed.get("body", "") or "").strip()
                 if body and self._body_looks_complete(body):
                     return raw
-                if body and self._legacy_json_preview_is_accepted(raw, body, stage_key):
-                    return raw
                 if body:
                     raise ValueError("preview response body appears incomplete")
                 raise ValueError("preview response body is empty")
@@ -1039,33 +1037,6 @@ class ChapterWriter:
         while text and text[-1] in _BODY_TRAILING_CLOSERS:
             text = text[:-1].rstrip()
         return bool(text and text[-1] in _BODY_TERMINAL_PUNCTUATION)
-
-    def _legacy_json_preview_is_accepted(self, raw: str, body: str, stage_key: str) -> bool:
-        cleaned = str(raw or "").lstrip()
-        if not cleaned.startswith("{"):
-            return False
-        body_text = str(body or "").strip()
-        if not body_text:
-            return False
-        threshold = max(300, min(self.min_chapter_chars, self.target_chapter_chars) // 2)
-        if len(body_text) >= threshold:
-            return True
-        parsed = self._parse_jsonish_text_payload(cleaned)
-        if stage_key == "scene_generation":
-            return bool(
-                parsed.get("body")
-                and (
-                    parsed.get("micro_summary")
-                    or parsed.get("scene_time_point")
-                    or parsed.get("scene_location_id")
-                )
-            )
-        if stage_key == "scene_stitch":
-            return bool(
-                parsed.get("body")
-                and (parsed.get("title") or parsed.get("end_of_chapter_summary"))
-            )
-        return False
 
     def _call_chat(
         self,

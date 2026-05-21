@@ -152,7 +152,7 @@ def test_api_route_deps_are_grouped_by_domain() -> None:
     assert "render_publishers_page" in PublisherDeps.__annotations__
 
 
-def test_api_route_deps_legacy_flat_publisher_fields_resolve_to_publisher_group() -> None:
+def test_api_route_deps_reject_flat_dependency_kwargs() -> None:
     def noop(*args, **kwargs):
         return None
 
@@ -200,10 +200,8 @@ def test_api_route_deps_legacy_flat_publisher_fields_resolve_to_publisher_group(
         }
     )
 
-    deps = ApiRouteDeps(**legacy_kwargs)
-
-    assert deps.get_publisher_manager is deps.publisher.get_publisher_manager
-    assert deps.render_publishers_page is deps.publisher.render_publishers_page
+    with pytest.raises(TypeError):
+        ApiRouteDeps(**legacy_kwargs)
 
 
 def test_design_status_contains_deprecation_matrix() -> None:

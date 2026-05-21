@@ -1029,7 +1029,7 @@
       });
     }
 
-    function setLegacyTabState(id, active) {
+    function setTabState(id, active) {
       const el = document.getElementById(id);
       if (!el) return;
       el.classList.toggle('active', active);
@@ -1048,9 +1048,9 @@
       const taskActive = currentHomeTab === 'task';
       const configActive = currentHomeTab === 'config';
       syncPrimaryTopbar(currentHomeTab);
-      setLegacyTabState('tab_book', bookActive);
-      setLegacyTabState('tab_task', taskActive);
-      setLegacyTabState('tab_config', configActive);
+      setTabState('tab_book', bookActive);
+      setTabState('tab_task', taskActive);
+      setTabState('tab_config', configActive);
       document.getElementById('panel_book').classList.toggle('active', bookActive);
       document.getElementById('panel_task').classList.toggle('active', taskActive);
       document.getElementById('panel_config').classList.toggle('active', configActive);
@@ -1140,8 +1140,8 @@
         running_scenario_rehearsal: 'Scenario Rehearsal',
         scenario_rehearsal_patch_required: 'Scenario Patch / Rerun',
         scenario_rehearsal_blocked: 'Scenario Blocked',
-        running_provisional_preview: 'Legacy Preview',
-        provisional_failed: 'Legacy Preview 失败',
+        running_provisional_preview: 'Provisional Preview',
+        provisional_failed: 'Provisional Preview 失败',
         assembling_context: '组装上下文',
         writing_chapter: '写作章节',
         chapter_failed: '章节失败',

@@ -6,7 +6,7 @@ import pytest
 
 from forwin.api_runtime import build_runtime_config, copy_config
 from forwin.api_schemas import GenerateRequest
-from forwin.config import Config, DEFAULT_MINIMAX_BASE_URL
+from forwin.config import Config, DEFAULT_DATABASE_URL, DEFAULT_MINIMAX_BASE_URL
 
 
 CONFIG_ENV_KEYS = {
@@ -61,6 +61,7 @@ CONFIG_ENV_KEYS = {
     "FORWIN_MINIO_SECRET_KEY",
     "FORWIN_MINIO_SECURE",
     "FORWIN_PERSONALITY_REVIEW_ENABLED",
+    "FORWIN_PROVISIONAL_PREVIEW_ENABLED",
     "FORWIN_PUBLISHER_EXTENSION_API_KEY",
     "FORWIN_PUBLISHER_PREFERRED_CLIENT_ID",
     "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED",
@@ -203,6 +204,36 @@ def test_default_scene_call_timeout_matches_default_llm_timeout(
 
     assert config.scene_call_timeout_seconds == config.llm_timeout_seconds == 90.0
     assert Config().scene_call_timeout_seconds == Config().llm_timeout_seconds == 90.0
+
+
+def test_removed_db_path_env_alias_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _set_env_file(monkeypatch, tmp_path, ["FORWIN_DB_PATH=postgresql+psycopg://old/forwin"])
+
+    config = Config.from_env()
+
+    assert config.database_url == DEFAULT_DATABASE_URL
+    assert not hasattr(config, "db_path")
+
+
+def test_current_provisional_preview_env_is_supported(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _set_env_file(monkeypatch, tmp_path, ["FORWIN_PROVISIONAL_PREVIEW_ENABLED=true"])
+
+    assert Config.from_env().provisional_preview_enabled is True
+
+
+def test_removed_legacy_provisional_blocking_env_alias_is_ignored(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _set_env_file(monkeypatch, tmp_path, ["FORWIN_LEGACY_PROVISIONAL_BLOCKING=true"])
+
+    config = Config.from_env()
+
+    assert config.provisional_preview_enabled is False
+    assert not hasattr(config, "legacy_provisional_blocking")
 
 
 def test_removed_legacy_relaxed_progression_mode_normalizes_to_current_default(

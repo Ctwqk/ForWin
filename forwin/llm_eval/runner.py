@@ -476,7 +476,6 @@ class LLMReliabilityRunner:
         orchestrator = WritingOrchestrator(
             Config(
                 database_url=database_url,
-                db_path=database_url,
                 artifact_root=str(artifact_root),
                 minimax_api_key=profile.api_key,
                 minimax_base_url=profile.base_url,

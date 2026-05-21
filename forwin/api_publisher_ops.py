@@ -264,7 +264,7 @@ def publisher_extension_get_browser_session(
     x_forwin_extension_key: str | None = None,
 ) -> ExtensionBrowserSessionResponse | None:
     _require_extension_auth(publisher_manager, x_forwin_extension_key)
-    payload = publisher_manager.get_browser_session(platform, upgrade_legacy=True)
+    payload = publisher_manager.get_browser_session(platform)
     if payload is None:
         return None
     return ExtensionBrowserSessionResponse(**payload)

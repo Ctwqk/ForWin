@@ -179,13 +179,11 @@ class BrowserCookieCodec:
         raw: str,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         metadata: dict[str, Any] = {
-            "legacy": False,
             "encrypted": False,
             "error": "",
         }
         text = str(raw or "").strip()
         if not text:
-            metadata["legacy"] = True
             return [], metadata
         try:
             payload = json.loads(text)
@@ -194,7 +192,6 @@ class BrowserCookieCodec:
             logger.warning("Stored publisher browser session is malformed JSON.")
             return [], metadata
         if isinstance(payload, list):
-            metadata["legacy"] = True
             return self.normalize_cookie_list(payload), metadata
         if not isinstance(payload, dict):
             metadata["error"] = "publisher_session_malformed"
@@ -241,19 +238,6 @@ class BrowserCookieCodec:
 
     def cookie_names_from_json(self, cookies_json: str) -> list[str]:
         cookies = self.decode(cookies_json)
-        names = [
-            str(item.get("name", "")).strip()
-            for item in cookies
-            if isinstance(item, dict) and str(item.get("name", "")).strip()
-        ]
-        return sorted(dict.fromkeys(names))
-
-    @staticmethod
-    def legacy_cookie_names_from_json(cookies_json: str) -> list[str]:
-        try:
-            cookies = json.loads(cookies_json or "[]")
-        except json.JSONDecodeError:
-            return []
         names = [
             str(item.get("name", "")).strip()
             for item in cookies
@@ -414,12 +398,7 @@ class BrowserSessionService:
             "cookie_count": len(normalized),
         }
 
-    def get_browser_session(
-        self,
-        platform: str,
-        *,
-        upgrade_legacy: bool = False,
-    ) -> dict[str, Any] | None:
+    def get_browser_session(self, platform: str) -> dict[str, Any] | None:
         self.platform_catalog.get(platform)
         with self.session_factory() as session:
             entries = session.execute(
@@ -432,9 +411,6 @@ class BrowserSessionService:
                 cookies, metadata = self.codec.decode_with_metadata(
                     selected_entry.cookies_json
                 )
-                if upgrade_legacy and metadata["legacy"] and self.codec.publisher_session_secret:
-                    selected_entry.cookies_json = self.codec.encode(cookies)
-                    session.commit()
                 return {
                     "platform": selected_entry.platform_id,
                     "client_id": selected_entry.client_id,
@@ -448,9 +424,6 @@ class BrowserSessionService:
             if stored is None:
                 return None
             cookies, metadata = self.codec.decode_with_metadata(stored.cookies_json)
-            if upgrade_legacy and metadata["legacy"] and self.codec.publisher_session_secret:
-                stored.cookies_json = self.codec.encode(cookies)
-                session.commit()
             return {
                 "platform": stored.platform_id,
                 "client_id": stored.extension_client_id,

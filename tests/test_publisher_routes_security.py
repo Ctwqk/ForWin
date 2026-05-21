@@ -22,6 +22,16 @@ class _FakePublisherManager:
     def preferred_client_heartbeat(self, **_kwargs):
         return {"ok": True, "client_id": "client-1"}
 
+    def get_browser_session(self, platform: str):
+        return {
+            "platform": platform,
+            "client_id": "client-1",
+            "cookie_count": 0,
+            "cookies": [],
+            "synced_at": "",
+            "last_error": "",
+        }
+
 
 def test_extension_heartbeat_status_requires_extension_key() -> None:
     manager = _FakePublisherManager()
@@ -38,3 +48,20 @@ def test_extension_heartbeat_status_requires_extension_key() -> None:
     assert handlers["publisher_extension_heartbeat_status"](
         x_forwin_extension_key="secret"
     ) == {"ok": True, "client_id": "client-1"}
+
+
+def test_extension_browser_session_does_not_request_plaintext_upgrade() -> None:
+    manager = _FakePublisherManager()
+    handlers = build_handlers(
+        get_publisher_manager=lambda: manager,
+        extension_root=Path("browser_extension/forwin-publisher"),
+    )
+
+    response = handlers["publisher_extension_get_browser_session"](
+        "qidian",
+        x_forwin_extension_key="secret",
+    )
+
+    assert response is not None
+    assert response.platform == "qidian"
+    assert manager.checked_keys == ["secret"]

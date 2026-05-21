@@ -184,7 +184,7 @@ class PublisherDeps:
     render_publishers_page: Callable[..., str]
 
 
-@dataclass(frozen=True, init=False)
+@dataclass(frozen=True)
 class ApiRouteDeps:
     core: CoreDeps
     task: TaskDeps
@@ -192,30 +192,6 @@ class ApiRouteDeps:
     governance: GovernanceDeps
     observability: ObservabilityDeps
     publisher: PublisherDeps
-
-    def __init__(
-        self,
-        *,
-        core: CoreDeps | None = None,
-        task: TaskDeps | None = None,
-        project: ProjectDeps | None = None,
-        governance: GovernanceDeps | None = None,
-        observability: ObservabilityDeps | None = None,
-        publisher: PublisherDeps | None = None,
-        **legacy: Any,
-    ) -> None:
-        object.__setattr__(self, "core", core or CoreDeps(**{name: legacy.pop(name) for name in CoreDeps.__annotations__}))
-        object.__setattr__(self, "task", task or TaskDeps(**{name: legacy.pop(name) for name in TaskDeps.__annotations__}))
-        object.__setattr__(self, "project", project or ProjectDeps(**{name: legacy.pop(name) for name in ProjectDeps.__annotations__}))
-        object.__setattr__(self, "governance", governance or GovernanceDeps(**{name: legacy.pop(name) for name in GovernanceDeps.__annotations__}))
-        object.__setattr__(self, "observability", observability or ObservabilityDeps(**{name: legacy.pop(name) for name in ObservabilityDeps.__annotations__}))
-        object.__setattr__(
-            self,
-            "publisher",
-            publisher or PublisherDeps(**{name: legacy.pop(name) for name in PublisherDeps.__annotations__}),
-        )
-        if legacy:
-            raise TypeError(f"Unexpected ApiRouteDeps fields: {', '.join(sorted(legacy))}")
 
     def __getattr__(self, name: str) -> Any:
         for group_name in ("core", "task", "project", "governance", "observability", "publisher"):

@@ -59,16 +59,16 @@ def _automation_publish_bindings(
 
 
 def policy_from_automation(automation: ProjectAutomationSettings) -> ProductionPolicy:
-    legacy_write_quota = _clamp_quota(
+    default_write_quota = _clamp_quota(
         getattr(automation, "daily_chapter_quota", 1),
         default=1,
         minimum=1,
     )
     daily_write_raw = _as_int(getattr(automation, "daily_write_quota", 0), 0)
     write_quota = (
-        legacy_write_quota
+        default_write_quota
         if daily_write_raw <= 0
-        else _clamp_quota(daily_write_raw, default=legacy_write_quota, minimum=1)
+        else _clamp_quota(daily_write_raw, default=default_write_quota, minimum=1)
     )
     auto_publish = bool(getattr(automation, "auto_publish", False))
     publish_raw = _as_int(getattr(automation, "daily_publish_quota", 0), 0)

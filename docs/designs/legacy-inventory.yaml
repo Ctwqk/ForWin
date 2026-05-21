@@ -428,7 +428,7 @@ entries:
     status: retained
 
   - id: external.legacy_migration_scripts
-    category: external_compat_delete
+    category: deleted
     owner_area: migration_tools
     paths:
       - scripts/migrate_legacy_canon_to_form.py
@@ -439,14 +439,14 @@ entries:
       - legacy ForWin SQLite
       - legacy SQLite
     reason: One-shot migration scripts support old persisted data and should be retired after old projects are abandoned.
-    removal_phase: phase_6
+    removal_phase: complete
     verification:
       - inventory_final
       - migration_script_listing
     delete_when:
       - old SQLite and legacy canon-quality migrations are no longer offered as operator workflows
       - current Postgres/Chapter Review Form migration tests cover only current schema
-    status: planned
+    status: deleted
 
   - id: genesis.book_genesis_facade_names
     category: deleted
@@ -495,7 +495,7 @@ entries:
     status: deleted
 
   - id: external.route_dependency_legacy_kwargs
-    category: external_compat_delete
+    category: deleted
     owner_area: api
     paths:
       - forwin/api_route_registry.py
@@ -509,17 +509,17 @@ entries:
       - 'if legacy:'
       - sorted(legacy)
     reason: Flat legacy dependency injection shapes support old internal callers and should be removed.
-    removal_phase: phase_6
+    removal_phase: complete
     verification:
       - api_route_tests
       - inventory_final
     delete_when:
       - callers construct grouped dependency objects only
       - old flat kwargs are rejected
-    status: planned
+    status: deleted
 
   - id: external.config_legacy_aliases
-    category: external_compat_delete
+    category: deleted
     owner_area: config
     paths:
       - forwin/config.py
@@ -541,7 +541,7 @@ entries:
       - legacy_profile
       - from_legacy_args
     reason: Old env/config aliases and constructor compatibility should not remain in current runtime.
-    removal_phase: phase_6
+    removal_phase: complete
     verification:
       - config_tests
       - production_policy_tests
@@ -549,10 +549,10 @@ entries:
     delete_when:
       - current env names and config objects are the only accepted inputs
       - old aliases produce clear validation errors
-    status: planned
+    status: deleted
 
   - id: external.publisher_plaintext_session_upgrade
-    category: external_compat_delete
+    category: deleted
     owner_area: publisher
     paths:
       - forwin/api_publisher_ops.py
@@ -565,17 +565,17 @@ entries:
       - '"legacy": False'
       - '"legacy": True'
     reason: Plaintext browser session upgrade supports old publisher storage and should be removed.
-    removal_phase: phase_6
+    removal_phase: complete
     verification:
       - publisher_session_tests
       - inventory_final
     delete_when:
       - encrypted/current browser session storage is the only supported format
       - API no longer requests upgrade_legacy
-    status: planned
+    status: deleted
 
   - id: external.model_and_protocol_aliases
-    category: external_compat_delete
+    category: deleted
     owner_area: protocol
     paths:
       - forwin/personality/models.py
@@ -589,7 +589,7 @@ entries:
       - valid legacy
       - _legacy_json_preview_is_accepted
     reason: Old model keys, repair scope names, and writer preview formats are compatibility shims.
-    removal_phase: phase_6
+    removal_phase: complete
     verification:
       - protocol_tests
       - writer_tests
@@ -597,10 +597,10 @@ entries:
     delete_when:
       - current schemas reject old aliases
       - writer accepts only current response format
-    status: planned
+    status: deleted
 
   - id: ui.legacy_project_and_governance_labels
-    category: external_compat_delete
+    category: deleted
     owner_area: frontend
     paths:
       - forwin/ui_assets/home/app_library.js
@@ -610,13 +610,12 @@ entries:
       - forwin/ui_assets/home/body.html
     allow_patterns:
       - legacy_relaxed
-      - creation_status
       - setLegacyTabState
       - Legacy Preview
       - legacy preview
       - legacy_preview
     reason: UI still exposes old project/governance/provisional-preview language and must move to current lifecycle labels.
-    removal_phase: phase_6
+    removal_phase: complete
     verification:
       - frontend_static_tests
       - browser_smoke
@@ -624,7 +623,7 @@ entries:
     delete_when:
       - UI no longer offers legacy_relaxed as an option
       - legacy project filters and Legacy Preview labels are removed or renamed
-    status: planned
+    status: deleted
 
   - id: metadata.legacy_source_fields
     category: deleted

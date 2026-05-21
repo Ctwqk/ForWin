@@ -2,7 +2,7 @@
 
     function governanceLabel(governance = {}) {
       const parts = [
-        governance.progression_mode || 'legacy_relaxed',
+        governance.progression_mode || 'serial_canon_band_guard',
         governance.auto_band_checkpoint ? 'auto-band-checkpoint' : 'manual-band-checkpoint',
         governance.future_constraints_enabled ? 'future-constraints:on' : 'future-constraints:off',
       ];
@@ -561,7 +561,7 @@
       card.appendChild(createNode('div', '治理设置', 'task-id'));
       const badges = createNode('div', '', 'badge-row');
       badges.appendChild(createNode('span', governance.default_operation_mode || 'blackbox', 'badge'));
-      badges.appendChild(createNode('span', governance.progression_mode || 'legacy_relaxed', 'badge'));
+      badges.appendChild(createNode('span', governance.progression_mode || 'serial_canon_band_guard', 'badge'));
       if (governance.auto_band_checkpoint) badges.appendChild(createNode('span', 'auto band checkpoint', 'badge ok'));
       badges.appendChild(createNode('span', governance.future_constraints_enabled ? 'future constraints 参与判定' : 'future constraints 仅保存/展示', governance.future_constraints_enabled ? 'badge ok' : 'badge warn'));
       card.appendChild(badges);
@@ -607,13 +607,13 @@
       form.appendChild(createLabeledField('默认运行模式', operationMode));
 
       const progressionMode = document.createElement('select');
-      ['legacy_relaxed', 'serial_canon', 'serial_canon_band_guard'].forEach((value) => {
+      ['serial_canon', 'serial_canon_band_guard'].forEach((value) => {
         const option = document.createElement('option');
         option.value = value;
         option.textContent = value;
         progressionMode.appendChild(option);
       });
-      progressionMode.value = governance.progression_mode || 'legacy_relaxed';
+      progressionMode.value = governance.progression_mode || 'serial_canon_band_guard';
       form.appendChild(createLabeledField('推进策略', progressionMode));
 
       const reviewInterval = document.createElement('input');

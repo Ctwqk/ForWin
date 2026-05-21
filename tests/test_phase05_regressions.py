@@ -62,7 +62,7 @@ from forwin.models.publisher import (
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.orchestrator.loop import RunResult, WritingOrchestrator
 from forwin.orchestrator.phase3 import PacingAssessment, PacingStrategist, ReplanGovernor, StageAssessment
-from forwin.orchestrator.phase24 import ArcEnvelopeManager
+from forwin.orchestrator.phase24 import ArcEnvelopeManager, PlanningServices
 from forwin.orchestrator.phase24 import policy_for_total_chapters
 from forwin.orchestrator.phase4 import NPCIntentGenerator, WorldSimulator
 from forwin.orchestrator.thread_sampling import sample_active_threads
@@ -286,12 +286,12 @@ class Phase05RegressionTests(unittest.TestCase):
             config.database_url,
             "postgresql+psycopg://forwin:forwin@localhost:5432/forwin",
         )
-        self.assertEqual(
-            config.db_path,
-            "postgresql+psycopg://forwin:forwin@localhost:5432/forwin",
-        )
+        self.assertFalse(hasattr(config, "db_path"))
         self.assertEqual(config.temperature, 0.42)
         self.assertEqual(config.max_tokens, 4096)
+
+    def test_planning_services_removed_legacy_constructor(self) -> None:
+        self.assertFalse(hasattr(PlanningServices, "from_legacy_args"))
 
     def test_config_from_env_reads_target_chapter_chars(self) -> None:
         with patch.dict(
@@ -2549,7 +2549,7 @@ class Phase05RegressionTests(unittest.TestCase):
                         "chapter_numbers": [1, 2],
                         "summary_lines": ["预演一", "预演二"],
                     },
-                    legacy_preview_enabled=True,
+                    provisional_preview_enabled=True,
                 )
                 envelope = manager.ensure_active_arc_resolution(
                     session=session,
@@ -2653,7 +2653,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     minimax_api_key="fake-key",
                     minimax_model="fake-model",
                     chapter_review_form_mode="off",
-                    legacy_provisional_blocking=True,
+                    provisional_preview_enabled=True,
                 )
             )
             calls = {"count": 0}
@@ -4189,7 +4189,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     minimax_model="fake-model",
                     chapter_review_form_mode="off",
                     operation_mode="blackbox",
-                    legacy_provisional_blocking=True,
+                    provisional_preview_enabled=True,
                 ),
                 progress_callback=lambda event, payload: events.append((event, dict(payload))),
             )

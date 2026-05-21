@@ -134,7 +134,6 @@ class RuntimeContainer:
             memory_index=create_memory_index(
                 backend=config.retrieval_backend,
                 root_dir=config.retrieval_root,
-                database_url=config.database_url,
                 qdrant_url=config.qdrant_url,
                 qdrant_collection=config.qdrant_collection,
                 embedding_backend=config.embedding_backend,
@@ -181,7 +180,7 @@ class RuntimeContainer:
         arc_envelope_manager = ArcEnvelopeManager(
             director=arc_director,
             subworld_manager=subworld_manager,
-            legacy_preview_enabled=config.legacy_provisional_blocking,
+            provisional_preview_enabled=config.provisional_preview_enabled,
         )
         arc_envelope_manager.services.band_plan = band_plan_service
         arc_envelope_manager.services.world_contracts = world_contract_service

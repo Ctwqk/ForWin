@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy.exc import OperationalError
 
-from forwin.api_task_routes import build_handlers
+from forwin.api_task_routes import TaskRouteDeps, build_handlers
+
+
+def test_build_handlers_rejects_flat_dependency_kwargs() -> None:
+    with pytest.raises(TypeError):
+        build_handlers(get_session=lambda: None)
 
 
 def test_terminate_task_marks_cancel_even_when_audit_log_is_locked() -> None:
@@ -38,23 +44,25 @@ def test_terminate_task_marks_cancel_even_when_audit_log_is_locked() -> None:
         tasks[task_id].update(kwargs)
 
     handlers = build_handlers(
-        get_session=lambda: Session(),
-        get_publisher_manager=lambda: SimpleNamespace(list_upload_jobs=lambda **kwargs: []),
-        list_generation_tasks=lambda limit: list(tasks.items()),
-        serialize_task=lambda task_id, task: task,
-        get_generation_task_or_404=lambda task_id: tasks[task_id],
-        serialize_generation_task_center_item=lambda task_id, task: task,
-        serialize_upload_task_center_item=lambda payload: payload,
-        list_project_backed_task_items=lambda limit: [],
-        parse_project_task_id=lambda task_id: None,
-        get_project_backed_task_item_or_404=lambda task_id: None,
-        task_is_terminal=lambda status: status in {"completed", "failed", "cancelled"},
-        task_is_terminable=lambda task: not task.get("cancel_requested") and task.get("status") == "running",
-        task_is_pausable=lambda task: False,
-        task_is_deletable=lambda task: False,
-        latest_related_decision_event=lambda *args, **kwargs: None,
-        log_decision_event=lambda *args, **kwargs: (_ for _ in ()).throw(locked),
-        update_task=update_task,
+        deps=TaskRouteDeps(
+            get_session=lambda: Session(),
+            get_publisher_manager=lambda: SimpleNamespace(list_upload_jobs=lambda **kwargs: []),
+            list_generation_tasks=lambda limit: list(tasks.items()),
+            serialize_task=lambda task_id, task: task,
+            get_generation_task_or_404=lambda task_id: tasks[task_id],
+            serialize_generation_task_center_item=lambda task_id, task: task,
+            serialize_upload_task_center_item=lambda payload: payload,
+            list_project_backed_task_items=lambda limit: [],
+            parse_project_task_id=lambda task_id: None,
+            get_project_backed_task_item_or_404=lambda task_id: None,
+            task_is_terminal=lambda status: status in {"completed", "failed", "cancelled"},
+            task_is_terminable=lambda task: not task.get("cancel_requested") and task.get("status") == "running",
+            task_is_pausable=lambda task: False,
+            task_is_deletable=lambda task: False,
+            latest_related_decision_event=lambda *args, **kwargs: None,
+            log_decision_event=lambda *args, **kwargs: (_ for _ in ()).throw(locked),
+            update_task=update_task,
+        )
     )
 
     response = handlers["terminate_task"]("task-1")

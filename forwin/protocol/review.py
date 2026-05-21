@@ -41,11 +41,6 @@ FinalGateDecisionKind = Literal[
 ]
 CanonRiskLevel = Literal["low", "high"]
 
-_LEGACY_REPAIR_SCOPE_MAP = {
-    "scene": "draft",
-    "band": "chapter_plan",
-    "arc": "band_plan",
-}
 _V4_REPAIR_SCOPES = {"scene", "chapter", "band", "arc", "world_model"}
 _METADATA_REPAIR_SCOPES = {"subworld", "active_rules", "operator"}
 _KNOWN_REPAIR_SCOPES = {"draft", "chapter_plan", "band_plan", *_METADATA_REPAIR_SCOPES, *_V4_REPAIR_SCOPES}
@@ -55,14 +50,11 @@ def normalize_repair_scope(
     value: object,
     *,
     default: str = "draft",
-    preserve_v4: bool = False,
 ) -> str:
     normalized = str(value or "").strip().lower()
     if not normalized:
         return default
-    if preserve_v4 and normalized in _V4_REPAIR_SCOPES:
-        return normalized
-    return _LEGACY_REPAIR_SCOPE_MAP.get(normalized, normalized)
+    return normalized
 
 
 class ContinuityIssue(BaseModel):
@@ -104,7 +96,7 @@ class RepairInstruction(BaseModel):
     @field_validator("repair_scope", mode="before")
     @classmethod
     def _normalize_repair_scope(cls, value: object) -> str:
-        normalized = normalize_repair_scope(value, preserve_v4=True)
+        normalized = normalize_repair_scope(value)
         if normalized not in _KNOWN_REPAIR_SCOPES:
             raise ValueError(f"Unsupported repair scope: {value}")
         return normalized

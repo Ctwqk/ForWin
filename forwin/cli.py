@@ -214,6 +214,37 @@ def cmd_llm_eval(args: argparse.Namespace) -> None:
         sys.exit(code)
 
 
+def cmd_generation_worker(args: argparse.Namespace) -> None:
+    """Run the durable generation worker."""
+    from forwin.api_core import state as api_state
+    from forwin.generation.worker_cli import default_worker_id, run_generation_worker_loop
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.runtime.container import RuntimeContainer
+
+    config = _get_config(args)
+    engine = get_engine(config.database_url)
+    try:
+        init_db(engine)
+        Session = get_session_factory(engine)
+        api_state._config = config
+        api_state._engine = engine
+        api_state._SessionFactory = Session
+        api_state._runtime_container = RuntimeContainer.from_config(config)
+
+        exit_code = run_generation_worker_loop(
+            session_factory=Session,
+            config=config,
+            worker_id=args.worker_id or default_worker_id(),
+            lease_seconds=args.lease_seconds,
+            poll_interval=args.poll_interval,
+            once=args.once,
+        )
+    finally:
+        engine.dispose()
+    if exit_code:
+        sys.exit(exit_code)
+
+
 # ------------------------------------------------------------------
 # Argument parser
 # ------------------------------------------------------------------
@@ -269,6 +300,12 @@ def build_parser() -> argparse.ArgumentParser:
     eval_report.add_argument("--run-id", required=True, help="run id")
     eval_report.add_argument("--artifact-root", default="", help="artifact root")
 
+    worker = sub.add_parser("generation-worker", help="运行 durable generation worker")
+    worker.add_argument("--worker-id", default="", help="Worker id；默认 hostname:pid")
+    worker.add_argument("--lease-seconds", type=int, default=300, help="任务 lease 秒数")
+    worker.add_argument("--poll-interval", type=float, default=2.0, help="无任务时轮询间隔秒数")
+    worker.add_argument("--once", action="store_true", help="只 claim 一次后退出")
+
     return parser
 
 
@@ -295,6 +332,8 @@ def main() -> None:
         cmd_status(args)
     elif args.command == "llm-eval":
         cmd_llm_eval(args)
+    elif args.command == "generation-worker":
+        cmd_generation_worker(args)
     else:
         parser.print_help()
 

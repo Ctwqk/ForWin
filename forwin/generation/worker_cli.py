@@ -1,0 +1,49 @@
+from __future__ import annotations
+
+import logging
+import os
+import socket
+import time
+from collections.abc import Callable
+from typing import Any
+
+from forwin.config import Config
+from forwin.generation.worker import GenerationWorkerResult, run_one_generation_task
+
+
+logger = logging.getLogger(__name__)
+
+
+def default_worker_id() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
+
+
+def run_generation_worker_loop(
+    *,
+    session_factory: Callable[[], Any],
+    config: Config,
+    worker_id: str = "",
+    lease_seconds: int = 300,
+    poll_interval: float = 2.0,
+    once: bool = False,
+    max_loops: int = 0,
+    run_once: Callable[..., GenerationWorkerResult] = run_one_generation_task,
+) -> int:
+    normalized_worker_id = str(worker_id or "").strip() or default_worker_id()
+    loops = 0
+    while True:
+        loops += 1
+        result = run_once(
+            session_factory=session_factory,
+            worker_id=normalized_worker_id,
+            config=config,
+            lease_seconds=lease_seconds,
+        )
+        if result.claimed:
+            logger.info("Generation worker executed task %s", result.task_id)
+        if once:
+            return 0
+        if max_loops > 0 and loops >= max_loops:
+            return 0
+        if not result.claimed:
+            time.sleep(max(0.0, float(poll_interval or 0.0)))

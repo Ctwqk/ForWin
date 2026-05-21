@@ -120,7 +120,14 @@ def collect_rows(session, project_id: str, chapters: int) -> list[ChapterMetric]
     return rows
 
 
-def compute_summary(rows: list[ChapterMetric]) -> dict[str, object]:
+def compute_summary(
+    rows: list[ChapterMetric],
+    *,
+    events: list[DecisionEvent] | None = None,
+    tasks: list[GenerationTask] | None = None,
+) -> dict[str, object]:
+    events = events or []
+    tasks = tasks or []
     missing_metric_sources = sorted(
         field.name
         for field in fields(ChapterMetric)
@@ -148,15 +155,37 @@ def compute_summary(rows: list[ChapterMetric]) -> dict[str, object]:
         "repeat_trope_category_rate": _repeat_rate(
             row.selected_trope_categories for row in rows
         ),
+        "task_resume_success_rate": _task_resume_success_rate(tasks),
+        "arc_macro_boundary_failure_rate": _future_plan_issue_rate(
+            events,
+            issue_type="arc_macro_progression_not_met",
+        ),
+        "progression_rule_violation_rate": _progression_rule_violation_rate(events),
+        "macro_status_evidence_gap_rate": _future_plan_issue_rate(
+            events,
+            issue_type="macro_status_evidence_gap",
+        ),
         "missing_metric_sources": missing_metric_sources,
     }
 
 
-def write_reports(rows: list[ChapterMetric], output: Path) -> None:
+def write_reports(
+    rows: list[ChapterMetric],
+    output: Path,
+    *,
+    events: list[DecisionEvent] | None = None,
+    tasks: list[GenerationTask] | None = None,
+) -> None:
     output.mkdir(parents=True, exist_ok=True)
     _write_metrics_csv(rows, output / "metrics.csv")
     (output / "summary.json").write_text(
-        json.dumps(compute_summary(rows), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            compute_summary(rows, events=events, tasks=tasks),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     (output / "README.md").write_text(
@@ -186,7 +215,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with Session() as session:
             rows = collect_rows(session, args.project_id, args.chapters)
-        write_reports(rows, args.output)
+            events = _project_decision_events(session, args.project_id)
+            tasks = _project_generation_tasks(session, args.project_id)
+        write_reports(rows, args.output, events=events, tasks=tasks)
     finally:
         engine.dispose()
     return 0
@@ -218,15 +249,7 @@ def _latest_drafts_by_chapter(session, project_id: str) -> dict[int, ChapterDraf
 
 def _task_status_by_chapter(session, project_id: str) -> dict[int, str]:  # noqa: ANN001
     statuses: dict[int, str] = {}
-    tasks = (
-        session.query(GenerationTask)
-        .filter(
-            GenerationTask.project_id == project_id,
-            GenerationTask.task_kind == "generation",
-        )
-        .order_by(GenerationTask.updated_at.asc(), GenerationTask.created_at.asc())
-        .all()
-    )
+    tasks = _project_generation_tasks(session, project_id)
     for task in tasks:
         for chapter_number in _json_list_ints(task.completed_chapters_json):
             statuses[chapter_number] = "accepted"
@@ -237,17 +260,35 @@ def _task_status_by_chapter(session, project_id: str) -> dict[int, str]:  # noqa
     return statuses
 
 
+def _project_generation_tasks(session, project_id: str) -> list[GenerationTask]:  # noqa: ANN001
+    return (
+        session.query(GenerationTask)
+        .filter(
+            GenerationTask.project_id == project_id,
+            GenerationTask.task_kind == "generation",
+        )
+        .order_by(GenerationTask.updated_at.asc(), GenerationTask.created_at.asc())
+        .all()
+    )
+
+
 def _decision_events_by_chapter(session, project_id: str) -> dict[int, list[DecisionEvent]]:  # noqa: ANN001
     grouped: dict[int, list[DecisionEvent]] = {}
-    events = (
+    events = _project_decision_events(session, project_id)
+    for event in events:
+        if int(event.chapter_number or 0) <= 0:
+            continue
+        grouped.setdefault(int(event.chapter_number or 0), []).append(event)
+    return grouped
+
+
+def _project_decision_events(session, project_id: str) -> list[DecisionEvent]:  # noqa: ANN001
+    return (
         session.query(DecisionEvent)
-        .filter(DecisionEvent.project_id == project_id, DecisionEvent.chapter_number > 0)
+        .filter(DecisionEvent.project_id == project_id)
         .order_by(DecisionEvent.chapter_number.asc(), DecisionEvent.created_at.asc())
         .all()
     )
-    for event in events:
-        grouped.setdefault(int(event.chapter_number or 0), []).append(event)
-    return grouped
 
 
 def _spans_by_chapter(session, project_id: str) -> dict[int, list[PerformanceSpan]]:  # noqa: ANN001
@@ -518,6 +559,67 @@ def _repeat_rate(values_by_row: Iterable[list[str] | None]) -> float | None:
     if total == 0:
         return None
     return round(repeats / total, 3)
+
+
+def _task_resume_success_rate(tasks: list[GenerationTask]) -> float | None:
+    resume_tasks = [
+        task
+        for task in tasks
+        if int(getattr(task, "resume_from_chapter", 0) or 0) > 0
+        or int(getattr(task, "run_until_chapter", 0) or 0) > 0
+    ]
+    if not resume_tasks:
+        return None
+    successes = sum(1 for task in resume_tasks if str(task.status or "") == "completed")
+    return round(successes / len(resume_tasks), 3)
+
+
+def _future_plan_issue_rate(
+    events: list[DecisionEvent],
+    *,
+    issue_type: str,
+) -> float | None:
+    audit_events = [
+        event
+        for event in events
+        if str(event.event_type or "")
+        in {DecisionEventType.FUTURE_PLAN_AUDIT_RUN, "future_plan_audit_completed"}
+    ]
+    if not audit_events:
+        return None
+    matches = sum(1 for event in audit_events if _event_has_issue_type(event, issue_type))
+    return round(matches / len(audit_events), 3)
+
+
+def _event_has_issue_type(event: DecisionEvent, issue_type: str) -> bool:
+    payload = _json_loads(event.payload_json, {})
+    if not isinstance(payload, dict):
+        return False
+    issues = payload.get("issues")
+    if isinstance(issues, list):
+        for issue in issues:
+            if isinstance(issue, dict) and issue.get("issue_type") == issue_type:
+                return True
+    blocking_reasons = payload.get("blocking_reasons")
+    if isinstance(blocking_reasons, list):
+        return any(str(reason).startswith(issue_type) for reason in blocking_reasons)
+    return False
+
+
+def _progression_rule_violation_rate(events: list[DecisionEvent]) -> float | None:
+    rule_events = [
+        event
+        for event in events
+        if str(event.event_type or "") == "progression_rule_evaluated"
+    ]
+    if not rule_events:
+        return None
+    violations = 0
+    for event in rule_events:
+        payload = _json_loads(event.payload_json, {})
+        if isinstance(payload, dict) and bool(payload.get("violated")):
+            violations += 1
+    return round(violations / len(rule_events), 3)
 
 
 def _write_metrics_csv(rows: list[ChapterMetric], path: Path) -> None:

@@ -83,6 +83,8 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
                     status="completed",
                     requested_chapters=2,
                     completed_chapters_json="[1, 2]",
+                    resume_from_chapter=2,
+                    run_until_chapter=2,
                 )
             )
             session.add_all(
@@ -127,6 +129,32 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
                             ensure_ascii=False,
                         ),
                     ),
+                    DecisionEvent(
+                        project_id=project.id,
+                        chapter_number=2,
+                        event_type=DecisionEventType.FUTURE_PLAN_AUDIT_RUN,
+                        payload_json=json.dumps(
+                            {
+                                "issues": [
+                                    {
+                                        "issue_type": "arc_macro_progression_not_met",
+                                        "blocking": True,
+                                    },
+                                    {
+                                        "issue_type": "macro_status_evidence_gap",
+                                        "blocking": False,
+                                    },
+                                ]
+                            },
+                            ensure_ascii=False,
+                        ),
+                    ),
+                    DecisionEvent(
+                        project_id=project.id,
+                        chapter_number=2,
+                        event_type="progression_rule_evaluated",
+                        payload_json=json.dumps({"violated": True}, ensure_ascii=False),
+                    ),
                     PerformanceSpan(
                         project_id=project.id,
                         chapter_number=1,
@@ -161,7 +189,7 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
 
         assert (
             pulp_pressure_test.main(
-                    ["--project-id", "project-pressure", "--chapters", "2", "--output", str(output)]
+                ["--project-id", "project-pressure", "--chapters", "2", "--output", str(output)]
             )
             == 0
         )
@@ -176,6 +204,10 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
         assert summary["canon_extraction_failure_rate"] == 1
         assert summary["repeat_trope_template_rate"] == 0.5
         assert summary["repeat_trope_category_rate"] == 0.5
+        assert summary["task_resume_success_rate"] == 1
+        assert summary["arc_macro_boundary_failure_rate"] == 1
+        assert summary["progression_rule_violation_rate"] == 1
+        assert summary["macro_status_evidence_gap_rate"] == 1
         assert "future versions can replace" not in (
             output / "README.md"
         ).read_text(encoding="utf-8").lower()

@@ -87,7 +87,7 @@ Acceptance:
 
 ```bash
 python3 scripts/audit_legacy_inventory.py --check
-python3 -m pytest tests/test_architecture_boundaries.py tests/review_engine/test_legacy_compatibility_audit.py -q
+python3 -m pytest tests/test_architecture_boundaries.py tests/test_legacy_inventory.py tests/review_engine/test_legacy_compatibility_audit.py -q
 ```
 
 After Phase 0, parallel development can continue, but new production legacy

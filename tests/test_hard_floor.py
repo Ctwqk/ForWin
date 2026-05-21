@@ -93,7 +93,9 @@ class FakeChapterLoop:
     def __init__(self, *, hard_floor_gate_enabled: bool = True) -> None:
         self.config = SimpleNamespace(
             hard_floor_gate_enabled=hard_floor_gate_enabled,
+            min_chapter_chars=20,
             operation_mode="checkpoint",
+            quality_profile="",
             review_interval_chapters=0,
         )
         self.retrieval_broker = SimpleNamespace(
@@ -306,6 +308,60 @@ def test_project_chapter_loop_stops_after_hard_floor_failure(monkeypatch) -> Non
     assert [call[1] for call in updater.status_calls] == [1]
 
 
+def test_project_chapter_loop_records_pulp_beat_event() -> None:
+    chapter_loop = FakeChapterLoop(hard_floor_gate_enabled=True)
+
+    result = WritingOrchestrator._run_project_chapters(
+        chapter_loop,
+        session=FakeSession(),
+        repo=FakeRepo(),
+        updater=FakeUpdater(),
+        checker=SimpleNamespace(),
+        project_id="project-1",
+        chapter_numbers=[1],
+        requested_chapters=1,
+    )
+
+    assert result.paused_chapters == [1]
+    pulp_events = [
+        event
+        for event in chapter_loop.decision_events
+        if event["event_type"] == DecisionEventType.PULP_BEAT_EVALUATED
+    ]
+    assert len(pulp_events) == 1
+    assert "pulp_beat" in pulp_events[0]["payload"]
+
+
+def test_project_chapter_loop_stops_on_fatal_pulp_payoff_policy() -> None:
+    class PulpLoop(FakeChapterLoop):
+        def __init__(self) -> None:
+            super().__init__(hard_floor_gate_enabled=True)
+            self.config = SimpleNamespace(
+                hard_floor_gate_enabled=True,
+                min_chapter_chars=20,
+                operation_mode="blackbox",
+                quality_profile="pulp",
+                review_interval_chapters=0,
+                long_run_policy=SimpleNamespace(payoff_gap_limit=1),
+            )
+
+        def _write_chapter_with_attention_fallback(self, **kwargs):
+            return writer("角色A走在路上，想起很多前情。忽然门外传来第二封密令？")
+
+    result = WritingOrchestrator._run_project_chapters(
+        PulpLoop(),
+        session=FakeSession(),
+        repo=FakeRepo(),
+        updater=FakeUpdater(),
+        checker=SimpleNamespace(),
+        project_id="project-1",
+        chapter_numbers=[1],
+        requested_chapters=1,
+    )
+
+    assert result.failed_chapters == [1]
+
+
 def test_project_chapter_loop_skips_hard_floor_when_disabled(monkeypatch) -> None:
     def fake_run_hard_floor(**kwargs):
         raise AssertionError("hard floor should not run when disabled")
@@ -384,6 +440,73 @@ def test_project_chapter_loop_defers_memory_upsert_failure_in_pulp() -> None:
     assert updater.status_calls[-1][2] == "accepted"
     assert updater.saved_events[-1]["event_type"] == "deferred_maintenance_recorded"
     assert updater.saved_events[-1]["payload"]["task_type"] == "memory_index_upsert"
+
+
+def test_project_chapter_loop_defers_structured_extraction_degradation() -> None:
+    class MemoryIndex:
+        def upsert_chapter(self, **kwargs) -> None:
+            return None
+
+    class AcceptedLoop(FakeChapterLoop):
+        def __init__(self) -> None:
+            super().__init__(hard_floor_gate_enabled=False)
+            self.config = SimpleNamespace(
+                hard_floor_gate_enabled=False,
+                operation_mode="blackbox",
+                review_interval_chapters=0,
+                quality_profile="pulp",
+            )
+            self.retrieval_broker = SimpleNamespace(
+                last_observability_summary={},
+                build_chapter_context=lambda *args, **kwargs: context(),
+                memory_index=MemoryIndex(),
+            )
+
+        def _write_chapter_with_attention_fallback(self, **kwargs):
+            return writer(
+                "角色A推开门，看见证据。他当场拿出合同，反派赔偿三十万。门外忽然传来第二封密令？",
+                generation_meta={
+                    "structured_extraction": "partial_degraded",
+                    "state_event_extraction": "degraded",
+                },
+            )
+
+        def _project_governance(self, project):
+            return SimpleNamespace(auto_band_checkpoint=False)
+
+        def _apply_canon_candidate(self, **kwargs):
+            return None
+
+        def _run_phase3_pass(self, **kwargs) -> None:
+            return None
+
+        def _audit_future_plans_after_acceptance(self, **kwargs):
+            return None
+
+        def _compile_world_model_after_acceptance(self, **kwargs) -> bool:
+            return True
+
+        def _record_generation_audit_checkpoint_if_due(self, **kwargs) -> bool:
+            return False
+
+    updater = FakeUpdater()
+    result = WritingOrchestrator._run_project_chapters(
+        AcceptedLoop(),
+        session=FakeSession(),
+        repo=FakeRepo(),
+        updater=updater,
+        checker=SimpleNamespace(),
+        project_id="project-1",
+        chapter_numbers=[1],
+        requested_chapters=1,
+    )
+
+    assert result.completed_chapters == [1]
+    assert any(
+        event["event_type"] == "deferred_maintenance_recorded"
+        and event["payload"]["task_type"] == "structured_extraction"
+        for event in updater.saved_events
+    )
 
 
 def test_short_chapter_fails() -> None:

@@ -629,11 +629,20 @@ def _recover_interrupted_generation_tasks() -> list[str]:
                 task["message"] = "服务重启时检测到暂停请求，生成任务已安全暂停。"
                 task["error"] = None
                 task["paused_at"] = now
-            else:
+            elif task.get("failed_chapters"):
                 task["status"] = "failed"
                 task["current_stage"] = "failed"
-                task["message"] = "服务重启前生成任务中断，已标记为失败。"
-                task["error"] = "generation_interrupted_after_restart"
+                task["message"] = "服务重启前生成任务已有失败章节，需修复后再继续。"
+                task["error"] = "generation_failed_chapter_blocker_after_restart"
+                task["finished_at"] = now
+            else:
+                task["status"] = "queued"
+                task["current_stage"] = "queued"
+                task["message"] = "服务重启后生成任务已重新排队，等待 durable worker 接管。"
+                task["error"] = None
+                task["lease_owner"] = ""
+                task["lease_expires_at"] = now
+                task["finished_at"] = None
             task["updated_at"] = now
             if str(task.get("current_stage", "")).strip() != str(row.current_stage or "").strip():
                 history = list(task.get("stage_history", []))
@@ -646,7 +655,8 @@ def _recover_interrupted_generation_tasks() -> list[str]:
                     )
                 )
                 task["stage_history"] = history
-            task["finished_at"] = now
+            if task.get("status") in api_state._GENERATION_TERMINAL_STATUSES:
+                task["finished_at"] = now
             _apply_generation_task_to_row(row, task, now=now)
             recovered_ids.append(row.id)
         session.commit()

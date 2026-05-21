@@ -12,6 +12,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.phase import ProvisionalBandExecution
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
+from tests.postgres import postgres_test_url
 
 
 class GenerationTaskPersistenceTests(unittest.TestCase):
@@ -55,7 +56,7 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertEqual(loaded["current_stage"], "writing_chapter")
         self.assertEqual([item[0] for item in listed], ["task-db-1"])
 
-    def test_recover_interrupted_generation_tasks_marks_running_tasks_failed(self) -> None:
+    def test_recover_interrupted_generation_tasks_requeues_resumable_running_tasks(self) -> None:
         task = api_module._create_task_record(
             message="正在写作。",
             title="重启恢复测试",
@@ -71,13 +72,14 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         recovered = api_module._get_generation_task_or_404("task-recover-1")
 
         self.assertEqual(recovered_ids, ["task-recover-1"])
-        self.assertEqual(recovered["status"], "failed")
-        self.assertEqual(recovered["current_stage"], "failed")
-        self.assertEqual(recovered["error"], "generation_interrupted_after_restart")
+        self.assertEqual(recovered["status"], "queued")
+        self.assertEqual(recovered["current_stage"], "queued")
+        self.assertIsNone(recovered["error"])
+        self.assertEqual(recovered["lease_owner"], "")
+        self.assertIsNotNone(recovered["lease_expires_at"])
         serialized = api_module._serialize_generation_task_center_item("task-recover-1", recovered)
-        self.assertTrue(serialized.interrupted_by_restart)
-        self.assertEqual(serialized.recovery_suggestion, "rerun")
-        self.assertEqual(recovered["stage_history"][-1]["stage"], "failed")
+        self.assertFalse(serialized.interrupted_by_restart)
+        self.assertEqual(recovered["stage_history"][-1]["stage"], "queued")
 
     def test_recover_interrupted_pause_requested_task_marks_paused(self) -> None:
         task = api_module._create_task_record(
@@ -187,6 +189,7 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
                     title="Review 阻塞测试",
                     premise="测试",
                     genre="玄幻",
+                    creation_status="writing",
                     created_at=now,
                     updated_at=now,
                 )

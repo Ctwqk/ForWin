@@ -1,6 +1,16 @@
 from __future__ import annotations
 
+import json
+
+from forwin.checker.hard_floor import HardFloorResult
+from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
 from forwin.checker.pulp_beat import verify_pulp_beats
+from forwin.config import Config
+from forwin.governance import DecisionEventType
+from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.governance import DecisionEvent
+from forwin.models.project import Project
+from tests.postgres import postgres_test_url
 
 
 def test_verify_pulp_beats_detects_core_payoff() -> None:
@@ -22,3 +32,60 @@ def test_verify_pulp_beats_flags_missing_payoff() -> None:
 
     assert result.visible_payoff_present is False
     assert "visible_payoff_present" in result.missing_fields
+
+
+def test_pulp_policy_blocks_consecutive_missing_payoff() -> None:
+    engine = get_engine(postgres_test_url("pulp-policy-consecutive"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    try:
+        with Session.begin() as session:
+            session.add(Project(id="project-1", title="P", premise="p", genre="都市"))
+            session.flush()
+            session.add(
+                DecisionEvent(
+                    project_id="project-1",
+                    chapter_number=1,
+                    event_type=DecisionEventType.PULP_BEAT_EVALUATED,
+                    payload_json=json.dumps(
+                        {"pulp_beat": {"visible_payoff_present": False}},
+                        ensure_ascii=False,
+                    ),
+                )
+            )
+
+        with Session.begin() as session:
+            decision = evaluate_pulp_beat_policy(
+                session=session,
+                project_id="project-1",
+                chapter_number=2,
+                hard_floor_result=HardFloorResult(
+                    passed=True,
+                    warning_reasons=["pulp_visible_payoff"],
+                    metadata={"pulp_beat": {"visible_payoff_present": False}},
+                ),
+                config=Config(quality_profile="pulp"),
+            )
+
+        assert decision.fatal is True
+        assert decision.reason == "pulp_visible_payoff_consecutive_missing"
+        assert decision.consecutive_missing_payoff == 2
+    finally:
+        engine.dispose()
+
+
+def test_pulp_policy_is_warning_only_for_standard_profile() -> None:
+    decision = evaluate_pulp_beat_policy(
+        session=object(),
+        project_id="project-1",
+        chapter_number=1,
+        hard_floor_result=HardFloorResult(
+            passed=True,
+            warning_reasons=["pulp_visible_payoff"],
+            metadata={"pulp_beat": {"visible_payoff_present": False}},
+        ),
+        config=Config(quality_profile="standard"),
+    )
+
+    assert decision.fatal is False
+    assert decision.consecutive_missing_payoff == 1

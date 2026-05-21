@@ -26,6 +26,44 @@ def _reject_placeholder_terms(values: list[str]) -> list[str]:
     return result
 
 
+_FALLBACK_SAMPLE_TERMS = {
+    "陆明",
+    "韩青",
+    "主舞台",
+    "主舞台文化",
+    "主舞台总图",
+    "主舞台核心区",
+    "权力中心",
+    "权力中心区",
+    "危险边缘",
+}
+
+
+def _reject_sample_terms(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in _FALLBACK_SAMPLE_TERMS:
+            continue
+        result.append(text)
+    return result
+
+
+def _fallback_generated_names(*, civilization: str, kind: str, count: int, seed: str) -> list[str]:
+    try:
+        return _reject_sample_terms(
+            _generate_culture_names(
+                civilization=civilization,
+                kind=kind,
+                count=count,
+                seed=seed,
+            )
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("Fallback culture naming failed for seed %s", seed, exc_info=True)
+        return []
+
+
 def _fallback_seed_text(pack: dict[str, Any]) -> str:
     book_brief = pack.get("book_brief") if isinstance(pack.get("book_brief"), dict) else {}
     return "\n".join(
@@ -71,7 +109,7 @@ def _fallback_named_entity_seed(pack: dict[str, Any]) -> dict[str, list[str]]:
     )
     location_terms.extend(
         re.findall(
-            r"([\u4e00-\u9fff]{2,12}(?:核心系统|地下线|检修线|钟塔|塔|楼|档案署|署|广场|旧城区|新区|港区|港口|记忆馆|档案馆|数据市场|市场|街区|码头|城区|边缘区))(?=，|、|。|；|,|;|并|是|为|和|与|$)",
+            r"([\u4e00-\u9fff]{2,12}(?:核心系统|地下线|检修线|星门|城邦|城市|钟塔|塔|楼|档案署|署|广场|旧城区|新区|港区|港口|记忆馆|档案馆|数据市场|市场|街区|码头|城区|边缘区))(?=，|、|。|；|,|;|并|是|为|和|与|$)",
             text,
         )
     )
@@ -89,6 +127,10 @@ def _fallback_named_entity_seed(pack: dict[str, Any]) -> dict[str, list[str]]:
 
 def _fallback_location_kind(name: str) -> str:
     text = str(name or "")
+    if "星门" in text:
+        return "gate"
+    if "城邦" in text or "城市" in text:
+        return "city"
     if "公会" in text or "档案" in text:
         return "institution"
     if "塔" in text or "楼" in text:
@@ -102,24 +144,69 @@ def _fallback_location_kind(name: str) -> str:
     return "location"
 
 
-def _fallback_culture_profiles() -> list[dict[str, Any]]:
+def _fallback_culture_profiles(project: Project, pack: dict[str, Any]) -> list[dict[str, Any]]:
+    seed_entities = _fallback_named_entity_seed(pack)
+    overview = str(project.setting_summary or _fallback_seed_text(pack) or project.genre or "项目世界").strip()
+    title = str(getattr(project, "title", "") or "").strip()
+    anchor = next(
+        (
+            item
+            for item in (
+                seed_entities["locations"]
+                + seed_entities["organizations"]
+                + seed_entities["story_terms"]
+                + ([title] if title else [])
+            )
+            if item
+        ),
+        "项目世界",
+    )
+    civilization = "中华"
+    seed_prefix = f"{title or anchor}:fallback-culture"
+    character_examples = _dedupe_preserve_order(
+        _reject_sample_terms(seed_entities["characters"])
+        + _fallback_generated_names(
+            civilization=civilization,
+            kind="person",
+            count=5,
+            seed=f"{seed_prefix}:person",
+        )
+    )[:5]
+    region_examples = _dedupe_preserve_order(
+        _reject_sample_terms(seed_entities["locations"])
+        + _fallback_generated_names(
+            civilization=civilization,
+            kind="region",
+            count=5,
+            seed=f"{seed_prefix}:region",
+        )
+    )[:5]
+    location_examples = _dedupe_preserve_order(
+        _reject_sample_terms(seed_entities["locations"] + seed_entities["story_terms"])
+        + _fallback_generated_names(
+            civilization=civilization,
+            kind="place",
+            count=5,
+            seed=f"{seed_prefix}:place",
+        )
+    )[:5]
     return [
         {
-            "id": "culture-main-stage",
-            "name": "主舞台文化",
-            "summary": "用于承接主舞台命名与文化语感的默认占位文化背景。",
-            "inspiration": "待补充具体文化母本。",
-            "generator_civilization": "中华",
+            "id": "culture-project-seed",
+            "name": f"{anchor}文化",
+            "summary": f"围绕{overview}形成的项目专属命名与文化语感。",
+            "inspiration": overview,
+            "generator_civilization": civilization,
             "generator_overlays": [],
             "social_markers": ["重秩序", "重门第", "旧俗与新制并行"],
             "aesthetic_keywords": ["冷色秩序", "旧城感", "压抑繁荣"],
             "character_name_style": "人物名以两到三字为主，简洁、冷硬、易记。",
-            "region_name_style": "地区名强调功能或权力层级，如核心区、边境区、旧城带。",
-            "location_name_style": "地点名强调辨识度与舞台感，如都城、渡口、要塞、旧街。",
-            "character_name_examples": ["陆明", "韩青"],
-            "region_name_examples": ["主舞台核心区", "权力中心区"],
-            "location_name_examples": ["主舞台", "权力中心", "危险边缘"],
-            "usage_notes": "先保留结构，后续可替换为真实文化背景与命名映射。",
+            "region_name_style": "地区名强调功能、灾变压力或制度层级。",
+            "location_name_style": "地点名强调辨识度、叙事用途和项目专属设定。",
+            "character_name_examples": character_examples,
+            "region_name_examples": region_examples,
+            "location_name_examples": location_examples,
+            "usage_notes": "仅作为本项目 deterministic fallback 的命名提示，不作为跨项目 canon。",
         }
     ]
 
@@ -135,7 +222,7 @@ def _fallback_world_bible(project: Project, pack: dict[str, Any]) -> dict[str, A
         "history_slice": "当前时代处于旧秩序松动、新规则浮现的阶段。",
         "naming_style": "中文网文风格，专名简洁可记。",
         "forbidden_zones": book_brief.get("content_guardrails") or [],
-        "culture_profiles": _fallback_culture_profiles(),
+        "culture_profiles": _fallback_culture_profiles(project, pack),
     }
 
 
@@ -157,12 +244,12 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
     seed_entities = _fallback_named_entity_seed(pack)
     locations = seed_entities["locations"]
     organizations = seed_entities["organizations"]
-    primary_subworld_name = "主舞台总图"
-    primary_region_name = "主舞台核心区"
-    power_region_name = "权力中心区"
-    primary_node_name = "主舞台"
-    power_node_name = "权力中心"
-    danger_node_name = "危险边缘"
+    primary_subworld_name = "项目总图"
+    primary_region_name = "核心叙事区"
+    power_region_name = "制度中枢区"
+    primary_node_name = "核心舞台"
+    power_node_name = organizations[0] if organizations else "治理中枢"
+    danger_node_name = "边境外缘"
     civilization = _culture_profile_generator_civilization(primary_profile)
     if locations:
         stage_root = "旧城" if "旧城" in locations else locations[0]
@@ -191,52 +278,32 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
                 for item in core_locations
                 if any(marker in item for marker in ("检修线", "市场", "港", "广场", "边缘"))
             ),
-            core_locations[-1] if len(core_locations) > 1 else "危险边缘",
+            core_locations[-1] if len(core_locations) > 1 else f"{stage_root}外缘",
         )
+        if danger_node_name in _FALLBACK_SAMPLE_TERMS:
+            danger_node_name = f"{stage_root}外缘"
         if organizations:
             power_region_name = organizations[0]
             if power_node_name == primary_node_name:
                 power_node_name = organizations[0]
     elif civilization:
-        try:
-            primary_subworld_name = _generate_culture_names(
-                civilization=civilization,
-                kind="region",
-                count=1,
-                seed=f"{primary_culture_id}:subworld",
-            )[0]
-            primary_region_name = _generate_culture_names(
-                civilization=civilization,
-                kind="region",
-                count=1,
-                seed=f"{primary_culture_id}:region:main",
-            )[0]
-            power_region_name = _generate_culture_names(
-                civilization=civilization,
-                kind="region",
-                count=1,
-                seed=f"{primary_culture_id}:region:power",
-            )[0]
-            primary_node_name = _generate_culture_names(
-                civilization=civilization,
-                kind="place",
-                count=1,
-                seed=f"{primary_culture_id}:node:main",
-            )[0]
-            power_node_name = _generate_culture_names(
-                civilization=civilization,
-                kind="place",
-                count=1,
-                seed=f"{primary_culture_id}:node:power",
-            )[0]
-            danger_node_name = _generate_culture_names(
-                civilization=civilization,
-                kind="place",
-                count=1,
-                seed=f"{primary_culture_id}:node:danger",
-            )[0]
-        except Exception:  # noqa: BLE001
-            logger.debug("Fallback map naming generation failed for profile %s", primary_culture_id, exc_info=True)
+        generated_region_names = _fallback_generated_names(
+            civilization=civilization,
+            kind="region",
+            count=3,
+            seed=f"{primary_culture_id}:map-regions",
+        )
+        generated_place_names = _fallback_generated_names(
+            civilization=civilization,
+            kind="place",
+            count=3,
+            seed=f"{primary_culture_id}:map-nodes",
+        )
+        if len(generated_region_names) >= 3:
+            primary_subworld_name, primary_region_name, power_region_name = generated_region_names[:3]
+        if len(generated_place_names) >= 3:
+            primary_node_name, power_node_name, danger_node_name = generated_place_names[:3]
+    governing_power = organizations[0] if organizations else f"{primary_subworld_name}治理中枢"
     primary_region_id = "region-main-stage"
     power_region_id = "region-power-core"
     primary_subworld_id = "subworld-main-stage"
@@ -255,9 +322,9 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
             "description": f"{name}是从项目设定中保留下来的核心舞台，用于承接线索、移动成本或权力压力。",
             "control": "多方关注",
             "danger": "中等，具体风险由章节推进细化。",
-            "climate_note": "沿用主舞台气候。",
+            "climate_note": "沿用本区域气候。",
             "terrain_note": "与旧城空间网络相连。",
-            "culture_note": "承接主舞台文化语感。",
+            "culture_note": "承接项目文化语感。",
             "resources": ["线索", "档案", "关系压力"],
         }
         for index, name in enumerate(
@@ -290,8 +357,8 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
                 "culture_traits": ["高压秩序", "旧俗仍在影响当代决策"],
                 "climate": "四季分明但边缘区域气候异常。",
                 "terrain": ["平原", "旧城", "边缘荒野"],
-                "governing_power": "主舞台权力中枢",
-                "resident_factions": ["主舞台权力中枢"],
+                "governing_power": governing_power,
+                "resident_factions": [governing_power],
                 "key_locations": key_location_names,
                 "travel_rules": ["重要地点之间必须有可解释的移动成本。"],
                 "resource_themes": ["关键资源", "旧时代遗留物"],
@@ -310,7 +377,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
                 "culture_traits": ["高压秩序", "旧俗与新制度并存"],
                 "climate": "四季分明但边缘区域气候异常。",
                 "terrain": ["平原", "旧城带"],
-                "controller_factions": ["主舞台权力中枢"],
+                "controller_factions": [governing_power],
                 "resource_themes": ["人口", "制度资源", "情报"],
             },
             {
@@ -321,11 +388,11 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
                 "level": 2,
                 "culture_profile_id": primary_culture_id,
                 "kind": "capital_core",
-                "summary": "主舞台秩序与权力最集中的地区。",
+                "summary": "项目核心秩序与权力最集中的地区。",
                 "culture_traits": ["等级森严", "血统叙事强"],
                 "climate": "城市微气候稳定。",
                 "terrain": ["高密度城建", "旧城区"],
-                "controller_factions": ["主舞台权力中枢"],
+                "controller_factions": [governing_power],
                 "resource_themes": ["金流", "权力网络"],
             },
         ],
@@ -338,7 +405,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
                 "parent_region_id": primary_region_id,
                 "culture_profile_id": primary_culture_id,
                 "description": overview[:80] or "故事主要发生的区域。",
-                "control": "主舞台权力中枢",
+                "control": governing_power,
                 "danger": "中等，表面秩序稳定但暗流强。",
                 "climate_note": "气候稳定，边缘区域存在异常波动。",
                 "terrain_note": "平原与旧城交错。",
@@ -353,7 +420,7 @@ def _fallback_map(pack: dict[str, Any]) -> dict[str, Any]:
                 "parent_region_id": power_region_id,
                 "culture_profile_id": primary_culture_id,
                 "description": "冲突与秩序交汇的核心地点。",
-                "control": "主舞台权力中枢",
+                "control": governing_power,
                 "danger": "表面低，政治风险高。",
                 "climate_note": "城市微气候稳定。",
                 "terrain_note": "高密度城建与旧城区并存。",
@@ -409,7 +476,7 @@ def _fallback_story_engine(pack: dict[str, Any]) -> dict[str, Any]:
     character_names = seed_entities["characters"]
     organizations = seed_entities["organizations"]
     protagonist_name = "主角"
-    primary_faction = "主舞台权力中枢"
+    primary_faction = "项目权力中枢"
     primary_faction_id = "faction-main-stage"
     opposition_name = "对手盘"
     civilization = _culture_profile_generator_civilization(primary_profile)

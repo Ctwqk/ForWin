@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
+
+from forwin.book_genesis_core.fallbacks import _fallback_map, _fallback_world
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -159,3 +163,34 @@ def test_local_rewrite_executor_has_no_case_specific_placeholder_defaults() -> N
     inspected_files = [REPO_ROOT / "forwin" / "reviser" / "local_rewrite_executor.py"]
 
     assert _violations(inspected_files, terms=LOCAL_REWRITE_STORY_TERMS) == []
+
+
+def test_genesis_deterministic_fallback_has_no_case_specific_story_anchors() -> None:
+    project = SimpleNamespace(
+        title="六十章最终审计压力测试·星门余烬",
+        genre="科幻悬疑",
+        premise=(
+            "主角：宁望舒，星门守门人。边境星门在一次静默潮汐后失去坐标，"
+            "记忆审计局试图抹除失踪舰队的真相。"
+        ),
+        setting_summary="近未来边境城邦、失控星门、记忆审计机构、舰队遗民与潮汐灾变。",
+        target_total_chapters=60,
+    )
+    pack = {
+        "book_brief": {
+            "title": project.title,
+            "premise": project.premise,
+            "genre": project.genre,
+            "setting_seed": project.setting_summary,
+            "target_total_chapters": project.target_total_chapters,
+        }
+    }
+
+    world = _fallback_world(project, pack)
+    fallback_pack = {**pack, "world": world}
+    map_atlas = _fallback_map(fallback_pack)
+    serialized = json.dumps({"world": world, "map": map_atlas}, ensure_ascii=False)
+
+    for banned in ("陆明", "韩青", "主舞台", "权力中心", "危险边缘", "待补充", "默认占位"):
+        assert banned not in serialized
+    assert "宁望舒" in serialized

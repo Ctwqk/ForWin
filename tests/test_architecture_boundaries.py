@@ -143,6 +143,18 @@ def test_new_production_code_does_not_expand_legacy_v4_alias_imports() -> None:
     assert offenders == []
 
 
+def test_legacy_inventory_covers_current_production_references() -> None:
+    from scripts.audit_legacy_inventory import audit_inventory
+
+    result = audit_inventory(
+        root=ROOT,
+        inventory_path=ROOT / "docs/designs/legacy-inventory.yaml",
+        strict_patterns=True,
+    )
+
+    assert result.ok, result.to_text()
+
+
 def test_api_route_deps_are_grouped_by_domain() -> None:
     assert [field.name for field in fields(ApiRouteDeps)] == [
         "core",

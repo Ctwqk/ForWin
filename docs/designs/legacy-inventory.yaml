@@ -214,6 +214,27 @@ entries:
       - current checkpoint serialization tests pass
     status: deleted
 
+  - id: api.split_runtime_run_aliases
+    category: external_compat_delete
+    owner_area: api
+    paths:
+      - forwin/api_core/app.py
+    allow_patterns:
+      - "legacy_inventory: api.split_runtime_run_aliases"
+      - "_run_generation_with_config = run_generation_with_config"
+      - "_run_continue_project_with_config = run_continue_project_with_config"
+    reason: Split-era forwin.api compatibility aliases are retained only for old tests and local integrations that patch private _run_* names; generation execution no longer uses these aliases.
+    removal_phase: post_worker_cutover_cleanup
+    verification:
+      - api_split_exports_tests
+      - generation_worker_cutover_tests
+      - inventory_final
+    delete_when:
+      - external tests and integrations patch public worker/runtime seams instead of forwin.api._run_* private aliases
+      - phase05 split-era thread tests are removed or rewritten for enqueue-only worker execution
+      - no direct references to forwin.api._run_generation_with_config or forwin.api._run_continue_project_with_config remain
+    status: planned
+
   - id: project.creation_status_legacy
     category: deleted
     owner_area: project_lifecycle

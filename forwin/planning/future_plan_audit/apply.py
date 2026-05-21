@@ -9,10 +9,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.query_interface import SqlBookStateQueryInterface
 from forwin.models.base import new_id
 from forwin.models.narrative_obligation import FuturePlanAuditRunRow
 from forwin.models.phase import BandExperiencePlan
-from forwin.models.project import ChapterPlan
+from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.planning.band_plan_patcher import BandPlanPatcher
@@ -22,6 +23,7 @@ from forwin.planning.signal_pre_audit import select_stale_signal_targets
 from forwin.protocol.experience import BandDelightSchedule
 
 from .helpers import *
+from .macro_progression import audit_arc_macro_boundary
 from .models import AuditStatus, FuturePlanAuditIssue, FuturePlanAuditRun
 
 
@@ -52,12 +54,18 @@ class FuturePlanApplyMixin:
             include_current=include_current,
             band_rows=band_rows,
         )
+        result = _with_macro_progression_boundary_issues(
+            session=session,
+            project_id=project_id,
+            current_chapter=current_chapter,
+            result=result,
+        )
         plans_by_id = {str(plan.id or ""): plan for plan in plans}
         bands_by_id = {str(row.band_id or ""): row for row in band_rows or []}
         obligation_repo = NarrativeObligationRepository(session)
         applied_patch_ids: list[str] = []
         persisted_patches: list[NarrativePlanPatch] = []
-        blocking_reasons: list[str] = []
+        blocking_reasons: list[str] = list(result.blocking_reasons)
         accepted_chapters = [
             int(plan.chapter_number or 0)
             for plan in plans
@@ -139,6 +147,51 @@ class FuturePlanApplyMixin:
         )
         stored_run = FuturePlanAuditRepository(session).save_run(result)
         return stored_run.model_copy(update={"plan_patches": result.plan_patches})
+
+
+def _with_macro_progression_boundary_issues(
+    *,
+    session: Session,
+    project_id: str,
+    current_chapter: int,
+    result: FuturePlanAuditRun,
+) -> FuturePlanAuditRun:
+    macro_status = SqlBookStateQueryInterface(session).get_protagonist_macro_status(
+        project_id=project_id,
+        as_of_chapter=int(current_chapter or 0),
+    )
+    boundary_arcs = session.execute(
+        select(ArcPlanVersion).where(
+            ArcPlanVersion.project_id == project_id,
+            ArcPlanVersion.chapter_end == int(current_chapter or 0),
+        )
+    ).scalars().all()
+    macro_issues = [
+        issue
+        for arc in boundary_arcs
+        for issue in audit_arc_macro_boundary(
+            arc=arc,
+            current_chapter=int(current_chapter or 0),
+            status=macro_status,
+        )
+    ]
+    if not macro_issues:
+        return result
+    blocking_reasons = [
+        *result.blocking_reasons,
+        *[
+            f"{issue.issue_type}:{issue.metadata.get('arc_id', '')}"
+            for issue in macro_issues
+            if issue.blocking
+        ],
+    ]
+    return result.model_copy(
+        update={
+            "issues": [*result.issues, *macro_issues],
+            "status": "fail",
+            "blocking_reasons": blocking_reasons,
+        }
+    )
 
 
 __all__ = ["FuturePlanApplyMixin"]

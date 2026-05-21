@@ -28,6 +28,16 @@ def _payload(row: DecisionEvent) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def cutover_audit_warnings(summary: dict[str, Any]) -> list[str]:
+    engine_live_chapters = int(summary.get("engine_live_chapters") or 0)
+    observed_chapters = int(summary.get("observed_chapters") or 0)
+    if observed_chapters > 0 and engine_live_chapters == 0:
+        return [
+            "WARNING: ENGINE NEVER DROVE LIVE - review engine safety-net removal requires engine-live decision events for every generated chapter"
+        ]
+    return []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Audit a review-engine live cutover pilot for legacy safety-net fallback."
@@ -84,6 +94,8 @@ def main() -> int:
             ],
             static_counts=collect_legacy_compatibility_static_counts(),
         )
+    for warning in cutover_audit_warnings(summary):
+        print(warning, file=sys.stderr)
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
     return 0 if summary["passed"] else 1
 

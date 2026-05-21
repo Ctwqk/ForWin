@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import os
+import warnings
 from typing import Literal
 
 from pydantic import BaseModel
@@ -23,6 +24,10 @@ DEFAULT_HTTP_BASIC_EXEMPT_PATHS = (
     "/api/publisher/extension/",
     "/api/publishers/extension/",
 )
+_DEPRECATED_REVIEW_CUTOVER_FIELDS = {
+    "review_engine_live_cutover_enabled",
+    "review_engine_live_cutover_project_allowlist",
+}
 
 
 class LLMConfig(BaseModel):
@@ -168,6 +173,19 @@ def _env_csv(env: dict[str, str], key: str) -> list[str]:
         for item in value.split(",")
         if item.strip()
     ]
+
+
+def _warn_deprecated_review_cutover_config(explicit_keys: set[str]) -> None:
+    used = sorted(_DEPRECATED_REVIEW_CUTOVER_FIELDS & set(explicit_keys))
+    if not used:
+        return
+    warnings.warn(
+        "review engine is globally live; "
+        "review_engine_live_cutover_enabled and "
+        "review_engine_live_cutover_project_allowlist are deprecated and ignored by runtime routing",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
 
 def _env_llm_profiles(env: dict[str, str] | None = None) -> list[dict[str, str]]:
@@ -512,8 +530,8 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
             "FORWIN_REVIEW_ENGINE_LIVE_CUTOVER_ENABLED",
             False,
         ),
-        "review_engine_live_cutover_project_allowlist": _env_csv(
-            env,
+        "review_engine_live_cutover_project_allowlist": tracked_csv(
+            "review_engine_live_cutover_project_allowlist",
             "FORWIN_REVIEW_ENGINE_LIVE_CUTOVER_PROJECT_ALLOWLIST",
         ),
         "repair_model_sequence": _env_csv(
@@ -798,7 +816,9 @@ class _ConfigFields:
     def from_env(cls) -> "Config":
         values, explicit_keys = _env_values()
         config = cls(**values)
-        return apply_quality_profile(config, explicit_keys=explicit_keys)
+        config = apply_quality_profile(config, explicit_keys=explicit_keys)
+        _warn_deprecated_review_cutover_config(explicit_keys)
+        return config
 
 
 class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]

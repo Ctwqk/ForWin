@@ -13,7 +13,7 @@
 - Commit with obligation: implemented behind `review_engine_commit_with_obligation_enabled`.
 - Arc/book budget: implemented behind `review_engine_arc_book_budget_enabled`; run `scripts/audit_obligation_distribution.py` before enabling.
 - Live cutover: implemented behind `review_engine_live_cutover_enabled` and `review_engine_live_cutover_project_allowlist`; production phase advancement still requires elapsed observation windows.
-- Legacy removal: not started; requires global cutover stability and separate PRs.
+- Legacy removal: review safety-net removal is now in the implementation phase after a 60-chapter live pilot; non-review legacy compatibility remains separate and blocked by runtime usage.
 
 ## Current audit settings (2026-05-19)
 
@@ -627,6 +627,8 @@ cutover 完成后如果保留两套并存,会出现:
 ### Trigger conditions
 
 `Gap 3` flag-on 上线后,满足全部条件即可启动 review legacy safety-net 删除:
+
+Current removal wave is limited to review safety-net dispatchers. The older global 30-day condition still applies to deleting deployment config fields and non-review compatibility paths, not to this engine-only runtime cleanup.
 
 - 一个完整 60 章 live pilot 通过 `scripts/audit_review_engine_cutover.py --expected-chapters 60`。
 - 60 章期间 0 `legacy_safety_net_used`。

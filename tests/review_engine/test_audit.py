@@ -128,7 +128,7 @@ def test_cutover_audit_warns_when_engine_never_drove_live() -> None:
     )
 
     assert warnings == [
-        "WARNING: ENGINE NEVER DROVE LIVE - Phase 1 pilot is not in allowlist or live flag is off; audit window not started"
+        "WARNING: ENGINE NEVER DROVE LIVE - review engine safety-net removal requires engine-live decision events for every generated chapter"
     ]
 
 

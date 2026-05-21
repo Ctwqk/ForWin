@@ -15,6 +15,12 @@ class AudienceCalibrationProfile:
     clarify_rule_legibility: bool = False
     protect_character_heat: bool = False
     hold_managed_ambiguity: bool = False
+    favor_visible_payoff: bool = False
+    reduce_setup_ratio: bool = False
+    boost_status_payoff: bool = False
+    avoid_trope_categories: list[str] | None = None
+    progression_blocked_template_ids: list[str] | None = None
+    progression_blocked_categories: list[str] | None = None
     recent_template_ids: list[str] | None = None
     recent_trope_categories: list[str] | None = None
 
@@ -88,10 +94,27 @@ class ExperiencePlanningService:
             strong_signal = trend.current_level in {"confirmed", "watchlist"} or trend.current_score >= 0.28
             if trend.signal_type == "pacing" and strong_signal and trend.trend_type != "falling":
                 profile.boost_reward_density = True
+                profile.favor_visible_payoff = True
+                profile.reduce_setup_ratio = True
             elif trend.signal_type in {"confusion", "risk"} and strong_signal:
                 profile.clarify_rule_legibility = True
+                category = str(getattr(trend, "target_name", "") or "").strip()
+                if category and category != "整体":
+                    profile.avoid_trope_categories = _append_unique(
+                        profile.avoid_trope_categories,
+                        category,
+                    )
             elif trend.signal_type in {"character_heat", "relationship_interest"} and strong_signal and trend.trend_type != "falling":
                 profile.protect_character_heat = True
             elif trend.signal_type == "prediction" and strong_signal:
                 profile.hold_managed_ambiguity = True
+            elif trend.signal_type in {"status", "scale", "growth"} and strong_signal:
+                profile.boost_status_payoff = True
         return profile
+
+
+def _append_unique(values: list[str] | None, value: str) -> list[str]:
+    result = [item for item in values or [] if str(item).strip()]
+    if value and value not in result:
+        result.append(value)
+    return result

@@ -15,6 +15,7 @@ from forwin.planning.band_plan.band_role import classify_band_role
 from forwin.planning.band_plan.contract_templates import contract_for_role
 from forwin.planning.arc_structure_service import ArcStructureDraftData
 from forwin.planning.band_window import BandWindowResolver
+from forwin.planning.progression_rules import active_progression_rules_for_chapter
 from forwin.planning.world_contract_service import WorldContractPlanningService
 from forwin.state.updater import StateUpdater
 
@@ -88,12 +89,38 @@ class BandPlanService:
         )
         from forwin.experience.trope_cooldown import recent_trope_usage
 
-        recent_template_ids, recent_categories = recent_trope_usage(
-            session,
-            project_id=request.project_id,
-        )
+        if hasattr(session, "execute"):
+            recent_template_ids, recent_categories = recent_trope_usage(
+                session,
+                project_id=request.project_id,
+            )
+        else:
+            recent_template_ids, recent_categories = [], []
         calibration.recent_template_ids = recent_template_ids
         calibration.recent_trope_categories = recent_categories
+        if hasattr(session, "execute"):
+            rules = active_progression_rules_for_chapter(
+                session,
+                project_id=request.project_id,
+                chapter_number=window.chapter_start,
+            )
+            blocked_template_ids: list[str] = []
+            blocked_categories: list[str] = []
+            for rule in rules:
+                if rule.rule_type not in {"trope_filter", "repetition_ban"}:
+                    continue
+                blocked_template_ids.extend(
+                    str(item).strip()
+                    for item in rule.payload.get("blocked_template_ids", [])
+                    if str(item).strip()
+                )
+                blocked_categories.extend(
+                    str(item).strip()
+                    for item in rule.payload.get("blocked_categories", [])
+                    if str(item).strip()
+                )
+            calibration.progression_blocked_template_ids = blocked_template_ids
+            calibration.progression_blocked_categories = blocked_categories
         schedule = self.scheduler.derive_band_delight_schedule(
             band_id=window.band_id,
             chapter_start=window.chapter_start,
@@ -149,12 +176,13 @@ class BandPlanService:
             arc_id=request.arc_id,
             schedule=schedule,
         )
-        self.persistence.save_trope_usage_records(
-            session=session,
-            project_id=request.project_id,
-            arc_id=request.arc_id,
-            schedule=schedule,
-        )
+        if hasattr(self.persistence, "save_trope_usage_records"):
+            self.persistence.save_trope_usage_records(
+                session=session,
+                project_id=request.project_id,
+                arc_id=request.arc_id,
+                schedule=schedule,
+            )
         updated_numbers: list[int] = []
         for plan in window.active_band:
             experience_plan = self.chapter_planner.derive_chapter_experience_plan(

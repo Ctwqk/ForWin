@@ -45,6 +45,21 @@ class BandExperienceScheduler:
         cooldown_policy = TropeCooldownPolicy()
         recent_template_ids = list(getattr(calibration, "recent_template_ids", []) or [])
         recent_categories = list(getattr(calibration, "recent_trope_categories", []) or [])
+        blocked_template_ids = {
+            str(item).strip()
+            for item in (getattr(calibration, "progression_blocked_template_ids", []) or [])
+            if str(item).strip()
+        }
+        blocked_categories = {
+            str(item).strip()
+            for item in (getattr(calibration, "progression_blocked_categories", []) or [])
+            if str(item).strip()
+        }
+        blocked_categories.update(
+            str(item).strip()
+            for item in (getattr(calibration, "avoid_trope_categories", []) or [])
+            if str(item).strip()
+        )
 
         def chapter_for(slot: str) -> int:
             if slot == "early":
@@ -57,7 +72,13 @@ class BandExperienceScheduler:
 
         def template_for(category: str) -> str:
             macro = macro_by_category.get(category)
-            if macro is not None and macro.template_id and macro.template_id not in used_template_ids:
+            if (
+                macro is not None
+                and macro.template_id
+                and macro.template_id not in used_template_ids
+                and macro.template_id not in blocked_template_ids
+                and category not in blocked_categories
+            ):
                 used_template_ids.add(macro.template_id)
                 return macro.template_id
 
@@ -67,6 +88,11 @@ class BandExperienceScheduler:
                 for template in category_templates
                 if template.template_id not in used_template_ids
                 and template.cost_weight <= normalized_cost_ceiling
+                and _template_allowed(
+                    template,
+                    blocked_template_ids=blocked_template_ids,
+                    blocked_categories=blocked_categories,
+                )
             ]
             under_ceiling = select_available_templates(
                 under_ceiling,
@@ -78,12 +104,22 @@ class BandExperienceScheduler:
                 template
                 for template in category_templates
                 if template.template_id not in used_template_ids
+                and _template_allowed(
+                    template,
+                    blocked_template_ids=blocked_template_ids,
+                    blocked_categories=blocked_categories,
+                )
             ]
             library_templates = _sorted_templates(load_trope_template_library())
             fallback_library = [
                 template
                 for template in library_templates
                 if template.template_id not in used_template_ids
+                and _template_allowed(
+                    template,
+                    blocked_template_ids=blocked_template_ids,
+                    blocked_categories=blocked_categories,
+                )
             ]
 
             for candidates in (under_ceiling, fallback_same_category, fallback_library, library_templates):
@@ -259,3 +295,14 @@ def _sorted_templates(templates: object) -> list:
         list(templates or []),
         key=lambda template: (int(getattr(template, "cost_weight", 2) or 0), str(template.template_id)),
     )
+
+
+def _template_allowed(
+    template,
+    *,
+    blocked_template_ids: set[str],
+    blocked_categories: set[str],
+) -> bool:
+    template_id = str(getattr(template, "template_id", "") or "").strip()
+    category = str(getattr(template, "category", "") or "").strip()
+    return template_id not in blocked_template_ids and category not in blocked_categories

@@ -10,22 +10,25 @@ def build_waiting_review_breakdown(
     *,
     limit: int = 12,
 ) -> list[dict[str, object]]:
-    grouped: OrderedDict[str, dict[str, object]] = OrderedDict()
+    grouped: OrderedDict[tuple[str, str, str], dict[str, object]] = OrderedDict()
     for event in events:
         payload = _event_payload(event)
-        if str(payload.get("outcome") or "").strip() != "manual_review":
+        outcome = str(payload.get("outcome") or "").strip()
+        if outcome not in {"manual_review", "system_block"}:
             continue
         rule_id = str(payload.get("rule_id") or "").strip()
         if not rule_id:
             continue
+        status_chip = _status_chip(payload)
+        key = (rule_id, outcome, status_chip)
         row = grouped.setdefault(
-            rule_id,
+            key,
             {
                 "rule_id": rule_id,
-                "outcome": "manual_review",
+                "outcome": outcome,
                 "reason": str(payload.get("reason") or getattr(event, "reason", "") or ""),
                 "count": 0,
-                "status_chip": _status_chip(payload),
+                "status_chip": status_chip,
             },
         )
         row["count"] = int(row.get("count") or 0) + 1
@@ -50,8 +53,11 @@ def _event_payload(event: Any) -> dict[str, Any]:
 
 
 def _status_chip(payload: dict[str, Any]) -> str:
+    outcome = str(payload.get("outcome") or "")
     rule_id = str(payload.get("rule_id") or "")
     reason = str(payload.get("reason") or "")
+    if outcome == "system_block":
+        return "系统阻断"
     if "policy_disabled" in rule_id or "policy disabled:" in reason:
         return "可自动处理但策略关闭"
     return "需要人工判断"

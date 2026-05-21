@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from forwin.book_state import BookStateRepository
-from forwin.governance import DecisionEventInfo
+from forwin.governance import DecisionEventInfo, DecisionEventType
 from forwin.models.base import new_id
 from forwin.personality import (
     CharacterPersonalityLibrary,
@@ -14,6 +14,7 @@ from forwin.personality import (
 )
 from forwin.personality.policy import CharacterPersonalityPolicyResolver
 from forwin.protocol.book_state import WorldNode
+from forwin.review_engine.audit import build_legacy_compatibility_payload
 from forwin.state.updater import StateUpdater
 
 from .events import (
@@ -75,6 +76,7 @@ class CharacterCreationHelper:
 
         character_id = request.character_id.strip() if request.character_id.strip() else f"char_{new_id()}"
         legacy_entity_id = request.legacy_entity_id
+        legacy_compat_event_id = ""
         if request.create_legacy_entity and not legacy_entity_id:
             entity = StateUpdater(self.session).create_entity(
                 project_id=request.project_id,
@@ -86,6 +88,11 @@ class CharacterCreationHelper:
                 chapter=request.created_at_chapter,
             )
             legacy_entity_id = entity.id
+            legacy_compat_event_id = self._save_legacy_entity_compatibility_event(
+                request,
+                legacy_entity_id=legacy_entity_id,
+                character_id=character_id,
+            )
 
         genesis_ref_id = self._genesis_ref_id(request)
         profile = dict(request.profile)
@@ -178,6 +185,8 @@ class CharacterCreationHelper:
                 },
             ),
         ]
+        if legacy_compat_event_id:
+            decision_ids.append(legacy_compat_event_id)
         return CharacterCreationResult(
             project_id=request.project_id,
             character_id=node.id,
@@ -411,6 +420,44 @@ class CharacterCreationHelper:
                 payload=payload,
                 related_object_type="world_node",
                 related_object_id=character_id,
+            )
+        )
+        return row.id
+
+    def _save_legacy_entity_compatibility_event(
+        self,
+        request: CharacterCreationRequest,
+        *,
+        legacy_entity_id: str,
+        character_id: str,
+    ) -> str:
+        row = StateUpdater(self.session).save_decision_event(
+            DecisionEventInfo(
+                project_id=request.project_id,
+                chapter_number=int(request.created_at_chapter or 0),
+                scope="character_creation",
+                event_family="runtime_observation",
+                event_type=DecisionEventType.LEGACY_COMPATIBILITY_USED,
+                actor_type="system",
+                summary="legacy compatibility used: characters.create_legacy_entity_default_true",
+                reason="character creation materialized a legacy Entity row",
+                payload=build_legacy_compatibility_payload(
+                    compat_layer="characters",
+                    compat_feature="characters.create_legacy_entity_default_true",
+                    usage_kind="legacy_entity_create",
+                    source_module="forwin.characters.creation",
+                    usage_reason="character creation materialized a legacy Entity row",
+                    compat_key="CharacterCreationRequest.create_legacy_entity",
+                    legacy_identifier=legacy_entity_id,
+                    canonical_identifier=character_id,
+                    metadata={
+                        "source": request.source,
+                        "source_ref": request.source_ref,
+                        "create_legacy_entity": bool(request.create_legacy_entity),
+                    },
+                ),
+                related_object_type="entity",
+                related_object_id=legacy_entity_id,
             )
         )
         return row.id

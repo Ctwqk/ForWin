@@ -1,0 +1,590 @@
+version: 1
+policy:
+  purpose: >
+    Long-term ledger and CI gate for production legacy references. New
+    production legacy references are blocked unless an entry is added here with
+    an owner, reason, deletion condition, and verification path.
+  scan_roots:
+    - forwin
+    - scripts
+  excluded_roots:
+    - tests
+    - docs
+    - forwin/**/__pycache__
+    - scripts/**/__pycache__
+  token_patterns:
+    - legacy
+    - Legacy
+    - LEGACY
+  included_extensions:
+    - .py
+    - .js
+    - .html
+    - .ts
+    - .tsx
+  final_allowed_categories:
+    - migration_history_keep
+    - test_doc_followup
+    - deleted
+
+categories:
+  runtime_delete: Runtime old-project or old-canon compatibility that must be removed.
+  rename_only: Current production behavior whose legacy naming must be renamed.
+  external_compat_delete: Compatibility for old clients, env names, storage, or public call shapes.
+  migration_history_keep: Historical migration/revision content retained outside runtime.
+  test_doc_followup: Test or current documentation references that follow production cleanup.
+  deleted: Historical record for removed entries; production paths must no longer match.
+
+entries:
+  - id: book_state.state.location_fallback
+    category: runtime_delete
+    owner_area: book_state
+    paths:
+      - forwin/book_state/runtime.py
+      - forwin/book_state/reviewer.py
+      - forwin/map/service.py
+      - forwin/context/assembler_core/book_state_overlay.py
+    allow_patterns:
+      - state.location
+      - legacy_location
+      - book_state.state.location_fallback
+      - book_state.state.location_patch_warning
+    reason: New projects must use canonical location_id, not old state.location fallback.
+    removal_phase: phase_4
+    verification:
+      - unit
+      - sixty_chapter_runtime_audit
+    delete_when:
+      - location_id-only BookState and map tests pass
+      - 60 chapter audit reports zero location fallback and patch-warning events
+    status: planned
+
+  - id: canonical_identity.legacy_entity_id
+    category: runtime_delete
+    owner_area: characters
+    paths:
+      - forwin/characters/models.py
+      - forwin/characters/creation.py
+      - forwin/characters/events.py
+      - forwin/characters/identity.py
+      - forwin/characters/registry.py
+      - forwin/book_state/compiler.py
+      - forwin/context/assembler_core/book_state_overlay.py
+      - forwin/context/assembler_core/personality_integrity.py
+      - forwin/models/book_state.py
+      - forwin/personality/enrichment.py
+      - forwin/state/updater.py
+      - forwin/subworld_manager.py
+      - forwin/world_model/page_repository.py
+    allow_patterns:
+      - legacy_entity_id
+      - create_legacy_entity
+      - CHARACTER_IMPORTED_FROM_LEGACY
+      - subworld.legacy_entity_id_bridge
+      - subworld.create_legacy_entity
+      - characters.create_legacy_entity_default_true
+    reason: BookState canonical character ids replace legacy Entity ids and bridge lookups.
+    removal_phase: phase_2
+    verification:
+      - unit
+      - db_migration
+      - sixty_chapter_runtime_audit
+    delete_when:
+      - canonical character resolution tests pass without legacy_entity_id
+      - character_identity_map no longer has legacy_entity_id
+      - 60 chapter audit reports zero identity bridge/create events
+    status: planned
+
+  - id: book_state.legacy_import
+    category: runtime_delete
+    owner_area: book_state
+    paths:
+      - forwin/api_book_state_routes.py
+      - forwin/api_route_registry.py
+      - forwin/api_schema/__init__.py
+      - forwin/api_schema/world.py
+      - forwin/book_state/__init__.py
+      - forwin/book_state/legacy_import.py
+    allow_patterns:
+      - LegacyBookStateImporter
+      - import_book_state_legacy
+      - BookStateLegacyImportResponse
+      - book_state.legacy_import.v1
+      - LEGACY_REGION_PROMOTION
+    reason: Old BookState import is not needed after old projects are abandoned.
+    removal_phase: phase_1
+    verification:
+      - unit
+      - api_route_tests
+      - inventory_final
+    delete_when:
+      - import route and schema are gone
+      - no runtime code imports LegacyBookStateImporter
+    status: planned
+
+  - id: governance.legacy_relaxed
+    category: runtime_delete
+    owner_area: governance
+    paths:
+      - forwin/api_governance_support.py
+      - forwin/api_runtime.py
+      - forwin/context/assembler_core/canon_quality_context.py
+      - forwin/governance.py
+      - forwin/orchestrator_loop_core/governance.py
+      - forwin/runtime_settings.py
+    allow_patterns:
+      - legacy_relaxed
+      - legacy_project_governance
+      - treat_empty_as_legacy
+      - governance.legacy_relaxed_fallback
+    reason: Current generation must use serial canon governance, not the old relaxed mode.
+    removal_phase: phase_1
+    verification:
+      - unit
+      - governance_api_tests
+      - inventory_final
+    delete_when:
+      - empty governance defaults to serial_canon_band_guard
+      - no project governance path emits governance.legacy_relaxed_fallback
+    status: planned
+
+  - id: api.legacy_checkpoint_status
+    category: external_compat_delete
+    owner_area: api
+    paths:
+      - forwin/api_governance_support.py
+      - forwin/governance.py
+      - forwin/project_payloads/arc_snapshot.py
+      - forwin/project_payloads/common.py
+      - forwin/project_payloads/generation.py
+      - forwin/project_payloads/genesis.py
+      - forwin/project_payloads/project_detail.py
+      - forwin/project_payloads/project_summary.py
+      - forwin/project_payloads/provisional.py
+      - forwin/project_payloads/runtime_maps.py
+      - forwin/project_payloads/scenario.py
+    allow_patterns:
+      - checkpoint_reason_with_legacy_status
+      - legacy_status
+      - api.legacy_checkpoint_status
+    reason: Old checkpoint status strings are an API compatibility shim, not current behavior.
+    removal_phase: phase_1
+    verification:
+      - governance_api_tests
+      - inventory_final
+    delete_when:
+      - old checkpoint status payloads are rejected or migrated before serialization
+      - current checkpoint serialization tests pass
+    status: planned
+
+  - id: project.creation_status_legacy
+    category: runtime_delete
+    owner_area: project_lifecycle
+    paths:
+      - forwin/api_core/runtime.py
+      - forwin/api_schema/project.py
+      - forwin/book_genesis_core/workflow.py
+      - forwin/context/assembler_core/personality_integrity.py
+      - forwin/genesis_workspace/service.py
+      - forwin/mcp/client.py
+      - forwin/mcp/models.py
+      - forwin/models/project.py
+      - forwin/project_ops/genesis.py
+      - forwin/project_payloads/project_detail.py
+      - forwin/project_payloads/project_summary.py
+      - forwin/state/updater.py
+    allow_patterns:
+      - creation_status
+      - '"legacy"'
+      - project.creation_status_legacy
+      - _record_project_creation_status_legacy_compatibility
+    reason: New projects must use explicit Genesis/writing lifecycle states, not legacy as a default.
+    removal_phase: phase_4
+    verification:
+      - genesis_tests
+      - mcp_model_tests
+      - sixty_chapter_runtime_audit
+    delete_when:
+      - new project default lifecycle state is explicit and current
+      - 60 chapter audit reports zero project.creation_status_legacy events
+    status: planned
+
+  - id: projection.world_v4_compat
+    category: runtime_delete
+    owner_area: world_projection
+    paths:
+      - forwin/orchestrator/loop.py
+      - forwin/orchestrator_loop_core/common.py
+      - forwin/orchestrator_loop_core/finalization.py
+      - forwin/orchestrator_loop_core/world_projection.py
+      - forwin/world_model
+      - forwin/world_model_v4
+    allow_patterns:
+      - LegacyWorldModelCompiler
+      - legacy_projection
+      - LEGACY_PROJECTION_FAILED
+      - projection.legacy_world_model_projection
+      - legacy world_model_v4
+      - LEGACY world model projection
+    reason: BookState is canon; world v4 and legacy world model projection writes must end.
+    removal_phase: phase_3
+    verification:
+      - unit
+      - db_migration
+      - sixty_chapter_runtime_audit
+    delete_when:
+      - 60 chapter flag-off pilot emits zero projection legacy events
+      - BookState direct commit tests pass without v4 projection writes
+    status: planned
+
+  - id: review_engine.legacy_telemetry_names
+    category: rename_only
+    owner_area: review_engine
+    paths:
+      - forwin/orchestrator_loop_core/governance.py
+      - forwin/orchestrator_loop_core/quality_gates.py
+      - forwin/orchestrator_loop_core/repair_loop.py
+      - forwin/review_engine/audit.py
+      - forwin/review_engine/rules/final_acceptance.py
+      - forwin/review_engine/rules/review_outcome.py
+    allow_patterns:
+      - legacy_outcome
+      - legacy_shadow_evaluated
+      - legacy_safety_net_used
+      - legacy_safety_net_chapters
+      - legacy_action
+      - legacy_decision
+      - legacy_final_acceptance_gate
+      - _ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION
+    reason: Review engine cutover safety net is gone or going away; remaining names should not teach new code to use legacy concepts.
+    removal_phase: phase_5
+    verification:
+      - review_engine_tests
+      - audit_script_tests
+      - inventory_final
+    delete_when:
+      - audit payload names use current/previous engine terminology
+      - review rules no longer expose legacy-named fields
+    status: planned
+
+  - id: legacy_compatibility_audit_runtime
+    category: runtime_delete
+    owner_area: review_engine
+    paths:
+      - scripts/audit_review_engine_cutover.py
+      - forwin/review_engine/audit.py
+      - forwin/orchestrator_loop_core/governance.py
+      - forwin/orchestrator_loop_core/service.py
+      - forwin/orchestrator_loop_core/world_projection.py
+      - forwin/orchestrator_loop_core/finalization.py
+      - forwin/subworld_manager.py
+      - forwin/characters/creation.py
+      - forwin/api_governance_support.py
+      - forwin/project_ops/genesis.py
+    allow_patterns:
+      - LEGACY_COMPATIBILITY_REGISTRY
+      - LEGACY_COMPATIBILITY_USED
+      - build_legacy_compatibility_payload
+      - summarize_legacy_compatibility_audit
+      - collect_legacy_compatibility_static_counts
+      - _record_legacy_compatibility_event
+      - legacy compatibility used
+    reason: Runtime legacy compatibility audit exists only while compatibility paths are being removed.
+    removal_phase: phase_8
+    verification:
+      - inventory_final
+      - sixty_chapter_runtime_audit
+    delete_when:
+      - all runtime_delete entries are deleted
+      - 60 chapter audit reports legacy_compat.total_events == 0
+    status: planned
+
+  - id: legacy_inventory.audit_gate_terms
+    category: test_doc_followup
+    owner_area: architecture
+    paths:
+      - scripts/audit_legacy_inventory.py
+    allow_patterns:
+      - legacy
+      - Legacy
+      - LEGACY
+    reason: Inventory gate implementation necessarily names legacy references while enforcing the freeze.
+    removal_phase: keep
+    verification:
+      - inventory_check
+      - audit_script_tests
+    delete_when:
+      - never, unless the inventory gate is renamed or replaced
+    status: retained
+
+  - id: external.legacy_migration_scripts
+    category: external_compat_delete
+    owner_area: migration_tools
+    paths:
+      - scripts/migrate_legacy_canon_to_form.py
+      - scripts/migrate_sqlite_to_postgres.py
+    allow_patterns:
+      - legacy_sourced
+      - legacy canon-quality
+      - legacy ForWin SQLite
+      - legacy SQLite
+    reason: One-shot migration scripts support old persisted data and should be retired after old projects are abandoned.
+    removal_phase: phase_6
+    verification:
+      - inventory_final
+      - migration_script_listing
+    delete_when:
+      - old SQLite and legacy canon-quality migrations are no longer offered as operator workflows
+      - current Postgres/Chapter Review Form migration tests cover only current schema
+    status: planned
+
+  - id: genesis.book_genesis_facade_names
+    category: rename_only
+    owner_area: genesis
+    paths:
+      - forwin/genesis_handoff/chapter_materializer.py
+      - forwin/genesis_workspace/fallbacks.py
+      - forwin/genesis_workspace/name_suggestions.py
+      - forwin/genesis_workspace/service.py
+    allow_patterns:
+      - def _legacy
+      - legacy = _legacy
+      - _legacy()
+    reason: These call current book_genesis helpers but use misleading legacy variable/function names.
+    removal_phase: phase_5
+    verification:
+      - genesis_tests
+      - inventory_final
+    delete_when:
+      - helper and variable names use book_genesis_core or genesis_core terminology
+      - Genesis stage generate/refine/lock tests pass
+    status: planned
+
+  - id: genesis.legacy_pack_payload_upgrade
+    category: runtime_delete
+    owner_area: genesis
+    paths:
+      - forwin/book_genesis_core/helpers.py
+      - forwin/book_genesis_core/names_paths.py
+      - forwin/genesis_workspace/normalizer.py
+    allow_patterns:
+      - _legacy_world_root_from_pack
+      - legacy payload compatibility
+    reason: Old Genesis pack shape upgrade is old-project compatibility after legacy projects are abandoned.
+    removal_phase: phase_4
+    verification:
+      - genesis_tests
+      - inventory_final
+    delete_when:
+      - current Genesis pack tests pass without legacy top-level section upgrade
+      - workspace normalizer docs describe only current pack compatibility
+    status: planned
+
+  - id: external.route_dependency_legacy_kwargs
+    category: external_compat_delete
+    owner_area: api
+    paths:
+      - forwin/api_route_registry.py
+      - forwin/api_task_routes.py
+    allow_patterns:
+      - '**legacy'
+      - legacy_deps
+      - legacy keyword dependencies
+      - legacy flat
+    reason: Flat legacy dependency injection shapes support old internal callers and should be removed.
+    removal_phase: phase_6
+    verification:
+      - api_route_tests
+      - inventory_final
+    delete_when:
+      - callers construct grouped dependency objects only
+      - old flat kwargs are rejected
+    status: planned
+
+  - id: external.config_legacy_aliases
+    category: external_compat_delete
+    owner_area: config
+    paths:
+      - forwin/config.py
+      - forwin/retrieval/memory_index.py
+      - forwin/runtime/container.py
+      - forwin/orchestrator_loop_core/run_control.py
+      - forwin/planning/provisional_preview_service.py
+      - forwin/orchestrator/phase24.py
+      - forwin/production/policy.py
+      - forwin/runtime_settings.py
+    allow_patterns:
+      - LEGACY_DATABASE_PATH_ENV
+      - FORWIN_LEGACY_PROVISIONAL_BLOCKING
+      - legacy_db_path
+      - legacy_provisional_blocking
+      - legacy call compatibility
+      - legacy_preview_enabled
+      - legacy_write_quota
+      - legacy_profile
+    reason: Old env/config aliases and constructor compatibility should not remain in current runtime.
+    removal_phase: phase_6
+    verification:
+      - config_tests
+      - production_policy_tests
+      - inventory_final
+    delete_when:
+      - current env names and config objects are the only accepted inputs
+      - old aliases produce clear validation errors
+    status: planned
+
+  - id: external.publisher_plaintext_session_upgrade
+    category: external_compat_delete
+    owner_area: publisher
+    paths:
+      - forwin/api_publisher_ops.py
+      - forwin/publisher_runtime/browser_sessions.py
+      - forwin/publishers/manager.py
+    allow_patterns:
+      - upgrade_legacy
+      - legacy_cookie_names_from_json
+      - metadata["legacy"]
+      - '"legacy": False'
+      - '"legacy": True'
+    reason: Plaintext browser session upgrade supports old publisher storage and should be removed.
+    removal_phase: phase_6
+    verification:
+      - publisher_session_tests
+      - inventory_final
+    delete_when:
+      - encrypted/current browser session storage is the only supported format
+      - API no longer requests upgrade_legacy
+    status: planned
+
+  - id: external.model_and_protocol_aliases
+    category: external_compat_delete
+    owner_area: protocol
+    paths:
+      - forwin/personality/models.py
+      - forwin/protocol/review.py
+      - forwin/reviewer/repair_scope_router.py
+      - forwin/writer/chapter_writer.py
+    allow_patterns:
+      - _accept_legacy_keys
+      - _LEGACY_REPAIR_SCOPE_MAP
+      - valid legacy RepairInstruction.repair_scope
+      - _legacy_json_preview_is_accepted
+    reason: Old model keys, repair scope names, and writer preview formats are compatibility shims.
+    removal_phase: phase_6
+    verification:
+      - protocol_tests
+      - writer_tests
+      - inventory_final
+    delete_when:
+      - current schemas reject old aliases
+      - writer accepts only current response format
+    status: planned
+
+  - id: ui.legacy_project_and_governance_labels
+    category: external_compat_delete
+    owner_area: frontend
+    paths:
+      - forwin/ui_assets/home/app_library.js
+      - forwin/ui_assets/home/app_state.js
+      - forwin/ui_assets/home/app_task_governance.js
+      - forwin/ui_assets/home/app_task_progress.js
+      - forwin/ui_assets/home/body.html
+    allow_patterns:
+      - legacy_relaxed
+      - creation_status
+      - setLegacyTabState
+      - Legacy Preview
+      - legacy preview
+      - legacy_preview
+    reason: UI still exposes old project/governance/provisional-preview language and must move to current lifecycle labels.
+    removal_phase: phase_6
+    verification:
+      - frontend_static_tests
+      - browser_smoke
+      - inventory_final
+    delete_when:
+      - UI no longer offers legacy_relaxed as an option
+      - legacy project filters and Legacy Preview labels are removed or renamed
+    status: planned
+
+  - id: metadata.legacy_source_fields
+    category: runtime_delete
+    owner_area: metadata
+    paths:
+      - forwin/state/repo.py
+      - forwin/subworld_manager.py
+    allow_patterns:
+      - legacy_source
+      - region_source
+    reason: New runtime metadata should use current source labels, not legacy_source.
+    removal_phase: phase_4
+    verification:
+      - state_repo_tests
+      - subworld_tests
+      - inventory_final
+    delete_when:
+      - state and subworld metadata use current source keys
+      - old metadata source fallback is no longer read
+    status: planned
+
+  - id: migration.history
+    category: migration_history_keep
+    owner_area: database
+    paths:
+      - forwin/migrations/versions
+    allow_patterns:
+      - legacy
+      - Legacy
+      - LEGACY
+      - legacy_entity_id
+      - legacy_status
+    reason: Historical migrations are immutable audit history and are not runtime support.
+    removal_phase: keep
+    verification:
+      - inventory_check
+    delete_when:
+      - never deleted unless migration history is intentionally rewritten
+    status: retained
+
+  - id: schema.bootstrap_legacy_columns
+    category: runtime_delete
+    owner_area: database
+    paths:
+      - forwin/models/base.py
+    allow_patterns:
+      - legacy_checkpoint_statuses_v1
+      - legacy_entity_id
+      - legacy_entity
+      - ix_character_identity_project_legacy
+    reason: Runtime bootstrap still creates or recognizes old schema columns and must be updated with schema deletion.
+    removal_phase: phase_2
+    verification:
+      - db_migration
+      - schema_bootstrap_tests
+      - inventory_final
+    delete_when:
+      - fresh database bootstrap creates only current schema
+      - migration tests cover dropping old columns
+    status: planned
+
+  - id: dead_code.removed_repair_paths
+    category: deleted
+    owner_area: reviewer
+    paths:
+      - forwin/orchestrator/repair_coordinator.py
+      - forwin/reviewer/repair_loop_detector.py
+      - forwin/reviewer/repair_scope_router.py
+      - forwin/canon_quality/rule_profile.py
+    allow_patterns:
+      - class ChapterRepairCoordinator
+      - class RepairLoopDetector
+      - def route_review_repair_scopes
+      - use_legacy_fallback=
+    reason: Dead repair paths were already removed; this entry prevents reintroduction.
+    removal_phase: complete
+    verification:
+      - architecture_boundary_tests
+      - inventory_final
+    delete_when:
+      - already deleted
+    status: deleted

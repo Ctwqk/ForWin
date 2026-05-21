@@ -325,6 +325,11 @@
       color:var(--accent);
       font:700 12px/1.2 var(--ui);
     }
+    .review-engine-breakdown .status-chip[data-chip="系统阻断"] {
+      border-color:rgba(185,28,28,.38);
+      background:rgba(254,226,226,.82);
+      color:#991b1b;
+    }
     .badge-row, .action-row, .inline-fields {
       display:flex;
       gap:8px;

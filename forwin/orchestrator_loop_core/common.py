@@ -84,13 +84,12 @@ from forwin.orchestrator.phase4 import (
 from forwin.planning.scenario_rehearsal_resolution import latest_blocking_scenario_rehearsal
 from forwin.planning.future_plan_auditor import FuturePlanAuditor, FuturePlanAuditRun
 from forwin.planning.band_plan_patcher import BandPlanPatcher
-from forwin.planning.obligation_scope_router import BandScopeCandidate, ObligationScopeRouter
+from forwin.review_engine.rules.obligation_scope import BandScopeCandidate
 from forwin.orchestrator.phase24 import ProvisionalBandPreview
 from forwin.retrieval import RetrievalBroker
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
-from forwin.reviewer.outcome import ReviewOutcomeRouter
 from forwin.runtime.services import RuntimeServices
 from forwin.state.repo import StateRepository
 from forwin.state.schema import KNOWN_STATE_FIELDS

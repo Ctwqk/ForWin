@@ -105,6 +105,12 @@ class BookGenesisNameGenerateResponse(BaseModel):
     message: str = ""
 
 
+class StartWritingRequest(BaseModel):
+    auto_continue: bool | None = None
+    run_until_chapter: int | None = Field(default=None, ge=1)
+    max_chapters: int | None = Field(default=None, ge=1)
+
+
 class StartWritingResponse(BaseModel):
     ok: bool
     project_id: str
@@ -123,5 +129,6 @@ __all__ = [
     'BookGenesisRefineRequest',
     'BookGenesisNameGenerateRequest',
     'BookGenesisNameGenerateResponse',
+    'StartWritingRequest',
     'StartWritingResponse',
 ]

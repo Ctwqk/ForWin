@@ -4,6 +4,229 @@
 
 闭合 `codex/review-engine-upgrade` 分支与原始设计(`docs/designs/review-engine-plan.md`)之间的实际差距,并把第一版被划为 out-of-scope 但现在已经成为瓶颈的几项提级。最终目标:engine 真正驱动决策,manual review 占比由"兜底"变成"显式分类",且每个决策都有审计追踪。
 
+## Implementation Status
+
+- Audit event persistence: implemented behind non-blocking event recording.
+- Dashboard three-state chip: implemented from real `REVIEW_ENGINE_DECISION` payloads.
+- Repair v2 orchestrator wiring: implemented with legacy-live shadow mode by default.
+- Local rewrite executor: implemented behind `review_engine_local_rewrite_enabled`.
+- Commit with obligation: implemented behind `review_engine_commit_with_obligation_enabled`.
+- Arc/book budget: implemented behind `review_engine_arc_book_budget_enabled`; run `scripts/audit_obligation_distribution.py` before enabling.
+- Live cutover: implemented behind `review_engine_live_cutover_enabled` and `review_engine_live_cutover_project_allowlist`; production phase advancement still requires elapsed observation windows.
+- Legacy removal: review safety-net removal is now in the implementation phase after a 60-chapter live pilot; non-review legacy compatibility remains separate and blocked by runtime usage.
+
+## Current audit settings (2026-05-19)
+
+本节记录当前实现和容器部署如何回答后续审计关注的四类问题。这里的"代码默认值"和"pilot 容器 env"必须分开看:默认值用于安全回滚,pilot env 用于本次 30 章项目灰度验证。
+
+### 1. Local rewrite 不允许写死任何单本书 canon 名
+
+- `LocalRewriteExecutor` 不再提供故事特定默认值,也不再把 `{{地点}}` / `{{角色}}` 替换为固定中文名。
+- placeholder 修复只允许从 `context_pack` 读锚点:
+  - 角色锚点优先级:`active_entities[kind=character].name` → `allowed_entities[]` → `chapter_entry_targets[].entity_name` → `active_personality_contexts[].character_name`。
+  - 地点锚点优先级:`map_context.active_locations[].location_name/name/location_id` → `active_entities[kind=location].name` → `map_context.visible_anchor_nodes[].name/node_id`。
+- 若正文包含 `{{角色}}` 或 `{{地点}}` 但对应锚点缺失,executor 返回 `needs_writer`,mode=`missing_canon_placeholder_anchor`,不做本地替换。这样宁可升级到 writer repair,也不伪造 canon。
+- repair loop 传入的是当前章节 `current_context`,不是空 `{}`。
+- 防回归测试:
+  - `tests/review_engine/test_local_rewrite_executor.py`
+  - `tests/test_no_story_specific_hardcoding.py::test_local_rewrite_executor_has_no_case_specific_placeholder_defaults`
+
+### 2. Flag 默认关闭,Phase 1 pilot 通过容器 env 显式开启
+
+代码默认值仍全部为 `False`;这是设计要求,不能改成全局默认开启。当前 pilot 容器通过 `FORWIN_ENV_FILE=/tmp/forwin-review-cutover.env` 显式开启:
+
+```text
+FORWIN_REVIEW_ENGINE_REPAIR_V2_ENABLED=true
+FORWIN_REVIEW_ENGINE_ARC_PATCHER_ENABLED=true
+FORWIN_REVIEW_ENGINE_BOOK_PATCHER_ENABLED=true
+FORWIN_REVIEW_ENGINE_OBLIGATION_VERIFIER_ENABLED=true
+FORWIN_REVIEW_ENGINE_AUTO_APPROVE_ENABLED=true
+FORWIN_REVIEW_ENGINE_LOCAL_REWRITE_ENABLED=true
+FORWIN_REVIEW_ENGINE_COMMIT_WITH_OBLIGATION_ENABLED=true
+FORWIN_REVIEW_ENGINE_ARC_BOOK_BUDGET_ENABLED=true
+FORWIN_REVIEW_ENGINE_LIVE_CUTOVER_ENABLED=true
+FORWIN_REVIEW_ENGINE_LIVE_CUTOVER_PROJECT_ALLOWLIST=e70538bbc774440cb53929cf7549dad8
+```
+
+`review_engine_live_cutover_project_allowlist` 当前只包含 30 章 pilot 项目 `e70538bbc774440cb53929cf7549dad8`。`engine_live_enabled()` 的语义是:
+
+- `live_cutover=false`:legacy live,engine shadow。
+- `live_cutover=true` 且 allowlist 非空:只有 allowlist 内项目 engine live;其它项目 legacy live,engine shadow。
+- `live_cutover=true` 且 allowlist 为空:全局 engine live。只有 Phase 4 才允许这样设置。
+
+### 3. Repair attempt 与 `body_truncated` 设置
+
+`MAX_ATTEMPTS_PER_SCOPE` 按 scope 重量分级:
+
+| scope | max attempts | 设置原因 |
+|---|---:|---|
+| `draft` | 2 | local 修复便宜,但两次仍失败通常不是单纯 draft 问题 |
+| `chapter_plan` | 2 | chapter patch 仍可重试一次 |
+| `band_plan` | 2 | band patch 成本中等 |
+| `arc_plan` | 1 | arc patch 贵,失败直接升级 |
+| `book_plan` | 1 | book patch 更贵,失败直接 manual |
+| `subworld` | 2 | 元数据修复允许一次重试 |
+| `active_rules` | 1 | 规则违反通常确定性强 |
+| `operator` | 0 | operator / schema 错误直接 manual |
+
+升级路径固定为:
+
+```text
+draft -> chapter_plan -> band_plan -> arc_plan -> book_plan -> manual_review
+```
+
+`body_truncated` 仍归 `draft` scope,但 local executor 不直接拼接正文;它返回 `needs_writer`,mode=`continue_from_last_complete_scene`,instruction 要求 writer 从最后一个完整 scene 继续写。若 draft scope 重试耗尽,按上面的升级路径进入 `chapter_plan`。
+
+### 4. Arc/book budget 与 shadow/cutover 门槛
+
+arc/book budget 默认值保留为:
+
+```text
+arc_max_p0_p1_per_arc = 2
+arc_max_p1_p2_per_arc = 4
+book_max_p0_per_book = 1
+book_max_p1_p2_per_book = 3
+```
+
+启用 `FORWIN_REVIEW_ENGINE_ARC_BOOK_BUDGET_ENABLED=true` 前必须先跑:
+
+```bash
+python scripts/audit_obligation_distribution.py
+```
+
+本次 pilot 容器内审计结果:
+
+```text
+arc_buckets=0 arc_p0_p1_p95=0
+book_buckets=0 book_p0_p1_p95=0
+```
+
+这说明当前历史样本没有可用于提高阈值的 arc/book obligation bucket,所以保留默认值。后续若 audit 显示默认值会阻断超过 5% 历史项目,必须先提高 defaults,再启用 budget flag。
+
+cutover 推进仍按阶段执行:
+
+| phase | 设置 | 进入下一阶段条件 |
+|---|---|---|
+| Phase 1 | 1 个 short pilot 项目 allowlist | ≥7 天 0 严重 mismatch |
+| Phase 2 | 3 个 small 项目(`<50` 章) | ≥7 天 0 严重 mismatch |
+| Phase 3 | 全部 small + medium(`<200` 章) | ≥7 天 0 严重 mismatch |
+| Phase 4 | all,含长篇;allowlist 可置空 | Phase 3 达标 |
+
+当前只完成 Phase 1 的单项目容器配置和 30 章 smoke。它**不满足**"60 章 live pilot 0 legacy safety-net fallback / 0 severe mismatch"门槛,因此不能据此删除 review legacy safety net。
+
+### 5. 60 章 live pilot 审计字段
+
+`DecisionEventType.REVIEW_ENGINE_DECISION` 的 `payload_json` 必须记录以下字段,用于证明每章是否真正由 review engine live 决策:
+
+```text
+live_or_shadow
+live_source
+shadow_source
+engine_live
+legacy_shadow_evaluated
+legacy_safety_net_used
+shadow_mismatch
+severe_shadow_mismatch
+legacy_outcome
+engine_outcome
+```
+
+60 章测试的删除条件不是"项目跑完",而是审计脚本通过:
+
+```bash
+python3 scripts/audit_review_engine_cutover.py --project-id <project_id> --expected-chapters 60
+```
+
+脚本通过要求:
+
+- 1..60 每章都有 `review_engine_decision` 事件。
+- 每章 `live_or_shadow=live`。
+- 每章 `live_source=engine` 且 `engine_live=true`。
+- `legacy_safety_net_used=false`。
+- `severe_shadow_mismatch=false`。
+
+`legacy_shadow_evaluated=true` 只表示 legacy 被反向 shadow 用来审计 parity,不表示 legacy 接管 live 决策。真正禁止的是 `legacy_safety_net_used=true` 或 `live_source=legacy`。
+
+当前代码边界:
+
+- `review_engine.rules.review_outcome` 已经是 engine-native policy,不再包装 `ReviewOutcomeRouter`。
+- `review_engine.rules.obligation_scope` 已经是 engine-native policy,orchestrator 不再直接调用 `ObligationScopeRouter`。
+- `ReviewOutcomeRouter` 和 `RepairPolicy` 在 60 章 pilot 前仍可作为 flag-off fallback / reverse shadow 参考;pilot 审计通过后再删除这些 safety-net 入口。
+
+### 6. Legacy compatibility usage 审计
+
+非 review safety-net 的 legacy compatibility 走独立事件:
+
+```text
+DecisionEventType.LEGACY_COMPATIBILITY_USED
+```
+
+单条事件只记录运行事实,不写删除结论。payload 字段:
+
+```text
+compat_layer
+compat_feature
+usage_kind
+source_module
+usage_reason
+compat_key
+legacy_identifier
+canonical_identifier
+related_stage
+metadata
+```
+
+`delete_candidate` 和 `blocking_for_removal` 不允许出现在单条事件里;它们只能由审计脚本汇总完整 60 章事件后得出。
+
+60 章审计可加:
+
+```bash
+python3 scripts/audit_review_engine_cutover.py \
+  --project-id <project_id> \
+  --expected-chapters 60 \
+  --include-legacy-compat
+```
+
+输出中的 `legacy_compat` 单独包含 runtime events 与 static scan 的合并结论:
+
+- `total_events`
+- `by_layer`
+- `by_feature`
+- `static_counts`
+- `removal_assessment.delete_candidates`
+- `removal_assessment.blocking_for_removal`
+- `removal_assessment.keep_for_import_only`
+- `removal_assessment.out_of_scope`
+- `removal_assessment.static_only_needs_targeted_test`
+- `removal_assessment.uninstrumented_no_delete_signal`
+- `removal_assessment.anomalous_runtime_without_static`
+
+删除结论必须按 runtime events + static callers 一起判断:
+
+| static callers | runtime events | 结论 |
+|---:|---:|---|
+| 0 | 0 | 只对 `candidate_if_unused` 这类可删模式输出 `delete_candidates` |
+| >0 | 0 | 输出 `static_only_needs_targeted_test`,说明 60 章窗口没覆盖到,不能删 |
+| >0 | >0 | 输出 `blocking_for_removal`,说明路径仍 live |
+| 0 | >0 | 输出 `anomalous_runtime_without_static`,先调查反射/动态调用 |
+
+`instrumentation_status=uninstrumented` 的 feature 不允许进入 `delete_candidates`;必须先补埋点或显式标成 `out_of_scope`。`must_migrate_if_used + 0 events` 也不能静默吞掉,有 static caller 时进入 targeted-test bucket。
+
+当前埋点/审计项:
+
+- `governance.legacy_relaxed_fallback`
+- `projection.legacy_world_model_projection`
+- `book_state.state.location_fallback`
+- `book_state.state.location_patch_warning`
+- `subworld.legacy_entity_id_bridge`
+- `subworld.create_legacy_entity`
+- `api.legacy_checkpoint_status`
+- `characters.create_legacy_entity_default_true`
+- `project.creation_status_legacy`(static-only)
+- `migration.legacy_book_state_import`(`keep_for_import_only`,因 API import route 仍调用 `LegacyBookStateImporter`)
+
+这些事件不影响 review cutover pass/fail。review safety-net 删除仍看 `legacy_safety_net_used=false` 和 `severe_shadow_mismatch=false`;compatibility 删除候选只看 `legacy_compat.removal_assessment`。
+
 ## Scope
 
 ### 包含
@@ -403,10 +626,13 @@ cutover 完成后如果保留两套并存,会出现:
 
 ### Trigger conditions
 
-`Gap 3` flag-on 上线后,满足全部条件即可启动删除 spec:
+`Gap 3` flag-on 上线后,满足全部条件即可启动 review legacy safety-net 删除:
 
-- 生产 ≥30 天 0 mismatch warning。
-- 历史 replay 全集 0 mismatch。
+Current removal wave is limited to review safety-net dispatchers. The older global 30-day condition still applies to deleting deployment config fields and non-review compatibility paths, not to this engine-only runtime cleanup.
+
+- 一个完整 60 章 live pilot 通过 `scripts/audit_review_engine_cutover.py --expected-chapters 60`。
+- 60 章期间 0 `legacy_safety_net_used`。
+- 60 章期间 0 severe mismatch。
 - `tests/review_engine/test_rule_parity.py` 仍然全过。
 - `review_engine_live_cutover_enabled` 在所有项目稳定开启。
 
@@ -479,10 +705,14 @@ Gap 3 (cutover)  ─ Gap 1/Gap 2 稳定 ≥7d 后启动
 
 任一 gap 出问题,关 flag 即可回到当前 branch 的行为(arc/book 一路除外——那一路已经 authoritative,但有自己的 `review_engine_arc_patcher_enabled` / `review_engine_book_patcher_enabled` flag)。
 
-## Open questions
+## Resolved settings and ownership
 
-1. Gap 1 的 `MAX_ATTEMPTS_PER_SCOPE` 具体值——所有 scope 统一(如 2)还是按 scope 分(arc 给更多)?
-2. Gap 3 cutover 时是否需要 per-project 灰度,还是全局 flag?长篇项目和短篇项目的 mismatch 容忍度可能不同。
-3. 提级 A 的 LLM 调用预算:`body_truncated` rewrite 可能需要重跑整章——是否走 local rewrite 还是降级回 chapter draft repair?
-4. Gap 6 默认 budget 值如何 calibrate?需要先从历史项目 audit obligation 数量分布。
-5. legacy 删除 spec(提级 C 触发后)由谁主导?涉及跨多个模块,可能需要 spec 内拆 PR。
+- `MAX_ATTEMPTS_PER_SCOPE`:已按 scope 分级,见 `Current audit settings`。
+- Gap 3 cutover:已确定 per-project allowlist 灰度,空 allowlist 只允许 Phase 4 全局 cutover。
+- `body_truncated`:留在 `draft` scope,使用 `continue_from_last_complete_scene` writer continuation mode;本地 executor 不伪造正文。
+- Gap 6 budget defaults:默认值见 `Current audit settings`;启用前必须跑 `scripts/audit_obligation_distribution.py`,若默认值阻断超过 5% 历史项目则先提高 defaults。
+- Legacy removal ownership:单 owner,4 个独立 PR,按依赖顺序执行:
+  1. `ReviewOutcomeRouter`
+  2. `ObligationScopeRouter`
+  3. `RepairPolicy`
+  4. `FinalAcceptanceGate` 直调路径

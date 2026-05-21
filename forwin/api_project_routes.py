@@ -20,6 +20,7 @@ from forwin.api_schemas import (
     ProjectContinueGenerationRequest,
     ProjectCreateRequest,
     ProjectExtendGenerationRequest,
+    StartWritingRequest,
 )
 from forwin.models.project import Project
 
@@ -233,9 +234,10 @@ def build_handlers(
             active_genesis_revision=active_genesis_revision,
         )
 
-    def start_project_writing(project_id: str):
+    def start_project_writing(project_id: str, req: StartWritingRequest | None = None):
         return api_project_ops.start_project_writing(
             project_id,
+            req,
             get_session=get_session,
             config=get_config(),
             saved_runtime_config_or_default=saved_runtime_config_or_default,

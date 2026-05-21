@@ -4,8 +4,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from forwin.canon_quality.signals import CanonQualitySignal, SignalKind
-from forwin.protocol.review import ContinuityIssue, ReviewVerdict
+from forwin.canon_quality.signals import SignalKind
 
 
 class RepairScopeKind(StrEnum):
@@ -50,15 +49,6 @@ SIGNAL_KIND_TO_SCOPE: dict[str, RepairScopeKind] = {
     SignalKind.repeated_reveal_as_new.value: RepairScopeKind.CHAPTER_PLAN,
 }
 
-_SCOPE_PRIORITY = {
-    RepairScopeKind.OPERATOR: 0,
-    RepairScopeKind.ACTIVE_RULES: 1,
-    RepairScopeKind.SUBWORLD: 2,
-    RepairScopeKind.CHAPTER_PLAN: 3,
-    RepairScopeKind.DRAFT: 4,
-}
-
-
 @dataclass(frozen=True)
 class RoutedSignal:
     kind: str
@@ -70,75 +60,13 @@ class RoutedSignal:
     payload: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
-class RepairScopeDispatch:
-    scope: RepairScopeKind
-    signals: list[RoutedSignal]
-
-
 def route_signal_kind(kind: str) -> RepairScopeKind:
     return SIGNAL_KIND_TO_SCOPE.get(str(kind or "").strip(), RepairScopeKind.OPERATOR)
 
 
-def route_review_repair_scopes(
-    review: ReviewVerdict,
-    *,
-    signals: list[CanonQualitySignal] | None = None,
-) -> list[RepairScopeDispatch]:
-    grouped: dict[RepairScopeKind, list[RoutedSignal]] = {}
-    for routed in _routed_from_review(review):
-        grouped.setdefault(route_signal_kind(routed.kind), []).append(routed)
-    for signal in signals or []:
-        routed = RoutedSignal(
-            kind=str(signal.signal_type or ""),
-            severity=str(signal.severity or "warning"),
-            subject_key=str(signal.subject_key or ""),
-            description=str(signal.description or ""),
-            source_signal_id=str(signal.signal_id or ""),
-            source="canon_quality_signal",
-            payload=dict(signal.payload or {}),
-        )
-        grouped.setdefault(route_signal_kind(routed.kind), []).append(routed)
-    return [
-        RepairScopeDispatch(scope=scope, signals=grouped[scope])
-        for scope in sorted(grouped, key=lambda item: _SCOPE_PRIORITY.get(item, 99))
-    ]
-
-
-def _routed_from_review(review: ReviewVerdict) -> list[RoutedSignal]:
-    routed: list[RoutedSignal] = []
-    for issue in review.issues:
-        if not _issue_is_blocking(issue):
-            continue
-        kind = _issue_kind(issue)
-        if not kind:
-            continue
-        routed.append(
-            RoutedSignal(
-                kind=kind,
-                severity=str(issue.severity or "warning"),
-                subject_key=str(issue.rule_name or ""),
-                description=str(issue.description or ""),
-                source="review_issue",
-                payload={"reviewer": issue.reviewer, "source_analyzer": issue.source_analyzer},
-            )
-        )
-    return routed
-
-
-def _issue_is_blocking(issue: ContinuityIssue) -> bool:
-    return bool(issue.blocking) or str(issue.severity or "") == "error"
-
-
-def _issue_kind(issue: ContinuityIssue) -> str:
-    return str(issue.issue_type or issue.rule_name or "").strip()
-
-
 __all__ = [
-    "RepairScopeDispatch",
     "RepairScopeKind",
     "RoutedSignal",
     "SIGNAL_KIND_TO_SCOPE",
-    "route_review_repair_scopes",
     "route_signal_kind",
 ]

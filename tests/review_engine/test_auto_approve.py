@@ -3,6 +3,10 @@ from __future__ import annotations
 from forwin.canon_quality.signals import CanonQualitySignal
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.protocol.review import ReviewVerdict
+from forwin.review_engine.interval import (
+    chapters_since_last_full_review,
+    full_review_boundary,
+)
 from forwin.review_engine.rules.auto_approve import decide_auto_approve
 from forwin.review_engine.types import DecisionInput, PlanLayerHealth
 
@@ -89,6 +93,42 @@ def test_auto_approve_rejects_error_signals() -> None:
 
     assert decision.outcome == "manual_review"
     assert "safe_warn_conditions" in decision.missing_evidence
+
+
+def test_interval_boundary_uses_accepted_chapter_count_not_auto_approve_count() -> None:
+    assert chapters_since_last_full_review(
+        accepted_chapter_count=4,
+        review_interval_chapters=5,
+    ) == 4
+    assert full_review_boundary(
+        accepted_chapter_count=5,
+        review_interval_chapters=5,
+    ) is True
+    assert full_review_boundary(
+        accepted_chapter_count=10,
+        review_interval_chapters=5,
+    ) is True
+    assert full_review_boundary(
+        accepted_chapter_count=11,
+        review_interval_chapters=5,
+    ) is False
+
+
+def test_auto_approve_payload_records_interval_counter() -> None:
+    decision = decide_auto_approve(
+        input=_input(verdict="pass", mode="blackbox"),
+        canon_gate_passed=True,
+        auto_approve_enabled=True,
+        future_plan_audit_passed=True,
+        obligation_audit_passed=True,
+        review_interval_hit=True,
+        chapters_since_last_full_review=5,
+        review_interval_chapters=5,
+    )
+
+    assert decision.rule_id == "review_interval_safe"
+    assert decision.sub_action["chapters_since_last_full_review"] == 5
+    assert decision.sub_action["review_interval_chapters"] == 5
 
 
 def test_auto_approve_rejects_blocking_obligations() -> None:

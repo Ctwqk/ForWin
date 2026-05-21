@@ -601,8 +601,8 @@ class LLMClientRetryTests(unittest.TestCase):
             client.close()
 
         self.assertEqual(result, "{\"ok\":true}")
-        self.assertNotIn("max_tokens", payloads[0])
-        self.assertEqual(payloads[0]["max_completion_tokens"], 2048)
+        self.assertEqual(payloads[0]["max_tokens"], 2048)
+        self.assertNotIn("max_completion_tokens", payloads[0])
         self.assertNotIn("response_format", payloads[0])
         self.assertEqual(attempts[0]["max_tokens"], 2048)
         self.assertEqual(attempts[0]["requested_max_tokens"], 5000)

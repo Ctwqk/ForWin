@@ -1,7 +1,7 @@
 # Trope Library V1 · Pulp Seed
 
-更新时间：2026-05-18
-状态：seed-content；待 `pulp_profile_upgrade_plan.md` Phase 5 MD loader 与 schema 扩展落地后即可加载
+更新时间：2026-05-18  
+状态：seed-content；待 `pulp_profile_upgrade_plan.md` Phase 5 MD loader 与 schema 扩展落地后即可加载  
 加载方式：`FORWIN_TROPE_TEMPLATE_PATH=Design-docs/trope_library_pulp_v1.md`
 
 ## 总则：四段式

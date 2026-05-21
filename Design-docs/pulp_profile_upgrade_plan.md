@@ -1,7 +1,7 @@
 # Pulp Profile 升级计划
 
-更新时间：2026-05-18
-状态：implementation-ready
+更新时间：2026-05-18  
+状态：implementation-ready  
 适用版本：当前 master / V4.5.1 后端
 
 把 ForWin 从"精品长篇引擎"扩展出一个"下沉市场量产档"。本文档是 Codex 实施指令，按 Phase 1 → 6 顺序执行。

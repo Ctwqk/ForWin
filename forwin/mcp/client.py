@@ -175,8 +175,30 @@ class ForWinAPIClient:
             genesis=self._genesis_view(payload),
         )
 
-    async def project_start_writing(self, *, project_id: str) -> MutationResult:
-        payload = await self._request_json("POST", f"/api/projects/{project_id}/start-writing")
+    async def project_start_writing(
+        self,
+        *,
+        project_id: str,
+        auto_continue: bool | None = None,
+        run_until_chapter: int | None = None,
+        max_chapters: int | None = None,
+    ) -> MutationResult:
+        if run_until_chapter is not None and run_until_chapter < 1:
+            raise ValueError("run_until_chapter must be positive when provided")
+        if max_chapters is not None and max_chapters < 1:
+            raise ValueError("max_chapters must be positive when provided")
+        request_json: dict[str, Any] = {}
+        if auto_continue is not None:
+            request_json["auto_continue"] = bool(auto_continue)
+        if run_until_chapter is not None:
+            request_json["run_until_chapter"] = int(run_until_chapter)
+        if max_chapters is not None:
+            request_json["max_chapters"] = int(max_chapters)
+        payload = await self._request_json(
+            "POST",
+            f"/api/projects/{project_id}/start-writing",
+            json=request_json,
+        )
         task_id = str(payload.get("task_id", "")).strip()
         return MutationResult(
             ok=bool(payload.get("ok", True)),
@@ -190,12 +212,20 @@ class ForWinAPIClient:
         *,
         project_id: str,
         max_chapters: int | None = None,
+        auto_continue: bool | None = None,
+        run_until_chapter: int | None = None,
     ) -> MutationResult:
         if max_chapters is not None and max_chapters < 1:
             raise ValueError("max_chapters must be positive when provided")
+        if run_until_chapter is not None and run_until_chapter < 1:
+            raise ValueError("run_until_chapter must be positive when provided")
         request_json: dict[str, Any] = {}
         if max_chapters is not None:
             request_json["max_chapters"] = int(max_chapters)
+        if auto_continue is not None:
+            request_json["auto_continue"] = bool(auto_continue)
+        if run_until_chapter is not None:
+            request_json["run_until_chapter"] = int(run_until_chapter)
         payload = await self._request_json(
             "POST",
             f"/api/projects/{project_id}/continue-generation",

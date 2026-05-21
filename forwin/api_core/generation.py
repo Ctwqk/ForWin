@@ -143,6 +143,7 @@ from forwin.api_schemas import (
 )
 from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
 from forwin.config import Config
+from forwin.generation.auto_continue import GenerationAutoContinueController
 from forwin.governance import (
     BandCheckpointIssueInfo,
     CONSTRAINT_LEVELS,
@@ -356,6 +357,11 @@ def _make_generation_completion_handler(
     task_id: str,
     root_event_id: str = "",
     prior_handler=None,
+    runtime_config: Config | None = None,
+    auto_continue: bool = False,
+    run_until_chapter: int | None = None,
+    max_chapters: int | None = None,
+    create_continue_generation_task=None,
 ):
     def _handler(result) -> None:
         if prior_handler is not None:
@@ -397,6 +403,19 @@ def _make_generation_completion_handler(
                 causal_root_id=root_event_id,
             )
             session.commit()
+        if auto_continue and create_continue_generation_task is not None:
+            controller = GenerationAutoContinueController(
+                session_factory=_get_session,
+                create_continue_generation_task=create_continue_generation_task,
+            )
+            controller.after_task_completion(
+                result,
+                parent_task_id=task_id,
+                run_until_chapter=run_until_chapter,
+                max_chapters=max_chapters,
+                auto_continue=auto_continue,
+                runtime_config=runtime_config,
+            )
 
     return _handler
 
@@ -456,6 +475,7 @@ def _create_generation_task(
                 task_id=task_id,
                 root_event_id=root_event_id,
                 prior_handler=_maybe_enqueue_auto_publish_jobs,
+                auto_continue=False,
             ),
         ),
         daemon=True,
@@ -470,6 +490,8 @@ def _create_continue_generation_task(
     runtime_config: Config,
     requested_chapters: int,
     max_chapters: int | None = None,
+    auto_continue: bool = True,
+    run_until_chapter: int | None = None,
     title: str = "",
     subtitle: str = "",
     message: str = "",
@@ -514,6 +536,11 @@ def _create_continue_generation_task(
                 task_id=task_id,
                 root_event_id=root_event_id,
                 prior_handler=_maybe_enqueue_auto_publish_jobs,
+                runtime_config=runtime_config,
+                auto_continue=auto_continue,
+                run_until_chapter=run_until_chapter,
+                max_chapters=max_chapters,
+                create_continue_generation_task=_create_continue_generation_task,
             ),
         ),
         daemon=True,

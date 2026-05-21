@@ -88,6 +88,7 @@ IssueGroup = Literal[
 class DecisionEventType:
     GENERATION_REQUESTED = "generation_requested"
     CONTINUE_REQUESTED = "continue_requested"
+    AUTO_CONTINUE_DECISION = "auto_continue_decision"
     RUN_STARTED = "run_started"
     RUN_COMPLETED = "run_completed"
     RUN_COMPLETED_WITH_FAILURES = "run_completed_with_failures"
@@ -118,6 +119,7 @@ class DecisionEventType:
     TERMINATE_REACHED = "terminate_reached"
 
     REVIEW_VERDICT_RECORDED = "review_verdict_recorded"
+    REVIEW_ENGINE_DECISION = "review_engine_decision"
     REPAIR_STARTED = "repair_started"
     REPAIR_FAILED = "repair_failed"
     REPAIR_SUCCEEDED = "repair_succeeded"
@@ -179,6 +181,7 @@ class DecisionEventType:
     PERSONALITY_ASSIGNMENT_BACKFILL_COMPLETED = "personality_assignment_backfill_completed"
     PERSONALITY_RELATIONSHIP_ENRICHED = "personality_relationship_enriched"
     CHARACTER_INTEGRITY_CHECK_FAILED = "character_integrity_check_failed"
+    LEGACY_COMPATIBILITY_USED = "legacy_compatibility_used"
     LEGACY_PROJECTION_FAILED = "legacy_projection_failed"
     LEGACY_REGION_PROMOTION_STARTED = "legacy_region_promotion_started"
     LEGACY_REGION_PROMOTION_SUCCEEDED = "legacy_region_promotion_succeeded"
@@ -229,6 +232,7 @@ class DecisionEventType:
 KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.GENERATION_REQUESTED,
     DecisionEventType.CONTINUE_REQUESTED,
+    DecisionEventType.AUTO_CONTINUE_DECISION,
     DecisionEventType.RUN_STARTED,
     DecisionEventType.RUN_COMPLETED,
     DecisionEventType.RUN_COMPLETED_WITH_FAILURES,
@@ -256,6 +260,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.TERMINATE_REQUESTED,
     DecisionEventType.TERMINATE_REACHED,
     DecisionEventType.REVIEW_VERDICT_RECORDED,
+    DecisionEventType.REVIEW_ENGINE_DECISION,
     DecisionEventType.REPAIR_STARTED,
     DecisionEventType.REPAIR_FAILED,
     DecisionEventType.REPAIR_SUCCEEDED,
@@ -304,6 +309,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.BOOK_STATE_COMPILE_SUCCEEDED,
     DecisionEventType.BOOK_STATE_COMPILE_FAILED,
     DecisionEventType.PERSONALITY_LOADOUT_UPDATED,
+    DecisionEventType.LEGACY_COMPATIBILITY_USED,
     DecisionEventType.LEGACY_PROJECTION_FAILED,
     DecisionEventType.LEGACY_REGION_PROMOTION_STARTED,
     DecisionEventType.LEGACY_REGION_PROMOTION_SUCCEEDED,

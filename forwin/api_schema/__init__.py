@@ -101,6 +101,7 @@ from .genesis import (
     BookGenesisRefineRequest,
     BookGenesisNameGenerateRequest,
     BookGenesisNameGenerateResponse,
+    StartWritingRequest,
     StartWritingResponse,
 )
 
@@ -261,6 +262,7 @@ __all__ = [
     'BookGenesisRefineRequest',
     'BookGenesisNameGenerateRequest',
     'BookGenesisNameGenerateResponse',
+    'StartWritingRequest',
     'StartWritingResponse',
     'ProjectArcSnapshotFields',
     'ProjectAutomationPublishSettings',

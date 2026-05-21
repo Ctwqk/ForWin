@@ -5,7 +5,6 @@ from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.review_engine.engine import AutoDecisionEngine
 from forwin.review_engine.rules.review_outcome import build_review_outcome_rules
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
-from forwin.reviewer.outcome import ReviewOutcomeRouter
 
 
 def _input(
@@ -36,19 +35,13 @@ def _engine_decision(input_payload: DecisionInput) -> Decision:
 
 def test_clean_pass_matches_review_outcome_router() -> None:
     input_payload = _input(review=ReviewVerdict(verdict="pass"))
-    legacy = ReviewOutcomeRouter().route(
-        review=input_payload.review,
-        signals=input_payload.signals,
-        open_obligations=input_payload.open_obligations,
-        current_chapter=input_payload.chapter_number,
-        target_total_chapters=input_payload.target_total_chapters,
-    )
 
     decision = _engine_decision(input_payload)
 
-    assert decision.sub_action["legacy_action"] == legacy.action
+    assert decision.sub_action["review_action"] == "commit_clean"
     assert decision.outcome == "auto_approve"
-    assert decision.routed_from == "ReviewOutcomeRouter"
+    assert decision.routed_from == "review_engine"
+    assert "legacy_action" not in decision.sub_action
 
 
 def test_placeholder_failure_matches_review_outcome_router() -> None:
@@ -65,19 +58,12 @@ def test_placeholder_failure_matches_review_outcome_router() -> None:
             ],
         )
     )
-    legacy = ReviewOutcomeRouter().route(
-        review=input_payload.review,
-        signals=input_payload.signals,
-        open_obligations=input_payload.open_obligations,
-        current_chapter=input_payload.chapter_number,
-        target_total_chapters=input_payload.target_total_chapters,
-    )
 
     decision = _engine_decision(input_payload)
 
-    assert legacy.action == "local_rewrite"
-    assert decision.sub_action["legacy_action"] == legacy.action
+    assert decision.sub_action["review_action"] == "local_rewrite"
     assert decision.outcome == "local_repair"
+    assert decision.routed_from == "review_engine"
 
 
 def test_plan_defer_matches_review_outcome_router() -> None:
@@ -91,19 +77,12 @@ def test_plan_defer_matches_review_outcome_router() -> None:
         description="动机需要后续解释。",
     )
     input_payload = _input(review=ReviewVerdict(verdict="warn"), signals=[signal])
-    legacy = ReviewOutcomeRouter().route(
-        review=input_payload.review,
-        signals=input_payload.signals,
-        open_obligations=input_payload.open_obligations,
-        current_chapter=input_payload.chapter_number,
-        target_total_chapters=input_payload.target_total_chapters,
-    )
 
     decision = _engine_decision(input_payload)
 
-    assert legacy.action == "defer_with_chapter_plan_patch"
-    assert decision.sub_action["legacy_action"] == legacy.action
+    assert decision.sub_action["review_action"] == "defer_with_chapter_plan_patch"
     assert decision.outcome == "chapter_patch"
+    assert decision.routed_from == "review_engine"
 
 
 def test_final_block_matches_review_outcome_router() -> None:
@@ -122,16 +101,9 @@ def test_final_block_matches_review_outcome_router() -> None:
         current_chapter=20,
         target_total_chapters=20,
     )
-    legacy = ReviewOutcomeRouter().route(
-        review=input_payload.review,
-        signals=input_payload.signals,
-        open_obligations=input_payload.open_obligations,
-        current_chapter=input_payload.chapter_number,
-        target_total_chapters=input_payload.target_total_chapters,
-    )
 
     decision = _engine_decision(input_payload)
 
-    assert legacy.action == "block"
-    assert decision.sub_action["legacy_action"] == legacy.action
+    assert decision.sub_action["review_action"] == "block"
     assert decision.outcome == "system_block"
+    assert decision.routed_from == "review_engine"

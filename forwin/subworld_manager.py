@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state import BookStateRepository
 from forwin.director.arc_director import ArcDirector
+from forwin.governance import DecisionEventInfo, DecisionEventType
 from forwin.models import (
     ArcPlanVersion,
     ChapterPlan,
@@ -28,6 +29,7 @@ from forwin.protocol import (
     SubWorldPlanItem,
     SubWorldSummary,
 )
+from forwin.review_engine.audit import build_legacy_compatibility_payload
 from forwin.state.updater import StateUpdater
 
 
@@ -47,6 +49,43 @@ def _load_json(raw: str, default):
         return json.loads(raw or "")
     except (json.JSONDecodeError, TypeError):
         return default
+
+
+def _record_subworld_legacy_compatibility(
+    *,
+    updater: StateUpdater,
+    project_id: str,
+    chapter_number: int,
+    compat_feature: str,
+    usage_kind: str,
+    usage_reason: str,
+    legacy_identifier: str = "",
+    canonical_identifier: str = "",
+) -> None:
+    try:
+        updater.save_decision_event(
+            DecisionEventInfo(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                scope="chapter" if int(chapter_number or 0) else "project",
+                event_family="runtime_observation",
+                event_type=DecisionEventType.LEGACY_COMPATIBILITY_USED,
+                summary=f"legacy compatibility used: {compat_feature}",
+                reason=usage_reason,
+                payload=build_legacy_compatibility_payload(
+                    compat_layer="subworld",
+                    compat_feature=compat_feature,
+                    usage_kind=usage_kind,
+                    source_module="forwin.subworld_manager",
+                    usage_reason=usage_reason,
+                    legacy_identifier=legacy_identifier,
+                    canonical_identifier=canonical_identifier,
+                    related_stage="subworld_plan_delta",
+                ),
+            )
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _clean_token(text: str) -> str:
@@ -124,6 +163,17 @@ class SubWorldManager:
                 legacy_entity_id = str(metadata.get("legacy_entity_id") or "").strip()
                 if legacy_entity_id and session.get(Entity, legacy_entity_id) is None:
                     legacy_entity_id = ""
+                if legacy_entity_id:
+                    _record_subworld_legacy_compatibility(
+                        updater=StateUpdater(session),
+                        project_id=project_id,
+                        chapter_number=0,
+                        compat_feature="subworld.legacy_entity_id_bridge",
+                        usage_kind="write_bridge",
+                        usage_reason="BookState character metadata provided legacy_entity_id for SubWorld roster",
+                        legacy_identifier=legacy_entity_id,
+                        canonical_identifier=node.id,
+                    )
                 if node.id in rostered_characters or (legacy_entity_id and legacy_entity_id in rostered):
                     continue
                 session.add(
@@ -406,6 +456,27 @@ class SubWorldManager:
                 entity_id = entity_map.get(seed.name) or existing_names.get(seed.name)
                 if entity_id and session.get(Entity, entity_id) is None:
                     entity_id = ""
+                if entity_id:
+                    _record_subworld_legacy_compatibility(
+                        updater=updater,
+                        project_id=project_id,
+                        chapter_number=max(0, int(chapter_number or 0)),
+                        compat_feature="subworld.legacy_entity_id_bridge",
+                        usage_kind="write_bridge",
+                        usage_reason="SubWorld character creation reused an existing legacy entity id",
+                        legacy_identifier=entity_id,
+                        canonical_identifier=seed.name,
+                    )
+                else:
+                    _record_subworld_legacy_compatibility(
+                        updater=updater,
+                        project_id=project_id,
+                        chapter_number=max(0, int(chapter_number or 0)),
+                        compat_feature="subworld.create_legacy_entity",
+                        usage_kind="write_bridge",
+                        usage_reason="SubWorld character creation requested a legacy entity row",
+                        canonical_identifier=seed.name,
+                    )
                 from forwin.characters.creation import CharacterCreationHelper
                 from forwin.characters.models import CharacterCreationRequest
 

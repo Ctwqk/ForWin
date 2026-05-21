@@ -27,9 +27,10 @@ def claim_generation_task(
             .where(
                 GenerationTask.deleted_at.is_(None),
                 GenerationTask.task_kind == "generation",
+                GenerationTask.cancel_requested.is_(False),
+                GenerationTask.pause_requested.is_(False),
                 or_(
                     GenerationTask.status == "queued",
-                    GenerationTask.status == "starting",
                     (
                         (GenerationTask.status == "running")
                         & (

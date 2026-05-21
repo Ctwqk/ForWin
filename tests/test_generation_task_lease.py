@@ -70,6 +70,66 @@ def test_expired_running_task_can_be_reclaimed() -> None:
         engine.dispose()
 
 
+def test_claim_generation_task_does_not_claim_non_expired_running_task() -> None:
+    engine = get_engine(postgres_test_url("generation-task-non-expired"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    now = datetime.now(timezone.utc)
+    try:
+        with Session.begin() as session:
+            session.add(
+                GenerationTask(
+                    id="task-running-owned",
+                    task_kind="generation",
+                    status="running",
+                    project_id="project-1",
+                    lease_owner="worker-1",
+                    lease_expires_at=now + timedelta(minutes=5),
+                    heartbeat_at=now,
+                )
+            )
+
+        with Session.begin() as session:
+            task = claim_generation_task(session, worker_id="worker-2", lease_seconds=300)
+
+        assert task is None
+    finally:
+        engine.dispose()
+
+
+def test_claim_generation_task_skips_paused_or_cancel_requested_queued_tasks() -> None:
+    engine = get_engine(postgres_test_url("generation-task-claim-flags"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    try:
+        with Session.begin() as session:
+            session.add_all(
+                [
+                    GenerationTask(
+                        id="task-paused-before-claim",
+                        task_kind="generation",
+                        status="queued",
+                        project_id="project-1",
+                        pause_requested=True,
+                    ),
+                    GenerationTask(
+                        id="task-cancel-before-claim",
+                        task_kind="generation",
+                        status="queued",
+                        project_id="project-2",
+                        cancel_requested=True,
+                    ),
+                ]
+            )
+
+        with Session.begin() as session:
+            task = claim_generation_task(session, worker_id="worker-1", lease_seconds=300)
+
+        assert task is None
+    finally:
+        engine.dispose()
+
+
 def test_heartbeat_extends_matching_running_lease() -> None:
     engine = get_engine(postgres_test_url("generation-task-heartbeat"))
     init_db(engine)

@@ -167,6 +167,7 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
         _upgrade_world_model_canonical_pages(conn)
         _upgrade_world_model_projection_cache_fields(conn)
         _upgrade_character_identity_map(conn)
+        _drop_obsolete_character_identity_legacy_bridge(conn)
         _upgrade_narrative_obligations(conn)
         _upgrade_canon_admission_obligation_fields(conn)
         _upgrade_future_plan_audit_runs(conn)
@@ -366,6 +367,23 @@ def _upgrade_character_identity_map(conn) -> None:
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_book_node ON character_identity_map (project_id, book_state_node_id)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_genesis ON character_identity_map (project_id, genesis_ref_id)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_status ON character_identity_map (project_id, status)"))
+
+
+def _drop_obsolete_character_identity_legacy_bridge(conn) -> None:
+    conn.execute(text("DROP INDEX IF EXISTS ix_character_identity_project_legacy"))
+    conn.execute(text("ALTER TABLE character_identity_map DROP COLUMN IF EXISTS legacy_entity_id"))
+    conn.execute(
+        text(
+            "ALTER TABLE IF EXISTS relation_edges "
+            "DROP CONSTRAINT IF EXISTS relation_edges_source_entity_id_fkey"
+        )
+    )
+    conn.execute(
+        text(
+            "ALTER TABLE IF EXISTS relation_edges "
+            "DROP CONSTRAINT IF EXISTS relation_edges_target_entity_id_fkey"
+        )
+    )
 
 
 def _upgrade_narrative_obligations(conn) -> None:

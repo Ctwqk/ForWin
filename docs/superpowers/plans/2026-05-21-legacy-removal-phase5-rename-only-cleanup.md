@@ -195,7 +195,7 @@ Run:
 
 ```bash
 python3 scripts/audit_legacy_inventory.py --check --strict-patterns
-git grep -n -E 'def _legacy|legacy = _legacy|_legacy\\(|from forwin import book_genesis as legacy|legacy\\.|legacy_outcome|legacy_shadow_evaluated|legacy_safety_net_used|legacy_safety_net_chapters|legacy_action|legacy_decision|legacy_severity|legacy_final_acceptance_gate|_ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION' -- forwin scripts ':!forwin/migrations/versions'
+git grep -n -E 'def _legacy\\(\\):|legacy = _legacy|_legacy\\(\\)\\.|from forwin import book_genesis as legacy|legacy\\._|legacy\\.GENESIS_STAGE_ORDER|legacy_outcome|legacy_shadow_evaluated|legacy_safety_net_used|legacy_safety_net_chapters|legacy_action|legacy_decision|legacy_severity|legacy_final_acceptance_gate|_ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION' -- forwin/genesis_handoff forwin/genesis_workspace forwin/orchestrator_loop_core forwin/review_engine
 ```
 
 Expected: audit passes and grep returns no production hits.

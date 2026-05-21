@@ -16,10 +16,10 @@ from .prompts import GenesisPromptBuilder
 from .revision_service import GenesisRevisionService
 
 
-def _legacy():
-    from forwin import book_genesis as legacy
+def _book_genesis():
+    from forwin import book_genesis
 
-    return legacy
+    return book_genesis
 
 
 class GenesisWorkspaceService:
@@ -51,12 +51,12 @@ class GenesisWorkspaceService:
         project: Project,
         brief_seed: dict[str, Any] | None = None,
     ) -> BookGenesisRevision:
-        legacy = _legacy()
+        book_genesis = _book_genesis()
         pack = self.revisions.create_initial_pack(project, brief_seed)
         row = updater.create_book_genesis_revision(
             project_id=project.id,
             revision=1,
-            pack_json=legacy._json_dump(pack),
+            pack_json=book_genesis._json_dump(pack),
             status="draft",
         )
         project.active_genesis_revision_id = row.id
@@ -88,48 +88,48 @@ class GenesisWorkspaceService:
         patch: dict[str, Any],
         reason: str = "",
     ) -> BookGenesisRevision:
-        legacy = _legacy()
-        legacy._ensure_revision_is_current(session, project, revision)
+        book_genesis = _book_genesis()
+        book_genesis._ensure_revision_is_current(session, project, revision)
         current = self.load_pack(revision)
         previous_stage_payloads = {
-            stage_key: legacy._json_clone(legacy._pack_stage_payload(current, stage_key))
-            for stage_key in legacy.GENESIS_STAGE_ORDER
+            stage_key: book_genesis._json_clone(book_genesis._pack_stage_payload(current, stage_key))
+            for stage_key in book_genesis.GENESIS_STAGE_ORDER
         }
-        next_pack = legacy._deep_merge(current, patch)
+        next_pack = book_genesis._deep_merge(current, patch)
         if "world" in patch and isinstance(next_pack.get("world"), dict):
             next_pack["world"] = self.normalizer.normalize_world_root(
                 project=project,
                 payload=next_pack.get("world") or {},
-                fallback=legacy._fallback_world(project, current),
+                fallback=book_genesis._fallback_world(project, current),
             )
         if "book_arc_blueprint" in patch and isinstance(next_pack.get("book_arc_blueprint"), dict):
             next_pack["book_arc_blueprint"] = self.normalizer.normalize_book_blueprint(
                 project=project,
                 payload=next_pack.get("book_arc_blueprint") or {},
-                fallback=legacy._fallback_blueprint(project, current),
+                fallback=book_genesis._fallback_blueprint(project, current),
             )
-        now = legacy._utc_iso()
+        now = book_genesis._utc_iso()
         stage_states = next_pack.get("stage_states") if isinstance(next_pack.get("stage_states"), dict) else {}
-        for stage_key, section_key in legacy._STAGE_TO_SECTION.items():
+        for stage_key, section_key in book_genesis._STAGE_TO_SECTION.items():
             patched = False
             if section_key in patch:
                 if stage_key == "world":
-                    patched = not legacy._deep_equal(
-                        legacy._world_stage_state_view(previous_stage_payloads.get(stage_key)),
-                        legacy._world_stage_state_view(legacy._pack_stage_payload(next_pack, stage_key)),
+                    patched = not book_genesis._deep_equal(
+                        book_genesis._world_stage_state_view(previous_stage_payloads.get(stage_key)),
+                        book_genesis._world_stage_state_view(book_genesis._pack_stage_payload(next_pack, stage_key)),
                     )
                 else:
                     patched = True
             elif "world" in patch and stage_key in {"world", "map", "story_engine"}:
                 if stage_key == "world":
-                    patched = not legacy._deep_equal(
-                        legacy._world_stage_state_view(previous_stage_payloads.get(stage_key)),
-                        legacy._world_stage_state_view(legacy._pack_stage_payload(next_pack, stage_key)),
+                    patched = not book_genesis._deep_equal(
+                        book_genesis._world_stage_state_view(previous_stage_payloads.get(stage_key)),
+                        book_genesis._world_stage_state_view(book_genesis._pack_stage_payload(next_pack, stage_key)),
                     )
                 else:
-                    patched = not legacy._deep_equal(
+                    patched = not book_genesis._deep_equal(
                         previous_stage_payloads.get(stage_key),
-                        legacy._pack_stage_payload(next_pack, stage_key),
+                        book_genesis._pack_stage_payload(next_pack, stage_key),
                     )
             if not patched:
                 continue
@@ -147,7 +147,7 @@ class GenesisWorkspaceService:
         new_row = updater.create_book_genesis_revision(
             project_id=project.id,
             revision=int(getattr(revision, "revision", 0) or 0) + 1,
-            pack_json=legacy._json_dump(next_pack),
+            pack_json=book_genesis._json_dump(next_pack),
             based_on_revision_id=str(getattr(revision, "id", "") or ""),
             status="draft",
         )
@@ -181,15 +181,15 @@ class GenesisWorkspaceService:
         stage_key: str,
         event_type: str = DecisionEventType.GENESIS_STAGE_GENERATED,
     ) -> tuple[BookGenesisRevision, PromptTrace]:
-        legacy = _legacy()
-        if stage_key not in legacy.GENESIS_STAGE_ORDER:
+        book_genesis = _book_genesis()
+        if stage_key not in book_genesis.GENESIS_STAGE_ORDER:
             raise ValueError(f"未知 Genesis stage: {stage_key}")
         pack = self.load_pack(revision)
         generated, trace_payload = self.owner._generate_stage_payload(project=project, pack=pack, stage_key=stage_key)
-        legacy._ensure_revision_is_current(session, project, revision)
+        book_genesis._ensure_revision_is_current(session, project, revision)
         next_pack = dict(pack)
-        legacy._set_pack_stage_payload(next_pack, stage_key, generated)
-        stage_states = next_pack.get("stage_states") if isinstance(next_pack.get("stage_states"), dict) else legacy._empty_stage_states()
+        book_genesis._set_pack_stage_payload(next_pack, stage_key, generated)
+        stage_states = next_pack.get("stage_states") if isinstance(next_pack.get("stage_states"), dict) else book_genesis._empty_stage_states()
         stage_state = stage_states.get(stage_key) if isinstance(stage_states.get(stage_key), dict) else {}
         parent_trace_id = str(stage_state.get("last_trace_id", "") or "")
         stage_state.update(
@@ -197,7 +197,7 @@ class GenesisWorkspaceService:
                 "stage_key": stage_key,
                 "status": "generated",
                 "locked": False,
-                "updated_at": legacy._utc_iso(),
+                "updated_at": book_genesis._utc_iso(),
             }
         )
         stage_states[stage_key] = stage_state
@@ -226,11 +226,11 @@ class GenesisWorkspaceService:
             template_id=f"genesis:{stage_key}",
             template_version="v1",
             effective_system_prompt=str(trace_payload.get("effective_system_prompt", "")),
-            prompt_layers_json=legacy._json_dump(trace_payload.get("prompt_layers", [])),
-            input_snapshot_json=legacy._json_dump(trace_payload.get("input_snapshot", {})),
-            model_profile_json=legacy._json_dump(trace_payload.get("model_profile", {})),
-            attempts_json=legacy._json_dump(trace_payload.get("attempts", [])),
-            output_summary_json=legacy._json_dump(trace_payload.get("output_summary", {})),
+            prompt_layers_json=book_genesis._json_dump(trace_payload.get("prompt_layers", [])),
+            input_snapshot_json=book_genesis._json_dump(trace_payload.get("input_snapshot", {})),
+            model_profile_json=book_genesis._json_dump(trace_payload.get("model_profile", {})),
+            attempts_json=book_genesis._json_dump(trace_payload.get("attempts", [])),
+            output_summary_json=book_genesis._json_dump(trace_payload.get("output_summary", {})),
             backend=str(trace_payload.get("backend", "") or ""),
             codex_job_id=str(trace_payload.get("codex_job_id", "") or ""),
             permission_profile=str(trace_payload.get("permission_profile", "") or ""),
@@ -247,7 +247,7 @@ class GenesisWorkspaceService:
         new_row = updater.create_book_genesis_revision(
             project_id=project.id,
             revision=int(getattr(revision, "revision", 0) or 0) + 1,
-            pack_json=legacy._json_dump(next_pack),
+            pack_json=book_genesis._json_dump(next_pack),
             based_on_revision_id=str(getattr(revision, "id", "") or ""),
             status="draft",
         )
@@ -287,10 +287,10 @@ class GenesisWorkspaceService:
         target_path: str = "",
         reason: str = "",
     ) -> tuple[BookGenesisRevision, PromptTrace]:
-        legacy = _legacy()
+        book_genesis = _book_genesis()
         normalized_instruction = str(instruction or "").strip()
         normalized_path = str(target_path or "").strip()
-        if stage_key not in legacy.GENESIS_STAGE_ORDER:
+        if stage_key not in book_genesis.GENESIS_STAGE_ORDER:
             raise ValueError(f"未知 Genesis stage: {stage_key}")
         if not normalized_instruction:
             raise ValueError("refine instruction 不能为空")
@@ -302,10 +302,10 @@ class GenesisWorkspaceService:
             instruction=normalized_instruction,
             target_path=normalized_path,
         )
-        legacy._ensure_revision_is_current(session, project, revision)
+        book_genesis._ensure_revision_is_current(session, project, revision)
         next_pack = dict(pack)
-        legacy._set_pack_stage_payload(next_pack, stage_key, refined_payload)
-        stage_states = next_pack.get("stage_states") if isinstance(next_pack.get("stage_states"), dict) else legacy._empty_stage_states()
+        book_genesis._set_pack_stage_payload(next_pack, stage_key, refined_payload)
+        stage_states = next_pack.get("stage_states") if isinstance(next_pack.get("stage_states"), dict) else book_genesis._empty_stage_states()
         stage_state = stage_states.get(stage_key) if isinstance(stage_states.get(stage_key), dict) else {}
         parent_trace_id = str(stage_state.get("last_trace_id", "") or "")
         stage_state.update(
@@ -313,7 +313,7 @@ class GenesisWorkspaceService:
                 "stage_key": stage_key,
                 "status": "edited",
                 "locked": False,
-                "updated_at": legacy._utc_iso(),
+                "updated_at": book_genesis._utc_iso(),
             }
         )
         stage_states[stage_key] = stage_state
@@ -343,11 +343,11 @@ class GenesisWorkspaceService:
             template_id=f"genesis_refine:{stage_key}",
             template_version="v1",
             effective_system_prompt=str(trace_payload.get("effective_system_prompt", "")),
-            prompt_layers_json=legacy._json_dump(trace_payload.get("prompt_layers", [])),
-            input_snapshot_json=legacy._json_dump(trace_payload.get("input_snapshot", {})),
-            model_profile_json=legacy._json_dump(trace_payload.get("model_profile", {})),
-            attempts_json=legacy._json_dump(trace_payload.get("attempts", [])),
-            output_summary_json=legacy._json_dump(trace_payload.get("output_summary", {})),
+            prompt_layers_json=book_genesis._json_dump(trace_payload.get("prompt_layers", [])),
+            input_snapshot_json=book_genesis._json_dump(trace_payload.get("input_snapshot", {})),
+            model_profile_json=book_genesis._json_dump(trace_payload.get("model_profile", {})),
+            attempts_json=book_genesis._json_dump(trace_payload.get("attempts", [])),
+            output_summary_json=book_genesis._json_dump(trace_payload.get("output_summary", {})),
             backend=str(trace_payload.get("backend", "") or ""),
             codex_job_id=str(trace_payload.get("codex_job_id", "") or ""),
             permission_profile=str(trace_payload.get("permission_profile", "") or ""),
@@ -364,7 +364,7 @@ class GenesisWorkspaceService:
         new_row = updater.create_book_genesis_revision(
             project_id=project.id,
             revision=int(getattr(revision, "revision", 0) or 0) + 1,
-            pack_json=legacy._json_dump(next_pack),
+            pack_json=book_genesis._json_dump(next_pack),
             based_on_revision_id=str(getattr(revision, "id", "") or ""),
             status="draft",
         )
@@ -383,19 +383,19 @@ class GenesisWorkspaceService:
         revision: BookGenesisRevision,
         stage_key: str,
     ) -> BookGenesisRevision:
-        legacy = _legacy()
-        if stage_key not in legacy.GENESIS_STAGE_ORDER:
+        book_genesis = _book_genesis()
+        if stage_key not in book_genesis.GENESIS_STAGE_ORDER:
             raise ValueError(f"未知 Genesis stage: {stage_key}")
-        legacy._ensure_revision_is_current(session, project, revision)
+        book_genesis._ensure_revision_is_current(session, project, revision)
         pack = self.load_pack(revision)
-        stage_states = pack.get("stage_states") if isinstance(pack.get("stage_states"), dict) else legacy._empty_stage_states()
+        stage_states = pack.get("stage_states") if isinstance(pack.get("stage_states"), dict) else book_genesis._empty_stage_states()
         stage_state = stage_states.get(stage_key) if isinstance(stage_states.get(stage_key), dict) else {}
         stage_state.update(
             {
                 "stage_key": stage_key,
                 "status": "locked",
                 "locked": True,
-                "updated_at": legacy._utc_iso(),
+                "updated_at": book_genesis._utc_iso(),
             }
         )
         stage_states[stage_key] = stage_state
@@ -403,12 +403,12 @@ class GenesisWorkspaceService:
         new_row = updater.create_book_genesis_revision(
             project_id=project.id,
             revision=int(getattr(revision, "revision", 0) or 0) + 1,
-            pack_json=legacy._json_dump(pack),
+            pack_json=book_genesis._json_dump(pack),
             based_on_revision_id=str(getattr(revision, "id", "") or ""),
             status="draft",
         )
         project.active_genesis_revision_id = new_row.id
-        if legacy._ready_for_start(pack):
+        if book_genesis._ready_for_start(pack):
             project.creation_status = "genesis_ready"
         session.add(project)
         updater.save_decision_event(
@@ -428,9 +428,9 @@ class GenesisWorkspaceService:
         return new_row
 
     def build_detail(self, *, session: Session, project: Project) -> dict[str, Any]:
-        legacy = _legacy()
+        book_genesis = _book_genesis()
         revision = self.active_revision(session, project)
-        pack = self.load_pack(revision) if revision is not None else legacy._initial_pack(project)
+        pack = self.load_pack(revision) if revision is not None else book_genesis._initial_pack(project)
         prompt_traces = session.execute(
             select(PromptTrace)
             .where(PromptTrace.project_id == project.id)
@@ -451,18 +451,18 @@ class GenesisWorkspaceService:
                     "template_id": row.template_id,
                     "template_version": row.template_version,
                     "effective_system_prompt": row.effective_system_prompt,
-                    "prompt_layers": legacy._json_load_list_dicts(row.prompt_layers_json),
-                    "input_snapshot": legacy._json_load_object(row.input_snapshot_json),
-                    "model_profile": legacy._json_load_object(row.model_profile_json),
-                    "attempts": legacy._json_load_list_dicts(row.attempts_json),
-                    "output_summary": legacy._json_load_object(row.output_summary_json),
+                    "prompt_layers": book_genesis._json_load_list_dicts(row.prompt_layers_json),
+                    "input_snapshot": book_genesis._json_load_object(row.input_snapshot_json),
+                    "model_profile": book_genesis._json_load_object(row.model_profile_json),
+                    "attempts": book_genesis._json_load_list_dicts(row.attempts_json),
+                    "output_summary": book_genesis._json_load_object(row.output_summary_json),
                     "decision_event_id": row.decision_event_id,
                     "parent_trace_id": row.parent_trace_id,
                     "created_at": row.created_at.isoformat() if row.created_at else "",
                 }
                 for row in prompt_traces
             ],
-            "can_start_writing": legacy._ready_for_start(pack)
+            "can_start_writing": book_genesis._ready_for_start(pack)
             and str(getattr(project, "creation_status", "") or "") == "genesis_ready",
         }
 

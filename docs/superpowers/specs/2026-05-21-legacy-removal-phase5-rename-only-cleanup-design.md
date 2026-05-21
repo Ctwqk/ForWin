@@ -65,7 +65,7 @@ python3 -m pytest tests/test_book_genesis_flow.py tests/test_genesis_workspace_s
 python3 -m pytest tests/review_engine/test_audit.py tests/review_engine/test_shadow_mode.py tests/review_engine/test_rule_parity.py tests/review_engine/test_obligation_scope.py -q
 python3 -m pytest tests/test_production_scheduler.py tests/test_architecture_boundaries.py -q
 python3 scripts/audit_legacy_inventory.py --check --strict-patterns
-git grep -n -E 'def _legacy|legacy = _legacy|_legacy\\(|from forwin import book_genesis as legacy|legacy\\.|legacy_outcome|legacy_shadow_evaluated|legacy_safety_net_used|legacy_safety_net_chapters|legacy_action|legacy_decision|legacy_severity|legacy_final_acceptance_gate|_ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION' -- forwin scripts ':!forwin/migrations/versions'
+git grep -n -E 'def _legacy\\(\\):|legacy = _legacy|_legacy\\(\\)\\.|from forwin import book_genesis as legacy|legacy\\._|legacy\\.GENESIS_STAGE_ORDER|legacy_outcome|legacy_shadow_evaluated|legacy_safety_net_used|legacy_safety_net_chapters|legacy_action|legacy_decision|legacy_severity|legacy_final_acceptance_gate|_ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION' -- forwin/genesis_handoff forwin/genesis_workspace forwin/orchestrator_loop_core forwin/review_engine
 python3 -m compileall -q forwin
 git diff --check
 ```

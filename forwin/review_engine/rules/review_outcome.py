@@ -211,9 +211,6 @@ def review_action_from_decision(decision: Decision, fallback_action: str = "") -
     review_action = str(decision.sub_action.get("review_action") or "").strip()
     if review_action:
         return review_action
-    legacy_action = str(decision.sub_action.get("legacy_action") or "").strip()
-    if legacy_action:
-        return legacy_action
     return _review_action_for_outcome(str(decision.outcome or "").strip(), fallback_action)
 
 

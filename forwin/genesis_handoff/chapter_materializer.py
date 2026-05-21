@@ -10,10 +10,10 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.state.updater import StateUpdater
 
 
-def _legacy():
-    from forwin import book_genesis as legacy
+def _book_genesis():
+    from forwin import book_genesis
 
-    return legacy
+    return book_genesis
 
 
 class GenesisChapterMaterializer:
@@ -31,7 +31,7 @@ class GenesisChapterMaterializer:
         decision_event_id: str = "",
         ensure_arc_map: bool = True,
     ) -> ArcPlanVersion:
-        legacy = _legacy()
+        book_genesis = _book_genesis()
         pack = self.owner.load_pack(revision)
         blueprint = pack.get("book_arc_blueprint") if isinstance(pack.get("book_arc_blueprint"), dict) else {}
         arc_payload = next(
@@ -89,11 +89,11 @@ class GenesisChapterMaterializer:
                 template_id=f"launch_arc_plan:{arc_row.arc_number}",
                 template_version="v1",
                 effective_system_prompt=str(trace_payload.get("effective_system_prompt", "")),
-                prompt_layers_json=legacy._json_dump(trace_payload.get("prompt_layers", [])),
-                input_snapshot_json=legacy._json_dump(trace_payload.get("input_snapshot", {})),
-                model_profile_json=legacy._json_dump(trace_payload.get("model_profile", {})),
-                attempts_json=legacy._json_dump(trace_payload.get("attempts", [])),
-                output_summary_json=legacy._json_dump(trace_payload.get("output_summary", {})),
+                prompt_layers_json=book_genesis._json_dump(trace_payload.get("prompt_layers", [])),
+                input_snapshot_json=book_genesis._json_dump(trace_payload.get("input_snapshot", {})),
+                model_profile_json=book_genesis._json_dump(trace_payload.get("model_profile", {})),
+                attempts_json=book_genesis._json_dump(trace_payload.get("attempts", [])),
+                output_summary_json=book_genesis._json_dump(trace_payload.get("output_summary", {})),
                 backend=str(trace_payload.get("backend", "") or ""),
                 codex_job_id=str(trace_payload.get("codex_job_id", "") or ""),
                 permission_profile=str(trace_payload.get("permission_profile", "") or ""),

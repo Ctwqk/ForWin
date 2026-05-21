@@ -21,7 +21,6 @@ def test_decide_obligation_scope_routes_chapter_issue_without_legacy_router() ->
     assert scope.affected_chapters == [4]
     assert decision.outcome == "chapter_patch"
     assert decision.routed_from == "review_engine"
-    assert "legacy_action" not in decision.sub_action
 
 
 def test_decide_obligation_scope_routes_band_issue_without_legacy_router() -> None:

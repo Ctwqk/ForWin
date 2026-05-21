@@ -163,7 +163,7 @@ def _band_checkpoint_issue_hint(issue: BandCheckpointIssueInfo) -> dict[str, str
         "hint_type": str(issue.code or "band_checkpoint_issue"),
         "message": str(issue.description or ""),
         "matched_text": str(issue.detail or ""),
-        "legacy_severity": str(issue.severity or ""),
+        "severity": str(issue.severity or ""),
     }
 
 

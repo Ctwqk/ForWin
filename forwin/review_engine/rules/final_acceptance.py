@@ -9,7 +9,7 @@ def build_final_acceptance_rules(gate: FinalAcceptanceGate | None = None) -> lis
     resolved_gate = gate or FinalAcceptanceGate()
     return [
         DecisionRule(
-            rule_id="legacy_final_acceptance_gate",
+            rule_id="final_acceptance_gate",
             source_dispatcher="FinalAcceptanceGate",
             priority=300,
             matches=lambda input: input.review.repair_verification is not None,
@@ -27,11 +27,11 @@ def _decision_from_final_gate(gate: FinalAcceptanceGate, input: DecisionInput) -
     return Decision(
         outcome="auto_approve" if result.decision == "force_accept" else "manual_review",
         reason=result.reason,
-        rule_id="legacy_final_acceptance_gate",
+        rule_id="final_acceptance_gate",
         missing_evidence=[] if result.forceable else ["force_accept_conditions"],
         routed_from="FinalAcceptanceGate",
         sub_action={
-            "legacy_decision": result.decision,
+            "final_gate_decision": result.decision,
             "forceable": result.forceable,
             "canon_risk": result.canon_risk,
             "residual_issues": list(result.residual_issues),

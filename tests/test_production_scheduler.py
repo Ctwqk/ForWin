@@ -14,7 +14,7 @@ class ActiveGenerationTaskError(RuntimeError):
     pass
 
 
-def test_scheduler_runs_due_projects_and_preserves_legacy_actions() -> None:
+def test_scheduler_runs_due_projects_and_preserves_actions() -> None:
     engine = get_engine(postgres_test_url("production-scheduler"))
     init_db(engine)
     Session = get_session_factory(engine)

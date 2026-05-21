@@ -11,7 +11,7 @@ from forwin.reviser.local_rewrite_executor import LocalRewriteExecutor
 
 def _final_gate_from_engine_decision(decision: Decision) -> FinalGateDecision:
     return FinalGateDecision(
-        decision=str(decision.sub_action.get("legacy_decision") or "manual_review_required"),
+        decision=str(decision.sub_action.get("final_gate_decision") or "manual_review_required"),
         forceable=bool(decision.sub_action.get("forceable")),
         reason=str(decision.reason or ""),
         canon_risk=str(decision.sub_action.get("canon_risk") or "high"),
@@ -153,13 +153,13 @@ def _review_and_maybe_rewrite(
             decision_input=repair_v2_input,
             shadow_mismatch=False,
             live_or_shadow="live",
-            legacy_outcome="",
+            baseline_outcome="",
             engine_outcome=repair_scope or str(repair_v2_decision.outcome or ""),
             live_source="engine",
             shadow_source="",
             engine_live=True,
-            legacy_shadow_evaluated=False,
-            legacy_safety_net_used=False,
+            baseline_shadow_evaluated=False,
+            baseline_safety_net_used=False,
             severe_mismatch=False,
             related_object_type="chapter_review",
             related_object_id=current_review_row.id,

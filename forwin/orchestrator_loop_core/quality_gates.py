@@ -18,7 +18,7 @@ from forwin.review_engine.rules.commit_with_obligation import decide_commit_with
 from forwin.review_engine.rules.structural_patch import decide_structural_patch
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
 
-_ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION = {
+_ENGINE_OUTCOME_TO_REVIEW_ACTION = {
     "auto_approve": "commit_clean",
     "local_repair": "local_rewrite",
     "chapter_patch": "defer_with_chapter_plan_patch",
@@ -36,7 +36,7 @@ def _review_action_for_engine_decision(decision: Decision) -> str:
     review_action = review_action_from_decision(decision, fallback_action)
     if review_action:
         return review_action
-    return _ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION.get(
+    return _ENGINE_OUTCOME_TO_REVIEW_ACTION.get(
         str(decision.outcome or "").strip(),
         fallback_action,
     )
@@ -550,13 +550,13 @@ def _prepare_deferred_acceptance_if_needed(
             decision_input=decision_input,
             shadow_mismatch=False,
             live_or_shadow="live",
-            legacy_outcome="",
+            baseline_outcome="",
             engine_outcome=engine_decision.outcome,
             live_source="engine",
             shadow_source="",
             engine_live=True,
-            legacy_shadow_evaluated=False,
-            legacy_safety_net_used=False,
+            baseline_shadow_evaluated=False,
+            baseline_safety_net_used=False,
             severe_mismatch=False,
             related_object_type="chapter_review",
             related_object_id=review_id,
@@ -681,7 +681,7 @@ def _prepare_deferred_acceptance_if_needed(
                     if commit_decision.outcome == "commit_with_obligation"
                     else "shadow"
                 ),
-                legacy_outcome="",
+                baseline_outcome="",
                 engine_outcome=commit_decision.outcome,
                 live_source=(
                     "engine"
@@ -694,8 +694,8 @@ def _prepare_deferred_acceptance_if_needed(
                     else "engine"
                 ),
                 engine_live=commit_decision.outcome == "commit_with_obligation",
-                legacy_shadow_evaluated=False,
-                legacy_safety_net_used=False,
+                baseline_shadow_evaluated=False,
+                baseline_safety_net_used=False,
                 related_object_type="chapter_review",
                 related_object_id=review_id,
             )
@@ -952,13 +952,13 @@ def _persist_structural_patch_outcome(
                     ),
                     decision_input=decision_input,
                     live_or_shadow="live",
-                    legacy_outcome=decision.outcome,
+                    baseline_outcome=decision.outcome,
                     engine_outcome="system_block",
                     live_source="engine",
                     shadow_source="",
                     engine_live=True,
-                    legacy_shadow_evaluated=False,
-                    legacy_safety_net_used=False,
+                    baseline_shadow_evaluated=False,
+                    baseline_safety_net_used=False,
                     related_object_type="chapter_review",
                     related_object_id=review_id,
                 )

@@ -30,29 +30,32 @@ def test_decision_event_payload_records_live_shadow_sources() -> None:
         input_digest="abc123",
         shadow_mismatch=True,
         live_or_shadow="live",
-        legacy_outcome="manual_review",
+        baseline_outcome="manual_review",
         engine_outcome="auto_approve",
         live_source="engine",
-        shadow_source="legacy",
+        shadow_source="baseline",
         engine_live=True,
-        legacy_shadow_evaluated=True,
-        legacy_safety_net_used=False,
+        baseline_shadow_evaluated=True,
+        baseline_safety_net_used=False,
         severe_shadow_mismatch=True,
     )
 
     assert payload["live_or_shadow"] == "live"
-    assert payload["legacy_outcome"] == "manual_review"
+    assert payload["baseline_outcome"] == "manual_review"
     assert payload["engine_outcome"] == "auto_approve"
     assert payload["shadow_mismatch"] is True
     assert payload["live_source"] == "engine"
-    assert payload["shadow_source"] == "legacy"
+    assert payload["shadow_source"] == "baseline"
     assert payload["engine_live"] is True
-    assert payload["legacy_shadow_evaluated"] is True
-    assert payload["legacy_safety_net_used"] is False
+    assert payload["baseline_shadow_evaluated"] is True
+    assert payload["baseline_safety_net_used"] is False
     assert payload["severe_shadow_mismatch"] is True
+    assert "legacy_outcome" not in payload
+    assert "legacy_shadow_evaluated" not in payload
+    assert "legacy_safety_net_used" not in payload
 
 
-def test_live_cutover_audit_requires_engine_live_without_legacy_safety_net() -> None:
+def test_live_cutover_audit_requires_engine_live_without_baseline_safety_net() -> None:
     summary = summarize_live_cutover_audit(
         [
             {
@@ -61,7 +64,7 @@ def test_live_cutover_audit_requires_engine_live_without_legacy_safety_net() -> 
                     "live_or_shadow": "live",
                     "live_source": "engine",
                     "engine_live": True,
-                    "legacy_safety_net_used": False,
+                    "baseline_safety_net_used": False,
                     "severe_shadow_mismatch": False,
                 },
             },
@@ -69,9 +72,9 @@ def test_live_cutover_audit_requires_engine_live_without_legacy_safety_net() -> 
                 "chapter_number": 2,
                 "payload": {
                     "live_or_shadow": "live",
-                    "live_source": "legacy",
+                    "live_source": "baseline",
                     "engine_live": True,
-                    "legacy_safety_net_used": True,
+                    "baseline_safety_net_used": True,
                     "severe_shadow_mismatch": False,
                 },
             },
@@ -81,7 +84,7 @@ def test_live_cutover_audit_requires_engine_live_without_legacy_safety_net() -> 
                     "live_or_shadow": "live",
                     "live_source": "engine",
                     "engine_live": True,
-                    "legacy_safety_net_used": False,
+                    "baseline_safety_net_used": False,
                     "severe_shadow_mismatch": True,
                 },
             },
@@ -91,7 +94,7 @@ def test_live_cutover_audit_requires_engine_live_without_legacy_safety_net() -> 
 
     assert summary["passed"] is False
     assert summary["engine_live_chapters"] == 2
-    assert summary["legacy_safety_net_chapters"] == [2]
+    assert summary["baseline_safety_net_chapters"] == [2]
     assert summary["severe_mismatch_chapters"] == [3]
 
 
@@ -104,7 +107,7 @@ def test_live_cutover_audit_passes_complete_60_chapter_engine_run() -> None:
                     "live_or_shadow": "live",
                     "live_source": "engine",
                     "engine_live": True,
-                    "legacy_safety_net_used": False,
+                    "baseline_safety_net_used": False,
                     "severe_shadow_mismatch": False,
                 },
             }
@@ -141,7 +144,7 @@ def test_live_cutover_audit_aggregates_multiple_events_per_chapter() -> None:
                     "live_or_shadow": "live",
                     "live_source": "engine",
                     "engine_live": True,
-                    "legacy_safety_net_used": False,
+                    "baseline_safety_net_used": False,
                     "severe_shadow_mismatch": False,
                 },
             },
@@ -151,7 +154,7 @@ def test_live_cutover_audit_aggregates_multiple_events_per_chapter() -> None:
                     "live_or_shadow": "shadow",
                     "live_source": "",
                     "engine_live": False,
-                    "legacy_safety_net_used": False,
+                    "baseline_safety_net_used": False,
                     "severe_shadow_mismatch": False,
                 },
             },

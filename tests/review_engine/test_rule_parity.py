@@ -41,7 +41,6 @@ def test_clean_pass_matches_review_outcome_router() -> None:
     assert decision.sub_action["review_action"] == "commit_clean"
     assert decision.outcome == "auto_approve"
     assert decision.routed_from == "review_engine"
-    assert "legacy_action" not in decision.sub_action
 
 
 def test_placeholder_failure_matches_review_outcome_router() -> None:

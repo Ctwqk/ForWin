@@ -299,7 +299,7 @@ entries:
     status: planned
 
   - id: review_engine.legacy_telemetry_names
-    category: rename_only
+    category: deleted
     owner_area: review_engine
     paths:
       - forwin/orchestrator_loop_core/governance.py
@@ -320,7 +320,7 @@ entries:
       - legacy_final_acceptance_gate
       - _ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION
     reason: Review engine cutover safety net is gone or going away; remaining names should not teach new code to use legacy concepts.
-    removal_phase: phase_5
+    removal_phase: complete
     verification:
       - review_engine_tests
       - audit_script_tests
@@ -328,7 +328,7 @@ entries:
     delete_when:
       - audit payload names use current/previous engine terminology
       - review rules no longer expose legacy-named fields
-    status: planned
+    status: deleted
 
   - id: legacy_compatibility_audit_runtime
     category: runtime_delete
@@ -449,7 +449,7 @@ entries:
     status: planned
 
   - id: genesis.book_genesis_facade_names
-    category: rename_only
+    category: deleted
     owner_area: genesis
     paths:
       - forwin/genesis_handoff/chapter_materializer.py
@@ -457,21 +457,22 @@ entries:
       - forwin/genesis_workspace/name_suggestions.py
       - forwin/genesis_workspace/service.py
     allow_patterns:
-      - def _legacy
+      - 'def _legacy():'
       - legacy = _legacy
       - _legacy()
       - from forwin import book_genesis as legacy
       - return legacy
-      - legacy.
+      - legacy._
+      - legacy.GENESIS_STAGE_ORDER
     reason: These call current book_genesis helpers but use misleading legacy variable/function names.
-    removal_phase: phase_5
+    removal_phase: complete
     verification:
       - genesis_tests
       - inventory_final
     delete_when:
       - helper and variable names use book_genesis_core or genesis_core terminology
       - Genesis stage generate/refine/lock tests pass
-    status: planned
+    status: deleted
 
   - id: genesis.legacy_pack_payload_upgrade
     category: deleted

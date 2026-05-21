@@ -3,10 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 
-def _legacy():
-    from forwin import book_genesis as legacy
+def _book_genesis():
+    from forwin import book_genesis
 
-    return legacy
+    return book_genesis
 
 
 class GenesisNameSuggestionService:
@@ -28,20 +28,20 @@ class GenesisNameSuggestionService:
         nonce: str = "",
         stage_payload_override: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        legacy = _legacy()
+        book_genesis = _book_genesis()
         normalized_stage = str(stage_key or "").strip()
-        if normalized_stage not in legacy.GENESIS_STAGE_ORDER:
+        if normalized_stage not in book_genesis.GENESIS_STAGE_ORDER:
             raise ValueError("未知 Genesis stage。")
         pack = self.owner.load_pack(revision)
         if isinstance(stage_payload_override, dict):
             pack = dict(pack)
-            legacy._set_pack_stage_payload(pack, normalized_stage, stage_payload_override)
-        stage_payload = legacy._pack_stage_payload(pack, normalized_stage)
+            book_genesis._set_pack_stage_payload(pack, normalized_stage, stage_payload_override)
+        stage_payload = book_genesis._pack_stage_payload(pack, normalized_stage)
         normalized_target = str(target_path or "").strip()
         normalized_field = str(field_path or "").strip()
         if not normalized_field:
             raise ValueError("field_path 不能为空。")
-        resolved_kind = str(kind or "").strip() or legacy._infer_name_kind(
+        resolved_kind = str(kind or "").strip() or book_genesis._infer_name_kind(
             stage_key=normalized_stage,
             target_path=normalized_target,
             field_path=normalized_field,
@@ -54,12 +54,12 @@ class GenesisNameSuggestionService:
             stage_payload=stage_payload,
             target_path=normalized_target,
         )
-        civilization = legacy._culture_profile_generator_civilization(culture_profile)
+        civilization = book_genesis._culture_profile_generator_civilization(culture_profile)
         if not civilization:
             raise ValueError("当前对象没有可用的文化背景命名配置。")
         normalized_count = max(1, min(int(count or 1), 12))
         try:
-            suggestions = legacy._generate_culture_names(
+            suggestions = book_genesis._generate_culture_names(
                 civilization=civilization,
                 kind=resolved_kind,
                 count=normalized_count,
@@ -79,7 +79,7 @@ class GenesisNameSuggestionService:
         except Exception as exc:  # noqa: BLE001
             raise ValueError(f"名称生成失败：{exc}") from exc
         applied_value: Any = suggestions
-        if not legacy._field_expects_list(normalized_field) and normalized_count == 1:
+        if not book_genesis._field_expects_list(normalized_field) and normalized_count == 1:
             applied_value = suggestions[0]
         return {
             "ok": True,

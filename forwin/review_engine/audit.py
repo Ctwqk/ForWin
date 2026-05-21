@@ -51,13 +51,13 @@ def build_decision_event_payload(
     input_digest: str,
     shadow_mismatch: bool,
     live_or_shadow: str = "shadow",
-    legacy_outcome: str = "",
+    baseline_outcome: str = "",
     engine_outcome: str = "",
     live_source: str = "",
     shadow_source: str = "",
     engine_live: bool = False,
-    legacy_shadow_evaluated: bool = False,
-    legacy_safety_net_used: bool = False,
+    baseline_shadow_evaluated: bool = False,
+    baseline_safety_net_used: bool = False,
     severe_shadow_mismatch: bool = False,
 ) -> dict[str, object]:
     return {
@@ -70,13 +70,13 @@ def build_decision_event_payload(
         "input_digest": input_digest,
         "shadow_mismatch": bool(shadow_mismatch),
         "live_or_shadow": str(live_or_shadow or "shadow"),
-        "legacy_outcome": str(legacy_outcome or ""),
+        "baseline_outcome": str(baseline_outcome or ""),
         "engine_outcome": str(engine_outcome or ""),
         "live_source": str(live_source or ""),
         "shadow_source": str(shadow_source or ""),
         "engine_live": bool(engine_live),
-        "legacy_shadow_evaluated": bool(legacy_shadow_evaluated),
-        "legacy_safety_net_used": bool(legacy_safety_net_used),
+        "baseline_shadow_evaluated": bool(baseline_shadow_evaluated),
+        "baseline_safety_net_used": bool(baseline_safety_net_used),
         "severe_shadow_mismatch": bool(severe_shadow_mismatch),
     }
 
@@ -420,10 +420,10 @@ def summarize_live_cutover_audit(
 
     expected_range = list(range(1, expected + 1)) if expected else sorted(by_chapter)
     missing_chapters = [chapter for chapter in expected_range if chapter not in by_chapter]
-    legacy_safety_net_chapters = [
+    baseline_safety_net_chapters = [
         chapter
         for chapter, payloads in sorted(by_chapter.items())
-        if any(_uses_legacy_safety_net(payload) for payload in payloads)
+        if any(_uses_baseline_safety_net(payload) for payload in payloads)
     ]
     severe_mismatch_chapters = [
         chapter
@@ -442,7 +442,7 @@ def summarize_live_cutover_audit(
     ]
     passed = not (
         missing_chapters
-        or legacy_safety_net_chapters
+        or baseline_safety_net_chapters
         or severe_mismatch_chapters
         or non_live_chapters
     )
@@ -452,16 +452,16 @@ def summarize_live_cutover_audit(
         "observed_chapters": len(by_chapter),
         "engine_live_chapters": len(engine_live_chapters),
         "missing_chapters": missing_chapters,
-        "legacy_safety_net_chapters": legacy_safety_net_chapters,
+        "baseline_safety_net_chapters": baseline_safety_net_chapters,
         "severe_mismatch_chapters": severe_mismatch_chapters,
         "non_live_chapters": non_live_chapters,
     }
 
 
-def _uses_legacy_safety_net(payload: Mapping[str, Any]) -> bool:
+def _uses_baseline_safety_net(payload: Mapping[str, Any]) -> bool:
     return (
-        bool(payload.get("legacy_safety_net_used"))
-        or str(payload.get("live_source") or "") == "legacy"
+        bool(payload.get("baseline_safety_net_used"))
+        or str(payload.get("live_source") or "") == "baseline"
         or (
             str(payload.get("live_or_shadow") or "") == "live"
             and str(payload.get("routed_from") or "") in {"ReviewOutcomeRouter", "RepairPolicy"}

@@ -26,8 +26,8 @@ def test_shadow_comparison_marks_mismatch() -> None:
 
 def test_shadow_comparison_matches_same_outcome_and_action() -> None:
     result = compare_shadow_decisions(
-        live=Decision("manual_review", "old", "old_rule", [], "old", {"legacy_action": "manual"}),
-        shadow=Decision("manual_review", "new", "new_rule", [], "engine", {"legacy_action": "manual"}),
+        live=Decision("manual_review", "old", "old_rule", [], "old", {"review_action": "manual"}),
+        shadow=Decision("manual_review", "new", "new_rule", [], "engine", {"review_action": "manual"}),
     )
 
     assert result.shadow_mismatch is False

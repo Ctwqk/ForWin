@@ -5,7 +5,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from forwin.book_state import BookStateRepository
-from forwin.governance import DecisionEventInfo, DecisionEventType
+from forwin.governance import DecisionEventInfo
 from forwin.models.base import new_id
 from forwin.personality import (
     CharacterPersonalityLibrary,
@@ -14,12 +14,10 @@ from forwin.personality import (
 )
 from forwin.personality.policy import CharacterPersonalityPolicyResolver
 from forwin.protocol.book_state import WorldNode
-from forwin.review_engine.audit import build_legacy_compatibility_payload
 from forwin.state.updater import StateUpdater
 
 from .events import (
     CHARACTER_CREATED,
-    CHARACTER_IMPORTED_FROM_LEGACY,
     CHARACTER_MERGED_EXISTING,
     CHARACTER_ROSTER_MATERIALIZED,
     PERSONALITY_LOADOUT_AUTO_ASSIGNED,
@@ -61,7 +59,6 @@ class CharacterCreationHelper:
         resolution = self.registry.resolve(
             project_id=request.project_id,
             character_id=request.character_id,
-            legacy_entity_id=request.legacy_entity_id,
             roster_item_id=request.roster_item_id,
             name=request.name,
         )
@@ -75,37 +72,16 @@ class CharacterCreationHelper:
             raise ValueError(f"invalid personality_loadout: {', '.join(assignment.validation.errors)}")
 
         character_id = request.character_id.strip() if request.character_id.strip() else f"char_{new_id()}"
-        legacy_entity_id = request.legacy_entity_id
-        legacy_compat_event_id = ""
-        if request.create_legacy_entity and not legacy_entity_id:
-            entity = StateUpdater(self.session).create_entity(
-                project_id=request.project_id,
-                kind="character",
-                name=request.name,
-                description=request.description,
-                aliases=request.aliases,
-                importance=request.importance,
-                chapter=request.created_at_chapter,
-            )
-            legacy_entity_id = entity.id
-            legacy_compat_event_id = self._save_legacy_entity_compatibility_event(
-                request,
-                legacy_entity_id=legacy_entity_id,
-                character_id=character_id,
-            )
-
         genesis_ref_id = self._genesis_ref_id(request)
         profile = dict(request.profile)
         if request.personality_tags and not profile.get("personality_tags"):
             profile["personality_tags"] = list(request.personality_tags)
         profile["personality_loadout"] = loadout_payload
         metadata = {
-            "legacy_entity_id": legacy_entity_id,
             "roster_item_ids": [request.roster_item_id] if request.roster_item_id else [],
             "character_identity": {
                 "canonical_character_id": character_id,
                 "book_state_node_id": character_id,
-                "legacy_entity_id": legacy_entity_id,
                 "genesis_ref_id": genesis_ref_id,
                 "roster_item_ids": [request.roster_item_id] if request.roster_item_id else [],
             },
@@ -141,7 +117,6 @@ class CharacterCreationHelper:
         self._sync_identity_map(
             request,
             character_id=node.id,
-            legacy_entity_id=legacy_entity_id,
             display_name=node.name,
             aliases=list(node.aliases),
             genesis_ref_id=genesis_ref_id,
@@ -153,12 +128,6 @@ class CharacterCreationHelper:
             as_of_chapter=int(request.created_at_chapter or 0),
             state=dict(request.state),
         )
-        if legacy_entity_id and request.state:
-            StateUpdater(self.session).create_entity_state(
-                legacy_entity_id,
-                int(request.created_at_chapter or 0),
-                dict(request.state),
-            )
         decision_ids = [
             self._save_event(
                 request,
@@ -185,8 +154,6 @@ class CharacterCreationHelper:
                 },
             ),
         ]
-        if legacy_compat_event_id:
-            decision_ids.append(legacy_compat_event_id)
         return CharacterCreationResult(
             project_id=request.project_id,
             character_id=node.id,
@@ -194,7 +161,6 @@ class CharacterCreationHelper:
             created=True,
             merged_existing=False,
             world_node=node.model_dump(mode="json"),
-            legacy_entity_id=legacy_entity_id,
             roster_item_id=request.roster_item_id,
             personality_loadout=loadout_payload,
             personality_assignment=assignment.report,
@@ -204,8 +170,6 @@ class CharacterCreationHelper:
         )
 
     def _creation_event_type(self, request: CharacterCreationRequest) -> str:
-        if request.source == "legacy_entity_import":
-            return CHARACTER_IMPORTED_FROM_LEGACY
         if request.source == "subworld_planned_slot_materialization":
             return CHARACTER_ROSTER_MATERIALIZED
         return CHARACTER_CREATED
@@ -231,7 +195,7 @@ class CharacterCreationHelper:
             value = str(context.get(key) or "").strip()
             if value:
                 return value
-        return str(request.source_ref or request.roster_item_id or request.legacy_entity_id or "").strip()
+        return str(request.source_ref or request.roster_item_id or "").strip()
 
     def get_or_create_character(self, request: CharacterCreationRequest) -> CharacterCreationResult:
         request = request.model_copy(update={"existing_resolution": "get_or_create"})
@@ -239,9 +203,6 @@ class CharacterCreationHelper:
 
     def materialize_roster_character(self, request: CharacterCreationRequest) -> CharacterCreationResult:
         return self.create_character(request.model_copy(update={"source": request.source or "subworld_planned_slot_materialization"}))
-
-    def import_legacy_character(self, request: CharacterCreationRequest) -> CharacterCreationResult:
-        return self.create_character(request.model_copy(update={"source": request.source or "legacy_entity_import"}))
 
     def apply_book_state_character_patch(self, request: CharacterCreationRequest) -> CharacterCreationResult:
         return self.create_character(request.model_copy(update={"source": request.source or "book_state_graph_delta"}))
@@ -294,7 +255,6 @@ class CharacterCreationHelper:
         self._sync_identity_map(
             request,
             character_id=node.id,
-            legacy_entity_id=str(request.legacy_entity_id or metadata.get("legacy_entity_id") or ""),
             display_name=node.name,
             aliases=list(node.aliases),
             genesis_ref_id=self._genesis_ref_id(request) or str(metadata.get("genesis_ref_id") or ""),
@@ -314,7 +274,6 @@ class CharacterCreationHelper:
             created=False,
             merged_existing=True,
             world_node=node.model_dump(mode="json"),
-            legacy_entity_id=str(metadata.get("legacy_entity_id") or ""),
             personality_loadout=dict(profile.get("personality_loadout") or {}),
             personality_assignment=metadata.get("personality_assignment") or {},
             integrity_report=CharacterIntegrityReport(ok=bool(profile.get("personality_loadout"))),
@@ -325,7 +284,6 @@ class CharacterCreationHelper:
         request: CharacterCreationRequest,
         *,
         character_id: str,
-        legacy_entity_id: str = "",
         display_name: str = "",
         aliases: list[str] | None = None,
         genesis_ref_id: str = "",
@@ -334,7 +292,6 @@ class CharacterCreationHelper:
             project_id=request.project_id,
             canonical_character_id=character_id,
             book_state_node_id=character_id,
-            legacy_entity_id=legacy_entity_id,
             genesis_ref_id=genesis_ref_id,
             roster_item_ids=[request.roster_item_id] if request.roster_item_id else [],
             aliases=list(aliases or request.aliases),
@@ -420,44 +377,6 @@ class CharacterCreationHelper:
                 payload=payload,
                 related_object_type="world_node",
                 related_object_id=character_id,
-            )
-        )
-        return row.id
-
-    def _save_legacy_entity_compatibility_event(
-        self,
-        request: CharacterCreationRequest,
-        *,
-        legacy_entity_id: str,
-        character_id: str,
-    ) -> str:
-        row = StateUpdater(self.session).save_decision_event(
-            DecisionEventInfo(
-                project_id=request.project_id,
-                chapter_number=int(request.created_at_chapter or 0),
-                scope="character_creation",
-                event_family="runtime_observation",
-                event_type=DecisionEventType.LEGACY_COMPATIBILITY_USED,
-                actor_type="system",
-                summary="legacy compatibility used: characters.create_legacy_entity_default_true",
-                reason="character creation materialized a legacy Entity row",
-                payload=build_legacy_compatibility_payload(
-                    compat_layer="characters",
-                    compat_feature="characters.create_legacy_entity_default_true",
-                    usage_kind="legacy_entity_create",
-                    source_module="forwin.characters.creation",
-                    usage_reason="character creation materialized a legacy Entity row",
-                    compat_key="CharacterCreationRequest.create_legacy_entity",
-                    legacy_identifier=legacy_entity_id,
-                    canonical_identifier=character_id,
-                    metadata={
-                        "source": request.source,
-                        "source_ref": request.source_ref,
-                        "create_legacy_entity": bool(request.create_legacy_entity),
-                    },
-                ),
-                related_object_type="entity",
-                related_object_id=legacy_entity_id,
             )
         )
         return row.id

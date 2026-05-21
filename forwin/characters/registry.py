@@ -24,19 +24,16 @@ class CharacterRegistry:
         *,
         project_id: str,
         character_id: str = "",
-        legacy_entity_id: str = "",
         roster_item_id: str = "",
         name: str = "",
     ) -> CharacterResolutionResult:
         repo = BookStateRepository(self.session)
         normalized_id = str(character_id or "").strip()
-        normalized_legacy_id = str(legacy_entity_id or "").strip()
         normalized_roster_id = str(roster_item_id or "").strip()
         normalized_name = _normalize_name(name)
         identity = CharacterIdentityMap(self.session).resolve(
             project_id=project_id,
             character_id=normalized_id,
-            legacy_entity_id=normalized_legacy_id,
             roster_item_id=normalized_roster_id,
         )
         nodes = [node for node in repo.list_world_nodes(project_id) if str(node.node_type) == "character"]
@@ -50,11 +47,6 @@ class CharacterRegistry:
             for node in nodes:
                 if node.id == normalized_id:
                     return CharacterResolutionResult(node=node, resolution="explicit_character_id")
-        if normalized_legacy_id:
-            for node in nodes:
-                metadata = dict(node.metadata) if isinstance(node.metadata, dict) else {}
-                if str(metadata.get("legacy_entity_id") or "").strip() == normalized_legacy_id:
-                    return CharacterResolutionResult(node=node, resolution="explicit_legacy_entity_id")
         if normalized_roster_id:
             for node in nodes:
                 metadata = dict(node.metadata) if isinstance(node.metadata, dict) else {}

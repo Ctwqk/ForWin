@@ -19,8 +19,8 @@ class CharacterIdentity:
 class CharacterIdentityMap:
     """Canonical character identity boundary.
 
-    BookState node ids are the canonical character ids. Legacy entity ids,
-    roster ids, Genesis refs and aliases are lookup signals only.
+    BookState node ids are the canonical character ids. Roster ids, Genesis refs
+    and aliases are lookup signals only.
     """
 
     def __init__(self, session: Session) -> None:
@@ -32,21 +32,18 @@ class CharacterIdentityMap:
         project_id: str,
         character_id: str = "",
         book_state_node_id: str = "",
-        legacy_entity_id: str = "",
         roster_item_id: str = "",
         genesis_ref_id: str = "",
     ) -> CharacterIdentity | None:
         project_id = str(project_id or "").strip()
         character_id = str(character_id or "").strip()
         book_state_node_id = str(book_state_node_id or "").strip() or character_id
-        legacy_entity_id = str(legacy_entity_id or "").strip()
         roster_item_id = str(roster_item_id or "").strip()
         genesis_ref_id = str(genesis_ref_id or "").strip()
 
         for column, value, resolution in (
             (CharacterIdentityMapRow.book_state_node_id, book_state_node_id, "identity_book_state_node_id"),
             (CharacterIdentityMapRow.canonical_character_id, character_id, "identity_canonical_character_id"),
-            (CharacterIdentityMapRow.legacy_entity_id, legacy_entity_id, "identity_legacy_entity_id"),
             (CharacterIdentityMapRow.genesis_ref_id, genesis_ref_id, "identity_genesis_ref_id"),
         ):
             if not value:
@@ -84,7 +81,6 @@ class CharacterIdentityMap:
         project_id: str,
         canonical_character_id: str,
         book_state_node_id: str = "",
-        legacy_entity_id: str = "",
         genesis_ref_id: str = "",
         roster_item_ids: list[str] | None = None,
         aliases: list[str] | None = None,
@@ -94,7 +90,6 @@ class CharacterIdentityMap:
         project_id = str(project_id or "").strip()
         canonical_character_id = str(canonical_character_id or "").strip()
         book_state_node_id = str(book_state_node_id or "").strip() or canonical_character_id
-        legacy_entity_id = str(legacy_entity_id or "").strip()
         genesis_ref_id = str(genesis_ref_id or "").strip()
         roster_item_ids = _dedupe(roster_item_ids or [])
         aliases = _dedupe(aliases or [])
@@ -104,7 +99,6 @@ class CharacterIdentityMap:
             project_id=project_id,
             canonical_character_id=canonical_character_id,
             book_state_node_id=book_state_node_id,
-            legacy_entity_id=legacy_entity_id,
             genesis_ref_id=genesis_ref_id,
             roster_item_ids=roster_item_ids,
         )
@@ -114,7 +108,6 @@ class CharacterIdentityMap:
 
         row.canonical_character_id = canonical_character_id or row.canonical_character_id
         row.book_state_node_id = book_state_node_id or row.book_state_node_id
-        row.legacy_entity_id = legacy_entity_id or row.legacy_entity_id
         row.genesis_ref_id = genesis_ref_id or row.genesis_ref_id
         row.display_name = display_name or row.display_name
         row.status = "active"
@@ -132,7 +125,6 @@ class CharacterIdentityMap:
         project_id: str,
         canonical_character_id: str,
         book_state_node_id: str,
-        legacy_entity_id: str,
         genesis_ref_id: str,
         roster_item_ids: list[str],
     ) -> CharacterIdentityMapRow | None:
@@ -141,8 +133,6 @@ class CharacterIdentityMap:
             clauses.append(CharacterIdentityMapRow.canonical_character_id == canonical_character_id)
         if book_state_node_id:
             clauses.append(CharacterIdentityMapRow.book_state_node_id == book_state_node_id)
-        if legacy_entity_id:
-            clauses.append(CharacterIdentityMapRow.legacy_entity_id == legacy_entity_id)
         if genesis_ref_id:
             clauses.append(CharacterIdentityMapRow.genesis_ref_id == genesis_ref_id)
         if not clauses and not roster_item_ids:

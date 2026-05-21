@@ -200,7 +200,6 @@ def _upgrade_world_model_canonical_pages(conn) -> None:
                 END,
                 canonical_source_type = CASE
                     WHEN frontmatter_json LIKE '%"node_id"%' THEN 'book_state_node'
-                    WHEN frontmatter_json LIKE '%"legacy_entity_id"%' THEN 'legacy_entity'
                     WHEN page_key LIKE '%:genesis:%' OR page_key LIKE 'genesis:%' THEN 'genesis'
                     ELSE 'world_model_page'
                 END,
@@ -293,7 +292,6 @@ def _upgrade_character_identity_map(conn) -> None:
                 project_id VARCHAR NOT NULL REFERENCES projects(id),
                 canonical_character_id VARCHAR NOT NULL DEFAULT '',
                 book_state_node_id VARCHAR NOT NULL DEFAULT '',
-                legacy_entity_id VARCHAR NOT NULL DEFAULT '',
                 genesis_ref_id VARCHAR NOT NULL DEFAULT '',
                 roster_item_ids_json TEXT DEFAULT '[]',
                 aliases_json TEXT DEFAULT '[]',
@@ -309,7 +307,6 @@ def _upgrade_character_identity_map(conn) -> None:
     for column, ddl in (
         ("canonical_character_id", "VARCHAR NOT NULL DEFAULT ''"),
         ("book_state_node_id", "VARCHAR NOT NULL DEFAULT ''"),
-        ("legacy_entity_id", "VARCHAR NOT NULL DEFAULT ''"),
         ("genesis_ref_id", "VARCHAR NOT NULL DEFAULT ''"),
         ("roster_item_ids_json", "TEXT DEFAULT '[]'"),
         ("aliases_json", "TEXT DEFAULT '[]'"),
@@ -328,7 +325,6 @@ def _upgrade_character_identity_map(conn) -> None:
                 project_id,
                 canonical_character_id,
                 book_state_node_id,
-                legacy_entity_id,
                 genesis_ref_id,
                 roster_item_ids_json,
                 aliases_json,
@@ -343,7 +339,6 @@ def _upgrade_character_identity_map(conn) -> None:
                 project_id,
                 id,
                 id,
-                COALESCE((metadata_json::jsonb ->> 'legacy_entity_id'), ''),
                 COALESCE((metadata_json::jsonb ->> 'genesis_ref_id'), ''),
                 COALESCE((metadata_json::jsonb -> 'roster_item_ids')::text, '[]'),
                 CASE
@@ -369,7 +364,6 @@ def _upgrade_character_identity_map(conn) -> None:
     )
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_canonical ON character_identity_map (project_id, canonical_character_id)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_book_node ON character_identity_map (project_id, book_state_node_id)"))
-    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_legacy ON character_identity_map (project_id, legacy_entity_id)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_genesis ON character_identity_map (project_id, genesis_ref_id)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_character_identity_project_status ON character_identity_map (project_id, status)"))
 

@@ -9,7 +9,7 @@ code migration and a later 60 chapter runtime audit.
 The source of truth is `docs/designs/legacy-inventory.yaml`, especially:
 
 - `canonical_identity.legacy_entity_id`
-- `schema.bootstrap_legacy_columns`
+- `schema.bootstrap_legacy_columns` character-identity column coverage
 - runtime audit features:
   - `subworld.legacy_entity_id_bridge`
   - `subworld.create_legacy_entity`
@@ -50,9 +50,15 @@ In scope:
   relations.
 - Add a DB migration to remove `character_identity_map.legacy_entity_id` and its
   index.
+- Drop Entity foreign-key constraints from `relation_edges.source_entity_id` and
+  `relation_edges.target_entity_id`; those columns become current relation
+  endpoint ids so they can hold canonical character ids.
 - Remove runtime audit registry entries for identity bridge/create once runtime
   code is gone.
-- Mark Phase 2 inventory entries deleted.
+- Mark `canonical_identity.legacy_entity_id` deleted. Keep
+  `schema.bootstrap_legacy_columns` retained for the remaining historical
+  checkpoint version marker, while removing its character identity column and
+  index coverage from current bootstrap code.
 
 Out of scope:
 
@@ -113,6 +119,10 @@ BookState and identity metadata. If an old relation only has non-canonical
 Entity ids and no canonical mapping, the enrichment path should skip it rather
 than resurrecting the bridge.
 
+The existing `source_entity_id` and `target_entity_id` column names remain for
+now, but their current contract is "relation endpoint id". They are not foreign
+keys to `entities.id` after this phase.
+
 ### Runtime Audit
 
 After code removal, the following runtime features should be removed from
@@ -124,6 +134,11 @@ After code removal, the following runtime features should be removed from
 
 The inventory entries stay as `deleted` records with narrow patterns so
 reintroduction fails.
+
+`schema.bootstrap_legacy_columns` remains retained, not deleted, because
+`legacy_checkpoint_statuses_v1` is a historical schema-version marker outside
+the character identity bridge. Its current bootstrap coverage must no longer
+create or index `character_identity_map.legacy_entity_id`.
 
 ## Testing
 

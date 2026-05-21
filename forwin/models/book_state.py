@@ -66,7 +66,6 @@ class CharacterIdentityMapRow(Base):
     __table_args__ = (
         Index("ix_character_identity_project_canonical", "project_id", "canonical_character_id"),
         Index("ix_character_identity_project_book_node", "project_id", "book_state_node_id"),
-        Index("ix_character_identity_project_legacy", "project_id", "legacy_entity_id"),
         Index("ix_character_identity_project_genesis", "project_id", "genesis_ref_id"),
         Index("ix_character_identity_project_status", "project_id", "status"),
     )
@@ -75,7 +74,6 @@ class CharacterIdentityMapRow(Base):
     project_id: Mapped[str] = mapped_column(String, ForeignKey("projects.id"), nullable=False)
     canonical_character_id: Mapped[str] = mapped_column(String, nullable=False, default="")
     book_state_node_id: Mapped[str] = mapped_column(String, nullable=False, default="")
-    legacy_entity_id: Mapped[str] = mapped_column(String, nullable=False, default="")
     genesis_ref_id: Mapped[str] = mapped_column(String, nullable=False, default="")
     roster_item_ids_json: Mapped[str] = mapped_column(Text, default="[]")
     aliases_json: Mapped[str] = mapped_column(Text, default="[]")

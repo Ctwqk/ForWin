@@ -12,7 +12,6 @@ class CharacterCreationRequest(BaseModel):
     source: str
     source_ref: str = ""
     character_id: str = ""
-    legacy_entity_id: str = ""
     roster_item_id: str = ""
     name: str
     aliases: list[str] = Field(default_factory=list)
@@ -31,7 +30,6 @@ class CharacterCreationRequest(BaseModel):
     existing_resolution: str = "get_or_create"
     generic_character_policy: str = "reject_or_group"
     audit_reason: str = ""
-    create_legacy_entity: bool = True
 
 
 class CharacterCreationResult(BaseModel):
@@ -41,7 +39,6 @@ class CharacterCreationResult(BaseModel):
     created: bool = False
     merged_existing: bool = False
     world_node: dict[str, Any] = Field(default_factory=dict)
-    legacy_entity_id: str = ""
     roster_item_id: str = ""
     personality_loadout: dict[str, Any] = Field(default_factory=dict)
     personality_assignment: PersonalityAssignmentReport | dict[str, Any] = Field(default_factory=dict)
@@ -51,5 +48,4 @@ class CharacterCreationResult(BaseModel):
 
 
 RosterMaterializationRequest = CharacterCreationRequest
-LegacyCharacterImportRequest = CharacterCreationRequest
 BookStateCharacterPatchRequest = CharacterCreationRequest

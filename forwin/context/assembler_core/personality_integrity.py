@@ -66,10 +66,8 @@ def _personality_integrity_issues(
             continue
         character_id = str(character.get("character_id") or "").strip()
         character_name = str(character.get("character_name") or "").strip()
-        legacy_entity_id = str(character.get("legacy_entity_id") or "").strip()
         if not (
             character_id in allowed_ids
-            or legacy_entity_id in allowed_ids
             or character_name in allowed_names
             or character_id in allowed_names
         ):

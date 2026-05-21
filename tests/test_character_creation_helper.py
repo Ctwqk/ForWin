@@ -36,12 +36,12 @@ def test_upgrade_backfills_identity_map_timestamps_for_existing_world_nodes() ->
         session.flush()
         session.add(
             WorldNodeRow(
-                id="char_legacy_backfill",
+                id="char_identity_backfill",
                 project_id=project.id,
                 node_type="character",
                 name="苏时雨",
                 aliases_json='["苏时雨"]',
-                metadata_json='{"legacy_entity_id":"legacy_su"}',
+                metadata_json='{"genesis_ref_id":"genesis_su","roster_item_ids":["roster_su"]}',
             )
         )
 
@@ -50,17 +50,19 @@ def test_upgrade_backfills_identity_map_timestamps_for_existing_world_nodes() ->
     with Session.begin() as session:
         identity = session.execute(
             select(CharacterIdentityMapRow).where(
-                CharacterIdentityMapRow.book_state_node_id == "char_legacy_backfill"
+                CharacterIdentityMapRow.book_state_node_id == "char_identity_backfill"
             )
         ).scalar_one()
 
     assert identity.display_name == "苏时雨"
-    assert identity.legacy_entity_id == "legacy_su"
+    assert identity.canonical_character_id == "char_identity_backfill"
+    assert identity.genesis_ref_id == "genesis_su"
+    assert identity.roster_item_ids_json == '["roster_su"]'
     assert identity.created_at is not None
     assert identity.updated_at is not None
 
 
-def test_create_character_writes_book_state_loadout_metadata_legacy_and_audit(tmp_path: Path) -> None:
+def test_create_character_writes_book_state_loadout_metadata_without_legacy_bridge(tmp_path: Path) -> None:
     engine = get_engine(postgres_test_url("character-creation-helper"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -95,7 +97,9 @@ def test_create_character_writes_book_state_loadout_metadata_legacy_and_audit(tm
         )
 
         node = BookStateRepository(session).list_world_nodes(project.id)[0]
-        legacy = session.get(Entity, result.legacy_entity_id)
+        character_entities = session.execute(
+            select(Entity).where(Entity.project_id == project.id, Entity.kind == "character")
+        ).scalars().all()
         events = session.execute(select(DecisionEvent).where(DecisionEvent.project_id == project.id)).scalars().all()
 
     assert result.created is True
@@ -104,21 +108,20 @@ def test_create_character_writes_book_state_loadout_metadata_legacy_and_audit(tm
     assert node.name == "沈临川"
     assert node.aliases == ["沈师兄"]
     assert node.profile["personality_loadout"]["dominant"]["skill"] == "trait-loyal-protector"
-    assert node.metadata["legacy_entity_id"] == result.legacy_entity_id
+    assert "legacy_entity_id" not in node.metadata
     assert node.metadata["character_identity"]["canonical_character_id"] == result.character_id
-    assert node.metadata["character_identity"]["legacy_entity_id"] == result.legacy_entity_id
+    assert node.metadata["character_identity"]["book_state_node_id"] == result.character_id
+    assert "legacy_entity_id" not in node.metadata["character_identity"]
     assert node.metadata["personality_assignment"]["assignment_mode"] == "auto_rule"
     assert node.metadata["character_creation"]["source"] == "api_manual"
-    assert legacy is not None
-    assert legacy.kind == "character"
+    assert character_entities == []
     assert {event.event_type for event in events} >= {"character_created", "personality_loadout_auto_assigned"}
     legacy_compat_events = [
         event
         for event in events
         if event.event_type == "legacy_compatibility_used"
-        and "characters.create_legacy_entity_default_true" in event.payload_json
     ]
-    assert len(legacy_compat_events) == 1
+    assert legacy_compat_events == []
 
 
 def test_create_character_persists_identity_map_for_book_state_legacy_and_roster(tmp_path: Path) -> None:
@@ -155,7 +158,6 @@ def test_create_character_persists_identity_map_for_book_state_legacy_and_roster
 
     assert identity.canonical_character_id == result.character_id
     assert identity.display_name == "周怀瑾"
-    assert identity.legacy_entity_id == result.legacy_entity_id
     assert identity.genesis_ref_id == "genesis:core_cast:zhou"
     assert identity.roster_item_ids_json == '["roster_a"]'
     assert identity.aliases_json == '["周执事", "周怀瑾"]'
@@ -242,11 +244,10 @@ def test_registry_resolves_identity_before_name_or_alias(tmp_path: Path) -> None
         repo = BookStateRepository(session)
         repo.create_world_node(
             WorldNode(
-                id="char_legacy",
+                id="char_canonical",
                 project_id=project.id,
                 node_type="character",
                 name="同名角色",
-                metadata={"legacy_entity_id": "legacy_a"},
             )
         )
         repo.create_world_node(
@@ -269,13 +270,13 @@ def test_registry_resolves_identity_before_name_or_alias(tmp_path: Path) -> None
         )
         registry = CharacterRegistry(session)
 
-        by_legacy = registry.resolve(project_id=project.id, legacy_entity_id="legacy_a", name="别名")
+        by_character_id = registry.resolve(project_id=project.id, character_id="char_canonical", name="别名")
         by_roster = registry.resolve(project_id=project.id, roster_item_id="roster_b", name="别名")
         by_alias = registry.resolve(project_id=project.id, name="别名")
 
-    assert by_legacy.node is not None
-    assert by_legacy.node.id == "char_legacy"
-    assert by_legacy.resolution == "explicit_legacy_entity_id"
+    assert by_character_id.node is not None
+    assert by_character_id.node.id == "char_canonical"
+    assert by_character_id.resolution == "explicit_character_id"
     assert by_roster.node is not None
     assert by_roster.node.id == "char_roster"
     assert by_roster.resolution == "explicit_roster_item_id"

@@ -59,8 +59,8 @@ def test_rival_relation_enriches_both_sides_and_records_diff(tmp_path: Path) -> 
 
         edge = StateUpdater(session).create_relation(
             project.id,
-            source.legacy_entity_id,
-            target.legacy_entity_id,
+            source.character_id,
+            target.character_id,
             "rival",
             description="两人是长期竞争的对手。",
         )
@@ -119,8 +119,8 @@ def test_relationship_enrichment_preserves_manual_override_and_skips_duplicates(
         )
 
         updater = StateUpdater(session)
-        updater.create_relation(project.id, locked.legacy_entity_id, other.legacy_entity_id, "mentor", description="导师扶持并保护对方。")
-        updater.create_relation(project.id, locked.legacy_entity_id, other.legacy_entity_id, "mentor", description="导师扶持并保护对方。")
+        updater.create_relation(project.id, locked.character_id, other.character_id, "mentor", description="导师扶持并保护对方。")
+        updater.create_relation(project.id, locked.character_id, other.character_id, "mentor", description="导师扶持并保护对方。")
         locked_loadout = _loadout_for(session, project.id, locked.character_id)
         other_loadout = _loadout_for(session, project.id, other.character_id)
 
@@ -145,8 +145,8 @@ def test_manual_relationship_enrichment_api_scans_project(tmp_path: Path) -> Non
             RelationEdge(
                 id=new_id(),
                 project_id=project.id,
-                source_entity_id=source.legacy_entity_id,
-                target_entity_id=target.legacy_entity_id,
+                source_entity_id=source.character_id,
+                target_entity_id=target.character_id,
                 relation_type="rival",
                 description="长期竞争的对手。",
                 is_active=True,

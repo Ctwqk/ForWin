@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from hashlib import md5
 
 from sqlalchemy import select
@@ -57,6 +57,10 @@ from forwin.protocol import (
     TimeAdvance,
     WriterOutput,
 )
+
+if TYPE_CHECKING:
+    from forwin.characters.models import CharacterCreationResult
+
 from forwin.protocol.review import normalize_repair_scope
 
 from .repo import StateRepository
@@ -442,7 +446,7 @@ class StateUpdater:
         *,
         roster_item_id: str,
         chapter: int,
-    ) -> Entity:
+    ) -> CharacterCreationResult:
         roster_item = self.session.get(SubWorldRosterItem, roster_item_id)
         if roster_item is None:
             raise ValueError(f"Roster item {roster_item_id} not found.")
@@ -476,7 +480,6 @@ class StateUpdater:
                 project_id=roster_item.project_id,
                 source="subworld_planned_slot_materialization",
                 source_ref=roster_item.id,
-                legacy_entity_id=entity.id if entity is not None else "",
                 roster_item_id=roster_item.id,
                 name=entity.name if entity is not None else display_name,
                 aliases=_json_list(entity.aliases_json) if entity is not None else [],
@@ -490,24 +493,22 @@ class StateUpdater:
                     "role_hint": roster_item.role_hint or "",
                     "role_archetype": roster_item.role_hint or "",
                 },
-                create_legacy_entity=entity is None,
                 audit_reason="planned roster slot materialization",
             )
         )
-        entity = self.session.get(Entity, result.legacy_entity_id)
-        if entity is None:
-            raise ValueError(f"Roster materialization did not create a legacy entity for {roster_item_id}.")
-        roster_item.entity_id = entity.id
-        roster_item.display_name = entity.name
+        roster_item.entity_id = entity.id if entity is not None else None
+        roster_item.display_name = result.character_name
         roster_item.status = "activated_named" if not roster_item.is_core else "seeded_named"
         if not roster_item.activation_chapter:
             roster_item.activation_chapter = int(chapter or 0)
         metadata = _json_dict(roster_item.metadata_json)
         metadata["character_id"] = result.character_id
+        metadata["book_state_node_id"] = result.character_id
+        metadata["canon_source"] = "book_state"
         roster_item.metadata_json = json.dumps(metadata, ensure_ascii=False)
         self.session.add(roster_item)
         self.session.flush()
-        return entity
+        return result
 
     # ------------------------------------------------------------------
     # Relations

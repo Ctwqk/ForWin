@@ -66,7 +66,7 @@ def _seed_allowed_bare_character(session, *, creation_status: str, strict: bool 
             node_type="character",
             name=entity.name,
             description=entity.description,
-            metadata={"legacy_entity_id": entity.id},
+            metadata={"character_identity": {"canonical_character_id": "char_bare", "book_state_node_id": "char_bare"}},
         )
     )
     return project.id, chapter

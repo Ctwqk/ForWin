@@ -38,8 +38,8 @@ class RelationshipPersonalityEnricher:
         if skill is None or skill.incomplete:
             return {"enriched": 0, "skipped": "skill_unavailable", "diffs": []}
 
-        source = self._node_for_legacy_entity_id(relation.project_id, relation.source_entity_id)
-        target = self._node_for_legacy_entity_id(relation.project_id, relation.target_entity_id)
+        source = self._node_for_character_endpoint(relation.project_id, relation.source_entity_id)
+        target = self._node_for_character_endpoint(relation.project_id, relation.target_entity_id)
         if source is None or target is None:
             return {"enriched": 0, "skipped": "character_mapping_missing", "diffs": []}
 
@@ -66,15 +66,20 @@ class RelationshipPersonalityEnricher:
             "items": items,
         }
 
-    def _node_for_legacy_entity_id(self, project_id: str, entity_id: str) -> WorldNode | None:
-        normalized = str(entity_id or "").strip()
+    def _node_for_character_endpoint(self, project_id: str, endpoint_id: str) -> WorldNode | None:
+        normalized = str(endpoint_id or "").strip()
         if not normalized:
             return None
         for node in self.repo.list_world_nodes(project_id):
             if str(node.node_type) != "character":
                 continue
+            if node.id == normalized:
+                return node
             metadata = node.metadata if isinstance(node.metadata, dict) else {}
-            if str(metadata.get("legacy_entity_id") or "") == normalized:
+            identity = metadata.get("character_identity") if isinstance(metadata.get("character_identity"), dict) else {}
+            if str(identity.get("canonical_character_id") or "").strip() == normalized:
+                return node
+            if str(identity.get("book_state_node_id") or "").strip() == normalized:
                 return node
         return None
 

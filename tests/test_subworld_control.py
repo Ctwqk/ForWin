@@ -2167,7 +2167,7 @@ class SubWorldControlTests(unittest.TestCase):
                 status="planned_slot",
             )
 
-            entity = updater.materialize_roster_item(roster_item_id=roster.id, chapter=3)
+            result = updater.materialize_roster_item(roster_item_id=roster.id, chapter=3)
             session.flush()
             session.refresh(roster)
             metadata = json.loads(roster.metadata_json or "{}")
@@ -2176,9 +2176,10 @@ class SubWorldControlTests(unittest.TestCase):
             session.close()
             engine.dispose()
 
-        self.assertEqual(entity.kind, "character")
+        self.assertEqual(result.character_id, node.id)
+        self.assertEqual(result.character_name, node.name)
         self.assertEqual(metadata.get("character_id"), node.id)
-        self.assertEqual(node.metadata.get("legacy_entity_id"), entity.id)
+        self.assertNotIn("legacy_entity_id", node.metadata)
         self.assertEqual(node.profile["personality_loadout"]["dominant"]["skill"], "trait-loyal-protector")
 
     def test_subworld_core_named_character_uses_character_creation_helper(self) -> None:

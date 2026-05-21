@@ -80,7 +80,7 @@ entries:
     status: planned
 
   - id: canonical_identity.legacy_entity_id
-    category: runtime_delete
+    category: deleted
     owner_area: characters
     paths:
       - forwin/characters/models.py
@@ -96,9 +96,7 @@ entries:
       - forwin/personality/enrichment.py
       - forwin/state/updater.py
       - forwin/subworld_manager.py
-      - forwin/world_model/page_repository.py
     allow_patterns:
-      - legacy_entity_id
       - create_legacy_entity
       - legacy_compat_event_id
       - _save_legacy_entity_compatibility_event
@@ -115,7 +113,7 @@ entries:
       - subworld.create_legacy_entity
       - characters.create_legacy_entity_default_true
     reason: BookState canonical character ids replace legacy Entity ids and bridge lookups.
-    removal_phase: phase_2
+    removal_phase: complete
     verification:
       - unit
       - db_migration
@@ -124,7 +122,7 @@ entries:
       - canonical character resolution tests pass without legacy_entity_id
       - character_identity_map no longer has legacy_entity_id
       - 60 chapter audit reports zero identity bridge/create events
-    status: planned
+    status: deleted
 
   - id: book_state.legacy_import
     category: deleted
@@ -659,17 +657,14 @@ entries:
     status: retained
 
   - id: schema.bootstrap_legacy_columns
-    category: runtime_delete
+    category: migration_history_keep
     owner_area: database
     paths:
       - forwin/models/base.py
     allow_patterns:
       - legacy_checkpoint_statuses_v1
-      - legacy_entity_id
-      - legacy_entity
-      - ix_character_identity_project_legacy
-    reason: Runtime bootstrap still creates or recognizes old schema columns and must be updated with schema deletion.
-    removal_phase: phase_2
+    reason: Current bootstrap no longer creates character identity legacy columns; the remaining legacy checkpoint version marker is retained as schema history until migration history is intentionally renamed.
+    removal_phase: migration_history
     verification:
       - db_migration
       - schema_bootstrap_tests
@@ -677,7 +672,7 @@ entries:
     delete_when:
       - fresh database bootstrap creates only current schema
       - migration tests cover dropping old columns
-    status: planned
+    status: retained
 
   - id: dead_code.removed_repair_paths
     category: deleted

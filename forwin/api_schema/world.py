@@ -121,7 +121,6 @@ class CharacterCreateRequest(BaseModel):
     source: str = "api_manual"
     source_ref: str = ""
     character_id: str = ""
-    legacy_entity_id: str = ""
     roster_item_id: str = ""
     name: str
     aliases: list[str] = Field(default_factory=list)

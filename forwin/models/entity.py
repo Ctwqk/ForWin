@@ -67,10 +67,10 @@ class RelationEdge(Base):
         String, ForeignKey("projects.id"), nullable=False
     )
     source_entity_id: Mapped[str] = mapped_column(
-        String, ForeignKey("entities.id"), nullable=False
+        String, nullable=False
     )
     target_entity_id: Mapped[str] = mapped_column(
-        String, ForeignKey("entities.id"), nullable=False
+        String, nullable=False
     )
     relation_type: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")

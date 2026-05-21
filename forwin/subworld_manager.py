@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state import BookStateRepository
 from forwin.director.arc_director import ArcDirector
-from forwin.governance import DecisionEventInfo, DecisionEventType
 from forwin.models import (
     ArcPlanVersion,
     ChapterPlan,
@@ -29,7 +28,6 @@ from forwin.protocol import (
     SubWorldPlanItem,
     SubWorldSummary,
 )
-from forwin.review_engine.audit import build_legacy_compatibility_payload
 from forwin.state.updater import StateUpdater
 
 
@@ -49,43 +47,6 @@ def _load_json(raw: str, default):
         return json.loads(raw or "")
     except (json.JSONDecodeError, TypeError):
         return default
-
-
-def _record_subworld_legacy_compatibility(
-    *,
-    updater: StateUpdater,
-    project_id: str,
-    chapter_number: int,
-    compat_feature: str,
-    usage_kind: str,
-    usage_reason: str,
-    legacy_identifier: str = "",
-    canonical_identifier: str = "",
-) -> None:
-    try:
-        updater.save_decision_event(
-            DecisionEventInfo(
-                project_id=project_id,
-                chapter_number=chapter_number,
-                scope="chapter" if int(chapter_number or 0) else "project",
-                event_family="runtime_observation",
-                event_type=DecisionEventType.LEGACY_COMPATIBILITY_USED,
-                summary=f"legacy compatibility used: {compat_feature}",
-                reason=usage_reason,
-                payload=build_legacy_compatibility_payload(
-                    compat_layer="subworld",
-                    compat_feature=compat_feature,
-                    usage_kind=usage_kind,
-                    source_module="forwin.subworld_manager",
-                    usage_reason=usage_reason,
-                    legacy_identifier=legacy_identifier,
-                    canonical_identifier=canonical_identifier,
-                    related_stage="subworld_plan_delta",
-                ),
-            )
-        )
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _clean_token(text: str) -> str:
@@ -159,29 +120,14 @@ class SubWorldManager:
         ]
         if book_state_characters:
             for node in book_state_characters:
-                metadata = dict(node.metadata) if isinstance(node.metadata, dict) else {}
-                legacy_entity_id = str(metadata.get("legacy_entity_id") or "").strip()
-                if legacy_entity_id and session.get(Entity, legacy_entity_id) is None:
-                    legacy_entity_id = ""
-                if legacy_entity_id:
-                    _record_subworld_legacy_compatibility(
-                        updater=StateUpdater(session),
-                        project_id=project_id,
-                        chapter_number=0,
-                        compat_feature="subworld.legacy_entity_id_bridge",
-                        usage_kind="write_bridge",
-                        usage_reason="BookState character metadata provided legacy_entity_id for SubWorld roster",
-                        legacy_identifier=legacy_entity_id,
-                        canonical_identifier=node.id,
-                    )
-                if node.id in rostered_characters or (legacy_entity_id and legacy_entity_id in rostered):
+                if node.id in rostered_characters:
                     continue
                 session.add(
                     SubWorldRosterItem(
                         id=new_id(),
                         project_id=project_id,
                         subworld_id=global_core.id,
-                        entity_id=legacy_entity_id or None,
+                        entity_id=None,
                         entity_kind="character",
                         display_name=node.name,
                         slot_key="",
@@ -195,7 +141,6 @@ class SubWorldManager:
                                 "character_id": node.id,
                                 "book_state_node_id": node.id,
                                 "canon_source": "book_state",
-                                "legacy_entity_id": legacy_entity_id,
                             },
                             ensure_ascii=False,
                         ),
@@ -374,7 +319,6 @@ class SubWorldManager:
         entity_map = dict(entity_map or {})
         global_core_id = self.ensure_registry(session, project_id)
         roster_lookup = self._roster_lookup(session, project_id)
-        existing_names = self._entity_name_map(session, project_id)
         actual_active_ids: list[str] = []
 
         for subworld_id in delta.reuse_subworld_ids:
@@ -453,30 +397,7 @@ class SubWorldManager:
                     )
 
             for seed in item.core_named_characters:
-                entity_id = entity_map.get(seed.name) or existing_names.get(seed.name)
-                if entity_id and session.get(Entity, entity_id) is None:
-                    entity_id = ""
-                if entity_id:
-                    _record_subworld_legacy_compatibility(
-                        updater=updater,
-                        project_id=project_id,
-                        chapter_number=max(0, int(chapter_number or 0)),
-                        compat_feature="subworld.legacy_entity_id_bridge",
-                        usage_kind="write_bridge",
-                        usage_reason="SubWorld character creation reused an existing legacy entity id",
-                        legacy_identifier=entity_id,
-                        canonical_identifier=seed.name,
-                    )
-                else:
-                    _record_subworld_legacy_compatibility(
-                        updater=updater,
-                        project_id=project_id,
-                        chapter_number=max(0, int(chapter_number or 0)),
-                        compat_feature="subworld.create_legacy_entity",
-                        usage_kind="write_bridge",
-                        usage_reason="SubWorld character creation requested a legacy entity row",
-                        canonical_identifier=seed.name,
-                    )
+                character_id = entity_map.get(seed.name) or ""
                 from forwin.characters.creation import CharacterCreationHelper
                 from forwin.characters.models import CharacterCreationRequest
 
@@ -485,7 +406,7 @@ class SubWorldManager:
                         project_id=project_id,
                         source="subworld_core_named_character",
                         source_ref=f"{target_row.id}:{seed.name}",
-                        legacy_entity_id=entity_id or "",
+                        character_id=character_id,
                         roster_item_id="",
                         name=seed.name,
                         aliases=list(seed.aliases),
@@ -497,23 +418,16 @@ class SubWorldManager:
                             "role_archetype": seed.role_hint,
                         },
                         state=dict(seed.initial_state or {}),
-                        create_legacy_entity=not bool(entity_id),
                         audit_reason="subworld core named character",
                     )
                 )
-                entity = session.get(Entity, result.legacy_entity_id or entity_id or "")
-                if entity is None:
-                    continue
-                if seed.initial_state:
-                    updater.create_entity_state(entity.id, max(0, int(chapter_number or 0)), seed.initial_state)
-                entity_map[entity.name] = entity.id
-                existing_names[entity.name] = entity.id
+                entity_map[result.character_name] = result.character_id
                 self._ensure_roster_item(
                     session=session,
                     project_id=project_id,
                     subworld_id=target_row.id,
                     roster_lookup=roster_lookup,
-                    entity_id=entity.id,
+                    entity_id="",
                     display_name=seed.name,
                     slot_key="",
                     role_hint=seed.role_hint,
@@ -521,7 +435,11 @@ class SubWorldManager:
                     is_core=True,
                     status="seeded_named",
                     activation_chapter=max(0, int(chapter_number or 0)),
-                    metadata={"character_id": result.character_id},
+                    metadata={
+                        "character_id": result.character_id,
+                        "book_state_node_id": result.character_id,
+                        "canon_source": "book_state",
+                    },
                 )
 
             for slot in item.planned_slots:
@@ -687,14 +605,14 @@ class SubWorldManager:
                 )
                 if chapter_hint <= 0:
                     break
-                entity = updater.materialize_roster_item(
+                result = updater.materialize_roster_item(
                     roster_item_id=slot.id,
                     chapter=chapter_hint,
                 )
                 entry_targets.append(
                     ChapterEntryTarget(
                         chapter_hint=chapter_hint,
-                        entity_name=entity.name,
+                        entity_name=result.character_name,
                         subworld_id=subworld_id,
                         role_hint=slot.role_hint,
                     )
@@ -769,24 +687,6 @@ class SubWorldManager:
             if slot_key:
                 mapping[(item.subworld_id, "slot", slot_key)] = item.id
         return mapping
-
-    def _entity_name_map(self, session: Session, project_id: str) -> dict[str, str]:
-        book_state_nodes = [
-            node
-            for node in BookStateRepository(session).list_world_nodes(project_id)
-            if str(node.node_type) == "character" and str(node.name or "").strip()
-        ]
-        if book_state_nodes:
-            return {node.name: node.id for node in book_state_nodes}
-        entities = session.execute(
-            select(Entity)
-            .where(Entity.project_id == project_id)
-        ).scalars().all()
-        return {
-            entity.name: entity.id
-            for entity in entities
-            if str(entity.name or "").strip()
-        }
 
     def _ensure_roster_item(
         self,

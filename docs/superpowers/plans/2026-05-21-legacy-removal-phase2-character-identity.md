@@ -31,7 +31,9 @@ Do not remove:
 - `forwin/characters/registry.py`: remove legacy lookup fallback.
 - `forwin/api_schema/world.py`: remove `legacy_entity_id` from `CharacterCreateRequest`.
 - `forwin/models/book_state.py`: remove column/index from `CharacterIdentityMapRow`.
-- `forwin/migrations/versions/0011_remove_character_identity_legacy_id.py`: drop/add column and index.
+- `forwin/models/entity.py`: loosen relation endpoint fields so canonical character ids can be stored.
+- `forwin/models/base.py`: remove current bootstrap SQL for character identity legacy columns.
+- `forwin/migrations/versions/0011_no_legacy_char_identity.py`: drop/add column and index.
 - `forwin/subworld_manager.py`: use `character_id`/`book_state_node_id`, not legacy Entity ids.
 - `forwin/state/updater.py`: materialize roster characters without requiring Entity rows.
 - `forwin/context/assembler_core/book_state_overlay.py`: stop exposing `legacy_entity_id`.
@@ -40,7 +42,7 @@ Do not remove:
 - `forwin/orchestrator_loop_core/finalization.py`: remove fallback from result legacy id.
 - `forwin/review_engine/audit.py`: remove Phase 2 identity runtime registry entries.
 - `forwin/governance.py` and `forwin/characters/events.py`: remove `CHARACTER_IMPORTED_FROM_LEGACY` if no callers remain.
-- `docs/designs/legacy-inventory.yaml`: mark Phase 2 entries deleted.
+- `docs/designs/legacy-inventory.yaml`: mark character identity deleted and retain the remaining schema-history marker.
 - Tests:
   - `tests/test_character_creation_helper.py`
   - `tests/test_character_personality_integration.py`
@@ -185,8 +187,9 @@ entity_map[result.character_name] = result.character_id
 - Modify: `forwin/characters/identity.py`
 - Modify: `forwin/characters/registry.py`
 - Modify: `forwin/models/book_state.py`
+- Modify: `forwin/models/entity.py`
 - Modify: `forwin/models/base.py`
-- Create: `forwin/migrations/versions/0011_remove_character_identity_legacy_id.py`
+- Create: `forwin/migrations/versions/0011_no_legacy_char_identity.py`
 
 - [ ] **Step 1: Remove runtime lookup/write**
 
@@ -209,9 +212,17 @@ In `forwin/models/base.py`, remove bootstrap SQL for `legacy_entity_id` and
 `ix_character_identity_project_legacy` from current schema creation. Do not edit
 historical migrations.
 
+In `forwin/models/entity.py`, change the `RelationEdge` endpoint columns from
+Entity foreign keys to current endpoint ids:
+
+```python
+source_entity_id: Mapped[str] = mapped_column(String, nullable=False)
+target_entity_id: Mapped[str] = mapped_column(String, nullable=False)
+```
+
 - [ ] **Step 3: Add migration**
 
-Create `forwin/migrations/versions/0011_remove_character_identity_legacy_id.py`
+Create `forwin/migrations/versions/0011_no_legacy_char_identity.py`
 with upgrade/downgrade:
 
 ```python
@@ -220,7 +231,7 @@ from __future__ import annotations
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0011_remove_character_identity_legacy_id"
+revision = "0011_no_legacy_char_identity"
 down_revision = "0010_future_plan_audit"
 branch_labels = None
 depends_on = None
@@ -230,8 +241,10 @@ def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return
-    op.drop_index("ix_character_identity_project_legacy", table_name="character_identity_map")
-    op.drop_column("character_identity_map", "legacy_entity_id")
+    op.execute("DROP INDEX IF EXISTS ix_character_identity_project_legacy")
+    op.execute("ALTER TABLE character_identity_map DROP COLUMN IF EXISTS legacy_entity_id")
+    op.execute("ALTER TABLE relation_edges DROP CONSTRAINT IF EXISTS relation_edges_source_entity_id_fkey")
+    op.execute("ALTER TABLE relation_edges DROP CONSTRAINT IF EXISTS relation_edges_target_entity_id_fkey")
 
 
 def downgrade() -> None:
@@ -246,6 +259,16 @@ def downgrade() -> None:
         "ix_character_identity_project_legacy",
         "character_identity_map",
         ["project_id", "legacy_entity_id"],
+    )
+    op.execute(
+        "ALTER TABLE relation_edges "
+        "ADD CONSTRAINT relation_edges_source_entity_id_fkey "
+        "FOREIGN KEY (source_entity_id) REFERENCES entities(id) NOT VALID"
+    )
+    op.execute(
+        "ALTER TABLE relation_edges "
+        "ADD CONSTRAINT relation_edges_target_entity_id_fkey "
+        "FOREIGN KEY (target_entity_id) REFERENCES entities(id) NOT VALID"
     )
 ```
 
@@ -322,13 +345,12 @@ In `forwin/review_engine/audit.py`, delete:
 
 Update tests that asserted those registry entries.
 
-- [ ] **Step 2: Mark inventory entries deleted**
+- [ ] **Step 2: Mark inventory entries**
 
 In `docs/designs/legacy-inventory.yaml`, mark:
 
 ```text
 canonical_identity.legacy_entity_id
-schema.bootstrap_legacy_columns
 ```
 
 as:
@@ -339,7 +361,11 @@ removal_phase: complete
 status: deleted
 ```
 
-Keep narrow residual `allow_patterns` for removed symbols.
+Keep narrow residual `allow_patterns` for removed symbols. Leave
+`schema.bootstrap_legacy_columns` as `migration_history_keep` with only
+`legacy_checkpoint_statuses_v1` allowed, because Phase 2 removes the current
+character identity column/index bootstrap but does not rewrite the historical
+checkpoint schema marker.
 
 - [ ] **Step 3: Run verification**
 
@@ -357,7 +383,8 @@ git diff --check
 Run production residual check:
 
 ```bash
-git grep -n -E 'legacy_entity_id|create_legacy_entity|LegacyCharacterImportRequest|CHARACTER_IMPORTED_FROM_LEGACY|subworld\\.legacy_entity_id_bridge|subworld\\.create_legacy_entity|characters\\.create_legacy_entity_default_true' -- forwin scripts ':!forwin/migrations/versions'
+git grep -n -E 'create_legacy_entity|LegacyCharacterImportRequest|CHARACTER_IMPORTED_FROM_LEGACY|subworld\\.legacy_entity_id_bridge|subworld\\.create_legacy_entity|characters\\.create_legacy_entity_default_true' -- forwin scripts ':!forwin/migrations/versions'
+git grep -n -E 'legacy_entity_id' -- forwin scripts ':!forwin/migrations/versions' ':!forwin/world_model'
 ```
 
 Expected: no runtime hits except deleted inventory/audit history if the grep is
@@ -378,4 +405,6 @@ git commit -m "refactor: remove legacy character identity bridge"
 - SubWorld no longer records identity bridge/create compatibility events.
 - Identity map schema no longer includes `legacy_entity_id`.
 - Remaining Entity usage is current-domain usage, not character identity bridge.
+- `schema.bootstrap_legacy_columns` is retained only for the non-character
+  historical checkpoint schema marker.
 - Phase 2 does not touch world projection, location fallback, creation status, or UI labels.

@@ -15,7 +15,9 @@ from forwin.api_schemas import (
 from forwin.book_state import BookStateProjection, BookStateRepository
 from forwin.characters.creation import CharacterCreationHelper
 from forwin.characters.models import CharacterCreationRequest
+from forwin.governance import DecisionEventInfo, DecisionEventType
 from forwin.models.project import Project
+from forwin.observability.payloads import audit_payload
 from forwin.personality.assignment import PersonalityLoadoutAssigner
 from forwin.personality.context import build_active_personality_context
 from forwin.personality.enrichment import RelationshipPersonalityEnricher

@@ -303,10 +303,10 @@ def test_legacy_compatibility_summary_includes_per_feature_detail() -> None:
             "chapter_number": 3,
             "payload": build_legacy_compatibility_payload(
                 compat_layer="subworld",
-                compat_feature="subworld.legacy_entity_id_bridge",
+                compat_feature="projection.legacy_world_model_projection",
                 usage_kind="write_bridge",
-                source_module="forwin.subworld_manager",
-                usage_reason="legacy entity bridge",
+                source_module="forwin.world_v4_compat.projector",
+                usage_reason="world model projection compatibility",
                 legacy_identifier="legacy-a",
                 canonical_identifier="char-a",
             ),
@@ -315,10 +315,10 @@ def test_legacy_compatibility_summary_includes_per_feature_detail() -> None:
             "chapter_number": 5,
             "payload": build_legacy_compatibility_payload(
                 compat_layer="subworld",
-                compat_feature="subworld.legacy_entity_id_bridge",
+                compat_feature="projection.legacy_world_model_projection",
                 usage_kind="write_bridge",
-                source_module="forwin.subworld_manager",
-                usage_reason="legacy entity bridge",
+                source_module="forwin.world_v4_compat.projector",
+                usage_reason="world model projection compatibility",
                 legacy_identifier="legacy-a",
                 canonical_identifier="char-a",
             ),
@@ -328,16 +328,16 @@ def test_legacy_compatibility_summary_includes_per_feature_detail() -> None:
     summary = summarize_legacy_compatibility_audit(
         rows,
         registry={
-            "subworld.legacy_entity_id_bridge": {
-                "compat_layer": "subworld",
+            "projection.legacy_world_model_projection": {
+                "compat_layer": "projection",
                 "removal_mode": "candidate_if_unused",
                 "instrumentation_status": "instrumented",
             }
         },
-        static_counts={"subworld.legacy_entity_id_bridge": 1},
+        static_counts={"projection.legacy_world_model_projection": 1},
     )
 
-    detail = summary["per_feature_detail"]["subworld.legacy_entity_id_bridge"]
+    detail = summary["per_feature_detail"]["projection.legacy_world_model_projection"]
     assert detail["events"] == 2
     assert detail["unique_chapters"] == 2
     assert detail["project_scope_events"] == 0
@@ -351,10 +351,10 @@ def test_legacy_compatibility_summary_marks_project_scope_events() -> None:
             "chapter_number": 0,
             "payload": build_legacy_compatibility_payload(
                 compat_layer="subworld",
-                compat_feature="subworld.legacy_entity_id_bridge",
+                compat_feature="projection.legacy_world_model_projection",
                 usage_kind="write_bridge",
-                source_module="forwin.subworld_manager",
-                usage_reason="project-level roster bridge",
+                source_module="forwin.world_v4_compat.projector",
+                usage_reason="project-level projection bridge",
                 legacy_identifier="legacy-a",
                 canonical_identifier="char-a",
             ),
@@ -362,10 +362,10 @@ def test_legacy_compatibility_summary_marks_project_scope_events() -> None:
         {
             "payload": build_legacy_compatibility_payload(
                 compat_layer="subworld",
-                compat_feature="subworld.legacy_entity_id_bridge",
+                compat_feature="projection.legacy_world_model_projection",
                 usage_kind="write_bridge",
-                source_module="forwin.subworld_manager",
-                usage_reason="project-level roster bridge",
+                source_module="forwin.world_v4_compat.projector",
+                usage_reason="project-level projection bridge",
                 legacy_identifier="legacy-b",
                 canonical_identifier="char-b",
             ),
@@ -375,16 +375,16 @@ def test_legacy_compatibility_summary_marks_project_scope_events() -> None:
     summary = summarize_legacy_compatibility_audit(
         rows,
         registry={
-            "subworld.legacy_entity_id_bridge": {
-                "compat_layer": "subworld",
+            "projection.legacy_world_model_projection": {
+                "compat_layer": "projection",
                 "removal_mode": "candidate_if_unused",
                 "instrumentation_status": "instrumented",
             }
         },
-        static_counts={"subworld.legacy_entity_id_bridge": 1},
+        static_counts={"projection.legacy_world_model_projection": 1},
     )
 
-    detail = summary["per_feature_detail"]["subworld.legacy_entity_id_bridge"]
+    detail = summary["per_feature_detail"]["projection.legacy_world_model_projection"]
     assert detail["events"] == 2
     assert detail["unique_chapters"] == 0
     assert detail["project_scope_events"] == 2

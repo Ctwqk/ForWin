@@ -34,22 +34,6 @@ LEGACY_COMPATIBILITY_REGISTRY: dict[str, dict[str, Any]] = {
         "static_patterns": "projection.legacy_world_model_projection",
         "description": "Legacy world model projection compatibility path.",
     },
-    "subworld.legacy_entity_id_bridge": {
-        "compat_layer": "subworld",
-        "default_assessment": "candidate_if_unused",
-        "removal_mode": "candidate_if_unused",
-        "instrumentation_status": "instrumented",
-        "static_patterns": "subworld.legacy_entity_id_bridge",
-        "description": "Bridge from SubWorld node metadata legacy_entity_id to canonical entity.",
-    },
-    "subworld.create_legacy_entity": {
-        "compat_layer": "subworld",
-        "default_assessment": "must_migrate_if_used",
-        "removal_mode": "must_migrate_if_used",
-        "instrumentation_status": "instrumented",
-        "static_patterns": "subworld.create_legacy_entity",
-        "description": "Create legacy entity rows for SubWorld compatibility.",
-    },
     "project.creation_status_legacy": {
         "compat_layer": "project",
         "default_assessment": "must_migrate_if_used",
@@ -60,14 +44,6 @@ LEGACY_COMPATIBILITY_REGISTRY: dict[str, dict[str, Any]] = {
             "_record_project_creation_status_legacy_compatibility(",
         ],
         "description": "Project-level legacy creation_status compatibility paths.",
-    },
-    "characters.create_legacy_entity_default_true": {
-        "compat_layer": "characters",
-        "default_assessment": "must_migrate_if_used",
-        "removal_mode": "must_migrate_if_used",
-        "instrumentation_status": "instrumented",
-        "static_patterns": "characters.create_legacy_entity_default_true",
-        "description": "Character creation path that materializes legacy Entity rows.",
     },
     "dead_code.repair_loop_detector": {
         "compat_layer": "dead_code",

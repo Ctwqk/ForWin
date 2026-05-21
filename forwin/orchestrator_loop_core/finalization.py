@@ -719,7 +719,7 @@ def _seed_state(
     from forwin.characters.models import CharacterCreationRequest
 
     character_helper = CharacterCreationHelper(updater.session)
-    entity_map: dict[str, str] = {}  # name -> entity_id
+    entity_map: dict[str, str] = {}  # name -> canonical character id
     for char_data in arc_plan.get("characters", []):
         initial_state = char_data.get("initial_state", {})
         result = character_helper.create_character(
@@ -743,7 +743,7 @@ def _seed_state(
                 audit_reason="arc plan seed character",
             )
         )
-        entity_map[result.character_name] = result.legacy_entity_id or result.character_id
+        entity_map[result.character_name] = result.character_id
 
     # Entities: locations
     for loc_data in arc_plan.get("locations", []):

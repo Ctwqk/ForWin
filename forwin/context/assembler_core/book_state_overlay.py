@@ -70,7 +70,6 @@ def _book_state_context_overlay(
                 {
                     "character_id": node.id,
                     "character_name": node.name,
-                    "legacy_entity_id": str(metadata.get("legacy_entity_id") or ""),
                     "personality_loadout": loadout if isinstance(loadout, dict) else {},
                     "personality_assignment": metadata.get("personality_assignment")
                     if isinstance(metadata.get("personality_assignment"), dict)

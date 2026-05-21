@@ -232,3 +232,60 @@ def test_deprecated_legacy_modules_emit_deprecation_warning() -> None:
         sys.modules.pop(module_name, None)
         with pytest.warns(DeprecationWarning, match="DESIGN_STATUS"):
             importlib.import_module(module_name)
+
+
+def test_removed_repair_dead_code_stays_removed() -> None:
+    assert not (ROOT / "forwin/orchestrator/repair_coordinator.py").exists()
+
+    loop_detector = importlib.import_module("forwin.reviewer.repair_loop_detector")
+    assert hasattr(loop_detector, "RepairAttemptRecord")
+    assert not hasattr(loop_detector, "RepairLoopDetector")
+    assert not hasattr(loop_detector, "RepairLoopResult")
+    assert not hasattr(loop_detector, "attempt_record_from_history_item")
+
+    scope_router = importlib.import_module("forwin.reviewer.repair_scope_router")
+    assert hasattr(scope_router, "RepairScopeKind")
+    assert hasattr(scope_router, "route_signal_kind")
+    assert not hasattr(scope_router, "RepairScopeDispatch")
+    assert not hasattr(scope_router, "route_review_repair_scopes")
+
+    rule_profile = importlib.import_module("forwin.canon_quality.rule_profile")
+    signature = inspect.signature(rule_profile.countdown_profiles_from_quality_context)
+    assert "use_legacy_fallback" not in signature.parameters
+    assert "use_legacy_fallback" not in _read("forwin/canon_quality/rule_profile.py")
+
+
+def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
+    forbidden_runtime_tokens = {
+        "Review" "OutcomeRouter": [
+            "forwin/orchestrator_loop_core/common.py",
+            "forwin/orchestrator_loop_core/quality_gates.py",
+        ],
+        "Repair" "Policy": [
+            "forwin/runtime/container.py",
+            "forwin/runtime/services.py",
+            "forwin/orchestrator_loop_core/service.py",
+            "forwin/orchestrator_loop_core/repair_loop.py",
+            "forwin/review_engine/rules/repair.py",
+        ],
+        "Obligation" "ScopeRouter": [
+            "forwin/orchestrator_loop_core/quality_gates.py",
+            "forwin/review_engine/rules/obligation_scope.py",
+        ],
+        "select_" "cutover_pair": [
+            "forwin/orchestrator_loop_core/quality_gates.py",
+        ],
+        "engine_" "live_enabled": [
+            "forwin/orchestrator_loop_core/repair_loop.py",
+        ],
+    }
+    offenders: list[tuple[str, str]] = []
+    for token, rel_paths in forbidden_runtime_tokens.items():
+        for rel_path in rel_paths:
+            if token in _read(rel_path):
+                offenders.append((rel_path, token))
+
+    assert offenders == []
+    assert "FinalAcceptanceGate" not in _read("forwin/runtime/container.py")
+    assert "FinalAcceptanceGate" not in _read("forwin/orchestrator_loop_core/repair_loop.py")
+    assert "FinalAcceptanceGate" in _read("forwin/review_engine/rules/final_acceptance.py")

@@ -53,6 +53,4 @@ class RuntimeServices:
     review_hub: Any
     writer: Any
     provisional_writer: Any
-    repair_policy: Any
     repair_verifier: Any
-    final_acceptance_gate: Any

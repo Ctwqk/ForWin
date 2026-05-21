@@ -37,19 +37,20 @@ class CodexBridgeClient:
         timeout_seconds: float | None = None,
         **_: object,
     ) -> str:
+        raw_output_schema = intent.output_schema
+        json_mode = bool(response_format and response_format.get("type") == "json_object")
+        output_schema = self._structured_output_schema(raw_output_schema)
         prompt = self._prompt_from_messages(
             messages,
             task_family=intent.task_family,
             stage_key=intent.stage_key,
             temperature=temperature,
             max_tokens=max_tokens,
+            json_mode=json_mode or output_schema is not None,
         )
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
-        output_schema = intent.output_schema
-        if output_schema is None and response_format and response_format.get("type") == "json_object":
-            output_schema = {"type": "object"}
         response = self.client.post(
             f"{self.bridge_url}/v1/codex/chat",
             headers=headers,
@@ -105,7 +106,14 @@ class CodexBridgeClient:
         stage_key: str,
         temperature: float,
         max_tokens: int,
+        json_mode: bool = False,
     ) -> str:
+        instructions = [
+            "Return only the requested final content.",
+            "If the user requests JSON, return a single JSON object.",
+        ]
+        if json_mode:
+            instructions.append("This invocation is in JSON mode: return only valid JSON, with no markdown or prose.")
         return "\n\n".join(
             [
                 "# ForWin Codex Invocation",
@@ -114,12 +122,22 @@ class CodexBridgeClient:
                 f"temperature: {temperature}",
                 f"max_tokens: {max_tokens}",
                 "",
-                "Return only the requested final content. If the user requests JSON, return a single JSON object.",
+                " ".join(instructions),
                 "",
                 "# Messages",
                 json.dumps(messages, ensure_ascii=False, indent=2),
             ]
         )
+
+    @staticmethod
+    def _structured_output_schema(schema: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(schema, dict):
+            return None
+        schema_type = str(schema.get("type", "") or "").strip()
+        if schema_type != "object":
+            return schema
+        has_shape = bool(schema.get("properties") or schema.get("required"))
+        return schema if has_shape else None
 
     def close(self) -> None:
         self.client.close()

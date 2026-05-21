@@ -173,6 +173,31 @@ class ScenarioRehearsalRunner:
         chapter_numbers: list[int],
         trigger_context: ScenarioTriggerContext | None = None,
     ) -> ScenarioRehearsalReport:
+        chapter_numbers = [
+            int(item)
+            for item in chapter_numbers
+            if str(item or "").strip().lstrip("-").isdigit() and int(item) > 0
+        ]
+        if not chapter_numbers:
+            trigger_context = trigger_context or ScenarioTriggerContext(
+                should_run=False,
+                reasons=["empty_band"],
+            )
+            return ScenarioRehearsalReport(
+                project_id=project_id,
+                arc_id=arc_id,
+                band_id=band_id,
+                chapter_numbers=[],
+                trigger_reasons=["low_risk_skip"],
+                recommendation=ScenarioRehearsalRecommendation.PASS,
+                metadata={
+                    "skipped": True,
+                    "skip_reason": "empty_band",
+                    "simulation_mode": "deterministic",
+                    "trigger_context": trigger_context.model_dump(),
+                    "rule_results": [],
+                },
+            )
         if trigger_context is None:
             trigger_context = ScenarioTriggerEvaluator(self.session).evaluate_for_band(
                 project_id=project_id,
@@ -365,6 +390,23 @@ class ScenarioRehearsalRunner:
         risk_findings: list[ScenarioRiskFinding] = []
         future_conflicts: list[str] = []
         patches: list[ScenarioPlanPatch] = []
+        entry_target_patch_subworld_ids: set[str] = set()
+
+        def add_entry_target_patch(subworld_id: str) -> None:
+            subworld_id = str(subworld_id or "").strip()
+            if not subworld_id or subworld_id in entry_target_patch_subworld_ids:
+                return
+            entry_target_patch_subworld_ids.add(subworld_id)
+            patches.append(
+                ScenarioPlanPatch(
+                    patch_type="add_entry_target",
+                    target=f"band_experience_plan.chapter_entry_targets:{subworld_id}",
+                    message="Add an entry target for the active subworld.",
+                    evidence_refs=[f"subworld:{subworld_id}"],
+                    metadata={"subworld_id": subworld_id},
+                )
+            )
+
         reveal_guard_by_gap = {
             str(step.gap_id or ""): int(step.must_not_reveal_before or 0)
             for step in (arc_contract.reveal_ladder if arc_contract else [])
@@ -495,6 +537,7 @@ class ScenarioRehearsalRunner:
                             affected_chapters=list(chapter_numbers),
                         )
                     )
+                    add_entry_target_patch(subworld_id)
                 if not (
                     str(subworld_meta.get("region_anchor") or "").strip()
                     and str(subworld_meta.get("node_anchor") or "").strip()
@@ -565,15 +608,7 @@ class ScenarioRehearsalRunner:
                                 metadata={"subworld_id": subworld_id, "role": role},
                             )
                         )
-                    patches.append(
-                        ScenarioPlanPatch(
-                            patch_type="add_entry_target",
-                            target=f"band_experience_plan.chapter_entry_targets:{subworld_id}",
-                            message="Add an entry target for the active subworld.",
-                            evidence_refs=[f"subworld:{subworld_id}"],
-                            metadata={"subworld_id": subworld_id},
-                        )
-                    )
+                    add_entry_target_patch(subworld_id)
             if any(
                 str(payload.get("entity_admission_rule") or "").strip() != "strict_named_character"
                 for payload in chapter_experience_payloads.values()

@@ -9,7 +9,7 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.governance import DecisionEvent
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ArcPlanVersion, ChapterPlan
-from forwin.models.subworld import SubWorld
+from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.models.world_v4 import ScenarioRehearsalRunRow
 from forwin.governance import DecisionEventType
 from forwin.planning.scenario_rehearsal import ScenarioRehearsalRunner
@@ -164,6 +164,134 @@ def test_subworld_without_roster_is_a_patchable_rehearsal_risk() -> None:
         assert report.recommendation == ScenarioRehearsalRecommendation.PATCH
         assert any(finding.risk_type == "subworld_roster_empty" for finding in report.risk_findings)
         assert any(patch.patch_type == "add_subworld_roster_slot" for patch in report.required_plan_patches)
+
+
+def test_subworld_with_roster_but_no_entry_target_auto_patches_band_plan() -> None:
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project, arc, chapters = _setup_project(session, chapter_start=1, chapter_end=4)
+        subworld = SubWorld(
+            project_id=project.id,
+            origin_arc_id=arc.id,
+            name="灰港",
+            purpose="新地图与势力入口",
+            scope="arc_local",
+            status="active",
+            metadata_json=json.dumps(
+                {"region_anchor": "灰港", "node_anchor": "灰港码头"},
+                ensure_ascii=False,
+            ),
+        )
+        session.add(subworld)
+        session.flush()
+        session.add(
+            SubWorldRosterItem(
+                project_id=project.id,
+                subworld_id=subworld.id,
+                entity_kind="character",
+                display_name="灰港向导",
+                slot_key="guide",
+                role_hint="新盟友",
+                is_core=True,
+                status="active",
+                activation_chapter=1,
+            )
+        )
+        for chapter in chapters:
+            chapter.experience_plan_json = json.dumps(
+                {"entity_admission_rule": "strict_named_character"},
+                ensure_ascii=False,
+            )
+            session.add(chapter)
+        session.add(
+            BandExperiencePlan(
+                project_id=project.id,
+                arc_id=arc.id,
+                band_id="band:1:4",
+                chapter_start=1,
+                chapter_end=4,
+                schedule_json=json.dumps(
+                    {
+                        "band_id": "band:1:4",
+                        "chapter_start": 1,
+                        "chapter_end": 4,
+                        "active_subworld_ids": [subworld.id],
+                        "chapter_entry_targets": [],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+
+        outcome = ScenarioRehearsalCoordinator(session).run_for_band(
+            project_id=project.id,
+            arc_id=arc.id,
+            band_id="band:1:4",
+            chapter_numbers=[chapter.chapter_number for chapter in chapters],
+        )
+
+        row = session.execute(
+            select(BandExperiencePlan)
+            .where(BandExperiencePlan.project_id == project.id, BandExperiencePlan.band_id == "band:1:4")
+            .order_by(BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc())
+        ).scalars().first()
+        payload = json.loads(row.schedule_json or "{}")
+
+        assert outcome.status == "patched_passed"
+        assert any(item.get("subworld_id") == subworld.id for item in payload["chapter_entry_targets"])
+
+
+def test_empty_rehearsal_band_is_skipped_without_blocking_checkpoint() -> None:
+    engine = get_engine(postgres_test_url())
+    init_db(engine)
+    Session = get_session_factory(engine)
+
+    with Session.begin() as session:
+        project, arc, _chapters = _setup_project(session, chapter_start=1, chapter_end=4)
+        subworld = SubWorld(
+            project_id=project.id,
+            origin_arc_id=arc.id,
+            name="灰港",
+            purpose="新地图与势力入口",
+            scope="arc_local",
+            status="active",
+        )
+        session.add(subworld)
+        session.flush()
+        session.add(
+            BandExperiencePlan(
+                project_id=project.id,
+                arc_id=arc.id,
+                band_id="band:0:0",
+                chapter_start=0,
+                chapter_end=0,
+                schedule_json=json.dumps(
+                    {
+                        "band_id": "band:0:0",
+                        "chapter_start": 0,
+                        "chapter_end": 0,
+                        "active_subworld_ids": [subworld.id],
+                        "chapter_entry_targets": [],
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+
+        outcome = ScenarioRehearsalCoordinator(session).run_for_band(
+            project_id=project.id,
+            arc_id=arc.id,
+            band_id="band:0:0",
+            chapter_numbers=[],
+        )
+
+        assert outcome.status == "skipped"
+        assert outcome.report.trigger_reasons == ["low_risk_skip"]
+        assert outcome.report.risk_findings == []
+        assert latest_blocking_scenario_rehearsal(session, project.id) is None
 
 
 def test_early_reveal_before_visibility_guard_blocks_rehearsal() -> None:

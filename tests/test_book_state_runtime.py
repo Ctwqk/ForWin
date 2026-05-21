@@ -144,6 +144,63 @@ def test_distance_between_world_nodes_uses_location_id_and_map_graph() -> None:
     assert result.total_travel_time == 0.5
 
 
+def test_distance_between_world_nodes_reports_legacy_location_fallback() -> None:
+    world = ObjectiveWorldGraph(
+        nodes=[
+            WorldNode(
+                id="char_mc",
+                project_id="project-1",
+                node_type="character",
+                state={"location": "loc_city"},
+            ),
+            WorldNode(
+                id="char_enemy",
+                project_id="project-1",
+                node_type="character",
+                state={"location_id": "loc_inner"},
+            ),
+        ]
+    )
+    map_graph = MapGraph(
+        nodes=_map_nodes(),
+        edges=[
+            MapEdge(
+                id="edge_secret_tunnel",
+                project_id="project-1",
+                from_node_id="loc_city",
+                to_node_id="loc_inner",
+                edge_type="hidden_route",
+                travel_time=0.5,
+                status="hidden",
+                discovered_by_default=False,
+            )
+        ],
+    )
+    facts: list[dict[str, object]] = []
+
+    result = distance_between_world_nodes(
+        world,
+        map_graph,
+        "char_mc",
+        "char_enemy",
+        legacy_compat_observer=facts.append,
+    )
+
+    assert result.reachable is True
+    assert facts == [
+        {
+            "compat_layer": "book_state",
+            "compat_feature": "book_state.state.location_fallback",
+            "usage_kind": "read_fallback",
+            "source_module": "forwin.book_state.runtime",
+            "usage_reason": "state.location used because location_id is missing",
+            "compat_key": "state.location",
+            "legacy_identifier": "loc_city",
+            "metadata": {"node_id": "char_mc", "field_path": "state.location"},
+        }
+    ]
+
+
 def test_objective_world_graph_applies_node_and_map_patches() -> None:
     world = ObjectiveWorldGraph(
         nodes=[

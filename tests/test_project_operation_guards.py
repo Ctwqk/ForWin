@@ -20,6 +20,7 @@ from forwin.api_schemas import (
     ProjectCreateRequest,
     ProjectExtendGenerationRequest,
     ProjectGovernanceUpdateRequest,
+    StartWritingRequest,
 )
 from forwin.config import Config
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
@@ -637,6 +638,165 @@ class ProjectOperationGuardTests(unittest.TestCase):
             project_row = session.get(Project, project.id)
             self.assertEqual(project_row.creation_status, "genesis_ready")
 
+    def test_start_writing_forwards_auto_continue_target_to_task_creation(self) -> None:
+        project = self._create_project(project_id="proj-start-writing-target")
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "genesis_ready"
+            project_row.target_total_chapters = 6
+            session.commit()
+
+        class FakeGenesisService:
+            class Handoff:
+                def start_writing(self, *, session, updater, command):
+                    project = session.get(Project, command.project_id)
+                    arc = ArcPlanVersion(
+                        id="arc-start-writing-target",
+                        project_id=project.id,
+                        version=1,
+                        arc_number=1,
+                        arc_synopsis="测试弧线",
+                        status="active",
+                    )
+                    session.add(arc)
+                    session.flush()
+                    for chapter_number in range(1, 7):
+                        session.add(
+                            ChapterPlan(
+                                id=f"plan-start-writing-target-{chapter_number}",
+                                project_id=project.id,
+                                arc_plan_id=arc.id,
+                                chapter_number=chapter_number,
+                                title=f"第{chapter_number}章",
+                                status="planned",
+                            )
+                        )
+                    project.creation_status = "writing"
+                    session.add(project)
+                    session.flush()
+                    return SimpleNamespace(
+                        active_chapter_plan_count=6,
+                        project_status="writing",
+                    )
+
+            def __init__(self):
+                self.handoff = self.Handoff()
+
+        captured: dict[str, object] = {}
+
+        def capture_task_creation(**kwargs):
+            captured.update(kwargs)
+            return "task-start-writing-target"
+
+        response = api_project_ops.start_project_writing(
+            project.id,
+            StartWritingRequest(auto_continue=False, max_chapters=2, run_until_chapter=2),
+            get_session=self.session_factory,
+            config=api_module._config,
+            saved_runtime_config_or_default=lambda: Config(
+                database_url=api_module._config.database_url,
+                minimax_api_key="saved-key",
+            ),
+            build_genesis_service=lambda _runtime_config: FakeGenesisService(),
+            close_genesis_service=lambda _service: None,
+            require_genesis_project=lambda _project: None,
+            active_genesis_revision=lambda _session, _project: SimpleNamespace(id="revision-start-writing-target"),
+            project_has_active_generation_task=lambda _project_id, *, session=None: False,
+            generation_task_conflict_message=lambda _project_id: "conflict",
+            create_continue_generation_task=capture_task_creation,
+        )
+
+        self.assertEqual(response.task_id, "task-start-writing-target")
+        self.assertIs(captured["auto_continue"], False)
+        self.assertEqual(captured["max_chapters"], 2)
+        self.assertEqual(captured["run_until_chapter"], 2)
+
+    def test_start_writing_defaults_to_auto_continue_until_project_target(self) -> None:
+        project = self._create_project(project_id="proj-start-auto-continue")
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "genesis_ready"
+            project_row.target_total_chapters = 24
+            session.commit()
+
+        class FakeGenesisService:
+            class Handoff:
+                def start_writing(self, *, session, updater, command):
+                    project = session.get(Project, command.project_id)
+                    active_arc = ArcPlanVersion(
+                        id="arc-start-auto-continue-1",
+                        project_id=project.id,
+                        version=1,
+                        arc_number=1,
+                        arc_synopsis="当前弧线",
+                        status="active",
+                        chapter_start=1,
+                        chapter_end=12,
+                        planned_target_size=12,
+                    )
+                    future_arc = ArcPlanVersion(
+                        id="arc-start-auto-continue-2",
+                        project_id=project.id,
+                        version=1,
+                        arc_number=2,
+                        arc_synopsis="后续弧线",
+                        status="planned",
+                        chapter_start=13,
+                        chapter_end=24,
+                        planned_target_size=12,
+                    )
+                    session.add_all([active_arc, future_arc])
+                    session.flush()
+                    for chapter_number in range(1, 13):
+                        session.add(
+                            ChapterPlan(
+                                id=f"plan-start-auto-continue-{chapter_number}",
+                                project_id=project.id,
+                                arc_plan_id=active_arc.id,
+                                chapter_number=chapter_number,
+                                title=f"第{chapter_number}章",
+                                status="planned",
+                            )
+                        )
+                    project.creation_status = "writing"
+                    session.add(project)
+                    session.flush()
+                    return SimpleNamespace(
+                        active_chapter_plan_count=12,
+                        project_status="writing",
+                    )
+
+            def __init__(self):
+                self.handoff = self.Handoff()
+
+        captured: dict[str, object] = {}
+
+        def capture_task_creation(**kwargs):
+            captured.update(kwargs)
+            return "task-start-auto-continue"
+
+        response = api_project_ops.start_project_writing(
+            project.id,
+            get_session=self.session_factory,
+            config=api_module._config,
+            saved_runtime_config_or_default=lambda: Config(
+                database_url=api_module._config.database_url,
+                minimax_api_key="saved-key",
+            ),
+            build_genesis_service=lambda _runtime_config: FakeGenesisService(),
+            close_genesis_service=lambda _service: None,
+            require_genesis_project=lambda _project: None,
+            active_genesis_revision=lambda _session, _project: SimpleNamespace(id="revision-start-auto-continue"),
+            project_has_active_generation_task=lambda _project_id, *, session=None: False,
+            generation_task_conflict_message=lambda _project_id: "conflict",
+            create_continue_generation_task=capture_task_creation,
+        )
+
+        self.assertEqual(response.task_id, "task-start-auto-continue")
+        self.assertIs(captured["auto_continue"], True)
+        self.assertIsNone(captured["run_until_chapter"])
+        self.assertEqual(captured["requested_chapters"], 12)
+
     def test_delete_project_rejects_running_generation_task(self) -> None:
         project = self._create_project(project_id="proj-delete-generation")
         with self.session_factory() as session:
@@ -881,6 +1041,168 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(response.requested_chapters, 2)
         self.assertEqual(captured["requested_chapters"], 2)
         self.assertEqual(captured["max_chapters"], 2)
+        self.assertEqual(captured["run_until_chapter"], 32)
+
+    def test_continue_generation_passes_auto_continue_target_to_task_creation(self) -> None:
+        project = self._create_project(project_id="proj-continue-auto-target")
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "writing"
+            project_row.target_total_chapters = 60
+            arc = ArcPlanVersion(
+                id="arc-continue-auto-target",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+                arc_number=3,
+                chapter_start=25,
+                chapter_end=36,
+            )
+            session.add(arc)
+            session.flush()
+            for chapter_number in range(25, 37):
+                session.add(
+                    ChapterPlan(
+                        id=f"plan-continue-auto-target-{chapter_number}",
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=chapter_number,
+                        title=f"第{chapter_number}章",
+                        status="planned",
+                    )
+                )
+            session.commit()
+
+        captured: dict[str, object] = {}
+
+        def capture_task_creation(**kwargs):
+            captured.update(kwargs)
+            task_id = "task-continue-auto-target"
+            task = api_module._create_task_record(
+                title=str(kwargs.get("title") or ""),
+                subtitle=str(kwargs.get("subtitle") or ""),
+                message=str(kwargs.get("message") or ""),
+                requested_chapters=int(kwargs.get("requested_chapters") or 0),
+            )
+            task["project_id"] = project.id
+            api_module._persist_generation_task(task_id, task)
+            return task_id
+
+        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+            response = api_module.continue_project_generation(
+                project.id,
+                ProjectContinueGenerationRequest(run_until_chapter=36),
+            )
+
+        self.assertEqual(response.task_id, "task-continue-auto-target")
+        self.assertIs(captured["auto_continue"], True)
+        self.assertEqual(captured["run_until_chapter"], 36)
+        self.assertEqual(captured["requested_chapters"], 12)
+        self.assertEqual(captured["max_chapters"], 12)
+
+    def test_continue_generation_auto_continue_false_preserves_short_batch(self) -> None:
+        project = self._create_project(project_id="proj-continue-auto-false")
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "writing"
+            project_row.target_total_chapters = 60
+            arc = ArcPlanVersion(
+                id="arc-continue-auto-false",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+                arc_number=1,
+                chapter_start=1,
+                chapter_end=12,
+            )
+            session.add(arc)
+            session.flush()
+            for chapter_number in range(1, 13):
+                session.add(
+                    ChapterPlan(
+                        id=f"plan-continue-auto-false-{chapter_number}",
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=chapter_number,
+                        title=f"第{chapter_number}章",
+                        status="planned",
+                    )
+                )
+            session.commit()
+
+        captured: dict[str, object] = {}
+
+        def capture_task_creation(**kwargs):
+            captured.update(kwargs)
+            task_id = "task-continue-auto-false"
+            task = api_module._create_task_record(
+                message=str(kwargs.get("message") or ""),
+                requested_chapters=int(kwargs.get("requested_chapters") or 0),
+            )
+            task["project_id"] = project.id
+            api_module._persist_generation_task(task_id, task)
+            return task_id
+
+        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+            response = api_module.continue_project_generation(
+                project.id,
+                ProjectContinueGenerationRequest(auto_continue=False, max_chapters=3),
+            )
+
+        self.assertEqual(response.requested_chapters, 3)
+        self.assertIs(captured["auto_continue"], False)
+        self.assertEqual(captured["max_chapters"], 3)
+        self.assertEqual(captured["requested_chapters"], 3)
+
+    def test_continue_generation_filters_auto_continue_target_for_strict_task_factory(self) -> None:
+        project = self._create_project(project_id="proj-continue-strict-factory")
+        with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "writing"
+            project_row.target_total_chapters = 60
+            arc = ArcPlanVersion(
+                id="arc-continue-strict-factory",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+                arc_number=1,
+                chapter_start=1,
+                chapter_end=4,
+            )
+            session.add(arc)
+            session.flush()
+            for chapter_number in range(1, 5):
+                session.add(
+                    ChapterPlan(
+                        id=f"plan-continue-strict-factory-{chapter_number}",
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=chapter_number,
+                        title=f"第{chapter_number}章",
+                        status="planned",
+                    )
+                )
+            session.commit()
+
+        def strict_task_creation(project_id, runtime_config, requested_chapters, max_chapters, title, subtitle, message):
+            task_id = "task-continue-strict-factory"
+            task = api_module._create_task_record(
+                title=title,
+                subtitle=subtitle,
+                message=message,
+                requested_chapters=requested_chapters,
+            )
+            task["project_id"] = project_id
+            api_module._persist_generation_task(task_id, task)
+            return task_id
+
+        with patch("forwin.api._create_continue_generation_task", new=strict_task_creation):
+            response = api_module.continue_project_generation(
+                project.id,
+                ProjectContinueGenerationRequest(auto_continue=True, run_until_chapter=4),
+            )
+
+        self.assertEqual(response.task_id, "task-continue-strict-factory")
 
     def test_continue_generation_count_is_scoped_to_active_arc(self) -> None:
         project = self._create_project(project_id="proj-continue-active-arc-only")
@@ -949,12 +1271,17 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(captured["requested_chapters"], 1)
         self.assertEqual(captured["max_chapters"], 10)
 
-    def test_project_continue_generation_request_rejects_non_positive_max_chapters(self) -> None:
+    def test_project_continue_generation_request_rejects_non_positive_run_limits(self) -> None:
         with self.assertRaises(ValidationError):
             ProjectContinueGenerationRequest(max_chapters=0)
         with self.assertRaises(ValidationError):
             ProjectContinueGenerationRequest(max_chapters=-1)
+        with self.assertRaises(ValidationError):
+            ProjectContinueGenerationRequest(run_until_chapter=0)
+        with self.assertRaises(ValidationError):
+            ProjectContinueGenerationRequest(run_until_chapter=-1)
         self.assertEqual(ProjectContinueGenerationRequest(max_chapters=1).max_chapters, 1)
+        self.assertEqual(ProjectContinueGenerationRequest(run_until_chapter=1).run_until_chapter, 1)
 
     def test_generation_control_drafted_chapter_blocks_future_arc_resume(self) -> None:
         project = self._create_project(project_id="proj-drafted-future-arc")

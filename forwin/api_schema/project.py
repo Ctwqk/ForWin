@@ -240,6 +240,8 @@ class ProjectCreateResponse(BaseModel):
 
 class ProjectContinueGenerationRequest(BaseModel):
     max_chapters: int | None = Field(default=None, ge=1)
+    auto_continue: bool | None = None
+    run_until_chapter: int | None = Field(default=None, ge=1)
     operation_mode: str | None = None
     review_interval_chapters: int | None = None
     progression_mode: str | None = None

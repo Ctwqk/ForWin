@@ -138,9 +138,7 @@ def test_writing_orchestrator_keeps_legacy_config_constructor(monkeypatch) -> No
         review_hub=SimpleNamespace(),
         writer=SimpleNamespace(),
         provisional_writer=SimpleNamespace(),
-        repair_policy=SimpleNamespace(),
         repair_verifier=SimpleNamespace(),
-        final_acceptance_gate=SimpleNamespace(),
     )
 
     class FakeContainer:

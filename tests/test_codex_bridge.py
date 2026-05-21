@@ -9,6 +9,9 @@ from fastapi.testclient import TestClient
 
 from forwin.codex_bridge.http import build_app
 from forwin.codex_bridge.runner import CodexExecRequest, CodexExecResult, CodexExecRunner
+from forwin.llm.codex_client import CodexBridgeClient
+from forwin.llm.router import LLMCallIntent
+from forwin.writer.chapter_writer import ChapterWriter
 
 
 class FakeCodexRunner:
@@ -33,6 +36,38 @@ class FakeCodexRunner:
             raw_events=[{"type": "message"}],
             returncode=0,
         )
+
+
+class FakeHttpResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self.payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, object]:
+        return self.payload
+
+
+class FakeHttpClient:
+    def __init__(self) -> None:
+        self.posts: list[dict[str, object]] = []
+
+    def post(self, url: str, *, headers=None, json=None) -> FakeHttpResponse:  # noqa: ANN001
+        self.posts.append({"url": url, "headers": headers, "json": json})
+        return FakeHttpResponse({"ok": True, "content": '{"ok":true}'})
+
+    def close(self) -> None:
+        return None
+
+
+class FakeWriterLLM:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def chat(self, messages, **kwargs):  # noqa: ANN001
+        self.calls.append(dict(kwargs))
+        return '{"ok": true}'
 
 
 class CodexBridgeTests(unittest.TestCase):
@@ -126,6 +161,58 @@ class CodexBridgeTests(unittest.TestCase):
         self.assertNotIn("--ask-for-approval", cmd)
         self.assertEqual(captured["input"], "ping")
         self.assertEqual(captured["schema"]["additionalProperties"], False)
+
+    def test_codex_client_does_not_send_generic_object_schema(self) -> None:
+        fake_http = FakeHttpClient()
+        with patch("forwin.llm.codex_client.httpx.Client", return_value=fake_http):
+            client = CodexBridgeClient(bridge_url="http://bridge")
+            client.chat(
+                [{"role": "user", "content": "只输出 JSON"}],
+                intent=LLMCallIntent(
+                    task_family="writer",
+                    stage_key="state_event_extraction",
+                    output_schema={"type": "object"},
+                ),
+                response_format={"type": "json_object"},
+            )
+
+        request_json = fake_http.posts[0]["json"]
+        self.assertIsInstance(request_json, dict)
+        self.assertIsNone(request_json["output_schema"])
+        self.assertIn("JSON mode", request_json["prompt"])
+
+    def test_codex_client_sends_shaped_schema(self) -> None:
+        fake_http = FakeHttpClient()
+        schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+        with patch("forwin.llm.codex_client.httpx.Client", return_value=fake_http):
+            client = CodexBridgeClient(bridge_url="http://bridge")
+            client.chat(
+                [{"role": "user", "content": "只输出 JSON"}],
+                intent=LLMCallIntent(
+                    task_family="writer",
+                    stage_key="state_event_extraction",
+                    output_schema=schema,
+                ),
+                response_format={"type": "json_object"},
+            )
+
+        request_json = fake_http.posts[0]["json"]
+        self.assertIsInstance(request_json, dict)
+        self.assertEqual(request_json["output_schema"], schema)
+
+    def test_chapter_writer_does_not_invent_generic_output_schema(self) -> None:
+        llm = FakeWriterLLM()
+        writer = ChapterWriter(llm)
+
+        writer._call_chat(
+            [{"role": "user", "content": "只输出 JSON"}],
+            temperature=0.1,
+            max_tokens=100,
+            response_format={"type": "json_object"},
+            stage_key="state_event_extraction",
+        )
+
+        self.assertNotIn("output_schema", llm.calls[0])
 
 
 if __name__ == "__main__":

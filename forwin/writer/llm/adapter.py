@@ -258,10 +258,7 @@ class OpenAICompatibleAdapter(
             "model": profile["model"],
             "messages": messages,
         }
-        if self._is_minimax_profile(profile):
-            payload["max_completion_tokens"] = effective_max_tokens
-        else:
-            payload["max_tokens"] = effective_max_tokens
+        payload["max_tokens"] = effective_max_tokens
         if send_temperature:
             payload["temperature"] = effective_temperature
         thinking = self._thinking_payload_for_profile(profile)

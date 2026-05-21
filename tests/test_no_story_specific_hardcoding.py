@@ -59,6 +59,11 @@ CHAPTER_REPAIR_TEST_PATHS = [
     REPO_ROOT / "tests" / "test_subworld_admission_auto_population.py",
 ]
 
+LOCAL_REWRITE_STORY_TERMS = (
+    "旧城通道",
+    "韩青",
+)
+
 ALLOWED_PRODUCTION_FILES: set[str] = set()
 
 ALLOWED_PRODUCTION_MECHANISM_FILES: set[str] = {
@@ -148,3 +153,9 @@ def test_chapter_repair_tests_do_not_reintroduce_case_specific_terms() -> None:
 
     assert _violations(inspected_files, terms=CHAPTER_REPAIR_STORY_TERMS) == []
     assert _violations(inspected_files, terms=BANNED_CURRENT_BOOK_MECHANISM_TERMS) == []
+
+
+def test_local_rewrite_executor_has_no_case_specific_placeholder_defaults() -> None:
+    inspected_files = [REPO_ROOT / "forwin" / "reviser" / "local_rewrite_executor.py"]
+
+    assert _violations(inspected_files, terms=LOCAL_REWRITE_STORY_TERMS) == []

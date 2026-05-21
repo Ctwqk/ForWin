@@ -1,6 +1,24 @@
 from __future__ import annotations
 
 from forwin.orchestrator_loop_core.common import *
+from forwin.protocol.review import FinalGateDecision
+from forwin.review_engine.engine import AutoDecisionEngine
+from forwin.review_engine.rules.final_acceptance import build_final_acceptance_rules
+from forwin.review_engine.rules.repair_v2 import decide_repair_v2
+from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
+from forwin.reviser.local_rewrite_executor import LocalRewriteExecutor
+
+
+def _final_gate_from_engine_decision(decision: Decision) -> FinalGateDecision:
+    return FinalGateDecision(
+        decision=str(decision.sub_action.get("legacy_decision") or "manual_review_required"),
+        forceable=bool(decision.sub_action.get("forceable")),
+        reason=str(decision.reason or ""),
+        canon_risk=str(decision.sub_action.get("canon_risk") or "high"),
+        residual_issues=list(decision.sub_action.get("residual_issues") or []),
+        requires_human=bool(decision.sub_action.get("requires_human", True)),
+    )
+
 
 def _review_and_maybe_rewrite(
     self,
@@ -108,19 +126,53 @@ def _review_and_maybe_rewrite(
         return current_output, current_review, False
 
     while True:
+        if self._pause_requested():
+            return current_output, current_review, False
         existing_attempts = repo.list_chapter_rewrite_attempts(project_id, chapter_plan.chapter_number)
-        repair_decision = self.repair_policy.decide(
-            verdict=current_review.verdict,
+        repair_v2_input = DecisionInput(
+            project_id=project_id,
+            chapter_number=chapter_plan.chapter_number,
+            review=current_review,
+            signals=[],
+            open_obligations=[],
             operation_mode=self.config.operation_mode,
             attempts_completed=len(existing_attempts),
-            requested_scope=self._repair_policy_requested_scope(current_review),
+            prior_scope_history=[
+                str(getattr(attempt, "repair_scope", "") or "")
+                for attempt in existing_attempts
+            ],
+            budget=None,
+            target_total_chapters=0,
+            plan_layer_health=PlanLayerHealth(),
         )
-        if repair_decision.kind != "repair":
-            final_gate = self.final_acceptance_gate.evaluate(
-                operation_mode=self.config.operation_mode,
-                review=current_review,
-                verification=current_review.repair_verification,
-            )
+        repair_v2_decision = decide_repair_v2(repair_v2_input)
+        repair_scope = str(repair_v2_decision.sub_action.get("scope") or "")
+        self._record_engine_decision_event(
+            updater=updater,
+            decision=repair_v2_decision,
+            decision_input=repair_v2_input,
+            shadow_mismatch=False,
+            live_or_shadow="live",
+            legacy_outcome="",
+            engine_outcome=repair_scope or str(repair_v2_decision.outcome or ""),
+            live_source="engine",
+            shadow_source="",
+            engine_live=True,
+            legacy_shadow_evaluated=False,
+            legacy_safety_net_used=False,
+            severe_mismatch=False,
+            related_object_type="chapter_review",
+            related_object_id=current_review_row.id,
+            parent_event_id=str(current_review_event.id or ""),
+        )
+        repair_can_run_locally = repair_v2_decision.outcome in {
+            "local_repair",
+            "chapter_patch",
+            "band_patch",
+        }
+        if not repair_can_run_locally:
+            final_decision = AutoDecisionEngine(build_final_acceptance_rules()).decide(repair_v2_input)
+            final_gate = _final_gate_from_engine_decision(final_decision)
             current_review = current_review.model_copy(
                 update={
                     "repair_exhausted": True,
@@ -151,11 +203,10 @@ def _review_and_maybe_rewrite(
                 return current_output, current_review, True
             return current_output, current_review, False
 
-        attempt_no = repair_decision.attempt_no
-        repair_scope = repair_decision.scope
+        attempt_no = len(existing_attempts) + 1
         repair_model_preference = {
-            "preferred_provider_kind": repair_decision.preferred_provider_kind,
-            "preferred_model": repair_decision.preferred_model,
+            "preferred_provider_kind": "",
+            "preferred_model": "",
         }
         repair_instruction = current_review.repair_instruction or self._default_repair_instruction(
             repair_scope=repair_scope,
@@ -251,71 +302,105 @@ def _review_and_maybe_rewrite(
             )
             continue
 
+        rewritten_output = None
+        if (
+            bool(getattr(self.config, "review_engine_local_rewrite_enabled", False))
+            and repair_v2_decision.outcome == "local_repair"
+        ):
+            issue_kind = str(repair_v2_decision.sub_action.get("issue_kind") or "")
+            local_result = LocalRewriteExecutor().execute(
+                draft=current_output,
+                issue_kind=issue_kind,
+                signals=[],
+                context_pack=current_context,
+            )
+            design_patch = {
+                **design_patch,
+                "local_rewrite_status": local_result.status,
+                "local_rewrite_mode": local_result.mode,
+            }
+            if local_result.status == "rewritten" and local_result.writer_output is not None:
+                rewritten_output = local_result.writer_output
+            elif local_result.status == "needs_writer":
+                design_patch = {
+                    **design_patch,
+                    "local_rewrite_instruction": local_result.instruction,
+                }
+            elif local_result.status == "unsupported":
+                logger.info(
+                    "Local rewrite unsupported project=%s chapter=%s issue=%s mode=%s",
+                    project_id,
+                    chapter_plan.chapter_number,
+                    issue_kind,
+                    local_result.mode,
+                )
+
         self._emit_progress(
             "stage_changed",
             stage="repairing_chapter",
             project_id=project_id,
             current_chapter=chapter_plan.chapter_number,
         )
-        try:
-            self._emit_progress(
-                "stage_changed",
-                stage="repairing_chapter",
-                project_id=project_id,
-                current_chapter=chapter_plan.chapter_number,
-            )
-            rewritten_output = self._write_chapter_with_attention_fallback(
-                context=updated_context,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                updater=updater,
-                paused_chapters=[],
-                frozen_artifacts=[],
-                trace_stage_key="chapter_rewrite",
-                llm_preferred_provider_kind=repair_decision.preferred_provider_kind,
-                llm_preferred_model=repair_decision.preferred_model,
-            )
-        except Exception as exc:  # noqa: BLE001
-            attempt_row = updater.save_chapter_rewrite_attempt(
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                attempt_no=attempt_no,
-                trigger_review_id=current_review_row.id,
-                repair_scope=repair_scope,
-                design_patch={**design_patch, "rewrite_error": str(exc)},
-                source_draft_id=current_draft.id,
-                result_draft_id=current_draft.id,
-                result_verdict="fail",
-                result_review_id=current_review_row.id,
-                failure_reason=str(exc),
-                verification={},
-                source_chapter_plan=source_chapter_plan,
-                result_chapter_plan=result_chapter_plan,
-                source_band_plan=source_band_plan,
-                result_band_plan=result_band_plan,
-                forced_accept_applied=False,
-            )
-            chapter_plan.repair_attempt_count = attempt_no
-            session.add(chapter_plan)
-            current_review_event = self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                chapter_number=chapter_plan.chapter_number,
-                event_family="evaluation_verdict",
-                event_type=DecisionEventType.REPAIR_FAILED,
-                scope="chapter",
-                summary=f"第{chapter_plan.chapter_number}章第 {attempt_no} 次 repair 失败。",
-                reason=str(exc),
-                related_object_type="chapter_rewrite_attempt",
-                related_object_id=attempt_row.id,
-                payload={
-                    "attempt_no": attempt_no,
-                    "repair_scope": repair_scope,
-                    **repair_model_preference,
-                },
-                parent_event_id=str(repair_started_event.id or ""),
-            )
-            continue
+        if rewritten_output is None:
+            try:
+                self._emit_progress(
+                    "stage_changed",
+                    stage="repairing_chapter",
+                    project_id=project_id,
+                    current_chapter=chapter_plan.chapter_number,
+                )
+                rewritten_output = self._write_chapter_with_attention_fallback(
+                    context=updated_context,
+                    project_id=project_id,
+                    chapter_number=chapter_plan.chapter_number,
+                    updater=updater,
+                    paused_chapters=[],
+                    frozen_artifacts=[],
+                    trace_stage_key="chapter_rewrite",
+                    llm_preferred_provider_kind=repair_model_preference["preferred_provider_kind"],
+                    llm_preferred_model=repair_model_preference["preferred_model"],
+                )
+            except Exception as exc:  # noqa: BLE001
+                attempt_row = updater.save_chapter_rewrite_attempt(
+                    project_id=project_id,
+                    chapter_number=chapter_plan.chapter_number,
+                    attempt_no=attempt_no,
+                    trigger_review_id=current_review_row.id,
+                    repair_scope=repair_scope,
+                    design_patch={**design_patch, "rewrite_error": str(exc)},
+                    source_draft_id=current_draft.id,
+                    result_draft_id=current_draft.id,
+                    result_verdict="fail",
+                    result_review_id=current_review_row.id,
+                    failure_reason=str(exc),
+                    verification={},
+                    source_chapter_plan=source_chapter_plan,
+                    result_chapter_plan=result_chapter_plan,
+                    source_band_plan=source_band_plan,
+                    result_band_plan=result_band_plan,
+                    forced_accept_applied=False,
+                )
+                chapter_plan.repair_attempt_count = attempt_no
+                session.add(chapter_plan)
+                current_review_event = self._record_decision_event(
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_plan.chapter_number,
+                    event_family="evaluation_verdict",
+                    event_type=DecisionEventType.REPAIR_FAILED,
+                    scope="chapter",
+                    summary=f"第{chapter_plan.chapter_number}章第 {attempt_no} 次 repair 失败。",
+                    reason=str(exc),
+                    related_object_type="chapter_rewrite_attempt",
+                    related_object_id=attempt_row.id,
+                    payload={
+                        "attempt_no": attempt_no,
+                        "repair_scope": repair_scope,
+                        **repair_model_preference,
+                    },
+                    parent_event_id=str(repair_started_event.id or ""),
+                )
+                continue
 
         if rewritten_output is None:
             attempt_row = updater.save_chapter_rewrite_attempt(

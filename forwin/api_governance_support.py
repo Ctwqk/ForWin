@@ -21,9 +21,11 @@ from forwin.api_schemas import (
 from forwin.config import Config
 from forwin.governance import (
     BandCheckpointIssueInfo,
+    CHECKPOINT_STATUS_VALUES,
     CONSTRAINT_LEVELS,
     CONSTRAINT_STATUSES,
     CONSTRAINT_TYPES,
+    DecisionEventInfo as GovernanceDecisionEventInfo,
     DecisionEventType,
     checkpoint_reason_with_legacy_status,
     ensure_decision_event_type,
@@ -35,6 +37,8 @@ from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeCon
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ArcPlanVersion, Project
 from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
+from forwin.review_engine.audit import build_legacy_compatibility_payload
+from forwin.state.updater import StateUpdater
 
 _DISPLAY_TZ = ZoneInfo("America/Los_Angeles")
 
@@ -230,6 +234,7 @@ def latest_band_checkpoint_row(
 def serialize_band_checkpoint(row: BandCheckpoint, *, session=None) -> BandCheckpointDetail:
     issues_payload = _json_load_list(row.issues_json)
     normalized_status = normalize_checkpoint_status(row.status)
+    _record_legacy_checkpoint_status_compatibility(session, row, normalized_status=normalized_status)
     return BandCheckpointDetail(
         id=row.id,
         project_id=row.project_id,
@@ -253,6 +258,64 @@ def serialize_band_checkpoint(row: BandCheckpoint, *, session=None) -> BandCheck
         updated_at=_display_datetime(row.updated_at),
         resolved_at=_display_datetime(row.resolved_at or (row.updated_at if normalized_status in {"pass", "overridden"} else None)),
     )
+
+
+def _record_legacy_checkpoint_status_compatibility(
+    session,
+    row: BandCheckpoint,
+    *,
+    normalized_status: str,
+) -> None:
+    if session is None:
+        return
+    raw_status = str(row.status or "").strip()
+    if not raw_status or raw_status in CHECKPOINT_STATUS_VALUES:
+        return
+    summary = "legacy compatibility used: api.legacy_checkpoint_status"
+    existing = (
+        session.execute(
+            select(DecisionEvent.id)
+            .where(
+                DecisionEvent.project_id == row.project_id,
+                DecisionEvent.event_type == DecisionEventType.LEGACY_COMPATIBILITY_USED,
+                DecisionEvent.related_object_type == "band_checkpoint",
+                DecisionEvent.related_object_id == row.id,
+                DecisionEvent.summary == summary,
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+    )
+    if existing:
+        return
+    try:
+        StateUpdater(session).save_decision_event(
+            GovernanceDecisionEventInfo(
+                project_id=row.project_id,
+                band_id=row.band_id,
+                scope="project",
+                event_family="runtime_observation",
+                event_type=DecisionEventType.LEGACY_COMPATIBILITY_USED,
+                actor_type="api",
+                summary=summary,
+                reason="legacy checkpoint status normalized in API response",
+                payload=build_legacy_compatibility_payload(
+                    compat_layer="api",
+                    compat_feature="api.legacy_checkpoint_status",
+                    usage_kind="api_normalization",
+                    source_module="forwin.api_governance_support",
+                    usage_reason="legacy checkpoint status normalized in API response",
+                    compat_key="BandCheckpoint.status",
+                    legacy_identifier=raw_status,
+                    canonical_identifier=normalized_status,
+                    metadata={"checkpoint_id": row.id, "band_id": row.band_id},
+                ),
+                related_object_type="band_checkpoint",
+                related_object_id=row.id,
+            )
+        )
+        session.commit()
+    except Exception:  # noqa: BLE001
+        session.rollback()
 
 
 def serialize_constraint(row: NarrativeConstraint) -> NarrativeConstraintInfo:

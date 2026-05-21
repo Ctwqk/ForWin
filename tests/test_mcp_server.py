@@ -629,6 +629,72 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.assertTrue(paused.task.pause_requested)
         self.assertIn("安全暂停", paused.message)
 
+    def test_continue_generation_via_mcp_passes_auto_continue_options(self) -> None:
+        with self.session_factory() as session:
+            updater = StateUpdater(session)
+            project = updater.create_project(
+                title="MCP Auto Continue Book",
+                premise="测试 MCP 续跑参数透传。",
+                genre="玄幻",
+                target_total_chapters=60,
+                creation_status="writing",
+            )
+            arc = updater.create_arc_plan(
+                project_id=project.id,
+                arc_synopsis="第一段自动续跑弧线",
+                status="active",
+                arc_number=1,
+                chapter_start=1,
+                chapter_end=12,
+                planned_target_size=12,
+            )
+            for chapter_number in range(1, 13):
+                updater.create_chapter_plan(
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=chapter_number,
+                    title=f"第{chapter_number}章",
+                    one_line="计划章节",
+                    goals=["推进主线"],
+                )
+            session.commit()
+            project_id = project.id
+
+        captured: dict[str, object] = {}
+
+        def capture_task_creation(**kwargs):
+            captured.update(kwargs)
+            task_id = "task-mcp-auto-continue"
+            task = api_module._create_task_record(
+                title=str(kwargs.get("title") or ""),
+                subtitle=str(kwargs.get("subtitle") or ""),
+                message=str(kwargs.get("message") or ""),
+                requested_chapters=int(kwargs.get("requested_chapters") or 0),
+            )
+            task["project_id"] = project_id
+            api_module._persist_generation_task(task_id, task)
+            return task_id
+
+        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+            result = self._load_model(
+                MutationResult,
+                self._call_tool(
+                    "project_continue_generation",
+                    {
+                        "project_id": project_id,
+                        "run_until_chapter": 12,
+                        "auto_continue": True,
+                    },
+                ),
+            )
+
+        self.assertIsNotNone(result.task)
+        self.assertEqual(result.task.task_id, "task-mcp-auto-continue")
+        self.assertIs(captured["auto_continue"], True)
+        self.assertEqual(captured["run_until_chapter"], 12)
+        self.assertEqual(captured["requested_chapters"], 12)
+        self.assertEqual(captured["max_chapters"], 12)
+
     def test_chapter_list_and_get_via_mcp(self) -> None:
         project_id, chapter_number = self._create_project_with_draft()
 

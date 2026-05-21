@@ -14,6 +14,7 @@ class BookStateReviewIssue(BaseModel):
     code: str
     target_ref: str
     message: str
+    legacy_compatibility: dict[str, object] = Field(default_factory=dict)
 
 
 class BookStateReviewVerdict(BaseModel):
@@ -138,6 +139,21 @@ def _movement_issues(runtime: BookStateRuntime, delta: GraphDelta) -> list[BookS
                     code="movement_unknown_map_node",
                     target_ref=f"node:{patch.node_id}",
                     message=f"movement references unknown map node: {old_location} -> {new_location}",
+                    legacy_compatibility=(
+                        {
+                            "compat_layer": "book_state",
+                            "compat_feature": "book_state.state.location_patch_warning",
+                            "usage_kind": "read_fallback",
+                            "source_module": "forwin.book_state.reviewer",
+                            "usage_reason": "legacy state.location patch downgraded to warning",
+                            "compat_key": "state.location",
+                            "legacy_identifier": f"{old_location}->{new_location}",
+                            "canonical_identifier": patch.node_id,
+                            "related_stage": "book_state_review",
+                        }
+                        if is_legacy_location
+                        else {}
+                    ),
                 )
             )
             continue

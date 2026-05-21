@@ -1,18 +1,46 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from forwin.orchestrator_loop_core.common import *
 from forwin.planning.arc_patch_validator import ArcPatchValidator
 from forwin.planning.arc_plan_patcher import ArcPlanPatcher
 from forwin.planning.book_patch_validator import BookPatchValidator
 from forwin.planning.book_plan_patcher import BookPlanPatcher
+from forwin.narrative_obligations.budget import evaluate_obligation_budget
 from forwin.review_engine.engine import AutoDecisionEngine
-from forwin.review_engine.parity import compare_shadow_decisions
 from forwin.review_engine.rules.review_outcome import (
     build_review_outcome_rules,
-    decision_from_review_outcome,
+    review_action_from_decision,
 )
+from forwin.review_engine.rules.obligation_scope import decide_obligation_scope
+from forwin.review_engine.rules.commit_with_obligation import decide_commit_with_obligation
 from forwin.review_engine.rules.structural_patch import decide_structural_patch
-from forwin.review_engine.types import DecisionInput, PlanLayerHealth
+from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
+
+_ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION = {
+    "auto_approve": "commit_clean",
+    "local_repair": "local_rewrite",
+    "chapter_patch": "defer_with_chapter_plan_patch",
+    "band_patch": "defer_with_band_plan_patch",
+    "arc_patch": "defer_with_arc_plan_patch",
+    "book_patch": "book_replan_required",
+    "commit_with_obligation": "commit_with_obligation",
+    "manual_review": "manual_review",
+    "system_block": "block",
+}
+
+
+def _review_action_for_engine_decision(decision: Decision) -> str:
+    fallback_action = str(decision.sub_action.get("review_action") or "").strip()
+    review_action = review_action_from_decision(decision, fallback_action)
+    if review_action:
+        return review_action
+    return _ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION.get(
+        str(decision.outcome or "").strip(),
+        fallback_action,
+    )
+
 
 @staticmethod
 def _is_timeout_like(exc: Exception) -> bool:
@@ -492,12 +520,6 @@ def _prepare_deferred_acceptance_if_needed(
     signals: list[Any],
     target_total_chapters: int,
 ) -> list[str]:
-    outcome = ReviewOutcomeRouter().route(
-        review=verdict,
-        signals=signals,
-        current_chapter=chapter_number,
-        target_total_chapters=target_total_chapters,
-    )
     decision_input = DecisionInput(
         project_id=project_id,
         chapter_number=chapter_number,
@@ -514,18 +536,51 @@ def _prepare_deferred_acceptance_if_needed(
         target_total_chapters=target_total_chapters,
         plan_layer_health=PlanLayerHealth(),
     )
-    shadow_comparison = compare_shadow_decisions(
-        live=decision_from_review_outcome(outcome),
-        shadow=AutoDecisionEngine(build_review_outcome_rules()).decide(decision_input),
-    )
-    if shadow_comparison.shadow_mismatch:
-        logger.warning(
-            "Review engine shadow mismatch project=%s chapter=%s live=%s shadow=%s",
-            project_id,
-            chapter_number,
-            shadow_comparison.live,
-            shadow_comparison.shadow,
+    engine_decision = AutoDecisionEngine(build_review_outcome_rules()).decide(decision_input)
+    selected_review_action = _review_action_for_engine_decision(engine_decision)
+    selected_review_reason = str(engine_decision.reason or "")
+    selected_primary_issue_class = str(
+        engine_decision.sub_action.get("primary_issue_class") or ""
+    ).strip()
+    record_engine_decision = getattr(self, "_record_engine_decision_event", None)
+    if callable(record_engine_decision):
+        record_engine_decision(
+            updater=StateUpdater(session),
+            decision=engine_decision,
+            decision_input=decision_input,
+            shadow_mismatch=False,
+            live_or_shadow="live",
+            legacy_outcome="",
+            engine_outcome=engine_decision.outcome,
+            live_source="engine",
+            shadow_source="",
+            engine_live=True,
+            legacy_shadow_evaluated=False,
+            legacy_safety_net_used=False,
+            severe_mismatch=False,
+            related_object_type="chapter_review",
+            related_object_id=review_id,
         )
+    decision_input = DecisionInput(
+        project_id=decision_input.project_id,
+        chapter_number=decision_input.chapter_number,
+        review=decision_input.review,
+        signals=decision_input.signals,
+        open_obligations=decision_input.open_obligations,
+        operation_mode=decision_input.operation_mode,
+        attempts_completed=decision_input.attempts_completed,
+        prior_scope_history=decision_input.prior_scope_history,
+        budget=decision_input.budget,
+        target_total_chapters=decision_input.target_total_chapters,
+        plan_layer_health=PlanLayerHealth(
+            active_chapter_patch_count=(
+                1 if selected_review_action == "defer_with_chapter_plan_patch" else 0
+            ),
+            active_band_patch_count=(
+                1 if selected_review_action == "defer_with_band_plan_patch" else 0
+            ),
+        ),
+    )
     structural_decision = decide_structural_patch(
         input=decision_input,
         arc_patcher_enabled=bool(
@@ -546,13 +601,27 @@ def _prepare_deferred_acceptance_if_needed(
             signals=signals,
             target_total_chapters=target_total_chapters,
             decision=structural_decision,
-            outcome_reason=outcome.reason,
+            outcome_reason=selected_review_reason,
+            arc_book_budget_enabled=bool(
+                getattr(
+                    getattr(self, "config", None),
+                    "review_engine_arc_book_budget_enabled",
+                    False,
+                )
+            ),
+            updater=StateUpdater(session),
+            decision_input=decision_input,
+            record_engine_decision_event=getattr(
+                self,
+                "_record_engine_decision_event",
+                None,
+            ),
         )
     if structural_decision.rule_id in {"arc_patcher_disabled", "book_patcher_disabled"}:
         return [structural_decision.reason]
-    if outcome.action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
+    if selected_review_action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
         return []
-    issue_type = str(outcome.primary_issue_class or "").strip()
+    issue_type = selected_primary_issue_class
     if not issue_type:
         return []
     existing = session.execute(
@@ -573,7 +642,7 @@ def _prepare_deferred_acceptance_if_needed(
         project_id=project_id,
         current_chapter=chapter_number,
     )
-    scope_decision = ObligationScopeRouter().route(
+    scope_decision = decide_obligation_scope(
         issue_type=issue_type,
         priority=_priority_for_deferred_issue(issue_type),
         current_chapter=chapter_number,
@@ -582,9 +651,68 @@ def _prepare_deferred_acceptance_if_needed(
     )
     if scope_decision.action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
         return [scope_decision.reason or f"deferred_acceptance_scope_unavailable:{issue_type}"]
+    if bool(
+        getattr(
+            getattr(self, "config", None),
+            "review_engine_commit_with_obligation_enabled",
+            False,
+        )
+    ):
+        commit_decision_input = replace(
+            decision_input,
+            plan_layer_health=PlanLayerHealth(
+                active_chapter_patch_count=(
+                    1 if scope_decision.action == "defer_with_chapter_plan_patch" else 0
+                ),
+                active_band_patch_count=(
+                    1 if scope_decision.action == "defer_with_band_plan_patch" else 0
+                ),
+            ),
+        )
+        commit_decision = decide_commit_with_obligation(commit_decision_input)
+        record_engine = getattr(self, "_record_engine_decision_event", None)
+        if callable(record_engine):
+            record_engine(
+                updater=StateUpdater(session),
+                decision=commit_decision,
+                decision_input=commit_decision_input,
+                live_or_shadow=(
+                    "live"
+                    if commit_decision.outcome == "commit_with_obligation"
+                    else "shadow"
+                ),
+                legacy_outcome="",
+                engine_outcome=commit_decision.outcome,
+                live_source=(
+                    "engine"
+                    if commit_decision.outcome == "commit_with_obligation"
+                    else ""
+                ),
+                shadow_source=(
+                    ""
+                    if commit_decision.outcome == "commit_with_obligation"
+                    else "engine"
+                ),
+                engine_live=commit_decision.outcome == "commit_with_obligation",
+                legacy_shadow_evaluated=False,
+                legacy_safety_net_used=False,
+                related_object_type="chapter_review",
+                related_object_id=review_id,
+            )
+        if commit_decision.outcome == "system_block":
+            return list(
+                commit_decision.sub_action.get("budget_reasons")
+                or [commit_decision.reason]
+            )
+        if commit_decision.outcome == "manual_review":
+            return [commit_decision.reason]
 
     obligation_id = new_id()
-    summary = _summary_for_deferred_issue(verdict=verdict, issue_type=issue_type, outcome_reason=outcome.reason)
+    summary = _summary_for_deferred_issue(
+        verdict=verdict,
+        issue_type=issue_type,
+        outcome_reason=selected_review_reason,
+    )
     payoff_test = _payoff_test_for_deferred_issue(
         verdict=verdict,
         issue_type=issue_type,
@@ -607,7 +735,7 @@ def _prepare_deferred_acceptance_if_needed(
         priority=_priority_for_deferred_issue(issue_type),
         status="proposed",
         summary=summary,
-        deferral_reason=scope_decision.reason or outcome.reason,
+        deferral_reason=scope_decision.reason or selected_review_reason,
         hardness="design_debt",
         deadline_chapter=int(scope_decision.deadline_chapter or 0),
         payoff_test=payoff_test,
@@ -698,6 +826,10 @@ def _persist_structural_patch_outcome(
     target_total_chapters: int,
     decision,
     outcome_reason: str,
+    arc_book_budget_enabled: bool = False,
+    updater: StateUpdater | None = None,
+    decision_input: DecisionInput | None = None,
+    record_engine_decision_event: Any | None = None,
 ) -> list[str]:
     issue_type = str(decision.sub_action.get("issue_kind") or "").strip()
     if not issue_type:
@@ -776,6 +908,61 @@ def _persist_structural_patch_outcome(
         evidence_refs=[f"review:{review_id}"] if review_id else [],
         metadata={"minimum_scope": target_scope, "review_engine_rule_id": decision.rule_id},
     )
+    if arc_book_budget_enabled:
+        budget = evaluate_obligation_budget(
+            open_obligations=_open_obligations_for_project(
+                session=session,
+                project_id=project_id,
+            ),
+            new_obligations=[obligation],
+            current_chapter=chapter_number,
+            band_start=chapter_number,
+            band_end=deadline_chapter,
+            arc_start=(
+                int(getattr(target_arc, "chapter_start", 0) or 0)
+                if decision.outcome == "arc_patch"
+                else 1
+            ),
+            arc_end=(
+                int(getattr(target_arc, "chapter_end", 0) or 0)
+                if decision.outcome == "arc_patch"
+                else target_total_chapters
+            ),
+        )
+        if budget.over_budget:
+            if (
+                callable(record_engine_decision_event)
+                and updater is not None
+                and decision_input is not None
+            ):
+                record_engine_decision_event(
+                    updater=updater,
+                    decision=Decision(
+                        outcome="system_block",
+                        reason=";".join(budget.reasons),
+                        rule_id="arc_book_obligation_budget_exceeded",
+                        missing_evidence=[],
+                        routed_from="AutoDecisionEngine",
+                        sub_action={
+                            "budget_reasons": list(budget.reasons),
+                            "scope": target_scope,
+                            "arc_id": target_arc_id,
+                            "threshold_source": "ObligationBudgetPolicy",
+                        },
+                    ),
+                    decision_input=decision_input,
+                    live_or_shadow="live",
+                    legacy_outcome=decision.outcome,
+                    engine_outcome="system_block",
+                    live_source="engine",
+                    shadow_source="",
+                    engine_live=True,
+                    legacy_shadow_evaluated=False,
+                    legacy_safety_net_used=False,
+                    related_object_type="chapter_review",
+                    related_object_id=review_id,
+                )
+            return list(budget.reasons)
     if decision.outcome == "arc_patch":
         plan_patch = ArcPlanPatcher().build_patch(
             project_id=project_id,
@@ -810,6 +997,36 @@ def _persist_structural_patch_outcome(
         target_total_chapters=target_total_chapters,
     )
     return [] if result.success else list(result.errors)
+
+
+def _open_obligations_for_project(
+    *,
+    session: Session,
+    project_id: str,
+) -> list[NarrativeObligation]:
+    rows = session.execute(
+        select(NarrativeObligationRow).where(
+            NarrativeObligationRow.project_id == project_id,
+            NarrativeObligationRow.status.in_(("proposed", "planned", "active", "expired")),
+        )
+    ).scalars().all()
+    return [
+        NarrativeObligation(
+            id=str(row.id or ""),
+            project_id=str(row.project_id or ""),
+            origin_chapter_number=int(row.origin_chapter_number or 0),
+            origin_draft_id=str(row.origin_draft_id or ""),
+            origin_review_id=str(row.origin_review_id or ""),
+            obligation_type=str(row.obligation_type or ""),
+            priority=str(row.priority or "P1"),  # type: ignore[arg-type]
+            status=str(row.status or "active"),  # type: ignore[arg-type]
+            summary=str(row.summary or ""),
+            hardness=str(row.hardness or "design_debt"),
+            deadline_chapter=int(row.deadline_chapter or 0),
+            payoff_test=str(row.payoff_test or ""),
+        )
+        for row in rows
+    ]
 
 
 def _arc_for_chapter(

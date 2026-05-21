@@ -11,6 +11,8 @@ def decide_auto_approve(
     future_plan_audit_passed: bool,
     obligation_audit_passed: bool,
     review_interval_hit: bool = False,
+    chapters_since_last_full_review: int = 0,
+    review_interval_chapters: int = 0,
 ) -> Decision:
     if not auto_approve_enabled:
         return Decision(
@@ -36,7 +38,13 @@ def decide_auto_approve(
             rule_id="review_interval_safe",
             missing_evidence=[],
             routed_from="AutoDecisionEngine",
-            sub_action={"review_interval_hit": True},
+            sub_action={
+                "review_interval_hit": True,
+                "chapters_since_last_full_review": int(
+                    chapters_since_last_full_review or 0
+                ),
+                "review_interval_chapters": int(review_interval_chapters or 0),
+            },
         )
     if (
         input.operation_mode == "copilot"

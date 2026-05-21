@@ -681,6 +681,7 @@ def run_continue_project_with_config(
     should_abort: Callable[[], bool] | None = None,
     should_pause: Callable[[], bool] | None = None,
     max_chapters: int | None = None,
+    resume_from_chapter: int | None = None,
     completion_handler: Callable[[object], None] | None = None,
 ) -> None:
     def _handle_progress(event: str, payload: dict[str, Any]) -> None:
@@ -735,7 +736,11 @@ def run_continue_project_with_config(
     run_orchestrator_task(
         task_id,
         orchestrator,
-        lambda: orchestrator.continue_project(project_id, max_chapters=max_chapters),
+        lambda: orchestrator.continue_project(
+            project_id,
+            max_chapters=max_chapters,
+            resume_from_chapter=resume_from_chapter,
+        ),
         update_task=update_task,
         logger=logger,
         error_message="继续生成失败",

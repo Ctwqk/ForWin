@@ -107,7 +107,6 @@ def _default_continue_executor(
     from forwin.api_runtime import run_continue_project_with_config
 
     def _execute(task: GenerationTask, resume_from_chapter: int) -> None:
-        _ = resume_from_chapter
         update_task = _db_task_updater(session_factory)
         run_continue_project_with_config(
             task.id,
@@ -115,7 +114,10 @@ def _default_continue_executor(
             config,
             update_task,
             logger,
+            should_abort=_db_task_flag(session_factory, task.id, "cancel_requested"),
+            should_pause=_db_task_flag(session_factory, task.id, "pause_requested"),
             max_chapters=int(task.max_chapters or 0) or None,
+            resume_from_chapter=resume_from_chapter,
         )
         with session_factory.begin() as session:
             heartbeat_generation_task(
@@ -170,6 +172,19 @@ def _db_task_updater(session_factory: Callable[[], Any]) -> Callable[..., None]:
             session.add(row)
 
     return _update
+
+
+def _db_task_flag(
+    session_factory: Callable[[], Any],
+    task_id: str,
+    attr: str,
+) -> Callable[[], bool]:
+    def _read() -> bool:
+        with session_factory() as session:
+            row = session.get(GenerationTask, task_id)
+            return bool(getattr(row, attr, False)) if row is not None else True
+
+    return _read
 
 
 def _apply_task_changes(row: GenerationTask, changes: dict[str, Any]) -> None:

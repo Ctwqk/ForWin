@@ -25,6 +25,7 @@ def build_continue_generation_workset(
     project_id: str,
     *,
     max_chapters: int | None = None,
+    resume_from_chapter: int | None = None,
     include_failed: bool = True,
     source: str = "direct_continue",
     preloaded_plans: list[ChapterPlan] | None = None,
@@ -33,6 +34,7 @@ def build_continue_generation_workset(
     normalized_source = str(source or "direct_continue").strip() or "direct_continue"
     if max_chapters is not None and int(max_chapters) < 1:
         raise ValueError("max_chapters must be positive when provided")
+    resume_floor = int(resume_from_chapter or 0)
 
     project = session.get(Project, normalized_project_id)
     if project is None:
@@ -75,6 +77,7 @@ def build_continue_generation_workset(
         for plan in plans
         if str(plan.status or "") in pending_statuses
         and int(plan.chapter_number or 0) > 0
+        and (resume_floor <= 0 or int(plan.chapter_number or 0) >= resume_floor)
     ]
     if active_arc is not None:
         active_candidates = [
@@ -83,6 +86,7 @@ def build_continue_generation_workset(
             if str(plan.arc_plan_id or "") == str(active_arc.id)
             and str(plan.status or "") in pending_statuses
             and int(plan.chapter_number or 0) > 0
+            and (resume_floor <= 0 or int(plan.chapter_number or 0) >= resume_floor)
         ]
         earliest_materialized = min(
             (int(plan.chapter_number or 0) for plan in materialized_candidates),
@@ -122,7 +126,11 @@ def build_continue_generation_workset(
 
     future_arc = _next_planned_arc(session, normalized_project_id)
     if future_arc is not None:
-        predicted = _future_arc_chapter_numbers(future_arc)
+        predicted = [
+            number
+            for number in _future_arc_chapter_numbers(future_arc)
+            if resume_floor <= 0 or number >= resume_floor
+        ]
         selected = _apply_max(predicted, max_chapters)
         return ContinueGenerationWorkset(
             project_id=normalized_project_id,

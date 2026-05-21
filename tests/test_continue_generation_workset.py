@@ -112,6 +112,44 @@ def test_workset_uses_active_arc_pending_chapters_and_max_chapters() -> None:
         engine.dispose()
 
 
+def test_continue_workset_filters_chapters_before_resume_point() -> None:
+    engine, Session = _session_factory("continue-workset-resume")
+    try:
+        with Session.begin() as session:
+            project = _project(session, project_id="project-workset-resume")
+            session.flush()
+            active = _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-workset-resume",
+                arc_number=1,
+                status="active",
+                chapter_start=1,
+                chapter_end=5,
+            )
+            for number in range(1, 6):
+                _chapter(
+                    session,
+                    project_id=project.id,
+                    arc_id=active.id,
+                    number=number,
+                    status="planned",
+                )
+
+        with Session() as session:
+            workset = build_continue_generation_workset(
+                session,
+                "project-workset-resume",
+                resume_from_chapter=3,
+                max_chapters=2,
+            )
+
+        assert workset.chapter_numbers == (3, 4)
+        assert workset.requested_chapters == 2
+    finally:
+        engine.dispose()
+
+
 def test_workset_blocks_pending_review_before_continue() -> None:
     engine, Session = _session_factory("continue-workset-review-block")
     try:

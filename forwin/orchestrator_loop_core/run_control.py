@@ -725,7 +725,12 @@ def _materialize_next_genesis_arc_if_needed(
         session.commit()
     return promoted
 
-def continue_project(self, project_id: str, max_chapters: int | None = None) -> RunResult:
+def continue_project(
+    self,
+    project_id: str,
+    max_chapters: int | None = None,
+    resume_from_chapter: int | None = None,
+) -> RunResult:
     session: Session = self._SessionFactory()
     try:
         repo, updater, checker = self._make_state_helpers(session)
@@ -766,6 +771,7 @@ def continue_project(self, project_id: str, max_chapters: int | None = None) -> 
             session,
             project_id,
             max_chapters=max_chapters,
+            resume_from_chapter=resume_from_chapter,
             source="orchestrator_continue",
         )
         self._record_decision_event(
@@ -797,6 +803,7 @@ def continue_project(self, project_id: str, max_chapters: int | None = None) -> 
                     session,
                     project_id,
                     max_chapters=max_chapters,
+                    resume_from_chapter=resume_from_chapter,
                     source="orchestrator_continue",
                 )
                 pending_chapter_numbers = list(workset.chapter_numbers)

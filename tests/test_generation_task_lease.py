@@ -221,3 +221,42 @@ def test_worker_claims_and_executes_queued_project_task() -> None:
             assert task.heartbeat_at is not None
     finally:
         engine.dispose()
+
+
+def test_default_continue_executor_passes_resume_to_runtime(monkeypatch) -> None:
+    engine = get_engine(postgres_test_url("generation-worker-resume-runtime"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    calls: list[dict[str, object]] = []
+    try:
+        with Session.begin() as session:
+            session.add(
+                GenerationTask(
+                    id="task-worker-resume-runtime",
+                    task_kind="generation",
+                    status="queued",
+                    project_id="project-1",
+                    completed_chapters_json="[1, 2]",
+                    max_chapters=3,
+                    execution_payload_json='{"mode":"continue","runtime_overrides":{}}',
+                )
+            )
+
+        def fake_run_continue_project_with_config(*args, **kwargs):
+            calls.append(kwargs)
+
+        monkeypatch.setattr(
+            "forwin.api_runtime.run_continue_project_with_config",
+            fake_run_continue_project_with_config,
+        )
+
+        result = run_one_generation_task(
+            session_factory=Session,
+            worker_id="worker-resume",
+            config=Config(minimax_api_key="sk-test"),
+        )
+
+        assert result.resume_from_chapter == 3
+        assert calls[0]["resume_from_chapter"] == 3
+    finally:
+        engine.dispose()

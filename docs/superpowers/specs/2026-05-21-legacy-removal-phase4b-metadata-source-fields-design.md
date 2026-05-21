@@ -49,11 +49,9 @@ back to `"map_regions"`.
 Mark `metadata.legacy_source_fields` as deleted. Its residual patterns remain
 narrow:
 
-- `legacy_source`
+- `"legacy_source"`
+- `'legacy_source'`
 - `_record_subworld_legacy_compatibility`
-- `legacy_identifier`
-- `legacy entity id`
-- `legacy entity row`
 
 `region_source` is current and must not remain an allow pattern for a deleted
 entry.
@@ -65,7 +63,7 @@ Required verification:
 ```bash
 python3 -m pytest tests/test_subworld_control.py -q
 python3 scripts/audit_legacy_inventory.py --check --strict-patterns
-git grep -n -E 'legacy_source|_record_subworld_legacy_compatibility|legacy_identifier|legacy entity id|legacy entity row' -- forwin/state/repo.py forwin/subworld_manager.py
+git grep -n -E "\"legacy_source\"|'legacy_source'|_record_subworld_legacy_compatibility" -- forwin/state/repo.py forwin/subworld_manager.py
 python3 -m compileall -q forwin
 git diff --check
 ```

@@ -544,7 +544,7 @@ class SubWorldManager:
                     culture_tag=culture_tag,
                     metadata={
                         **payload,
-                        "legacy_source": "SubWorldPlanItem.region_seeds",
+                        "region_source": "runtime_generated",
                     },
                 )
             )

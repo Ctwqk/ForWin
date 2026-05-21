@@ -839,7 +839,7 @@ class StateRepository:
                 "culture_traits": region.culture_tag,
                 "subworld_id": region.subworld_id,
                 "subworld_name": subworld_names.get(region.subworld_id, ""),
-                "region_source": metadata.get("legacy_source", "map_regions"),
+                "region_source": metadata.get("region_source", "map_regions"),
                 "region_promotion_state": "promoted",
             }
             drafts.append(payload)

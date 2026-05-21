@@ -16,6 +16,7 @@ from forwin.context.assembler import assemble_context
 from forwin.director.arc_director import ArcDirector
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.genesis import BookGenesisRevision
+from forwin.map.models import MapRegionRow
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.phase4 import WorldSimulationTurn
 from forwin.models.project import ChapterPlan
@@ -884,6 +885,47 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual(context.entity_admission_rule, "strict_named_character")
         self.assertIn("Genesis 地区：主城核心区@主舞台总图·L1", context.genesis_map_overview)
         self.assertIn("运行时地区草案：江城前哨区@global_core·L1", context.genesis_map_overview)
+
+    def test_active_subworld_region_drafts_read_current_region_source(self) -> None:
+        with TemporaryDirectory() as tmp:
+            engine = get_engine(postgres_test_url("region-source"))
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="书", premise="p", genre="g")
+                global_core = updater.create_subworld(
+                    project_id=project.id,
+                    origin_arc_id=None,
+                    parent_subworld_id=None,
+                    name="global_core",
+                    purpose="核心舞台",
+                    scope="global_core",
+                    metadata={},
+                )
+                session.add(
+                    MapRegionRow(
+                        id="region-current-source",
+                        project_id=project.id,
+                        subworld_id=global_core.id,
+                        region_type="local_region",
+                        name="新舞台核心区",
+                        description="地区",
+                        metadata_json=json.dumps(
+                            {"level": 1, "region_source": "runtime_generated"},
+                            ensure_ascii=False,
+                        ),
+                    )
+                )
+                session.commit()
+
+                drafts = StateRepository(session).get_active_subworld_region_drafts(project.id, 1)
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertEqual(drafts[0]["name"], "新舞台核心区")
+        self.assertEqual(drafts[0]["region_source"], "runtime_generated")
 
     def test_writer_prompt_includes_subworld_rules_and_entry_targets(self) -> None:
         context = SimpleNamespace(
@@ -2005,6 +2047,10 @@ class SubWorldControlTests(unittest.TestCase):
                     select(SubWorld)
                     .where(SubWorld.project_id == project.id, SubWorld.name == "新舞台")
                 ).scalar_one()
+                new_region = session.execute(
+                    select(MapRegionRow)
+                    .where(MapRegionRow.project_id == project.id, MapRegionRow.subworld_id == new_subworld.id)
+                ).scalar_one()
             finally:
                 session.close()
                 engine.dispose()
@@ -2016,6 +2062,9 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual(metadata.get("region_source"), "runtime_generated")
         self.assertEqual(metadata.get("region_promotion_state"), "draft")
         self.assertEqual(metadata.get("region_drafts", [])[0]["name"], "新舞台核心区")
+        region_metadata = json.loads(new_region.metadata_json or "{}")
+        self.assertEqual(region_metadata.get("region_source"), "runtime_generated")
+        self.assertNotIn("legacy_source", region_metadata)
 
     def test_phase24_persists_subworld_activation_into_band_and_chapter_plan(self) -> None:
         with TemporaryDirectory() as tmp:

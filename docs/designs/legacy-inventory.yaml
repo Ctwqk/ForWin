@@ -626,20 +626,17 @@ entries:
     status: planned
 
   - id: metadata.legacy_source_fields
-    category: runtime_delete
+    category: deleted
     owner_area: metadata
     paths:
       - forwin/state/repo.py
       - forwin/subworld_manager.py
     allow_patterns:
-      - legacy_source
-      - region_source
+      - '"legacy_source"'
+      - "'legacy_source'"
       - _record_subworld_legacy_compatibility
-      - legacy_identifier
-      - legacy entity id
-      - legacy entity row
     reason: New runtime metadata should use current source labels, not legacy_source.
-    removal_phase: phase_4
+    removal_phase: complete
     verification:
       - state_repo_tests
       - subworld_tests
@@ -647,7 +644,7 @@ entries:
     delete_when:
       - state and subworld metadata use current source keys
       - old metadata source fallback is no longer read
-    status: planned
+    status: deleted
 
   - id: migration.history
     category: migration_history_keep

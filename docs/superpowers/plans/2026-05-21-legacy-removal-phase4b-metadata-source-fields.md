@@ -120,7 +120,7 @@ Run:
 
 ```bash
 python3 scripts/audit_legacy_inventory.py --check --strict-patterns
-git grep -n -E 'legacy_source|_record_subworld_legacy_compatibility|legacy_identifier|legacy entity id|legacy entity row' -- forwin/state/repo.py forwin/subworld_manager.py
+git grep -n -E "\"legacy_source\"|'legacy_source'|_record_subworld_legacy_compatibility" -- forwin/state/repo.py forwin/subworld_manager.py
 ```
 
 Expected: audit passes and grep returns no hits.

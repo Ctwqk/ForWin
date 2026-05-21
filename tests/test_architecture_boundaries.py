@@ -232,3 +232,24 @@ def test_deprecated_legacy_modules_emit_deprecation_warning() -> None:
         sys.modules.pop(module_name, None)
         with pytest.warns(DeprecationWarning, match="DESIGN_STATUS"):
             importlib.import_module(module_name)
+
+
+def test_removed_repair_dead_code_stays_removed() -> None:
+    assert not (ROOT / "forwin/orchestrator/repair_coordinator.py").exists()
+
+    loop_detector = importlib.import_module("forwin.reviewer.repair_loop_detector")
+    assert hasattr(loop_detector, "RepairAttemptRecord")
+    assert not hasattr(loop_detector, "RepairLoopDetector")
+    assert not hasattr(loop_detector, "RepairLoopResult")
+    assert not hasattr(loop_detector, "attempt_record_from_history_item")
+
+    scope_router = importlib.import_module("forwin.reviewer.repair_scope_router")
+    assert hasattr(scope_router, "RepairScopeKind")
+    assert hasattr(scope_router, "route_signal_kind")
+    assert not hasattr(scope_router, "RepairScopeDispatch")
+    assert not hasattr(scope_router, "route_review_repair_scopes")
+
+    rule_profile = importlib.import_module("forwin.canon_quality.rule_profile")
+    signature = inspect.signature(rule_profile.countdown_profiles_from_quality_context)
+    assert "use_legacy_fallback" not in signature.parameters
+    assert "use_legacy_fallback" not in _read("forwin/canon_quality/rule_profile.py")

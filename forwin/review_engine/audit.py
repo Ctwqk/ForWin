@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, is_dataclass
 import hashlib
 import json
@@ -14,7 +15,7 @@ LEGACY_COMPATIBILITY_REGISTRY: dict[str, dict[str, Any]] = {
         "default_assessment": "candidate_if_unused",
         "removal_mode": "candidate_if_unused",
         "instrumentation_status": "instrumented",
-        "static_patterns": "book_state.state.location_fallback",
+        "static_patterns": "legacy_compat_observer(",
         "description": "Fallback from BookState runtime location to legacy state.location.",
     },
     "book_state.state.location_patch_warning": {
@@ -22,7 +23,7 @@ LEGACY_COMPATIBILITY_REGISTRY: dict[str, dict[str, Any]] = {
         "default_assessment": "candidate_if_unused",
         "removal_mode": "candidate_if_unused",
         "instrumentation_status": "instrumented",
-        "static_patterns": "book_state.state.location_patch_warning",
+        "static_patterns": 'code="movement_unknown_map_node"',
         "description": "Legacy state.location patches downgraded to warnings.",
     },
     "projection.legacy_world_model_projection": {
@@ -70,7 +71,7 @@ LEGACY_COMPATIBILITY_REGISTRY: dict[str, dict[str, Any]] = {
         "default_assessment": "keep_for_import_only",
         "removal_mode": "keep_for_import_only",
         "instrumentation_status": "import_contract",
-        "static_patterns": "LegacyBookStateImporter",
+        "static_patterns": "LegacyBookStateImporter(",
         "description": "Legacy BookState import/migration compatibility.",
     },
     "project.creation_status_legacy": {
@@ -79,14 +80,8 @@ LEGACY_COMPATIBILITY_REGISTRY: dict[str, dict[str, Any]] = {
         "removal_mode": "must_migrate_if_used",
         "instrumentation_status": "static_only",
         "static_patterns": [
-            'creation_status", "legacy',
-            'creation_status", "") or "legacy',
-            'creation_status == "legacy',
-            'creation_status: str = "legacy"',
-            'creation_status: Mapped[str] = mapped_column(String, default="legacy")',
-            'creation_status=str(raw.get("creation_status", "legacy"))',
-            'creation_status=str(getattr(project, "creation_status", "") or "legacy")',
-            'getattr(project, "creation_status", "") or "legacy"',
+            'creation_status", "") or "").strip() == "legacy"',
+            "_record_project_creation_status_legacy_compatibility(",
         ],
         "description": "Project-level legacy creation_status compatibility paths.",
     },
@@ -97,6 +92,38 @@ LEGACY_COMPATIBILITY_REGISTRY: dict[str, dict[str, Any]] = {
         "instrumentation_status": "instrumented",
         "static_patterns": "characters.create_legacy_entity_default_true",
         "description": "Character creation path that materializes legacy Entity rows.",
+    },
+    "dead_code.repair_loop_detector": {
+        "compat_layer": "dead_code",
+        "default_assessment": "dead_code_candidate",
+        "removal_mode": "dead_code_candidate",
+        "instrumentation_status": "static_only",
+        "static_patterns": "RepairLoopDetector(",
+        "description": "Legacy repair-loop detector runtime path.",
+    },
+    "dead_code.chapter_repair_coordinator": {
+        "compat_layer": "dead_code",
+        "default_assessment": "dead_code_candidate",
+        "removal_mode": "dead_code_candidate",
+        "instrumentation_status": "static_only",
+        "static_patterns": "ChapterRepairCoordinator(",
+        "description": "Legacy chapter repair coordinator runtime path.",
+    },
+    "dead_code.route_review_repair_scopes": {
+        "compat_layer": "dead_code",
+        "default_assessment": "dead_code_candidate",
+        "removal_mode": "dead_code_candidate",
+        "instrumentation_status": "static_only",
+        "static_patterns": "route_review_repair_scopes(",
+        "description": "Legacy review repair-scope router runtime path.",
+    },
+    "dead_code.rule_profile_use_legacy_fallback": {
+        "compat_layer": "dead_code",
+        "default_assessment": "dead_code_candidate",
+        "removal_mode": "dead_code_candidate",
+        "instrumentation_status": "static_only",
+        "static_patterns": "use_legacy_fallback",
+        "description": "Legacy rule-profile fallback parameter.",
     },
 }
 
@@ -178,23 +205,37 @@ def summarize_legacy_compatibility_audit(
     registry: Mapping[str, Mapping[str, Any]] = LEGACY_COMPATIBILITY_REGISTRY,
     static_counts: Mapping[str, int] | None = None,
 ) -> dict[str, object]:
-    events: list[Mapping[str, Any]] = []
+    events: list[dict[str, Any]] = []
     for row in rows:
         payload = row.get("payload", row)
         if isinstance(payload, Mapping):
-            events.append(payload)
+            events.append(
+                {
+                    "chapter_number": int(row.get("chapter_number") or 0),
+                    "payload": payload,
+                }
+            )
 
     by_layer: dict[str, int] = {}
     by_feature: dict[str, int] = {}
-    for payload in events:
+    feature_events: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        payload = event["payload"]
         layer = str(payload.get("compat_layer") or "unknown").strip() or "unknown"
         feature = str(payload.get("compat_feature") or "unknown").strip() or "unknown"
         by_layer[layer] = by_layer.get(layer, 0) + 1
         by_feature[feature] = by_feature.get(feature, 0) + 1
+        feature_events.setdefault(feature, []).append(event)
 
     assessment = {
+        "dead_code": [],
         "delete_candidates": [],
         "blocking_for_removal": [],
+        "migration_plan_required": [],
+        "repromote_mode": [],
+        "needs_targeted_test": [],
+        "archival_only": [],
+        "review_retention": [],
         "keep_for_import_only": [],
         "out_of_scope": [],
         "static_only_needs_targeted_test": [],
@@ -215,22 +256,14 @@ def summarize_legacy_compatibility_audit(
             "events": count,
             "static_callers": static_count,
         }
+        static_unknown = static_count is None
+        has_static = static_count > 0 if static_count is not None else False
         if mode == "out_of_scope":
             assessment["out_of_scope"].append(
                 {
                     **common,
                     "reason": "outside this removal audit",
-                }
-            )
-        elif mode == "keep_for_import_only":
-            assessment["keep_for_import_only"].append(
-                {
-                    **common,
-                    "reason": (
-                        "used during audit window"
-                        if count
-                        else "import compatibility retained even when unused"
-                    ),
+                    "verdict": "out_of_scope",
                 }
             )
         elif instrumentation_status == "uninstrumented" and count == 0:
@@ -238,48 +271,155 @@ def summarize_legacy_compatibility_audit(
                 {
                     **common,
                     "reason": "runtime instrumentation is missing",
+                    "verdict": "uninstrumented_no_delete_signal",
                 }
             )
+        elif static_unknown and mode == "candidate_if_unused" and count == 0:
+            assessment["delete_candidates"].append(
+                {
+                    **common,
+                    "reason": "unused during audit window",
+                    "verdict": "delete_candidate",
+                }
+            )
+        elif static_unknown and mode == "keep_for_import_only" and count == 0:
+            item = {
+                **common,
+                "reason": "import compatibility retained even when unused",
+                "verdict": "archival_only",
+            }
+            assessment["keep_for_import_only"].append(item)
+            assessment["archival_only"].append(item)
+        elif static_count == 0 and count == 0:
+            verdict = "dead_code"
+            bucket = "dead_code"
+            if mode == "candidate_if_unused":
+                verdict = "delete_candidate"
+                bucket = "delete_candidates"
+            elif mode == "keep_for_import_only":
+                verdict = "archival_only"
+                bucket = "archival_only"
+            assessment[bucket].append(
+                {
+                    **common,
+                    "reason": "no runtime events and no static callers",
+                    "verdict": verdict,
+                }
+            )
+        elif mode == "keep_for_import_only" and count == 0:
+            item = {
+                **common,
+                "reason": "import compatibility retained even when unused",
+                "verdict": "archival_only",
+            }
+            assessment["keep_for_import_only"].append(item)
+            assessment["archival_only"].append(item)
         elif static_count == 0 and count > 0:
             assessment["anomalous_runtime_without_static"].append(
                 {
                     **common,
                     "reason": "runtime events exist but static scan found no callers",
+                    "verdict": "anomaly",
                 }
             )
         elif count > 0:
-            assessment["blocking_for_removal"].append(
+            verdict = "migration_plan_required"
+            bucket = "migration_plan_required"
+            if mode == "candidate_if_unused":
+                verdict = "repromote_mode"
+                bucket = "repromote_mode"
+            elif mode == "keep_for_import_only":
+                verdict = "review_retention"
+                bucket = "review_retention"
+            item = {
+                **common,
+                "reason": "used during audit window",
+                "verdict": verdict,
+            }
+            assessment[bucket].append(item)
+            assessment["blocking_for_removal"].append(item)
+        elif has_static and mode == "candidate_if_unused":
+            assessment["delete_candidates"].append(
                 {
                     **common,
-                    "reason": "used during audit window",
+                    "reason": "static callers exist but runtime audit did not hit this path; verify in next run",
+                    "verdict": "delete_candidate",
                 }
             )
-        elif static_count is not None and static_count > 0:
+        elif has_static and mode == "must_migrate_if_used":
+            item = {
+                **common,
+                "reason": "static callers exist but runtime audit did not hit this path",
+                "verdict": "needs_targeted_test",
+            }
+            assessment["needs_targeted_test"].append(item)
+            assessment["static_only_needs_targeted_test"].append(item)
+        elif has_static and mode == "dead_code_candidate":
+            assessment["needs_targeted_test"].append(
+                {
+                    **common,
+                    "reason": "dead-code candidate still has static callers",
+                    "verdict": "needs_targeted_test",
+                }
+            )
+        elif has_static:
             assessment["static_only_needs_targeted_test"].append(
                 {
                     **common,
                     "reason": "static callers exist but runtime audit did not hit this path",
-                }
-            )
-        elif mode == "candidate_if_unused":
-            reason = (
-                "unused during audit window and no static callers"
-                if static_count == 0
-                else "unused during audit window"
-            )
-            assessment["delete_candidates"].append(
-                {
-                    **common,
-                    "reason": reason,
+                    "verdict": "needs_targeted_test",
                 }
             )
     return {
         "total_events": len(events),
         "by_layer": by_layer,
         "by_feature": by_feature,
+        "per_feature_detail": _legacy_compatibility_feature_detail(feature_events),
         "static_counts": dict(static_counts or {}),
         "removal_assessment": assessment,
     }
+
+
+def _legacy_compatibility_feature_detail(
+    feature_events: Mapping[str, list[dict[str, Any]]],
+) -> dict[str, dict[str, Any]]:
+    detail: dict[str, dict[str, Any]] = {}
+    for feature, events in sorted(feature_events.items()):
+        chapters = {
+            int(event.get("chapter_number") or 0)
+            for event in events
+            if int(event.get("chapter_number") or 0) > 0
+        }
+        legacy_ids: Counter[str] = Counter()
+        canonical_ids: Counter[str] = Counter()
+        usage_kinds: Counter[str] = Counter()
+        for event in events:
+            payload = event["payload"]
+            legacy_identifier = str(payload.get("legacy_identifier") or "").strip()
+            canonical_identifier = str(payload.get("canonical_identifier") or "").strip()
+            usage_kind = str(payload.get("usage_kind") or "").strip()
+            if legacy_identifier:
+                legacy_ids[legacy_identifier] += 1
+            if canonical_identifier:
+                canonical_ids[canonical_identifier] += 1
+            if usage_kind:
+                usage_kinds[usage_kind] += 1
+        unique_chapters = len(chapters)
+        detail[feature] = {
+            "events": len(events),
+            "unique_chapters": unique_chapters,
+            "events_per_chapter_avg": (
+                round(len(events) / unique_chapters, 3) if unique_chapters else 0.0
+            ),
+            "top_legacy_identifiers": [
+                [identifier, count] for identifier, count in legacy_ids.most_common(5)
+            ],
+            "top_canonical_identifiers": [
+                [identifier, count] for identifier, count in canonical_ids.most_common(5)
+            ],
+            "top_usage_kinds": [[kind, count] for kind, count in usage_kinds.most_common(5)],
+        }
+    return detail
 
 
 def collect_legacy_compatibility_static_counts(
@@ -295,12 +435,15 @@ def collect_legacy_compatibility_static_counts(
         if _skip_static_compat_scan_path(path):
             continue
         try:
-            text = path.read_text(encoding="utf-8")
+            lines = path.read_text(encoding="utf-8").splitlines()
         except UnicodeDecodeError:
-            text = path.read_text(encoding="utf-8", errors="ignore")
+            lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
         for feature, entry in registry.items():
             patterns = _static_patterns(feature, entry)
-            if any(pattern and pattern in text for pattern in patterns):
+            if any(
+                _line_contains_static_caller(line, patterns)
+                for line in lines
+            ):
                 counts[feature] += 1
     return counts
 
@@ -308,6 +451,8 @@ def collect_legacy_compatibility_static_counts(
 def _skip_static_compat_scan_path(path: Path) -> bool:
     parts = set(path.parts)
     if "__pycache__" in parts:
+        return True
+    if "tests" in parts or "migrations" in parts:
         return True
     if path.name.startswith("test_") or path.name.endswith("_test.py"):
         return True
@@ -321,6 +466,17 @@ def _static_patterns(feature: str, entry: Mapping[str, Any]) -> list[str]:
         return [str(part) for part in raw_value if str(part)]
     raw = str(raw_value)
     return [part for part in raw.split("|") if part]
+
+
+def _line_contains_static_caller(line: str, patterns: list[str]) -> bool:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return False
+    if stripped.startswith(("from ", "import ", "class ", "def ")):
+        return False
+    if stripped.startswith(('"', "'")):
+        return False
+    return any(pattern and pattern in line for pattern in patterns)
 
 
 def summarize_live_cutover_audit(

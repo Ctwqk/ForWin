@@ -75,6 +75,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import normalize_repair_scope
+from forwin.review_engine.audit import build_legacy_compatibility_payload
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id, load_latest_rewrite_attempts_by_chapter
 from forwin.state.updater import StateUpdater
 
@@ -90,8 +91,74 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
     "paused",
 }
 
+_PROJECT_CREATION_STATUS_LEGACY_SUMMARY = (
+    "legacy compatibility used: project.creation_status_legacy"
+)
+
 from .common import *
 from forwin.generation.run_target import resolve_generation_run_target
+
+
+def _record_project_creation_status_legacy_compatibility(
+    session,
+    project: Project,
+    *,
+    source_module: str,
+    usage_reason: str,
+) -> None:
+    project_id = str(getattr(project, "id", "") or "").strip()
+    if not project_id:
+        return
+    if str(getattr(project, "creation_status", "") or "").strip() != "legacy":
+        return
+    existing = (
+        session.execute(
+            select(DecisionEvent.id)
+            .where(
+                DecisionEvent.project_id == project_id,
+                DecisionEvent.event_type == DecisionEventType.LEGACY_COMPATIBILITY_USED,
+                DecisionEvent.related_object_type == "project",
+                DecisionEvent.related_object_id == project_id,
+                DecisionEvent.summary == _PROJECT_CREATION_STATUS_LEGACY_SUMMARY,
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+    )
+    if existing:
+        return
+    StateUpdater(session).save_decision_event(
+        DecisionEventInfo(
+            project_id=project_id,
+            scope="project",
+            event_family="runtime_observation",
+            event_type=DecisionEventType.LEGACY_COMPATIBILITY_USED,
+            actor_type="api",
+            summary=_PROJECT_CREATION_STATUS_LEGACY_SUMMARY,
+            reason=usage_reason,
+            payload=build_legacy_compatibility_payload(
+                compat_layer="project",
+                compat_feature="project.creation_status_legacy",
+                usage_kind="workflow_fallback",
+                source_module=source_module,
+                usage_reason=usage_reason,
+                compat_key="Project.creation_status",
+                legacy_identifier="legacy",
+                canonical_identifier=project_id,
+            ),
+            related_object_type="project",
+            related_object_id=project_id,
+        )
+    )
+
+
+def _require_genesis_project_with_audit(session, project: Project, require_genesis_project) -> None:
+    _record_project_creation_status_legacy_compatibility(
+        session,
+        project,
+        source_module="forwin.project_ops.genesis",
+        usage_reason="legacy project reached Genesis-only API guard",
+    )
+    require_genesis_project(project)
 
 
 def get_project_genesis(
@@ -108,7 +175,7 @@ def get_project_genesis(
         project = session.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "项目不存在")
-        require_genesis_project(project)
+        _require_genesis_project_with_audit(session, project, require_genesis_project)
         genesis_service = build_genesis_service()
         return BookGenesisDetail.model_validate(
             genesis_service.build_detail(session=session, project=project)
@@ -134,7 +201,7 @@ def patch_project_genesis(
         project = session.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "项目不存在")
-        require_genesis_project(project)
+        _require_genesis_project_with_audit(session, project, require_genesis_project)
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "项目 Genesis revision 不存在")
@@ -183,7 +250,7 @@ def generate_project_genesis_stage(
         project = session.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "项目不存在")
-        require_genesis_project(project)
+        _require_genesis_project_with_audit(session, project, require_genesis_project)
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "项目 Genesis revision 不存在")
@@ -229,7 +296,7 @@ def lock_project_genesis_stage(
         project = session.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "项目不存在")
-        require_genesis_project(project)
+        _require_genesis_project_with_audit(session, project, require_genesis_project)
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "项目 Genesis revision 不存在")
@@ -274,7 +341,7 @@ def rerun_project_genesis_stage(
         project = session.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "项目不存在")
-        require_genesis_project(project)
+        _require_genesis_project_with_audit(session, project, require_genesis_project)
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "项目 Genesis revision 不存在")
@@ -322,7 +389,7 @@ def refine_project_genesis_stage(
         project = session.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "项目不存在")
-        require_genesis_project(project)
+        _require_genesis_project_with_audit(session, project, require_genesis_project)
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "项目 Genesis revision 不存在")
@@ -373,7 +440,7 @@ def generate_project_genesis_name(
         project = session.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "项目不存在")
-        require_genesis_project(project)
+        _require_genesis_project_with_audit(session, project, require_genesis_project)
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "项目 Genesis revision 不存在")
@@ -426,7 +493,7 @@ def start_project_writing(
         project = session.get(Project, project_id)
         if project is None:
             raise HTTPException(404, "项目不存在")
-        require_genesis_project(project)
+        _require_genesis_project_with_audit(session, project, require_genesis_project)
         if str(project.creation_status or "") != "genesis_ready":
             raise HTTPException(409, "Genesis 尚未完成锁定，不能启动写作。")
         if project_has_active_generation_task(project_id, session=session):

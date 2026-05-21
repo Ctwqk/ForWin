@@ -53,74 +53,72 @@ class GovernanceDecisionApiTests(unittest.TestCase):
                 reason="operator typo should not persist an invalid checkpoint status",
             )
 
-    def test_legacy_approved_band_checkpoint_serializes_without_validation_error(self) -> None:
-        with TemporaryDirectory() as tmp:
-            db_path = postgres_test_url("legacy_checkpoint_status")
-            self._prime_api(db_path)
-            project_id = new_id()
-            arc_id = new_id()
-            created = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
-            with api_module._get_session() as session:
-                session.add(
-                    Project(
-                        id=project_id,
-                        title="历史 checkpoint",
-                        premise="premise",
-                        genre="玄幻",
-                        setting_summary="",
-                    )
+    def test_unknown_band_checkpoint_status_serializes_as_error_without_compat_event(self) -> None:
+        db_path = postgres_test_url("unknown_checkpoint_status")
+        self._prime_api(db_path)
+        project_id = new_id()
+        arc_id = new_id()
+        created = datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc)
+        with api_module._get_session() as session:
+            session.add(
+                Project(
+                    id=project_id,
+                    title="current checkpoint",
+                    premise="premise",
+                    genre="玄幻",
+                    setting_summary="",
                 )
-                session.flush()
-                session.add(
-                    ArcPlanVersion(
-                        id=arc_id,
-                        project_id=project_id,
-                        version=1,
-                        arc_synopsis="治理弧线",
-                        status="active",
-                    )
+            )
+            session.flush()
+            session.add(
+                ArcPlanVersion(
+                    id=arc_id,
+                    project_id=project_id,
+                    version=1,
+                    arc_synopsis="治理弧线",
+                    status="active",
                 )
-                session.flush()
-                session.add(
-                    BandCheckpoint(
-                        id="checkpoint-legacy-approved",
-                        project_id=project_id,
-                        arc_id=arc_id,
-                        band_id="band-legacy",
-                        chapter_start=1,
-                        chapter_end=3,
-                        boundary_kind="band_end",
-                        boundary_chapter=3,
-                        status="approved",
-                        summary="历史人工通过",
-                        reason="legacy operator approval",
-                        created_at=created,
-                        updated_at=created,
-                    )
+            )
+            session.flush()
+            session.add(
+                BandCheckpoint(
+                    id="checkpoint-invalid-status",
+                    project_id=project_id,
+                    arc_id=arc_id,
+                    band_id="band-current",
+                    chapter_start=1,
+                    chapter_end=3,
+                    boundary_kind="band_end",
+                    boundary_chapter=3,
+                    status="approved",
+                    summary="old status should not be accepted",
+                    reason="operator used removed status",
+                    created_at=created,
+                    updated_at=created,
                 )
-                session.commit()
+            )
+            session.commit()
 
-            checkpoint = api_module.get_band_checkpoint(project_id, "band-legacy")
-            project = api_module.get_project(project_id)
+        checkpoint = api_module.get_band_checkpoint(project_id, "band-current")
+        project = api_module.get_project(project_id)
 
-            self.assertEqual(checkpoint.status, "overridden")
-            self.assertIn("legacy_status=approved", checkpoint.reason)
-            self.assertTrue(checkpoint.resolved_at)
-            self.assertIsNotNone(project.latest_band_checkpoint)
-            self.assertEqual(project.latest_band_checkpoint.status, "overridden")
-            with api_module._get_session() as session:
-                events = (
-                    session.query(DecisionEvent)
-                    .filter(
-                        DecisionEvent.project_id == project_id,
-                        DecisionEvent.event_type == DecisionEventType.LEGACY_COMPATIBILITY_USED,
-                        DecisionEvent.related_object_type == "band_checkpoint",
-                        DecisionEvent.related_object_id == "checkpoint-legacy-approved",
-                    )
-                    .all()
+        self.assertEqual(checkpoint.status, "error")
+        self.assertEqual(checkpoint.reason, "operator used removed status")
+        self.assertFalse(checkpoint.resolved_at)
+        self.assertIsNotNone(project.latest_band_checkpoint)
+        self.assertEqual(project.latest_band_checkpoint.status, "error")
+        with api_module._get_session() as session:
+            count = (
+                session.query(DecisionEvent)
+                .filter(
+                    DecisionEvent.project_id == project_id,
+                    DecisionEvent.event_type == DecisionEventType.LEGACY_COMPATIBILITY_USED,
+                    DecisionEvent.related_object_type == "band_checkpoint",
+                    DecisionEvent.related_object_id == "checkpoint-invalid-status",
                 )
-            self.assertEqual(len(events), 1)
-            self.assertIn("api.legacy_checkpoint_status", events[0].payload_json)
+                .count()
+            )
+        self.assertEqual(count, 0)
 
     def test_approve_band_checkpoint_sets_resolved_at(self) -> None:
         with TemporaryDirectory() as tmp:

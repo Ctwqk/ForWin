@@ -5,7 +5,6 @@ from __future__ import annotations
 from .adapter import BookStateDeltaAdapter
 from .compiler import BookStateCompiler
 from .cognition import CognitionView
-from .legacy_import import LegacyBookStateImporter
 from .map_graph import MapGraph
 from .narrative import NarrativeControlGraph
 from .projection import BookStateProjection
@@ -26,7 +25,6 @@ __all__ = [
     "BookStateReviewIssue",
     "BookStateReviewVerdict",
     "CognitionView",
-    "LegacyBookStateImporter",
     "MapGraph",
     "NarrativeControlGraph",
     "ObjectiveWorldGraph",

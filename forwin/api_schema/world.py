@@ -112,13 +112,6 @@ class BookStatePathResponse(BaseModel):
     explanation: str = ""
 
 
-class BookStateLegacyImportResponse(BaseModel):
-    schema_version: str = "book_state.legacy_import.v1"
-    project_id: str
-    imported: dict[str, Any] = Field(default_factory=dict)
-    migration_report: dict[str, Any] = Field(default_factory=dict)
-
-
 class PersonalityLoadoutUpdateRequest(BaseModel):
     personality_loadout: dict[str, Any] = Field(default_factory=dict)
     reason: str = ""
@@ -335,7 +328,6 @@ __all__ = [
     'WorldModelV4ExportResponse',
     'BookStateRuntimeResponse',
     'BookStatePathResponse',
-    'BookStateLegacyImportResponse',
     'PersonalityLoadoutUpdateRequest',
     'CharacterCreateRequest',
     'CharacterPersonalityPreviewRequest',

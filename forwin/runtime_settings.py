@@ -95,7 +95,7 @@ class RuntimeSettingsStore:
     @staticmethod
     def _normalize_progression_mode(value: object) -> str:
         normalized = str(value or "").strip()
-        if normalized in {"legacy_relaxed", "serial_canon", "serial_canon_band_guard"}:
+        if normalized in {"serial_canon", "serial_canon_band_guard"}:
             return normalized
         return "serial_canon_band_guard"
 

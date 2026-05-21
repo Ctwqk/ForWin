@@ -32,7 +32,6 @@ from forwin.governance import (
     NarrativeConstraintInfo,
     ProjectGovernanceSettings,
     DecisionEventType,
-    checkpoint_reason_with_legacy_status,
     chapter_blocking_message,
     normalize_checkpoint_status,
     normalize_project_governance,

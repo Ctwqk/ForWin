@@ -28,6 +28,7 @@ _DEPRECATED_REVIEW_CUTOVER_FIELDS = {
     "review_engine_live_cutover_enabled",
     "review_engine_live_cutover_project_allowlist",
 }
+_PROGRESSION_MODES = {"serial_canon", "serial_canon_band_guard"}
 
 
 class LLMConfig(BaseModel):
@@ -132,6 +133,13 @@ def _env_str(env: dict[str, str], key: str, default: str = "") -> str:
     if value == "":
         return default
     return value
+
+
+def _normalize_progression_mode(value: object) -> str:
+    normalized = str(value or "").strip()
+    if normalized in _PROGRESSION_MODES:
+        return normalized
+    return "serial_canon_band_guard"
 
 
 def _env_int(env: dict[str, str], key: str, default: int) -> int:
@@ -422,8 +430,8 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         "review_interval_chapters": tracked_int(
             "review_interval_chapters", "REVIEW_INTERVAL_CHAPTERS", 0
         ),
-        "progression_mode": _env_str(
-            env, "PROGRESSION_MODE", "serial_canon_band_guard"
+        "progression_mode": _normalize_progression_mode(
+            _env_str(env, "PROGRESSION_MODE", "serial_canon_band_guard")
         ),
         "auto_band_checkpoint": tracked_bool(
             "auto_band_checkpoint", "AUTO_BAND_CHECKPOINT", True
@@ -888,6 +896,11 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
                 "FORWIN_PUBLISHER_SESSION_SECRET must be set when "
                 "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED=true"
             )
+        object.__setattr__(
+            self,
+            "progression_mode",
+            _normalize_progression_mode(self.progression_mode),
+        )
 
     @property
     def writer(self) -> WriterProfile:

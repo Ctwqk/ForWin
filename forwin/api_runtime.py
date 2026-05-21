@@ -40,7 +40,9 @@ _PROGRESS_PAYLOAD_KEYS = (
 
 
 def copy_config(base_config: Config, **updates: object) -> Config:
-    return base_config.model_copy(update=updates)
+    values = base_config.model_dump()
+    values.update(updates)
+    return Config(**values)
 
 
 def _build_task_progress_changes(
@@ -242,7 +244,7 @@ def build_runtime_config(
         operation_mode=operation_mode,
         freeze_failed_candidates=freeze_failed_candidates,
         review_interval_chapters=max(0, int(review_interval_chapters)),
-        progression_mode=progression_mode or "legacy_relaxed",
+        progression_mode=progression_mode or "serial_canon_band_guard",
         auto_band_checkpoint=bool(auto_band_checkpoint),
         band_warn_action=band_warn_action or "pause",
         manual_checkpoints_enabled=bool(manual_checkpoints_enabled),

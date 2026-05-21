@@ -13,23 +13,7 @@ def _project_governance(self, project: Project):
         getattr(project, "governance_json", "{}"),
         fallback_operation_mode=self.config.operation_mode,
         fallback_review_interval=self.config.review_interval_chapters,
-        treat_empty_as_legacy=True,
     )
-    if str(governance.progression_mode or "") == "legacy_relaxed":
-        updater = getattr(self, "_governance_runtime_updater", None)
-        project_id = str(getattr(project, "id", "") or "").strip()
-        record_compat = getattr(self, "_record_legacy_compatibility_event", None)
-        if updater is not None and project_id and callable(record_compat):
-            record_compat(
-                updater=updater,
-                project_id=project_id,
-                compat_layer="governance",
-                compat_feature="governance.legacy_relaxed_fallback",
-                usage_kind="config_fallback",
-                source_module="forwin.orchestrator_loop_core.governance",
-                usage_reason="project governance resolved to legacy_relaxed",
-                metadata={"progression_mode": "legacy_relaxed"},
-            )
     return governance
 
 def _record_decision_event(
@@ -597,9 +581,7 @@ def _strict_progression_block(
     chapter_number: int,
 ) -> tuple[str, str, str]:
     governance = self._project_governance(project)
-    mode = str(governance.progression_mode or "legacy_relaxed")
-    if mode == "legacy_relaxed":
-        return "", "", ""
+    mode = str(governance.progression_mode or "serial_canon_band_guard")
     if chapter_number > 1:
         previous_plan = repo.get_chapter_plan(project.id, chapter_number - 1)
         if previous_plan is not None and previous_plan.status != "accepted":

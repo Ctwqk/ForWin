@@ -88,7 +88,7 @@ def test_legacy_compatibility_summary_marks_unused_candidates() -> None:
     summary = summarize_legacy_compatibility_audit([], registry=LEGACY_COMPATIBILITY_REGISTRY)
 
     assert any(
-        item["compat_feature"] == "governance.legacy_relaxed_fallback"
+        item["compat_feature"] == "book_state.state.location_fallback"
         and item["reason"] == "unused during audit window"
         and item["events"] == 0
         and item["static_callers"] is None
@@ -99,11 +99,11 @@ def test_legacy_compatibility_summary_marks_unused_candidates() -> None:
 
 def test_uninstrumented_candidate_does_not_become_delete_candidate() -> None:
     registry = {
-        "api.legacy_checkpoint_status": {
+        "compat.uninstrumented_candidate": {
             "compat_layer": "api",
             "removal_mode": "candidate_if_unused",
             "instrumentation_status": "uninstrumented",
-            "description": "Normalize legacy checkpoint status strings in API responses.",
+            "description": "Synthetic uninstrumented compatibility path.",
         }
     }
 
@@ -112,7 +112,7 @@ def test_uninstrumented_candidate_does_not_become_delete_candidate() -> None:
     assert summary["removal_assessment"]["delete_candidates"] == []
     assert summary["removal_assessment"]["uninstrumented_no_delete_signal"] == [
         {
-            "compat_feature": "api.legacy_checkpoint_status",
+            "compat_feature": "compat.uninstrumented_candidate",
             "reason": "runtime instrumentation is missing",
             "events": 0,
             "static_callers": None,
@@ -246,29 +246,29 @@ def test_static_counts_ignore_imports_definitions_and_migrations(tmp_path) -> No
     (source_root / "book_state").mkdir(parents=True)
     (source_root / "migrations").mkdir(parents=True)
     (source_root / "api.py").write_text(
-        "from forwin.book_state import LegacyBookStateImporter\n"
-        "counts = LegacyBookStateImporter(session).import_project(project_id)\n",
+        "from forwin.book_state import ImportContractRunner\n"
+        "counts = ImportContractRunner(session).import_project(project_id)\n",
         encoding="utf-8",
     )
-    (source_root / "book_state" / "legacy_import.py").write_text(
-        "class LegacyBookStateImporter:\n"
+    (source_root / "book_state" / "import_contract.py").write_text(
+        "class ImportContractRunner:\n"
         "    pass\n",
         encoding="utf-8",
     )
-    (source_root / "migrations" / "001_legacy.py").write_text(
-        "LegacyBookStateImporter(session).import_project(project_id)\n",
+    (source_root / "migrations" / "001_import.py").write_text(
+        "ImportContractRunner(session).import_project(project_id)\n",
         encoding="utf-8",
     )
     registry = {
-        "migration.legacy_book_state_import": {
+        "compat.import_contract": {
             "compat_layer": "migration",
-            "static_patterns": ["LegacyBookStateImporter("],
+            "static_patterns": ["ImportContractRunner("],
         }
     }
 
     counts = collect_legacy_compatibility_static_counts(source_root, registry=registry)
 
-    assert counts == {"migration.legacy_book_state_import": 1}
+    assert counts == {"compat.import_contract": 1}
 
 
 def test_dead_code_candidate_with_no_runtime_or_static_is_reported() -> None:

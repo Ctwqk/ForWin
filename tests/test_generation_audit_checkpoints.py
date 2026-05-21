@@ -21,8 +21,8 @@ def _governance_json(*, interval: int = 2, pause_enabled: bool = True) -> str:
     return json.dumps(
         {
             "default_operation_mode": "blackbox",
-            "progression_mode": "legacy_relaxed",
-            "auto_band_checkpoint": False,
+            "progression_mode": "serial_canon_band_guard",
+            "auto_band_checkpoint": True,
             "manual_checkpoints_enabled": True,
             "future_constraints_enabled": True,
             "generation_audit_interval_chapters": interval,

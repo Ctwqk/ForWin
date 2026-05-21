@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from forwin.api_runtime import build_runtime_config, copy_config
+from forwin.api_schemas import GenerateRequest
 from forwin.config import Config, DEFAULT_MINIMAX_BASE_URL
 
 
@@ -201,6 +203,36 @@ def test_default_scene_call_timeout_matches_default_llm_timeout(
 
     assert config.scene_call_timeout_seconds == config.llm_timeout_seconds == 90.0
     assert Config().scene_call_timeout_seconds == Config().llm_timeout_seconds == 90.0
+
+
+def test_removed_legacy_relaxed_progression_mode_normalizes_to_current_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _set_env_file(monkeypatch, tmp_path, ["PROGRESSION_MODE=legacy_relaxed"])
+
+    assert Config.from_env().progression_mode == "serial_canon_band_guard"
+    assert Config(progression_mode="legacy_relaxed").progression_mode == "serial_canon_band_guard"
+
+
+def test_copy_config_normalizes_removed_legacy_relaxed_progression_mode() -> None:
+    runtime_config = copy_config(Config(), progression_mode="legacy_relaxed")
+
+    assert runtime_config.progression_mode == "serial_canon_band_guard"
+
+
+def test_build_runtime_config_normalizes_removed_request_progression_mode() -> None:
+    runtime_config = build_runtime_config(
+        GenerateRequest(
+            premise="测试 premise",
+            genre="玄幻",
+            num_chapters=1,
+            progression_mode="legacy_relaxed",
+        ),
+        base_config=Config(),
+        runtime_settings=None,
+    )
+
+    assert runtime_config.progression_mode == "serial_canon_band_guard"
 
 
 def test_publisher_extension_legacy_alias_still_works(

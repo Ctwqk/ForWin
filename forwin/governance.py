@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from forwin.protocol.experience import BandDelightSchedule
 
 
-ProgressionMode = Literal["legacy_relaxed", "serial_canon", "serial_canon_band_guard"]
+ProgressionMode = Literal["serial_canon", "serial_canon_band_guard"]
 BandWarnAction = Literal["pause", "continue"]
 PlanTaskType = Literal[
     "plot_advance",
@@ -39,20 +39,9 @@ def normalize_checkpoint_status(value: object) -> str:
     raw = str(value or "").strip()
     if raw in CHECKPOINT_STATUS_VALUES:
         return raw
-    if raw == "approved":
-        return "overridden"
-    return "overridden"
+    return "error"
 
 
-def checkpoint_reason_with_legacy_status(reason: object, value: object) -> str:
-    normalized_reason = str(reason or "").strip()
-    raw = str(value or "").strip()
-    if not raw or raw in CHECKPOINT_STATUS_VALUES:
-        return normalized_reason
-    legacy_marker = f"legacy_status={raw}"
-    if legacy_marker in normalized_reason:
-        return normalized_reason
-    return f"{normalized_reason}; {legacy_marker}".strip("; ")
 BlockingReasonCode = Literal[
     "",
     "chapter_not_canon",
@@ -183,9 +172,6 @@ class DecisionEventType:
     CHARACTER_INTEGRITY_CHECK_FAILED = "character_integrity_check_failed"
     LEGACY_COMPATIBILITY_USED = "legacy_compatibility_used"
     LEGACY_PROJECTION_FAILED = "legacy_projection_failed"
-    LEGACY_REGION_PROMOTION_STARTED = "legacy_region_promotion_started"
-    LEGACY_REGION_PROMOTION_SUCCEEDED = "legacy_region_promotion_succeeded"
-    LEGACY_REGION_PROMOTION_FAILED = "legacy_region_promotion_failed"
     TASK_OPERATION_STARTED = "task_operation_started"
     TASK_OPERATION_SUCCEEDED = "task_operation_succeeded"
     TASK_OPERATION_FAILED = "task_operation_failed"
@@ -311,9 +297,6 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.PERSONALITY_LOADOUT_UPDATED,
     DecisionEventType.LEGACY_COMPATIBILITY_USED,
     DecisionEventType.LEGACY_PROJECTION_FAILED,
-    DecisionEventType.LEGACY_REGION_PROMOTION_STARTED,
-    DecisionEventType.LEGACY_REGION_PROMOTION_SUCCEEDED,
-    DecisionEventType.LEGACY_REGION_PROMOTION_FAILED,
     DecisionEventType.TASK_OPERATION_STARTED,
     DecisionEventType.TASK_OPERATION_SUCCEEDED,
     DecisionEventType.TASK_OPERATION_FAILED,
@@ -388,12 +371,12 @@ class PlanTaskItem(BaseModel):
 class ProjectGovernanceSettings(BaseModel):
     default_operation_mode: str = "blackbox"
     review_interval_chapters: int = 0
-    progression_mode: ProgressionMode = "legacy_relaxed"
-    auto_band_checkpoint: bool = False
+    progression_mode: ProgressionMode = "serial_canon_band_guard"
+    auto_band_checkpoint: bool = True
     band_warn_action: BandWarnAction = "pause"
-    manual_checkpoints_enabled: bool = False
-    future_constraints_enabled: bool = False
-    generation_audit_interval_chapters: int = 0
+    manual_checkpoints_enabled: bool = True
+    future_constraints_enabled: bool = True
+    generation_audit_interval_chapters: int = 6
     generation_audit_pause_enabled: bool = False
     canon_glossary: CanonGlossary = Field(default_factory=CanonGlossary)
 
@@ -500,30 +483,11 @@ def new_project_governance(
     )
 
 
-def legacy_project_governance(
-    *,
-    default_operation_mode: str = "blackbox",
-    review_interval_chapters: int = 0,
-) -> ProjectGovernanceSettings:
-    return ProjectGovernanceSettings(
-        default_operation_mode=str(default_operation_mode or "blackbox").strip() or "blackbox",
-        review_interval_chapters=max(0, int(review_interval_chapters or 0)),
-        progression_mode="legacy_relaxed",
-        auto_band_checkpoint=False,
-        band_warn_action="pause",
-        manual_checkpoints_enabled=False,
-        future_constraints_enabled=False,
-        generation_audit_interval_chapters=0,
-        generation_audit_pause_enabled=False,
-    )
-
-
 def normalize_project_governance(
     raw: str | dict[str, Any] | None,
     *,
     fallback_operation_mode: str = "blackbox",
     fallback_review_interval: int = 0,
-    treat_empty_as_legacy: bool = True,
 ) -> ProjectGovernanceSettings:
     payload: dict[str, Any]
     if isinstance(raw, dict):
@@ -533,8 +497,8 @@ def normalize_project_governance(
             payload = json.loads(raw or "{}") or {}
         except (json.JSONDecodeError, TypeError):
             payload = {}
-    if not payload and treat_empty_as_legacy:
-        return legacy_project_governance(
+    if not payload:
+        return new_project_governance(
             default_operation_mode=fallback_operation_mode,
             review_interval_chapters=fallback_review_interval,
         )
@@ -558,6 +522,11 @@ def normalize_project_governance(
         )
     except (TypeError, ValueError):
         merged["generation_audit_interval_chapters"] = 0
+    if str(merged.get("progression_mode") or "").strip() not in {
+        "serial_canon",
+        "serial_canon_band_guard",
+    }:
+        merged["progression_mode"] = "serial_canon_band_guard"
     return ProjectGovernanceSettings.model_validate(merged)
 
 

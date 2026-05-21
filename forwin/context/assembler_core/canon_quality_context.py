@@ -77,7 +77,6 @@ def _build_canon_quality_context(
                 getattr(project, "governance_json", "") or "{}",
                 fallback_operation_mode="blackbox",
                 fallback_review_interval=0,
-                treat_empty_as_legacy=False,
             )
             base["canon_glossary"] = governance.canon_glossary.model_dump(mode="json")
             base["countdown_rule_profiles"] = {

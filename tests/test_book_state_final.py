@@ -9,7 +9,6 @@ from forwin.book_state import (
     BookStateRepository,
     BookStateReviewGate,
     CognitionView,
-    LegacyBookStateImporter,
     MapGraph,
     NarrativeControlGraph,
     distance_between_world_nodes,
@@ -18,7 +17,7 @@ from forwin.book_state.schema import validate_world_node
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow, NarrativeNodeRow, WorldNodeRow
-from forwin.models.entity import Entity, EntityState
+from forwin.models.entity import Entity
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
     CognitionOverlay,
@@ -140,15 +139,13 @@ def test_review_gate_blocks_unknown_location_id_but_warns_for_legacy_location() 
     assert severities["node:char_old"] == "warning"
 
 
-def test_v4_adapter_and_legacy_import_create_book_state_rows() -> None:
+def test_v4_adapter_create_book_state_rows_without_import() -> None:
     Session = _session()
     with Session.begin() as session:
         project_id = _project(session)
         entity = Entity(project_id=project_id, kind="character", name="陆沉", created_at_chapter=1)
         session.add(entity)
         session.flush()
-        session.add(EntityState(entity_id=entity.id, as_of_chapter=1, state_json='{"location_id": "loc_city"}'))
-        counts = LegacyBookStateImporter(session).import_project(project_id)
 
         source = DeltaSource(source_type=DeltaSourceType.CHARACTER_ACTION, actor_id="char_mc")
         changes = ExtractedWorldChangeSet(
@@ -172,8 +169,7 @@ def test_v4_adapter_and_legacy_import_create_book_state_rows() -> None:
         node_count = session.scalar(select(func.count()).select_from(WorldNodeRow))
         narrative_count = session.scalar(select(func.count()).select_from(NarrativeNodeRow))
 
-    assert counts["world_nodes"] == 1
     assert result.committed is True
-    assert node_count == 2
+    assert node_count == 1
     assert narrative_count >= 1
     assert NarrativeControlGraph(nodes=[]).open_gap_ids() == []

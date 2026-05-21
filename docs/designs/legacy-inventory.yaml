@@ -88,6 +88,7 @@ entries:
       - forwin/characters/events.py
       - forwin/characters/identity.py
       - forwin/characters/registry.py
+      - forwin/api_schema/world.py
       - forwin/book_state/compiler.py
       - forwin/context/assembler_core/book_state_overlay.py
       - forwin/context/assembler_core/personality_integrity.py
@@ -126,7 +127,7 @@ entries:
     status: planned
 
   - id: book_state.legacy_import
-    category: runtime_delete
+    category: deleted
     owner_area: book_state
     paths:
       - forwin/api_book_state_routes.py
@@ -143,23 +144,16 @@ entries:
       - LEGACY_REGION_PROMOTION
       - legacy BookState import
       - legacy_region_promotion
-      - legacy_entity_id
-      - legacy_entity_name
-      - legacy_entity_kind
       - legacy_map_node_
       - legacy_import
-      - create_legacy_entity
-      - import_legacy_character
-      - legacy_entity_import
       - legacy entity import
       - _promote_legacy_region_drafts
       - _stable_legacy_region_id
-      - legacy_source
       - legacy_entity_state
       - legacy_relation_type
       - legacy_table
     reason: Old BookState import is not needed after old projects are abandoned.
-    removal_phase: phase_1
+    removal_phase: complete
     verification:
       - unit
       - api_route_tests
@@ -167,10 +161,10 @@ entries:
     delete_when:
       - import route and schema are gone
       - no runtime code imports LegacyBookStateImporter
-    status: planned
+    status: deleted
 
   - id: governance.legacy_relaxed
-    category: runtime_delete
+    category: deleted
     owner_area: governance
     paths:
       - forwin/api_governance_support.py
@@ -180,13 +174,12 @@ entries:
       - forwin/orchestrator_loop_core/governance.py
       - forwin/runtime_settings.py
     allow_patterns:
-      - legacy_relaxed
       - legacy_project_governance
       - treat_empty_as_legacy
       - legacy_marker
       - governance.legacy_relaxed_fallback
     reason: Current generation must use serial canon governance, not the old relaxed mode.
-    removal_phase: phase_1
+    removal_phase: complete
     verification:
       - unit
       - governance_api_tests
@@ -194,10 +187,10 @@ entries:
     delete_when:
       - empty governance defaults to serial_canon_band_guard
       - no project governance path emits governance.legacy_relaxed_fallback
-    status: planned
+    status: deleted
 
   - id: api.legacy_checkpoint_status
-    category: external_compat_delete
+    category: deleted
     owner_area: api
     paths:
       - forwin/api_governance_support.py
@@ -213,20 +206,18 @@ entries:
       - forwin/project_payloads/scenario.py
     allow_patterns:
       - checkpoint_reason_with_legacy_status
-      - legacy_status
       - _record_legacy_checkpoint_status_compatibility
       - legacy checkpoint status normalized
-      - legacy_identifier
       - api.legacy_checkpoint_status
     reason: Old checkpoint status strings are an API compatibility shim, not current behavior.
-    removal_phase: phase_1
+    removal_phase: complete
     verification:
       - governance_api_tests
       - inventory_final
     delete_when:
       - old checkpoint status payloads are rejected or migrated before serialization
       - current checkpoint serialization tests pass
-    status: planned
+    status: deleted
 
   - id: project.creation_status_legacy
     category: runtime_delete

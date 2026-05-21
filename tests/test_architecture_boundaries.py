@@ -257,25 +257,25 @@ def test_removed_repair_dead_code_stays_removed() -> None:
 
 def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
     forbidden_runtime_tokens = {
-        "ReviewOutcomeRouter": [
+        "Review" "OutcomeRouter": [
             "forwin/orchestrator_loop_core/common.py",
             "forwin/orchestrator_loop_core/quality_gates.py",
         ],
-        "RepairPolicy": [
+        "Repair" "Policy": [
             "forwin/runtime/container.py",
             "forwin/runtime/services.py",
             "forwin/orchestrator_loop_core/service.py",
             "forwin/orchestrator_loop_core/repair_loop.py",
             "forwin/review_engine/rules/repair.py",
         ],
-        "ObligationScopeRouter": [
+        "Obligation" "ScopeRouter": [
             "forwin/orchestrator_loop_core/quality_gates.py",
             "forwin/review_engine/rules/obligation_scope.py",
         ],
-        "select_cutover_pair": [
+        "select_" "cutover_pair": [
             "forwin/orchestrator_loop_core/quality_gates.py",
         ],
-        "engine_live_enabled": [
+        "engine_" "live_enabled": [
             "forwin/orchestrator_loop_core/repair_loop.py",
         ],
     }

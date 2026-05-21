@@ -26,14 +26,6 @@ LEGACY_COMPATIBILITY_REGISTRY: dict[str, dict[str, Any]] = {
         "static_patterns": 'code="movement_unknown_map_node"',
         "description": "Legacy state.location patches downgraded to warnings.",
     },
-    "projection.legacy_world_model_projection": {
-        "compat_layer": "projection",
-        "default_assessment": "must_migrate_if_used",
-        "removal_mode": "must_migrate_if_used",
-        "instrumentation_status": "instrumented",
-        "static_patterns": "projection.legacy_world_model_projection",
-        "description": "Legacy world model projection compatibility path.",
-    },
     "project.creation_status_legacy": {
         "compat_layer": "project",
         "default_assessment": "must_migrate_if_used",

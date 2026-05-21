@@ -48,12 +48,12 @@ WriterOutput / chapter body
 -> projection refresh
 ```
 
-`world_v4` rows 只在 `FORWIN_WORLD_V4_COMPAT_WRITE=true` 时作为 best-effort compatibility projection 写入。该投影失败不得回滚已提交的 BookState canon；关闭该开关时，新项目仍可完成 BookState canon commit。
+旧 `world_model_v4` / world-v4 compatibility projection 写入已经从 accepted chapter runtime 删除。新项目的 canon commit 只以 BookState review/compile 结果为准，后续只保留 Knowledge Projection refresh 等当前检索投影。
 
 ## 兼容层
 
 - `world_model`：legacy wiki/export/projection/read path；不作为新 canon 语义来源。
-- `world_model_v4`：world_v4 compatibility projection / migration source / debug-export bridge；不继续新增最终 canon 能力。
+- `world_model_v4`：已删除的旧 compatibility projection / debug-export bridge；不得重新作为 runtime 写入路径引入。
 - `reviewer_v4`：world_v4 extraction compatibility gate；不是 `reviewer` 的新版替代品。
 - legacy `entities / entity_states / relation_edges / CanonEvent`：兼容投影、迁移输入或审计摘要。
 - legacy provisional：历史预演、审计和 compatibility preview，不默认阻断正式写作。

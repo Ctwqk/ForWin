@@ -13,7 +13,6 @@ import forwin.map as book_map
 import forwin.reviewer as reviewer
 import forwin.reviewer_v4 as reviewer_v4
 import forwin.world_model as world_model
-import forwin.world_model_v4 as world_model_v4
 from forwin.api_route_registry import (
     ApiRouteDeps,
     CoreDeps,
@@ -28,16 +27,7 @@ from forwin.api_route_registry import (
 ROOT = Path(__file__).resolve().parents[1]
 
 LEGACY_ALIAS_IMPORT_ALLOWLIST = {
-    "forwin/api_route_registry.py",
-    "forwin/api_world_model_v4_routes.py",
     "forwin/book_state/legacy_import.py",
-    "forwin/world_model_v4/__init__.py",
-    "forwin/world_model_v4/bootstrap.py",
-    "forwin/world_model_v4/compiler.py",
-    "forwin/world_model_v4/export.py",
-    "forwin/world_model_v4/projection.py",
-    "forwin/world_model_v4/provisional.py",
-    "forwin/world_model_v4/repository.py",
 }
 
 
@@ -49,7 +39,6 @@ def test_core_packages_declare_current_architecture_roles() -> None:
     expectations = {
         "forwin/book_state/README.md": "Status: CANON runtime.",
         "forwin/world_model/README.md": "Status: LEGACY projection / wiki / export layer.",
-        "forwin/world_model_v4/README.md": "Status: COMPATIBILITY projection / migration source / debug bridge.",
         "forwin/reviewer/README.md": "Status: MAIN REVIEW facade.",
         "forwin/reviewer_v4/README.md": "Status: COMPATIBILITY gate.",
         "forwin/map/README.md": "Status: CANON map runtime.",
@@ -59,36 +48,27 @@ def test_core_packages_declare_current_architecture_roles() -> None:
 
     assert "CANON BookState runtime" in inspect.getdoc(book_state)
     assert "LEGACY world model projection" in inspect.getdoc(world_model)
-    assert "COMPATIBILITY world_v4 projection" in inspect.getdoc(world_model_v4)
     assert "MAIN chapter review facade" in inspect.getdoc(reviewer)
     assert "COMPATIBILITY world_v4 extraction review gate" in inspect.getdoc(reviewer_v4)
     assert "CANON Scheme C BookMap runtime" in inspect.getdoc(book_map)
 
 
-def test_orchestrator_book_state_compile_precedes_world_v4_projection() -> None:
+def test_orchestrator_book_state_runtime_has_no_legacy_projection_markers() -> None:
     source = _read("forwin/orchestrator/loop.py")
-    book_state_index = source.index("book_state_result = commit_service.compile_approved")
-    compatibility_index = source.index("compiler_result = WorldModelCompilerV4(session).compile_gate_verdict")
+    projection_source = _read("forwin/orchestrator_loop_core/world_projection.py")
 
-    assert "BookStateGraphDeltaExtractor" in source
-    assert "BookStateDirectCommitService" in source
-    assert book_state_index < compatibility_index
-    assert "BookState canon 已保留" in source
-    assert "LEGACY_PROJECTION_FAILED" in source
-
-
-def test_legacy_world_model_is_labeled_projection_in_runtime_paths() -> None:
-    source = _read("forwin/orchestrator/loop.py")
-    v4_compiler = _read("forwin/world_model_v4/compiler.py")
-    compat_compiler = _read("forwin/world_v4_compat/compiler.py")
-
-    assert "LegacyWorldModelCompiler" in source
-    assert "legacy_projection" in source
-    assert "BookState canon 不回滚" in source
-    assert "compatibility projection rows" in v4_compiler
-    assert "class WorldModelCompiler" in compat_compiler
-    assert "BookStateCompilerV46" in compat_compiler
-    assert "sole v4 canon writer" not in v4_compiler
+    forbidden = [
+        "WorldModelCompilerV4",
+        "LegacyWorldModelCompiler",
+        "LEGACY_PROJECTION_FAILED",
+        "legacy_projection",
+        "projection.legacy_world_model_projection",
+        "world_v4_compat_write_enabled",
+    ]
+    assert all(token not in source for token in forbidden)
+    assert all(token not in projection_source for token in forbidden)
+    assert "BookStateDirectCommitService" in projection_source
+    assert "KnowledgeProjectionRefresher" in projection_source
 
 
 def test_design_docs_do_not_name_legacy_tables_as_current_source_of_truth() -> None:
@@ -128,6 +108,8 @@ def test_new_production_code_does_not_expand_legacy_v4_alias_imports() -> None:
     forbidden = (
         "from forwin.world_model_v4",
         "import forwin.world_model_v4",
+        "from forwin.world_v4_compat",
+        "import forwin.world_v4_compat",
         "from forwin.reviewer_v4",
         "import forwin.reviewer_v4",
     )
@@ -228,7 +210,6 @@ def test_design_status_contains_deprecation_matrix() -> None:
     status_doc = _read("Design-docs/DESIGN_STATUS.md")
 
     assert "兼容 / 弃用矩阵" in status_doc
-    assert "`forwin.world_model_v4` | deprecated | `forwin.world_v4_compat`" in status_doc
     assert "`forwin.reviewer_v4` | deprecated | `forwin.world_v4_review_gate`" in status_doc
     assert "`forwin.planning.scenario_rehearsal` | deprecated" in status_doc
     assert "v5.0" in status_doc
@@ -237,13 +218,18 @@ def test_design_status_contains_deprecation_matrix() -> None:
 def test_deprecated_legacy_modules_emit_deprecation_warning() -> None:
     for module_name in (
         "forwin.world_model",
-        "forwin.world_model_v4",
         "forwin.reviewer_v4",
         "forwin.planning.scenario_rehearsal",
     ):
         sys.modules.pop(module_name, None)
         with pytest.warns(DeprecationWarning, match="DESIGN_STATUS"):
             importlib.import_module(module_name)
+
+
+def test_removed_world_v4_projection_modules_stay_removed() -> None:
+    assert not (ROOT / "forwin/api_world_model_v4_routes.py").exists()
+    assert not (ROOT / "forwin/world_model_v4").exists()
+    assert not (ROOT / "forwin/world_v4_compat").exists()
 
 
 def test_removed_repair_dead_code_stays_removed() -> None:

@@ -257,7 +257,7 @@ def _experience_overlay_section(context: ChapterContextPack) -> str | None:
     return "\n".join(["【读者体验 Overlay】", *lines])
 
 
-def _world_model_v4_section(context: ChapterContextPack) -> str | None:
+def _world_intent_section(context: ChapterContextPack) -> str | None:
     intent = getattr(context, "chapter_world_delta_intent", None)
     if not any(
         (
@@ -268,7 +268,7 @@ def _world_model_v4_section(context: ChapterContextPack) -> str | None:
         )
     ):
         return None
-    lines = ["【V4 世界模型意图】"]
+    lines = ["【世界状态意图】"]
     if getattr(context, "visible_world_lines", None):
         lines.append("  · 台前 world lines：" + "、".join(context.visible_world_lines))
     if getattr(context, "hidden_world_lines", None):
@@ -611,7 +611,7 @@ __all__ = [
     '_extract_protagonist_name',
     '_chapter_plan_section',
     '_experience_overlay_section',
-    '_world_model_v4_section',
+    '_world_intent_section',
     '_previous_summaries_section',
     '_active_entities_section',
     '_personality_context_section',

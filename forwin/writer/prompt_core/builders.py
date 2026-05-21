@@ -36,7 +36,7 @@ from .sections import (
     _subworld_control_section,
     _timeline_section,
     _world_model_section,
-    _world_model_v4_section,
+    _world_intent_section,
     _world_pressure_section,
 )
 
@@ -114,7 +114,7 @@ def _scene_prompt_sections(
         _active_threads_section(context, limit=thread_limit),
         _canon_name_anchor_section(context),
         _experience_overlay_section(context),
-        _world_model_v4_section(context),
+        _world_intent_section(context),
         _arc_envelope_section(context, compact=envelope_compact),
         _npc_intents_section(
             context,
@@ -158,7 +158,7 @@ def build_single_chapter_draft_prompt(
         _active_threads_section(context, limit=8),
         _canon_name_anchor_section(context),
         _experience_overlay_section(context),
-        _world_model_v4_section(context),
+        _world_intent_section(context),
         _arc_envelope_section(context, compact=False),
         _npc_intents_section(context, limit=4, detailed=True),
         _world_pressure_section(context),
@@ -218,7 +218,7 @@ def build_preview_chapter_prompt(
         _active_threads_section(context, limit=6),
         _canon_name_anchor_section(context),
         _experience_overlay_section(context),
-        _world_model_v4_section(context),
+        _world_intent_section(context),
         _arc_envelope_section(context, compact=True),
         _npc_intents_section(context, limit=3, detailed=False),
         _world_pressure_section(context),

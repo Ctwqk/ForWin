@@ -11,8 +11,8 @@ from .retriever import WorldModelRetriever
 from .store import WorldModelStore
 
 warnings.warn(
-    "forwin.world_model is deprecated as a business dependency; use BookState as canon and "
-    "world_v4_compat only for projection compatibility. See Design-docs/DESIGN_STATUS.md.",
+    "forwin.world_model is deprecated as a business dependency; use BookState as canon. "
+    "See Design-docs/DESIGN_STATUS.md.",
     DeprecationWarning,
     stacklevel=2,
 )

@@ -3,8 +3,11 @@ from __future__ import annotations
 from forwin.config import Config
 
 
-def test_world_v4_compat_write_is_disabled_by_default() -> None:
-    assert Config().world_v4_compat_write_enabled is False
+def test_world_v4_projection_flags_are_removed() -> None:
+    config = Config()
+
+    assert not hasattr(config, "world_v4_compat_write_enabled")
+    assert not hasattr(config, "enable_world_v4_debug_api")
 
 
 def test_review_engine_repair_v2_is_disabled_by_default() -> None:

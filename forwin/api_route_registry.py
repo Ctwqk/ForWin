@@ -20,7 +20,6 @@ from forwin import (
     api_system_routes,
     api_task_routes,
     api_world_model_routes,
-    api_world_model_v4_routes,
 )
 from forwin.api_schemas import (
     ActiveGenerationTaskCheckResponse,
@@ -91,11 +90,6 @@ from forwin.api_schemas import (
     WorldModelImportResponse,
     WorldModelPageInfo,
     WorldModelSnapshotInfo,
-    WorldModelV4DebugResponse,
-    WorldModelV4ExportResponse,
-    WorldModelV4GapInfo,
-    WorldModelV4LineInfo,
-    WorldModelV4RevealInfo,
 )
 
 
@@ -405,12 +399,6 @@ def register_api_routes(
         get_session=get_session,
         get_config=get_config,
     )
-    world_model_v4_handlers = api_world_model_v4_routes.build_handlers(
-        get_session=get_session,
-        debug_enabled=lambda: bool(
-            getattr(get_config(), "enable_world_v4_debug_api", False)
-        ),
-    )
     book_state_handlers = api_book_state_routes.build_handlers(
         get_session=get_session,
     )
@@ -441,7 +429,6 @@ def register_api_routes(
         **project_handlers,
         **governance_handlers,
         **world_model_handlers,
-        **world_model_v4_handlers,
         **book_state_handlers,
         **obsidian_handlers,
         **llm_kb_handlers,
@@ -543,11 +530,6 @@ def register_api_routes(
         ("/api/projects/{project_id}/scenario-rehearsal/latest", ["GET"], handlers["get_latest_scenario_rehearsal"], {"response_model": ScenarioRehearsalDetail}),
         ("/api/projects/{project_id}/scenario-rehearsal/{run_id}/rerun", ["POST"], handlers["rerun_scenario_rehearsal"], {"response_model": ScenarioRehearsalDetail}),
         ("/api/projects/{project_id}/scenario-rehearsal/patches/{patch_id}/approve", ["POST"], handlers["approve_scenario_plan_patch"], {"response_model": ScenarioRehearsalDetail}),
-        ("/api/projects/{project_id}/world-model/v4/debug", ["GET"], handlers["get_world_model_v4_debug"], {"response_model": WorldModelV4DebugResponse}),
-        ("/api/projects/{project_id}/world-model/v4/lines", ["GET"], handlers["get_world_model_v4_lines"], {"response_model": list[WorldModelV4LineInfo]}),
-        ("/api/projects/{project_id}/world-model/v4/gaps", ["GET"], handlers["get_world_model_v4_gaps"], {"response_model": list[WorldModelV4GapInfo]}),
-        ("/api/projects/{project_id}/world-model/v4/reveals", ["GET"], handlers["get_world_model_v4_reveals"], {"response_model": list[WorldModelV4RevealInfo]}),
-        ("/api/projects/{project_id}/world-model/v4/export", ["GET"], handlers["get_world_model_v4_export"], {"response_model": WorldModelV4ExportResponse}),
         ("/api/personality-skills", ["GET"], handlers["list_personality_skills"], {}),
         ("/api/projects/{project_id}/characters", ["POST"], handlers["create_character"], {}),
         ("/api/projects/{project_id}/characters/personality/preview", ["POST"], handlers["preview_character_personality"], {}),

@@ -7,25 +7,25 @@ from tempfile import TemporaryDirectory
 from sqlalchemy import func, select
 
 from forwin.config import Config
+from forwin.models import DecisionEvent, Entity, EntityState
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.draft import ChapterDraft, ChapterReview
-from forwin.models.entity import Entity, EntityState
-from forwin.models.project import ChapterPlan
-from forwin.models.world_v4 import WorldCompileRunV4Row, WorldDeltaRow
 from forwin.models.book_state import GraphDeltaRow
-from forwin.protocol.book_state import BookStateCompileResult
+from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.models.project import ChapterPlan
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent, WorldContractRepository
+from forwin.protocol.book_state import BookStateCompileResult
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.state_change import StateChangeCandidate
 from forwin.protocol.writer import WriterOutput
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 def _setup_project(session):
     updater = StateUpdater(session)
     project = updater.create_project(
-        title="V4 gate",
+        title="BookState gate",
         premise="殖民地防线与异常通讯",
         genre="科幻",
     )
@@ -56,19 +56,19 @@ def _setup_project(session):
     return project, chapter
 
 
-def test_apply_canon_candidate_runs_v4_compiler_before_legacy_state_update() -> None:
+def test_apply_canon_candidate_commits_book_state_without_projection_compatibility_event() -> None:
     with TemporaryDirectory() as tmp:
-        db_path = postgres_test_url("orchestrator-v4")
+        db_path = postgres_test_url("orchestrator-bookstate-no-projection-compat")
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
         orchestrator = WritingOrchestrator(
             Config(
                 database_url=db_path,
+                artifact_root=str(Path(tmp) / "artifacts"),
                 minimax_api_key="",
                 minimax_model="fake-model",
-                    chapter_review_form_mode="off",
-                world_v4_compat_write_enabled=True,
+                chapter_review_form_mode="off",
             )
         )
         with Session.begin() as session:
@@ -91,20 +91,20 @@ def test_apply_canon_candidate_runs_v4_compiler_before_legacy_state_update() -> 
             )
 
         with Session() as session:
-            compile_run = session.execute(select(WorldCompileRunV4Row)).scalar_one()
-            delta_count = session.scalar(select(func.count()).select_from(WorldDeltaRow))
+            graph_deltas = session.scalar(select(func.count()).select_from(GraphDeltaRow))
+            events = session.execute(select(DecisionEvent)).scalars().all()
 
+        event_types = {event.event_type for event in events}
+        payloads = "\n".join(event.payload_json or "" for event in events)
         assert result is None
-        assert compile_run.committed is True
-        retrieval_packs = json.loads(compile_run.retrieval_pack_json)
-        assert retrieval_packs["writing"]["hidden_objective_truths"] == []
-        assert retrieval_packs["review"]["must_not_reveal"] == ["father_sieged"]
-        assert delta_count == 2
+        assert graph_deltas > 0
+        assert "legacy_projection_failed" not in event_types
+        assert "projection.legacy_world_model_projection" not in payloads
 
 
-def test_apply_canon_candidate_blocks_v4_review_failure() -> None:
+def test_apply_canon_candidate_blocks_review_failure_before_book_state_commit() -> None:
     with TemporaryDirectory() as tmp:
-        db_path = postgres_test_url("orchestrator-v4-block")
+        db_path = postgres_test_url("orchestrator-bookstate-review-block")
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
@@ -114,7 +114,7 @@ def test_apply_canon_candidate_blocks_v4_review_failure() -> None:
                 artifact_root=str(Path(tmp) / "artifacts"),
                 minimax_api_key="",
                 minimax_model="fake-model",
-                    chapter_review_form_mode="off",
+                chapter_review_form_mode="off",
             )
         )
         with Session.begin() as session:
@@ -137,13 +137,9 @@ def test_apply_canon_candidate_blocks_v4_review_failure() -> None:
             )
 
         with Session() as session:
-            compile_runs = session.scalar(select(func.count()).select_from(WorldCompileRunV4Row))
-            delta_count = session.scalar(select(func.count()).select_from(WorldDeltaRow))
             graph_deltas = session.scalar(select(func.count()).select_from(GraphDeltaRow))
 
         assert frozen
-        assert compile_runs == 0
-        assert delta_count == 0
         assert graph_deltas == 0
 
 
@@ -154,7 +150,13 @@ def test_apply_canon_candidate_drops_unregistered_character_state_changes() -> N
         init_db(engine)
         Session = get_session_factory(engine)
         orchestrator = WritingOrchestrator(
-            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model", chapter_review_form_mode="off")
+            Config(
+                database_url=db_path,
+                artifact_root=str(Path(tmp) / "artifacts"),
+                minimax_api_key="",
+                minimax_model="fake-model",
+                chapter_review_form_mode="off",
+            )
         )
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
@@ -216,7 +218,7 @@ def test_apply_canon_candidate_drops_unregistered_character_state_changes() -> N
         assert unknown_count == 0
 
 
-def test_book_state_compile_failure_rolls_back_v4_rows(monkeypatch) -> None:
+def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None:
     def fail_compile(self, approved_changes, *, compiler_run_id: str = ""):
         return BookStateCompileResult(
             project_id=approved_changes.project_id,
@@ -228,56 +230,17 @@ def test_book_state_compile_failure_rolls_back_v4_rows(monkeypatch) -> None:
 
     monkeypatch.setattr("forwin.book_state.review_gate_ext.BookStateCompiler.compile", fail_compile)
     with TemporaryDirectory() as tmp:
-        db_path = postgres_test_url("orchestrator-v4-bookstate-rollback")
-        engine = get_engine(db_path)
-        init_db(engine)
-        Session = get_session_factory(engine)
-        orchestrator = WritingOrchestrator(
-            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model", chapter_review_form_mode="off")
-        )
-        with Session.begin() as session:
-            repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
-            project, _chapter = _setup_project(session)
-            result = orchestrator._apply_canon_candidate(  # noqa: SLF001
-                session=session,
-                repo=repo,
-                updater=updater,
-                project_id=project.id,
-                chapter_number=23,
-                writer_output=WriterOutput(
-                    project_id=project.id,
-                    chapter_number=23,
-                    title="乱码呼号",
-                    body="防线修复后，通讯台传出乱码和父亲旧部呼号。",
-                    end_of_chapter_summary="收到异常通讯。",
-                ),
-                verdict=ReviewVerdict(verdict="pass", issues=[]),
-            )
-
-        with Session() as session:
-            compile_runs = session.scalar(select(func.count()).select_from(WorldCompileRunV4Row))
-            world_deltas = session.scalar(select(func.count()).select_from(WorldDeltaRow))
-            graph_deltas = session.scalar(select(func.count()).select_from(GraphDeltaRow))
-
-        assert result
-        assert compile_runs == 0
-        assert world_deltas == 0
-        assert graph_deltas == 0
-
-
-def test_book_state_direct_path_can_skip_world_v4_compat_projection() -> None:
-    with TemporaryDirectory() as tmp:
-        db_path = postgres_test_url("orchestrator-bookstate-direct-no-v4")
+        db_path = postgres_test_url("orchestrator-bookstate-rollback")
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
         orchestrator = WritingOrchestrator(
             Config(
                 database_url=db_path,
+                artifact_root=str(Path(tmp) / "artifacts"),
                 minimax_api_key="",
                 minimax_model="fake-model",
-                    chapter_review_form_mode="off",
-                world_v4_compat_write_enabled=False,
+                chapter_review_form_mode="off",
             )
         )
         with Session.begin() as session:
@@ -300,14 +263,10 @@ def test_book_state_direct_path_can_skip_world_v4_compat_projection() -> None:
             )
 
         with Session() as session:
-            compile_runs = session.scalar(select(func.count()).select_from(WorldCompileRunV4Row))
-            world_deltas = session.scalar(select(func.count()).select_from(WorldDeltaRow))
             graph_deltas = session.scalar(select(func.count()).select_from(GraphDeltaRow))
 
-        assert result is None
-        assert compile_runs == 0
-        assert world_deltas == 0
-        assert graph_deltas > 0
+        assert result
+        assert graph_deltas == 0
 
 
 def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
@@ -317,7 +276,13 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
         init_db(engine)
         Session = get_session_factory(engine)
         orchestrator = WritingOrchestrator(
-            Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model", chapter_review_form_mode="off")
+            Config(
+                database_url=db_path,
+                artifact_root=str(Path(tmp) / "artifacts"),
+                minimax_api_key="",
+                minimax_model="fake-model",
+                chapter_review_form_mode="off",
+            )
         )
         with Session.begin() as session:
             updater = StateUpdater(session)
@@ -358,5 +323,4 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
             status = session.scalar(select(ChapterPlan.status).where(ChapterPlan.id == chapter.id))
 
         assert "needs_review" in result["message"]
-        assert result["frozen_artifact"] == "book-state-review-gate-blocked"
         assert status == "needs_review"

@@ -454,12 +454,6 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         "legacy_provisional_blocking": _env_bool(
             env, "FORWIN_LEGACY_PROVISIONAL_BLOCKING", False
         ),
-        "world_v4_compat_write_enabled": tracked_bool(
-            "world_v4_compat_write_enabled", "FORWIN_WORLD_V4_COMPAT_WRITE", False
-        ),
-        "enable_world_v4_debug_api": _env_bool(
-            env, "FORWIN_ENABLE_COMPAT_DEBUG_API", False
-        ),
         "skill_runtime_enabled": _env_bool(
             env, "FORWIN_SKILL_RUNTIME_ENABLED", True
         ),
@@ -626,7 +620,6 @@ PULP_OVERRIDES: dict[str, object] = {
     "future_constraints_enabled": False,
     "generation_audit_interval_chapters": 0,
     "generation_audit_pause_enabled": False,
-    "world_v4_compat_write_enabled": False,
     "phase4_use_llm": False,
     "reviewer_quality_mode": "deterministic",
     "planning_audit_mode": "off",
@@ -743,8 +736,6 @@ class _ConfigFields:
     generation_audit_interval_chapters: int = 0
     generation_audit_pause_enabled: bool = False
     legacy_provisional_blocking: bool = False
-    world_v4_compat_write_enabled: bool = False
-    enable_world_v4_debug_api: bool = False
     skill_runtime_enabled: bool = True
     skill_registry_path: str = "forwin_skills"
     skill_strictness: str = "normal"

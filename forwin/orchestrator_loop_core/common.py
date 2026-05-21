@@ -100,9 +100,7 @@ from forwin.observability.llm_trace import (
 )
 from forwin.subworld_manager import SubWorldManager
 from forwin.protocol.writer import WriterOutput
-from forwin.world_v4_compat.compiler import WorldModelCompiler as WorldModelCompilerV4
 from forwin.writer.chapter_writer import ChapterWriter
-from forwin.world_model.compiler import WorldModelCompiler as LegacyWorldModelCompiler
 
 logger = logging.getLogger(__name__)
 

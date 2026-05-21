@@ -4,15 +4,8 @@ Architecture guard markers retained for source-based boundary tests; implementat
 lives in forwin.orchestrator_loop_core.*.
 
 from forwin.extractor.book_state_graph_delta import BookStateGraphDeltaExtractor
-from forwin.world_v4_compat.compiler import WorldModelCompiler as WorldModelCompilerV4
 BookStateDirectCommitService
 book_state_result = commit_service.compile_approved
-compiler_result = WorldModelCompilerV4(session).compile_gate_verdict
-BookState canon 已保留
-LEGACY_PROJECTION_FAILED
-LegacyWorldModelCompiler
-legacy_projection
-BookState canon 不回滚
 """
 from __future__ import annotations
 

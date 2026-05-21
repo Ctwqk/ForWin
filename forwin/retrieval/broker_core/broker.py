@@ -14,11 +14,6 @@ from forwin.llm_kb.store import LLMKnowledgeBaseStore
 from forwin.models.world_model import WorldModelConflictRow, WorldModelPageRow
 from forwin.models.world_v4 import (
     ArcWorldContractRow,
-    BeliefRow,
-    KnowledgeGapRow,
-    ReaderExperienceDeltaRow,
-    WorldDeltaRow,
-    WorldLineRow,
 )
 from forwin.planning.world_contracts import (
     ArcWorldContract,
@@ -94,7 +89,6 @@ class RetrievalBroker:
         llm_kb_qdrant_collection: str | None = None,
         llm_kb_qdrant_client: object | None = None,
         llm_kb_qdrant_models: object | None = None,
-        include_world_v4_compat: bool = False,
     ) -> None:
         self.context_budget_chars = context_budget_chars
         self.max_entities = max_entities
@@ -112,7 +106,6 @@ class RetrievalBroker:
         self.llm_kb_qdrant_collection = llm_kb_qdrant_collection
         self.llm_kb_qdrant_client = llm_kb_qdrant_client
         self.llm_kb_qdrant_models = llm_kb_qdrant_models
-        self.include_world_v4_compat = bool(include_world_v4_compat)
         self.last_observability_summary: dict[str, object] = {}
 
     def build_chapter_context(self, repo, project_id: str, chapter_plan) -> ChapterContextPack:
@@ -263,82 +256,11 @@ class RetrievalBroker:
         if session is None:
             raise TypeError("repo must expose a SQLAlchemy session")
 
-        if self.include_world_v4_compat:
-            lines = list(
-                session.execute(
-                    select(WorldLineRow)
-                    .where(WorldLineRow.project_id == project_id)
-                    .order_by(WorldLineRow.created_at.asc(), WorldLineRow.id.asc())
-                )
-                .scalars()
-                .all()
-            )
-            deltas = list(
-                session.execute(
-                    select(WorldDeltaRow)
-                    .where(
-                        WorldDeltaRow.project_id == project_id,
-                        WorldDeltaRow.narrative_chapter <= chapter_number,
-                    )
-                    .order_by(
-                        WorldDeltaRow.narrative_chapter.desc(),
-                        WorldDeltaRow.created_at.desc(),
-                        WorldDeltaRow.id.desc(),
-                    )
-                    .limit(12)
-                )
-                .scalars()
-                .all()
-            )
-            gaps = list(
-                session.execute(
-                    select(KnowledgeGapRow)
-                    .where(
-                        KnowledgeGapRow.project_id == project_id,
-                        KnowledgeGapRow.status.in_(("open", "hinted", "partially_closed")),
-                    )
-                    .order_by(KnowledgeGapRow.created_at.asc(), KnowledgeGapRow.id.asc())
-                )
-                .scalars()
-                .all()
-            )
-            reader_experience = list(
-                session.execute(
-                    select(ReaderExperienceDeltaRow)
-                    .where(
-                        ReaderExperienceDeltaRow.project_id == project_id,
-                        ReaderExperienceDeltaRow.chapter_number <= chapter_number,
-                    )
-                    .order_by(
-                        ReaderExperienceDeltaRow.chapter_number.desc(),
-                        ReaderExperienceDeltaRow.created_at.desc(),
-                        ReaderExperienceDeltaRow.id.desc(),
-                    )
-                    .limit(8)
-                )
-                .scalars()
-                .all()
-            )
-            beliefs = list(
-                session.execute(
-                    select(BeliefRow)
-                    .where(BeliefRow.project_id == project_id)
-                    .order_by(
-                        BeliefRow.last_updated_at_chapter.desc(),
-                        BeliefRow.created_at.desc(),
-                        BeliefRow.id.desc(),
-                    )
-                    .limit(24)
-                )
-                .scalars()
-                .all()
-            )
-        else:
-            lines = []
-            deltas = []
-            gaps = []
-            reader_experience = []
-            beliefs = []
+        lines = []
+        deltas = []
+        gaps = []
+        reader_experience = []
+        beliefs = []
 
         visible_lines = [
             line.world_line_id
@@ -420,13 +342,13 @@ class RetrievalBroker:
             planned_reveal_ladder=reveal_ladder,
             reader_cognition_state=reader_state,
             character_cognition_states=character_states,
-            observer_visibility_states=self._observer_visibility_from_gaps(gaps),
+            observer_visibility_states={},
             promise_debts=promise_debts,
             recent_reader_experience_deltas=recent_reader_exp,
             must_not_reveal=list(chapter_intent.must_not_reveal)
             if isinstance(chapter_intent, ChapterWorldDeltaIntent)
             else [],
-            fair_misdirection_requirements=self._fairness_requirements_from_gaps(gaps),
+            fair_misdirection_requirements=[],
             accepted_delta_ids=[
                 delta.delta_id for delta in deltas if bool(delta.allowed_for_canon)
             ],
@@ -435,9 +357,7 @@ class RetrievalBroker:
             ],
             metadata={
                 "hidden_truth_included": include_hidden_truth,
-                "world_v4_compatibility_source": (
-                    "enabled" if self.include_world_v4_compat else "disabled"
-                ),
+                "retrieval_source": "book_state",
             },
         )
         return self._augment_v46_context(
@@ -887,36 +807,6 @@ class RetrievalBroker:
                 continue
             steps.extend(contract.reveal_ladder)
         return steps
-
-    @staticmethod
-    def _observer_visibility_from_gaps(gaps: list[KnowledgeGapRow]) -> dict[str, str]:
-        states: dict[str, str] = {}
-        for gap in gaps:
-            try:
-                payload = json.loads(gap.observer_states_json or "{}")
-            except (TypeError, ValueError, json.JSONDecodeError):
-                continue
-            if not isinstance(payload, dict):
-                continue
-            for observer_id, state in payload.items():
-                if isinstance(state, dict):
-                    visibility = str(state.get("visibility", "") or "")
-                    if visibility:
-                        states[f"{gap.gap_id}:{observer_id}"] = visibility
-        return states
-
-    @staticmethod
-    def _fairness_requirements_from_gaps(gaps: list[KnowledgeGapRow]) -> list[str]:
-        requirements: list[str] = []
-        for gap in gaps:
-            try:
-                payload = json.loads(gap.fairness_requirements_json or "[]")
-            except (TypeError, ValueError, json.JSONDecodeError):
-                continue
-            if isinstance(payload, list):
-                requirements.extend(str(item) for item in payload if str(item).strip())
-        return requirements
-
 
 __all__ = [
     'RetrievalBroker',

@@ -73,7 +73,6 @@ def test_pulp_profile_derives_low_cost_defaults(
     assert config.future_constraints_enabled is False
     assert config.generation_audit_interval_chapters == 0
     assert config.generation_audit_pause_enabled is False
-    assert config.world_v4_compat_write_enabled is False
     assert config.phase4_use_llm is False
     assert config.reviewer_quality_mode == "deterministic"
     assert config.planning_audit_mode == "off"

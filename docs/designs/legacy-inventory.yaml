@@ -252,41 +252,55 @@ entries:
     status: planned
 
   - id: projection.world_v4_compat
-    category: runtime_delete
+    category: deleted
     owner_area: world_projection
     paths:
-      - forwin/orchestrator/loop.py
-      - forwin/orchestrator_loop_core/common.py
-      - forwin/orchestrator_loop_core/finalization.py
-      - forwin/orchestrator_loop_core/world_projection.py
-      - forwin/world_model
       - forwin/world_model_v4
+      - forwin/world_v4_compat
+      - forwin/api_world_model_v4_routes.py
     allow_patterns:
       - LegacyWorldModelCompiler
       - legacy_projection
       - LEGACY_PROJECTION_FAILED
       - projection.legacy_world_model_projection
-      - legacy_severity
-      - Legacy project scaffold
-      - legacy WorldModel projection
+      - Legacy world_model_v4
+      - legacy world_model_v4
+    reason: BookState is canon; world v4 and legacy world model projection writes must end.
+    removal_phase: complete
+    verification:
+      - unit
+      - inventory_audit
+      - sixty_chapter_runtime_audit
+    delete_when:
+      - deleted projection modules have no runtime matches
+      - BookState direct commit tests pass without v4 projection writes
+    status: deleted
+
+  - id: projection.world_model_current_helpers
+    category: rename_only
+    owner_area: world_projection
+    paths:
+      - forwin/world_model
+    allow_patterns:
+      - LEGACY world model projection/export layer
+      - LEGACY projection / wiki / export layer
+      - legacy projection views
       - legacy_entity_id
       - legacy_compatibility
       - legacy_identifier
       - legacy_nested
-      - Legacy world_model_v4
-      - public legacy import path
       - legacy path
-      - legacy world_model_v4
-      - LEGACY world model projection
-    reason: BookState is canon; world v4 and legacy world model projection writes must end.
-    removal_phase: phase_3
+      - legacy APIs
+      - Legacy APIs
+      - Legacy project scaffold
+    reason: Current World Studio/API pages, Obsidian import/export, retrieval helpers, and Genesis bootstrap still use this package; Phase 3 removes accepted-chapter projection writes but does not rename or delete these helpers.
+    removal_phase: phase_7
     verification:
-      - unit
-      - db_migration
-      - sixty_chapter_runtime_audit
+      - world_model_current_path_tests
+      - inventory_audit
     delete_when:
-      - 60 chapter flag-off pilot emits zero projection legacy events
-      - BookState direct commit tests pass without v4 projection writes
+      - current callers are migrated to BookState or renamed non-legacy modules
+      - old table import/export behavior has an explicit external-compat owner
     status: planned
 
   - id: review_engine.legacy_telemetry_names
@@ -294,6 +308,7 @@ entries:
     owner_area: review_engine
     paths:
       - forwin/orchestrator_loop_core/governance.py
+      - forwin/orchestrator_loop_core/common.py
       - forwin/orchestrator_loop_core/quality_gates.py
       - forwin/orchestrator_loop_core/repair_loop.py
       - forwin/review_engine/audit.py
@@ -306,6 +321,7 @@ entries:
       - legacy_safety_net_chapters
       - legacy_action
       - legacy_decision
+      - legacy_severity
       - legacy_final_acceptance_gate
       - _ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION
     reason: Review engine cutover safety net is gone or going away; remaining names should not teach new code to use legacy concepts.
@@ -348,6 +364,7 @@ entries:
       - summarize_legacy_compatibility_audit
       - collect_legacy_compatibility_static_counts
       - _record_legacy_compatibility_event
+      - legacy_compatibility
       - legacy_compat_observer
       - legacy_identifier
       - legacy_entity_id

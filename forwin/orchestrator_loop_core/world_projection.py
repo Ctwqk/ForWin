@@ -321,66 +321,6 @@ def _apply_world_v4_gate(
         )
         return frozen_path or "book-state-compile-blocked"
 
-    if self.config.world_v4_compat_write_enabled and gate_verdict is not None:
-        record_compat = getattr(self, "_record_legacy_compatibility_event", None)
-        if callable(record_compat):
-            record_compat(
-                updater=updater,
-                project_id=project_id,
-                chapter_number=chapter_number,
-                compat_layer="projection",
-                compat_feature="projection.legacy_world_model_projection",
-                usage_kind="projection_compat",
-                source_module="forwin.orchestrator_loop_core.world_projection",
-                usage_reason="world_v4 compatibility projection path invoked",
-                related_stage="legacy_projection",
-            )
-        legacy_nested = session.begin_nested()
-        try:
-            compiler_result = WorldModelCompilerV4(session).compile_gate_verdict(
-                project_id=project_id,
-                chapter_number=chapter_number,
-                verdict=gate_verdict,
-                compiler_run_id=f"compile_{project_id}_{chapter_number}",
-                retrieval_pack_payload=retrieval_pack_payload,
-            )
-            if compiler_result.committed:
-                legacy_nested.commit()
-            else:
-                legacy_nested.rollback()
-                self._record_decision_event(
-                    updater=updater,
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    event_family="runtime_observation",
-                    event_type=DecisionEventType.LEGACY_PROJECTION_FAILED,
-                    scope="chapter",
-                    summary=f"第{chapter_number}章 world_model_v4 compatibility projection 未提交，BookState canon 已保留。",
-                    payload=audit_payload(
-                        stage="legacy_projection",
-                        status="failed",
-                        operation_id=self._audit_operation_id(),
-                        result=compiler_result.model_dump(mode="json"),
-                    ),
-                )
-        except Exception as exc:
-            legacy_nested.rollback()
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                chapter_number=chapter_number,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.LEGACY_PROJECTION_FAILED,
-                scope="chapter",
-                summary=f"第{chapter_number}章 world_model_v4 compatibility projection 失败，BookState canon 已保留。",
-                reason=str(exc),
-                payload=event_error_payload(
-                    exc,
-                    stage="legacy_projection",
-                    operation_id=self._audit_operation_id(),
-                ),
-            )
-
     projection_refresh = KnowledgeProjectionRefresher(
         session,
         qdrant_url=self.config.qdrant_url,

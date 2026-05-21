@@ -58,11 +58,11 @@ def test_legacy_compatibility_summary_assesses_usage_after_collection() -> None:
             },
             {
                 "payload": build_legacy_compatibility_payload(
-                    compat_layer="projection",
-                    compat_feature="projection.legacy_world_model_projection",
-                    usage_kind="projection_compat",
-                    source_module="forwin.orchestrator_loop_core.world_projection",
-                    usage_reason="projection compatibility path invoked",
+                    compat_layer="project",
+                    compat_feature="project.creation_status_legacy",
+                    usage_kind="project_lifecycle_fallback",
+                    source_module="forwin.project_payloads.project_summary",
+                    usage_reason="legacy project lifecycle fallback invoked",
                 )
             },
         ],
@@ -303,9 +303,9 @@ def test_legacy_compatibility_summary_includes_per_feature_detail() -> None:
             "chapter_number": 3,
             "payload": build_legacy_compatibility_payload(
                 compat_layer="subworld",
-                compat_feature="projection.legacy_world_model_projection",
+                compat_feature="compat.synthetic_projection",
                 usage_kind="write_bridge",
-                source_module="forwin.world_v4_compat.projector",
+                source_module="forwin.synthetic.projector",
                 usage_reason="world model projection compatibility",
                 legacy_identifier="legacy-a",
                 canonical_identifier="char-a",
@@ -315,9 +315,9 @@ def test_legacy_compatibility_summary_includes_per_feature_detail() -> None:
             "chapter_number": 5,
             "payload": build_legacy_compatibility_payload(
                 compat_layer="subworld",
-                compat_feature="projection.legacy_world_model_projection",
+                compat_feature="compat.synthetic_projection",
                 usage_kind="write_bridge",
-                source_module="forwin.world_v4_compat.projector",
+                source_module="forwin.synthetic.projector",
                 usage_reason="world model projection compatibility",
                 legacy_identifier="legacy-a",
                 canonical_identifier="char-a",
@@ -328,16 +328,16 @@ def test_legacy_compatibility_summary_includes_per_feature_detail() -> None:
     summary = summarize_legacy_compatibility_audit(
         rows,
         registry={
-            "projection.legacy_world_model_projection": {
+            "compat.synthetic_projection": {
                 "compat_layer": "projection",
                 "removal_mode": "candidate_if_unused",
                 "instrumentation_status": "instrumented",
             }
         },
-        static_counts={"projection.legacy_world_model_projection": 1},
+        static_counts={"compat.synthetic_projection": 1},
     )
 
-    detail = summary["per_feature_detail"]["projection.legacy_world_model_projection"]
+    detail = summary["per_feature_detail"]["compat.synthetic_projection"]
     assert detail["events"] == 2
     assert detail["unique_chapters"] == 2
     assert detail["project_scope_events"] == 0
@@ -351,9 +351,9 @@ def test_legacy_compatibility_summary_marks_project_scope_events() -> None:
             "chapter_number": 0,
             "payload": build_legacy_compatibility_payload(
                 compat_layer="subworld",
-                compat_feature="projection.legacy_world_model_projection",
+                compat_feature="compat.synthetic_projection",
                 usage_kind="write_bridge",
-                source_module="forwin.world_v4_compat.projector",
+                source_module="forwin.synthetic.projector",
                 usage_reason="project-level projection bridge",
                 legacy_identifier="legacy-a",
                 canonical_identifier="char-a",
@@ -362,9 +362,9 @@ def test_legacy_compatibility_summary_marks_project_scope_events() -> None:
         {
             "payload": build_legacy_compatibility_payload(
                 compat_layer="subworld",
-                compat_feature="projection.legacy_world_model_projection",
+                compat_feature="compat.synthetic_projection",
                 usage_kind="write_bridge",
-                source_module="forwin.world_v4_compat.projector",
+                source_module="forwin.synthetic.projector",
                 usage_reason="project-level projection bridge",
                 legacy_identifier="legacy-b",
                 canonical_identifier="char-b",
@@ -375,16 +375,16 @@ def test_legacy_compatibility_summary_marks_project_scope_events() -> None:
     summary = summarize_legacy_compatibility_audit(
         rows,
         registry={
-            "projection.legacy_world_model_projection": {
+            "compat.synthetic_projection": {
                 "compat_layer": "projection",
                 "removal_mode": "candidate_if_unused",
                 "instrumentation_status": "instrumented",
             }
         },
-        static_counts={"projection.legacy_world_model_projection": 1},
+        static_counts={"compat.synthetic_projection": 1},
     )
 
-    detail = summary["per_feature_detail"]["projection.legacy_world_model_projection"]
+    detail = summary["per_feature_detail"]["compat.synthetic_projection"]
     assert detail["events"] == 2
     assert detail["unique_chapters"] == 0
     assert detail["project_scope_events"] == 2

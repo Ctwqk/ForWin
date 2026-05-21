@@ -13,6 +13,10 @@ from forwin.generation.task_lease import (
     generation_task_resume_from_chapter,
     heartbeat_generation_task,
 )
+from forwin.generation.task_payload import (
+    build_worker_config_from_payload,
+    payload_from_json,
+)
 from forwin.models.task import GenerationTask
 
 
@@ -107,11 +111,17 @@ def _default_continue_executor(
     from forwin.api_runtime import run_continue_project_with_config
 
     def _execute(task: GenerationTask, resume_from_chapter: int) -> None:
+        payload = payload_from_json(getattr(task, "execution_payload_json", "{}"))
+        worker_config = build_worker_config_from_payload(
+            config,
+            payload,
+            task_id=task.id,
+        )
         update_task = _db_task_updater(session_factory)
         run_continue_project_with_config(
             task.id,
             str(task.project_id or ""),
-            config,
+            worker_config,
             update_task,
             logger,
             should_abort=_db_task_flag(session_factory, task.id, "cancel_requested"),
@@ -141,15 +151,23 @@ def _default_new_executor(
 
     def _execute(task: GenerationTask, resume_from_chapter: int) -> None:
         _ = resume_from_chapter
+        payload = payload_from_json(getattr(task, "execution_payload_json", "{}"))
+        worker_config = build_worker_config_from_payload(
+            config,
+            payload,
+            task_id=task.id,
+        )
         update_task = _db_task_updater(session_factory)
         run_generation_with_config(
             task.id,
-            str(task.message or ""),
-            "",
-            int(task.requested_chapters or 0),
-            config,
+            payload.premise,
+            payload.genre,
+            int(payload.num_chapters or task.requested_chapters or 0),
+            worker_config,
             update_task,
             logger,
+            should_abort=_db_task_flag(session_factory, task.id, "cancel_requested"),
+            should_pause=_db_task_flag(session_factory, task.id, "pause_requested"),
         )
         with session_factory.begin() as session:
             heartbeat_generation_task(

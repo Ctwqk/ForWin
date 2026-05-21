@@ -260,3 +260,47 @@ def test_default_continue_executor_passes_resume_to_runtime(monkeypatch) -> None
         assert calls[0]["resume_from_chapter"] == 3
     finally:
         engine.dispose()
+
+
+def test_worker_uses_initial_payload_for_new_generation(monkeypatch) -> None:
+    engine = get_engine(postgres_test_url("generation-worker-initial-payload"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    calls: list[tuple[object, ...]] = []
+    try:
+        with Session.begin() as session:
+            session.add(
+                GenerationTask(
+                    id="task-initial-payload",
+                    task_kind="generation",
+                    status="queued",
+                    project_id="",
+                    requested_chapters=2,
+                    execution_payload_json=(
+                        '{"mode":"initial","premise":"县城开局","genre":"都市",'
+                        '"num_chapters":2,"runtime_overrides":{"quality_profile":"pulp"}}'
+                    ),
+                )
+            )
+
+        def fake_run_generation_with_config(*args, **kwargs):
+            calls.append(args)
+
+        monkeypatch.setattr(
+            "forwin.api_runtime.run_generation_with_config",
+            fake_run_generation_with_config,
+        )
+
+        result = run_one_generation_task(
+            session_factory=Session,
+            worker_id="worker-initial",
+            config=Config(minimax_api_key="sk-test"),
+        )
+
+        assert result.claimed is True
+        assert calls
+        assert calls[0][1] == "县城开局"
+        assert calls[0][2] == "都市"
+        assert calls[0][3] == 2
+    finally:
+        engine.dispose()

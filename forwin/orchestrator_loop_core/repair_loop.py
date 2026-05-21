@@ -126,6 +126,8 @@ def _review_and_maybe_rewrite(
         return current_output, current_review, False
 
     while True:
+        if self._pause_requested():
+            return current_output, current_review, False
         existing_attempts = repo.list_chapter_rewrite_attempts(project_id, chapter_plan.chapter_number)
         repair_v2_input = DecisionInput(
             project_id=project_id,

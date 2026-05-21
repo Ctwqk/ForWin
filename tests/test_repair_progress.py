@@ -121,6 +121,16 @@ def test_review_repair_loop_emits_distinct_progress_stages() -> None:
     assert 'stage="repair_review"' in source
 
 
+def test_repair_loop_checks_pause_between_retry_attempts() -> None:
+    source = inspect.getsource(WritingOrchestrator._review_and_maybe_rewrite)
+    retry_loop = source.split("while True:", 1)[1]
+    pause_check = retry_loop.find("self._pause_requested()")
+    attempt_load = retry_loop.find("repo.list_chapter_rewrite_attempts")
+
+    assert pause_check != -1
+    assert pause_check < attempt_load
+
+
 def test_repair_must_fix_is_carried_into_writer_rule_anchors() -> None:
     payload = WritingOrchestrator._chapter_experience_patch_payload(
         ChapterExperiencePlan(rule_anchors=["保留既有规则"]),

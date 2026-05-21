@@ -1096,8 +1096,8 @@ class ChapterWriter:
             kwargs["task_family"] = task_family
         if "stage_key" in parameters:
             kwargs["stage_key"] = stage_key
-        if "output_schema" in parameters and response_format is not None:
-            kwargs["output_schema"] = output_schema or {"type": "object"}
+        if "output_schema" in parameters and output_schema is not None:
+            kwargs["output_schema"] = output_schema
         if route_override:
             preferred_provider_kind = route_override.get("preferred_provider_kind", "")
             preferred_model = route_override.get("preferred_model", "")

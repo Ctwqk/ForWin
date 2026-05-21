@@ -265,9 +265,6 @@ def _source_from_frontmatter(page_key: str, frontmatter: dict[str, Any]) -> tupl
     node_id = str(frontmatter.get("node_id") or "").strip()
     if node_id:
         return "book_state_node", node_id, 30000
-    legacy_entity_id = str(frontmatter.get("legacy_entity_id") or "").strip()
-    if legacy_entity_id:
-        return "legacy_entity", legacy_entity_id, 20000
     forwin_id = str(frontmatter.get("forwin_id") or page_key or "").strip()
     if ":genesis:" in forwin_id or forwin_id.startswith("genesis:"):
         return "genesis", forwin_id, 10000

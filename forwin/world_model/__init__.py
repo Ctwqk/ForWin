@@ -1,4 +1,4 @@
-"""LEGACY world model projection/export layer; not a new canon source."""
+"""Deprecated world model projection/export facade; BookState is canon."""
 
 from __future__ import annotations
 

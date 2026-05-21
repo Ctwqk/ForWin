@@ -38,7 +38,7 @@ def _read(rel_path: str) -> str:
 def test_core_packages_declare_current_architecture_roles() -> None:
     expectations = {
         "forwin/book_state/README.md": "Status: CANON runtime.",
-        "forwin/world_model/README.md": "Status: LEGACY projection / wiki / export layer.",
+        "forwin/world_model/README.md": "Status: deprecated projection / wiki / export facade.",
         "forwin/reviewer/README.md": "Status: MAIN REVIEW facade.",
         "forwin/reviewer_v4/README.md": "Status: COMPATIBILITY gate.",
         "forwin/map/README.md": "Status: CANON map runtime.",
@@ -47,7 +47,7 @@ def test_core_packages_declare_current_architecture_roles() -> None:
         assert marker in _read(rel_path)
 
     assert "CANON BookState runtime" in inspect.getdoc(book_state)
-    assert "LEGACY world model projection" in inspect.getdoc(world_model)
+    assert "Deprecated world model projection/export facade" in inspect.getdoc(world_model)
     assert "MAIN chapter review facade" in inspect.getdoc(reviewer)
     assert "COMPATIBILITY world_v4 extraction review gate" in inspect.getdoc(reviewer_v4)
     assert "CANON Scheme C BookMap runtime" in inspect.getdoc(book_map)

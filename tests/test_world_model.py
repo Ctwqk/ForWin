@@ -35,6 +35,7 @@ from forwin.state.updater import StateUpdater
 from forwin.world_model.compiler import WorldModelCompiler
 from forwin.world_model.exporter_obsidian import ObsidianWorldExporter
 from forwin.world_model.importer_obsidian import ObsidianWorldImporter
+from forwin.world_model.page_repository import WorldModelPageRepository
 from forwin.world_model.retriever import WorldModelRetriever
 from forwin.obsidian.importer import ObsidianImporter
 from forwin.config import Config
@@ -67,6 +68,18 @@ class WorldModelTests(unittest.TestCase):
             default_base_url="http://default.invalid",
             default_model="default-model",
         )
+
+    def test_page_identity_ignores_removed_legacy_entity_frontmatter(self) -> None:
+        identity = WorldModelPageRepository.identity_for_values(
+            page_type="character",
+            title="韩砚",
+            page_key="character/han-yan",
+            frontmatter={"legacy_entity_id": "entity-old", "forwin_id": "character-current"},
+            as_of_chapter=3,
+        )
+
+        self.assertEqual(identity.canonical_source_type, "world_model_page")
+        self.assertEqual(identity.canonical_source_id, "character-current")
 
     def tearDown(self) -> None:
         api_module._SessionFactory = self.old_session_factory

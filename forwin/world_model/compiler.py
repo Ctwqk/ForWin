@@ -320,7 +320,7 @@ class WorldModelCompiler:
                     source_type="project",
                     source_id=project.id,
                     chapter_number=0,
-                    summary="Legacy project scaffold without Genesis revision.",
+                    summary="Project scaffold without Genesis revision.",
                 ).model_dump(mode="json")
             ]
         source_refs.extend(

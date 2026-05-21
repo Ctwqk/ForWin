@@ -299,6 +299,24 @@ entries:
       - 60 chapter audit reports legacy_compat.total_events == 0
     status: planned
 
+  - id: legacy_inventory.audit_gate_terms
+    category: test_doc_followup
+    owner_area: architecture
+    paths:
+      - scripts/audit_legacy_inventory.py
+    allow_patterns:
+      - legacy
+      - Legacy
+      - LEGACY
+    reason: Inventory gate implementation necessarily names legacy references while enforcing the freeze.
+    removal_phase: keep
+    verification:
+      - inventory_check
+      - audit_script_tests
+    delete_when:
+      - never, unless the inventory gate is renamed or replaced
+    status: retained
+
   - id: external.legacy_migration_scripts
     category: external_compat_delete
     owner_area: migration_tools
@@ -558,10 +576,10 @@ entries:
       - forwin/reviewer/repair_scope_router.py
       - forwin/canon_quality/rule_profile.py
     allow_patterns:
-      - ChapterRepairCoordinator
-      - RepairLoopDetector
-      - route_review_repair_scopes
-      - use_legacy_fallback
+      - class ChapterRepairCoordinator
+      - class RepairLoopDetector
+      - def route_review_repair_scopes
+      - use_legacy_fallback=
     reason: Dead repair paths were already removed; this entry prevents reintroduction.
     removal_phase: complete
     verification:

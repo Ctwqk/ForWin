@@ -123,12 +123,13 @@ def test_engine_uses_repair_v2_when_enabled() -> None:
     assert decision.outcome == "arc_patch"
 
 
-def test_engine_keeps_legacy_repair_when_repair_v2_disabled() -> None:
+def test_scope_driven_repair_rules_always_use_repair_v2_after_safety_net_removal() -> None:
     engine = AutoDecisionEngine(
         build_scope_driven_repair_rules(repair_v2_enabled=False)
     )
 
     decision = engine.decide(_input_with_issue("identity_ambiguity"))
 
-    assert decision.rule_id == "legacy_repair_policy"
-    assert decision.outcome == "local_repair"
+    assert decision.rule_id == "repair_v2_scope_driven"
+    assert decision.outcome == "arc_patch"
+    assert decision.routed_from == "RepairPolicy.v2"

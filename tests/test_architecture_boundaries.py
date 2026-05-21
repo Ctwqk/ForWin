@@ -253,3 +253,39 @@ def test_removed_repair_dead_code_stays_removed() -> None:
     signature = inspect.signature(rule_profile.countdown_profiles_from_quality_context)
     assert "use_legacy_fallback" not in signature.parameters
     assert "use_legacy_fallback" not in _read("forwin/canon_quality/rule_profile.py")
+
+
+def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
+    forbidden_runtime_tokens = {
+        "ReviewOutcomeRouter": [
+            "forwin/orchestrator_loop_core/common.py",
+            "forwin/orchestrator_loop_core/quality_gates.py",
+        ],
+        "RepairPolicy": [
+            "forwin/runtime/container.py",
+            "forwin/runtime/services.py",
+            "forwin/orchestrator_loop_core/service.py",
+            "forwin/orchestrator_loop_core/repair_loop.py",
+            "forwin/review_engine/rules/repair.py",
+        ],
+        "ObligationScopeRouter": [
+            "forwin/orchestrator_loop_core/quality_gates.py",
+            "forwin/review_engine/rules/obligation_scope.py",
+        ],
+        "select_cutover_pair": [
+            "forwin/orchestrator_loop_core/quality_gates.py",
+        ],
+        "engine_live_enabled": [
+            "forwin/orchestrator_loop_core/repair_loop.py",
+        ],
+    }
+    offenders: list[tuple[str, str]] = []
+    for token, rel_paths in forbidden_runtime_tokens.items():
+        for rel_path in rel_paths:
+            if token in _read(rel_path):
+                offenders.append((rel_path, token))
+
+    assert offenders == []
+    assert "FinalAcceptanceGate" not in _read("forwin/runtime/container.py")
+    assert "FinalAcceptanceGate" not in _read("forwin/orchestrator_loop_core/repair_loop.py")
+    assert "FinalAcceptanceGate" in _read("forwin/review_engine/rules/final_acceptance.py")

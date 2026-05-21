@@ -177,6 +177,7 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
         _upgrade_generation_task_leases(conn)
         _upgrade_trope_usage_records(conn)
         _upgrade_project_target_total_default(conn)
+        _upgrade_arc_macro_progression(conn)
         conn.execute(
             text(
                 """
@@ -628,6 +629,15 @@ def _upgrade_trope_usage_records(conn) -> None:
 def _upgrade_project_target_total_default(conn) -> None:
     conn.execute(
         text("ALTER TABLE projects ALTER COLUMN target_total_chapters SET DEFAULT 50")
+    )
+
+
+def _upgrade_arc_macro_progression(conn) -> None:
+    conn.execute(
+        text(
+            "ALTER TABLE arc_plan_versions "
+            "ADD COLUMN IF NOT EXISTS macro_progression_json TEXT NOT NULL DEFAULT '{}'"
+        )
     )
 
 

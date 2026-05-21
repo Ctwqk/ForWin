@@ -53,6 +53,32 @@ def _clean_token(text: str) -> str:
     return "".join(ch for ch in str(text or "").strip() if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
 
 
+def _metadata_character_ids(metadata: dict | None) -> list[str]:
+    if not isinstance(metadata, dict):
+        return []
+    values = [
+        metadata.get("character_id"),
+        metadata.get("book_state_node_id"),
+    ]
+    identity = metadata.get("character_identity")
+    if isinstance(identity, dict):
+        values.extend(
+            [
+                identity.get("canonical_character_id"),
+                identity.get("book_state_node_id"),
+            ]
+        )
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
+
+
 @dataclass(slots=True)
 class BandActivationPlan:
     active_subworld_ids: list[str]
@@ -683,6 +709,9 @@ class SubWorldManager:
             entity_key = str(item.entity_id or "").strip()
             if entity_key:
                 mapping[(item.subworld_id, "entity", entity_key)] = item.id
+            metadata = _load_json(item.metadata_json, {})
+            for character_id in _metadata_character_ids(metadata):
+                mapping[(item.subworld_id, "character", character_id)] = item.id
             slot_key = str(item.slot_key or "").strip()
             if slot_key:
                 mapping[(item.subworld_id, "slot", slot_key)] = item.id
@@ -705,12 +734,15 @@ class SubWorldManager:
         activation_chapter: int,
         metadata: dict | None = None,
     ) -> None:
-        key = (
-            (subworld_id, "entity", entity_id)
-            if str(entity_id or "").strip()
-            else (subworld_id, "slot", str(slot_key or "").strip())
-        )
-        existing_id = roster_lookup.get(key)
+        lookup_keys: list[tuple[str, str, str]] = [
+            (subworld_id, "character", character_id)
+            for character_id in _metadata_character_ids(metadata)
+        ]
+        if str(entity_id or "").strip():
+            lookup_keys.append((subworld_id, "entity", str(entity_id or "").strip()))
+        if str(slot_key or "").strip():
+            lookup_keys.append((subworld_id, "slot", str(slot_key or "").strip()))
+        existing_id = next((roster_lookup[key] for key in lookup_keys if key in roster_lookup), None)
         if existing_id:
             row = session.get(SubWorldRosterItem, existing_id)
             if row is not None:
@@ -733,6 +765,8 @@ class SubWorldManager:
                     current_metadata.update(metadata)
                     row.metadata_json = json.dumps(current_metadata, ensure_ascii=False)
                 session.add(row)
+                for lookup_key in lookup_keys:
+                    roster_lookup[lookup_key] = row.id
             return
         row = SubWorldRosterItem(
             id=new_id(),
@@ -751,10 +785,8 @@ class SubWorldManager:
         )
         session.add(row)
         session.flush()
-        if entity_id:
-            roster_lookup[(subworld_id, "entity", entity_id)] = row.id
-        elif slot_key:
-            roster_lookup[(subworld_id, "slot", slot_key)] = row.id
+        for lookup_key in lookup_keys:
+            roster_lookup[lookup_key] = row.id
 
     def fallback_slot_name(self, *, project_id: str, subworld_id: str, slot_key: str, role_hint: str) -> str:
         payload = f"{project_id}:{subworld_id}:{slot_key}:{role_hint}".encode("utf-8")

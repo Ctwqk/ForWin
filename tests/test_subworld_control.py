@@ -2182,6 +2182,79 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertNotIn("legacy_entity_id", node.metadata)
         self.assertEqual(node.profile["personality_loadout"]["dominant"]["skill"], "trait-loyal-protector")
 
+    def test_roster_materialization_prefers_canonical_metadata_over_entity_lookup(self) -> None:
+        engine = get_engine(postgres_test_url("planned-slot-canonical-metadata"))
+        init_db(engine)
+        session = get_session_factory(engine)()
+        try:
+            updater = StateUpdater(session)
+            project = updater.create_project(title="书", premise="p", genre="g")
+            subworld = updater.create_subworld(
+                project_id=project.id,
+                origin_arc_id=None,
+                parent_subworld_id=None,
+                name="江城",
+                purpose="本地线",
+                scope="arc_local",
+            )
+            BookStateRepository(session).create_world_node(
+                WorldNode(
+                    id="char_canonical_zhou",
+                    project_id=project.id,
+                    node_type="character",
+                    name="周怀瑾",
+                    aliases=[],
+                    description="负责联络内城。",
+                    profile={
+                        "personality_loadout": {
+                            "dominant": {"skill": "trait-loyal-protector", "weight": 0.9},
+                            "secondary": [],
+                            "social_mask": [],
+                            "stress_modes": [],
+                            "relationship_patterns": [],
+                            "overrides": {},
+                        }
+                    },
+                    metadata={
+                        "character_identity": {
+                            "canonical_character_id": "char_canonical_zhou",
+                            "book_state_node_id": "char_canonical_zhou",
+                        }
+                    },
+                )
+            )
+            roster = updater.create_roster_item(
+                project_id=project.id,
+                subworld_id=subworld.id,
+                entity_id=None,
+                display_name="周执事",
+                role_hint="联络人",
+                description="负责联络内城。",
+                is_core=True,
+                status="planned_slot",
+                metadata={
+                    "character_id": "char_canonical_zhou",
+                    "book_state_node_id": "char_canonical_zhou",
+                    "canon_source": "book_state",
+                },
+            )
+
+            result = updater.materialize_roster_item(roster_item_id=roster.id, chapter=3)
+            session.flush()
+            session.refresh(roster)
+            nodes = BookStateRepository(session).list_world_nodes(project.id)
+        finally:
+            session.close()
+            engine.dispose()
+
+        self.assertFalse(result.created)
+        self.assertTrue(result.merged_existing)
+        self.assertEqual(result.character_id, "char_canonical_zhou")
+        self.assertEqual(result.character_name, "周怀瑾")
+        self.assertEqual([node.id for node in nodes if node.node_type == "character"], ["char_canonical_zhou"])
+        self.assertIsNone(roster.entity_id)
+        self.assertEqual(roster.display_name, "周怀瑾")
+
     def test_subworld_core_named_character_uses_character_creation_helper(self) -> None:
         engine = get_engine(postgres_test_url("subworld-core-personality"))
         init_db(engine)
@@ -2228,6 +2301,73 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual(node.name, "沈临川")
         self.assertEqual(node.profile["personality_loadout"]["dominant"]["skill"], "trait-loyal-protector")
         self.assertEqual(roster_metadata.get("character_id"), node.id)
+
+    def test_subworld_core_named_character_roster_dedupes_by_canonical_metadata(self) -> None:
+        engine = get_engine(postgres_test_url("subworld-core-roster-canonical-dedupe"))
+        init_db(engine)
+        session = get_session_factory(engine)()
+        try:
+            updater = StateUpdater(session)
+            project = updater.create_project(title="书", premise="p", genre="g")
+            arc = updater.create_arc_plan(project.id, "弧线")
+            manager = SubWorldManager()
+            delta = SubWorldPlanDelta.model_validate(
+                {
+                    "new_subworlds": [
+                        {
+                            "subworld_id": "subworld_dedupe",
+                            "name": "江城",
+                            "scope": "arc_local",
+                            "core_named_characters": [
+                                {
+                                    "name": "沈临川",
+                                    "description": "冷静护卫，负责保护主角。",
+                                    "role_hint": "护卫",
+                                    "importance": 7,
+                                }
+                            ],
+                        }
+                    ],
+                    "initial_active_subworld_ids": [],
+                }
+            )
+            manager.apply_arc_delta(
+                session=session,
+                updater=updater,
+                project_id=project.id,
+                arc_id=arc.id,
+                chapter_number=1,
+                delta=delta,
+            )
+            manager.apply_arc_delta(
+                session=session,
+                updater=updater,
+                project_id=project.id,
+                arc_id=arc.id,
+                chapter_number=1,
+                delta=delta,
+            )
+            session.flush()
+            roster_rows = session.execute(
+                select(SubWorldRosterItem).where(
+                    SubWorldRosterItem.project_id == project.id,
+                    SubWorldRosterItem.subworld_id == "subworld_dedupe",
+                    SubWorldRosterItem.display_name == "沈临川",
+                )
+            ).scalars().all()
+            nodes = [
+                node
+                for node in BookStateRepository(session).list_world_nodes(project.id)
+                if node.node_type == "character" and node.name == "沈临川"
+            ]
+            roster_metadata = [json.loads(row.metadata_json or "{}") for row in roster_rows]
+        finally:
+            session.close()
+            engine.dispose()
+
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(len(roster_rows), 1)
+        self.assertEqual(roster_metadata[0].get("character_id"), nodes[0].id)
 
     def test_writer_output_parses_entity_mentions(self) -> None:
         writer = ChapterWriter(llm_client=SimpleNamespace(chat=lambda *args, **kwargs: "{}"))

@@ -453,18 +453,34 @@ class StateUpdater:
         if roster_item.entity_kind != "character":
             raise ValueError("Only character roster items can be materialized in v1.")
 
-        entity: Entity | None = None
-        if roster_item.entity_id:
-            entity = self.session.get(Entity, roster_item.entity_id)
-            if entity is None:
-                raise ValueError(f"Roster item {roster_item_id} references missing entity.")
-        else:
-            display_name = str(roster_item.display_name or "").strip() or self._fallback_slot_name(
-                project_id=roster_item.project_id,
-                subworld_id=roster_item.subworld_id,
-                slot_key=roster_item.slot_key,
-                role_hint=roster_item.role_hint,
+        metadata = _json_dict(roster_item.metadata_json)
+        canonical_character_id = str(
+            metadata.get("character_id")
+            or metadata.get("book_state_node_id")
+            or (
+                metadata.get("character_identity", {}).get("canonical_character_id")
+                if isinstance(metadata.get("character_identity"), dict)
+                else ""
             )
+            or (
+                metadata.get("character_identity", {}).get("book_state_node_id")
+                if isinstance(metadata.get("character_identity"), dict)
+                else ""
+            )
+            or ""
+        ).strip()
+        display_name = str(roster_item.display_name or "").strip() or self._fallback_slot_name(
+            project_id=roster_item.project_id,
+            subworld_id=roster_item.subworld_id,
+            slot_key=roster_item.slot_key,
+            role_hint=roster_item.role_hint,
+        )
+        entity: Entity | None = None
+        if roster_item.entity_id and not canonical_character_id:
+            entity = self.session.get(Entity, roster_item.entity_id)
+            if entity is not None and entity.kind != "character":
+                entity = None
+        if entity is None and not canonical_character_id:
             entity = self._repo.get_entities_by_names(
                 roster_item.project_id,
                 [display_name],
@@ -480,6 +496,7 @@ class StateUpdater:
                 project_id=roster_item.project_id,
                 source="subworld_planned_slot_materialization",
                 source_ref=roster_item.id,
+                character_id=canonical_character_id,
                 roster_item_id=roster_item.id,
                 name=entity.name if entity is not None else display_name,
                 aliases=_json_list(entity.aliases_json) if entity is not None else [],
@@ -496,12 +513,11 @@ class StateUpdater:
                 audit_reason="planned roster slot materialization",
             )
         )
-        roster_item.entity_id = entity.id if entity is not None else None
+        roster_item.entity_id = None
         roster_item.display_name = result.character_name
         roster_item.status = "activated_named" if not roster_item.is_core else "seeded_named"
         if not roster_item.activation_chapter:
             roster_item.activation_chapter = int(chapter or 0)
-        metadata = _json_dict(roster_item.metadata_json)
         metadata["character_id"] = result.character_id
         metadata["book_state_node_id"] = result.character_id
         metadata["canon_source"] = "book_state"

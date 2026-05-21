@@ -30,9 +30,13 @@ class ChapterMetric:
     context_pack_char_count: int | None = None
     hard_floor_passed: bool | None = None
     hard_floor_fail_reasons: list[str] | None = None
+    visible_payoff_present: bool | None = None
+    pulp_missing_fields: list[str] | None = None
+    structured_extraction_status: str | None = None
     reward_beats_in_plan: int | None = None
     reward_gap_since_last: int | None = None
     selected_trope_ids: list[str] | None = None
+    selected_trope_categories: list[str] | None = None
     ending_hook_detected: bool | None = None
     chapter_length: int | None = None
     bookstate_compile_succeeded: bool | None = None
@@ -87,9 +91,13 @@ def collect_rows(session, project_id: str, chapters: int) -> list[ChapterMetric]
             chapter_length=int(getattr(draft, "char_count", 0) or 0) if draft else None,
             reward_beats_in_plan=_reward_beats_in_plan(plan),
             selected_trope_ids=_selected_trope_ids(plan),
+            selected_trope_categories=_selected_trope_categories(plan),
             rewrite_count=int(getattr(plan, "repair_attempt_count", 0) or 0) if plan else None,
             hard_floor_passed=_hard_floor_passed(events, plan),
             hard_floor_fail_reasons=_hard_floor_fail_reasons(events),
+            visible_payoff_present=_visible_payoff_present(events),
+            pulp_missing_fields=_pulp_missing_fields(events),
+            structured_extraction_status=_structured_extraction_status(events),
             ending_hook_detected=_ending_hook_detected(events),
             bookstate_compile_succeeded=_bookstate_compile_succeeded(events),
             wall_time_seconds=_wall_time_seconds(row_spans),
@@ -119,12 +127,27 @@ def compute_summary(rows: list[ChapterMetric]) -> dict[str, object]:
         if any(getattr(row, field.name) is None for row in rows)
     )
     reward_gaps = [row.reward_gap_since_last for row in rows if row.reward_gap_since_last is not None]
+    wall_times = [row.wall_time_seconds for row in rows if row.wall_time_seconds is not None]
     return {
         "chapter_count": len(rows),
         "accepted_chapter_count": sum(1 for row in rows if row.verdict == "accepted"),
         "average_llm_call_count": _average(row.llm_call_count for row in rows),
         "average_wall_time_seconds": _average(row.wall_time_seconds for row in rows),
+        "avg_llm_calls_per_chapter": _average(row.llm_call_count for row in rows),
+        "p95_wall_time_seconds": _percentile(wall_times, 0.95),
+        "prompt_char_count_slope": _slope(row.prompt_char_count for row in rows),
+        "context_pack_char_count_slope": _slope(row.context_pack_char_count for row in rows),
+        "reward_gap_p95": _percentile(reward_gaps, 0.95),
         "max_reward_gap": max(reward_gaps) if reward_gaps else None,
+        "visible_payoff_missing_rate": _missing_rate(
+            row.visible_payoff_present for row in rows
+        ),
+        "hard_floor_fail_rate": _false_rate(row.hard_floor_passed for row in rows),
+        "canon_extraction_failure_rate": _extraction_failure_rate(rows),
+        "repeat_trope_template_rate": _repeat_rate(row.selected_trope_ids for row in rows),
+        "repeat_trope_category_rate": _repeat_rate(
+            row.selected_trope_categories for row in rows
+        ),
         "missing_metric_sources": missing_metric_sources,
     }
 
@@ -271,7 +294,29 @@ def _selected_trope_ids(plan: ChapterPlan | None) -> list[str] | None:
     if not isinstance(experience_plan, dict):
         return []
     candidates: list[Any] = []
-    for key in ("selected_trope_ids", "template_ids", "trope_ids", "active_band_template_ids"):
+    for key in (
+        "selected_template_ids",
+        "selected_trope_ids",
+        "template_ids",
+        "trope_ids",
+        "active_band_template_ids",
+    ):
+        value = experience_plan.get(key)
+        if isinstance(value, list):
+            candidates.extend(value)
+        elif isinstance(value, str) and value.strip():
+            candidates.append(value)
+    return [str(item).strip() for item in candidates if str(item).strip()]
+
+
+def _selected_trope_categories(plan: ChapterPlan | None) -> list[str] | None:
+    if plan is None:
+        return None
+    experience_plan = _json_loads(getattr(plan, "experience_plan_json", "{}"), {})
+    if not isinstance(experience_plan, dict):
+        return []
+    candidates: list[Any] = []
+    for key in ("planned_reward_tags", "selected_trope_categories", "reward_tags"):
         value = experience_plan.get(key)
         if isinstance(value, list):
             candidates.extend(value)
@@ -304,6 +349,47 @@ def _hard_floor_fail_reasons(events: list[DecisionEvent]) -> list[str] | None:
         if event.reason:
             return [part.strip() for part in str(event.reason).split(";") if part.strip()]
         return []
+    return None
+
+
+def _visible_payoff_present(events: list[DecisionEvent]) -> bool | None:
+    payload = _pulp_beat_payload(events)
+    if not payload:
+        return None
+    value = payload.get("visible_payoff_present")
+    return bool(value) if isinstance(value, bool) else None
+
+
+def _pulp_missing_fields(events: list[DecisionEvent]) -> list[str] | None:
+    payload = _pulp_beat_payload(events)
+    if not payload:
+        return None
+    value = payload.get("missing_fields")
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return []
+
+
+def _pulp_beat_payload(events: list[DecisionEvent]) -> dict[str, Any]:
+    for event in events:
+        if event.event_type != DecisionEventType.PULP_BEAT_EVALUATED:
+            continue
+        payload = _json_loads(event.payload_json, {})
+        if isinstance(payload, dict) and isinstance(payload.get("pulp_beat"), dict):
+            return payload["pulp_beat"]
+    return {}
+
+
+def _structured_extraction_status(events: list[DecisionEvent]) -> str | None:
+    for event in events:
+        payload = _json_loads(event.payload_json, {})
+        if not isinstance(payload, dict):
+            continue
+        if (
+            event.event_type == DecisionEventType.DEFERRED_MAINTENANCE_RECORDED
+            and payload.get("task_type") == "structured_extraction"
+        ):
+            return str(payload.get("structured_extraction") or "deferred")
     return None
 
 
@@ -373,6 +459,65 @@ def _average(values: Iterable[float | int | None]) -> float | int | None:
     if average.is_integer():
         return int(average)
     return round(average, 3)
+
+
+def _percentile(values: Iterable[float | int | None], percentile: float) -> float | int | None:
+    present_values = sorted(value for value in values if value is not None)
+    if not present_values:
+        return None
+    index = min(
+        len(present_values) - 1,
+        max(0, int((len(present_values) - 1) * percentile + 0.999999)),
+    )
+    value = present_values[index]
+    return int(value) if isinstance(value, float) and value.is_integer() else value
+
+
+def _slope(values: Iterable[float | int | None]) -> float | int | None:
+    present_values = [value for value in values if value is not None]
+    if len(present_values) < 2:
+        return None
+    slope = (present_values[-1] - present_values[0]) / (len(present_values) - 1)
+    if float(slope).is_integer():
+        return int(slope)
+    return round(float(slope), 3)
+
+
+def _false_rate(values: Iterable[bool | None]) -> float | None:
+    present_values = [value for value in values if value is not None]
+    if not present_values:
+        return None
+    return round(sum(1 for value in present_values if value is False) / len(present_values), 3)
+
+
+def _missing_rate(values: Iterable[bool | None]) -> float | None:
+    return _false_rate(values)
+
+
+def _extraction_failure_rate(rows: list[ChapterMetric]) -> float | None:
+    statuses = [row.structured_extraction_status for row in rows if row.structured_extraction_status is not None]
+    if not statuses:
+        return None
+    failures = {"degraded", "partial_degraded", "deferred"}
+    return round(sum(1 for status in statuses if status in failures) / len(statuses), 3)
+
+
+def _repeat_rate(values_by_row: Iterable[list[str] | None]) -> float | None:
+    seen: set[str] = set()
+    total = 0
+    repeats = 0
+    for values in values_by_row:
+        for value in values or []:
+            if not value:
+                continue
+            total += 1
+            if value in seen:
+                repeats += 1
+            else:
+                seen.add(value)
+    if total == 0:
+        return None
+    return round(repeats / total, 3)
 
 
 def _write_metrics_csv(rows: list[ChapterMetric], path: Path) -> None:

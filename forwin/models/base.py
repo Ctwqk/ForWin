@@ -64,6 +64,7 @@ POSTGRES_BASELINE_MIGRATIONS = (
     "future_plan_audit_runs_v1",
     "generation_task_leases_v1",
     "trope_usage_records_v1",
+    "project_target_total_default_v1",
 )
 
 
@@ -175,6 +176,7 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
         _upgrade_future_plan_audit_runs(conn)
         _upgrade_generation_task_leases(conn)
         _upgrade_trope_usage_records(conn)
+        _upgrade_project_target_total_default(conn)
         conn.execute(
             text(
                 """
@@ -620,6 +622,12 @@ def _upgrade_trope_usage_records(conn) -> None:
             "CREATE INDEX IF NOT EXISTS ix_trope_usage_project_band "
             "ON trope_usage_records (project_id, band_id, created_at)"
         )
+    )
+
+
+def _upgrade_project_target_total_default(conn) -> None:
+    conn.execute(
+        text("ALTER TABLE projects ALTER COLUMN target_total_chapters SET DEFAULT 50")
     )
 
 

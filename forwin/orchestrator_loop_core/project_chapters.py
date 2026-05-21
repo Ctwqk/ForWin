@@ -1,8 +1,76 @@
 from __future__ import annotations
 
 from forwin.checker.hard_floor import run_hard_floor
+from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
 from forwin.maintenance.deferred import DeferredMaintenanceRecord, record_deferred_maintenance
 from forwin.orchestrator_loop_core.common import *
+
+
+_STRUCTURED_EXTRACTION_PARTS = (
+    "state_event_extraction",
+    "thread_time_extraction",
+    "lore_timeline_notes_extraction",
+)
+
+
+def _record_pulp_beat_evaluation(
+    self,
+    *,
+    updater: StateUpdater,
+    project_id: str,
+    chapter_number: int,
+    hard_floor,
+) -> None:
+    metadata = getattr(hard_floor, "metadata", {}) or {}
+    pulp_beat = metadata.get("pulp_beat") if isinstance(metadata, dict) else None
+    if not isinstance(pulp_beat, dict):
+        return
+    self._record_decision_event(
+        updater=updater,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        event_family="evaluation_verdict",
+        event_type=DecisionEventType.PULP_BEAT_EVALUATED,
+        scope="chapter",
+        summary=f"第{chapter_number}章 pulp beat 已评估。",
+        payload={
+            "passed": bool(getattr(hard_floor, "passed", False)),
+            "warning_reasons": list(getattr(hard_floor, "warning_reasons", []) or []),
+            "pulp_beat": pulp_beat,
+        },
+    )
+
+
+def _defer_structured_extraction_if_needed(
+    *,
+    updater: StateUpdater,
+    project_id: str,
+    chapter_number: int,
+    writer_output,
+) -> None:
+    meta = dict(getattr(writer_output, "generation_meta", {}) or {})
+    status = str(meta.get("structured_extraction", "") or "").strip()
+    degraded_parts = [
+        part
+        for part in _STRUCTURED_EXTRACTION_PARTS
+        if str(meta.get(part, "") or "").strip() == "degraded"
+    ]
+    if status not in {"degraded", "partial_degraded"} and not degraded_parts:
+        return
+    record_deferred_maintenance(
+        updater,
+        DeferredMaintenanceRecord(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            task_type="structured_extraction",
+            reason=status or "structured_extraction_degraded",
+            payload={
+                "structured_extraction": status,
+                "degraded_parts": degraded_parts,
+            },
+        ),
+    )
+
 
 def _run_project_chapters(
     self,
@@ -278,6 +346,36 @@ def _run_project_chapters(
                     chapter_number=chapter_num,
                     config=self.config,
                 )
+                _record_pulp_beat_evaluation(
+                    self,
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                    hard_floor=hard_floor,
+                )
+                pulp_policy = evaluate_pulp_beat_policy(
+                    session=session,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                    hard_floor_result=hard_floor,
+                    config=self.config,
+                )
+                if pulp_policy.fatal:
+                    fail_reasons = [*hard_floor.fail_reasons, pulp_policy.reason]
+                    hard_floor = hard_floor.model_copy(
+                        update={
+                            "passed": False,
+                            "fail_reasons": fail_reasons,
+                            "checks": {
+                                **hard_floor.checks,
+                                pulp_policy.reason: False,
+                            },
+                            "metadata": {
+                                **hard_floor.metadata,
+                                "pulp_beat_policy": pulp_policy.model_dump(mode="json"),
+                            },
+                        }
+                    )
                 if not hard_floor.passed:
                     hard_floor_issues = [
                         {
@@ -509,7 +607,13 @@ def _run_project_chapters(
                 residual_review_issues=(
                     residual_review_issues if force_accept_applied else []
                 ),
-                canon_risk_level=canon_risk_level,
+                    canon_risk_level=canon_risk_level,
+            )
+            _defer_structured_extraction_if_needed(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_num,
+                writer_output=writer_output,
             )
             self._emit_progress(
                 "stage_changed",

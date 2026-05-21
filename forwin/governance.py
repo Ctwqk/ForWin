@@ -125,6 +125,7 @@ class DecisionEventType:
     CANON_COMMIT_FAILED = "canon_commit_failed"
     CANON_COMMIT_BLOCKED = "canon_commit_blocked"
     HARD_GATE_HIT = "hard_gate_hit"
+    PULP_BEAT_EVALUATED = "pulp_beat_evaluated"
 
     STAGE_ENTERED = "stage_entered"
     STAGE_EXITED = "stage_exited"
@@ -260,6 +261,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.CANON_COMMIT_BLOCKED,
     DecisionEventType.CANON_COMMIT_FAILED,
     DecisionEventType.HARD_GATE_HIT,
+    DecisionEventType.PULP_BEAT_EVALUATED,
     DecisionEventType.STAGE_ENTERED,
     DecisionEventType.STAGE_EXITED,
     DecisionEventType.STAGE_DURATION_SUMMARY,

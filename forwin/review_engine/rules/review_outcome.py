@@ -296,13 +296,14 @@ def _decision_outcome_for_review_action(action: str) -> str:
         return "auto_approve"
     if normalized == "commit_with_obligation":
         return "commit_with_obligation"
-    if normalized in {
-        "local_rewrite",
-        "chapter_replan_then_rewrite",
-        "band_replan_then_rewrite",
-        "arc_replan_then_rewrite",
-    }:
+    if normalized == "local_rewrite":
         return "local_repair"
+    if normalized == "chapter_replan_then_rewrite":
+        return "chapter_patch"
+    if normalized == "band_replan_then_rewrite":
+        return "band_patch"
+    if normalized == "arc_replan_then_rewrite":
+        return "arc_patch"
     if normalized == "defer_with_chapter_plan_patch":
         return "chapter_patch"
     if normalized == "defer_with_band_plan_patch":

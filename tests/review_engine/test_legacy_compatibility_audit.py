@@ -73,24 +73,28 @@ def test_legacy_compatibility_summary_assesses_usage_after_collection() -> None:
     assert summary["by_layer"]["book_state"] == 1
     assert summary["by_feature"]["book_state.state.location_fallback"] == 1
     blockers = summary["removal_assessment"]["blocking_for_removal"]
-    assert {
-        "compat_feature": "book_state.state.location_fallback",
-        "reason": "used during audit window",
-        "events": 1,
-        "static_callers": None,
-    } in blockers
+    assert any(
+        item["compat_feature"] == "book_state.state.location_fallback"
+        and item["reason"] == "used during audit window"
+        and item["events"] == 1
+        and item["static_callers"] is None
+        and item["verdict"] == "repromote_mode"
+        for item in blockers
+    )
     assert "delete_candidates" in summary["removal_assessment"]
 
 
 def test_legacy_compatibility_summary_marks_unused_candidates() -> None:
     summary = summarize_legacy_compatibility_audit([], registry=LEGACY_COMPATIBILITY_REGISTRY)
 
-    assert {
-        "compat_feature": "governance.legacy_relaxed_fallback",
-        "reason": "unused during audit window",
-        "events": 0,
-        "static_callers": None,
-    } in summary["removal_assessment"]["delete_candidates"]
+    assert any(
+        item["compat_feature"] == "governance.legacy_relaxed_fallback"
+        and item["reason"] == "unused during audit window"
+        and item["events"] == 0
+        and item["static_callers"] is None
+        and item["verdict"] == "delete_candidate"
+        for item in summary["removal_assessment"]["delete_candidates"]
+    )
 
 
 def test_uninstrumented_candidate_does_not_become_delete_candidate() -> None:
@@ -112,6 +116,7 @@ def test_uninstrumented_candidate_does_not_become_delete_candidate() -> None:
             "reason": "runtime instrumentation is missing",
             "events": 0,
             "static_callers": None,
+            "verdict": "uninstrumented_no_delete_signal",
         }
     ]
 
@@ -175,25 +180,27 @@ def test_static_and_runtime_counts_drive_removal_verdicts() -> None:
     assert assessment["delete_candidates"] == [
         {
             "compat_feature": "compat.dead",
-            "reason": "unused during audit window and no static callers",
+            "reason": "no runtime events and no static callers",
             "events": 0,
             "static_callers": 0,
-        }
-    ]
-    assert assessment["static_only_needs_targeted_test"] == [
+            "verdict": "delete_candidate",
+        },
         {
             "compat_feature": "compat.rare",
-            "reason": "static callers exist but runtime audit did not hit this path",
+            "reason": "static callers exist but runtime audit did not hit this path; verify in next run",
             "events": 0,
             "static_callers": 2,
+            "verdict": "delete_candidate",
         }
     ]
-    assert assessment["blocking_for_removal"] == [
+    assert assessment["static_only_needs_targeted_test"] == []
+    assert assessment["repromote_mode"] == [
         {
             "compat_feature": "compat.live",
             "reason": "used during audit window",
             "events": 1,
             "static_callers": 3,
+            "verdict": "repromote_mode",
         }
     ]
     assert assessment["anomalous_runtime_without_static"] == [
@@ -202,6 +209,7 @@ def test_static_and_runtime_counts_drive_removal_verdicts() -> None:
             "reason": "runtime events exist but static scan found no callers",
             "events": 1,
             "static_callers": 0,
+            "verdict": "anomaly",
         }
     ]
 
@@ -231,6 +239,109 @@ def test_static_legacy_compatibility_counts_exclude_registry_and_tests(tmp_path)
     counts = collect_legacy_compatibility_static_counts(source_root, registry=registry)
 
     assert counts == {"book_state.state.location_fallback": 1}
+
+
+def test_static_counts_ignore_imports_definitions_and_migrations(tmp_path) -> None:
+    source_root = tmp_path / "forwin"
+    (source_root / "book_state").mkdir(parents=True)
+    (source_root / "migrations").mkdir(parents=True)
+    (source_root / "api.py").write_text(
+        "from forwin.book_state import LegacyBookStateImporter\n"
+        "counts = LegacyBookStateImporter(session).import_project(project_id)\n",
+        encoding="utf-8",
+    )
+    (source_root / "book_state" / "legacy_import.py").write_text(
+        "class LegacyBookStateImporter:\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    (source_root / "migrations" / "001_legacy.py").write_text(
+        "LegacyBookStateImporter(session).import_project(project_id)\n",
+        encoding="utf-8",
+    )
+    registry = {
+        "migration.legacy_book_state_import": {
+            "compat_layer": "migration",
+            "static_patterns": ["LegacyBookStateImporter("],
+        }
+    }
+
+    counts = collect_legacy_compatibility_static_counts(source_root, registry=registry)
+
+    assert counts == {"migration.legacy_book_state_import": 1}
+
+
+def test_dead_code_candidate_with_no_runtime_or_static_is_reported() -> None:
+    registry = {
+        "dead_code.repair_loop_detector": {
+            "compat_layer": "dead_code",
+            "removal_mode": "dead_code_candidate",
+            "instrumentation_status": "static_only",
+        }
+    }
+
+    summary = summarize_legacy_compatibility_audit(
+        [],
+        registry=registry,
+        static_counts={"dead_code.repair_loop_detector": 0},
+    )
+
+    assert summary["removal_assessment"]["dead_code"] == [
+        {
+            "compat_feature": "dead_code.repair_loop_detector",
+            "reason": "no runtime events and no static callers",
+            "events": 0,
+            "static_callers": 0,
+            "verdict": "dead_code",
+        }
+    ]
+
+
+def test_legacy_compatibility_summary_includes_per_feature_detail() -> None:
+    rows = [
+        {
+            "chapter_number": 3,
+            "payload": build_legacy_compatibility_payload(
+                compat_layer="subworld",
+                compat_feature="subworld.legacy_entity_id_bridge",
+                usage_kind="write_bridge",
+                source_module="forwin.subworld_manager",
+                usage_reason="legacy entity bridge",
+                legacy_identifier="legacy-a",
+                canonical_identifier="char-a",
+            ),
+        },
+        {
+            "chapter_number": 5,
+            "payload": build_legacy_compatibility_payload(
+                compat_layer="subworld",
+                compat_feature="subworld.legacy_entity_id_bridge",
+                usage_kind="write_bridge",
+                source_module="forwin.subworld_manager",
+                usage_reason="legacy entity bridge",
+                legacy_identifier="legacy-a",
+                canonical_identifier="char-a",
+            ),
+        },
+    ]
+
+    summary = summarize_legacy_compatibility_audit(
+        rows,
+        registry={
+            "subworld.legacy_entity_id_bridge": {
+                "compat_layer": "subworld",
+                "removal_mode": "candidate_if_unused",
+                "instrumentation_status": "instrumented",
+            }
+        },
+        static_counts={"subworld.legacy_entity_id_bridge": 1},
+    )
+
+    detail = summary["per_feature_detail"]["subworld.legacy_entity_id_bridge"]
+    assert detail["events"] == 2
+    assert detail["unique_chapters"] == 2
+    assert detail["events_per_chapter_avg"] == 1.0
+    assert detail["top_legacy_identifiers"] == [["legacy-a", 2]]
 
 
 def test_record_legacy_compatibility_event_writes_fact_event() -> None:

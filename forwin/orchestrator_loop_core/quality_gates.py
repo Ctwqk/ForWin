@@ -8,12 +8,9 @@ from forwin.planning.arc_plan_patcher import ArcPlanPatcher
 from forwin.planning.book_patch_validator import BookPatchValidator
 from forwin.planning.book_plan_patcher import BookPlanPatcher
 from forwin.narrative_obligations.budget import evaluate_obligation_budget
-from forwin.review_engine.cutover import select_cutover_pair
 from forwin.review_engine.engine import AutoDecisionEngine
-from forwin.review_engine.parity import compare_shadow_decisions, severe_shadow_mismatch
 from forwin.review_engine.rules.review_outcome import (
     build_review_outcome_rules,
-    decision_from_review_outcome,
     review_action_from_decision,
 )
 from forwin.review_engine.rules.obligation_scope import decide_obligation_scope
@@ -34,13 +31,14 @@ _ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION = {
 }
 
 
-def _review_action_for_cutover_decision(decision: Decision, fallback_action: str) -> str:
+def _review_action_for_engine_decision(decision: Decision) -> str:
+    fallback_action = str(decision.sub_action.get("review_action") or "").strip()
     review_action = review_action_from_decision(decision, fallback_action)
     if review_action:
         return review_action
     return _ENGINE_OUTCOME_TO_LEGACY_REVIEW_ACTION.get(
         str(decision.outcome or "").strip(),
-        str(fallback_action or "").strip(),
+        fallback_action,
     )
 
 
@@ -522,12 +520,6 @@ def _prepare_deferred_acceptance_if_needed(
     signals: list[Any],
     target_total_chapters: int,
 ) -> list[str]:
-    outcome = ReviewOutcomeRouter().route(
-        review=verdict,
-        signals=signals,
-        current_chapter=chapter_number,
-        target_total_chapters=target_total_chapters,
-    )
     decision_input = DecisionInput(
         project_id=project_id,
         chapter_number=chapter_number,
@@ -542,68 +534,53 @@ def _prepare_deferred_acceptance_if_needed(
         prior_scope_history=[],
         budget=None,
         target_total_chapters=target_total_chapters,
-        plan_layer_health=PlanLayerHealth(
-            active_chapter_patch_count=(
-                1 if outcome.action == "defer_with_chapter_plan_patch" else 0
-            ),
-            active_band_patch_count=(
-                1 if outcome.action == "defer_with_band_plan_patch" else 0
-            ),
-        ),
+        plan_layer_health=PlanLayerHealth(),
     )
-    legacy_decision = decision_from_review_outcome(outcome)
     engine_decision = AutoDecisionEngine(build_review_outcome_rules()).decide(decision_input)
-    selection = select_cutover_pair(
-        project_id=project_id,
-        legacy_decision=legacy_decision,
-        engine_decision=engine_decision,
-        config=getattr(self, "config", None),
-    )
-    selected_review_action = _review_action_for_cutover_decision(
-        selection.live,
-        outcome.action,
-    )
-    selected_review_reason = str(selection.live.reason or outcome.reason or "")
+    selected_review_action = _review_action_for_engine_decision(engine_decision)
+    selected_review_reason = str(engine_decision.reason or "")
     selected_primary_issue_class = str(
-        selection.live.sub_action.get("primary_issue_class")
-        or outcome.primary_issue_class
-        or ""
+        engine_decision.sub_action.get("primary_issue_class") or ""
     ).strip()
-    shadow_comparison = compare_shadow_decisions(
-        live=selection.live,
-        shadow=selection.shadow,
-    )
-    severe_mismatch = severe_shadow_mismatch(shadow_comparison)
     record_engine_decision = getattr(self, "_record_engine_decision_event", None)
     if callable(record_engine_decision):
         record_engine_decision(
             updater=StateUpdater(session),
-            decision=selection.live,
+            decision=engine_decision,
             decision_input=decision_input,
-            shadow_mismatch=shadow_comparison.shadow_mismatch,
+            shadow_mismatch=False,
             live_or_shadow="live",
-            legacy_outcome=legacy_decision.outcome,
+            legacy_outcome="",
             engine_outcome=engine_decision.outcome,
-            live_source=selection.live_source,
-            shadow_source=selection.shadow_source,
-            engine_live=selection.engine_live,
-            legacy_shadow_evaluated=selection.shadow_source == "legacy",
-            legacy_safety_net_used=selection.live_source == "legacy",
-            severe_mismatch=severe_mismatch,
+            live_source="engine",
+            shadow_source="",
+            engine_live=True,
+            legacy_shadow_evaluated=False,
+            legacy_safety_net_used=False,
+            severe_mismatch=False,
             related_object_type="chapter_review",
             related_object_id=review_id,
         )
-    if shadow_comparison.shadow_mismatch:
-        logger.warning(
-            "Review engine shadow mismatch project=%s chapter=%s live_source=%s shadow_source=%s severe=%s live=%s shadow=%s",
-            project_id,
-            chapter_number,
-            selection.live_source,
-            selection.shadow_source,
-            severe_mismatch,
-            shadow_comparison.live,
-            shadow_comparison.shadow,
-        )
+    decision_input = DecisionInput(
+        project_id=decision_input.project_id,
+        chapter_number=decision_input.chapter_number,
+        review=decision_input.review,
+        signals=decision_input.signals,
+        open_obligations=decision_input.open_obligations,
+        operation_mode=decision_input.operation_mode,
+        attempts_completed=decision_input.attempts_completed,
+        prior_scope_history=decision_input.prior_scope_history,
+        budget=decision_input.budget,
+        target_total_chapters=decision_input.target_total_chapters,
+        plan_layer_health=PlanLayerHealth(
+            active_chapter_patch_count=(
+                1 if selected_review_action == "defer_with_chapter_plan_patch" else 0
+            ),
+            active_band_patch_count=(
+                1 if selected_review_action == "defer_with_band_plan_patch" else 0
+            ),
+        ),
+    )
     structural_decision = decide_structural_patch(
         input=decision_input,
         arc_patcher_enabled=bool(
@@ -704,7 +681,7 @@ def _prepare_deferred_acceptance_if_needed(
                     if commit_decision.outcome == "commit_with_obligation"
                     else "shadow"
                 ),
-                legacy_outcome=outcome.action,
+                legacy_outcome="",
                 engine_outcome=commit_decision.outcome,
                 live_source=(
                     "engine"

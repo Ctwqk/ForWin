@@ -90,7 +90,6 @@ from forwin.retrieval import RetrievalBroker
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
-from forwin.reviewer.outcome import ReviewOutcomeRouter
 from forwin.runtime.services import RuntimeServices
 from forwin.state.repo import StateRepository
 from forwin.state.schema import KNOWN_STATE_FIELDS

@@ -9,6 +9,7 @@ from forwin.review_engine.audit import (
     summarize_live_cutover_audit,
 )
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
+from scripts.audit_review_engine_cutover import cutover_audit_warnings
 
 
 def test_decision_event_payload_contains_rule_and_digest() -> None:
@@ -115,6 +116,20 @@ def test_live_cutover_audit_passes_complete_60_chapter_engine_run() -> None:
     assert summary["passed"] is True
     assert summary["observed_chapters"] == 60
     assert summary["missing_chapters"] == []
+
+
+def test_cutover_audit_warns_when_engine_never_drove_live() -> None:
+    warnings = cutover_audit_warnings(
+        {
+            "engine_live_chapters": 0,
+            "observed_chapters": 60,
+            "expected_chapters": 60,
+        }
+    )
+
+    assert warnings == [
+        "WARNING: ENGINE NEVER DROVE LIVE - Phase 1 pilot is not in allowlist or live flag is off; audit window not started"
+    ]
 
 
 def test_live_cutover_audit_aggregates_multiple_events_per_chapter() -> None:

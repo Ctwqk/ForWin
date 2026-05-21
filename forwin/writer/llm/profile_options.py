@@ -30,6 +30,8 @@ class ProfileOptionsMixin:
     ) -> float:
         if cls._is_kimi_k25_profile(profile):
             return 0.6
+        if cls._is_minimax_profile(profile):
+            return min(1.0, max(0.1, float(requested_temperature)))
         return float(requested_temperature)
 
     @classmethod
@@ -43,6 +45,36 @@ class ProfileOptionsMixin:
         return None
 
     @classmethod
+    def _effective_messages_for_profile(
+        cls,
+        profile: dict[str, str],
+        messages: list[dict],
+    ) -> list[dict]:
+        if not cls._is_minimax_profile(profile):
+            return list(messages)
+
+        system_parts: list[str] = []
+        non_system_messages: list[dict] = []
+        for message in messages:
+            role = str(message.get("role") or "").strip()
+            if role in {"system", "developer"}:
+                content = message.get("content", "")
+                if not isinstance(content, str):
+                    content = json.dumps(content, ensure_ascii=False)
+                if content.strip():
+                    system_parts.append(content)
+                continue
+            non_system_messages.append(dict(message))
+
+        if not system_parts:
+            return non_system_messages
+
+        return [
+            {"role": "system", "content": "\n\n".join(system_parts)},
+            *non_system_messages,
+        ]
+
+    @classmethod
     def _effective_max_tokens_for_profile(
         cls,
         profile: dict[str, str],
@@ -53,6 +85,12 @@ class ProfileOptionsMixin:
         if cls._is_minimax_profile(profile):
             return max(1, min(int(requested_max_tokens), 2048))
         return int(requested_max_tokens)
+
+    @classmethod
+    def _max_tokens_payload_key_for_profile(cls, profile: dict[str, str]) -> str:
+        if cls._is_minimax_profile(profile):
+            return "max_completion_tokens"
+        return "max_tokens"
 
     @classmethod
     def _effective_response_format_for_profile(

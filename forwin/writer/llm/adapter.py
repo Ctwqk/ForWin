@@ -254,11 +254,12 @@ class OpenAICompatibleAdapter(
             profile,
             response_format,
         )
+        effective_messages = self._effective_messages_for_profile(profile, messages)
         payload = {
             "model": profile["model"],
-            "messages": messages,
+            "messages": effective_messages,
         }
-        payload["max_tokens"] = effective_max_tokens
+        payload[self._max_tokens_payload_key_for_profile(profile)] = effective_max_tokens
         if send_temperature:
             payload["temperature"] = effective_temperature
         thinking = self._thinking_payload_for_profile(profile)
@@ -296,7 +297,7 @@ class OpenAICompatibleAdapter(
                     self._record_llm_attempt(
                         attempt_group_id=attempt_group_id,
                         profile=profile,
-                        messages=messages,
+                        messages=effective_messages,
                         temperature=effective_temperature,
                         max_tokens=effective_max_tokens,
                         response_format=effective_response_format,
@@ -355,7 +356,7 @@ class OpenAICompatibleAdapter(
                     self._record_llm_attempt(
                         attempt_group_id=attempt_group_id,
                         profile=profile,
-                        messages=messages,
+                        messages=effective_messages,
                         temperature=effective_temperature,
                         max_tokens=effective_max_tokens,
                         response_format=effective_response_format,
@@ -387,10 +388,10 @@ class OpenAICompatibleAdapter(
                 self._record_llm_attempt(
                     attempt_group_id=attempt_group_id,
                     profile=profile,
-                    messages=messages,
+                    messages=effective_messages,
                     temperature=effective_temperature,
                     max_tokens=effective_max_tokens,
-                        response_format=effective_response_format,
+                    response_format=effective_response_format,
                     request_timeout=effective_request_timeout,
                     attempt_no=attempt_no,
                     http_status=response.status_code,
@@ -421,10 +422,10 @@ class OpenAICompatibleAdapter(
                 self._record_llm_attempt(
                     attempt_group_id=attempt_group_id,
                     profile=profile,
-                    messages=messages,
+                    messages=effective_messages,
                     temperature=effective_temperature,
                     max_tokens=effective_max_tokens,
-                        response_format=effective_response_format,
+                    response_format=effective_response_format,
                     request_timeout=effective_request_timeout,
                     attempt_no=attempt_no,
                     duration_ms=max(0, int((time.perf_counter() - attempt_started_at) * 1000)),
@@ -470,10 +471,10 @@ class OpenAICompatibleAdapter(
                 self._record_llm_attempt(
                     attempt_group_id=attempt_group_id,
                     profile=profile,
-                    messages=messages,
+                    messages=effective_messages,
                     temperature=effective_temperature,
                     max_tokens=effective_max_tokens,
-                        response_format=effective_response_format,
+                    response_format=effective_response_format,
                     request_timeout=effective_request_timeout,
                     attempt_no=attempt_no,
                     http_status=status_code,

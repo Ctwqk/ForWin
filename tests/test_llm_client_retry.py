@@ -590,7 +590,12 @@ class LLMClientRetryTests(unittest.TestCase):
         try:
             with patch.object(client.client, "post", side_effect=fake_post):
                 result = client.chat(
-                    [{"role": "user", "content": "只输出 JSON"}],
+                    [
+                        {"role": "system", "content": "只输出 JSON。"},
+                        {"role": "system", "content": "不要解释。"},
+                        {"role": "user", "content": "返回 {\"ok\": true}。"},
+                    ],
+                    temperature=0.0,
                     max_tokens=5000,
                     response_format={"type": "json_object"},
                     task_family="writer",
@@ -601,11 +606,21 @@ class LLMClientRetryTests(unittest.TestCase):
             client.close()
 
         self.assertEqual(result, "{\"ok\":true}")
-        self.assertEqual(payloads[0]["max_tokens"], 2048)
-        self.assertNotIn("max_completion_tokens", payloads[0])
+        self.assertEqual(payloads[0]["max_completion_tokens"], 2048)
+        self.assertNotIn("max_tokens", payloads[0])
         self.assertNotIn("response_format", payloads[0])
+        self.assertEqual(payloads[0]["temperature"], 0.1)
+        self.assertEqual(
+            payloads[0]["messages"],
+            [
+                {"role": "system", "content": "只输出 JSON。\n\n不要解释。"},
+                {"role": "user", "content": "返回 {\"ok\": true}。"},
+            ],
+        )
         self.assertEqual(attempts[0]["max_tokens"], 2048)
         self.assertEqual(attempts[0]["requested_max_tokens"], 5000)
+        self.assertEqual(attempts[0]["temperature"], 0.1)
+        self.assertEqual(attempts[0]["requested_temperature"], 0.0)
         self.assertEqual(attempts[0]["response_format"], {})
 
     def test_non_retryable_http_error_records_provider_body_preview(self) -> None:

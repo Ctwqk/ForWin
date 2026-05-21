@@ -441,6 +441,8 @@ def load_inventory(path: Path) -> dict[str, Any]:
         raise ValueError("Inventory root must be a mapping.")
     if not isinstance(raw.get("policy"), dict):
         raise ValueError("Inventory must define a policy mapping.")
+    if raw.get("entries") is None:
+        raw["entries"] = []
     if not isinstance(raw.get("entries"), list):
         raise ValueError("Inventory must define an entries list.")
     return raw

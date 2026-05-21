@@ -196,7 +196,7 @@ def _overlay_active_generation_task(detail: ProjectDetail, task: GenerationTask 
         update={
             "current_stage": stage,
             "current_chapter": current_chapter,
-            "can_pause": status in {"starting", "running"} and not pause_requested,
+            "can_pause": status in {"queued", "starting", "running"} and not pause_requested,
             "can_resume": status == "paused",
             "pause_requested": pause_requested,
             "next_gate": "",

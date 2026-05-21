@@ -286,7 +286,7 @@ def _update_task(task_id: str, **changes: Any) -> None:
         normalized.pop("status", None)
     if task.get("cancel_requested") and normalized.get("current_stage") not in {"terminating", "cancelled"}:
         normalized.pop("current_stage", None)
-    if task.get("pause_requested") and normalized.get("status") in {"starting", "running"}:
+    if task.get("pause_requested") and normalized.get("status") in {"queued", "starting", "running"}:
         normalized.pop("status", None)
     if task.get("pause_requested") and normalized.get("current_stage") not in {"paused", "cancelled", "terminating"}:
         normalized.pop("current_stage", None)

@@ -219,6 +219,24 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertEqual(paused["current_stage"], "paused")
         self.assertTrue(paused["pause_requested"])
 
+    def test_queued_generation_task_can_be_marked_pause_requested(self) -> None:
+        task = api_module._create_task_record(title="queued pause", requested_chapters=1)
+        task["project_id"] = "project-queued-pause"
+        api_module._persist_generation_task("task-queued-pause", task)
+
+        loaded = api_module._get_generation_task_or_404("task-queued-pause")
+        self.assertTrue(api_module._task_is_pausable(loaded))
+
+        api_module._update_task(
+            "task-queued-pause",
+            pause_requested=True,
+            message="已请求暂停，等待 worker 跳过 claim",
+        )
+        paused = api_module._get_generation_task_or_404("task-queued-pause")
+
+        self.assertTrue(paused["pause_requested"])
+        self.assertEqual(paused["status"], "queued")
+
     def test_progress_update_cannot_expand_requested_chapters_contract(self) -> None:
         task = api_module._create_task_record(title="继续生成计数契约", requested_chapters=2)
         task["project_id"] = "project-progress-contract"

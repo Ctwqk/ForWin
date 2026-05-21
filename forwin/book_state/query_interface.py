@@ -6,6 +6,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.macro_status import (
+    ProtagonistMacroStatus,
+    derive_protagonist_macro_status,
+)
 from forwin.canon_quality.active_rule_store import ActiveRule, CanonQualityActiveRuleStore
 from forwin.models.canon_quality import CountdownLedgerRow
 
@@ -46,6 +50,13 @@ class BookStateQueryInterface(Protocol):
         project_id: str,
         as_of_chapter: int,
     ) -> list[ActiveRule]: ...
+
+    def get_protagonist_macro_status(
+        self,
+        *,
+        project_id: str,
+        as_of_chapter: int,
+    ) -> ProtagonistMacroStatus: ...
 
 
 class SqlBookStateQueryInterface:
@@ -105,10 +116,23 @@ class SqlBookStateQueryInterface:
             chapter_number=int(as_of_chapter or 0),
         )
 
+    def get_protagonist_macro_status(
+        self,
+        *,
+        project_id: str,
+        as_of_chapter: int,
+    ) -> ProtagonistMacroStatus:
+        return derive_protagonist_macro_status(
+            self.session,
+            project_id=project_id,
+            as_of_chapter=int(as_of_chapter or 0),
+        )
+
 
 __all__ = [
     "BookStateQueryInterface",
     "CountdownState",
     "InvariantStateSnapshot",
+    "ProtagonistMacroStatus",
     "SqlBookStateQueryInterface",
 ]

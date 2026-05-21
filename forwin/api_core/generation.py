@@ -444,6 +444,8 @@ def _create_generation_task(
     )
     if normalized_project_id:
         task_record["project_id"] = normalized_project_id
+    task_record["max_chapters"] = int(num_chapters or 0)
+    task_record["run_until_chapter"] = int(num_chapters or 0)
     _persist_generation_task(task_id, task_record)
     root_event_id = ""
     if normalized_project_id:
@@ -509,6 +511,8 @@ def _create_continue_generation_task(
         requested_chapters=requested_chapters,
     )
     task_record["project_id"] = normalized_project_id
+    task_record["max_chapters"] = int(max_chapters or 0)
+    task_record["run_until_chapter"] = int(run_until_chapter or 0)
     _persist_generation_task(task_id, task_record)
     root_event_id = _create_task_root_event(
         project_id=normalized_project_id,

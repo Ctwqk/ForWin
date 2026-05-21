@@ -15,6 +15,8 @@ class AudienceCalibrationProfile:
     clarify_rule_legibility: bool = False
     protect_character_heat: bool = False
     hold_managed_ambiguity: bool = False
+    recent_template_ids: list[str] | None = None
+    recent_trope_categories: list[str] | None = None
 
 
 def load_long_window_audience_trends(

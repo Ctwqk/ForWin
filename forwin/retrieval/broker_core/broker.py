@@ -46,6 +46,7 @@ from forwin.world_model.store import load_json
 from forwin.obsidian.frontmatter import parse_sections
 from forwin.personality import CharacterPersonalityLibrary, build_active_personality_contexts
 from forwin.retrieval.memory_index import ChapterMemoryIndex, create_memory_index
+from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
 from .helpers import (
     _active_personality_contexts,
     _database_url_from_repo,
@@ -95,6 +96,7 @@ class RetrievalBroker:
         llm_kb_qdrant_client: object | None = None,
         llm_kb_qdrant_models: object | None = None,
         include_world_v4_compat: bool = False,
+        retrieval_budget: RetrievalBudget | None = None,
     ) -> None:
         self.context_budget_chars = context_budget_chars
         self.max_entities = max_entities
@@ -113,6 +115,7 @@ class RetrievalBroker:
         self.llm_kb_qdrant_client = llm_kb_qdrant_client
         self.llm_kb_qdrant_models = llm_kb_qdrant_models
         self.include_world_v4_compat = bool(include_world_v4_compat)
+        self.retrieval_budget = retrieval_budget or RetrievalBudget()
         self.last_observability_summary: dict[str, object] = {}
 
     def build_chapter_context(self, repo, project_id: str, chapter_plan) -> ChapterContextPack:
@@ -821,16 +824,22 @@ class RetrievalBroker:
         query = "\n".join(part for part in query_parts if part)
         if not query.strip():
             return []
+        raw_limit = max(self.max_memories, sum(self.retrieval_budget.model_dump().values()))
         memories = self.memory_index.search(
             project_id=base_pack.project_id,
             query=query,
-            limit=self.max_memories,
+            limit=raw_limit,
         )
-        return [
+        eligible = [
             memory
             for memory in memories
             if memory.chapter_number < base_pack.chapter_number
         ]
+        buckets = bucket_memory_results(eligible, self.retrieval_budget)
+        selected = []
+        for key in ("recent", "promise", "enemy", "wealth_status", "relationship", "world"):
+            selected.extend(buckets[key])
+        return selected[:raw_limit]
 
     def _pick_world_context(self, world_context: WorldContextPack) -> WorldContextPack:
         if not world_context or not world_context.snapshot_id:

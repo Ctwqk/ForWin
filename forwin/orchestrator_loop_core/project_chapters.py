@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from forwin.checker.hard_floor import run_hard_floor
+from forwin.maintenance.deferred import DeferredMaintenanceRecord, record_deferred_maintenance
 from forwin.orchestrator_loop_core.common import *
 
 def _run_project_chapters(
@@ -315,7 +316,7 @@ def _run_project_chapters(
                     )
                     session.commit()
                     failed_chapters.append(chapter_num)
-                    continue
+                    break
 
             if self.config.operation_mode == "checkpoint":
                 updater.mark_chapter_status(
@@ -558,7 +559,26 @@ def _run_project_chapters(
                     reason=str(exc),
                     payload={"error_class": exc.__class__.__name__, "error_summary": str(exc)},
                 )
-                raise
+                long_run_policy = getattr(self.config, "long_run_policy", None)
+                should_defer_observation_failure = bool(
+                    getattr(long_run_policy, "defer_observation_failures", False)
+                    or str(getattr(self.config, "quality_profile", "") or "") == "pulp"
+                )
+                if not should_defer_observation_failure:
+                    raise
+                record_deferred_maintenance(
+                    updater,
+                    DeferredMaintenanceRecord(
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                        task_type="memory_index_upsert",
+                        reason=str(exc),
+                        payload={
+                            "error_class": exc.__class__.__name__,
+                            "error_summary": str(exc),
+                        },
+                    ),
+                )
             self._run_phase3_pass(
                 session=session,
                 project_id=project_id,

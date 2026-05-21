@@ -36,6 +36,7 @@ from forwin.governance import (
     normalize_checkpoint_status,
     normalize_project_governance,
 )
+from forwin.long_run_policy import normalize_long_run_policy
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.entity import Entity
 from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
@@ -270,6 +271,9 @@ def normalize_project_automation(raw: str | dict[str, Any] | None) -> ProjectAut
             "auto_publish": auto_publish,
             "publish": publish_payload,
             "publish_bindings": publish_bindings,
+            "long_run_policy": normalize_long_run_policy(
+                payload.get("long_run_policy")
+            ).model_dump(mode="json"),
             "last_scheduler_date": str(payload.get("last_scheduler_date", "")).strip(),
             "last_scheduler_at": str(payload.get("last_scheduler_at", "")).strip(),
             "last_scheduler_action": str(payload.get("last_scheduler_action", "")).strip(),

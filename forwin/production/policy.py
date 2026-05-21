@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from forwin.api_schemas import ProjectAutomationPublishSettings, ProjectAutomationSettings
+from forwin.long_run_policy import LongRunPolicy, normalize_long_run_policy
 
 
 MAX_DAILY_PRODUCTION_QUOTA = 20
@@ -38,6 +39,7 @@ class ProductionPolicy(BaseModel):
     max_active_generation_tasks: int = 1
     max_active_upload_tasks: int = 1
     publish_bindings: list[ProjectAutomationPublishSettings] = Field(default_factory=list)
+    long_run_policy: LongRunPolicy = Field(default_factory=LongRunPolicy)
 
 
 def _automation_publish_bindings(
@@ -99,4 +101,7 @@ def policy_from_automation(automation: ProjectAutomationSettings) -> ProductionP
             minimum=1,
         ),
         publish_bindings=_automation_publish_bindings(automation),
+        long_run_policy=normalize_long_run_policy(
+            getattr(automation, "long_run_policy", None)
+        ),
     )

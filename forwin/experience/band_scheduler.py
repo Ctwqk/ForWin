@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from forwin.experience.service import AudienceCalibrationProfile
+from forwin.experience.trope_cooldown import TropeCooldownPolicy, select_available_templates
 from forwin.experience.types import ArcExperienceBundle
 from forwin.models.project import ChapterPlan
 from forwin.planning.arc_structure_service import ArcStructureDraftData
@@ -41,6 +42,9 @@ class BandExperienceScheduler:
             if item.category not in {"emotion"}
         }
         used_template_ids: set[str] = set()
+        cooldown_policy = TropeCooldownPolicy()
+        recent_template_ids = list(getattr(calibration, "recent_template_ids", []) or [])
+        recent_categories = list(getattr(calibration, "recent_trope_categories", []) or [])
 
         def chapter_for(slot: str) -> int:
             if slot == "early":
@@ -64,6 +68,12 @@ class BandExperienceScheduler:
                 if template.template_id not in used_template_ids
                 and template.cost_weight <= normalized_cost_ceiling
             ]
+            under_ceiling = select_available_templates(
+                under_ceiling,
+                recent_template_ids=recent_template_ids,
+                recent_categories=recent_categories,
+                policy=cooldown_policy,
+            )
             fallback_same_category = [
                 template
                 for template in category_templates

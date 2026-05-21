@@ -72,3 +72,21 @@ def test_policy_auto_publish_backfills_publish_quota_when_missing() -> None:
 
     assert policy.quota.write == 2
     assert policy.quota.publish == 1
+
+
+def test_policy_carries_long_run_policy() -> None:
+    automation = normalize_project_automation(
+        {
+            "long_run_policy": {
+                "mode": "factory_batch",
+                "batch_size": 12,
+                "defer_observation_failures": True,
+            },
+        }
+    )
+
+    policy = policy_from_automation(automation)
+
+    assert policy.long_run_policy.mode == "factory_batch"
+    assert policy.long_run_policy.batch_size == 12
+    assert policy.long_run_policy.defer_observation_failures is True

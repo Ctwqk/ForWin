@@ -226,6 +226,12 @@ def _generation_task_from_row(row: GenerationTask) -> dict[str, Any]:
         ],
         "cancel_requested": bool(row.cancel_requested),
         "pause_requested": bool(getattr(row, "pause_requested", False)),
+        "lease_owner": str(getattr(row, "lease_owner", "") or ""),
+        "lease_expires_at": getattr(row, "lease_expires_at", None),
+        "heartbeat_at": getattr(row, "heartbeat_at", None),
+        "resume_from_chapter": int(getattr(row, "resume_from_chapter", 0) or 0),
+        "run_until_chapter": int(getattr(row, "run_until_chapter", 0) or 0),
+        "max_chapters": int(getattr(row, "max_chapters", 0) or 0),
         "deleted": row.deleted_at is not None,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
@@ -265,6 +271,12 @@ def _apply_generation_task_to_row(
     )
     row.cancel_requested = bool(task.get("cancel_requested"))
     row.pause_requested = bool(task.get("pause_requested"))
+    row.lease_owner = str(task.get("lease_owner", "") or "")
+    row.lease_expires_at = task.get("lease_expires_at") or None
+    row.heartbeat_at = task.get("heartbeat_at") or None
+    row.resume_from_chapter = int(task.get("resume_from_chapter", 0) or 0)
+    row.run_until_chapter = int(task.get("run_until_chapter", 0) or 0)
+    row.max_chapters = int(task.get("max_chapters", 0) or 0)
     if row.created_at is None:
         row.created_at = task.get("created_at") or timestamp
     row.updated_at = task.get("updated_at") or timestamp
@@ -737,6 +749,12 @@ def _create_task_record(
         "frozen_artifacts": [],
         "cancel_requested": False,
         "pause_requested": False,
+        "lease_owner": "",
+        "lease_expires_at": None,
+        "heartbeat_at": None,
+        "resume_from_chapter": 0,
+        "run_until_chapter": 0,
+        "max_chapters": 0,
         "deleted": False,
         "persistence_degraded": False,
         "persistence_error": None,
@@ -768,6 +786,12 @@ def _serialize_task(task_id: str, task: dict[str, Any]) -> TaskSummaryResponse:
         paused_chapters=task.get("paused_chapters", []),
         frozen_artifacts=task.get("frozen_artifacts", []),
         pause_requested=bool(task.get("pause_requested")),
+        lease_owner=str(task.get("lease_owner", "") or ""),
+        lease_expires_at=_display_datetime(task.get("lease_expires_at")),
+        heartbeat_at=_display_datetime(task.get("heartbeat_at")),
+        resume_from_chapter=int(task.get("resume_from_chapter", 0) or 0),
+        run_until_chapter=int(task.get("run_until_chapter", 0) or 0),
+        max_chapters=int(task.get("max_chapters", 0) or 0),
         pausable=_task_is_pausable(task),
         resumable=_task_is_resumable(task),
         generation_control=GenerationControlInfo(

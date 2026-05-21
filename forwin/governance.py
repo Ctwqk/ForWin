@@ -142,6 +142,7 @@ class DecisionEventType:
     MEMORY_INDEX_UPSERT_STARTED = "memory_index_upsert_started"
     MEMORY_INDEX_UPSERT_SUCCEEDED = "memory_index_upsert_succeeded"
     MEMORY_INDEX_UPSERT_FAILED = "memory_index_upsert_failed"
+    DEFERRED_MAINTENANCE_RECORDED = "deferred_maintenance_recorded"
     MAP_GENERATION_STARTED = "map_generation_started"
     MAP_GENERATION_SUCCEEDED = "map_generation_succeeded"
     MAP_GENERATION_FAILED = "map_generation_failed"
@@ -277,6 +278,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.MEMORY_INDEX_UPSERT_STARTED,
     DecisionEventType.MEMORY_INDEX_UPSERT_SUCCEEDED,
     DecisionEventType.MEMORY_INDEX_UPSERT_FAILED,
+    DecisionEventType.DEFERRED_MAINTENANCE_RECORDED,
     DecisionEventType.MAP_GENERATION_STARTED,
     DecisionEventType.MAP_GENERATION_SUCCEEDED,
     DecisionEventType.MAP_GENERATION_FAILED,

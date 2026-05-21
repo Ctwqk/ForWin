@@ -62,6 +62,8 @@ POSTGRES_BASELINE_MIGRATIONS = (
     "narrative_obligations_v1",
     "canon_admission_obligation_fields_v1",
     "future_plan_audit_runs_v1",
+    "generation_task_leases_v1",
+    "trope_usage_records_v1",
 )
 
 
@@ -170,6 +172,8 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
         _upgrade_narrative_obligations(conn)
         _upgrade_canon_admission_obligation_fields(conn)
         _upgrade_future_plan_audit_runs(conn)
+        _upgrade_generation_task_leases(conn)
+        _upgrade_trope_usage_records(conn)
         conn.execute(
             text(
                 """
@@ -562,6 +566,49 @@ def _upgrade_future_plan_audit_runs(conn) -> None:
         conn.execute(text(f"ALTER TABLE future_plan_audit_runs ADD COLUMN IF NOT EXISTS {column} {ddl}"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_future_plan_audit_project_created ON future_plan_audit_runs (project_id, created_at)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_future_plan_audit_project_chapter ON future_plan_audit_runs (project_id, current_chapter_number)"))
+
+
+def _upgrade_generation_task_leases(conn) -> None:
+    for column, ddl in (
+        ("lease_owner", "VARCHAR NOT NULL DEFAULT ''"),
+        ("lease_expires_at", "TIMESTAMP NULL"),
+        ("heartbeat_at", "TIMESTAMP NULL"),
+        ("resume_from_chapter", "INTEGER NOT NULL DEFAULT 0"),
+        ("run_until_chapter", "INTEGER NOT NULL DEFAULT 0"),
+        ("max_chapters", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        conn.execute(text(f"ALTER TABLE generation_tasks ADD COLUMN IF NOT EXISTS {column} {ddl}"))
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_generation_tasks_lease "
+            "ON generation_tasks (status, lease_expires_at)"
+        )
+    )
+
+
+def _upgrade_trope_usage_records(conn) -> None:
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS trope_usage_records (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR NOT NULL REFERENCES projects(id),
+                arc_id VARCHAR NOT NULL DEFAULT '',
+                band_id VARCHAR NOT NULL DEFAULT '',
+                chapter_number INTEGER NOT NULL DEFAULT 0,
+                template_id VARCHAR NOT NULL,
+                category VARCHAR NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_trope_usage_project_band "
+            "ON trope_usage_records (project_id, band_id, created_at)"
+        )
+    )
 
 
 def upgrade_db(engine: Engine) -> None:

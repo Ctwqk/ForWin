@@ -799,25 +799,44 @@ class ChapterWriter:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("%s primary pass failed, retrying with reduced body: %s", label, exc)
-            shortened_body = chapter_body[: max(800, min(len(chapter_body), 1800))]
-            try:
-                return self._chat_json(
-                    prompt_builder(context, chapter_title, shortened_body),
-                    temperature=retry_temperature,
-                    max_tokens=retry_max_tokens,
-                    timeout_seconds=self.scene_call_timeout_seconds,
-                    max_attempts=1,
-                    retry_on_timeout=False,
-                    stage_key=label,
-                )
-            except Exception as repair_exc:  # noqa: BLE001
-                logger.warning("%s degraded to empty metadata after retry: %s", label, repair_exc)
-                return {
-                    "_generation_meta": {
-                        label: "degraded",
-                        f"{label}_error": str(repair_exc),
-                    }
+            last_error: Exception = exc
+            for shortened_body in self._structured_fallback_windows(chapter_body):
+                try:
+                    return self._chat_json(
+                        prompt_builder(context, chapter_title, shortened_body),
+                        temperature=retry_temperature,
+                        max_tokens=retry_max_tokens,
+                        timeout_seconds=self.scene_call_timeout_seconds,
+                        max_attempts=1,
+                        retry_on_timeout=False,
+                        stage_key=label,
+                    )
+                except Exception as repair_exc:  # noqa: BLE001
+                    last_error = repair_exc
+            logger.warning("%s degraded to empty metadata after retry: %s", label, last_error)
+            return {
+                "_generation_meta": {
+                    label: "degraded",
+                    f"{label}_error": str(last_error),
                 }
+            }
+
+    @staticmethod
+    def _structured_fallback_windows(chapter_body: str) -> list[str]:
+        body = str(chapter_body or "")
+        if len(body) <= 1800:
+            return [body]
+        midpoint = len(body) // 2
+        windows = [
+            body[:1200],
+            body[max(0, midpoint - 600) : min(len(body), midpoint + 600)],
+            body[-1600:],
+        ]
+        deduped: list[str] = []
+        for window in windows:
+            if window and window not in deduped:
+                deduped.append(window)
+        return deduped
 
     @staticmethod
     def _preview_summary(raw_summary: object, title: str, body: str) -> str:

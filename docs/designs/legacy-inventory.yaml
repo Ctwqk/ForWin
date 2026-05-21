@@ -7,11 +7,20 @@ policy:
   scan_roots:
     - forwin
     - scripts
+    - frontend
   excluded_roots:
     - tests
     - docs
     - forwin/**/__pycache__
     - scripts/**/__pycache__
+    - frontend/**/node_modules
+    - frontend/**/node_modules/**
+    - frontend/**/dist
+    - frontend/**/dist/**
+    - frontend/**/build
+    - frontend/**/build/**
+    - frontend/**/.next
+    - frontend/**/.next/**
   token_patterns:
     - legacy
     - Legacy
@@ -47,6 +56,9 @@ entries:
     allow_patterns:
       - state.location
       - legacy_location
+      - legacy_compatibility
+      - legacy_compat_observer
+      - legacy_identifier
       - book_state.state.location_fallback
       - book_state.state.location_patch_warning
     reason: New projects must use canonical location_id, not old state.location fallback.
@@ -79,6 +91,16 @@ entries:
     allow_patterns:
       - legacy_entity_id
       - create_legacy_entity
+      - legacy_compat_event_id
+      - _save_legacy_entity_compatibility_event
+      - legacy_entity_import
+      - import_legacy_character
+      - legacy Entity row
+      - legacy_entity_create
+      - LegacyCharacterImportRequest
+      - Legacy entity ids
+      - normalized_legacy_id
+      - legacy entity for
       - CHARACTER_IMPORTED_FROM_LEGACY
       - subworld.legacy_entity_id_bridge
       - subworld.create_legacy_entity
@@ -111,6 +133,23 @@ entries:
       - BookStateLegacyImportResponse
       - book_state.legacy_import.v1
       - LEGACY_REGION_PROMOTION
+      - legacy BookState import
+      - legacy_region_promotion
+      - legacy_entity_id
+      - legacy_entity_name
+      - legacy_entity_kind
+      - legacy_map_node_
+      - legacy_import
+      - create_legacy_entity
+      - import_legacy_character
+      - legacy_entity_import
+      - legacy entity import
+      - _promote_legacy_region_drafts
+      - _stable_legacy_region_id
+      - legacy_source
+      - legacy_entity_state
+      - legacy_relation_type
+      - legacy_table
     reason: Old BookState import is not needed after old projects are abandoned.
     removal_phase: phase_1
     verification:
@@ -136,6 +175,7 @@ entries:
       - legacy_relaxed
       - legacy_project_governance
       - treat_empty_as_legacy
+      - legacy_marker
       - governance.legacy_relaxed_fallback
     reason: Current generation must use serial canon governance, not the old relaxed mode.
     removal_phase: phase_1
@@ -166,6 +206,9 @@ entries:
     allow_patterns:
       - checkpoint_reason_with_legacy_status
       - legacy_status
+      - _record_legacy_checkpoint_status_compatibility
+      - legacy checkpoint status normalized
+      - legacy_identifier
       - api.legacy_checkpoint_status
     reason: Old checkpoint status strings are an API compatibility shim, not current behavior.
     removal_phase: phase_1
@@ -198,6 +241,8 @@ entries:
       - '"legacy"'
       - project.creation_status_legacy
       - _record_project_creation_status_legacy_compatibility
+      - _PROJECT_CREATION_STATUS_LEGACY_SUMMARY
+      - legacy project reached Genesis-only API guard
     reason: New projects must use explicit Genesis/writing lifecycle states, not legacy as a default.
     removal_phase: phase_4
     verification:
@@ -224,6 +269,16 @@ entries:
       - legacy_projection
       - LEGACY_PROJECTION_FAILED
       - projection.legacy_world_model_projection
+      - legacy_severity
+      - Legacy project scaffold
+      - legacy WorldModel projection
+      - legacy_entity_id
+      - legacy_compatibility
+      - legacy_identifier
+      - legacy_nested
+      - Legacy world_model_v4
+      - public legacy import path
+      - legacy path
       - legacy world_model_v4
       - LEGACY world model projection
     reason: BookState is canon; world v4 and legacy world model projection writes must end.
@@ -273,6 +328,7 @@ entries:
     paths:
       - scripts/audit_review_engine_cutover.py
       - forwin/review_engine/audit.py
+      - forwin/governance.py
       - forwin/orchestrator_loop_core/governance.py
       - forwin/orchestrator_loop_core/service.py
       - forwin/orchestrator_loop_core/world_projection.py
@@ -284,11 +340,56 @@ entries:
     allow_patterns:
       - LEGACY_COMPATIBILITY_REGISTRY
       - LEGACY_COMPATIBILITY_USED
+      - LEGACY_PROJECTION_FAILED
+      - LEGACY_REGION_PROMOTION
+      - CHARACTER_IMPORTED_FROM_LEGACY
+      - legacy_compatibility_used
+      - legacy_projection_failed
+      - legacy_region_promotion
+      - character_imported_from_legacy
       - build_legacy_compatibility_payload
       - summarize_legacy_compatibility_audit
       - collect_legacy_compatibility_static_counts
       - _record_legacy_compatibility_event
+      - legacy_compat_observer
+      - legacy_identifier
+      - legacy_entity_id
+      - legacy compatibility
       - legacy compatibility used
+      - legacy safety-net
+      - --include-legacy-compat
+      - include_legacy_compat
+      - legacy_compat_rows
+      - legacy_ids
+      - _legacy_compatibility_feature_detail
+      - _uses_legacy_safety_net
+      - live_source
+      - Legacy state.location
+      - legacy state.location
+      - Legacy world model
+      - Legacy repair
+      - projection.legacy_world_model_projection
+      - subworld.legacy_entity_id_bridge
+      - subworld.create_legacy_entity
+      - governance.legacy_relaxed_fallback
+      - api.legacy_checkpoint_status
+      - migration.legacy_book_state_import
+      - project.creation_status_legacy
+      - _record_project_creation_status_legacy_compatibility
+      - characters.create_legacy_entity_default_true
+      - dead_code.rule_profile_use_legacy_fallback
+      - Legacy BookState import
+      - LegacyBookStateImporter(
+      - Legacy chapter repair coordinator
+      - Legacy review repair-scope router
+      - Create legacy entity rows
+      - Project governance fallback to legacy_relaxed
+      - Normalize legacy checkpoint status strings
+      - Project-level legacy creation_status
+      - Character creation path that materializes legacy Entity rows
+      - Legacy rule-profile fallback parameter
+      - 'creation_status", "") or "").strip() == "legacy"'
+      - use_legacy_fallback
     reason: Runtime legacy compatibility audit exists only while compatibility paths are being removed.
     removal_phase: phase_8
     verification:
@@ -350,6 +451,9 @@ entries:
       - def _legacy
       - legacy = _legacy
       - _legacy()
+      - from forwin import book_genesis as legacy
+      - return legacy
+      - legacy.
     reason: These call current book_genesis helpers but use misleading legacy variable/function names.
     removal_phase: phase_5
     verification:
@@ -391,6 +495,9 @@ entries:
       - legacy_deps
       - legacy keyword dependencies
       - legacy flat
+      - legacy.pop
+      - 'if legacy:'
+      - sorted(legacy)
     reason: Flat legacy dependency injection shapes support old internal callers and should be removed.
     removal_phase: phase_6
     verification:
@@ -422,6 +529,7 @@ entries:
       - legacy_preview_enabled
       - legacy_write_quota
       - legacy_profile
+      - from_legacy_args
     reason: Old env/config aliases and constructor compatibility should not remain in current runtime.
     removal_phase: phase_6
     verification:
@@ -468,6 +576,7 @@ entries:
       - _accept_legacy_keys
       - _LEGACY_REPAIR_SCOPE_MAP
       - valid legacy RepairInstruction.repair_scope
+      - valid legacy
       - _legacy_json_preview_is_accepted
     reason: Old model keys, repair scope names, and writer preview formats are compatibility shims.
     removal_phase: phase_6
@@ -516,6 +625,10 @@ entries:
     allow_patterns:
       - legacy_source
       - region_source
+      - _record_subworld_legacy_compatibility
+      - legacy_identifier
+      - legacy entity id
+      - legacy entity row
     reason: New runtime metadata should use current source labels, not legacy_source.
     removal_phase: phase_4
     verification:

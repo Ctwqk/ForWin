@@ -200,13 +200,13 @@ def audit_inventory(
         for entry in matching_entries:
             hits_by_entry[entry.id] += 1
         if strict_patterns and not any(_entry_matches_line(entry, hit.line) for entry in matching_entries):
-            warnings.append(
+            issues.append(
                 AuditIssue(
                     kind="pattern_unmatched",
                     path=hit.path,
                     line_number=hit.line_number,
                     line=hit.line,
-                    message="path is covered but no allow_pattern matched this line",
+                    message=f"path is covered but no allow_pattern matched this line: {hit.line}",
                 )
             )
 
@@ -316,7 +316,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inventory", default=str(DEFAULT_INVENTORY), help="Inventory YAML path.")
     parser.add_argument("--check", action="store_true", help="Return non-zero when blocking issues exist.")
     parser.add_argument("--final", action="store_true", help="Require all active removal entries to be deleted.")
-    parser.add_argument("--strict-patterns", action="store_true", help="Warn for covered paths whose lines match no allow_pattern.")
+    parser.add_argument(
+        "--strict-patterns",
+        action="store_true",
+        help="Fail covered paths whose lines match no allow_pattern.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
     args = parser.parse_args(argv)
 

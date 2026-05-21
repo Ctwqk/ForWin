@@ -92,6 +92,45 @@ def test_audit_accepts_registered_path(tmp_path: Path) -> None:
     assert result.issues == []
 
 
+def test_strict_patterns_fail_registered_path_with_unregistered_line(tmp_path: Path) -> None:
+    from scripts.audit_legacy_inventory import audit_inventory
+
+    root = tmp_path
+    (root / "forwin").mkdir()
+    (root / "forwin" / "registered.py").write_text(
+        "CURRENT = 'known legacy compatibility'\n"
+        "NEW = 'legacy bypass that is not inventoried'\n",
+        encoding="utf-8",
+    )
+    inventory = root / "legacy-inventory.yaml"
+    _write_inventory(
+        inventory,
+        """
+  - id: sample.registered
+    category: runtime_delete
+    owner_area: sample
+    paths:
+      - forwin/registered.py
+    allow_patterns:
+      - known legacy compatibility
+    reason: Registered synthetic legacy reference.
+    removal_phase: phase_x
+    verification:
+      - unit
+    delete_when:
+      - synthetic condition
+    status: planned
+""",
+    )
+
+    result = audit_inventory(root=root, inventory_path=inventory, strict_patterns=True)
+
+    assert result.ok is False
+    assert [issue.kind for issue in result.issues] == ["pattern_unmatched"]
+    assert result.issues[0].path == "forwin/registered.py"
+    assert "legacy bypass" in result.issues[0].line
+
+
 def test_deleted_entry_residual_fails_only_when_deleted_pattern_matches(tmp_path: Path) -> None:
     from scripts.audit_legacy_inventory import audit_inventory
 
@@ -339,3 +378,53 @@ def test_cli_returns_nonzero_for_uncovered_hit(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "uncovered" in result.stdout
     assert "forwin/current.py" in result.stdout
+
+
+def test_cli_strict_patterns_returns_nonzero_for_unregistered_line(tmp_path: Path) -> None:
+    root = tmp_path
+    (root / "forwin").mkdir()
+    (root / "forwin" / "registered.py").write_text(
+        "CURRENT = 'known legacy compatibility'\n"
+        "NEW = 'legacy bypass that is not inventoried'\n",
+        encoding="utf-8",
+    )
+    inventory = root / "legacy-inventory.yaml"
+    _write_inventory(
+        inventory,
+        """
+  - id: sample.registered
+    category: runtime_delete
+    owner_area: sample
+    paths:
+      - forwin/registered.py
+    allow_patterns:
+      - known legacy compatibility
+    reason: Registered synthetic legacy reference.
+    removal_phase: phase_x
+    verification:
+      - unit
+    delete_when:
+      - synthetic condition
+    status: planned
+""",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/audit_legacy_inventory.py",
+            "--root",
+            str(root),
+            "--inventory",
+            str(inventory),
+            "--check",
+            "--strict-patterns",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        text=True,
+        capture_output=True,
+    )
+
+    assert result.returncode == 1
+    assert "pattern_unmatched" in result.stdout
+    assert "legacy bypass" in result.stdout

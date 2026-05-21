@@ -117,6 +117,12 @@ def _default_continue_executor(
             payload,
             task_id=task.id,
         )
+        completion_handler = _worker_completion_handler(
+            session_factory=session_factory,
+            task_id=task.id,
+            payload=payload,
+            worker_config=worker_config,
+        )
         update_task = _db_task_updater(session_factory)
         run_continue_project_with_config(
             task.id,
@@ -128,6 +134,7 @@ def _default_continue_executor(
             should_pause=_db_task_flag(session_factory, task.id, "pause_requested"),
             max_chapters=int(task.max_chapters or 0) or None,
             resume_from_chapter=resume_from_chapter,
+            completion_handler=completion_handler,
         )
         with session_factory.begin() as session:
             heartbeat_generation_task(
@@ -157,6 +164,12 @@ def _default_new_executor(
             payload,
             task_id=task.id,
         )
+        completion_handler = _worker_completion_handler(
+            session_factory=session_factory,
+            task_id=task.id,
+            payload=payload,
+            worker_config=worker_config,
+        )
         update_task = _db_task_updater(session_factory)
         run_generation_with_config(
             task.id,
@@ -168,6 +181,7 @@ def _default_new_executor(
             logger,
             should_abort=_db_task_flag(session_factory, task.id, "cancel_requested"),
             should_pause=_db_task_flag(session_factory, task.id, "pause_requested"),
+            completion_handler=completion_handler,
         )
         with session_factory.begin() as session:
             heartbeat_generation_task(
@@ -203,6 +217,39 @@ def _db_task_flag(
             return bool(getattr(row, attr, False)) if row is not None else True
 
     return _read
+
+
+def _worker_completion_handler(
+    *,
+    session_factory: Callable[[], Any],
+    task_id: str,
+    payload,
+    worker_config: Config,
+) -> Callable[[object], None]:
+    from forwin.generation.auto_continue import GenerationAutoContinueController
+
+    def _create_next_task(**kwargs: Any) -> str:
+        from forwin.api_core.generation import _create_continue_generation_task
+
+        return _create_continue_generation_task(**kwargs)
+
+    def _handle(result: object) -> None:
+        if not bool(getattr(payload, "auto_continue", True)):
+            return
+        controller = GenerationAutoContinueController(
+            session_factory=session_factory,
+            create_continue_generation_task=_create_next_task,
+        )
+        controller.after_task_completion(
+            result,
+            parent_task_id=task_id,
+            run_until_chapter=int(getattr(payload, "run_until_chapter", 0) or 0) or None,
+            max_chapters=int(getattr(payload, "max_chapters", 0) or 0) or None,
+            auto_continue=bool(getattr(payload, "auto_continue", True)),
+            runtime_config=worker_config,
+        )
+
+    return _handle
 
 
 def _apply_task_changes(row: GenerationTask, changes: dict[str, Any]) -> None:

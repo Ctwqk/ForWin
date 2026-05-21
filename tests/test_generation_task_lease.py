@@ -304,3 +304,45 @@ def test_worker_uses_initial_payload_for_new_generation(monkeypatch) -> None:
         assert calls[0][3] == 2
     finally:
         engine.dispose()
+
+
+def test_worker_continue_executor_passes_completion_handler(monkeypatch) -> None:
+    engine = get_engine(postgres_test_url("generation-worker-completion-handler"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    seen_completion_handlers: list[object] = []
+    try:
+        with Session.begin() as session:
+            session.add(
+                GenerationTask(
+                    id="task-worker-completion",
+                    task_kind="generation",
+                    status="queued",
+                    project_id="project-1",
+                    max_chapters=2,
+                    run_until_chapter=10,
+                    execution_payload_json=(
+                        '{"mode":"continue","auto_continue":true,'
+                        '"run_until_chapter":10,"max_chapters":2,'
+                        '"runtime_overrides":{}}'
+                    ),
+                )
+            )
+
+        def fake_run_continue_project_with_config(*args, **kwargs):
+            seen_completion_handlers.append(kwargs.get("completion_handler"))
+
+        monkeypatch.setattr(
+            "forwin.api_runtime.run_continue_project_with_config",
+            fake_run_continue_project_with_config,
+        )
+
+        run_one_generation_task(
+            session_factory=Session,
+            worker_id="worker-completion",
+            config=Config(minimax_api_key="sk-test"),
+        )
+
+        assert callable(seen_completion_handlers[0])
+    finally:
+        engine.dispose()

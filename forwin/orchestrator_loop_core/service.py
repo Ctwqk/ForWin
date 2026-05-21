@@ -78,9 +78,7 @@ class WritingOrchestrator:
         self.world_simulator = services.world_simulator
         self.arc_envelope_manager = services.arc_envelope_manager
         self.review_hub = services.review_hub
-        self.repair_policy = services.repair_policy
         self.repair_verifier = services.repair_verifier
-        self.final_acceptance_gate = services.final_acceptance_gate
         self._bind_orchestrator_runtime_hooks()
 
 

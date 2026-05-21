@@ -43,6 +43,13 @@ def test_draft_level_issue_routes_to_local_repair() -> None:
     assert decision.sub_action["scope"] == "draft"
 
 
+def test_soft_quality_issue_routes_to_local_repair() -> None:
+    decision = decide_repair_v2(_input_with_issue("hook_failure"))
+
+    assert decision.outcome == "local_repair"
+    assert decision.sub_action["scope"] == "draft"
+
+
 def test_chapter_level_issue_routes_to_chapter_patch_scope() -> None:
     decision = decide_repair_v2(_input_with_issue("single_chapter_pacing"))
 

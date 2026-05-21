@@ -10,7 +10,6 @@ from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.reviser.policy import RepairPolicy
 
 
 class RepairProgressTests(unittest.TestCase):
@@ -137,60 +136,6 @@ def test_repair_must_fix_is_carried_into_writer_rule_anchors() -> None:
 
     assert payload["rule_anchors"][0] == "repair must fix: 不要把终端审计窗口从239分钟延长到60小时。"
     assert "保留既有规则" in payload["rule_anchors"]
-
-
-def test_repair_policy_keeps_requested_local_scope_for_local_hard_error() -> None:
-    policy = RepairPolicy(max_attempts=3)
-
-    second_attempt = policy.decide(
-        verdict="fail",
-        operation_mode="blackbox",
-        attempts_completed=1,
-        requested_scope="draft",
-    )
-    third_attempt = policy.decide(
-        verdict="fail",
-        operation_mode="blackbox",
-        attempts_completed=2,
-        requested_scope="scene",
-    )
-
-    assert second_attempt.scope == "draft"
-    assert third_attempt.scope == "draft"
-
-
-def test_repair_policy_selects_configured_model_sequence() -> None:
-    policy = RepairPolicy(
-        max_attempts=3,
-        model_sequence=(
-            "deepseek-reasoner",
-            "deepseek-reasoner",
-            "gpt-5.3-codex-spark",
-        ),
-    )
-
-    first = policy.decide(
-        verdict="fail",
-        operation_mode="blackbox",
-        attempts_completed=0,
-    )
-    second = policy.decide(
-        verdict="fail",
-        operation_mode="blackbox",
-        attempts_completed=1,
-    )
-    third = policy.decide(
-        verdict="fail",
-        operation_mode="blackbox",
-        attempts_completed=2,
-    )
-
-    assert first.preferred_provider_kind == "deepseek"
-    assert first.preferred_model == "deepseek-reasoner"
-    assert second.preferred_provider_kind == "deepseek"
-    assert second.preferred_model == "deepseek-reasoner"
-    assert third.preferred_provider_kind == "spark"
-    assert third.preferred_model == "gpt-5.3-codex-spark"
 
 
 def test_structural_ledger_issue_does_not_pin_repair_to_requested_draft_scope() -> None:

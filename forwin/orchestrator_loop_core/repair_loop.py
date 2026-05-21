@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 from forwin.orchestrator_loop_core.common import *
-from forwin.review_engine.cutover import engine_live_enabled
-from forwin.review_engine.rules.repair_v2 import compare_repair_v2_shadow, decide_repair_v2
-from forwin.review_engine.types import DecisionInput, PlanLayerHealth
+from forwin.protocol.review import FinalGateDecision
+from forwin.review_engine.engine import AutoDecisionEngine
+from forwin.review_engine.rules.final_acceptance import build_final_acceptance_rules
+from forwin.review_engine.rules.repair_v2 import decide_repair_v2
+from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.reviser.local_rewrite_executor import LocalRewriteExecutor
+
+
+def _final_gate_from_engine_decision(decision: Decision) -> FinalGateDecision:
+    return FinalGateDecision(
+        decision=str(decision.sub_action.get("legacy_decision") or "manual_review_required"),
+        forceable=bool(decision.sub_action.get("forceable")),
+        reason=str(decision.reason or ""),
+        canon_risk=str(decision.sub_action.get("canon_risk") or "high"),
+        residual_issues=list(decision.sub_action.get("residual_issues") or []),
+        requires_human=bool(decision.sub_action.get("requires_human", True)),
+    )
+
 
 def _review_and_maybe_rewrite(
     self,
@@ -113,12 +127,6 @@ def _review_and_maybe_rewrite(
 
     while True:
         existing_attempts = repo.list_chapter_rewrite_attempts(project_id, chapter_plan.chapter_number)
-        repair_decision = self.repair_policy.decide(
-            verdict=current_review.verdict,
-            operation_mode=self.config.operation_mode,
-            attempts_completed=len(existing_attempts),
-            requested_scope=self._repair_policy_requested_scope(current_review),
-        )
         repair_v2_input = DecisionInput(
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
@@ -136,69 +144,33 @@ def _review_and_maybe_rewrite(
             plan_layer_health=PlanLayerHealth(),
         )
         repair_v2_decision = decide_repair_v2(repair_v2_input)
-        v2_scope = str(repair_v2_decision.sub_action.get("scope") or "")
-        repair_v2_live = bool(
-            getattr(self.config, "review_engine_repair_v2_enabled", False)
-        ) and engine_live_enabled(self.config, project_id)
-        repair_shadow = compare_repair_v2_shadow(
-            old_scope=repair_decision.scope,
-            new_scope=v2_scope,
-            enabled=repair_v2_live,
-        )
+        repair_scope = str(repair_v2_decision.sub_action.get("scope") or "")
         self._record_engine_decision_event(
             updater=updater,
             decision=repair_v2_decision,
             decision_input=repair_v2_input,
-            shadow_mismatch=repair_decision.scope != v2_scope,
-            live_or_shadow="live" if repair_v2_live else "shadow",
-            legacy_outcome=repair_decision.scope,
-            engine_outcome=v2_scope,
-            live_source="engine" if repair_v2_live else "legacy",
-            shadow_source="legacy" if repair_v2_live else "engine",
-            engine_live=repair_v2_live,
-            legacy_shadow_evaluated=repair_v2_live,
-            legacy_safety_net_used=not repair_v2_live,
+            shadow_mismatch=False,
+            live_or_shadow="live",
+            legacy_outcome="",
+            engine_outcome=repair_scope or str(repair_v2_decision.outcome or ""),
+            live_source="engine",
+            shadow_source="",
+            engine_live=True,
+            legacy_shadow_evaluated=False,
+            legacy_safety_net_used=False,
+            severe_mismatch=False,
             related_object_type="chapter_review",
             related_object_id=current_review_row.id,
             parent_event_id=str(current_review_event.id or ""),
         )
-        if repair_v2_live and repair_v2_decision.outcome in {
+        repair_can_run_locally = repair_v2_decision.outcome in {
             "local_repair",
             "chapter_patch",
             "band_patch",
-        }:
-            repair_decision = repair_decision.__class__(
-                kind="repair",
-                scope=repair_shadow.live_scope,
-                attempt_no=len(existing_attempts) + 1,
-                max_attempts=max(
-                    int(getattr(repair_decision, "max_attempts", 0) or 0),
-                    len(existing_attempts) + 1,
-                ),
-                reason="repair-v2-live",
-                preferred_provider_kind=getattr(
-                    repair_decision,
-                    "preferred_provider_kind",
-                    "",
-                ),
-                preferred_model=getattr(repair_decision, "preferred_model", ""),
-            )
-        elif repair_v2_live and repair_v2_decision.outcome in {
-            "arc_patch",
-            "book_patch",
-            "manual_review",
-            "system_block",
-        }:
-            repair_decision = repair_decision.__class__(
-                kind="pause_for_review",
-                reason=f"repair-v2-nonlocal-outcome:{repair_v2_decision.outcome}",
-            )
-        if repair_decision.kind != "repair":
-            final_gate = self.final_acceptance_gate.evaluate(
-                operation_mode=self.config.operation_mode,
-                review=current_review,
-                verification=current_review.repair_verification,
-            )
+        }
+        if not repair_can_run_locally:
+            final_decision = AutoDecisionEngine(build_final_acceptance_rules()).decide(repair_v2_input)
+            final_gate = _final_gate_from_engine_decision(final_decision)
             current_review = current_review.model_copy(
                 update={
                     "repair_exhausted": True,
@@ -229,11 +201,10 @@ def _review_and_maybe_rewrite(
                 return current_output, current_review, True
             return current_output, current_review, False
 
-        attempt_no = repair_decision.attempt_no
-        repair_scope = repair_decision.scope
+        attempt_no = len(existing_attempts) + 1
         repair_model_preference = {
-            "preferred_provider_kind": repair_decision.preferred_provider_kind,
-            "preferred_model": repair_decision.preferred_model,
+            "preferred_provider_kind": "",
+            "preferred_model": "",
         }
         repair_instruction = current_review.repair_instruction or self._default_repair_instruction(
             repair_scope=repair_scope,
@@ -332,7 +303,6 @@ def _review_and_maybe_rewrite(
         rewritten_output = None
         if (
             bool(getattr(self.config, "review_engine_local_rewrite_enabled", False))
-            and repair_v2_live
             and repair_v2_decision.outcome == "local_repair"
         ):
             issue_kind = str(repair_v2_decision.sub_action.get("issue_kind") or "")
@@ -385,8 +355,8 @@ def _review_and_maybe_rewrite(
                     paused_chapters=[],
                     frozen_artifacts=[],
                     trace_stage_key="chapter_rewrite",
-                    llm_preferred_provider_kind=repair_decision.preferred_provider_kind,
-                    llm_preferred_model=repair_decision.preferred_model,
+                    llm_preferred_provider_kind=repair_model_preference["preferred_provider_kind"],
+                    llm_preferred_model=repair_model_preference["preferred_model"],
                 )
             except Exception as exc:  # noqa: BLE001
                 attempt_row = updater.save_chapter_rewrite_attempt(

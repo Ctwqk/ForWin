@@ -390,6 +390,11 @@ def _legacy_compatibility_feature_detail(
             for event in events
             if int(event.get("chapter_number") or 0) > 0
         }
+        project_scope_events = sum(
+            1
+            for event in events
+            if int(event.get("chapter_number") or 0) <= 0
+        )
         legacy_ids: Counter[str] = Counter()
         canonical_ids: Counter[str] = Counter()
         usage_kinds: Counter[str] = Counter()
@@ -408,6 +413,7 @@ def _legacy_compatibility_feature_detail(
         detail[feature] = {
             "events": len(events),
             "unique_chapters": unique_chapters,
+            "project_scope_events": project_scope_events,
             "events_per_chapter_avg": (
                 round(len(events) / unique_chapters, 3) if unique_chapters else 0.0
             ),

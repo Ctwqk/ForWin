@@ -340,8 +340,54 @@ def test_legacy_compatibility_summary_includes_per_feature_detail() -> None:
     detail = summary["per_feature_detail"]["subworld.legacy_entity_id_bridge"]
     assert detail["events"] == 2
     assert detail["unique_chapters"] == 2
+    assert detail["project_scope_events"] == 0
     assert detail["events_per_chapter_avg"] == 1.0
     assert detail["top_legacy_identifiers"] == [["legacy-a", 2]]
+
+
+def test_legacy_compatibility_summary_marks_project_scope_events() -> None:
+    rows = [
+        {
+            "chapter_number": 0,
+            "payload": build_legacy_compatibility_payload(
+                compat_layer="subworld",
+                compat_feature="subworld.legacy_entity_id_bridge",
+                usage_kind="write_bridge",
+                source_module="forwin.subworld_manager",
+                usage_reason="project-level roster bridge",
+                legacy_identifier="legacy-a",
+                canonical_identifier="char-a",
+            ),
+        },
+        {
+            "payload": build_legacy_compatibility_payload(
+                compat_layer="subworld",
+                compat_feature="subworld.legacy_entity_id_bridge",
+                usage_kind="write_bridge",
+                source_module="forwin.subworld_manager",
+                usage_reason="project-level roster bridge",
+                legacy_identifier="legacy-b",
+                canonical_identifier="char-b",
+            ),
+        },
+    ]
+
+    summary = summarize_legacy_compatibility_audit(
+        rows,
+        registry={
+            "subworld.legacy_entity_id_bridge": {
+                "compat_layer": "subworld",
+                "removal_mode": "candidate_if_unused",
+                "instrumentation_status": "instrumented",
+            }
+        },
+        static_counts={"subworld.legacy_entity_id_bridge": 1},
+    )
+
+    detail = summary["per_feature_detail"]["subworld.legacy_entity_id_bridge"]
+    assert detail["events"] == 2
+    assert detail["unique_chapters"] == 0
+    assert detail["project_scope_events"] == 2
 
 
 def test_record_legacy_compatibility_event_writes_fact_event() -> None:

@@ -5,6 +5,9 @@ import subprocess
 import sys
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def _write_inventory(path: Path, entries: str) -> None:
     path.write_text(
         "\n".join(
@@ -129,6 +132,25 @@ def test_strict_patterns_fail_registered_path_with_unregistered_line(tmp_path: P
     assert [issue.kind for issue in result.issues] == ["pattern_unmatched"]
     assert result.issues[0].path == "forwin/registered.py"
     assert "legacy bypass" in result.issues[0].line
+
+
+def test_real_inventory_policy_scans_frontend_sources_and_excludes_generated_dirs(tmp_path: Path) -> None:
+    from scripts.audit_legacy_inventory import load_inventory, scan_legacy_hits
+
+    root = tmp_path
+    source_file = root / "frontend" / "world-studio" / "src" / "App.tsx"
+    nested_vendor_file = root / "frontend" / "world-studio" / "node_modules" / "pkg" / "index.ts"
+    top_vendor_file = root / "frontend" / "node_modules" / "pkg" / "index.ts"
+    top_dist_file = root / "frontend" / "dist" / "bundle.js"
+    nested_dist_file = root / "frontend" / "world-studio" / "dist" / "bundle.js"
+    for path in [source_file, nested_vendor_file, top_vendor_file, top_dist_file, nested_dist_file]:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("export const label = 'legacy marker';\n", encoding="utf-8")
+
+    policy = load_inventory(REPO_ROOT / "docs/designs/legacy-inventory.yaml")["policy"]
+    hits = scan_legacy_hits(root=root, policy=policy)
+
+    assert [hit.path for hit in hits] == ["frontend/world-studio/src/App.tsx"]
 
 
 def test_deleted_entry_residual_fails_only_when_deleted_pattern_matches(tmp_path: Path) -> None:
@@ -370,7 +392,7 @@ def test_cli_returns_nonzero_for_uncovered_hit(tmp_path: Path) -> None:
             str(inventory),
             "--check",
         ],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=REPO_ROOT,
         text=True,
         capture_output=True,
     )
@@ -420,7 +442,7 @@ def test_cli_strict_patterns_returns_nonzero_for_unregistered_line(tmp_path: Pat
             "--check",
             "--strict-patterns",
         ],
-        cwd=Path(__file__).resolve().parents[1],
+        cwd=REPO_ROOT,
         text=True,
         capture_output=True,
     )

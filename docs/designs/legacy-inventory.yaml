@@ -13,6 +13,14 @@ policy:
     - docs
     - forwin/**/__pycache__
     - scripts/**/__pycache__
+    - frontend/node_modules
+    - frontend/node_modules/**
+    - frontend/dist
+    - frontend/dist/**
+    - frontend/build
+    - frontend/build/**
+    - frontend/.next
+    - frontend/.next/**
     - frontend/**/node_modules
     - frontend/**/node_modules/**
     - frontend/**/dist

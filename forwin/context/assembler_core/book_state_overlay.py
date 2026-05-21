@@ -148,7 +148,6 @@ def _resolve_book_state_location_id(
     for raw in (
         state.get("location_id"),
         state.get("current_location_id"),
-        state.get("location"),
         node.profile.get("map_node_id"),
         node.profile.get("location_id"),
     ):

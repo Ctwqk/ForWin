@@ -54,7 +54,7 @@ categories:
 
 entries:
   - id: book_state.state.location_fallback
-    category: runtime_delete
+    category: deleted
     owner_area: book_state
     paths:
       - forwin/book_state/runtime.py
@@ -62,22 +62,19 @@ entries:
       - forwin/map/service.py
       - forwin/context/assembler_core/book_state_overlay.py
     allow_patterns:
-      - state.location
       - legacy_location
-      - legacy_compatibility
       - legacy_compat_observer
-      - legacy_identifier
       - book_state.state.location_fallback
       - book_state.state.location_patch_warning
     reason: New projects must use canonical location_id, not old state.location fallback.
-    removal_phase: phase_4
+    removal_phase: complete
     verification:
       - unit
       - sixty_chapter_runtime_audit
     delete_when:
       - location_id-only BookState and map tests pass
       - 60 chapter audit reports zero location fallback and patch-warning events
-    status: planned
+    status: deleted
 
   - id: canonical_identity.legacy_entity_id
     category: deleted
@@ -218,7 +215,7 @@ entries:
     status: deleted
 
   - id: project.creation_status_legacy
-    category: runtime_delete
+    category: deleted
     owner_area: project_lifecycle
     paths:
       - forwin/api_core/runtime.py
@@ -234,14 +231,12 @@ entries:
       - forwin/project_payloads/project_summary.py
       - forwin/state/updater.py
     allow_patterns:
-      - creation_status
-      - '"legacy"'
       - project.creation_status_legacy
       - _record_project_creation_status_legacy_compatibility
       - _PROJECT_CREATION_STATUS_LEGACY_SUMMARY
       - legacy project reached Genesis-only API guard
     reason: New projects must use explicit Genesis/writing lifecycle states, not legacy as a default.
-    removal_phase: phase_4
+    removal_phase: complete
     verification:
       - genesis_tests
       - mcp_model_tests
@@ -249,7 +244,7 @@ entries:
     delete_when:
       - new project default lifecycle state is explicit and current
       - 60 chapter audit reports zero project.creation_status_legacy events
-    status: planned
+    status: deleted
 
   - id: projection.world_v4_compat
     category: deleted
@@ -479,7 +474,7 @@ entries:
     status: planned
 
   - id: genesis.legacy_pack_payload_upgrade
-    category: runtime_delete
+    category: deleted
     owner_area: genesis
     paths:
       - forwin/book_genesis_core/helpers.py
@@ -489,14 +484,14 @@ entries:
       - _legacy_world_root_from_pack
       - legacy payload compatibility
     reason: Old Genesis pack shape upgrade is old-project compatibility after legacy projects are abandoned.
-    removal_phase: phase_4
+    removal_phase: complete
     verification:
       - genesis_tests
       - inventory_final
     delete_when:
       - current Genesis pack tests pass without legacy top-level section upgrade
       - workspace normalizer docs describe only current pack compatibility
-    status: planned
+    status: deleted
 
   - id: external.route_dependency_legacy_kwargs
     category: external_compat_delete

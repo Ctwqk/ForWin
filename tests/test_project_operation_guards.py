@@ -60,7 +60,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.engine.dispose()
         self.tmpdir.cleanup()
 
-    def _create_project(self, *, project_id: str | None = None) -> Project:
+    def _create_project(self, *, project_id: str | None = None, creation_status: str | None = None) -> Project:
         with self.session_factory() as session:
             project = Project(
                 id=project_id or new_id(),
@@ -69,12 +69,14 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 genre="玄幻",
                 setting_summary="测试设定",
             )
+            if creation_status is not None:
+                project.creation_status = creation_status
             session.add(project)
             session.commit()
             return project
 
     def test_generate_rejects_existing_project_with_active_generation_task(self) -> None:
-        project = self._create_project(project_id="proj-active-generate")
+        project = self._create_project(project_id="proj-active-generate", creation_status="writing")
         with self.session_factory() as session:
             session.add(
                 GenerationTask(
@@ -218,7 +220,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertIn("不要回退成几天", first_future_contract)
 
     def test_extend_generation_rejects_active_generation_task(self) -> None:
-        project = self._create_project(project_id="proj-extend-active")
+        project = self._create_project(project_id="proj-extend-active", creation_status="writing")
 
         with self.assertRaises(HTTPException) as ctx:
             api_project_ops.extend_project_generation(
@@ -890,7 +892,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertTrue(governance.governance.future_constraints_enabled)
 
     def test_continue_generation_rejects_failed_band_checkpoint(self) -> None:
-        project = self._create_project(project_id="proj-band-checkpoint")
+        project = self._create_project(project_id="proj-band-checkpoint", creation_status="writing")
         with self.session_factory() as session:
             arc = ArcPlanVersion(
                 id="arc-band-checkpoint",
@@ -942,7 +944,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertIn("checkpoint", str(ctx.exception.detail))
 
     def test_continue_generation_rejects_drafted_chapter_waiting_for_acceptance(self) -> None:
-        project = self._create_project(project_id="proj-drafted-waits")
+        project = self._create_project(project_id="proj-drafted-waits", creation_status="writing")
         with self.session_factory() as session:
             arc = ArcPlanVersion(
                 id="arc-drafted-waits",

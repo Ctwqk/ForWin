@@ -10,33 +10,6 @@ from typing import Any, Iterable, Mapping
 from .types import Decision, DecisionInput
 
 LEGACY_COMPATIBILITY_REGISTRY: dict[str, dict[str, Any]] = {
-    "book_state.state.location_fallback": {
-        "compat_layer": "book_state",
-        "default_assessment": "candidate_if_unused",
-        "removal_mode": "candidate_if_unused",
-        "instrumentation_status": "instrumented",
-        "static_patterns": "legacy_compat_observer(",
-        "description": "Fallback from BookState runtime location to legacy state.location.",
-    },
-    "book_state.state.location_patch_warning": {
-        "compat_layer": "book_state",
-        "default_assessment": "candidate_if_unused",
-        "removal_mode": "candidate_if_unused",
-        "instrumentation_status": "instrumented",
-        "static_patterns": 'code="movement_unknown_map_node"',
-        "description": "Legacy state.location patches downgraded to warnings.",
-    },
-    "project.creation_status_legacy": {
-        "compat_layer": "project",
-        "default_assessment": "must_migrate_if_used",
-        "removal_mode": "must_migrate_if_used",
-        "instrumentation_status": "static_only",
-        "static_patterns": [
-            'creation_status", "") or "").strip() == "legacy"',
-            "_record_project_creation_status_legacy_compatibility(",
-        ],
-        "description": "Project-level legacy creation_status compatibility paths.",
-    },
     "dead_code.repair_loop_detector": {
         "compat_layer": "dead_code",
         "default_assessment": "dead_code_candidate",

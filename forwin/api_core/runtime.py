@@ -337,8 +337,9 @@ def _active_genesis_revision(session: Session, project: Project) -> BookGenesisR
 
 
 def _require_genesis_project(project: Project) -> None:
-    if str(getattr(project, "creation_status", "") or "").strip() == "legacy":
-        raise HTTPException(400, "旧项目未启用 Genesis 工作流。")
+    creation_status = str(getattr(project, "creation_status", "") or "").strip()
+    if creation_status and creation_status not in {"creating", "genesis_ready", "writing"}:
+        raise HTTPException(400, f"项目生命周期状态无效：{creation_status}")
 
 
 def _genesis_patch_payload(req: BookGenesisPatchRequest) -> dict[str, Any]:

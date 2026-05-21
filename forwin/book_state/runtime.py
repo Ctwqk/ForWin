@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Callable
 from typing import Any
 
 from forwin.book_state.cognition import CognitionView
@@ -233,18 +232,9 @@ def distance_between_world_nodes(
     *,
     metric: str = "travel_time",
     observer: tuple[str, str] | None = None,
-    legacy_compat_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> PathResult:
-    source_location = _resolve_location(
-        world,
-        source_node_id,
-        legacy_compat_observer=legacy_compat_observer,
-    )
-    target_location = _resolve_location(
-        world,
-        target_node_id,
-        legacy_compat_observer=legacy_compat_observer,
-    )
+    source_location = _resolve_location(world, source_node_id)
+    target_location = _resolve_location(world, target_node_id)
     if not source_location:
         return PathResult(
             reachable=False,
@@ -274,29 +264,11 @@ def distance_between_world_nodes(
 def _resolve_location(
     world: ObjectiveWorldGraph,
     node_id: str,
-    *,
-    legacy_compat_observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> str:
     state = world.get_state(node_id)
     location_id = str(state.get("location_id", "") or "").strip()
     if location_id:
         return location_id
-    legacy_location = str(state.get("location", "") or "").strip()
-    if legacy_location:
-        if legacy_compat_observer is not None:
-            legacy_compat_observer(
-                {
-                    "compat_layer": "book_state",
-                    "compat_feature": "book_state.state.location_fallback",
-                    "usage_kind": "read_fallback",
-                    "source_module": "forwin.book_state.runtime",
-                    "usage_reason": "state.location used because location_id is missing",
-                    "compat_key": "state.location",
-                    "legacy_identifier": legacy_location,
-                    "metadata": {"node_id": node_id, "field_path": "state.location"},
-                }
-            )
-        return legacy_location
     current_activity_id = str(state.get("current_activity_id", "") or "").strip()
     if current_activity_id:
         activity_state = world.get_state(current_activity_id)

@@ -718,7 +718,7 @@ class NPCIntentGenerator:
                 except (json.JSONDecodeError, TypeError):
                     state = {}
             status = str(state.get("status", "normal") or "normal")
-            location = str(state.get("location", "") or "")
+            location = str(state.get("location_id", "") or state.get("current_location_id", "") or "")
 
             intent_kind = "pressure" if index == 0 else "pursue"
             urgency = max(1, min(5, 5 - index))

@@ -98,7 +98,7 @@ class ProjectSummary(ProjectArcSnapshotFields):
     needs_review_chapter_count: int = 0
     upload_task_count: int = 0
     uploaded_chapter_count: int = 0
-    creation_status: str = "legacy"
+    creation_status: str = "creating"
     active_genesis_revision_id: str = ""
     genesis_stage_overview: list[BookGenesisStageState] = Field(default_factory=list)
     can_start_writing: bool = False
@@ -166,7 +166,7 @@ class ProjectDetail(ProjectArcSnapshotFields):
     genre: str
     setting_summary: str
     target_total_chapters: int = 3
-    creation_status: str = "legacy"
+    creation_status: str = "creating"
     active_genesis_revision_id: str = ""
     genesis_stage_overview: list[BookGenesisStageState] = Field(default_factory=list)
     can_start_writing: bool = False

@@ -533,7 +533,7 @@ class ForWinAPIClient:
             genre=str(raw.get("genre", "")),
             premise=str(raw.get("premise", "")),
             setting_summary=str(raw.get("setting_summary", "")),
-            creation_status=str(raw.get("creation_status", "legacy")),
+            creation_status=str(raw.get("creation_status", "creating")),
             active_genesis_revision_id=str(raw.get("active_genesis_revision_id", "")),
             can_start_writing=bool(raw.get("can_start_writing", False)),
             target_total_chapters=int(raw.get("target_total_chapters", 0) or 0),

@@ -717,7 +717,7 @@
         titleWrap.appendChild(createNode('div', `${book.genre || ''}${book.created_at ? ` | 创建于 ${book.created_at}` : ''}`, 'meta-line'));
         top.appendChild(titleWrap);
         const badges = createNode('div', '', 'badge-row');
-        if (book.creation_status && book.creation_status !== 'legacy') {
+        if (book.creation_status) {
           badges.appendChild(createNode('span', `Genesis · ${book.creation_status}`, `badge ${book.creation_status === 'genesis_ready' ? 'ok' : 'warn'}`));
         }
         badges.appendChild(createNode('span', `目标 ${book.target_total_chapters || @@DEFAULT_CHAPTERS_JSON@@} 章`, 'badge'));

@@ -53,7 +53,7 @@ def detect_conflicts(snapshot: dict[str, Any]) -> list[WorldModelConflict]:
             continue
         name = str(character.get("name", "") or "").strip()
         state = character.get("current_state") if isinstance(character.get("current_state"), dict) else {}
-        location = str(state.get("location", "") or "").strip()
+        location = str(state.get("location_id", "") or state.get("current_location_id", "") or "").strip()
         chapter = int(character.get("state_chapter", 0) or 0)
         if name and location and chapter:
             locations_by_chapter[(chapter, name)].add(location)

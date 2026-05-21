@@ -425,7 +425,7 @@ def build_detail(self, *, session: Session, project: Project) -> dict[str, Any]:
     ).scalars().all()
     return {
         "project_id": project.id,
-        "creation_status": str(getattr(project, "creation_status", "") or "legacy"),
+        "creation_status": str(getattr(project, "creation_status", "") or "creating"),
         "active_genesis_revision_id": str(getattr(project, "active_genesis_revision_id", "") or ""),
         "revision": int(getattr(revision, "revision", 1) or 1),
         "pack": pack,

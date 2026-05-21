@@ -110,7 +110,7 @@ class ProjectView(BaseModel):
     genre: str
     premise: str = ""
     setting_summary: str = ""
-    creation_status: str = "legacy"
+    creation_status: str = "creating"
     active_genesis_revision_id: str = ""
     can_start_writing: bool = False
     target_total_chapters: int = 0

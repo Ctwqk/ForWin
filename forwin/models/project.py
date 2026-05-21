@@ -18,7 +18,7 @@ class Project(Base):
     genre: Mapped[str] = mapped_column(String, default="玄幻")
     setting_summary: Mapped[str] = mapped_column(Text, default="")
     target_total_chapters: Mapped[int] = mapped_column(Integer, default=3)
-    creation_status: Mapped[str] = mapped_column(String, default="legacy")
+    creation_status: Mapped[str] = mapped_column(String, default="creating")
     active_genesis_revision_id: Mapped[str] = mapped_column(String, default="")
     automation_json: Mapped[str] = mapped_column(Text, default="{}")
     governance_json: Mapped[str] = mapped_column(Text, default="{}")

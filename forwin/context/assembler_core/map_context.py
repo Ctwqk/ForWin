@@ -229,7 +229,7 @@ def _build_map_context(repo_session, project_id: str, entities: list, genesis_st
     for entity in entities:
         state = getattr(entity, "current_state", {}) or {}
         location_id = _resolve_map_node_id(
-            str(state.get("location_id", "") or state.get("location", "") or ""),
+            str(state.get("location_id", "") or state.get("current_location_id", "") or ""),
             node_by_id=node_by_id,
             node_id_by_source=node_id_by_source,
             node_id_by_name=node_id_by_name,

@@ -293,9 +293,6 @@ def resolve_world_node_location_id(world: ObjectiveWorldGraph, node_id: str) -> 
     location_id = str(state.get("location_id", "") or "").strip()
     if location_id:
         return location_id
-    legacy_location = str(state.get("location", "") or "").strip()
-    if legacy_location:
-        return legacy_location
     current_activity_id = str(state.get("current_activity_id", "") or "").strip()
     if current_activity_id:
         activity_state = world.get_state(current_activity_id)

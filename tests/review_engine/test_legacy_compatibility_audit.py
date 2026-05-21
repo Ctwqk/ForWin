@@ -23,23 +23,23 @@ def test_legacy_compatibility_event_type_is_registered() -> None:
 def test_legacy_compatibility_payload_records_facts_only() -> None:
     payload = build_legacy_compatibility_payload(
         compat_layer="book_state",
-        compat_feature="book_state.state.location_fallback",
+        compat_feature="compat.synthetic_candidate",
         usage_kind="read_fallback",
         source_module="forwin.book_state.runtime",
-        usage_reason="state.location present",
-        compat_key="state.location",
+        usage_reason="synthetic compatibility path present",
+        compat_key="synthetic.key",
         legacy_identifier="旧城",
         canonical_identifier="",
         related_stage="compile_runtime",
-        metadata={"field_path": "state.location"},
+        metadata={"field_path": "synthetic.key"},
     )
 
     assert payload["compat_layer"] == "book_state"
-    assert payload["compat_feature"] == "book_state.state.location_fallback"
+    assert payload["compat_feature"] == "compat.synthetic_candidate"
     assert payload["usage_kind"] == "read_fallback"
     assert payload["source_module"] == "forwin.book_state.runtime"
-    assert payload["usage_reason"] == "state.location present"
-    assert payload["metadata"] == {"field_path": "state.location"}
+    assert payload["usage_reason"] == "synthetic compatibility path present"
+    assert payload["metadata"] == {"field_path": "synthetic.key"}
     assert "delete_candidate" not in payload
     assert "blocking_for_removal" not in payload
 
@@ -50,31 +50,42 @@ def test_legacy_compatibility_summary_assesses_usage_after_collection() -> None:
             {
                 "payload": build_legacy_compatibility_payload(
                     compat_layer="book_state",
-                    compat_feature="book_state.state.location_fallback",
+                    compat_feature="compat.synthetic_candidate",
                     usage_kind="read_fallback",
                     source_module="forwin.book_state.runtime",
-                    usage_reason="state.location present",
+                    usage_reason="synthetic compatibility path present",
                 )
             },
             {
                 "payload": build_legacy_compatibility_payload(
                     compat_layer="project",
-                    compat_feature="project.creation_status_legacy",
+                    compat_feature="compat.synthetic_project",
                     usage_kind="project_lifecycle_fallback",
                     source_module="forwin.project_payloads.project_summary",
-                    usage_reason="legacy project lifecycle fallback invoked",
+                    usage_reason="synthetic project fallback invoked",
                 )
             },
         ],
-        registry=LEGACY_COMPATIBILITY_REGISTRY,
+        registry={
+            "compat.synthetic_candidate": {
+                "compat_layer": "book_state",
+                "removal_mode": "candidate_if_unused",
+                "instrumentation_status": "instrumented",
+            },
+            "compat.synthetic_project": {
+                "compat_layer": "project",
+                "removal_mode": "must_migrate_if_used",
+                "instrumentation_status": "instrumented",
+            },
+        },
     )
 
     assert summary["total_events"] == 2
     assert summary["by_layer"]["book_state"] == 1
-    assert summary["by_feature"]["book_state.state.location_fallback"] == 1
+    assert summary["by_feature"]["compat.synthetic_candidate"] == 1
     blockers = summary["removal_assessment"]["blocking_for_removal"]
     assert any(
-        item["compat_feature"] == "book_state.state.location_fallback"
+        item["compat_feature"] == "compat.synthetic_candidate"
         and item["reason"] == "used during audit window"
         and item["events"] == 1
         and item["static_callers"] is None
@@ -85,10 +96,19 @@ def test_legacy_compatibility_summary_assesses_usage_after_collection() -> None:
 
 
 def test_legacy_compatibility_summary_marks_unused_candidates() -> None:
-    summary = summarize_legacy_compatibility_audit([], registry=LEGACY_COMPATIBILITY_REGISTRY)
+    summary = summarize_legacy_compatibility_audit(
+        [],
+        registry={
+            "compat.synthetic_candidate": {
+                "compat_layer": "book_state",
+                "removal_mode": "candidate_if_unused",
+                "instrumentation_status": "instrumented",
+            }
+        },
+    )
 
     assert any(
-        item["compat_feature"] == "book_state.state.location_fallback"
+        item["compat_feature"] == "compat.synthetic_candidate"
         and item["reason"] == "unused during audit window"
         and item["events"] == 0
         and item["static_callers"] is None
@@ -218,27 +238,27 @@ def test_static_legacy_compatibility_counts_exclude_registry_and_tests(tmp_path)
     source_root = tmp_path / "forwin"
     (source_root / "review_engine").mkdir(parents=True)
     (source_root / "runtime.py").write_text(
-        'record_compat(compat_feature="book_state.state.location_fallback")\n',
+        'record_compat(compat_feature="compat.synthetic_candidate")\n',
         encoding="utf-8",
     )
     (source_root / "review_engine" / "audit.py").write_text(
-        '"book_state.state.location_fallback"\n',
+        '"compat.synthetic_candidate"\n',
         encoding="utf-8",
     )
     (source_root / "test_fake.py").write_text(
-        '"book_state.state.location_fallback"\n',
+        '"compat.synthetic_candidate"\n',
         encoding="utf-8",
     )
     registry = {
-        "book_state.state.location_fallback": {
+        "compat.synthetic_candidate": {
             "compat_layer": "book_state",
-            "static_patterns": ["book_state.state.location_fallback"],
+            "static_patterns": ["compat.synthetic_candidate"],
         }
     }
 
     counts = collect_legacy_compatibility_static_counts(source_root, registry=registry)
 
-    assert counts == {"book_state.state.location_fallback": 1}
+    assert counts == {"compat.synthetic_candidate": 1}
 
 
 def test_static_counts_ignore_imports_definitions_and_migrations(tmp_path) -> None:
@@ -419,16 +439,16 @@ def test_record_legacy_compatibility_event_writes_fact_event() -> None:
         project_id="project-1",
         chapter_number=7,
         compat_layer="book_state",
-        compat_feature="book_state.state.location_fallback",
+        compat_feature="compat.synthetic_candidate",
         usage_kind="read_fallback",
         source_module="forwin.book_state.runtime",
-        usage_reason="state.location present",
+        usage_reason="synthetic compatibility path present",
     )
 
     event = recorder.events[0]
     assert event.event_type == DecisionEventType.LEGACY_COMPATIBILITY_USED
     assert event.event_family == "runtime_observation"
-    assert event.payload["compat_feature"] == "book_state.state.location_fallback"
+    assert event.payload["compat_feature"] == "compat.synthetic_candidate"
 
 
 def test_cutover_audit_help_exposes_legacy_compat_flag() -> None:

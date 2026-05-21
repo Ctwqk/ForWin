@@ -41,7 +41,7 @@ def _project_personality_integrity_strict(project) -> bool:
     personality_policy = automation.get("character_personality") if isinstance(automation, dict) else {}
     if isinstance(personality_policy, dict) and "strict_integrity" in personality_policy:
         return bool(personality_policy.get("strict_integrity"))
-    return str(getattr(project, "creation_status", "") or "legacy") != "legacy"
+    return True
 
 
 def _personality_integrity_issues(

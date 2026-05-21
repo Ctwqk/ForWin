@@ -19,18 +19,20 @@ from tests.postgres import postgres_test_url
 from tests.test_personality_assignment import _write_skill
 
 
-def _seed_allowed_bare_character(session, *, creation_status: str, strict: bool | None):
+def _seed_allowed_bare_character(session, *, creation_status: str | None = None, strict: bool | None):
     updater = StateUpdater(session)
     automation = {}
     if strict is not None:
         automation = {"character_personality": {"strict_integrity": strict}}
-    project = updater.create_project(
-        title="人格运行时",
-        premise="p",
-        genre="玄幻",
-        creation_status=creation_status,
-        automation_json=json.dumps(automation, ensure_ascii=False),
-    )
+    create_kwargs = {
+        "title": "人格运行时",
+        "premise": "p",
+        "genre": "玄幻",
+        "automation_json": json.dumps(automation, ensure_ascii=False),
+    }
+    if creation_status is not None:
+        create_kwargs["creation_status"] = creation_status
+    project = updater.create_project(**create_kwargs)
     arc = updater.create_arc_plan(project.id, "弧线")
     chapter = updater.create_chapter_plan(
         project_id=project.id,
@@ -72,19 +74,16 @@ def _seed_allowed_bare_character(session, *, creation_status: str, strict: bool 
     return project.id, chapter
 
 
-def test_assemble_context_warns_for_missing_personality_loadout_in_legacy_project() -> None:
+def test_assemble_context_blocks_missing_personality_loadout_for_current_project_default() -> None:
     engine = get_engine(postgres_test_url("character-personality-context-warn"))
     init_db(engine)
     Session = get_session_factory(engine)
 
     with Session.begin() as session:
-        project_id, chapter = _seed_allowed_bare_character(session, creation_status="legacy", strict=None)
+        project_id, chapter = _seed_allowed_bare_character(session, strict=None)
 
-        context = assemble_context(StateRepository(session), project_id, chapter)
-
-    assert context.personality_integrity_issues
-    assert context.personality_integrity_issues[0]["code"] == "personality_missing_loadout"
-    assert context.active_personality_contexts == []
+        with pytest.raises(ValueError, match="personality_missing_loadout"):
+            assemble_context(StateRepository(session), project_id, chapter)
 
 
 def test_assemble_context_blocks_missing_personality_loadout_when_strict() -> None:

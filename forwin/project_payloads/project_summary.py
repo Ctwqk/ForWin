@@ -210,7 +210,7 @@ def build_project_summaries(
                     project,
                     int(chapter_stats.get("chapter_count", 0) or 0),
                 ),
-                creation_status=str(getattr(project, "creation_status", "") or "legacy"),
+                creation_status=str(getattr(project, "creation_status", "") or "creating"),
                 active_genesis_revision_id=str(getattr(project, "active_genesis_revision_id", "") or ""),
                 genesis_stage_overview=_stage_overview_from_revision(genesis_revision),
                 can_start_writing=_can_start_writing(project, genesis_revision),

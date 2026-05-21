@@ -1340,7 +1340,7 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.assertTrue(faction["id"])
         self.assertEqual(node["parent_subworld"], submap["id"])
 
-    def test_legacy_top_level_genesis_sections_upgrade_on_read_and_write_back_as_world_root(self) -> None:
+    def test_top_level_old_genesis_sections_are_not_promoted_on_read(self) -> None:
         created = api_module.create_project(
             ProjectCreateRequest.model_validate(
                 {
@@ -1373,9 +1373,9 @@ class BookGenesisFlowTests(unittest.TestCase):
             session.commit()
 
         detail = api_module.get_project_genesis(created.project_id)
-        self.assertEqual(detail.pack.world["world_bible"]["overview"], "旧格式世界观")
-        self.assertEqual(detail.pack.world["map_atlas"]["overview"], "旧格式地图")
-        self.assertEqual(detail.pack.world["story_engine"]["long_arcs"], ["旧格式引擎"])
+        self.assertNotEqual(detail.pack.world["world_bible"].get("overview"), "旧格式世界观")
+        self.assertNotEqual(detail.pack.world["map_atlas"].get("overview"), "旧格式地图")
+        self.assertNotEqual(detail.pack.world["story_engine"].get("long_arcs"), ["旧格式引擎"])
         self.assertIn("minimum_world_system", detail.pack.world)
 
         detail = api_module.patch_project_genesis(

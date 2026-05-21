@@ -110,7 +110,7 @@ def test_compiler_persists_delta_snapshots_and_review_gate() -> None:
     assert movement_path.total_travel_time == 1
 
 
-def test_review_gate_blocks_unknown_location_id_but_warns_for_legacy_location() -> None:
+def test_review_gate_blocks_unknown_location_id_and_ignores_old_location_field() -> None:
     Session = _session()
     with Session.begin() as session:
         project_id = _project(session)
@@ -136,7 +136,7 @@ def test_review_gate_blocks_unknown_location_id_but_warns_for_legacy_location() 
     severities = {issue.target_ref: issue.severity for issue in verdict.issues if issue.code == "movement_unknown_map_node"}
     assert verdict.accepted is False
     assert severities["node:char_mc"] == "error"
-    assert severities["node:char_old"] == "warning"
+    assert "node:char_old" not in severities
 
 
 def test_v4_adapter_create_book_state_rows_without_import() -> None:

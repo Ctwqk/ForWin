@@ -202,7 +202,8 @@ def _initial_pack_dummy_merge(payload: dict[str, Any]) -> dict[str, Any]:
         "stage_states": _empty_stage_states(),
     }
     upgraded_payload = dict(payload or {})
-    upgraded_payload["world"] = _legacy_world_root_from_pack(upgraded_payload)
+    world_payload = upgraded_payload.get("world") if isinstance(upgraded_payload.get("world"), dict) else {}
+    upgraded_payload["world"] = _deep_merge(_empty_stage_world(), world_payload)
     upgraded_payload.pop("world_bible", None)
     upgraded_payload.pop("map_atlas", None)
     upgraded_payload.pop("story_engine", None)

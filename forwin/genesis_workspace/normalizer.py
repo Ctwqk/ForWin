@@ -4,7 +4,7 @@ from typing import Any
 
 
 class GenesisNormalizer:
-    """Normalizes Genesis pack slices while preserving legacy payload compatibility."""
+    """Normalizes current Genesis pack slices."""
 
     def __init__(self, owner: Any) -> None:
         self.owner = owner
@@ -44,4 +44,3 @@ class GenesisNormalizer:
         fallback: dict[str, Any],
     ) -> dict[str, Any]:
         return self.owner._normalize_blueprint_payload(project=project, payload=payload, fallback=fallback)
-

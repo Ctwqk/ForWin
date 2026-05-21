@@ -163,7 +163,7 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
         self.assertTrue(any(event.event_type == DecisionEventType.GENESIS_STAGE_GENERATED for event in events))
         self.assertTrue(any(event.event_type == DecisionEventType.GENESIS_STAGE_REFINED for event in events))
 
-    def test_legacy_top_level_sections_upgrade_to_world_root(self) -> None:
+    def test_top_level_old_world_sections_are_not_promoted_to_world_root(self) -> None:
         service = self._service()
         with self.session_factory() as session:
             project = self._project(session, project_id="proj-genesis-workspace-legacy")
@@ -188,7 +188,7 @@ class GenesisWorkspaceServiceTests(unittest.TestCase):
 
             loaded = service.load_pack(revision)
 
-        self.assertEqual(loaded["world"]["world_bible"]["overview"], "旧顶层 world bible")
-        self.assertEqual(loaded["world"]["map_atlas"]["overview"], "旧顶层 map")
-        self.assertEqual(loaded["world"]["story_engine"]["long_arcs"], ["旧顶层 engine"])
+        self.assertNotEqual(loaded["world"]["world_bible"].get("overview"), "旧顶层 world bible")
+        self.assertNotEqual(loaded["world"]["map_atlas"].get("overview"), "旧顶层 map")
+        self.assertNotEqual(loaded["world"]["story_engine"].get("long_arcs"), ["旧顶层 engine"])
         self.assertNotIn("world_bible", loaded)

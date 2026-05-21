@@ -144,7 +144,7 @@ def test_distance_between_world_nodes_uses_location_id_and_map_graph() -> None:
     assert result.total_travel_time == 0.5
 
 
-def test_distance_between_world_nodes_reports_legacy_location_fallback() -> None:
+def test_distance_between_world_nodes_requires_location_id_without_location_fallback() -> None:
     world = ObjectiveWorldGraph(
         nodes=[
             WorldNode(
@@ -176,29 +176,15 @@ def test_distance_between_world_nodes_reports_legacy_location_fallback() -> None
             )
         ],
     )
-    facts: list[dict[str, object]] = []
-
     result = distance_between_world_nodes(
         world,
         map_graph,
         "char_mc",
         "char_enemy",
-        legacy_compat_observer=facts.append,
     )
 
-    assert result.reachable is True
-    assert facts == [
-        {
-            "compat_layer": "book_state",
-            "compat_feature": "book_state.state.location_fallback",
-            "usage_kind": "read_fallback",
-            "source_module": "forwin.book_state.runtime",
-            "usage_reason": "state.location used because location_id is missing",
-            "compat_key": "state.location",
-            "legacy_identifier": "loc_city",
-            "metadata": {"node_id": "char_mc", "field_path": "state.location"},
-        }
-    ]
+    assert result.reachable is False
+    assert result.blocked_reason == "missing location_id for char_mc"
 
 
 def test_objective_world_graph_applies_node_and_map_patches() -> None:

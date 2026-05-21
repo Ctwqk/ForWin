@@ -133,20 +133,6 @@ def _empty_stage_world() -> dict[str, Any]:
     }
 
 
-def _legacy_world_root_from_pack(payload: dict[str, Any]) -> dict[str, Any]:
-    world = payload.get("world") if isinstance(payload.get("world"), dict) else {}
-    base = _empty_stage_world()
-    if world:
-        base = _deep_merge(base, world)
-    if isinstance(payload.get("world_bible"), dict):
-        base["world_bible"] = _deep_merge(base.get("world_bible", {}), payload.get("world_bible") or {})
-    if isinstance(payload.get("map_atlas"), dict):
-        base["map_atlas"] = _deep_merge(base.get("map_atlas", {}), payload.get("map_atlas") or {})
-    if isinstance(payload.get("story_engine"), dict):
-        base["story_engine"] = _deep_merge(base.get("story_engine", {}), payload.get("story_engine") or {})
-    return base
-
-
 def _pack_stage_payload(pack: dict[str, Any], stage_key: str) -> dict[str, Any]:
     section_path = _STAGE_TO_SECTION[stage_key]
     if "." not in section_path:

@@ -261,7 +261,7 @@ def build_project_detail(
         genre=project.genre,
         setting_summary=project.setting_summary,
         target_total_chapters=effective_target_total_chapters(project, len(plans)),
-        creation_status=str(getattr(project, "creation_status", "") or "legacy"),
+        creation_status=str(getattr(project, "creation_status", "") or "creating"),
         active_genesis_revision_id=str(getattr(project, "active_genesis_revision_id", "") or ""),
         genesis_stage_overview=_stage_overview_from_revision(genesis_revision),
         can_start_writing=_can_start_writing(project, genesis_revision),

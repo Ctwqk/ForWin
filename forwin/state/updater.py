@@ -127,7 +127,7 @@ class StateUpdater:
         setting_summary: str = "",
         target_total_chapters: int = 3,
         governance=None,
-        creation_status: str = "legacy",
+        creation_status: str = "creating",
         active_genesis_revision_id: str = "",
         automation_json: str = "{}",
     ) -> Project:
@@ -140,7 +140,7 @@ class StateUpdater:
             genre=genre,
             setting_summary=setting_summary,
             target_total_chapters=max(1, int(target_total_chapters or 1)),
-            creation_status=str(creation_status or "legacy").strip() or "legacy",
+            creation_status=str(creation_status or "creating").strip() or "creating",
             active_genesis_revision_id=str(active_genesis_revision_id or "").strip(),
             automation_json=str(automation_json or "{}"),
             governance_json=governance_to_json(resolved_governance),

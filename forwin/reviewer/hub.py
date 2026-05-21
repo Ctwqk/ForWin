@@ -625,10 +625,7 @@ class HistoricalReviewHub:
             [base_instruction.repair_scope, webnovel_instruction.repair_scope],
             key=lambda item: scope_rank.get(item, 1),
         )
-        merged_scope = normalize_repair_scope(
-            merged_scope,
-            preserve_v4=(merged_scope in {"arc", "world_model"}),
-        )
+        merged_scope = normalize_repair_scope(merged_scope)
         merged_failure_type = (
             base_instruction.failure_type
             if base_instruction.failure_type == webnovel_instruction.failure_type

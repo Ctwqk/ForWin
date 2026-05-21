@@ -178,6 +178,7 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
         _upgrade_trope_usage_records(conn)
         _upgrade_project_target_total_default(conn)
         _upgrade_arc_macro_progression(conn)
+        _upgrade_project_progression_rules(conn)
         conn.execute(
             text(
                 """
@@ -637,6 +638,38 @@ def _upgrade_arc_macro_progression(conn) -> None:
         text(
             "ALTER TABLE arc_plan_versions "
             "ADD COLUMN IF NOT EXISTS macro_progression_json TEXT NOT NULL DEFAULT '{}'"
+        )
+    )
+
+
+def _upgrade_project_progression_rules(conn) -> None:
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS project_progression_rules (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR NOT NULL REFERENCES projects(id),
+                rule_type VARCHAR NOT NULL,
+                chapter_start INTEGER NOT NULL DEFAULT 1,
+                chapter_end INTEGER NOT NULL DEFAULT 0,
+                severity VARCHAR NOT NULL DEFAULT 'warning',
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                active BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_project_progression_rules_project_range "
+            "ON project_progression_rules (project_id, chapter_start, chapter_end)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_project_progression_rules_project_type "
+            "ON project_progression_rules (project_id, rule_type)"
         )
     )
 

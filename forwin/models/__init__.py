@@ -32,6 +32,7 @@ from .phase import (
     WorldProjectionDeltaRow,
 )
 from .phase4 import NPCIntentSnapshot, WorldSimulationTurn
+from .progression import ProjectProgressionRule
 from .publisher import (
     CommentSignalCandidate,
     FeedbackActionRecord,
@@ -108,6 +109,7 @@ __all__ = [
     "Project",
     "ArcPlanVersion",
     "ChapterPlan",
+    "ProjectProgressionRule",
     "GenerationTask",
     "SubWorld",
     "SubWorldRosterItem",

@@ -82,6 +82,66 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
             "pulp",
         )
 
+    def test_create_generation_task_enqueues_without_starting_thread(self) -> None:
+        config = Config(database_url=postgres_test_url("generation-tasks"), minimax_api_key="sk-test")
+
+        with patch("forwin.api_core.generation.threading.Thread") as thread_cls:
+            task_id = api_module._create_generation_task(
+                premise="主角从县城崛起",
+                genre="都市",
+                num_chapters=2,
+                runtime_config=config,
+                title="线程切换测试",
+                subtitle="都市 · 2 章",
+            )
+
+        thread_cls.assert_not_called()
+        task = api_module._get_generation_task_or_404(task_id)
+        self.assertEqual(task["status"], "queued")
+        self.assertEqual(task["current_stage"], "queued")
+        self.assertEqual(task["execution_payload"]["mode"], "initial")
+        self.assertEqual(task["execution_payload"]["premise"], "主角从县城崛起")
+        self.assertEqual(task["execution_payload"]["genre"], "都市")
+        self.assertEqual(task["execution_payload"]["num_chapters"], 2)
+
+    def test_create_continue_generation_task_enqueues_without_starting_thread(self) -> None:
+        config = Config(database_url=postgres_test_url("generation-tasks"), minimax_api_key="sk-test")
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                Project(
+                    id="project-enqueue-only",
+                    title="继续入队测试",
+                    premise="测试",
+                    genre="玄幻",
+                    creation_status="writing",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        with patch("forwin.api_core.generation.threading.Thread") as thread_cls:
+            task_id = api_module._create_continue_generation_task(
+                project_id="project-enqueue-only",
+                runtime_config=config,
+                requested_chapters=3,
+                max_chapters=3,
+                auto_continue=False,
+                run_until_chapter=8,
+                title="继续入队测试",
+                subtitle="继续生成",
+            )
+
+        thread_cls.assert_not_called()
+        task = api_module._get_generation_task_or_404(task_id)
+        self.assertEqual(task["status"], "queued")
+        self.assertEqual(task["project_id"], "project-enqueue-only")
+        self.assertEqual(task["execution_payload"]["mode"], "continue")
+        self.assertFalse(task["execution_payload"]["auto_continue"])
+        self.assertEqual(task["execution_payload"]["run_until_chapter"], 8)
+        self.assertEqual(task["execution_payload"]["max_chapters"], 3)
+
     def test_recover_interrupted_generation_tasks_requeues_resumable_running_tasks(self) -> None:
         task = api_module._create_task_record(
             message="正在写作。",

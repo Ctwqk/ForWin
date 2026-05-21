@@ -604,7 +604,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.assertEqual(started.project.target_total_chapters, 6)
         self.assertEqual(started.project.materialized_chapter_count, 3)
         self.assertEqual(started.project.chapter_count, 3)
-        self.assertEqual(started.task.status, "starting")
+        self.assertEqual(started.task.status, "queued")
         self.assertEqual(started.task.current_stage, "queued")
 
         active_check = self._call_tool(

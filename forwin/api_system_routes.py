@@ -143,6 +143,7 @@ def build_handlers(
                 project_id=normalized_project_id,
                 title=task_title,
                 subtitle=task_subtitle,
+                model_profile_id=str(req.model_profile_id or "").strip(),
             )
         except active_generation_task_error_cls as exc:
             raise HTTPException(409, str(exc)) from exc

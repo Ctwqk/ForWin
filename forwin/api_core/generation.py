@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import os
-import threading
 import uuid
 import json
 import io
@@ -144,6 +143,7 @@ from forwin.api_schemas import (
 from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
 from forwin.config import Config
 from forwin.generation.auto_continue import GenerationAutoContinueController
+from forwin.generation.task_payload import execution_payload_from_config
 from forwin.governance import (
     BandCheckpointIssueInfo,
     CONSTRAINT_LEVELS,
@@ -429,6 +429,7 @@ def _create_generation_task(
     project_id: str = "",
     title: str = "",
     subtitle: str = "",
+    model_profile_id: str = "",
 ) -> str:
     normalized_project_id = str(project_id or "").strip()
     if normalized_project_id and _project_has_active_generation_task(normalized_project_id):
@@ -446,7 +447,6 @@ def _create_generation_task(
         task_record["project_id"] = normalized_project_id
     task_record["max_chapters"] = int(num_chapters or 0)
     task_record["run_until_chapter"] = int(num_chapters or 0)
-    _persist_generation_task(task_id, task_record)
     root_event_id = ""
     if normalized_project_id:
         root_event_id = _create_task_root_event(
@@ -460,29 +460,18 @@ def _create_generation_task(
         governance_task_id=task_id,
         governance_causal_root_id=root_event_id,
     )
-    t = threading.Thread(
-        target=_run_generation_with_config,
-        args=(
-            task_id,
-            premise,
-            genre,
-            num_chapters,
-            runtime_config,
-            _update_task,
-            logger,
-            normalized_project_id or None,
-            lambda: _task_should_abort(task_id),
-            lambda: _task_should_pause(task_id),
-            _make_generation_completion_handler(
-                task_id=task_id,
-                root_event_id=root_event_id,
-                prior_handler=_maybe_enqueue_auto_publish_jobs,
-                auto_continue=False,
-            ),
-        ),
-        daemon=True,
+    payload = execution_payload_from_config(
+        mode="initial",
+        runtime_config=runtime_config,
+        root_event_id=root_event_id,
+        premise=premise,
+        genre=genre,
+        num_chapters=num_chapters,
+        auto_continue=False,
+        model_profile_id=model_profile_id,
     )
-    t.start()
+    task_record["execution_payload"] = payload.model_dump(mode="json")
+    _persist_generation_task(task_id, task_record)
     return task_id
 
 
@@ -513,7 +502,6 @@ def _create_continue_generation_task(
     task_record["project_id"] = normalized_project_id
     task_record["max_chapters"] = int(max_chapters or 0)
     task_record["run_until_chapter"] = int(run_until_chapter or 0)
-    _persist_generation_task(task_id, task_record)
     root_event_id = _create_task_root_event(
         project_id=normalized_project_id,
         task_id=task_id,
@@ -525,31 +513,16 @@ def _create_continue_generation_task(
         governance_task_id=task_id,
         governance_causal_root_id=root_event_id,
     )
-    thread = threading.Thread(
-        target=_run_continue_project_with_config,
-        args=(
-            task_id,
-            normalized_project_id,
-            runtime_config,
-            _update_task,
-            logger,
-            lambda: _task_should_abort(task_id),
-            lambda: _task_should_pause(task_id),
-            max_chapters,
-            _make_generation_completion_handler(
-                task_id=task_id,
-                root_event_id=root_event_id,
-                prior_handler=_maybe_enqueue_auto_publish_jobs,
-                runtime_config=runtime_config,
-                auto_continue=auto_continue,
-                run_until_chapter=run_until_chapter,
-                max_chapters=max_chapters,
-                create_continue_generation_task=_create_continue_generation_task,
-            ),
-        ),
-        daemon=True,
+    payload = execution_payload_from_config(
+        mode="continue",
+        runtime_config=runtime_config,
+        root_event_id=root_event_id,
+        auto_continue=auto_continue,
+        run_until_chapter=run_until_chapter,
+        max_chapters=max_chapters,
     )
-    thread.start()
+    task_record["execution_payload"] = payload.model_dump(mode="json")
+    _persist_generation_task(task_id, task_record)
     return task_id
 
 

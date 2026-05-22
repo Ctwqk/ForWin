@@ -136,6 +136,7 @@ def _default_continue_executor(
             max_chapters=int(task.max_chapters or 0) or None,
             resume_from_chapter=resume_from_chapter,
             completion_handler=completion_handler,
+            component="worker",
         )
         with session_factory.begin() as session:
             heartbeat_generation_task(
@@ -183,6 +184,7 @@ def _default_new_executor(
             should_abort=_db_task_flag(session_factory, task.id, "cancel_requested"),
             should_pause=_db_task_flag(session_factory, task.id, "pause_requested"),
             completion_handler=completion_handler,
+            component="worker",
         )
         with session_factory.begin() as session:
             heartbeat_generation_task(

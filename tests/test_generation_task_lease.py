@@ -319,6 +319,7 @@ def test_default_continue_executor_passes_resume_to_runtime(monkeypatch) -> None
 
         assert result.resume_from_chapter == 3
         assert calls[0]["resume_from_chapter"] == 3
+        assert calls[0]["component"] == "worker"
     finally:
         engine.dispose()
 
@@ -327,7 +328,7 @@ def test_worker_uses_initial_payload_for_new_generation(monkeypatch) -> None:
     engine = get_engine(postgres_test_url("generation-worker-initial-payload"))
     init_db(engine)
     Session = get_session_factory(engine)
-    calls: list[tuple[object, ...]] = []
+    calls: list[dict[str, object]] = []
     try:
         with Session.begin() as session:
             session.add(
@@ -345,7 +346,7 @@ def test_worker_uses_initial_payload_for_new_generation(monkeypatch) -> None:
             )
 
         def fake_run_generation_with_config(*args, **kwargs):
-            calls.append(args)
+            calls.append({"args": args, "kwargs": kwargs})
 
         monkeypatch.setattr(
             "forwin.api_runtime.run_generation_with_config",
@@ -360,9 +361,10 @@ def test_worker_uses_initial_payload_for_new_generation(monkeypatch) -> None:
 
         assert result.claimed is True
         assert calls
-        assert calls[0][1] == "县城开局"
-        assert calls[0][2] == "都市"
-        assert calls[0][3] == 2
+        assert calls[0]["args"][1] == "县城开局"
+        assert calls[0]["args"][2] == "都市"
+        assert calls[0]["args"][3] == 2
+        assert calls[0]["kwargs"]["component"] == "worker"
     finally:
         engine.dispose()
 
@@ -405,5 +407,6 @@ def test_worker_continue_executor_passes_completion_handler(monkeypatch) -> None
         )
 
         assert callable(seen_completion_handlers[0])
+        assert seen_completion_handlers[0] is not None
     finally:
         engine.dispose()

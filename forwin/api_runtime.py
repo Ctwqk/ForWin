@@ -464,10 +464,12 @@ def run_orchestrator_task(
     completion_handler=None,
     should_abort: Callable[[], bool] | None = None,
     should_pause: Callable[[], bool] | None = None,
+    component: str = "api",
 ) -> None:
     started_at = time.perf_counter()
     observed_project_id = default_project_id
     observability = _task_observability(orchestrator)
+    span_component = str(component or "api").strip() or "api"
     try:
         operation_ctx = OperationContext(
             project_id=str(observed_project_id or "").strip(),
@@ -475,7 +477,12 @@ def run_orchestrator_task(
             stage="task.operation",
             operation_id=task_id,
         )
-        with observability.span(operation_ctx, "task.operation", span_kind="task", component="api") as span:
+        with observability.span(
+            operation_ctx,
+            "task.operation",
+            span_kind="task",
+            component=span_component,
+        ) as span:
             if not (should_abort and should_abort()):
                 update_task(task_id, status="running")
             _record_task_observability_event(
@@ -563,7 +570,12 @@ def run_orchestrator_task(
             summary="生成任务 cleanup 已开始。",
         )
         try:
-            with observability.span(cleanup_ctx, "task.cleanup", span_kind="task", component="api"):
+            with observability.span(
+                cleanup_ctx,
+                "task.cleanup",
+                span_kind="task",
+                component=span_component,
+            ):
                 orchestrator.llm_client.close()
                 orchestrator.engine.dispose()
         finally:
@@ -588,6 +600,7 @@ def run_generation_with_config(
     should_abort: Callable[[], bool] | None = None,
     should_pause: Callable[[], bool] | None = None,
     completion_handler: Callable[[object], None] | None = None,
+    component: str = "api",
 ) -> None:
     normalized_project_id = str(project_id or "").strip()
 
@@ -669,6 +682,7 @@ def run_generation_with_config(
         completion_handler=completion_handler,
         should_abort=should_abort,
         should_pause=should_pause,
+        component=component,
     )
 
 
@@ -683,6 +697,7 @@ def run_continue_project_with_config(
     max_chapters: int | None = None,
     resume_from_chapter: int | None = None,
     completion_handler: Callable[[object], None] | None = None,
+    component: str = "api",
 ) -> None:
     def _handle_progress(event: str, payload: dict[str, Any]) -> None:
         changes = _build_task_progress_changes(event, payload)
@@ -749,4 +764,5 @@ def run_continue_project_with_config(
         completion_handler=completion_handler,
         should_abort=should_abort,
         should_pause=should_pause,
+        component=component,
     )

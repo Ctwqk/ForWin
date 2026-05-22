@@ -112,6 +112,7 @@ def record_worker_execution_failed(
             ctx,
             event_type=DecisionEventType.GENERATION_WORKER_EXECUTION_FAILED,
             summary="生成 worker 执行 generation task 失败。",
+            exc=exc,
             scope="task",
             payload={"worker_id": str(worker_id or "")},
             related_object_type="generation_task",

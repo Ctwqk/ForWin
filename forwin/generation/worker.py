@@ -17,6 +17,12 @@ from forwin.generation.task_payload import (
     build_worker_config_from_payload,
     payload_from_json,
 )
+from forwin.generation.worker_observability import (
+    generation_worker_span,
+    record_worker_claim,
+    record_worker_execution_failed,
+    record_worker_heartbeat_failed,
+)
 from forwin.models.task import GenerationTask
 
 
@@ -57,6 +63,32 @@ def run_one_generation_task(
         project_id = str(task.project_id or "")
         resume_from_chapter = generation_task_resume_from_chapter(task)
 
+    task_id = str(task_id or "")
+    project_id = str(project_id or "")
+    record_worker_claim(
+        session_factory=session_factory,
+        config=config,
+        worker_id=worker_id,
+        claim=claim,
+        resume_from_chapter=resume_from_chapter,
+        lease_seconds=lease_seconds,
+    )
+    with generation_worker_span(
+        session_factory=session_factory,
+        config=config,
+        span_name="generation_worker.claim",
+        task_id=task_id,
+        project_id=project_id,
+        worker_id=worker_id,
+        tags={"claim_kind": claim.claim_kind},
+        metrics={
+            "claimed": 1,
+            "lease_seconds": max(30, int(lease_seconds or 300)),
+            "resume_from_chapter": max(0, int(resume_from_chapter or 0)),
+        },
+    ):
+        pass
+
     try:
         if project_id:
             executor = execute_continue or _default_continue_executor(
@@ -72,9 +104,27 @@ def run_one_generation_task(
                 lease_seconds=lease_seconds,
                 worker_id=worker_id,
             )
-        executor(task, resume_from_chapter)
-    except Exception:
+        with generation_worker_span(
+            session_factory=session_factory,
+            config=config,
+            span_name="generation_worker.execute",
+            task_id=task_id,
+            project_id=project_id,
+            worker_id=worker_id,
+            tags={"execution_mode": "continue" if project_id else "initial"},
+            metrics={"resume_from_chapter": max(0, int(resume_from_chapter or 0))},
+        ):
+            executor(task, resume_from_chapter)
+    except Exception as exc:
         logger.exception("Generation worker failed task %s", task_id)
+        record_worker_execution_failed(
+            session_factory=session_factory,
+            config=config,
+            task_id=task_id,
+            project_id=project_id,
+            worker_id=worker_id,
+            exc=exc,
+        )
         with session_factory.begin() as session:
             row = session.get(GenerationTask, task_id)
             if row is not None and row.lease_owner == worker_id:
@@ -85,9 +135,18 @@ def run_one_generation_task(
         raise
 
     with session_factory.begin() as session:
-        heartbeat_generation_task(
+        heartbeat_ok = heartbeat_generation_task(
             session,
             task_id=task_id,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+        )
+    if not heartbeat_ok:
+        record_worker_heartbeat_failed(
+            session_factory=session_factory,
+            config=config,
+            task_id=task_id,
+            project_id=project_id,
             worker_id=worker_id,
             lease_seconds=lease_seconds,
         )

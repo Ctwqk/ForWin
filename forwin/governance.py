@@ -56,7 +56,7 @@ DecisionEventFamily = Literal[
     "runtime_observation",
     "evaluation_verdict",
 ]
-DecisionActorType = Literal["system", "scheduler", "manual_ui", "api", "extension"]
+DecisionActorType = Literal["system", "scheduler", "manual_ui", "api", "extension", "worker"]
 OverClosureRiskCategory = Literal[
     "",
     "character_locked_out",

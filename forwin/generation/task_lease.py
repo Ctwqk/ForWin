@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Literal
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from forwin.models.task import GenerationTask
+
+
+@dataclass(frozen=True)
+class GenerationTaskClaimResult:
+    task: GenerationTask
+    claim_kind: Literal["queued", "expired_running"]
+    previous_lease_owner: str = ""
+    previous_lease_expires_at: datetime | None = None
 
 
 def utcnow() -> datetime:
@@ -18,7 +28,7 @@ def claim_generation_task(
     *,
     worker_id: str,
     lease_seconds: int = 300,
-) -> GenerationTask | None:
+) -> GenerationTaskClaimResult | None:
     now = utcnow()
     expires = now + timedelta(seconds=max(30, int(lease_seconds or 300)))
     row = (
@@ -49,6 +59,12 @@ def claim_generation_task(
     )
     if row is None:
         return None
+    previous_status = str(row.status or "")
+    previous_lease_owner = str(row.lease_owner or "")
+    previous_lease_expires_at = row.lease_expires_at
+    claim_kind: Literal["queued", "expired_running"] = (
+        "expired_running" if previous_status == "running" else "queued"
+    )
     row.status = "running"
     row.current_stage = "running"
     row.lease_owner = str(worker_id or "").strip()
@@ -57,7 +73,12 @@ def claim_generation_task(
     row.started_at = row.started_at or now
     row.finished_at = None
     session.add(row)
-    return row
+    return GenerationTaskClaimResult(
+        task=row,
+        claim_kind=claim_kind,
+        previous_lease_owner=previous_lease_owner if claim_kind == "expired_running" else "",
+        previous_lease_expires_at=previous_lease_expires_at if claim_kind == "expired_running" else None,
+    )
 
 
 def heartbeat_generation_task(

@@ -45,13 +45,14 @@ def run_one_generation_task(
     execute_new: ExecuteGenerationTask | None = None,
 ) -> GenerationWorkerResult:
     with session_factory.begin() as session:
-        task = claim_generation_task(
+        claim = claim_generation_task(
             session,
             worker_id=worker_id,
             lease_seconds=lease_seconds,
         )
-        if task is None:
+        if claim is None:
             return GenerationWorkerResult(message="no_claimable_generation_task")
+        task = claim.task
         task_id = task.id
         project_id = str(task.project_id or "")
         resume_from_chapter = generation_task_resume_from_chapter(task)

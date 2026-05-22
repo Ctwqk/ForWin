@@ -30,7 +30,8 @@ def test_claim_generation_task_sets_lease_fields() -> None:
             )
 
         with Session.begin() as session:
-            task = claim_generation_task(session, worker_id="worker-1", lease_seconds=300)
+            claim = claim_generation_task(session, worker_id="worker-1", lease_seconds=300)
+            task = claim.task if claim is not None else None
 
         assert task is not None
         assert task.id == "task-lease"
@@ -46,7 +47,7 @@ def test_expired_running_task_can_be_reclaimed() -> None:
     engine = get_engine(postgres_test_url("generation-task-reclaim"))
     init_db(engine)
     Session = get_session_factory(engine)
-    expired = datetime.now(timezone.utc) - timedelta(minutes=10)
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=10)).replace(tzinfo=None)
     try:
         with Session.begin() as session:
             session.add(
@@ -62,10 +63,70 @@ def test_expired_running_task_can_be_reclaimed() -> None:
             )
 
         with Session.begin() as session:
-            task = claim_generation_task(session, worker_id="worker-2", lease_seconds=300)
+            claim = claim_generation_task(session, worker_id="worker-2", lease_seconds=300)
+            task = claim.task if claim is not None else None
 
         assert task is not None
         assert task.lease_owner == "worker-2"
+    finally:
+        engine.dispose()
+
+
+def test_queued_claim_reports_claim_kind_and_no_previous_owner() -> None:
+    engine = get_engine(postgres_test_url("generation-task-queued-claim-kind"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    try:
+        with Session.begin() as session:
+            session.add(
+                GenerationTask(
+                    id="task-queued-kind",
+                    task_kind="generation",
+                    status="queued",
+                    project_id="project-1",
+                )
+            )
+
+        with Session.begin() as session:
+            claim = claim_generation_task(session, worker_id="worker-1", lease_seconds=300)
+
+        assert claim is not None
+        assert claim.task.id == "task-queued-kind"
+        assert claim.claim_kind == "queued"
+        assert claim.previous_lease_owner == ""
+        assert claim.previous_lease_expires_at is None
+    finally:
+        engine.dispose()
+
+
+def test_expired_claim_reports_previous_lease_metadata() -> None:
+    engine = get_engine(postgres_test_url("generation-task-expired-claim-kind"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=10)).replace(tzinfo=None)
+    try:
+        with Session.begin() as session:
+            session.add(
+                GenerationTask(
+                    id="task-expired-kind",
+                    task_kind="generation",
+                    status="running",
+                    project_id="project-1",
+                    lease_owner="old-worker",
+                    lease_expires_at=expired,
+                    heartbeat_at=expired,
+                )
+            )
+
+        with Session.begin() as session:
+            claim = claim_generation_task(session, worker_id="worker-2", lease_seconds=300)
+
+        assert claim is not None
+        assert claim.task.id == "task-expired-kind"
+        assert claim.task.lease_owner == "worker-2"
+        assert claim.claim_kind == "expired_running"
+        assert claim.previous_lease_owner == "old-worker"
+        assert claim.previous_lease_expires_at == expired
     finally:
         engine.dispose()
 

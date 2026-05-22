@@ -70,22 +70,14 @@ def build_repair_v2_rules(*, enabled: bool) -> list[DecisionRule]:
 
 def decide_repair_v2(input: DecisionInput) -> Decision:
     primary = classify_primary_issue(review=input.review, signals=input.signals)
-    selected_scope = primary.scope
-    max_attempts = MAX_ATTEMPTS_PER_SCOPE.get(selected_scope, 1)
+    selected_scope, escalated_from = _select_available_scope(input, primary.scope)
+    max_attempts = MAX_ATTEMPTS_PER_SCOPE.get(selected_scope, 0)
     attempts_for_scope = _attempt_count_for_scope(input, selected_scope)
-    escalated_from = ""
-    if max_attempts <= 0:
-        outcome = "manual_review"
-    elif attempts_for_scope >= max_attempts:
-        escalated_from = selected_scope
-        selected_scope = _escalate_scope(selected_scope) or "operator"
-        outcome = (
-            "manual_review"
-            if selected_scope == "operator"
-            else _SCOPE_TO_OUTCOME.get(selected_scope, "manual_review")
-        )
-    else:
-        outcome = _SCOPE_TO_OUTCOME.get(selected_scope, "manual_review")
+    outcome = (
+        "manual_review"
+        if selected_scope == "operator" or max_attempts <= 0
+        else _SCOPE_TO_OUTCOME.get(selected_scope, "manual_review")
+    )
     return Decision(
         outcome=outcome,
         reason=f"{primary.kind} routes to {selected_scope}",
@@ -110,10 +102,26 @@ def _attempt_count_for_scope(input: DecisionInput, scope: IssueScope) -> int:
     return sum(1 for item in input.prior_scope_history if str(item or "") == scope)
 
 
-def _escalate_scope(scope: IssueScope) -> IssueScope | None:
-    if scope not in ESCALATION_PATH:
-        return None
-    index = ESCALATION_PATH.index(scope)
-    if index >= len(ESCALATION_PATH) - 1:
-        return None
-    return ESCALATION_PATH[index + 1]
+def _select_available_scope(
+    input: DecisionInput,
+    primary_scope: IssueScope,
+) -> tuple[IssueScope, str]:
+    max_attempts = MAX_ATTEMPTS_PER_SCOPE.get(primary_scope, 1)
+    if max_attempts <= 0:
+        return primary_scope, ""
+    if primary_scope not in ESCALATION_PATH:
+        attempts = _attempt_count_for_scope(input, primary_scope)
+        if attempts >= max_attempts:
+            return "operator", primary_scope
+        return primary_scope, ""
+
+    start_index = ESCALATION_PATH.index(primary_scope)
+    last_exhausted = ""
+    for scope in ESCALATION_PATH[start_index:]:
+        scope_max_attempts = MAX_ATTEMPTS_PER_SCOPE.get(scope, 1)
+        if scope_max_attempts <= 0:
+            return "operator", scope
+        if _attempt_count_for_scope(input, scope) < scope_max_attempts:
+            return scope, last_exhausted
+        last_exhausted = scope
+    return "operator", last_exhausted or primary_scope

@@ -5,7 +5,7 @@ import re
 
 from playwright.sync_api import expect
 
-from tests.browser.fixtures import MockForWinBackend, goto_home
+from tests.browser.fixtures import MockForWinBackend, goto_home, switch_home_tab
 
 
 def test_home_console_navigation_books_and_config(page, browser_test_base_url: str) -> None:
@@ -16,11 +16,11 @@ def test_home_console_navigation_books_and_config(page, browser_test_base_url: s
     expect(page.get_by_role("navigation", name="ForWin primary navigation")).to_contain_text("世界档案")
     expect(page.get_by_role("navigation", name="ForWin primary navigation")).to_contain_text("发布")
     expect(page.get_by_text("V4 世界")).to_have_count(0)
-    page.locator("#tab_task").click()
-    expect(page.locator("#panel_task")).to_contain_text("统一任务中心")
+    switch_home_tab(page, "task")
+    expect(page.locator("#panel_task")).to_contain_text("任务")
     expect(page.locator("#task_list")).to_contain_text("等待人工 review")
 
-    page.locator("#tab_config").click()
+    switch_home_tab(page, "config")
     expect(page.locator("#profile_list")).to_contain_text("测试 MiniMax")
     expect(page.get_by_role("heading", name="浏览器扩展")).to_be_visible()
     expect(page.get_by_role("button", name="打开扩展设置")).to_be_visible()
@@ -95,7 +95,7 @@ def test_generation_modal_serializes_all_operation_combinations(page, browser_te
         }
         for operation_mode, progression_mode, freeze_failed_candidates, auto_band_checkpoint, manual_checkpoints_enabled, future_constraints_enabled in product(
             ["blackbox", "copilot", "checkpoint"],
-            ["", "legacy_relaxed", "serial_canon", "serial_canon_band_guard"],
+            ["", "serial_canon", "serial_canon_band_guard"],
             [False, True],
             [False, True],
             [False, True],
@@ -129,7 +129,7 @@ def test_generation_modal_serializes_all_operation_combinations(page, browser_te
     )
 
     payloads = backend.captured_payloads("/api/generate")
-    assert len(payloads) == 192
+    assert len(payloads) == len(combos)
     observed = {
         (
             payload["operation_mode"],

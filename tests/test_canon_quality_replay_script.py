@@ -7,7 +7,8 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from scripts.replay_canon_quality_for_project import replay_project
 
 
-def test_replay_script_writes_markdown_report(tmp_path: Path) -> None:
+def test_replay_script_writes_markdown_report(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setenv("FORWIN_CHAPTER_REVIEW_FORM_MODE", "primary")
     engine = get_engine(postgres_test_url("canon_quality_replay"))
     init_db(engine)
     session_factory = get_session_factory(engine)

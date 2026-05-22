@@ -252,7 +252,6 @@ python3 -m pytest -q
 python scripts/audit_review_engine_cutover.py \
   --project-id <new_60_chapter_project_id> \
   --expected-chapters 60 \
-  --include-legacy-compat
 git grep -n -E 'legacy|Legacy|LEGACY' -- forwin scripts
 ```
 
@@ -262,9 +261,11 @@ Required results:
 - Full tests pass.
 - 60 chapter audit reports:
   - `engine_live_chapters == 60`
-  - `legacy_safety_net_chapters == []`
+  - `baseline_safety_net_chapters == []`
   - `severe_mismatch_chapters == []`
-  - `legacy_compat.total_events == 0`
+- The pre-deletion Phase 8 pilot recorded `legacy_compat.total_events == 0`;
+  after Phase 8 deletion, the compatibility audit runtime and
+  `--include-legacy-compat` flag no longer exist.
 - Remaining `git grep` hits are only migration history, deleted-entry audit
   history, or historical docs/tests outside the production scan.
 

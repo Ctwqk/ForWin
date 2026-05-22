@@ -919,7 +919,7 @@ class BookGenesisFlowTests(unittest.TestCase):
         faction = detail.pack.world["story_engine"]["factions"][0]
         opposition = detail.pack.world["story_engine"]["opposition"][0]
 
-        self.assertEqual(culture_profile["id"], "culture-main-stage")
+        self.assertEqual(culture_profile["id"], "culture-project-seed")
         self.assertTrue(culture_profile["character_name_examples"])
         self.assertTrue(culture_profile["region_name_examples"])
         self.assertTrue(culture_profile["location_name_examples"])

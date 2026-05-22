@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.protocol.writer import WriterOutput
 from forwin.orchestrator_loop_core.common import *
 
 def _persist_draft_and_review(

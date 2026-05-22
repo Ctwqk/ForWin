@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from playwright.sync_api import expect
 
-from tests.browser.fixtures import MockForWinBackend
+from tests.browser.fixtures import MockForWinBackend, switch_home_tab
 
 
 VIEWPORTS = [
@@ -58,7 +58,7 @@ def test_home_surfaces_api_failures_and_clears_modal_state(page, browser_test_ba
     page.get_by_role("button", name="刷新").first.click()
     expect(page.locator("#global_status")).to_contain_text("book list exploded")
 
-    page.locator("#tab_task").click()
+    switch_home_tab(page, "task")
     page.get_by_role("button", name="新建任务").click()
     page.locator("#task_generation_premise").fill("临时输入")
     page.get_by_role("button", name="取消").first.click()

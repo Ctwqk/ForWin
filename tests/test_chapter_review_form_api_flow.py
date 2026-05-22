@@ -64,6 +64,7 @@ def test_analyze_writer_output_quality_uses_form_only_and_persists_projection() 
                 writer_output=output,
                 draft_id="draft-1",
                 persist=True,
+                mode="primary",
                 llm_client=FakeReviewClient(project.id),
                 return_raw_analyzer_results=True,
             )
@@ -103,6 +104,7 @@ def test_analyze_writer_output_quality_blocks_when_form_llm_missing() -> None:
                 writer_output=output,
                 draft_id="draft-1",
                 persist=False,
+                mode="primary",
                 llm_client=None,
             )
 

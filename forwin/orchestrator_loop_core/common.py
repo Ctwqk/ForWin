@@ -101,6 +101,7 @@ from forwin.observability.llm_trace import (
 from forwin.subworld_manager import SubWorldManager
 from forwin.protocol.writer import WriterOutput
 from forwin.writer.chapter_writer import ChapterWriter
+from forwin.orchestrator_loop_core.result import ProvisionalGateSnapshot, RunResult
 
 logger = logging.getLogger(__name__)
 
@@ -259,45 +260,6 @@ def _future_plan_audit_checkpoint_payload(
         "applied_plan_patch_ids": list(result.applied_plan_patch_ids),
         "blocking_reasons": list(result.blocking_reasons),
     }
-
-
-@dataclass(slots=True)
-class RunResult:
-    """Summary for a single orchestrator run."""
-
-    project_id: str
-    requested_chapters: int
-    completed_chapters: list[int] = field(default_factory=list)
-    failed_chapters: list[int] = field(default_factory=list)
-    paused_chapters: list[int] = field(default_factory=list)
-    frozen_artifacts: list[str] = field(default_factory=list)
-    cancelled: bool = False
-    paused: bool = False
-
-    @property
-    def status(self) -> str:
-        if self.paused:
-            return "paused"
-        if self.cancelled:
-            return "cancelled"
-        if self.paused_chapters:
-            return "needs_review"
-        if self.failed_chapters and not self.completed_chapters:
-            return "failed"
-        if self.failed_chapters:
-            return "partial_failed"
-        return "completed"
-
-
-@dataclass(slots=True)
-class ProvisionalGateSnapshot:
-    """The latest persisted provisional execution used to gate canon writing."""
-
-    id: str
-    aggregate_verdict: str
-    failure_count: int
-    issue_count: int
-    chapter_numbers: list[int]
 
 
 class TransientLLMChapterFailure(RuntimeError):

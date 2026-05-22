@@ -107,6 +107,28 @@ def test_draft_issue_escalates_to_chapter_plan_after_two_draft_attempts() -> Non
     assert decision.sub_action["escalated_from"] == "draft"
 
 
+def test_draft_issue_continues_along_full_escalation_path() -> None:
+    input_payload = replace(
+        _input_with_issue("body_truncated"),
+        prior_scope_history=[
+            "draft",
+            "draft",
+            "chapter_plan",
+            "chapter_plan",
+            "band_plan",
+            "band_plan",
+            "arc_plan",
+            "book_plan",
+        ],
+    )
+
+    decision = decide_repair_v2(input_payload)
+
+    assert decision.outcome == "manual_review"
+    assert decision.sub_action["scope"] == "operator"
+    assert decision.sub_action["escalated_from"] == "book_plan"
+
+
 def test_arc_scope_escalates_after_one_arc_attempt() -> None:
     input_payload = replace(
         _input_with_issue("identity_ambiguity"),

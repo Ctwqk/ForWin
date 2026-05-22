@@ -171,7 +171,6 @@ class DecisionEventType:
     PERSONALITY_ASSIGNMENT_BACKFILL_COMPLETED = "personality_assignment_backfill_completed"
     PERSONALITY_RELATIONSHIP_ENRICHED = "personality_relationship_enriched"
     CHARACTER_INTEGRITY_CHECK_FAILED = "character_integrity_check_failed"
-    LEGACY_COMPATIBILITY_USED = "legacy_compatibility_used"
     TASK_OPERATION_STARTED = "task_operation_started"
     TASK_OPERATION_SUCCEEDED = "task_operation_succeeded"
     TASK_OPERATION_FAILED = "task_operation_failed"
@@ -297,7 +296,6 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.BOOK_STATE_COMPILE_SUCCEEDED,
     DecisionEventType.BOOK_STATE_COMPILE_FAILED,
     DecisionEventType.PERSONALITY_LOADOUT_UPDATED,
-    DecisionEventType.LEGACY_COMPATIBILITY_USED,
     DecisionEventType.TASK_OPERATION_STARTED,
     DecisionEventType.TASK_OPERATION_SUCCEEDED,
     DecisionEventType.TASK_OPERATION_FAILED,

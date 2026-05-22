@@ -9,6 +9,7 @@ from tests.browser.fixtures import (
     sample_chapter,
     sample_generation_task,
     sample_project,
+    switch_home_tab,
 )
 
 
@@ -69,7 +70,7 @@ def test_mock_regression_create_book_start_generation_and_persist_after_refresh(
 
     page.reload(wait_until="domcontentloaded")
     expect(page.locator("#global_status")).to_contain_text("首页已加载")
-    page.locator("#tab_task").click()
+    switch_home_tab(page, "task")
     page.locator(".task-item").filter(has_text=task_id).get_by_role("button", name="查看详情").click()
     expect(page.locator("#drawer_body")).to_contain_text("潮声第1章")
     page.get_by_role("button", name="查看正文").first.click()
@@ -88,7 +89,7 @@ def test_large_project_chapter_list_renders_in_batches(page, browser_test_base_u
     )
     goto_home(page, browser_test_base_url, backend)
 
-    page.locator("#tab_book").click()
+    switch_home_tab(page, "book")
     page.locator(".task-item").filter(has_text="长篇分页书").get_by_role("button", name="查看书本").click()
     expect(page.locator("#drawer_body")).to_contain_text("项目章节")
 

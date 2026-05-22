@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from playwright.sync_api import expect
 
-from tests.browser.fixtures import MockForWinBackend, goto_home
+from tests.browser.fixtures import MockForWinBackend, goto_home, switch_home_tab
 
 
 def _submit_governance_reason(page, reason: str = "浏览器测试审计原因") -> None:
@@ -14,7 +14,7 @@ def test_governance_actions_review_and_chapter_operations(page, browser_test_bas
     backend = MockForWinBackend()
     goto_home(page, browser_test_base_url, backend)
 
-    page.locator("#tab_task").click()
+    switch_home_tab(page, "task")
     page.get_by_role("button", name="查看详情").first.click()
     expect(page.locator("#drawer_body")).to_contain_text("治理设置")
 

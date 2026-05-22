@@ -79,8 +79,7 @@ After the pilot completes:
 ```bash
 python3 scripts/audit_review_engine_cutover.py \
   --project-id <project_id> \
-  --expected-chapters 60 \
-  --include-legacy-compat
+  --expected-chapters 60
 ```
 
 After deletion:

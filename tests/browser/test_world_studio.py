@@ -10,7 +10,7 @@ def test_world_studio_pages_conflicts_proposals_export_import(page, browser_test
     goto_world_studio(page, browser_test_base_url, backend)
 
     expect(page.locator(".project-strip")).to_contain_text("雾港潮生录")
-    expect(page.locator(".status-grid")).to_contain_text("Pages")
+    expect(page.locator(".status-grid")).to_contain_text("页面")
     expect(page.locator(".status-grid")).to_contain_text("Proposals")
     expect(page.locator(".main-panel")).to_contain_text("林夜")
 

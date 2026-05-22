@@ -1319,6 +1319,15 @@ def goto_home(page: Page, base_url: str, backend: MockForWinBackend) -> None:
     expect(page.locator("#global_status")).to_contain_text("首页已加载")
 
 
+def switch_home_tab(page: Page, tab: str) -> None:
+    labels = {
+        "book": re.compile(r"^(Books|书本)$"),
+        "task": re.compile(r"^(Tasks|任务)$"),
+        "config": re.compile(r"^(Settings|配置)$"),
+    }
+    page.get_by_role("button", name=labels[tab]).click()
+
+
 def goto_publishers(page: Page, base_url: str, backend: MockForWinBackend, *, bridge: bool = True) -> None:
     if bridge:
         install_extension_bridge(page)

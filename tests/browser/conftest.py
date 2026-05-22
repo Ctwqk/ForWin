@@ -146,6 +146,8 @@ def page(browser_context: BrowserContext) -> Iterator[Page]:
         reason = failure or "unknown"
         if request.url.startswith("data:"):
             return
+        if request.url.startswith(("https://fonts.googleapis.com/", "https://fonts.gstatic.com/")):
+            return
         failures.append(f"request failed: {request.method} {request.url} {reason}")
 
     page.on("console", on_console)

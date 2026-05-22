@@ -587,12 +587,9 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                 "output_summary": {"mode": "fallback"},
             }
 
-        def noop_continue_project(*args, **kwargs):
-            return None
-
-        with (
-            patch("forwin.book_genesis.BookGenesisService._call_json_with_trace", new=fake_launch_arc_call),
-            patch("forwin.api._run_continue_project_with_config", new=noop_continue_project),
+        with patch(
+            "forwin.book_genesis.BookGenesisService._call_json_with_trace",
+            new=fake_launch_arc_call,
         ):
             started = self._load_model(
                 MutationResult,

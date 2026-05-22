@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 from forwin.orchestrator_loop_core.common import *
+from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.review_engine.audit import (
     build_decision_event_payload,
-    build_legacy_compatibility_payload,
     digest_decision_input,
 )
 from forwin.review_engine.types import Decision, DecisionInput
+from forwin.state.repo import StateRepository
+
+
+def _positive_int(value: object) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 def _project_governance(self, project: Project):
     governance = normalize_project_governance(
@@ -114,62 +122,6 @@ def _record_engine_decision_event(
             decision_input.project_id,
             decision_input.chapter_number,
             decision.rule_id,
-            exc,
-        )
-
-def _record_legacy_compatibility_event(
-    self,
-    *,
-    updater: StateUpdater,
-    project_id: str,
-    compat_layer: str,
-    compat_feature: str,
-    usage_kind: str,
-    source_module: str,
-    usage_reason: str,
-    chapter_number: int = 0,
-    related_object_type: str = "",
-    related_object_id: str = "",
-    compat_key: str = "",
-    legacy_identifier: str = "",
-    canonical_identifier: str = "",
-    related_stage: str = "",
-    metadata: dict[str, Any] | None = None,
-    parent_event_id: str = "",
-) -> None:
-    try:
-        payload = build_legacy_compatibility_payload(
-            compat_layer=compat_layer,
-            compat_feature=compat_feature,
-            usage_kind=usage_kind,
-            source_module=source_module,
-            usage_reason=usage_reason,
-            compat_key=compat_key,
-            legacy_identifier=legacy_identifier,
-            canonical_identifier=canonical_identifier,
-            related_stage=related_stage,
-            metadata=metadata,
-        )
-        self._record_decision_event(
-            updater=updater,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            event_family="runtime_observation",
-            event_type=DecisionEventType.LEGACY_COMPATIBILITY_USED,
-            scope="chapter" if int(chapter_number or 0) else "project",
-            summary=f"legacy compatibility used: {compat_feature}",
-            reason=usage_reason,
-            related_object_type=related_object_type,
-            related_object_id=related_object_id,
-            payload=payload,
-            parent_event_id=parent_event_id,
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Failed to record legacy compatibility usage project=%s chapter=%s feature=%s: %s",
-            project_id,
-            chapter_number,
-            compat_feature,
             exc,
         )
 
@@ -1003,4 +955,4 @@ def _filter_supported_state_changes(changes):
 
 
 
-__all__ = ['_project_governance', '_record_decision_event', '_record_engine_decision_event', '_record_legacy_compatibility_event', '_audit_current_plan_before_write', '_audit_future_plans_after_acceptance', '_future_plan_audit_plans', '_future_plan_audit_band_rows', '_record_future_plan_audit_events', '_record_generation_audit_checkpoint_if_due', '_generation_audit_checkpoint_payload', '_previous_band_row', '_manual_boundary_checkpoint', '_strict_progression_block', '_create_auto_band_checkpoint', '_filter_supported_state_changes']
+__all__ = ['_project_governance', '_record_decision_event', '_record_engine_decision_event', '_audit_current_plan_before_write', '_audit_future_plans_after_acceptance', '_future_plan_audit_plans', '_future_plan_audit_band_rows', '_record_future_plan_audit_events', '_record_generation_audit_checkpoint_if_due', '_generation_audit_checkpoint_payload', '_previous_band_row', '_manual_boundary_checkpoint', '_strict_progression_block', '_create_auto_band_checkpoint', '_filter_supported_state_changes']

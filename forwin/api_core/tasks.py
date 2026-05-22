@@ -193,12 +193,6 @@ from forwin.state.updater import StateUpdater
 
 logger = logging.getLogger(__name__)
 
-# Backwards-compatible aliases for tests and local integrations while api.py is being split.
-_build_runtime_config = build_runtime_config
-_build_saved_runtime_config = build_saved_runtime_config
-_run_generation_with_config = run_generation_with_config
-_run_continue_project_with_config = run_continue_project_with_config
-
 from forwin.api_core import state as api_state
 from forwin.api_core.runtime import *
 

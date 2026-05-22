@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import inspect, select, text
+from sqlalchemy import select
 
 from forwin.api_book_state_routes import build_handlers
 from forwin.api_schemas import (
@@ -62,33 +62,6 @@ def test_upgrade_backfills_identity_map_timestamps_for_existing_world_nodes() ->
     assert identity.updated_at is not None
 
 
-def test_upgrade_drops_obsolete_character_identity_legacy_entity_id() -> None:
-    engine = get_engine(postgres_test_url("character-identity-drop-legacy-id"))
-    init_db(engine)
-
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "ALTER TABLE character_identity_map "
-                "ADD COLUMN IF NOT EXISTS legacy_entity_id VARCHAR NOT NULL DEFAULT ''"
-            )
-        )
-        conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS ix_character_identity_project_legacy "
-                "ON character_identity_map (project_id, legacy_entity_id)"
-            )
-        )
-
-    upgrade_db(engine)
-
-    inspector = inspect(engine)
-    column_names = {column["name"] for column in inspector.get_columns("character_identity_map")}
-    index_names = {index["name"] for index in inspector.get_indexes("character_identity_map")}
-    assert "legacy_entity_id" not in column_names
-    assert "ix_character_identity_project_legacy" not in index_names
-
-
 def test_create_character_writes_book_state_loadout_metadata_without_legacy_bridge(tmp_path: Path) -> None:
     engine = get_engine(postgres_test_url("character-creation-helper"))
     init_db(engine)
@@ -143,12 +116,6 @@ def test_create_character_writes_book_state_loadout_metadata_without_legacy_brid
     assert node.metadata["character_creation"]["source"] == "api_manual"
     assert character_entities == []
     assert {event.event_type for event in events} >= {"character_created", "personality_loadout_auto_assigned"}
-    legacy_compat_events = [
-        event
-        for event in events
-        if event.event_type == "legacy_compatibility_used"
-    ]
-    assert legacy_compat_events == []
 
 
 def test_create_character_persists_identity_map_for_book_state_legacy_and_roster(tmp_path: Path) -> None:

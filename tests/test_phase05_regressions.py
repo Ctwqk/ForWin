@@ -596,7 +596,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     }
                 )
                 if len(self.calls) == 1:
-                    return '{"title":"第一章","body":"' + ("正文" * 1200) + '","end_of_chapter_summary":"总结"}'
+                    return '{"title":"第一章","body":"' + ("正文" * 1200) + '。","end_of_chapter_summary":"总结"}'
                 return '{"state_changes":[],"new_events":[],"thread_beats":[]}'
 
         context = ChapterContextPack(
@@ -626,7 +626,7 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertIn("目标正文长度 2600 到 3200 中文字", first_prompt)
         self.assertGreaterEqual(client.calls[0]["max_tokens"], 4600)
 
-    def test_orchestrator_keeps_draft_when_structured_state_is_dirty(self) -> None:
+    def test_orchestrator_drops_unsupported_state_field_and_keeps_draft(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = postgres_test_url("dirty-state")
             orchestrator = WritingOrchestrator(
@@ -1053,13 +1053,16 @@ class Phase05RegressionTests(unittest.TestCase):
                 orchestrator.engine.dispose()
 
             self.assertEqual(result.status, "needs_review")
-            self.assertEqual(len(attempts), 3)
-            self.assertEqual([item.repair_scope for item in attempts], ["draft", "draft", "draft"])
+            self.assertEqual(len(attempts), 4)
+            self.assertEqual(
+                [item.repair_scope for item in attempts],
+                ["chapter_plan", "chapter_plan", "band_plan", "band_plan"],
+            )
             review_meta = json.loads(review.review_meta_json)
             self.assertEqual((review_meta.get("final_gate_decision") or {}).get("decision"), "manual_review_required")
             self.assertEqual((review_meta.get("final_gate_decision") or {}).get("canon_risk"), "high")
             self.assertEqual(plan.status, "needs_review")
-            self.assertEqual(plan.repair_attempt_count, 3)
+            self.assertEqual(plan.repair_attempt_count, 4)
             self.assertEqual(plan.canon_risk_level, "high")
             self.assertEqual(apply_calls["count"], 0)
 
@@ -1266,7 +1269,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 orchestrator.engine.dispose()
 
             self.assertEqual(result.status, "needs_review")
-            self.assertEqual([item.repair_scope for item in attempts], ["draft", "chapter_plan", "band_plan"])
+            self.assertEqual(
+                [item.repair_scope for item in attempts],
+                ["draft", "chapter_plan", "chapter_plan", "band_plan", "band_plan"],
+            )
             self.assertNotIn("新的危险是什么", band_plan.schedule_json)
             self.assertTrue(all("新的危险是什么" not in (plan.experience_plan_json or "") for plan in chapter_plans))
             self.assertEqual(attempts[-1].failure_reason, "lightweight-provisional:fail")
@@ -3865,12 +3871,7 @@ class Phase05RegressionTests(unittest.TestCase):
                     )
                     for intent in intents
                 ],
-                [
-                    (1, "林夜", "pressure", "优先利用旧站台的地利；主动制造信息差", 5),
-                    (1, "周柒", "pursue", "优先利用调度室的地利；跟进主角留下的线索", 4),
-                    (2, "林夜", "pressure", "优先利用旧站台的地利；主动制造信息差", 5),
-                    (2, "周柒", "pursue", "优先利用调度室的地利；跟进主角留下的线索", 4),
-                ],
+                [],
             )
             self.assertEqual(
                 [
@@ -4737,7 +4738,7 @@ class Phase05RegressionTests(unittest.TestCase):
             def chat(self, _messages, temperature: float, max_tokens: int, response_format=None) -> str:
                 self.calls += 1
                 if self.calls == 1:
-                    return '{"title":"第一章","body":"%s"}' % ("正文" * 900)
+                    return '{"title":"第一章","body":"%s。"}' % ("正文" * 900)
                 raise RuntimeError("structured extraction failed")
 
         writer = ChapterWriter(FakeClient(), writer_mode="single")
@@ -4983,9 +4984,9 @@ class Phase05RegressionTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.responses = [
                     '{"scenes":[{"scene_no":1,"objective":"相遇","must_progress_points":["主角遇敌"],"time_hint":"清晨","location_hint":"荒原","involved_entities":["林夜"],"micro_hook":"敌人逼近","target_chars":700},{"scene_no":2,"objective":"逃离","must_progress_points":["主角脱身"],"time_hint":"午后","location_hint":"峡谷","involved_entities":["林夜"],"micro_hook":"更大危机","target_chars":700}]}',
-                    '{"text":"scene one","micro_summary":"相遇总结","scene_time_point":"清晨","scene_location_id":"荒原","involved_entities":["林夜"]}',
-                    '{"text":"scene two","micro_summary":"逃离总结","scene_time_point":"午后","scene_location_id":"峡谷","involved_entities":["林夜"]}',
-                    '{"title":"拼接章","body":"scene one\\nscene two","end_of_chapter_summary":"本章完成逃离"}',
+                    '{"text":"scene one。","micro_summary":"相遇总结","scene_time_point":"清晨","scene_location_id":"荒原","involved_entities":["林夜"]}',
+                    '{"text":"scene two。","micro_summary":"逃离总结","scene_time_point":"午后","scene_location_id":"峡谷","involved_entities":["林夜"]}',
+                    '{"title":"拼接章","body":"scene one。\\nscene two。","end_of_chapter_summary":"本章完成逃离"}',
                     '{"state_changes":[{"entity_name":"林夜","entity_kind":"character","field":"location","old_value":"荒原","new_value":"峡谷","reason":"逃离成功"}],"new_events":[{"summary":"林夜逃离","significance":"major","involved_entity_names":["林夜"],"roles":["protagonist"]}]}',
                     '{"thread_beats":[{"thread_name":"主线","beat_type":"escalation","description":"危机升级"}],"time_advance":{"new_time_label":"第二天","duration_description":"半日后"}}',
                     '{"lore_candidates":[],"timeline_hints":[],"writer_notes":[]}',
@@ -5029,9 +5030,9 @@ class Phase05RegressionTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.responses = [
                     "scene breakdown unavailable",
-                    '{"text":"scene one","micro_summary":"相遇总结","scene_time_point":"清晨","scene_location_id":"荒原","involved_entities":["林夜"]}',
-                    '{"text":"scene two","micro_summary":"推进总结","scene_time_point":"午后","scene_location_id":"旧站台","involved_entities":["林夜"]}',
-                    '{"title":"回退章","body":"scene one\\nscene two","end_of_chapter_summary":"本章完成推进"}',
+                    '{"text":"scene one。","micro_summary":"相遇总结","scene_time_point":"清晨","scene_location_id":"荒原","involved_entities":["林夜"]}',
+                    '{"text":"scene two。","micro_summary":"推进总结","scene_time_point":"午后","scene_location_id":"旧站台","involved_entities":["林夜"]}',
+                    '{"title":"回退章","body":"scene one。\\nscene two。","end_of_chapter_summary":"本章完成推进"}',
                     '{"state_changes":[],"new_events":[]}',
                     '{"thread_beats":[],"time_advance":null}',
                     '{"lore_candidates":[],"timeline_hints":[],"writer_notes":[]}',
@@ -5842,9 +5843,9 @@ class Phase05RegressionTests(unittest.TestCase):
                 page = client.get("/publishers")
                 self.assertEqual(page.status_code, 200)
                 self.assertIn("浏览器扩展", page.text)
-                self.assertIn("如果你通过 Mac 或笔记本访问这台 Linux 后端", page.text)
+                self.assertIn("首次安装请手动完成这几步", page.text)
                 self.assertIn("browser_extension/forwin-publisher", page.text)
-                self.assertIn("最近上传任务", page.text)
+                self.assertIn("排队中与执行中的上传任务", page.text)
                 self.assertIn("下载扩展包", page.text)
                 self.assertIn("下载 Firefox 扩展包", page.text)
                 self.assertIn("/api/publishers/extension-package", page.text)
@@ -6152,8 +6153,8 @@ class Phase05RegressionTests(unittest.TestCase):
                     self.assertIn("Kimi 中文站 / Moonshot.cn", page.text)
                     self.assertIn("https://api.moonshot.cn/v1", page.text)
                     self.assertIn("kimi-k2.5", page.text)
-                    self.assertIn("统一任务中心", page.text)
-                    self.assertIn("模型列表", page.text)
+                    self.assertIn("任务", page.text)
+                    self.assertIn("模型", page.text)
                     self.assertIn("Operation Mode", page.text)
                     self.assertIn("/publishers", page.text)
                     self.assertIn("模型设置", page.text)
@@ -6301,8 +6302,8 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.assertEqual(approve_payload.task_id, task_payload.task_id)
                 self.assertIn("已启动后续章节继续执行", approve_payload.message)
                 self.assertEqual(task_payload.project_id, run_result.project_id)
-                self.assertEqual(len(FakeThread.created), 1)
-                self.assertTrue(FakeThread.created[0].started)
+                self.assertEqual(len(FakeThread.created), 0)
+                self.assertEqual(task_payload.status, "queued")
             finally:
                 if temp_engine is not None:
                     temp_engine.dispose()
@@ -6328,7 +6329,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.started = True
 
         old_config = api_module._config
+        old_engine = api_module._engine
+        old_factory = api_module._SessionFactory
         old_tasks = api_module._tasks
+        temp_engine = None
         try:
             api_module._config = Config(
                 database_url=postgres_test_url(),
@@ -6336,6 +6340,9 @@ class Phase05RegressionTests(unittest.TestCase):
                 minimax_base_url="https://api.minimaxi.com/v1",
                 minimax_model="MiniMax-M2.7",
             )
+            temp_engine = get_engine(api_module._config.database_url)
+            api_module._engine = temp_engine
+            api_module._SessionFactory = get_session_factory(temp_engine)
             api_module._tasks = {}
             with TestClient(api_module.app) as client:
                 with patch.object(api_module.threading, "Thread", FakeThread):
@@ -6349,19 +6356,21 @@ class Phase05RegressionTests(unittest.TestCase):
                             "base_url": "https://example.test/v1",
                             "model": "custom-model",
                         },
-                    )
+                        )
 
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(len(FakeThread.created), 1)
-            thread = FakeThread.created[0]
-            self.assertTrue(thread.started)
-            self.assertIs(thread.target, api_module._run_generation_with_config)
-            runtime_config = thread.args[4]
-            self.assertEqual(runtime_config.minimax_api_key, "sk-inline")
-            self.assertEqual(runtime_config.minimax_base_url, "https://example.test/v1")
-            self.assertEqual(runtime_config.minimax_model, "custom-model")
+            self.assertEqual(len(FakeThread.created), 0)
+            task = api_module._get_generation_task_or_404(response.json()["task_id"])
+            overrides = task["execution_payload"]["runtime_overrides"]
+            self.assertNotIn("minimax_api_key", overrides)
+            self.assertEqual(overrides["minimax_base_url"], "https://example.test/v1")
+            self.assertEqual(overrides["minimax_model"], "custom-model")
         finally:
+            if temp_engine is not None:
+                temp_engine.dispose()
             api_module._config = old_config
+            api_module._engine = old_engine
+            api_module._SessionFactory = old_factory
             api_module._tasks = old_tasks
 
     def test_generate_for_existing_project_keeps_book_context(self) -> None:
@@ -6385,7 +6394,13 @@ class Phase05RegressionTests(unittest.TestCase):
             session_factory = get_session_factory(engine)
             with session_factory() as session:
                 updater = StateUpdater(session)
-                project = updater.create_project("测试书", "前提", "玄幻", "设定")
+                project = updater.create_project(
+                    "测试书",
+                    "前提",
+                    "玄幻",
+                    "设定",
+                    creation_status="writing",
+                )
                 session.commit()
 
             old_config = api_module._config
@@ -6417,9 +6432,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 payload = response.json()
                 self.assertEqual(payload["project_id"], project.id)
                 self.assertEqual(payload["title"], "测试书")
-                self.assertEqual(len(FakeThread.created), 1)
-                self.assertIs(FakeThread.created[0].target, api_module._run_generation_with_config)
-                self.assertEqual(FakeThread.created[0].args[7], project.id)
+                self.assertEqual(len(FakeThread.created), 0)
+                task = api_module._get_generation_task_or_404(payload["task_id"])
+                self.assertEqual(task["project_id"], project.id)
+                self.assertEqual(task["execution_payload"]["mode"], "initial")
             finally:
                 api_module._config = old_config
                 api_module._engine = old_engine
@@ -6496,7 +6512,12 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.llm_client = SimpleNamespace(close=lambda: None)
                 self.engine = SimpleNamespace(dispose=lambda: None)
 
-            def continue_project(self, project_id: str, max_chapters: int | None = None):
+            def continue_project(
+                self,
+                project_id: str,
+                max_chapters: int | None = None,
+                resume_from_chapter: int | None = None,
+            ):
                 self.continue_calls.append((project_id, max_chapters))
                 return RunResult(
                     project_id=project_id,
@@ -6903,7 +6924,10 @@ class Phase05RegressionTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             old_config = api_module._config
             old_store = api_module._runtime_settings
+            old_engine = api_module._engine
+            old_factory = api_module._SessionFactory
             old_tasks = api_module._tasks
+            temp_engine = None
             try:
                 api_module._config = Config(
                     database_url=postgres_test_url(),
@@ -6912,6 +6936,9 @@ class Phase05RegressionTests(unittest.TestCase):
                     minimax_base_url="https://api.minimaxi.com/v1",
                     minimax_model="MiniMax-M2.7",
                 )
+                temp_engine = get_engine(api_module._config.database_url)
+                api_module._engine = temp_engine
+                api_module._SessionFactory = get_session_factory(temp_engine)
                 api_module._runtime_settings = RuntimeSettingsStore(
                     api_module._config.runtime_settings_path,
                     default_api_key="",
@@ -6939,13 +6966,19 @@ class Phase05RegressionTests(unittest.TestCase):
                         )
 
                 self.assertEqual(response.status_code, 200)
-                runtime_config = FakeThread.created[0].args[4]
-                self.assertEqual(runtime_config.minimax_api_key, "sk-from-store")
-                self.assertEqual(runtime_config.minimax_base_url, "https://stored.example/v1")
-                self.assertEqual(runtime_config.minimax_model, "stored-model")
+                self.assertEqual(len(FakeThread.created), 0)
+                task = api_module._get_generation_task_or_404(response.json()["task_id"])
+                overrides = task["execution_payload"]["runtime_overrides"]
+                self.assertNotIn("minimax_api_key", overrides)
+                self.assertEqual(overrides["minimax_base_url"], "https://stored.example/v1")
+                self.assertEqual(overrides["minimax_model"], "stored-model")
             finally:
+                if temp_engine is not None:
+                    temp_engine.dispose()
                 api_module._config = old_config
                 api_module._runtime_settings = old_store
+                api_module._engine = old_engine
+                api_module._SessionFactory = old_factory
                 api_module._tasks = old_tasks
 
     def test_phase24_persists_experience_overlay_artifacts(self) -> None:
@@ -7174,7 +7207,7 @@ class Phase05RegressionTests(unittest.TestCase):
             self.assertEqual(plan.status, "needs_review")
             self.assertEqual(apply_calls["count"], 0)
 
-    def test_blackbox_exhausted_fail_force_accepts_after_third_rewrite(self) -> None:
+    def test_blackbox_exhausted_soft_fail_force_accepts_after_retry_budget(self) -> None:
         class SoftFailReviewHub:
             def __init__(self):
                 self.calls = 0
@@ -7185,7 +7218,10 @@ class Phase05RegressionTests(unittest.TestCase):
                     ("hook_soft", "章末钩子偏软", "hook_failure", "scene", {"hook_type": "hard_cliffhanger"}),
                     ("progress_stall", "推进仍偏慢", "stall", "band", {"progress_markers": ["推进主线"]}),
                     ("immersion_anchor_missing", "沉浸感仍偏弱", "immersion", "band", {"immersion_anchors": ["雨声压着窗框"]}),
-                    ("reward_delivery_thin", "回报仍偏薄", "payoff_miss", "scene", {"planned_reward_tags": ["mystery", "payoff"]}),
+                    ("reward_delivery_thin", "回报仍偏薄", "payoff_miss", "scene", {"planned_reward_tags": ["mystery", "emotion"]}),
+                    ("progress_stall_late", "后段推进仍偏慢", "stall", "band", {"progress_markers": ["主角主动推进"]}),
+                    ("immersion_anchor_late", "后段沉浸锚仍偏弱", "immersion", "scene", {"immersion_anchors": ["金属门低鸣"]}),
+                    ("hook_soft_final", "最终残留软钩子", "hook_failure", "scene", {"hook_type": "hard_cliffhanger"}),
                 ]
                 rule_name, description, issue_type, target_scope, design_patch = issue_specs[min(self.calls - 1, len(issue_specs) - 1)]
                 return ReviewVerdict(
@@ -7277,15 +7313,18 @@ class Phase05RegressionTests(unittest.TestCase):
                 orchestrator.engine.dispose()
 
             self.assertEqual(result.status, "paused")
-            self.assertEqual(len(attempts), 3)
-            self.assertEqual([item.repair_scope for item in attempts], ["draft", "chapter_plan", "band_plan"])
+            self.assertEqual(len(attempts), 6)
+            self.assertEqual(
+                [item.repair_scope for item in attempts],
+                ["draft", "draft", "chapter_plan", "chapter_plan", "band_plan", "band_plan"],
+            )
             self.assertTrue(attempts[-1].forced_accept_applied)
             review_meta = json.loads(review.review_meta_json)
             self.assertTrue(review_meta.get("forced_accept_applied"))
             self.assertEqual((review_meta.get("final_gate_decision") or {}).get("decision"), "force_accept")
             self.assertEqual(plan.status, "accepted")
             self.assertEqual(plan.acceptance_mode, "force_accept_after_repair")
-            self.assertEqual(plan.repair_attempt_count, 3)
+            self.assertEqual(plan.repair_attempt_count, 6)
             self.assertEqual(plan.canon_risk_level, "low")
             self.assertEqual(apply_calls["count"], 1)
 
@@ -7363,7 +7402,7 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(review.verdict, "fail")
         self.assertIsNotNone(review.repair_instruction)
         assert review.repair_instruction is not None
-        self.assertEqual(review.repair_instruction.repair_scope, "chapter_plan")
+        self.assertEqual(review.repair_instruction.repair_scope, "band")
         self.assertEqual(review.repair_instruction.failure_type, "mixed")
         self.assertIn("死人仍在行动", review.repair_instruction.must_fix)
         self.assertIn("推进停滞", review.repair_instruction.must_fix)
@@ -7541,9 +7580,12 @@ class Phase05RegressionTests(unittest.TestCase):
             self.assertEqual(result.status, "needs_review")
             self.assertEqual(plan.status, "needs_review")
             self.assertIsNone(checkpoint)
-            self.assertEqual(len(attempts), 3)
+            self.assertEqual(len(attempts), 6)
             ordered_attempts = sorted(attempts, key=lambda item: item.attempt_no)
-            self.assertEqual([item.repair_scope for item in ordered_attempts], ["draft", "chapter_plan", "band_plan"])
+            self.assertEqual(
+                [item.repair_scope for item in ordered_attempts],
+                ["draft", "draft", "chapter_plan", "chapter_plan", "band_plan", "band_plan"],
+            )
             self.assertFalse(any(item.forced_accept_applied for item in attempts))
             review_meta = json.loads(latest_review.review_meta_json)
             self.assertFalse(review_meta.get("forced_accept_applied"))
@@ -8061,22 +8103,22 @@ class Phase05RegressionTests(unittest.TestCase):
                 self.assertEqual(payload["acceptance_mode"], "force_accept_after_repair")
                 self.assertEqual(payload["repair_attempt_count"], 3)
                 self.assertEqual(payload["canon_risk_level"], "low")
-                self.assertEqual(payload["latest_repair_scope"], "draft")
+                self.assertEqual(payload["latest_repair_scope"], "scene")
                 self.assertTrue(payload["repair_exhausted"])
                 self.assertTrue(payload["forced_accept_applied"])
                 self.assertEqual(payload["repair_verification"]["verifier_mode"], "rule_only")
                 self.assertEqual(payload["final_gate_decision"]["decision"], "force_accept")
-                self.assertEqual(payload["rewrite_attempts"][0]["repair_scope"], "draft")
+                self.assertEqual(payload["rewrite_attempts"][0]["repair_scope"], "scene")
                 self.assertTrue(payload["rewrite_attempts"][0]["forced_accept_applied"])
                 self.assertEqual(chapter_payload["acceptance_mode"], "force_accept_after_repair")
                 self.assertEqual(chapter_payload["repair_attempt_count"], 3)
                 self.assertEqual(chapter_payload["canon_risk_level"], "low")
                 self.assertEqual(chapter_payload["residual_review_issues"][0]["description"], "钩子偏弱")
                 self.assertEqual(list_payload[0]["acceptance_mode"], "force_accept_after_repair")
-                self.assertEqual(list_payload[0]["latest_repair_scope"], "draft")
+                self.assertEqual(list_payload[0]["latest_repair_scope"], "scene")
                 self.assertEqual(list_payload[0]["canon_risk_level"], "low")
                 self.assertEqual(project_payload["chapters"][0]["acceptance_mode"], "force_accept_after_repair")
-                self.assertEqual(project_payload["chapters"][0]["latest_repair_scope"], "draft")
+                self.assertEqual(project_payload["chapters"][0]["latest_repair_scope"], "scene")
             finally:
                 api_module._engine = old_engine
                 api_module._SessionFactory = old_factory

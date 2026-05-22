@@ -4,14 +4,14 @@ import re
 
 from playwright.sync_api import expect
 
-from tests.browser.fixtures import MockForWinBackend, goto_home
+from tests.browser.fixtures import MockForWinBackend, goto_home, switch_home_tab
 
 
 def test_task_center_drawer_controls_and_bulk_delete(page, browser_test_base_url: str) -> None:
     backend = MockForWinBackend()
     goto_home(page, browser_test_base_url, backend)
 
-    page.locator("#tab_task").click()
+    switch_home_tab(page, "task")
     page.get_by_role("button", name="查看详情").first.click()
     expect(page.locator("#task_drawer_overlay")).to_have_class(re.compile(r".*\bopen\b.*"))
     expect(page.locator("#drawer_body")).to_contain_text("任务主线")
@@ -26,7 +26,7 @@ def test_task_center_drawer_controls_and_bulk_delete(page, browser_test_base_url
     expect(page.locator("#global_status")).to_contain_text("已发送终止请求")
 
     page.locator("#task_drawer_overlay").get_by_role("button", name="关闭").click()
-    page.locator("#tab_task").click()
+    switch_home_tab(page, "task")
     page.locator("#task_select_all_btn").click()
     expect(page.locator("#task_bulk_delete_btn")).to_be_enabled()
     page.once("dialog", lambda dialog: dialog.accept())
@@ -86,7 +86,7 @@ def test_upload_task_modal_payload_combinations(page, browser_test_base_url: str
 def test_stale_drawer_closes_when_task_detail_404s(page, browser_test_base_url: str) -> None:
     backend = MockForWinBackend()
     goto_home(page, browser_test_base_url, backend)
-    page.locator("#tab_task").click()
+    switch_home_tab(page, "task")
     page.get_by_role("button", name="查看详情").first.click()
     expect(page.locator("#task_drawer_overlay")).to_have_class(re.compile(r".*\bopen\b.*"))
 
@@ -99,7 +99,7 @@ def test_stale_drawer_closes_when_task_detail_404s(page, browser_test_base_url: 
 def test_stale_drawer_closes_when_task_disappears_from_list(page, browser_test_base_url: str) -> None:
     backend = MockForWinBackend()
     goto_home(page, browser_test_base_url, backend)
-    page.locator("#tab_task").click()
+    switch_home_tab(page, "task")
     page.get_by_role("button", name="查看详情").first.click()
     expect(page.locator("#task_drawer_overlay")).to_have_class(re.compile(r".*\bopen\b.*"))
 

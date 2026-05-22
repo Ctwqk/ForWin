@@ -214,6 +214,25 @@ entries:
       - current checkpoint serialization tests pass
     status: deleted
 
+  - id: api.split_runtime_run_aliases
+    category: deleted
+    owner_area: api
+    paths:
+      - forwin/api_core/app.py
+    allow_patterns:
+      - "api.split_runtime_run_aliases"
+    reason: Split-era forwin.api compatibility aliases are retained only for old tests and local integrations that patch private _run_* names; generation execution no longer uses these aliases.
+    removal_phase: complete
+    verification:
+      - api_split_exports_tests
+      - generation_worker_cutover_tests
+      - inventory_final
+    delete_when:
+      - external tests and integrations patch public worker/runtime seams instead of forwin.api._run_* private aliases
+      - phase05 split-era thread tests are removed or rewritten for enqueue-only worker execution
+      - no direct references to forwin.api._run_generation_with_config or forwin.api._run_continue_project_with_config remain
+    status: deleted
+
   - id: project.creation_status_legacy
     category: deleted
     owner_area: project_lifecycle
@@ -394,14 +413,14 @@ entries:
       - 'creation_status", "") or "").strip() == "legacy"'
       - use_legacy_fallback
     reason: Runtime legacy compatibility audit exists only while compatibility paths are being removed.
-    removal_phase: phase_8
+    removal_phase: complete
     verification:
       - inventory_final
       - sixty_chapter_runtime_audit
     delete_when:
       - all runtime_delete entries are deleted
       - 60 chapter audit reports legacy_compat.total_events == 0
-    status: planned
+    status: deleted
 
   - id: legacy_inventory.audit_gate_terms
     category: test_doc_followup
@@ -660,17 +679,15 @@ entries:
     status: retained
 
   - id: schema.bootstrap_legacy_columns
-    category: migration_history_keep
+    category: deleted
     owner_area: database
     paths:
       - forwin/models/base.py
     allow_patterns:
       - legacy_checkpoint_statuses_v1
       - _drop_obsolete_character_identity_legacy_bridge
-      - DROP INDEX IF EXISTS ix_character_identity_project_legacy
-      - DROP COLUMN IF EXISTS legacy_entity_id
-    reason: Current bootstrap no longer creates character identity legacy columns; the remaining legacy checkpoint version marker is retained as schema history until migration history is intentionally renamed.
-    removal_phase: migration_history
+    reason: Runtime bootstrap no longer creates or cleans old character identity bridge columns, and the old checkpoint schema marker is no longer inserted for new databases. Immutable Alembic migration text is covered by migration.history.
+    removal_phase: complete
     verification:
       - db_migration
       - schema_bootstrap_tests
@@ -678,7 +695,7 @@ entries:
     delete_when:
       - fresh database bootstrap creates only current schema
       - migration tests cover dropping old columns
-    status: retained
+    status: deleted
 
   - id: dead_code.removed_repair_paths
     category: deleted

@@ -83,8 +83,8 @@ def test_session_secret_encrypts_new_cookie_storage() -> None:
         engine.dispose()
 
 
-def test_legacy_plaintext_session_reads_and_upgrades_in_extension_context() -> None:
-    engine, plaintext_manager = _manager("publisher-secret-legacy")
+def test_plaintext_session_reads_without_upgrade_in_extension_context() -> None:
+    engine, plaintext_manager = _manager("publisher-secret-plaintext")
     try:
         plaintext_manager.record_browser_session(
             client_id="client-1",
@@ -111,9 +111,9 @@ def test_legacy_plaintext_session_reads_and_upgrades_in_extension_context() -> N
                 {"client_id": "client-1", "platform_id": "qidian"},
             )
             assert entry is not None
-            upgraded_raw = entry.cookies_json
-        assert "token-secret-value" not in upgraded_raw
-        assert json.loads(upgraded_raw)["encoding"] == "fernet-v1"
+            stored_raw = entry.cookies_json
+        assert "token-secret-value" in stored_raw
+        assert isinstance(json.loads(stored_raw), list)
     finally:
         engine.dispose()
 

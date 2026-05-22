@@ -14,7 +14,7 @@ from forwin.orchestrator_loop_core import world_projection as _world_projection_
 from forwin.orchestrator_loop_core import writer_attention as _writer_attention_module
 from forwin.orchestrator_loop_core.run_control import _bind_orchestrator_runtime_hooks, run, run_existing_project, _emit_progress, _bind_governance_runtime, _clear_governance_runtime, _start_governance_stage_span, _finish_governance_stage_span, _record_stage_transition, _latest_provisional_gate_snapshot, _new_failed_provisional_gate, _block_on_scenario_rehearsal, _block_on_provisional_failure, _pending_chapter_numbers_for_active_arc, _materialize_next_genesis_arc_if_needed, continue_project
 from forwin.orchestrator_loop_core.acceptance import accept_review
-from forwin.orchestrator_loop_core.governance import _project_governance, _record_decision_event, _record_engine_decision_event, _record_legacy_compatibility_event, _audit_current_plan_before_write, _audit_future_plans_after_acceptance, _future_plan_audit_plans, _future_plan_audit_band_rows, _record_future_plan_audit_events, _record_generation_audit_checkpoint_if_due, _generation_audit_checkpoint_payload, _previous_band_row, _manual_boundary_checkpoint, _strict_progression_block, _create_auto_band_checkpoint, _filter_supported_state_changes
+from forwin.orchestrator_loop_core.governance import _project_governance, _record_decision_event, _record_engine_decision_event, _audit_current_plan_before_write, _audit_future_plans_after_acceptance, _future_plan_audit_plans, _future_plan_audit_band_rows, _record_future_plan_audit_events, _record_generation_audit_checkpoint_if_due, _generation_audit_checkpoint_payload, _previous_band_row, _manual_boundary_checkpoint, _strict_progression_block, _create_auto_band_checkpoint, _filter_supported_state_changes
 from forwin.orchestrator_loop_core.runtime_helpers import _make_state_helpers, _select_skill_layers, _filter_supported_kwargs, _call_with_compatible_kwargs, _save_prompt_trace_payload, _record_prompt_trace_performance_spans
 from forwin.orchestrator_loop_core.review_autofix import _persist_draft_and_review, _review_current_output, _apply_canon_name_drift_autofix, _apply_subworld_admission_autofix, _apply_placeholder_leakage_autofix, _placeholder_role_replacement, _looks_like_genericizable_unknown_reference, _project_character_names, _generic_subworld_reference, _subworld_role_titles, _replace_canon_name_strings, _review_event_payload, _review_issue_payloads, _record_map_movement_review_issues, _review_canon_risk, _load_json_list, _chapter_plan_snapshot, _band_plan_snapshot, _repair_verification_issue, _review_with_repair_verification, _repair_policy_requested_scope, _review_has_structural_repair_issue
 from forwin.orchestrator_loop_core.repair_loop import _review_and_maybe_rewrite, _review_meta_json, _default_repair_instruction, _apply_repair_patch, _replace_band_schedule, _structure_data_from_row, _reader_promise_from_row, _current_chapter_repair_experience_plan, _chapter_experience_patch_payload, _countdown_repair_rule_anchors, _band_schedule_patch_payload, _arc_payoff_patch_payload
@@ -36,7 +36,7 @@ class WritingOrchestrator:
         services: RuntimeServices | None = None,
     ) -> None:
         if services is None:
-            container_cls = RuntimeContainer
+            container_cls = globals().get("RuntimeContainer")
             if container_cls is None:
                 from forwin.runtime.container import RuntimeContainer as container_cls
 
@@ -103,7 +103,6 @@ WritingOrchestrator.accept_review = accept_review
 WritingOrchestrator._project_governance = _project_governance
 WritingOrchestrator._record_decision_event = _record_decision_event
 WritingOrchestrator._record_engine_decision_event = _record_engine_decision_event
-WritingOrchestrator._record_legacy_compatibility_event = _record_legacy_compatibility_event
 WritingOrchestrator._audit_current_plan_before_write = _audit_current_plan_before_write
 WritingOrchestrator._audit_future_plans_after_acceptance = _audit_future_plans_after_acceptance
 WritingOrchestrator._future_plan_audit_plans = _future_plan_audit_plans

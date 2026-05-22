@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 from forwin.orchestrator_loop_core.common import *
+
+logger = logging.getLogger(__name__)
 
 def _write_chapter_with_attention_fallback(
     self,

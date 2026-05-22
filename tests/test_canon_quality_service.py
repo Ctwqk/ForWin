@@ -41,6 +41,7 @@ def test_service_persists_validated_form_projection() -> None:
                 writer_output=output,
                 draft_id="draft-1",
                 persist=True,
+                mode="primary",
                 llm_client=FakeFormClient(_payload(project.id, 1, character_quote=quote)),
                 return_raw_analyzer_results=True,
             )
@@ -88,6 +89,7 @@ def test_service_rejects_subject_misattribution_without_state_write() -> None:
                 writer_output=output,
                 draft_id="draft-1",
                 persist=True,
+                mode="primary",
                 llm_client=FakeFormClient(payload),
             )
             session.commit()
@@ -125,6 +127,7 @@ def test_service_blocks_when_form_llm_unavailable() -> None:
                 writer_output=output,
                 draft_id="draft-1",
                 persist=False,
+                mode="primary",
                 llm_client=None,
             )
 

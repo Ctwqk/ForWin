@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from itertools import product
 import time
 from urllib.error import HTTPError
@@ -190,7 +191,7 @@ def test_live_llm_browser_generation_reaches_backend_artifacts(page) -> None:
 
     page.goto(f"{base_url}/", wait_until="domcontentloaded")
     expect(page.locator("#global_status")).to_contain_text("首页已加载")
-    page.locator("#tab_task").click()
+    page.get_by_role("button", name=re.compile(r"^(Tasks|任务)$")).click()
     page.get_by_role("button", name="新建任务").click()
     page.locator("#task_generation_premise").fill(
         f"{title_marker}。写一个完整第一章：雾港记录员林夜在退潮时发现旧航线档案异常。"
@@ -237,7 +238,7 @@ def test_live_llm_all_generation_operation_combinations(page) -> None:
         }
         for operation_mode, progression_mode, freeze_failed_candidates, auto_band_checkpoint, manual_checkpoints_enabled, future_constraints_enabled in product(
             ["blackbox", "copilot", "checkpoint"],
-            ["", "legacy_relaxed", "serial_canon", "serial_canon_band_guard"],
+            ["", "serial_canon", "serial_canon_band_guard"],
             [False, True],
             [False, True],
             [False, True],

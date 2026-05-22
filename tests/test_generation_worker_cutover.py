@@ -92,3 +92,10 @@ def test_generation_api_no_longer_starts_daemon_generation_threads() -> None:
     assert "target=_run_generation_with_config" not in source
     assert "target=_run_continue_project_with_config" not in source
     assert "daemon=True" not in source
+
+
+def test_api_split_removes_private_run_alias_compatibility() -> None:
+    assert not hasattr(api_module, "_build_runtime_config")
+    assert not hasattr(api_module, "_build_saved_runtime_config")
+    assert not hasattr(api_module, "_run_generation_with_config")
+    assert not hasattr(api_module, "_run_continue_project_with_config")

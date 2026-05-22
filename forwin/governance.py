@@ -176,6 +176,10 @@ class DecisionEventType:
     TASK_OPERATION_FAILED = "task_operation_failed"
     TASK_CLEANUP_STARTED = "task_cleanup_started"
     TASK_CLEANUP_FINISHED = "task_cleanup_finished"
+    GENERATION_WORKER_CLAIMED = "generation_worker_claimed"
+    GENERATION_WORKER_RECLAIMED = "generation_worker_reclaimed"
+    GENERATION_WORKER_HEARTBEAT_FAILED = "generation_worker_heartbeat_failed"
+    GENERATION_WORKER_EXECUTION_FAILED = "generation_worker_execution_failed"
     CONTEXT_ASSEMBLED = "context_assembled"
     CONTEXT_PRUNED = "context_pruned"
     MEMORY_SEARCH_STARTED = "memory_search_started"
@@ -301,6 +305,10 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.TASK_OPERATION_FAILED,
     DecisionEventType.TASK_CLEANUP_STARTED,
     DecisionEventType.TASK_CLEANUP_FINISHED,
+    DecisionEventType.GENERATION_WORKER_CLAIMED,
+    DecisionEventType.GENERATION_WORKER_RECLAIMED,
+    DecisionEventType.GENERATION_WORKER_HEARTBEAT_FAILED,
+    DecisionEventType.GENERATION_WORKER_EXECUTION_FAILED,
     DecisionEventType.CONTEXT_ASSEMBLED,
     DecisionEventType.CONTEXT_PRUNED,
     DecisionEventType.MEMORY_SEARCH_STARTED,

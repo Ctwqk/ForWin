@@ -336,6 +336,52 @@ def test_fanqie_chapter_manage_url_backfills_remote_book_id() -> None:
         engine.dispose()
 
 
+def test_qidian_chaptertmp_url_backfills_book_and_chapter_ids() -> None:
+    engine, runtime = _runtime("publisher-qidian-url-ids")
+    try:
+        with runtime.session_factory() as session:
+            project_id = _project(session)
+            session.commit()
+
+        created = runtime.upload_jobs.create_upload_job(
+            project_id=project_id,
+            platform="qidian",
+            book_name="起点绑定",
+            chapter_title="测试章",
+            body="正文",
+            upload_url=None,
+            publish=False,
+        )
+        current_url = (
+            "https://write.qq.com/portal/booknovels/chaptertmp/CBID/35512915704247809"
+            "?entry=publish#ccid=96252713670601666"
+        )
+        updated = runtime.upload_jobs.update_upload_job_result(
+            job_id=created["job_id"],
+            client_id="client-1",
+            status="succeeded",
+            message="完成",
+            current_url=current_url,
+            error="",
+            result_payload={
+                "official_status": "drafted",
+                "verified_via": "chapter-page",
+            },
+        )
+
+        assert updated["result_payload"]["work_binding"]["remote_book_id"] == "35512915704247809"
+        assert updated["result_payload"]["chapter_binding"]["remote_chapter_id"] == "96252713670601666"
+        with runtime.session_factory() as session:
+            work = session.execute(select(PublisherWorkBinding)).scalar_one()
+            chapter = session.execute(select(PublisherChapterBinding)).scalar_one()
+            assert work.remote_book_id == "35512915704247809"
+            assert chapter.remote_chapter_id == "96252713670601666"
+            assert chapter.remote_url == current_url
+            assert chapter.publish_state == "drafted"
+    finally:
+        engine.dispose()
+
+
 def test_verified_draft_upserts_chapter_binding_as_drafted() -> None:
     engine, runtime = _runtime("publisher-upload-upserts-draft")
     try:

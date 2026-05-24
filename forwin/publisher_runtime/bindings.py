@@ -98,6 +98,25 @@ def _infer_fanqie_chapter_id_from_url(url: str) -> str:
     return match.group("chapter_id") if match else ""
 
 
+def _infer_qidian_book_id_from_url(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if "write.qq.com" not in parsed.netloc:
+        return ""
+    match = re.search(
+        r"/portal/booknovels/chaptertmp/CBID/(?P<book_id>\d+)",
+        parsed.path,
+    )
+    return match.group("book_id") if match else ""
+
+
+def _infer_qidian_chapter_id_from_url(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if "write.qq.com" not in parsed.netloc:
+        return ""
+    values = _url_query_values(url)
+    return values.get("ccid", "")
+
+
 def _infer_remote_book_id(
     *,
     platform_id: str,
@@ -113,6 +132,8 @@ def _infer_remote_book_id(
     )
     if explicit:
         return explicit
+    if platform_id == "qidian":
+        return _infer_qidian_book_id_from_url(current_url)
     if platform_id == "fanqie":
         return _infer_fanqie_book_id_from_url(current_url)
     return ""
@@ -132,6 +153,8 @@ def _infer_remote_chapter_id(
     )
     if explicit:
         return explicit
+    if platform_id == "qidian":
+        return _infer_qidian_chapter_id_from_url(current_url)
     if platform_id == "fanqie":
         return _infer_fanqie_chapter_id_from_url(current_url)
     return ""

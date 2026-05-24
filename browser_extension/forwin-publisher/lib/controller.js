@@ -262,6 +262,145 @@ export class PublisherExtensionController {
   }
 
   async executeUploadJobPayload(job, originTabId = 0) {
+    const taskKind = String(job?.task_kind || 'chapter_upload').trim() || 'chapter_upload';
+    if (taskKind === 'cover_upload') {
+      return this.executeCoverUploadJobPayload(job, originTabId);
+    }
+    if (taskKind === 'audit_sync') {
+      return this.executeAuditSyncJobPayload(job, originTabId);
+    }
+    return this.executeChapterUploadJobPayload(job, originTabId);
+  }
+
+  async executeSimplePublisherTaskJobPayload(job, originTabId = 0, options = {}) {
+    const clientId = await this.deps.getClientId();
+    const adapter = getPlatformAdapter(job.platform);
+    const taskKind = String(options.taskKind || job.task_kind || '').trim();
+    const command = options.command;
+    if (typeof command !== 'function') {
+      throw new Error(`缺少 ${taskKind} 执行命令。`);
+    }
+    const taskKey = `${taskKind}:${job.job_id}`;
+    const displayAction = String(options.displayAction || '发布任务');
+    const initialJob = Object.prototype.hasOwnProperty.call(job || {}, 'status') ? job : await this.deps.backend.getUploadJob(job.job_id);
+
+    if (initialJob.abort_requested || initialJob.status === 'terminating' || initialJob.status === 'cancelled') {
+      await this.deps.backend.updateUploadJobResult(job.job_id, {
+        client_id: clientId,
+        status: 'cancelled',
+        message: `${displayAction}已取消。`,
+        current_url: '',
+        error: '',
+        result_payload: { task_kind: taskKind, phase: 'abort-before-start' },
+      });
+      return { message: `${displayAction}已取消。` };
+    }
+
+    if (job.status !== 'running') {
+      await this.deps.backend.updateUploadJobResult(job.job_id, {
+        client_id: clientId,
+        status: 'running',
+        message: `${adapter.displayName} ${displayAction}已被浏览器扩展接管。`,
+        current_url: '',
+        error: '',
+        result_payload: { task_kind: taskKind, phase: 'claimed' },
+      });
+    }
+    await this.deps.notifyPage(originTabId, 'upload-status', {
+      jobId: job.job_id,
+      status: 'running',
+      platform: job.platform,
+      message: `${adapter.displayName} ${displayAction}执行中。`,
+    });
+
+    try {
+      const payload = job.result_payload || {};
+      const targetUrl = payload.remote_url || job.upload_url || adapter.dashboardUrl || adapter.publishUrl;
+      const tab = await this.deps.openUploadTab(targetUrl);
+      this.registerExecutionTask(taskKey, tab.tabId);
+      await this.waitForOpenedUploadTab(tab.tabId, job.platform, 6000);
+      const openedTab = await this.deps.getTab(tab.tabId);
+      await this.deps.backend.updateUploadJobResult(job.job_id, {
+        client_id: clientId,
+        status: 'running',
+        message: `${adapter.displayName} 正在打开${displayAction}页面。`,
+        current_url: String(openedTab?.url || targetUrl || ''),
+        error: '',
+        result_payload: { ...payload, task_kind: taskKind, phase: 'opened-upload-tab' },
+      });
+      const commandPayload = {
+        platform: job.platform,
+        display_name: job.display_name,
+        book_name: job.book_name,
+        ...(payload || {}),
+      };
+      const result = await command(tab.tabId, commandPayload);
+      const finalStatus = result.ok ? 'succeeded' : 'failed';
+      const cleanupPayload = result.ok ? await this.cleanupExecutionTabs(taskKey) : { attempted: false };
+      if (!result.ok) {
+        this.forgetExecutionTask(taskKey);
+      }
+      const resultPayload = {
+        ...(result.resultPayload || {}),
+        ...(result.errorCode ? { error_code: result.errorCode } : {}),
+        task_kind: taskKind,
+        tab_cleanup: cleanupPayload,
+      };
+      await this.deps.backend.updateUploadJobResult(job.job_id, {
+        client_id: clientId,
+        status: finalStatus,
+        message: result.message || (result.ok ? `${displayAction}已完成。` : `${displayAction}失败。`),
+        current_url: result.currentUrl || '',
+        error: result.error || '',
+        result_payload: resultPayload,
+      });
+      await this.deps.notifyPage(originTabId, 'upload-status', {
+        jobId: job.job_id,
+        status: finalStatus,
+        platform: job.platform,
+        message: result.message || (result.ok ? `${displayAction}已完成。` : `${displayAction}失败。`),
+      });
+      return {
+        message: result.ok ? `浏览器扩展已完成${displayAction}。` : `${displayAction}失败，请查看任务状态。`,
+      };
+    } catch (error) {
+      this.forgetExecutionTask(taskKey);
+      const message = error instanceof Error ? error.message : String(error);
+      await this.deps.backend.updateUploadJobResult(job.job_id, {
+        client_id: clientId,
+        status: 'failed',
+        message: `浏览器扩展执行${displayAction}时失败。`,
+        current_url: '',
+        error: message,
+        result_payload: { task_kind: taskKind, phase: 'controller-error' },
+      });
+      await this.deps.notifyPage(originTabId, 'upload-status', {
+        jobId: job.job_id,
+        status: 'failed',
+        platform: job.platform,
+        message,
+      });
+      throw error;
+    }
+  }
+
+  async executeCoverUploadJobPayload(job, originTabId = 0) {
+    return this.executeSimplePublisherTaskJobPayload(job, originTabId, {
+      taskKind: 'cover_upload',
+      displayAction: '封面上传任务',
+      command: this.deps.runCoverUploadCommand,
+    });
+  }
+
+  async executeAuditSyncJobPayload(job, originTabId = 0) {
+    return this.executeSimplePublisherTaskJobPayload(job, originTabId, {
+      taskKind: 'audit_sync',
+      displayAction: '审核同步任务',
+      command: this.deps.runAuditSyncCommand,
+    });
+  }
+
+  async executeChapterUploadJobPayload(job, originTabId = 0) {
     const clientId = await this.deps.getClientId();
     const adapter = getPlatformAdapter(job.platform);
     const taskKey = `upload:${job.job_id}`;

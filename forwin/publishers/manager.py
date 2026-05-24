@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from forwin.models.publisher import (
     PublisherBrowserSessionEntry,
     PublisherCommentSyncJob,
     PublisherExtensionClient,
+    PublisherCoverAsset,
     PublisherUploadJob,
+    PublisherWorkBinding,
 )
 from forwin.publisher_runtime.audit import (
     comment_sync_event_type as _comment_sync_event_type,
@@ -127,6 +131,12 @@ class PublisherManager:
         publish: bool,
         create_if_missing: bool = False,
         book_meta: dict[str, Any] | None = None,
+        cover_generation_enabled: bool = True,
+        cover_confirmation_required: bool = False,
+        cover_candidate_count: int = 4,
+        cover_style_hint: str = "",
+        auto_cover_upload_enabled: bool = True,
+        publisher_compliance_required: bool = False,
     ) -> dict[str, Any]:
         return self.runtime.upload_jobs.create_upload_job(
             project_id=project_id,
@@ -138,6 +148,198 @@ class PublisherManager:
             publish=publish,
             create_if_missing=create_if_missing,
             book_meta=book_meta,
+            cover_generation_enabled=cover_generation_enabled,
+            cover_confirmation_required=cover_confirmation_required,
+            cover_candidate_count=cover_candidate_count,
+            cover_style_hint=cover_style_hint,
+            auto_cover_upload_enabled=auto_cover_upload_enabled,
+            publisher_compliance_required=publisher_compliance_required,
+        )
+
+    def list_work_bindings(
+        self,
+        *,
+        project_id: str = "",
+        platform: str = "",
+    ) -> list[dict[str, Any]]:
+        return self.runtime.bindings.list_work_bindings(
+            project_id=project_id,
+            platform_id=platform,
+        )
+
+    def list_chapter_bindings(
+        self,
+        *,
+        project_id: str = "",
+        platform: str = "",
+        work_binding_id: str = "",
+    ) -> list[dict[str, Any]]:
+        return self.runtime.bindings.list_chapter_bindings(
+            project_id=project_id,
+            platform_id=platform,
+            work_binding_id=work_binding_id,
+        )
+
+    def list_cover_assets(
+        self,
+        *,
+        project_id: str = "",
+        work_binding_id: str = "",
+    ) -> list[dict[str, Any]]:
+        return self.runtime.cover_service.list_cover_assets(
+            project_id=project_id,
+            work_binding_id=work_binding_id,
+        )
+
+    def generate_cover_candidates(
+        self,
+        *,
+        project_id: str = "",
+        platform: str,
+        book_name: str,
+        book_meta: dict[str, Any] | None = None,
+        cover_candidate_count: int = 4,
+        cover_style_hint: str = "",
+        cover_confirmation_required: bool = False,
+    ) -> dict[str, Any]:
+        return self.runtime.cover_service.generate_cover_candidates(
+            project_id=project_id,
+            platform_id=platform,
+            book_name=book_name,
+            book_meta=book_meta,
+            candidate_count=cover_candidate_count,
+            cover_style_hint=cover_style_hint,
+            cover_confirmation_required=cover_confirmation_required,
+        )
+
+    def select_cover_asset(self, cover_asset_id: str) -> dict[str, Any]:
+        return self.runtime.cover_service.set_cover_selection(
+            cover_asset_id,
+            selection_state="selected",
+            status="selected",
+        )
+
+    def approve_cover_asset(self, cover_asset_id: str) -> dict[str, Any]:
+        return self.runtime.cover_service.set_cover_selection(
+            cover_asset_id,
+            selection_state="approved",
+            status="approved",
+        )
+
+    def reject_cover_asset(self, cover_asset_id: str) -> dict[str, Any]:
+        return self.runtime.cover_service.set_cover_selection(
+            cover_asset_id,
+            selection_state="rejected",
+            status="rejected",
+        )
+
+    def enqueue_cover_upload(self, cover_asset_id: str) -> dict[str, Any]:
+        with self.session_factory() as session:
+            cover = session.get(PublisherCoverAsset, cover_asset_id)
+            if cover is None:
+                raise ValueError("封面不存在。")
+            work = (
+                session.get(PublisherWorkBinding, cover.work_binding_id)
+                if cover.work_binding_id
+                else None
+            )
+            if work is None and cover.project_id:
+                work = session.execute(
+                    select(PublisherWorkBinding)
+                    .where(PublisherWorkBinding.project_id == cover.project_id)
+                    .limit(1)
+                ).scalar_one_or_none()
+            if work is None:
+                raise ValueError("封面尚未绑定平台作品，不能上传。")
+            payload = {
+                "project_id": work.project_id,
+                "work_binding_id": work.id,
+                "platform": work.platform_id,
+                "book_name": work.book_name,
+                "remote_book_id": work.remote_book_id,
+                "remote_url": work.remote_url,
+                "cover_asset_id": cover.id,
+                "file_path": cover.file_path,
+            }
+            job = PublisherUploadJob(
+                project_id=work.project_id,
+                platform_id=work.platform_id,
+                task_kind="cover_upload",
+                status="pending",
+                book_name=work.book_name,
+                chapter_title="",
+                body_text="",
+                upload_url=work.remote_url,
+                publish=False,
+                result_message="封面上传任务已创建，等待浏览器扩展执行。",
+                result_payload_json=json.dumps(payload, ensure_ascii=False),
+            )
+            session.add(job)
+            session.commit()
+            session.refresh(job)
+            return self.runtime.upload_jobs.serialize_upload_job(job)
+
+    def enqueue_audit_sync(
+        self,
+        *,
+        project_id: str = "",
+        platform: str,
+        work_binding_id: str = "",
+        book_name: str = "",
+    ) -> dict[str, Any]:
+        with self.session_factory() as session:
+            work = session.get(PublisherWorkBinding, work_binding_id) if work_binding_id else None
+            if work is None and project_id:
+                work = session.execute(
+                    select(PublisherWorkBinding)
+                    .where(
+                        PublisherWorkBinding.project_id == project_id,
+                        PublisherWorkBinding.platform_id == platform,
+                    )
+                    .limit(1)
+                ).scalar_one_or_none()
+            payload = {
+                "project_id": project_id or (work.project_id if work is not None else ""),
+                "work_binding_id": work.id if work is not None else "",
+                "remote_book_id": work.remote_book_id if work is not None else "",
+                "remote_url": work.remote_url if work is not None else "",
+            }
+            job = PublisherUploadJob(
+                project_id=payload["project_id"],
+                platform_id=platform or (work.platform_id if work is not None else ""),
+                task_kind="audit_sync",
+                status="pending",
+                book_name=book_name or (work.book_name if work is not None else ""),
+                chapter_title="",
+                body_text="",
+                upload_url=payload["remote_url"],
+                publish=False,
+                result_message="审核同步任务已创建，等待浏览器扩展执行。",
+                result_payload_json=json.dumps(payload, ensure_ascii=False),
+            )
+            session.add(job)
+            session.commit()
+            session.refresh(job)
+            return self.runtime.upload_jobs.serialize_upload_job(job)
+
+    def get_preflight(
+        self,
+        *,
+        platform: str,
+        book_name: str,
+        chapter_title: str = "",
+        body: str = "",
+        create_if_missing: bool = False,
+        book_meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_book_meta = self.runtime.upload_jobs.normalize_book_meta(book_meta)
+        return self.runtime.preflight.check_upload_readiness(
+            platform_id=platform,
+            book_name=book_name,
+            chapter_title=chapter_title,
+            body=body,
+            create_if_missing=create_if_missing,
+            book_meta=normalized_book_meta,
         )
 
     def create_upload_jobs_batch(
@@ -151,6 +353,12 @@ class PublisherManager:
         publish: bool,
         create_if_missing: bool = False,
         book_meta: dict[str, Any] | None = None,
+        cover_generation_enabled: bool = True,
+        cover_confirmation_required: bool = False,
+        cover_candidate_count: int = 4,
+        cover_style_hint: str = "",
+        auto_cover_upload_enabled: bool = True,
+        publisher_compliance_required: bool = False,
     ) -> int:
         return self.runtime.upload_jobs.create_upload_jobs_batch(
             project_id=project_id,
@@ -161,6 +369,12 @@ class PublisherManager:
             publish=publish,
             create_if_missing=create_if_missing,
             book_meta=book_meta,
+            cover_generation_enabled=cover_generation_enabled,
+            cover_confirmation_required=cover_confirmation_required,
+            cover_candidate_count=cover_candidate_count,
+            cover_style_hint=cover_style_hint,
+            auto_cover_upload_enabled=auto_cover_upload_enabled,
+            publisher_compliance_required=publisher_compliance_required,
         )
 
     def get_upload_job(self, job_id: str) -> dict[str, Any]:

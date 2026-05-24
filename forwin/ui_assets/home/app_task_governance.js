@@ -942,6 +942,45 @@
         createIfMissingWrap.appendChild(document.createTextNode('若作品不存在则自动新建'));
         automationForm.appendChild(createIfMissingWrap);
 
+        const coverGenerationInput = document.createElement('input');
+        coverGenerationInput.type = 'checkbox';
+        coverGenerationInput.checked = automation.publish?.cover_generation_enabled !== false;
+        const coverGenerationWrap = document.createElement('label');
+        coverGenerationWrap.className = 'checkbox';
+        coverGenerationWrap.appendChild(coverGenerationInput);
+        coverGenerationWrap.appendChild(document.createTextNode('建书时生成封面候选'));
+        automationForm.appendChild(coverGenerationWrap);
+
+        const coverConfirmationInput = document.createElement('input');
+        coverConfirmationInput.type = 'checkbox';
+        coverConfirmationInput.checked = Boolean(automation.publish?.cover_confirmation_required);
+        const coverConfirmationWrap = document.createElement('label');
+        coverConfirmationWrap.className = 'checkbox';
+        coverConfirmationWrap.appendChild(coverConfirmationInput);
+        coverConfirmationWrap.appendChild(document.createTextNode('封面上传前需要确认'));
+        automationForm.appendChild(coverConfirmationWrap);
+
+        const autoCoverUploadInput = document.createElement('input');
+        autoCoverUploadInput.type = 'checkbox';
+        autoCoverUploadInput.checked = automation.publish?.auto_cover_upload_enabled !== false;
+        const autoCoverUploadWrap = document.createElement('label');
+        autoCoverUploadWrap.className = 'checkbox';
+        autoCoverUploadWrap.appendChild(autoCoverUploadInput);
+        autoCoverUploadWrap.appendChild(document.createTextNode('首章成功后自动上传封面'));
+        automationForm.appendChild(autoCoverUploadWrap);
+
+        const coverCandidateCountInput = document.createElement('input');
+        coverCandidateCountInput.type = 'number';
+        coverCandidateCountInput.min = '1';
+        coverCandidateCountInput.max = '8';
+        coverCandidateCountInput.value = automation.publish?.cover_candidate_count || 4;
+        automationForm.appendChild(createLabeledField('封面候选数量', coverCandidateCountInput));
+
+        const coverStyleHintInput = document.createElement('input');
+        coverStyleHintInput.type = 'text';
+        coverStyleHintInput.value = automation.publish?.cover_style_hint || '';
+        automationForm.appendChild(createLabeledField('封面风格提示', coverStyleHintInput));
+
         const audienceInput = document.createElement('input');
         audienceInput.type = 'text';
         audienceInput.value = automation.publish?.book_meta?.audience || '';
@@ -991,6 +1030,12 @@
                 book_name: bookNameInput.value.trim(),
                 upload_url: uploadUrlInput.value.trim(),
                 create_if_missing: createIfMissingInput.checked,
+                cover_generation_enabled: coverGenerationInput.checked,
+                cover_confirmation_required: coverConfirmationInput.checked,
+                cover_candidate_count: Number(coverCandidateCountInput.value || 4),
+                cover_style_hint: coverStyleHintInput.value.trim(),
+                auto_cover_upload_enabled: autoCoverUploadInput.checked,
+                publisher_compliance_required: true,
                 book_meta: {
                   audience: audienceInput.value.trim(),
                   primary_category: primaryCategoryInput.value.trim(),

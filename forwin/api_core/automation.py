@@ -226,9 +226,11 @@ def _run_scheduled_review_action(project_id: str, chapter_number: int) -> Any:
 
 def _run_automation_scheduler_pass() -> None:
     production_scheduler_factory = None
+    runtime_services = None
     if api_state._runtime_container is not None:
-        production_scheduler_factory = api_state._runtime_container.services().production_scheduler
-    return api_automation.run_automation_scheduler_pass(
+        runtime_services = api_state._runtime_container.services()
+        production_scheduler_factory = runtime_services.production_scheduler
+    result = api_automation.run_automation_scheduler_pass(
         session_factory=api_state._SessionFactory,
         config=api_state._config,
         saved_runtime_config_or_503=_saved_runtime_config_or_503,
@@ -245,6 +247,12 @@ def _run_automation_scheduler_pass() -> None:
         approve_chapter_review=_run_scheduled_review_action,
         production_scheduler_factory=production_scheduler_factory,
     )
+    if runtime_services is not None:
+        try:
+            runtime_services.publisher_runtime.backend_jobs.run_pending_once(limit=1)
+        except Exception:  # noqa: BLE001
+            logger.exception("Publisher backend job pass failed.")
+    return result
 
 
 def _automation_scheduler_loop() -> None:

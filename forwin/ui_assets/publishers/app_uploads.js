@@ -13,6 +13,9 @@
         ? payload.auto_retry
         : null;
       const lines = [];
+      if (data.task_kind && data.task_kind !== 'chapter_upload') {
+        lines.push(`任务类型：${data.task_kind}`);
+      }
       if (retry && retry.failure_count) {
         const maxAttempts = retry.max_attempts || 3;
         if (retry.login_failure) {
@@ -29,6 +32,18 @@
           : {};
         const codexJobId = intervention.call && intervention.call.job_id;
         lines.push(codexJobId ? `Codex：已提交介入任务 ${codexJobId}` : 'Codex：已请求介入排查上传失败。');
+      }
+      if (payload.work_binding && payload.work_binding.remote_book_id) {
+        lines.push(`远端作品：${payload.work_binding.remote_book_id}`);
+      }
+      if (payload.chapter_binding && payload.chapter_binding.remote_chapter_id) {
+        lines.push(`远端章节：${payload.chapter_binding.remote_chapter_id}`);
+      }
+      if (payload.cover_upload_job_id) {
+        lines.push(`封面上传任务：${payload.cover_upload_job_id}`);
+      }
+      if (payload.preflight && Array.isArray(payload.preflight.warnings) && payload.preflight.warnings.length) {
+        lines.push(`预检 warning：${payload.preflight.warnings.map((item) => item.message || item.code).join('；')}`);
       }
       return lines;
     }
@@ -149,10 +164,16 @@
         book_name: document.getElementById('book_name').value,
         chapter_title: document.getElementById('chapter_title').value,
         body: document.getElementById('body').value,
-        upload_url: document.getElementById('upload_url').value || null,
-        publish,
-        create_if_missing: document.getElementById('create_if_missing').checked,
-        book_meta: {
+          upload_url: document.getElementById('upload_url').value || null,
+          publish,
+          create_if_missing: document.getElementById('create_if_missing').checked,
+          cover_generation_enabled: document.getElementById('cover_generation_enabled').checked,
+          cover_confirmation_required: document.getElementById('cover_confirmation_required').checked,
+          cover_candidate_count: Number(document.getElementById('cover_candidate_count').value || 4),
+          cover_style_hint: document.getElementById('cover_style_hint').value.trim(),
+          auto_cover_upload_enabled: document.getElementById('auto_cover_upload_enabled').checked,
+          publisher_compliance_required: true,
+          book_meta: {
           audience: document.getElementById('book_audience').value,
           primary_category: document.getElementById('book_primary_category').value.trim(),
           protagonist_names: protagonistNames,

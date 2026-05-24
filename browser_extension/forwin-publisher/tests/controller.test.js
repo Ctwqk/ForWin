@@ -49,6 +49,18 @@ function makeController(overrides = {}) {
       message: '章节发布动作已提交。',
       resultPayload: { mode: 'publish' },
     }),
+    runCoverUploadCommand: async () => ({
+      ok: true,
+      currentUrl: 'https://write.qq.com/portal/book/123',
+      message: '封面上传动作已提交。',
+      resultPayload: { cover_state: 'uploaded' },
+    }),
+    runAuditSyncCommand: async () => ({
+      ok: true,
+      currentUrl: 'https://write.qq.com/portal/book/123',
+      message: '审核状态已同步。',
+      resultPayload: { work: { audit_state: 'under_review' }, chapters: [] },
+    }),
     runCommentSyncCommand: async () => ({
       ok: true,
       currentUrl: 'https://fanqienovel.com/main/writer/',
@@ -545,6 +557,117 @@ test('controller forwards create-if-missing book metadata to upload command', as
   assert.equal(payloads[0].create_if_missing, true);
   assert.equal(payloads[0].book_meta.primary_category, '都市日常');
   assert.deepEqual(payloads[0].book_meta.protagonist_names, ['韩砚', '林雾']);
+});
+
+test('controller dispatches cover upload task kind to cover command', async () => {
+  const payloads = [];
+  const { controller, uploadResults } = makeController({
+    getTab: async () => ({ id: 77, url: 'https://write.qq.com/portal/book/123' }),
+    runCoverUploadCommand: async (_tabId, payload) => {
+      payloads.push(payload);
+      return {
+        ok: true,
+        currentUrl: 'https://write.qq.com/portal/book/123',
+        message: '封面上传动作已提交。',
+        resultPayload: { cover_state: 'under_review' },
+      };
+    },
+    runUploadCommand: async () => {
+      throw new Error('chapter upload command should not run for cover_upload');
+    },
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => ({
+        job_id: 'cover-job-1',
+        task_kind: 'cover_upload',
+        platform: 'qidian',
+        display_name: '起点小说',
+        book_name: '测试书',
+        upload_url: null,
+        result_payload: {
+          work_binding_id: 'work-1',
+          remote_book_id: 'book-1',
+          remote_url: 'https://write.qq.com/portal/book/123',
+          cover_asset_id: 'cover-1',
+          file_path: '/tmp/cover.png',
+        },
+      }),
+      updateUploadJobResult: async (_jobId, payload) => {
+        uploadResults.push(payload);
+        return { ok: true };
+      },
+    },
+  });
+
+  await controller.handleMessage(
+    { action: 'execute-upload-job', payload: { jobId: 'cover-job-1' } },
+    { tab: { id: 100 } },
+  );
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].file_path, '/tmp/cover.png');
+  assert.equal(payloads[0].cover_asset_id, 'cover-1');
+  assert.equal(uploadResults.at(-1).status, 'succeeded');
+  assert.equal(uploadResults.at(-1).result_payload.task_kind, 'cover_upload');
+  assert.equal(uploadResults.at(-1).result_payload.cover_state, 'under_review');
+});
+
+test('controller dispatches audit sync task kind to audit sync command', async () => {
+  const payloads = [];
+  const { controller, uploadResults } = makeController({
+    getTab: async () => ({ id: 77, url: 'https://fanqienovel.com/main/writer/book-info/456' }),
+    runAuditSyncCommand: async (_tabId, payload) => {
+      payloads.push(payload);
+      return {
+        ok: true,
+        currentUrl: 'https://fanqienovel.com/main/writer/book-info/456',
+        message: '审核状态已同步。',
+        resultPayload: {
+          work: { remote_book_id: 'book-456', audit_state: 'under_review' },
+          chapters: [{ chapter_number: 1, audit_state: 'under_review' }],
+          cover: { cover_state: 'under_review' },
+        },
+      };
+    },
+    runUploadCommand: async () => {
+      throw new Error('chapter upload command should not run for audit_sync');
+    },
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 3 }),
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => ({
+        job_id: 'audit-job-1',
+        task_kind: 'audit_sync',
+        platform: 'fanqie',
+        display_name: '番茄小说',
+        book_name: '测试书',
+        upload_url: null,
+        result_payload: {
+          work_binding_id: 'work-456',
+          remote_book_id: 'book-456',
+          remote_url: 'https://fanqienovel.com/main/writer/book-info/456',
+        },
+      }),
+      updateUploadJobResult: async (_jobId, payload) => {
+        uploadResults.push(payload);
+        return { ok: true };
+      },
+    },
+  });
+
+  await controller.handleMessage(
+    { action: 'execute-upload-job', payload: { jobId: 'audit-job-1' } },
+    { tab: { id: 100 } },
+  );
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].remote_book_id, 'book-456');
+  assert.equal(uploadResults.at(-1).status, 'succeeded');
+  assert.equal(uploadResults.at(-1).result_payload.task_kind, 'audit_sync');
+  assert.equal(uploadResults.at(-1).result_payload.work.audit_state, 'under_review');
 });
 
 test('controller auto-dispatches claimed upload job for connected platform', async () => {

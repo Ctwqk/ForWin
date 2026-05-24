@@ -111,6 +111,7 @@ class PublisherAuditService:
         payload = {
             "platform_id": job.platform_id,
             "job_id": job.id,
+            "task_kind": str(job.task_kind or "chapter_upload"),
             "status": job.status,
             "publish": bool(job.publish),
             "create_if_missing": False,

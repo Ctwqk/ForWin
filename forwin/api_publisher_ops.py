@@ -25,9 +25,18 @@ from forwin.api_schemas import (
     PublisherCommentSyncJobRequest,
     PublisherCommentSyncJobResponse,
     PublisherBrowserSessionSummaryResponse,
+    PublisherAuditSyncRequest,
+    PublisherChapterBindingResponse,
+    PublisherCoverAssetResponse,
+    PublisherCoverGenerateRequest,
+    PublisherCoverSelectRequest,
+    PublisherCoverUploadRequest,
     PublisherPlatformInfo,
+    PublisherPreflightRequest,
+    PublisherPreflightResponse,
     PublisherUploadJobCreateRequest,
     PublisherUploadJobResponse,
+    PublisherWorkBindingResponse,
     TaskMutationResponse,
     UploadJobResultRequest,
 )
@@ -156,11 +165,170 @@ def create_publisher_upload_job(
             upload_url=req.upload_url,
             publish=req.publish,
             create_if_missing=req.create_if_missing,
+            cover_generation_enabled=req.cover_generation_enabled,
+            cover_confirmation_required=req.cover_confirmation_required,
+            cover_candidate_count=req.cover_candidate_count,
+            cover_style_hint=req.cover_style_hint,
+            auto_cover_upload_enabled=req.auto_cover_upload_enabled,
+            publisher_compliance_required=req.publisher_compliance_required,
             book_meta=req.book_meta.model_dump() if req.book_meta else None,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     return PublisherUploadJobResponse(**payload)
+
+
+def list_publisher_work_bindings(
+    *,
+    publisher_manager,
+    project_id: str = "",
+    platform: str = "",
+) -> list[PublisherWorkBindingResponse]:
+    return [
+        PublisherWorkBindingResponse(**item)
+        for item in publisher_manager.list_work_bindings(
+            project_id=project_id,
+            platform=platform,
+        )
+    ]
+
+
+def list_publisher_chapter_bindings(
+    *,
+    publisher_manager,
+    project_id: str = "",
+    platform: str = "",
+    work_binding_id: str = "",
+) -> list[PublisherChapterBindingResponse]:
+    return [
+        PublisherChapterBindingResponse(**item)
+        for item in publisher_manager.list_chapter_bindings(
+            project_id=project_id,
+            platform=platform,
+            work_binding_id=work_binding_id,
+        )
+    ]
+
+
+def list_publisher_cover_assets(
+    *,
+    publisher_manager,
+    project_id: str = "",
+    work_binding_id: str = "",
+) -> list[PublisherCoverAssetResponse]:
+    return [
+        PublisherCoverAssetResponse(**item)
+        for item in publisher_manager.list_cover_assets(
+            project_id=project_id,
+            work_binding_id=work_binding_id,
+        )
+    ]
+
+
+def generate_publisher_cover_candidates(
+    req: PublisherCoverGenerateRequest,
+    *,
+    publisher_manager,
+) -> dict[str, Any]:
+    try:
+        return publisher_manager.generate_cover_candidates(
+            project_id=req.project_id,
+            platform=req.platform,
+            book_name=req.book_name,
+            book_meta=req.book_meta.model_dump() if req.book_meta else None,
+            cover_candidate_count=req.cover_candidate_count,
+            cover_style_hint=req.cover_style_hint,
+            cover_confirmation_required=req.cover_confirmation_required,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def select_publisher_cover_asset(
+    req: PublisherCoverSelectRequest,
+    *,
+    publisher_manager,
+) -> PublisherCoverAssetResponse:
+    try:
+        return PublisherCoverAssetResponse(
+            **publisher_manager.select_cover_asset(req.cover_asset_id)
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+def approve_publisher_cover_asset(
+    req: PublisherCoverSelectRequest,
+    *,
+    publisher_manager,
+) -> PublisherCoverAssetResponse:
+    try:
+        return PublisherCoverAssetResponse(
+            **publisher_manager.approve_cover_asset(req.cover_asset_id)
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+def reject_publisher_cover_asset(
+    req: PublisherCoverSelectRequest,
+    *,
+    publisher_manager,
+) -> PublisherCoverAssetResponse:
+    try:
+        return PublisherCoverAssetResponse(
+            **publisher_manager.reject_cover_asset(req.cover_asset_id)
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+def enqueue_publisher_cover_upload(
+    req: PublisherCoverUploadRequest,
+    *,
+    publisher_manager,
+) -> PublisherUploadJobResponse:
+    try:
+        return PublisherUploadJobResponse(
+            **publisher_manager.enqueue_cover_upload(req.cover_asset_id)
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def enqueue_publisher_audit_sync(
+    req: PublisherAuditSyncRequest,
+    *,
+    publisher_manager,
+) -> PublisherUploadJobResponse:
+    try:
+        return PublisherUploadJobResponse(
+            **publisher_manager.enqueue_audit_sync(
+                project_id=req.project_id,
+                platform=req.platform,
+                work_binding_id=req.work_binding_id,
+                book_name=req.book_name,
+            )
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+def publisher_preflight(
+    req: PublisherPreflightRequest,
+    *,
+    publisher_manager,
+) -> PublisherPreflightResponse:
+    return PublisherPreflightResponse(
+        **publisher_manager.get_preflight(
+            platform=req.platform,
+            book_name=req.book_name,
+            chapter_title=req.chapter_title,
+            body=req.body,
+            create_if_missing=req.create_if_missing,
+            book_meta=req.book_meta.model_dump() if req.book_meta else None,
+        )
+    )
 
 
 def get_publisher_upload_job(job_id: str, *, publisher_manager) -> PublisherUploadJobResponse:

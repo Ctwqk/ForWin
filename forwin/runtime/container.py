@@ -196,6 +196,7 @@ class RuntimeContainer:
             map_movement_review_enabled=config.map_movement_review_enabled,
             personality_review_enabled=config.personality_review_enabled,
             canon_quality_review_in_hub_enabled=config.canon_quality_review_in_hub_enabled,
+            publisher_compliance_review_enabled=True,
             llm_client=llm_client if hub_llm_enabled else None,
             llm_enabled=hub_llm_enabled,
             observability=observability,
@@ -211,6 +212,8 @@ class RuntimeContainer:
             strict_preferred_client=config.publisher_strict_preferred_client,
             observability=observability,
             codex_intervention_handler=build_codex_intervention_handler(config),
+            minimax_api_key=config.minimax_api_key,
+            minimax_base_url=config.minimax_base_url,
         )
         return RuntimeServices(
             config=config,

@@ -1138,6 +1138,11 @@
       document.getElementById('task_upload_primary_category').value = currentTaskPrefill.primary_category || '';
       document.getElementById('task_upload_protagonist_names').value = currentTaskPrefill.protagonist_names || '';
       document.getElementById('task_upload_intro').value = currentTaskPrefill.intro || '';
+      document.getElementById('task_upload_cover_generation_enabled').checked = currentTaskPrefill.cover_generation_enabled ?? true;
+      document.getElementById('task_upload_cover_confirmation_required').checked = currentTaskPrefill.cover_confirmation_required ?? false;
+      document.getElementById('task_upload_cover_candidate_count').value = currentTaskPrefill.cover_candidate_count || 4;
+      document.getElementById('task_upload_cover_style_hint').value = currentTaskPrefill.cover_style_hint || '';
+      document.getElementById('task_upload_auto_cover_upload_enabled').checked = currentTaskPrefill.auto_cover_upload_enabled ?? true;
     }
 
     async function openTaskModal(kind = 'generation', prefill = {}) {
@@ -1274,6 +1279,12 @@
           upload_url: document.getElementById('task_upload_upload_url').value.trim() || null,
           publish: document.getElementById('task_upload_publish').checked,
           create_if_missing: document.getElementById('task_upload_create_if_missing').checked,
+          cover_generation_enabled: document.getElementById('task_upload_cover_generation_enabled').checked,
+          cover_confirmation_required: document.getElementById('task_upload_cover_confirmation_required').checked,
+          cover_candidate_count: Number(document.getElementById('task_upload_cover_candidate_count').value || 4),
+          cover_style_hint: document.getElementById('task_upload_cover_style_hint').value.trim(),
+          auto_cover_upload_enabled: document.getElementById('task_upload_auto_cover_upload_enabled').checked,
+          publisher_compliance_required: true,
           book_meta: {
             audience: document.getElementById('task_upload_audience').value,
             primary_category: document.getElementById('task_upload_primary_category').value.trim(),

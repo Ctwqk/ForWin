@@ -245,6 +245,26 @@ def cmd_generation_worker(args: argparse.Namespace) -> None:
         sys.exit(exit_code)
 
 
+def cmd_publisher_worker(args: argparse.Namespace) -> None:
+    """Run publisher backend-owned jobs such as cover generation."""
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.runtime.container import RuntimeContainer
+
+    config = _get_config(args)
+    engine = get_engine(config.database_url)
+    try:
+        init_db(engine)
+        Session = get_session_factory(engine)
+        runtime = RuntimeContainer.from_config(config).services().publisher_runtime
+        handled = runtime.backend_jobs.run_pending_once(limit=args.limit)
+        if handled:
+            print("\n".join(handled))
+        elif args.once:
+            print("no publisher backend jobs")
+    finally:
+        engine.dispose()
+
+
 # ------------------------------------------------------------------
 # Argument parser
 # ------------------------------------------------------------------
@@ -306,6 +326,10 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("--poll-interval", type=float, default=2.0, help="无任务时轮询间隔秒数")
     worker.add_argument("--once", action="store_true", help="只 claim 一次后退出")
 
+    publisher_worker = sub.add_parser("publisher-worker", help="运行 publisher 后端任务 worker")
+    publisher_worker.add_argument("--once", action="store_true", help="只执行一轮后退出")
+    publisher_worker.add_argument("--limit", type=int, default=1, help="单轮处理任务数")
+
     return parser
 
 
@@ -334,6 +358,8 @@ def main() -> None:
         cmd_llm_eval(args)
     elif args.command == "generation-worker":
         cmd_generation_worker(args)
+    elif args.command == "publisher-worker":
+        cmd_publisher_worker(args)
     else:
         parser.print_help()
 

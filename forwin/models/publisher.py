@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -116,10 +116,21 @@ class PublisherBrowserSessionEntry(Base):
 
 class PublisherUploadJob(Base):
     __tablename__ = "publisher_upload_jobs"
+    __table_args__ = (
+        Index(
+            "ix_publisher_upload_jobs_task_status",
+            "task_kind",
+            "status",
+            "platform_id",
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
     project_id: Mapped[str] = mapped_column(String, default="")
     platform_id: Mapped[str] = mapped_column(String, nullable=False)
+    task_kind: Mapped[str] = mapped_column(
+        String, default="chapter_upload", nullable=False
+    )
     status: Mapped[str] = mapped_column(String, default="pending")
     book_name: Mapped[str] = mapped_column(String, default="")
     chapter_title: Mapped[str] = mapped_column(String, default="")
@@ -136,6 +147,155 @@ class PublisherUploadJob(Base):
     result_message: Mapped[str] = mapped_column(Text, default="")
     error_message: Mapped[str] = mapped_column(Text, default="")
     result_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+class PublisherWorkBinding(Base):
+    __tablename__ = "publisher_work_bindings"
+    __table_args__ = (
+        Index(
+            "ix_publisher_work_bindings_project_platform",
+            "project_id",
+            "platform_id",
+        ),
+        Index(
+            "ux_publisher_work_bindings_project_platform",
+            "project_id",
+            "platform_id",
+            unique=True,
+            postgresql_where=text("project_id <> ''"),
+        ),
+        Index(
+            "ix_publisher_work_bindings_platform_book",
+            "platform_id",
+            "book_name",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(String, default="")
+    platform_id: Mapped[str] = mapped_column(String, nullable=False)
+    book_name: Mapped[str] = mapped_column(String, default="")
+    remote_book_id: Mapped[str] = mapped_column(String, default="")
+    remote_url: Mapped[str] = mapped_column(String, default="")
+    audit_state: Mapped[str] = mapped_column(String, default="unknown")
+    audit_reason: Mapped[str] = mapped_column(Text, default="")
+    platform_status: Mapped[str] = mapped_column(String, default="")
+    cover_asset_id: Mapped[str] = mapped_column(String, default="")
+    cover_state: Mapped[str] = mapped_column(String, default="none")
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    raw_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+class PublisherChapterBinding(Base):
+    __tablename__ = "publisher_chapter_bindings"
+    __table_args__ = (
+        Index(
+            "ix_publisher_chapter_bindings_work",
+            "work_binding_id",
+            "chapter_number",
+        ),
+        Index(
+            "ux_publisher_chapter_bindings_work_number",
+            "work_binding_id",
+            "chapter_number",
+            unique=True,
+            postgresql_where=text("chapter_number > 0"),
+        ),
+        Index(
+            "ix_publisher_chapter_bindings_project_platform",
+            "project_id",
+            "platform_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    work_binding_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("publisher_work_bindings.id"),
+        nullable=False,
+    )
+    project_id: Mapped[str] = mapped_column(String, default="")
+    platform_id: Mapped[str] = mapped_column(String, nullable=False)
+    chapter_number: Mapped[int] = mapped_column(Integer, default=0)
+    chapter_title: Mapped[str] = mapped_column(String, default="")
+    remote_chapter_id: Mapped[str] = mapped_column(String, default="")
+    remote_url: Mapped[str] = mapped_column(String, default="")
+    publish_state: Mapped[str] = mapped_column(String, default="unknown")
+    audit_state: Mapped[str] = mapped_column(String, default="unknown")
+    audit_reason: Mapped[str] = mapped_column(Text, default="")
+    word_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    raw_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+class PublisherCoverAsset(Base):
+    __tablename__ = "publisher_cover_assets"
+    __table_args__ = (
+        Index("ix_publisher_cover_assets_project", "project_id"),
+        Index("ix_publisher_cover_assets_work", "work_binding_id"),
+        Index(
+            "ux_publisher_cover_assets_selected_work",
+            "work_binding_id",
+            unique=True,
+            postgresql_where=text(
+                "work_binding_id <> '' AND selection_state IN ('selected', 'approved')"
+            ),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(String, default="")
+    work_binding_id: Mapped[str] = mapped_column(String, default="")
+    source: Mapped[str] = mapped_column(String, default="minimax")
+    prompt: Mapped[str] = mapped_column(Text, default="")
+    source_meta_json: Mapped[str] = mapped_column(Text, default="{}")
+    status: Mapped[str] = mapped_column(String, default="generated")
+    selection_state: Mapped[str] = mapped_column(String, default="candidate")
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    score_reasons_json: Mapped[str] = mapped_column(Text, default="[]")
+    width: Mapped[int] = mapped_column(Integer, default=0)
+    height: Mapped[int] = mapped_column(Integer, default=0)
+    file_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    file_path: Mapped[str] = mapped_column(Text, default="")
+    mime_type: Mapped[str] = mapped_column(String, default="")
+    platform_validation_json: Mapped[str] = mapped_column(Text, default="{}")
+    minimax_request_id: Mapped[str] = mapped_column(String, default="")
+    raw_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+
+class PublisherMilestone(Base):
+    __tablename__ = "publisher_milestones"
+    __table_args__ = (
+        Index("ix_publisher_milestones_work_state", "work_binding_id", "state"),
+        Index("ix_publisher_milestones_type", "milestone_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    work_binding_id: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("publisher_work_bindings.id"),
+        nullable=False,
+    )
+    milestone_type: Mapped[str] = mapped_column(String, nullable=False)
+    state: Mapped[str] = mapped_column(String, default="open")
+    message: Mapped[str] = mapped_column(Text, default="")
+    evidence_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), onupdate=func.now()

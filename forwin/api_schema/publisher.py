@@ -57,6 +57,12 @@ class PublisherUploadJobCreateRequest(BaseModel):
     publish: bool = True
     prefer_extension: bool = False
     create_if_missing: bool = False
+    cover_generation_enabled: bool = True
+    cover_confirmation_required: bool = False
+    cover_candidate_count: int = 4
+    cover_style_hint: str = ""
+    auto_cover_upload_enabled: bool = True
+    publisher_compliance_required: bool = False
     book_meta: PublisherBookMetaRequest | None = None
 
 
@@ -67,11 +73,17 @@ class ProjectChapterPublishRequest(BaseModel):
     upload_url: str | None = None
     publish: bool = True
     create_if_missing: bool = False
+    cover_generation_enabled: bool = True
+    cover_confirmation_required: bool = False
+    cover_candidate_count: int = 4
+    cover_style_hint: str = ""
+    auto_cover_upload_enabled: bool = True
+    publisher_compliance_required: bool = False
     book_meta: PublisherBookMetaRequest | None = None
 
 
 class PublisherUploadJobResponse(BaseModel):
-    task_kind: str = "upload"
+    task_kind: str = "chapter_upload"
     job_id: str
     project_id: str = ""
     platform: str
@@ -226,6 +238,106 @@ class PublisherCommentSyncJobResponse(BaseModel):
     created_at: str
 
 
+class PublisherWorkBindingResponse(BaseModel):
+    id: str
+    project_id: str = ""
+    platform: str
+    book_name: str = ""
+    remote_book_id: str = ""
+    remote_url: str = ""
+    audit_state: str = "unknown"
+    audit_reason: str = ""
+    platform_status: str = ""
+    cover_asset_id: str = ""
+    cover_state: str = "none"
+    last_synced_at: str = ""
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class PublisherChapterBindingResponse(BaseModel):
+    id: str
+    work_binding_id: str
+    project_id: str = ""
+    platform: str
+    chapter_number: int = 0
+    chapter_title: str = ""
+    remote_chapter_id: str = ""
+    remote_url: str = ""
+    publish_state: str = "unknown"
+    audit_state: str = "unknown"
+    audit_reason: str = ""
+    word_count: int = 0
+    last_synced_at: str = ""
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class PublisherCoverAssetResponse(BaseModel):
+    id: str
+    project_id: str = ""
+    work_binding_id: str = ""
+    source: str = ""
+    prompt: str = ""
+    source_meta: dict[str, Any] = Field(default_factory=dict)
+    status: str = ""
+    selection_state: str = ""
+    score: float = 0.0
+    score_reasons: list[Any] = Field(default_factory=list)
+    width: int = 0
+    height: int = 0
+    file_size_bytes: int = 0
+    file_path: str = ""
+    mime_type: str = ""
+    platform_validation: dict[str, Any] = Field(default_factory=dict)
+    minimax_request_id: str = ""
+    raw_payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class PublisherCoverGenerateRequest(BaseModel):
+    project_id: str = ""
+    platform: str
+    book_name: str
+    book_meta: PublisherBookMetaRequest | None = None
+    cover_candidate_count: int = 4
+    cover_style_hint: str = ""
+    cover_confirmation_required: bool = False
+
+
+class PublisherCoverSelectRequest(BaseModel):
+    cover_asset_id: str
+
+
+class PublisherCoverUploadRequest(BaseModel):
+    cover_asset_id: str
+
+
+class PublisherAuditSyncRequest(BaseModel):
+    project_id: str = ""
+    platform: str
+    work_binding_id: str = ""
+    book_name: str = ""
+
+
+class PublisherPreflightRequest(BaseModel):
+    platform: str
+    book_name: str
+    chapter_title: str = ""
+    body: str = ""
+    create_if_missing: bool = False
+    book_meta: PublisherBookMetaRequest | None = None
+
+
+class PublisherPreflightResponse(BaseModel):
+    ok: bool
+    blocking: list[dict[str, Any]] = Field(default_factory=list)
+    warnings: list[dict[str, Any]] = Field(default_factory=list)
+    platform_meta: dict[str, Any] = Field(default_factory=dict)
+    requires_reviewer: bool = False
+
+
 class PublisherRawCommentInput(BaseModel):
     remote_comment_id: str
     work_id: str = ""
@@ -279,6 +391,15 @@ __all__ = [
     'CommentSyncJobResultRequest',
     'PublisherCommentSyncJobRequest',
     'PublisherCommentSyncJobResponse',
+    'PublisherWorkBindingResponse',
+    'PublisherChapterBindingResponse',
+    'PublisherCoverAssetResponse',
+    'PublisherCoverGenerateRequest',
+    'PublisherCoverSelectRequest',
+    'PublisherCoverUploadRequest',
+    'PublisherAuditSyncRequest',
+    'PublisherPreflightRequest',
+    'PublisherPreflightResponse',
     'PublisherRawCommentInput',
     'ExtensionCommentsBatchRequest',
     'ExtensionCommentsBatchResponse',

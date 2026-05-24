@@ -64,6 +64,7 @@ POSTGRES_BASELINE_MIGRATIONS = (
     "generation_task_leases_v1",
     "trope_usage_records_v1",
     "project_target_total_default_v1",
+    "publisher_bindings_covers_v1",
 )
 
 
@@ -177,6 +178,7 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
         _upgrade_project_target_total_default(conn)
         _upgrade_arc_macro_progression(conn)
         _upgrade_project_progression_rules(conn)
+        _upgrade_publisher_bindings_covers(conn)
         conn.execute(
             text(
                 """
@@ -652,6 +654,181 @@ def _upgrade_project_progression_rules(conn) -> None:
         text(
             "CREATE INDEX IF NOT EXISTS ix_project_progression_rules_project_type "
             "ON project_progression_rules (project_id, rule_type)"
+        )
+    )
+
+
+def _upgrade_publisher_bindings_covers(conn) -> None:
+    conn.execute(
+        text(
+            "ALTER TABLE publisher_upload_jobs "
+            "ADD COLUMN IF NOT EXISTS task_kind VARCHAR NOT NULL DEFAULT 'chapter_upload'"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_publisher_upload_jobs_task_status "
+            "ON publisher_upload_jobs (task_kind, status, platform_id)"
+        )
+    )
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS publisher_work_bindings (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR NOT NULL DEFAULT '',
+                platform_id VARCHAR NOT NULL,
+                book_name VARCHAR NOT NULL DEFAULT '',
+                remote_book_id VARCHAR NOT NULL DEFAULT '',
+                remote_url VARCHAR NOT NULL DEFAULT '',
+                audit_state VARCHAR NOT NULL DEFAULT 'unknown',
+                audit_reason TEXT NOT NULL DEFAULT '',
+                platform_status VARCHAR NOT NULL DEFAULT '',
+                cover_asset_id VARCHAR NOT NULL DEFAULT '',
+                cover_state VARCHAR NOT NULL DEFAULT 'none',
+                last_synced_at TIMESTAMP NULL,
+                raw_payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_publisher_work_bindings_project_platform "
+            "ON publisher_work_bindings (project_id, platform_id)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_publisher_work_bindings_project_platform "
+            "ON publisher_work_bindings (project_id, platform_id) "
+            "WHERE project_id <> ''"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_publisher_work_bindings_platform_book "
+            "ON publisher_work_bindings (platform_id, book_name)"
+        )
+    )
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS publisher_chapter_bindings (
+                id VARCHAR PRIMARY KEY,
+                work_binding_id VARCHAR NOT NULL REFERENCES publisher_work_bindings(id),
+                project_id VARCHAR NOT NULL DEFAULT '',
+                platform_id VARCHAR NOT NULL,
+                chapter_number INTEGER NOT NULL DEFAULT 0,
+                chapter_title VARCHAR NOT NULL DEFAULT '',
+                remote_chapter_id VARCHAR NOT NULL DEFAULT '',
+                remote_url VARCHAR NOT NULL DEFAULT '',
+                publish_state VARCHAR NOT NULL DEFAULT 'unknown',
+                audit_state VARCHAR NOT NULL DEFAULT 'unknown',
+                audit_reason TEXT NOT NULL DEFAULT '',
+                word_count INTEGER NOT NULL DEFAULT 0,
+                last_synced_at TIMESTAMP NULL,
+                raw_payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_publisher_chapter_bindings_work "
+            "ON publisher_chapter_bindings (work_binding_id, chapter_number)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_publisher_chapter_bindings_work_number "
+            "ON publisher_chapter_bindings (work_binding_id, chapter_number) "
+            "WHERE chapter_number > 0"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_publisher_chapter_bindings_project_platform "
+            "ON publisher_chapter_bindings (project_id, platform_id)"
+        )
+    )
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS publisher_cover_assets (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR NOT NULL DEFAULT '',
+                work_binding_id VARCHAR NOT NULL DEFAULT '',
+                source VARCHAR NOT NULL DEFAULT 'minimax',
+                prompt TEXT NOT NULL DEFAULT '',
+                source_meta_json TEXT NOT NULL DEFAULT '{}',
+                status VARCHAR NOT NULL DEFAULT 'generated',
+                selection_state VARCHAR NOT NULL DEFAULT 'candidate',
+                score DOUBLE PRECISION NOT NULL DEFAULT 0,
+                score_reasons_json TEXT NOT NULL DEFAULT '[]',
+                width INTEGER NOT NULL DEFAULT 0,
+                height INTEGER NOT NULL DEFAULT 0,
+                file_size_bytes INTEGER NOT NULL DEFAULT 0,
+                file_path TEXT NOT NULL DEFAULT '',
+                mime_type VARCHAR NOT NULL DEFAULT '',
+                platform_validation_json TEXT NOT NULL DEFAULT '{}',
+                minimax_request_id VARCHAR NOT NULL DEFAULT '',
+                raw_payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_publisher_cover_assets_project "
+            "ON publisher_cover_assets (project_id)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_publisher_cover_assets_work "
+            "ON publisher_cover_assets (work_binding_id)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_publisher_cover_assets_selected_work "
+            "ON publisher_cover_assets (work_binding_id) "
+            "WHERE work_binding_id <> '' AND selection_state IN ('selected', 'approved')"
+        )
+    )
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS publisher_milestones (
+                id VARCHAR PRIMARY KEY,
+                work_binding_id VARCHAR NOT NULL REFERENCES publisher_work_bindings(id),
+                milestone_type VARCHAR NOT NULL,
+                state VARCHAR NOT NULL DEFAULT 'open',
+                message TEXT NOT NULL DEFAULT '',
+                evidence_json TEXT NOT NULL DEFAULT '{}',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_publisher_milestones_work_state "
+            "ON publisher_milestones (work_binding_id, state)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_publisher_milestones_type "
+            "ON publisher_milestones (milestone_type)"
         )
     )
 

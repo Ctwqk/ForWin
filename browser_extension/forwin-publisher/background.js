@@ -540,6 +540,31 @@ async function sendDebuggerCommand(tabId, method, commandParams = {}) {
   return wrapCall(extensionApi.debugger, 'sendCommand', { tabId }, method, commandParams);
 }
 
+async function setFileInputFiles(tabId, selector, files) {
+  await attachDebugger(tabId);
+  try {
+    const documentResult = await sendDebuggerCommand(tabId, 'DOM.getDocument', { depth: -1, pierce: true });
+    const rootNodeId = documentResult?.root?.nodeId;
+    if (!rootNodeId) {
+      throw new Error('无法读取页面 DOM。');
+    }
+    const queryResult = await sendDebuggerCommand(tabId, 'DOM.querySelector', {
+      nodeId: rootNodeId,
+      selector,
+    });
+    const nodeId = Number(queryResult?.nodeId || 0);
+    if (!nodeId) {
+      throw new Error(`未找到文件输入控件：${selector}`);
+    }
+    await sendDebuggerCommand(tabId, 'DOM.setFileInputFiles', {
+      nodeId,
+      files,
+    });
+  } finally {
+    await detachDebugger(tabId);
+  }
+}
+
 async function trustedClick(tabId, x, y) {
   await sendDebuggerCommand(tabId, 'Input.dispatchMouseEvent', {
     type: 'mouseMoved',
@@ -940,6 +965,71 @@ async function runCommentSyncCommand(tabId, payload) {
   return sendPlatformAgentMessage(tabId, 'run-comment-sync', payload, 45000);
 }
 
+async function runCoverUploadCommand(tabId, payload) {
+  if (!tabId) {
+    return { ok: false, error: '未能打开封面上传页面。' };
+  }
+  const readyState = await waitForRunnablePlatformTab(payload.platform, tabId, 12000);
+  if (!readyState?.ready) {
+    const tab = await getTab(tabId);
+    return {
+      ok: false,
+      error: '平台封面页面没有准备好，无法执行封面上传。',
+      currentUrl: String(tab?.url || ''),
+      errorCode: 'cover-upload-page-not-ready',
+    };
+  }
+  const prepare = await sendPlatformAgentMessage(tabId, 'prepare-cover-upload', payload, 20000);
+  if (!prepare?.ok) {
+    return prepare || {
+      ok: false,
+      error: '未找到封面上传控件。',
+      errorCode: 'cover-upload-control-not-found',
+    };
+  }
+  try {
+    await setFileInputFiles(tabId, prepare.fileInputSelector || 'input[type="file"]', [payload.file_path]);
+  } catch (error) {
+    return {
+      ok: false,
+      currentUrl: String(prepare.currentUrl || ''),
+      error: error instanceof Error ? error.message : String(error),
+      errorCode: 'cover-upload-file-injection-failed',
+      resultPayload: {
+        phase: 'set-file-input-files',
+        file_input_selector: prepare.fileInputSelector || '',
+      },
+    };
+  }
+  return sendPlatformAgentMessage(
+    tabId,
+    'run-cover-upload',
+    {
+      ...payload,
+      fileInjected: true,
+      fileInputSelector: prepare.fileInputSelector || 'input[type="file"]',
+    },
+    45000,
+  );
+}
+
+async function runAuditSyncCommand(tabId, payload) {
+  if (!tabId) {
+    return { ok: false, error: '未能打开审核同步页面。' };
+  }
+  const readyState = await waitForRunnablePlatformTab(payload.platform, tabId, 12000);
+  if (!readyState?.ready) {
+    const tab = await getTab(tabId);
+    return {
+      ok: false,
+      error: '平台审核页面没有准备好，无法执行审核同步。',
+      currentUrl: String(tab?.url || ''),
+      errorCode: 'audit-sync-page-not-ready',
+    };
+  }
+  return sendPlatformAgentMessage(tabId, 'run-audit-sync', payload, 45000);
+}
+
 function isUploadEditorUrl(platformId, url = '') {
   if (!url) {
     return false;
@@ -1293,6 +1383,8 @@ const controller = new PublisherExtensionController({
   getExtensionVersion,
   getBrowserInfo,
   runUploadCommand,
+  runCoverUploadCommand,
+  runAuditSyncCommand,
   runCommentSyncCommand,
   inspectLoginState,
   inspectPlatformState,

@@ -62,6 +62,12 @@ class ProjectAutomationPublishSettings(BaseModel):
     book_name: str = ""
     upload_url: str = ""
     create_if_missing: bool = False
+    cover_generation_enabled: bool = True
+    cover_confirmation_required: bool = False
+    cover_candidate_count: int = 4
+    cover_style_hint: str = ""
+    auto_cover_upload_enabled: bool = True
+    publisher_compliance_required: bool = True
     book_meta: "PublisherBookMetaRequest" = Field(
         default_factory=lambda: PublisherBookMetaRequest()
     )

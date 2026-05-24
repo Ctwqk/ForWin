@@ -14,7 +14,12 @@ from forwin.api_schemas import (
     ExtensionHeartbeatRequest,
     ExtensionSessionSyncRequest,
     PublisherBrowserSessionSummaryResponse,
+    PublisherAuditSyncRequest,
     PublisherCommentSyncJobRequest,
+    PublisherCoverGenerateRequest,
+    PublisherCoverSelectRequest,
+    PublisherCoverUploadRequest,
+    PublisherPreflightRequest,
     PublisherUploadJobCreateRequest,
     UploadJobResultRequest,
 )
@@ -58,6 +63,74 @@ def build_handlers(
             status=status,
             platform=platform,
             limit=limit,
+        )
+
+    def list_publisher_work_bindings(project_id: str = "", platform: str = ""):
+        return api_publisher_ops.list_publisher_work_bindings(
+            publisher_manager=get_publisher_manager(),
+            project_id=project_id,
+            platform=platform,
+        )
+
+    def list_publisher_chapter_bindings(
+        project_id: str = "",
+        platform: str = "",
+        work_binding_id: str = "",
+    ):
+        return api_publisher_ops.list_publisher_chapter_bindings(
+            publisher_manager=get_publisher_manager(),
+            project_id=project_id,
+            platform=platform,
+            work_binding_id=work_binding_id,
+        )
+
+    def list_publisher_cover_assets(project_id: str = "", work_binding_id: str = ""):
+        return api_publisher_ops.list_publisher_cover_assets(
+            publisher_manager=get_publisher_manager(),
+            project_id=project_id,
+            work_binding_id=work_binding_id,
+        )
+
+    def generate_publisher_cover_candidates(req: PublisherCoverGenerateRequest):
+        return api_publisher_ops.generate_publisher_cover_candidates(
+            req,
+            publisher_manager=get_publisher_manager(),
+        )
+
+    def select_publisher_cover_asset(req: PublisherCoverSelectRequest):
+        return api_publisher_ops.select_publisher_cover_asset(
+            req,
+            publisher_manager=get_publisher_manager(),
+        )
+
+    def approve_publisher_cover_asset(req: PublisherCoverSelectRequest):
+        return api_publisher_ops.approve_publisher_cover_asset(
+            req,
+            publisher_manager=get_publisher_manager(),
+        )
+
+    def reject_publisher_cover_asset(req: PublisherCoverSelectRequest):
+        return api_publisher_ops.reject_publisher_cover_asset(
+            req,
+            publisher_manager=get_publisher_manager(),
+        )
+
+    def enqueue_publisher_cover_upload(req: PublisherCoverUploadRequest):
+        return api_publisher_ops.enqueue_publisher_cover_upload(
+            req,
+            publisher_manager=get_publisher_manager(),
+        )
+
+    def enqueue_publisher_audit_sync(req: PublisherAuditSyncRequest):
+        return api_publisher_ops.enqueue_publisher_audit_sync(
+            req,
+            publisher_manager=get_publisher_manager(),
+        )
+
+    def publisher_preflight(req: PublisherPreflightRequest):
+        return api_publisher_ops.publisher_preflight(
+            req,
+            publisher_manager=get_publisher_manager(),
         )
 
     def terminate_publisher_upload_job(job_id: str):
@@ -192,6 +265,16 @@ def build_handlers(
         "create_publisher_upload_job": create_publisher_upload_job,
         "get_publisher_upload_job": get_publisher_upload_job,
         "list_publisher_upload_jobs": list_publisher_upload_jobs,
+        "list_publisher_work_bindings": list_publisher_work_bindings,
+        "list_publisher_chapter_bindings": list_publisher_chapter_bindings,
+        "list_publisher_cover_assets": list_publisher_cover_assets,
+        "generate_publisher_cover_candidates": generate_publisher_cover_candidates,
+        "select_publisher_cover_asset": select_publisher_cover_asset,
+        "approve_publisher_cover_asset": approve_publisher_cover_asset,
+        "reject_publisher_cover_asset": reject_publisher_cover_asset,
+        "enqueue_publisher_cover_upload": enqueue_publisher_cover_upload,
+        "enqueue_publisher_audit_sync": enqueue_publisher_audit_sync,
+        "publisher_preflight": publisher_preflight,
         "terminate_publisher_upload_job": terminate_publisher_upload_job,
         "delete_publisher_upload_job": delete_publisher_upload_job,
         "publisher_extension_heartbeat": publisher_extension_heartbeat,

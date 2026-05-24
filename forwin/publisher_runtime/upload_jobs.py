@@ -17,6 +17,11 @@ from .platform_catalog import PlatformCatalog, PlatformSpec
 
 
 AUTO_UPLOAD_MAX_ATTEMPTS = 3
+EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS = (
+    "chapter_upload",
+    "cover_upload",
+    "audit_sync",
+)
 
 QIDIAN_REAL_CCID_RE = re.compile(r"(?:[?#&])ccid=(\d{6,})")
 
@@ -193,14 +198,22 @@ class UploadJobService:
         *,
         session_factory,
         platform_catalog: PlatformCatalog,
+        platform_metadata_catalog=None,
+        preflight=None,
         connection_state: ExtensionConnectionService,
         audit: PublisherAuditService,
+        bindings=None,
+        cover_service=None,
         codex_intervention_handler: CodexInterventionHandler | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.platform_catalog = platform_catalog
+        self.platform_metadata_catalog = platform_metadata_catalog
+        self.preflight = preflight
         self.connection_state = connection_state
         self.audit = audit
+        self.bindings = bindings
+        self.cover_service = cover_service
         self.codex_intervention_handler = codex_intervention_handler
 
     def request_codex_intervention(self, intervention: dict[str, Any]) -> None:
@@ -251,15 +264,92 @@ class UploadJobService:
         publish: bool,
         create_if_missing: bool = False,
         book_meta: dict[str, Any] | None = None,
+        cover_generation_enabled: bool = True,
+        cover_confirmation_required: bool = False,
+        cover_candidate_count: int = 4,
+        cover_style_hint: str = "",
+        auto_cover_upload_enabled: bool = True,
+        publisher_compliance_required: bool = False,
     ) -> dict[str, Any]:
         spec = self.platform_catalog.get(platform)
         normalized_book_meta = self.normalize_book_meta(book_meta)
+        platform_meta = (
+            self.platform_metadata_catalog.resolve_for_platform(platform, normalized_book_meta)
+            if self.platform_metadata_catalog is not None
+            else {}
+        )
+        preflight = (
+            self.preflight.check_upload_readiness(
+                platform_id=platform,
+                book_name=book_name,
+                chapter_title=chapter_title,
+                body=body,
+                create_if_missing=create_if_missing,
+                book_meta=normalized_book_meta,
+                publisher_compliance_required=publisher_compliance_required,
+            )
+            if self.preflight is not None
+            else {"ok": True, "blocking": [], "warnings": [], "platform_meta": platform_meta}
+        )
+        if not preflight.get("ok", False):
+            details = "；".join(
+                str(item.get("message") or item.get("code") or "")
+                for item in preflight.get("blocking", [])
+                if isinstance(item, dict)
+            )
+            raise ValueError(f"发布预检失败：{details or '请补全平台必填信息。'}")
         with self.session_factory() as session:
             resolved_project_id = self.resolve_project_id(
                 session,
                 explicit_project_id=project_id,
                 work_name=book_name,
             )
+            if (
+                create_if_missing
+                and cover_generation_enabled
+                and self.cover_service is not None
+                and self.cover_service.selected_cover_for_project(
+                    session,
+                    project_id=resolved_project_id,
+                )
+                is None
+            ):
+                cover_job = self.new_upload_job(
+                    spec=spec,
+                    resolved_project_id=resolved_project_id,
+                    platform=platform,
+                    book_name=book_name,
+                    chapter_title="",
+                    body="",
+                    upload_url=upload_url,
+                    publish=False,
+                    create_if_missing=create_if_missing,
+                    normalized_book_meta=normalized_book_meta,
+                    platform_meta=platform_meta,
+                    preflight={"ok": True, "blocking": [], "warnings": [], "platform_meta": platform_meta},
+                    task_kind="cover_generate",
+                )
+                cover_payload = _load_json_object(cover_job.result_payload_json)
+                cover_payload.update(
+                    {
+                        "project_id": resolved_project_id,
+                        "cover_candidate_count": max(1, min(int(cover_candidate_count or 4), 8)),
+                        "cover_style_hint": str(cover_style_hint or "").strip(),
+                        "cover_confirmation_required": bool(cover_confirmation_required),
+                        "auto_cover_upload_enabled": bool(auto_cover_upload_enabled),
+                    }
+                )
+                cover_job.result_payload_json = json.dumps(cover_payload, ensure_ascii=False)
+                cover_job.result_message = "封面生成任务已创建，等待后端执行。"
+                session.add(cover_job)
+                session.flush()
+                self.audit.record_upload_job_event(
+                    session,
+                    job=cover_job,
+                    event_type=DecisionEventType.UPLOAD_JOB_CREATED,
+                    summary="封面生成任务已创建。",
+                    actor_type="api",
+                )
             job = self.new_upload_job(
                 spec=spec,
                 resolved_project_id=resolved_project_id,
@@ -271,7 +361,21 @@ class UploadJobService:
                 publish=publish,
                 create_if_missing=create_if_missing,
                 normalized_book_meta=normalized_book_meta,
+                platform_meta=platform_meta,
+                preflight=preflight,
             )
+            chapter_payload = _load_json_object(job.result_payload_json)
+            chapter_payload.update(
+                {
+                    "cover_generation_enabled": bool(cover_generation_enabled),
+                    "cover_confirmation_required": bool(cover_confirmation_required),
+                    "cover_candidate_count": max(1, min(int(cover_candidate_count or 4), 8)),
+                    "cover_style_hint": str(cover_style_hint or "").strip(),
+                    "auto_cover_upload_enabled": bool(auto_cover_upload_enabled),
+                    "publisher_compliance_required": bool(publisher_compliance_required),
+                }
+            )
+            job.result_payload_json = json.dumps(chapter_payload, ensure_ascii=False)
             session.add(job)
             session.flush()
             self.audit.record_upload_job_event(
@@ -296,9 +400,20 @@ class UploadJobService:
         publish: bool,
         create_if_missing: bool = False,
         book_meta: dict[str, Any] | None = None,
+        cover_generation_enabled: bool = True,
+        cover_confirmation_required: bool = False,
+        cover_candidate_count: int = 4,
+        cover_style_hint: str = "",
+        auto_cover_upload_enabled: bool = True,
+        publisher_compliance_required: bool = False,
     ) -> int:
         spec = self.platform_catalog.get(platform)
         normalized_book_meta = self.normalize_book_meta(book_meta)
+        platform_meta = (
+            self.platform_metadata_catalog.resolve_for_platform(platform, normalized_book_meta)
+            if self.platform_metadata_catalog is not None
+            else {}
+        )
         normalized_jobs: list[tuple[str, str]] = []
         seen_titles: set[str] = set()
         for item in jobs:
@@ -316,6 +431,52 @@ class UploadJobService:
                 explicit_project_id=project_id,
                 work_name=book_name,
             )
+            if (
+                create_if_missing
+                and cover_generation_enabled
+                and self.cover_service is not None
+                and self.cover_service.selected_cover_for_project(
+                    session,
+                    project_id=resolved_project_id,
+                )
+                is None
+            ):
+                cover_job = self.new_upload_job(
+                    spec=spec,
+                    resolved_project_id=resolved_project_id,
+                    platform=platform,
+                    book_name=book_name,
+                    chapter_title="",
+                    body="",
+                    upload_url=upload_url,
+                    publish=False,
+                    create_if_missing=create_if_missing,
+                    normalized_book_meta=normalized_book_meta,
+                    platform_meta=platform_meta,
+                    preflight={"ok": True, "blocking": [], "warnings": [], "platform_meta": platform_meta},
+                    task_kind="cover_generate",
+                )
+                cover_payload = _load_json_object(cover_job.result_payload_json)
+                cover_payload.update(
+                    {
+                        "project_id": resolved_project_id,
+                        "cover_candidate_count": max(1, min(int(cover_candidate_count or 4), 8)),
+                        "cover_style_hint": str(cover_style_hint or "").strip(),
+                        "cover_confirmation_required": bool(cover_confirmation_required),
+                        "auto_cover_upload_enabled": bool(auto_cover_upload_enabled),
+                    }
+                )
+                cover_job.result_payload_json = json.dumps(cover_payload, ensure_ascii=False)
+                cover_job.result_message = "封面生成任务已创建，等待后端执行。"
+                session.add(cover_job)
+                session.flush()
+                self.audit.record_upload_job_event(
+                    session,
+                    job=cover_job,
+                    event_type=DecisionEventType.UPLOAD_JOB_CREATED,
+                    summary="封面生成任务已创建。",
+                    actor_type="api",
+                )
             chapter_titles = [chapter_title for chapter_title, _body in normalized_jobs]
             existing_titles: set[str] = set()
             if resolved_project_id and chapter_titles:
@@ -343,12 +504,43 @@ class UploadJobService:
                     publish=publish,
                     create_if_missing=create_if_missing,
                     normalized_book_meta=normalized_book_meta,
+                    platform_meta=platform_meta,
+                    preflight=(
+                        self.preflight.check_upload_readiness(
+                            platform_id=platform,
+                            book_name=book_name,
+                            chapter_title=chapter_title,
+                            body=body,
+                            create_if_missing=create_if_missing,
+                            book_meta=normalized_book_meta,
+                        )
+                        if self.preflight is not None
+                        else {
+                            "ok": True,
+                            "blocking": [],
+                            "warnings": [],
+                            "platform_meta": platform_meta,
+                        }
+                    ),
                 )
                 for chapter_title, body in normalized_jobs
                 if chapter_title not in existing_titles
             ]
             if not rows:
                 return 0
+            for row in rows:
+                payload = _load_json_object(row.result_payload_json)
+                payload.update(
+                    {
+                        "cover_generation_enabled": bool(cover_generation_enabled),
+                        "cover_confirmation_required": bool(cover_confirmation_required),
+                        "cover_candidate_count": max(1, min(int(cover_candidate_count or 4), 8)),
+                        "cover_style_hint": str(cover_style_hint or "").strip(),
+                        "auto_cover_upload_enabled": bool(auto_cover_upload_enabled),
+                        "publisher_compliance_required": bool(publisher_compliance_required),
+                    }
+                )
+                row.result_payload_json = json.dumps(payload, ensure_ascii=False)
             session.add_all(rows)
             session.flush()
             for job in rows:
@@ -436,6 +628,7 @@ class UploadJobService:
                     PublisherUploadJob.deleted_at.is_(None),
                     PublisherUploadJob.extension_client_id == client_id,
                     PublisherUploadJob.platform_id.in_(platforms),
+                    PublisherUploadJob.task_kind.in_(EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS),
                 )
                 .order_by(PublisherUploadJob.started_at.asc(), PublisherUploadJob.created_at.asc())
                 .limit(1)
@@ -459,6 +652,7 @@ class UploadJobService:
                         PublisherUploadJob.abort_requested.is_(False),
                         PublisherUploadJob.deleted_at.is_(None),
                         PublisherUploadJob.platform_id.in_(claimable_platforms),
+                        PublisherUploadJob.task_kind.in_(EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS),
                     )
                     .order_by(PublisherUploadJob.created_at.asc())
                     .limit(1)
@@ -475,6 +669,7 @@ class UploadJobService:
                         PublisherUploadJob.status == "pending",
                         PublisherUploadJob.abort_requested.is_(False),
                         PublisherUploadJob.deleted_at.is_(None),
+                        PublisherUploadJob.task_kind.in_(EXTENSION_CLAIMABLE_UPLOAD_TASK_KINDS),
                     )
                     .values(
                         status="running",
@@ -686,6 +881,79 @@ class UploadJobService:
                 if effective_status in {"cancelled", "pending"}
                 else error
             )
+
+            task_kind = str(job.task_kind or "chapter_upload").strip() or "chapter_upload"
+            if (
+                self.bindings is not None
+                and effective_status == "succeeded"
+                and task_kind == "chapter_upload"
+            ):
+                work_binding = self.bindings.upsert_work_binding_from_upload_job(
+                    session,
+                    job=job,
+                    result_payload=merged_payload,
+                    current_url=current_url,
+                )
+                chapter_binding = self.bindings.upsert_chapter_binding_from_upload_job(
+                    session,
+                    job=job,
+                    work_binding=work_binding,
+                    result_payload=merged_payload,
+                    current_url=current_url,
+                )
+                merged_payload["work_binding"] = self.bindings.serialize_work_binding(
+                    work_binding
+                )
+                merged_payload["chapter_binding"] = (
+                    self.bindings.serialize_chapter_binding(chapter_binding)
+                )
+                if self.cover_service is not None:
+                    cover_upload_job = self.cover_service.enqueue_cover_upload_if_ready(
+                        session,
+                        job=job,
+                        payload=merged_payload,
+                        work_binding=work_binding,
+                    )
+                    if cover_upload_job is not None:
+                        merged_payload["cover_upload_job_id"] = cover_upload_job.id
+                        self.audit.record_upload_job_event(
+                            session,
+                            job=cover_upload_job,
+                            event_type=DecisionEventType.UPLOAD_JOB_CREATED,
+                            summary="封面上传任务已创建。",
+                            actor_type="api",
+                        )
+            elif (
+                self.bindings is not None
+                and effective_status == "succeeded"
+                and task_kind == "cover_upload"
+            ):
+                work_binding = self.bindings.update_from_cover_upload_result(
+                    session,
+                    job=job,
+                    result_payload=merged_payload,
+                    current_url=current_url,
+                )
+                if work_binding is not None:
+                    merged_payload["work_binding"] = self.bindings.serialize_work_binding(
+                        work_binding
+                    )
+            elif (
+                self.bindings is not None
+                and effective_status == "succeeded"
+                and task_kind == "audit_sync"
+            ):
+                work_binding = self.bindings.update_from_audit_sync_result(
+                    session,
+                    job=job,
+                    result_payload=merged_payload,
+                    current_url=current_url,
+                )
+                if work_binding is not None:
+                    merged_payload["work_binding"] = self.bindings.serialize_work_binding(
+                        work_binding
+                    )
+
             job.result_payload_json = json.dumps(merged_payload, ensure_ascii=False)
 
             if self.platform_catalog.has(job.platform_id):
@@ -755,6 +1023,7 @@ class UploadJobService:
         payload = json.loads(job.result_payload_json or "{}")
         terminal = job.status in {"succeeded", "failed", "cancelled"}
         return {
+            "task_kind": str(job.task_kind or "chapter_upload"),
             "job_id": job.id,
             "project_id": job.project_id,
             "platform": job.platform_id,
@@ -793,6 +1062,9 @@ class UploadJobService:
         publish: bool,
         create_if_missing: bool,
         normalized_book_meta: dict[str, Any],
+        platform_meta: dict[str, Any] | None = None,
+        preflight: dict[str, Any] | None = None,
+        task_kind: str = "chapter_upload",
     ) -> PublisherUploadJob:
         payload: dict[str, Any] = {}
         if resolved_project_id:
@@ -801,9 +1073,21 @@ class UploadJobService:
             payload["create_if_missing"] = True
         if normalized_book_meta:
             payload["book_meta"] = normalized_book_meta
+        if platform_meta:
+            payload["platform_meta"] = platform_meta
+        if preflight:
+            if not preflight.get("ok", False):
+                details = "；".join(
+                    str(item.get("message") or item.get("code") or "")
+                    for item in preflight.get("blocking", [])
+                    if isinstance(item, dict)
+                )
+                raise ValueError(f"发布预检失败：{details or '请补全平台必填信息。'}")
+            payload["preflight"] = preflight
         return PublisherUploadJob(
             project_id=resolved_project_id,
             platform_id=platform,
+            task_kind=str(task_kind or "chapter_upload").strip() or "chapter_upload",
             status="pending",
             book_name=book_name,
             chapter_title=chapter_title,

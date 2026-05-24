@@ -230,6 +230,12 @@ def create_project_chapter_upload_job(
             upload_url=req.upload_url,
             publish=req.publish,
             create_if_missing=req.create_if_missing,
+            cover_generation_enabled=req.cover_generation_enabled,
+            cover_confirmation_required=req.cover_confirmation_required,
+            cover_candidate_count=req.cover_candidate_count,
+            cover_style_hint=req.cover_style_hint,
+            auto_cover_upload_enabled=req.auto_cover_upload_enabled,
+            publisher_compliance_required=req.publisher_compliance_required,
             book_meta=req.book_meta.model_dump() if req.book_meta else None,
         )
     except ValueError as exc:

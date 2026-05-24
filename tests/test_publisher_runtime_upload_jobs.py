@@ -8,6 +8,7 @@ from forwin.governance import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.governance import DecisionEvent
 from forwin.models.project import Project
+from forwin.models.publisher import PublisherUploadJob
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.publishers.manager import PublisherManager
 
@@ -50,7 +51,12 @@ def test_upload_job_service_lifecycle_preserves_payload_and_audit_shape() -> Non
             upload_url=None,
             publish=False,
             create_if_missing=True,
-            book_meta={"primary_category": "都市日常", "protagonist_names": ["韩砚", "林雾", "多余"]},
+            book_meta={
+                "audience": "male",
+                "primary_category": "都市日常",
+                "protagonist_names": ["韩砚", "林雾", "多余"],
+                "intro": "这是一本关于发布运行时的长篇测试作品，简介用于通过平台建书预检，并验证 payload 不泄露正文。",
+            },
         )
         claimed = runtime.upload_jobs.claim_next_upload_job(
             client_id="client-1",
@@ -71,6 +77,8 @@ def test_upload_job_service_lifecycle_preserves_payload_and_audit_shape() -> Non
         assert updated["status"] == "succeeded"
         assert updated["result_payload"]["create_if_missing"] is True
         assert updated["result_payload"]["book_meta"]["protagonist_names"] == ["韩砚", "林雾"]
+        assert updated["result_payload"]["platform_meta"]["resolved_primary_category"]["label"] == "都市"
+        assert updated["result_payload"]["preflight"]["ok"] is True
         assert runtime.upload_jobs.get_upload_job(created["job_id"])["deletable"] is True
 
         with runtime.session_factory() as session:
@@ -89,7 +97,133 @@ def test_upload_job_service_lifecycle_preserves_payload_and_audit_shape() -> Non
             assert "正文不应写入审计 payload" not in payload_text
             payload = json.loads(payload_text)
             if event.event_type.startswith("upload_job_"):
-                assert payload["body_chars"] == len("正文不应写入审计 payload")
+                if payload.get("task_kind") == "cover_generate":
+                    assert payload["body_chars"] == 0
+                else:
+                    assert payload["body_chars"] == len("正文不应写入审计 payload")
+    finally:
+        engine.dispose()
+
+
+def test_create_if_missing_upload_job_blocks_hard_preflight_failure() -> None:
+    engine, runtime = _runtime("publisher-runtime-preflight-block")
+    try:
+        try:
+            runtime.upload_jobs.create_upload_job(
+                platform="fanqie",
+                book_name="测试书",
+                chapter_title="第一章",
+                body="正文",
+                upload_url=None,
+                publish=True,
+                create_if_missing=True,
+                book_meta={
+                    "audience": "male",
+                    "primary_category": "都市日常",
+                    "intro": "太短",
+                },
+            )
+        except ValueError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError("expected preflight failure")
+
+        assert "发布预检失败" in message
+        assert "主角名" in message or "简介" in message
+    finally:
+        engine.dispose()
+
+
+def test_claim_next_upload_job_does_not_return_cover_generate() -> None:
+    engine, runtime = _runtime("publisher-runtime-claim-skips-cover-generate")
+    try:
+        with runtime.session_factory() as session:
+            session.add(
+                PublisherUploadJob(
+                    platform_id="qidian",
+                    task_kind="cover_generate",
+                    status="pending",
+                    book_name="测试书",
+                    chapter_title="",
+                    body_text="",
+                )
+            )
+            session.commit()
+
+        claimed = runtime.upload_jobs.claim_next_upload_job(
+            client_id="client-1",
+            connected_platforms=["qidian"],
+        )
+
+        assert claimed is None
+    finally:
+        engine.dispose()
+
+
+def test_claim_next_upload_job_returns_cover_upload_and_audit_sync() -> None:
+    engine, runtime = _runtime("publisher-runtime-claim-task-kinds")
+    try:
+        with runtime.session_factory() as session:
+            session.add_all(
+                [
+                    PublisherUploadJob(
+                        platform_id="qidian",
+                        task_kind="cover_upload",
+                        status="pending",
+                        book_name="测试书",
+                        chapter_title="",
+                        body_text="",
+                    ),
+                    PublisherUploadJob(
+                        platform_id="qidian",
+                        task_kind="audit_sync",
+                        status="pending",
+                        book_name="测试书",
+                        chapter_title="",
+                        body_text="",
+                    ),
+                ]
+            )
+            session.commit()
+
+        first = runtime.upload_jobs.claim_next_upload_job(
+            client_id="client-1",
+            connected_platforms=["qidian"],
+        )
+        assert first is not None
+        runtime.upload_jobs.update_upload_job_result(
+            job_id=first["job_id"],
+            client_id="client-1",
+            status="succeeded",
+            message="封面上传完成",
+            current_url="https://write.qq.com/portal/dashboard",
+            error="",
+            result_payload={"cover_state": "uploaded"},
+        )
+        second = runtime.upload_jobs.claim_next_upload_job(
+            client_id="client-1",
+            connected_platforms=["qidian"],
+        )
+
+        assert second is not None
+        assert {first["task_kind"], second["task_kind"]} == {"cover_upload", "audit_sync"}
+    finally:
+        engine.dispose()
+
+
+def test_legacy_create_upload_job_returns_chapter_upload_task_kind() -> None:
+    engine, runtime = _runtime("publisher-runtime-legacy-task-kind")
+    try:
+        created = runtime.upload_jobs.create_upload_job(
+            platform="fanqie",
+            book_name="测试书",
+            chapter_title="第一章",
+            body="正文",
+            upload_url=None,
+            publish=False,
+        )
+
+        assert created["task_kind"] == "chapter_upload"
     finally:
         engine.dispose()
 

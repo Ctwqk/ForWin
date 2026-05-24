@@ -91,6 +91,28 @@
       </div>
       <label style="margin-top:8px;">作品简介</label>
       <textarea id="book_intro" placeholder="50-500 字。创建新书时会用到。"></textarea>
+      <div class="grid" style="margin-top:8px;">
+        <div>
+          <label>封面候选数量</label>
+          <input id="cover_candidate_count" type="number" min="1" max="8" value="4">
+        </div>
+        <div>
+          <label>封面风格提示</label>
+          <input id="cover_style_hint" placeholder="可选：水墨 / 赛博 / 暗黑奇幻">
+        </div>
+      </div>
+      <label style="display:flex;align-items:center;gap:10px;margin:8px 0 0;">
+        <input id="cover_generation_enabled" type="checkbox" style="width:auto;" checked>
+        建书时生成封面候选
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;margin:8px 0 0;">
+        <input id="cover_confirmation_required" type="checkbox" style="width:auto;">
+        封面上传前需要确认
+      </label>
+      <label style="display:flex;align-items:center;gap:10px;margin:8px 0 0;">
+        <input id="auto_cover_upload_enabled" type="checkbox" style="width:auto;" checked>
+        首章成功后自动上传封面
+      </label>
       <label>章节标题</label>
       <input id="chapter_title" placeholder="例如：第一百二十三章 风雪夜归人">
       <label>正文</label>

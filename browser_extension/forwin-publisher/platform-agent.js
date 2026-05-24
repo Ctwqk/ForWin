@@ -3255,6 +3255,162 @@
     );
   }
 
+  function coverFileInputSelector() {
+    const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
+    const imageInput = inputs.find((input) => {
+      const accept = String(input.getAttribute('accept') || '').toLowerCase();
+      return accept.includes('image') || accept.includes('png') || accept.includes('jpg') || accept.includes('jpeg');
+    }) || inputs[0] || null;
+    if (!imageInput) {
+      return '';
+    }
+    if (imageInput.id) {
+      return `input#${CSS.escape(imageInput.id)}`;
+    }
+    if (imageInput.name) {
+      return `input[name="${CSS.escape(imageInput.name)}"]`;
+    }
+    return 'input[type="file"]';
+  }
+
+  function normalizeAuditStateFromText(text) {
+    if (includesAny(text, ['审核失败', '审核未通过', '被拒', '驳回'])) {
+      return 'rejected';
+    }
+    if (includesAny(text, ['审核通过', '已通过', '已发布'])) {
+      return 'approved';
+    }
+    if (includesAny(text, ['审核中', '待审核', '提交审核', '书籍信息待审核'])) {
+      return 'under_review';
+    }
+    return 'unknown';
+  }
+
+  async function prepareCoverUpload(payload) {
+    const selector = coverFileInputSelector();
+    if (!selector) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: '未找到封面上传文件控件。',
+        errorCode: 'cover-upload-control-not-found',
+        resultPayload: {
+          task_kind: 'cover_upload',
+          phase: 'find-cover-upload-control',
+          remote_book_id: payload.remote_book_id || '',
+          remote_url: payload.remote_url || '',
+        },
+      };
+    }
+    return {
+      ok: true,
+      currentUrl: window.location.href,
+      fileInputSelector: selector,
+      resultPayload: {
+        task_kind: 'cover_upload',
+        phase: 'cover-upload-control-ready',
+      },
+    };
+  }
+
+  async function runCoverUpload(payload) {
+    if (!payload.fileInjected) {
+      return {
+        ok: false,
+        currentUrl: window.location.href,
+        error: '封面文件尚未注入文件控件。',
+        errorCode: 'cover-upload-file-not-injected',
+        resultPayload: {
+          task_kind: 'cover_upload',
+          phase: 'file-not-injected',
+        },
+      };
+    }
+    const selector = payload.fileInputSelector || coverFileInputSelector();
+    const input = selector ? document.querySelector(selector) : null;
+    if (input) {
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    await Promise.race([
+      waitForPageSignal(['上传成功', '保存成功', '提交成功', '审核中', '待审核', '封面'], 6000),
+      sleep(1500),
+    ]);
+    const text = pageText();
+    const auditState = normalizeAuditStateFromText(text);
+    const coverState = auditState === 'rejected'
+      ? 'rejected'
+      : auditState === 'approved'
+        ? 'approved'
+        : auditState === 'under_review'
+          ? 'under_review'
+          : 'uploaded';
+    return {
+      ok: true,
+      currentUrl: window.location.href,
+      message: coverState === 'uploaded' ? '封面上传动作已提交。' : '封面已进入平台处理流程。',
+      resultPayload: {
+        task_kind: 'cover_upload',
+        cover_state: coverState,
+        audit_state: auditState,
+        platform_message: text.slice(0, 500),
+        work_binding_id: payload.work_binding_id || '',
+        cover_asset_id: payload.cover_asset_id || '',
+        remote_book_id: payload.remote_book_id || '',
+        remote_url: payload.remote_url || window.location.href,
+      },
+    };
+  }
+
+  async function runAuditSync(payload) {
+    await sleep(800);
+    const text = pageText();
+    const auditState = normalizeAuditStateFromText(text);
+    const officialStatus = resolveOfficialStatus(text);
+    const milestones = [];
+    if (includesAny(text, ['签约', '申请签约'])) {
+      milestones.push({
+        milestone_type: 'signing_entry_visible',
+        state: 'open',
+        message: '平台页面出现签约入口或签约提示。',
+      });
+    }
+    if (includesAny(text, ['收益', '稿费', '收入'])) {
+      milestones.push({
+        milestone_type: 'revenue_entry_visible',
+        state: 'open',
+        message: '平台页面出现收益相关入口。',
+      });
+    }
+    return {
+      ok: true,
+      currentUrl: window.location.href,
+      message: '平台审核状态已同步。',
+      resultPayload: {
+        task_kind: 'audit_sync',
+        work: {
+          work_binding_id: payload.work_binding_id || '',
+          remote_book_id: payload.remote_book_id || payload.work_id || '',
+          remote_url: payload.remote_url || window.location.href,
+          audit_state: auditState,
+          official_status: officialStatus,
+          platform_message: text.slice(0, 500),
+        },
+        chapters: [],
+        cover: {
+          cover_state: auditState === 'rejected'
+            ? 'rejected'
+            : auditState === 'approved'
+              ? 'approved'
+              : auditState === 'under_review'
+                ? 'under_review'
+                : 'unknown',
+        },
+        milestones,
+      },
+    };
+  }
+
   runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!message || message.channel !== CHANNEL) {
       return;
@@ -3314,6 +3470,54 @@
     }
     if (message.action === 'run-comment-sync') {
       runCommentSync(message.payload || {})
+        .then(sendResponse)
+        .catch((error) => {
+          sendResponse({
+            ok: false,
+            currentUrl: window.location.href,
+            error: error instanceof Error ? error.message : String(error),
+            errorCode: error instanceof Error ? String(error.code || '') : '',
+            resultPayload: error instanceof Error && error.resultPayload && typeof error.resultPayload === 'object'
+              ? error.resultPayload
+              : {},
+          });
+        });
+      return true;
+    }
+    if (message.action === 'prepare-cover-upload') {
+      prepareCoverUpload(message.payload || {})
+        .then(sendResponse)
+        .catch((error) => {
+          sendResponse({
+            ok: false,
+            currentUrl: window.location.href,
+            error: error instanceof Error ? error.message : String(error),
+            errorCode: error instanceof Error ? String(error.code || '') : '',
+            resultPayload: error instanceof Error && error.resultPayload && typeof error.resultPayload === 'object'
+              ? error.resultPayload
+              : {},
+          });
+        });
+      return true;
+    }
+    if (message.action === 'run-cover-upload') {
+      runCoverUpload(message.payload || {})
+        .then(sendResponse)
+        .catch((error) => {
+          sendResponse({
+            ok: false,
+            currentUrl: window.location.href,
+            error: error instanceof Error ? error.message : String(error),
+            errorCode: error instanceof Error ? String(error.code || '') : '',
+            resultPayload: error instanceof Error && error.resultPayload && typeof error.resultPayload === 'object'
+              ? error.resultPayload
+              : {},
+          });
+        });
+      return true;
+    }
+    if (message.action === 'run-audit-sync') {
+      runAuditSync(message.payload || {})
         .then(sendResponse)
         .catch((error) => {
           sendResponse({

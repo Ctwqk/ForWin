@@ -20,6 +20,7 @@ from .infrastructure_errors import filter_writer_fixable_issues, infrastructure_
 from .lint import LintSignalCollector
 from .map_movement import MapMovementReviewer
 from .personality import PersonalityConsistencyReviewer
+from .publisher_compliance import PublisherComplianceReviewer
 
 
 class HistoricalReviewHub:
@@ -31,6 +32,7 @@ class HistoricalReviewHub:
         map_movement_review_enabled: bool = True,
         personality_review_enabled: bool = True,
         canon_quality_review_in_hub_enabled: bool = True,
+        publisher_compliance_review_enabled: bool = False,
         llm_client=None,
         llm_enabled: bool | None = None,
         continuity_reviewer=None,
@@ -38,6 +40,7 @@ class HistoricalReviewHub:
         experience_reviewer=None,
         map_movement_reviewer=None,
         personality_reviewer=None,
+        publisher_compliance_reviewer=None,
         lint_collector=None,
         llm_webnovel_reviewer=None,
         observability=None,
@@ -47,6 +50,7 @@ class HistoricalReviewHub:
         self.map_movement_review_enabled = bool(map_movement_review_enabled)
         self.personality_review_enabled = bool(personality_review_enabled)
         self.canon_quality_review_in_hub_enabled = bool(canon_quality_review_in_hub_enabled)
+        self.publisher_compliance_review_enabled = bool(publisher_compliance_review_enabled)
         self.continuity_reviewer = continuity_reviewer
         self.governance_reviewer = governance_reviewer or GovernanceReviewer()
         self.experience_reviewer = experience_reviewer or ExperienceReviewer(
@@ -56,6 +60,9 @@ class HistoricalReviewHub:
         )
         self.map_movement_reviewer = map_movement_reviewer or MapMovementReviewer()
         self.personality_reviewer = personality_reviewer or PersonalityConsistencyReviewer()
+        self.publisher_compliance_reviewer = (
+            publisher_compliance_reviewer or PublisherComplianceReviewer()
+        )
         self.lint_collector = lint_collector or LintSignalCollector(enabled=lint_review_enabled)
         self.llm_webnovel_reviewer = llm_webnovel_reviewer
         self.llm_client = llm_client
@@ -199,12 +206,27 @@ class HistoricalReviewHub:
                     writer_output,
                 )
                 span.metric("issue_count", len(getattr(personality_review, "issues", []) or []))
+        publisher_compliance = ReviewVerdict(verdict="pass", issues=[])
+        if self.publisher_compliance_review_enabled:
+            with self.observability.span(
+                obs_context,
+                "review.publisher_compliance",
+                span_kind="reviewer",
+                component="reviewer",
+            ) as span:
+                publisher_compliance = self._call_with_compatible_kwargs(
+                    self.publisher_compliance_reviewer.review,
+                    review_context,
+                    writer_output,
+                )
+                span.metric("issue_count", len(getattr(publisher_compliance, "issues", []) or []))
         issues = [
             *self._normalize_issues(continuity.issues, reviewer="continuity"),
             *self._normalize_issues(governance.issues, reviewer="governance"),
             *self._normalize_issues(webnovel.issues, reviewer="webnovel_experience"),
             *self._normalize_issues(map_movement.issues, reviewer="map_movement"),
             *self._normalize_issues(personality_review.issues, reviewer="personality"),
+            *self._normalize_issues(publisher_compliance.issues, reviewer="publisher_compliance"),
             *canon_quality_issues,
         ]
         verdict = self._merge_verdicts(
@@ -213,6 +235,7 @@ class HistoricalReviewHub:
             webnovel.verdict,
             map_movement.verdict,
             personality_review.verdict,
+            publisher_compliance.verdict,
             quality_verdict,
         )
         repair_instruction = None
@@ -238,7 +261,8 @@ class HistoricalReviewHub:
                     if governance.verdict == "fail"
                     else None
                 ),
-                webnovel_instruction=webnovel.repair_instruction,
+                webnovel_instruction=webnovel.repair_instruction
+                or publisher_compliance.repair_instruction,
             )
         verdict_payload = ReviewVerdict(
             verdict=verdict,

@@ -582,6 +582,12 @@ def _maybe_enqueue_auto_publish_jobs(result) -> None:
             upload_url=publish.upload_url or None,
             publish=True,
             create_if_missing=bool(publish.create_if_missing),
+            cover_generation_enabled=bool(publish.cover_generation_enabled),
+            cover_confirmation_required=bool(publish.cover_confirmation_required),
+            cover_candidate_count=int(publish.cover_candidate_count or 4),
+            cover_style_hint=publish.cover_style_hint,
+            auto_cover_upload_enabled=bool(publish.auto_cover_upload_enabled),
+            publisher_compliance_required=bool(publish.publisher_compliance_required),
             book_meta=publish.book_meta.model_dump(mode="json"),
         )
     except Exception:  # noqa: BLE001

@@ -173,11 +173,30 @@ def normalize_project_automation(raw: str | dict[str, Any] | None) -> ProjectAut
         book_meta_raw = publish_raw.get("book_meta")
         if not isinstance(book_meta_raw, dict):
             book_meta_raw = {}
+        try:
+            cover_candidate_count = int(publish_raw.get("cover_candidate_count", 4) or 4)
+        except (TypeError, ValueError):
+            cover_candidate_count = 4
+        cover_candidate_count = max(1, min(cover_candidate_count, 8))
         return {
             "platform": str(publish_raw.get("platform", "")).strip(),
             "book_name": str(publish_raw.get("book_name", "")).strip(),
             "upload_url": str(publish_raw.get("upload_url", "")).strip(),
             "create_if_missing": bool(publish_raw.get("create_if_missing", False)),
+            "cover_generation_enabled": bool(
+                publish_raw.get("cover_generation_enabled", True)
+            ),
+            "cover_confirmation_required": bool(
+                publish_raw.get("cover_confirmation_required", False)
+            ),
+            "cover_candidate_count": cover_candidate_count,
+            "cover_style_hint": str(publish_raw.get("cover_style_hint", "")).strip(),
+            "auto_cover_upload_enabled": bool(
+                publish_raw.get("auto_cover_upload_enabled", True)
+            ),
+            "publisher_compliance_required": bool(
+                publish_raw.get("publisher_compliance_required", True)
+            ),
             "book_meta": {
                 "audience": str(book_meta_raw.get("audience", "")).strip(),
                 "primary_category": str(book_meta_raw.get("primary_category", "")).strip(),

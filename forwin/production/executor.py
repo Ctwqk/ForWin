@@ -166,6 +166,12 @@ class ProductionExecutor:
                     upload_url=binding.upload_url or None,
                     publish=True,
                     create_if_missing=bool(binding.create_if_missing),
+                    cover_generation_enabled=bool(binding.cover_generation_enabled),
+                    cover_confirmation_required=bool(binding.cover_confirmation_required),
+                    cover_candidate_count=int(binding.cover_candidate_count or 4),
+                    cover_style_hint=binding.cover_style_hint,
+                    auto_cover_upload_enabled=bool(binding.auto_cover_upload_enabled),
+                    publisher_compliance_required=bool(binding.publisher_compliance_required),
                     book_meta=binding.book_meta.model_dump(mode="json"),
                 )
                 or 0

@@ -293,6 +293,49 @@ def test_upload_success_upserts_chapter_binding() -> None:
         engine.dispose()
 
 
+def test_fanqie_chapter_manage_url_backfills_remote_book_id() -> None:
+    engine, runtime = _runtime("publisher-fanqie-url-book-id")
+    try:
+        with runtime.session_factory() as session:
+            project_id = _project(session)
+            session.commit()
+
+        created = runtime.upload_jobs.create_upload_job(
+            project_id=project_id,
+            platform="fanqie",
+            book_name="番茄绑定",
+            chapter_title="测试章",
+            body="正文",
+            upload_url=None,
+            publish=False,
+        )
+        current_url = "https://fanqienovel.com/main/writer/chapter-manage/7624577204235537433&%E7%95%AA%E8%8C%84%E7%BB%91%E5%AE%9A?type=2"
+        updated = runtime.upload_jobs.update_upload_job_result(
+            job_id=created["job_id"],
+            client_id="client-1",
+            status="succeeded",
+            message="完成",
+            current_url=current_url,
+            error="",
+            result_payload={
+                "official_status": "drafted",
+                "verified_via": "chapter-manage",
+            },
+        )
+
+        assert updated["result_payload"]["work_binding"]["remote_book_id"] == "7624577204235537433"
+        assert updated["result_payload"]["chapter_binding"]["remote_chapter_id"] == ""
+        with runtime.session_factory() as session:
+            work = session.execute(select(PublisherWorkBinding)).scalar_one()
+            chapter = session.execute(select(PublisherChapterBinding)).scalar_one()
+            assert work.remote_book_id == "7624577204235537433"
+            assert work.remote_url == current_url
+            assert chapter.remote_url == current_url
+            assert chapter.publish_state == "drafted"
+    finally:
+        engine.dispose()
+
+
 def test_verified_draft_upserts_chapter_binding_as_drafted() -> None:
     engine, runtime = _runtime("publisher-upload-upserts-draft")
     try:

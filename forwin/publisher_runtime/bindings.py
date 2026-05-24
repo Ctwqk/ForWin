@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from sqlalchemy import select
 
@@ -57,6 +59,82 @@ def _looks_like_remote_url(value: str) -> bool:
             "portal",
         )
     )
+
+
+def _url_query_values(url: str) -> dict[str, str]:
+    parsed = urlparse(str(url or "").strip())
+    values: dict[str, str] = {}
+    for source in (parsed.query, parsed.fragment):
+        for key, items in parse_qs(source, keep_blank_values=False).items():
+            if items and str(items[0]).strip():
+                values[str(key)] = str(items[0]).strip()
+    return values
+
+
+def _infer_fanqie_book_id_from_url(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if "fanqienovel.com" not in parsed.netloc:
+        return ""
+    match = re.search(
+        r"/main/writer/(?:chapter-manage|book-info)/(?P<book_id>\d+)",
+        parsed.path,
+    )
+    return match.group("book_id") if match else ""
+
+
+def _infer_fanqie_chapter_id_from_url(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if "fanqienovel.com" not in parsed.netloc:
+        return ""
+    values = _url_query_values(url)
+    for key in ("chapter_id", "item_id", "volume_id"):
+        value = values.get(key, "")
+        if value:
+            return value
+    match = re.search(
+        r"/main/writer/(?:chapter-edit|chapter-detail)/\d+/(?P<chapter_id>\d+)",
+        parsed.path,
+    )
+    return match.group("chapter_id") if match else ""
+
+
+def _infer_remote_book_id(
+    *,
+    platform_id: str,
+    result_payload: dict[str, Any],
+    current_url: str = "",
+) -> str:
+    explicit = _first_text(
+        result_payload,
+        "remote_book_id",
+        "remote_work_id",
+        "work_id",
+        "book_id",
+    )
+    if explicit:
+        return explicit
+    if platform_id == "fanqie":
+        return _infer_fanqie_book_id_from_url(current_url)
+    return ""
+
+
+def _infer_remote_chapter_id(
+    *,
+    platform_id: str,
+    result_payload: dict[str, Any],
+    current_url: str = "",
+) -> str:
+    explicit = _first_text(
+        result_payload,
+        "remote_chapter_id",
+        "chapter_id",
+        "ccid",
+    )
+    if explicit:
+        return explicit
+    if platform_id == "fanqie":
+        return _infer_fanqie_chapter_id_from_url(current_url)
+    return ""
 
 
 def _normalize_audit_state(payload: dict[str, Any]) -> str:
@@ -164,12 +242,10 @@ class PublisherBindingService:
         result_payload: dict[str, Any],
         current_url: str = "",
     ) -> PublisherWorkBinding:
-        remote_book_id = _first_text(
-            result_payload,
-            "remote_book_id",
-            "remote_work_id",
-            "work_id",
-            "book_id",
+        remote_book_id = _infer_remote_book_id(
+            platform_id=job.platform_id,
+            result_payload=result_payload,
+            current_url=current_url,
         )
         remote_url = _first_text(
             result_payload,
@@ -258,11 +334,10 @@ class PublisherBindingService:
         chapter.platform_id = job.platform_id
         chapter.chapter_number = chapter_number or chapter.chapter_number
         chapter.chapter_title = chapter_title or chapter.chapter_title
-        remote_chapter_id = _first_text(
-            result_payload,
-            "remote_chapter_id",
-            "chapter_id",
-            "ccid",
+        remote_chapter_id = _infer_remote_chapter_id(
+            platform_id=job.platform_id,
+            result_payload=result_payload,
+            current_url=current_url,
         )
         if remote_chapter_id:
             chapter.remote_chapter_id = remote_chapter_id

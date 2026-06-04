@@ -119,6 +119,30 @@ For publisher-browser work, keep the extension enabled but replace
 `FORWIN_PUBLISHER_EXTENSION_API_KEY` and `FORWIN_PUBLISHER_SESSION_SECRET` with
 long random values before starting the backend.
 
+### Current production deployment
+
+Current production is a distributed Docker Swarm deployment, not the local
+single-host compose layout described above.
+
+- Source-of-truth development checkout: `10.0.0.246:/home/kikuhiko/ForWin` on
+  branch `master`.
+- Production deploy target:
+  `10.0.0.126:/Users/magi1/ForWin-swarm`.
+- Swarm services: `forwin-app-swarm` and `forwin-mcp-swarm`.
+- User-facing URL: `http://10.0.0.126:8899`.
+- MCP/API helper port: `10.0.0.126:8896`.
+- Production deploys are picked up by the 150 GitHub sync job after changes are
+  pushed to GitHub.
+
+The 126 directory is a deployment output with `.deploy-sync-project` and
+`.deploy-sync-source-commit` markers. Do not create a long-lived Codex coding
+project there unless the task is explicitly about inspecting the deployed copy.
+
+Production data stores are centralized on `10.0.0.150`. This repository still
+contains database models, migrations, storage code, and local compose profiles,
+but production ForWin should connect to the 150-hosted Postgres/Qdrant/MinIO
+services instead of starting app-local stateful containers on 126.
+
 ### Personal LAN deployment
 
 1. Copy `.env.example` to `.env`.

@@ -38,7 +38,7 @@ _CANON_SCOPE_TO_REPAIR_SCOPE = {
 
 
 def _canon_repair_scope(raw_scope: object) -> str:
-    return _CANON_SCOPE_TO_REPAIR_SCOPE.get(str(raw_scope or "").strip(), "")
+    return _CANON_SCOPE_TO_REPAIR_SCOPE.get(str(raw_scope or "").strip().lower(), "")
 
 
 def _canon_issue_type_for_scope(repair_scope: str) -> str:

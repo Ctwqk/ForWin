@@ -575,3 +575,65 @@ def test_canon_gate_block_review_routes_to_required_draft_scope():
     assert review.issues[0].issue_type == "canon_admission_draft_block"
     assert decision.outcome == "local_repair"
     assert decision.sub_action["scope"] == "draft"
+
+
+def _canon_repair_decision_for_scope(raw_scope: object) -> tuple[ReviewVerdict, Decision]:
+    gate = SimpleNamespace(
+        required_repair_scope=raw_scope,
+        gate_summary=f"canon quality gate strict: required_repair_scope={raw_scope}",
+        deterministic_issue_refs=["signal-1"],
+    )
+    review = _review_from_canon_gate_block(gate)
+    decision = decide_repair_v2(
+        DecisionInput(
+            project_id="p",
+            chapter_number=2,
+            review=review,
+            signals=[],
+            open_obligations=[],
+            operation_mode="blackbox",
+            attempts_completed=0,
+            prior_scope_history=[],
+            budget=None,
+            target_total_chapters=0,
+            plan_layer_health=PlanLayerHealth(),
+        )
+    )
+    return review, decision
+
+
+@pytest.mark.parametrize(
+    ("raw_scope", "expected_issue_type", "expected_outcome", "expected_scope"),
+    [
+        ("chapter_plan", "canon_admission_chapter_plan_block", "chapter_patch", "chapter_plan"),
+        (" BAND ", "canon_admission_band_block", "band_patch", "band_plan"),
+        ("arc", "canon_admission_arc_block", "arc_patch", "arc_plan"),
+        ("book", "canon_admission_book_block", "book_patch", "book_plan"),
+    ],
+)
+def test_canon_gate_block_review_routes_known_required_scopes(
+    raw_scope,
+    expected_issue_type,
+    expected_outcome,
+    expected_scope,
+):
+    review, decision = _canon_repair_decision_for_scope(raw_scope)
+
+    assert review.verdict == "fail"
+    assert review.recommended_action == "rewrite"
+    assert review.issues[0].issue_type == expected_issue_type
+    assert review.issues[0].target_scope == expected_scope
+    assert decision.outcome == expected_outcome
+    assert decision.sub_action["scope"] == expected_scope
+
+
+@pytest.mark.parametrize("raw_scope", [None, "scene_plan"])
+def test_canon_gate_block_review_unrouted_scope_requires_operator_review(raw_scope):
+    review, decision = _canon_repair_decision_for_scope(raw_scope)
+
+    assert review.verdict == "fail"
+    assert review.recommended_action == "pause_for_review"
+    assert review.issues[0].issue_type == "canon_admission_unrouted_block"
+    assert review.issues[0].target_scope == "operator"
+    assert decision.outcome == "manual_review"
+    assert decision.sub_action["scope"] == "operator"

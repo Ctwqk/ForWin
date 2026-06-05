@@ -73,6 +73,7 @@ ISSUE_TO_SCOPE: dict[str, IssueScope] = {
     "canon_admission_band_block": "band_plan",
     "canon_admission_arc_block": "arc_plan",
     "canon_admission_book_block": "book_plan",
+    "canon_admission_unrouted_block": "operator",
 }
 
 _SCOPE_RANK: dict[IssueScope, int] = {

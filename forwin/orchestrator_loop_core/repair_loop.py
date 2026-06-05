@@ -24,6 +24,78 @@ def _attempts_for_repair_phase(
     return [attempt for attempt in attempts if _attempt_repair_phase(attempt) == normalized_phase]
 
 
+_CANON_SCOPE_TO_REPAIR_SCOPE = {
+    "draft": "draft",
+    "chapter": "chapter_plan",
+    "chapter_plan": "chapter_plan",
+    "band": "band_plan",
+    "band_plan": "band_plan",
+    "arc": "arc_plan",
+    "arc_plan": "arc_plan",
+    "book": "book_plan",
+    "book_plan": "book_plan",
+}
+
+
+def _canon_repair_scope(raw_scope: object) -> str:
+    return _CANON_SCOPE_TO_REPAIR_SCOPE.get(str(raw_scope or "").strip(), "")
+
+
+def _canon_issue_type_for_scope(repair_scope: str) -> str:
+    return {
+        "draft": "canon_admission_draft_block",
+        "chapter_plan": "canon_admission_chapter_plan_block",
+        "band_plan": "canon_admission_band_block",
+        "arc_plan": "canon_admission_arc_block",
+        "book_plan": "canon_admission_book_block",
+    }.get(repair_scope, "")
+
+
+def _review_from_canon_gate_block(gate_result) -> ReviewVerdict:
+    repair_scope = _canon_repair_scope(getattr(gate_result, "required_repair_scope", ""))
+    issue_type = _canon_issue_type_for_scope(repair_scope)
+    issue = ContinuityIssue(
+        rule_name="canon_admission_block",
+        severity="error",
+        description=str(getattr(gate_result, "gate_summary", "") or "canon admission blocked commit"),
+        reviewer="canon_quality_gate",
+        issue_type=issue_type or "canon_admission_unrouted_block",
+        target_scope=repair_scope or "operator",
+        evidence_refs=[
+            str(ref)
+            for ref in getattr(gate_result, "deterministic_issue_refs", []) or []
+            if str(ref or "")
+        ],
+        source_layer="canon_admission",
+        blocking_origin="canon_quality_gate",
+        blocking=True,
+        original_result=gate_result.model_dump(mode="json") if hasattr(gate_result, "model_dump") else {},
+    )
+    repair_instruction = None
+    if repair_scope in {"draft", "chapter_plan", "band_plan"}:
+        repair_instruction = RepairInstruction(
+            repair_scope=repair_scope,  # type: ignore[arg-type]
+            failure_type="mixed",
+            must_fix=[issue.description],
+            must_preserve=[],
+            scope_reason="canon admission required repair",
+            design_patch={
+                "canon_required_repair_scope": repair_scope,
+                "canon_gate_summary": str(getattr(gate_result, "gate_summary", "") or ""),
+            },
+            evidence_refs=list(issue.evidence_refs),
+        )
+    return ReviewVerdict(
+        verdict="fail",
+        issues=[issue],
+        recommended_action="rewrite" if repair_scope else "pause_for_review",
+        review_summary=str(getattr(gate_result, "gate_summary", "") or "canon admission blocked commit"),
+        reviewer_mode="canon_repair",
+        repair_instruction=repair_instruction,
+        residual_review_issues=[issue],
+    )
+
+
 def _final_gate_from_engine_decision(decision: Decision) -> FinalGateDecision:
     return FinalGateDecision(
         decision=str(decision.sub_action.get("final_gate_decision") or "manual_review_required"),
@@ -1154,6 +1226,9 @@ __all__ = [
     "CANON_REPAIR_PHASE",
     "_attempt_repair_phase",
     "_attempts_for_repair_phase",
+    "_canon_repair_scope",
+    "_canon_issue_type_for_scope",
+    "_review_from_canon_gate_block",
     "_review_and_maybe_rewrite",
     "_run_repair_loop_for_phase",
     "_review_meta_json",

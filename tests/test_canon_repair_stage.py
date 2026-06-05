@@ -20,10 +20,14 @@ from forwin.orchestrator_loop_core.quality_gates import (
     CanonApplyOutcome,
     CanonQualityGateOutcome,
 )
-from forwin.orchestrator_loop_core.repair_loop import _attempts_for_repair_phase
+from forwin.orchestrator_loop_core.repair_loop import (
+    _attempts_for_repair_phase,
+    _review_from_canon_gate_block,
+)
 from forwin.project_ops.reviews import get_chapter_review
 from forwin.protocol.review import ReviewVerdict
-from forwin.review_engine.types import Decision
+from forwin.review_engine.rules.repair_v2 import decide_repair_v2
+from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
 
 
 def _session_factory():
@@ -533,3 +537,41 @@ def test_coerce_canon_apply_outcome_rejects_truthy_non_string_values():
     assert legacy.block_kind == "legacy_block"
     with pytest.raises(TypeError):
         _coerce_canon_apply_outcome({"blocked_path": "legacy/path.json"})
+
+
+def test_canon_gate_block_review_routes_to_required_draft_scope():
+    gate = CanonAdmissionGateResult(
+        project_id="p",
+        chapter_number=2,
+        draft_id="d1",
+        review_id="r1",
+        commit_allowed=False,
+        verdict="fail",
+        admission_mode="blocked",
+        required_repair_scope="draft",
+        gate_summary="canon quality gate strict: commit_allowed=False",
+        deterministic_issue_refs=["signal-1"],
+    )
+
+    review = _review_from_canon_gate_block(gate)
+    decision = decide_repair_v2(
+        DecisionInput(
+            project_id="p",
+            chapter_number=2,
+            review=review,
+            signals=[],
+            open_obligations=[],
+            operation_mode="blackbox",
+            attempts_completed=0,
+            prior_scope_history=[],
+            budget=None,
+            target_total_chapters=0,
+            plan_layer_health=PlanLayerHealth(),
+        )
+    )
+
+    assert review.verdict == "fail"
+    assert review.recommended_action == "rewrite"
+    assert review.issues[0].issue_type == "canon_admission_draft_block"
+    assert decision.outcome == "local_repair"
+    assert decision.sub_action["scope"] == "draft"

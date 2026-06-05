@@ -68,6 +68,11 @@ ISSUE_TO_SCOPE: dict[str, IssueScope] = {
     "form_budget_exceeded": "operator",
     "form_answer_rejected": "operator",
     "writer_prompt_assembly_error": "operator",
+    "canon_admission_draft_block": "draft",
+    "canon_admission_chapter_plan_block": "chapter_plan",
+    "canon_admission_band_block": "band_plan",
+    "canon_admission_arc_block": "arc_plan",
+    "canon_admission_book_block": "book_plan",
 }
 
 _SCOPE_RANK: dict[IssueScope, int] = {

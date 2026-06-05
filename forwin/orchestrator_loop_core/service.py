@@ -7,6 +7,7 @@ from forwin.orchestrator_loop_core import governance as _governance_module
 from forwin.orchestrator_loop_core import project_chapters as _project_chapters_module
 from forwin.orchestrator_loop_core import quality_gates as _quality_gates_module
 from forwin.orchestrator_loop_core import repair_loop as _repair_loop_module
+from forwin.orchestrator_loop_core import repair_patches as _repair_patches_module
 from forwin.orchestrator_loop_core import review_autofix as _review_autofix_module
 from forwin.orchestrator_loop_core import run_control as _run_control_module
 from forwin.orchestrator_loop_core import runtime_helpers as _runtime_helpers_module
@@ -20,19 +21,21 @@ from forwin.orchestrator_loop_core.review_autofix import _persist_draft_and_revi
 from forwin.orchestrator_loop_core.repair_loop import (
     CANON_REPAIR_PHASE as CANON_REPAIR_PHASE,
     _apply_repair_patch,
-    _arc_payoff_patch_payload,
-    _band_schedule_patch_payload,
-    _chapter_experience_patch_payload,
-    _countdown_repair_rule_anchors,
-    _current_chapter_repair_experience_plan,
     _default_repair_instruction,
-    _reader_promise_from_row,
-    _replace_band_schedule,
     _review_and_maybe_rewrite,
     _review_from_canon_gate_block,
     _review_meta_json,
     _run_canon_repair_for_block,
     _run_repair_loop_for_phase,
+)
+from forwin.orchestrator_loop_core.repair_patches import (
+    _arc_payoff_patch_payload,
+    _band_schedule_patch_payload,
+    _chapter_experience_patch_payload,
+    _countdown_repair_rule_anchors,
+    _current_chapter_repair_experience_plan,
+    _reader_promise_from_row,
+    _replace_band_schedule,
     _structure_data_from_row,
 )
 from forwin.orchestrator_loop_core.project_chapters import _run_project_chapters
@@ -223,6 +226,7 @@ for _module in (
     _project_chapters_module,
     _quality_gates_module,
     _repair_loop_module,
+    _repair_patches_module,
     _review_autofix_module,
     _run_control_module,
     _runtime_helpers_module,

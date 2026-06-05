@@ -2327,6 +2327,16 @@ class Phase05RegressionTests(unittest.TestCase):
                                     "platform": "fanqie",
                                     "book_name": "自动发布测试书",
                                     "create_if_missing": True,
+                                    "book_meta": {
+                                        "audience": "male",
+                                        "primary_category": "玄幻",
+                                        "protagonist_names": ["陆衡"],
+                                        "intro": (
+                                            "陆衡在灵潮复苏后的边城追查失踪旧案，"
+                                            "一边守住家族留下的秘钥，一边揭开宗门与商会暗线。"
+                                            "每一章都推进主线危机，并保持清晰升级目标。"
+                                        ),
+                                    },
                                 },
                             },
                             ensure_ascii=False,
@@ -2390,8 +2400,18 @@ class Phase05RegressionTests(unittest.TestCase):
                         .order_by(PublisherUploadJob.chapter_title.asc())
                     ).scalars().all()
 
-                self.assertEqual(len(stored_jobs), 3)
-                self.assertEqual([job.chapter_title for job in stored_jobs], ["第1章", "第2章", "第3章"])
+                chapter_jobs = [
+                    job for job in stored_jobs
+                    if job.task_kind == "chapter_upload"
+                ]
+                cover_jobs = [
+                    job for job in stored_jobs
+                    if job.task_kind == "cover_generate"
+                ]
+                self.assertEqual(len(stored_jobs), 4)
+                self.assertEqual(len(cover_jobs), 1)
+                self.assertEqual(len(chapter_jobs), 3)
+                self.assertEqual([job.chapter_title for job in chapter_jobs], ["第1章", "第2章", "第3章"])
                 self.assertEqual(count_matching_statements(select_statements, " from projects"), 2)
                 self.assertEqual(
                     count_matching_statements(select_statements, " from chapter_plans"),
@@ -5929,7 +5949,11 @@ class Phase05RegressionTests(unittest.TestCase):
                             "audience": "male",
                             "primary_category": "都市日常",
                             "protagonist_names": ["韩砚", "林雾"],
-                            "intro": "一段关于旧城与旧案的故事。",
+                            "intro": (
+                                "韩砚与林雾在现代都市中追查连环旧案，"
+                                "从一桩看似普通的失踪事件切入，逐步揭开商业集团、"
+                                "家族秘密与警局旧档之间的联系。"
+                            ),
                         },
                     },
                 )
@@ -5945,8 +5969,13 @@ class Phase05RegressionTests(unittest.TestCase):
 
                 listed = client.get("/api/publishers/upload-jobs")
                 self.assertEqual(listed.status_code, 200)
-                self.assertEqual(len(listed.json()), 1)
-                self.assertEqual(listed.json()[0]["job_id"], job_id)
+                listed_jobs = listed.json()
+                self.assertEqual(len(listed_jobs), 2)
+                self.assertEqual(
+                    {job["task_kind"] for job in listed_jobs},
+                    {"chapter_upload", "cover_generate"},
+                )
+                self.assertIn(job_id, {job["job_id"] for job in listed_jobs})
 
                 unauthorized = client.post(
                     "/api/publishers/extension/heartbeat",

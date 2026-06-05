@@ -76,6 +76,7 @@ ALLOWED_PRODUCTION_MECHANISM_FILES: set[str] = {
     "forwin/canon_quality/rule_profile.py",
     "forwin/orchestrator/loop.py",
     "forwin/orchestrator_loop_core/repair_loop.py",
+    "forwin/orchestrator_loop_core/repair_patches.py",
     "forwin/planning/future_plan_auditor.py",
     "forwin/planning/future_plan_audit/helpers.py",
     "forwin/writer/prompts.py",

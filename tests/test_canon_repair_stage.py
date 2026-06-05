@@ -599,7 +599,7 @@ def test_coerce_canon_apply_outcome_rejects_truthy_non_string_values():
         _coerce_canon_apply_outcome,
     )
 
-    existing = CanonApplyOutcome(blocked_path="path", block_kind="legacy_block")
+    existing = CanonApplyOutcome(blocked_path="path", block_kind="string_block")
 
     assert _coerce_canon_apply_outcome(existing) is existing
     assert not _coerce_canon_apply_outcome(None).blocked
@@ -607,7 +607,7 @@ def test_coerce_canon_apply_outcome_rejects_truthy_non_string_values():
     legacy = _coerce_canon_apply_outcome("legacy/path.json")
     assert legacy.blocked
     assert legacy.blocked_path == "legacy/path.json"
-    assert legacy.block_kind == "legacy_block"
+    assert legacy.block_kind == "string_block"
     with pytest.raises(TypeError):
         _coerce_canon_apply_outcome({"blocked_path": "legacy/path.json"})
 

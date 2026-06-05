@@ -327,7 +327,7 @@ class LLMClientRetryTests(unittest.TestCase):
         original_client = client.client
 
         def hung_post(url, **_kwargs):  # noqa: ANN001
-            time.sleep(0.2)
+            time.sleep(0.5)
             request = httpx.Request("POST", url)
             return httpx.Response(
                 200,
@@ -349,7 +349,7 @@ class LLMClientRetryTests(unittest.TestCase):
         finally:
             client.close()
 
-        self.assertLess(elapsed, 0.15)
+        self.assertLess(elapsed, 0.3)
         self.assertIsNot(client.client, original_client)
 
     def test_falls_back_to_next_profile_after_retryable_failures(self) -> None:

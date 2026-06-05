@@ -29,7 +29,7 @@ def _coerce_canon_apply_outcome(value: object):
     if isinstance(value, str):
         if not value:
             return CanonApplyOutcome()
-        return CanonApplyOutcome(blocked_path=value, block_kind="legacy_block")
+        return CanonApplyOutcome(blocked_path=value, block_kind="string_block")
     if value:
         raise TypeError(
             "_apply_canon_candidate returned unsupported canon outcome type: "

@@ -30,18 +30,25 @@ def accept_review(self, project_id: str, chapter_number: int, *, reason: str = "
         writer_output = self._load_writer_output_from_meta(latest_draft.llm_raw_response)
         verdict = self._load_review_verdict(latest_review)
 
-        frozen_path = self._apply_canon_candidate(
-            session=session,
-            repo=repo,
-            updater=updater,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            writer_output=writer_output,
-            verdict=verdict,
+        from forwin.orchestrator_loop_core.project_chapters import (
+            _coerce_canon_apply_outcome,
+        )
+
+        canon_outcome = _coerce_canon_apply_outcome(
+            self._apply_canon_candidate(
+                session=session,
+                repo=repo,
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                writer_output=writer_output,
+                verdict=verdict,
+            )
         )
 
         repair_attempt_count = len(repo.list_chapter_rewrite_attempts(project_id, chapter_number))
-        if frozen_path:
+        frozen_path = canon_outcome.blocked_path
+        if canon_outcome.blocked:
             updater.mark_chapter_status(
                 project_id,
                 chapter_number,

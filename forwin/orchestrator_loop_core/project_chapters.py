@@ -18,6 +18,16 @@ _STRUCTURED_EXTRACTION_PARTS = (
 )
 
 
+def _coerce_canon_apply_outcome(value: object):
+    from forwin.orchestrator_loop_core.quality_gates import CanonApplyOutcome
+
+    if isinstance(value, CanonApplyOutcome):
+        return value
+    if value:
+        return CanonApplyOutcome(blocked_path=str(value), block_kind="legacy_block")
+    return CanonApplyOutcome()
+
+
 def _record_pulp_beat_evaluation(
     self,
     *,
@@ -554,17 +564,21 @@ def _run_project_chapters(
                 failed_chapters=failed_chapters,
                 paused_chapters=paused_chapters,
             )
-            frozen_path = self._apply_canon_candidate(
-                session=session,
-                repo=repo,
-                updater=updater,
-                project_id=project_id,
-                chapter_number=chapter_num,
-                writer_output=writer_output,
-                verdict=verdict,
+            canon_outcome = _coerce_canon_apply_outcome(
+                self._apply_canon_candidate(
+                    session=session,
+                    repo=repo,
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                    writer_output=writer_output,
+                    verdict=verdict,
+                )
             )
-            if frozen_path:
-                frozen_artifacts.append(frozen_path)
+            if canon_outcome.blocked:
+                frozen_path = canon_outcome.blocked_path
+                if frozen_path:
+                    frozen_artifacts.append(frozen_path)
                 updater.mark_chapter_status(
                     project_id,
                     chapter_num,

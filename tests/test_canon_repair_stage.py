@@ -7,12 +7,14 @@ from types import SimpleNamespace
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.models import base as base_module
 from forwin.models.base import Base
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.orchestrator_loop_core import repair_loop as repair_loop_module
+from forwin.orchestrator_loop_core.quality_gates import CanonApplyOutcome
 from forwin.orchestrator_loop_core.repair_loop import _attempts_for_repair_phase
 from forwin.project_ops.reviews import get_chapter_review
 from forwin.protocol.review import ReviewVerdict
@@ -317,3 +319,27 @@ def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
     assert forced_accept is True
     assert review_attempt.forced_accept_applied is True
     assert canon_attempt.forced_accept_applied is False
+
+
+def test_canon_apply_outcome_preserves_gate_result_and_block_path():
+    gate = CanonAdmissionGateResult(
+        project_id="p",
+        chapter_number=2,
+        draft_id="d1",
+        review_id="r1",
+        commit_allowed=False,
+        verdict="fail",
+        admission_mode="blocked",
+        required_repair_scope="draft",
+        gate_summary="canon quality gate strict: commit_allowed=False",
+    )
+
+    outcome = CanonApplyOutcome(
+        blocked_path="frozen/path.json",
+        block_kind="canon_quality",
+        canon_gate_result=gate,
+    )
+
+    assert outcome.blocked
+    assert outcome.repairable_scope == "draft"
+    assert outcome.canon_gate_result is gate

@@ -13,6 +13,7 @@ from forwin.models.book_state import GraphDeltaRow
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.project import ChapterPlan
 from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.orchestrator_loop_core.quality_gates import CanonApplyOutcome
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent, WorldContractRepository
 from forwin.protocol.book_state import BookStateCompileResult
 from forwin.protocol.review import ReviewVerdict
@@ -96,7 +97,8 @@ def test_apply_canon_candidate_commits_book_state_without_projection_compatibili
 
         event_types = {event.event_type for event in events}
         payloads = "\n".join(event.payload_json or "" for event in events)
-        assert result is None
+        assert isinstance(result, CanonApplyOutcome)
+        assert not result.blocked
         assert graph_deltas > 0
         assert "legacy_projection_failed" not in event_types
         assert "projection.legacy_world_model_projection" not in payloads
@@ -213,7 +215,8 @@ def test_apply_canon_candidate_drops_unregistered_character_state_changes() -> N
                 .where(Entity.project_id == project.id, Entity.name == "未入册角色")
             )
 
-        assert result is None
+        assert isinstance(result, CanonApplyOutcome)
+        assert not result.blocked
         assert json.loads(known_state.state_json)["location"] == "旧港火灾纪念碑广场"
         assert unknown_count == 0
 

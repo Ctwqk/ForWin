@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import logging
 
+from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.orchestrator_loop_core.common import *
 from forwin.review_engine.engine import AutoDecisionEngine
 from forwin.review_engine.rules.review_outcome import (
@@ -20,6 +21,39 @@ from forwin.orchestrator_loop_core.structural_patches import (
 from forwin.state.updater import StateUpdater
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CanonQualityGateOutcome:
+    blocked_path: str = ""
+    gate_result: CanonAdmissionGateResult | None = None
+
+    @property
+    def blocked(self) -> bool:
+        return bool(self.blocked_path)
+
+    def __bool__(self) -> bool:
+        return self.blocked
+
+
+@dataclass(frozen=True)
+class CanonApplyOutcome:
+    blocked_path: str = ""
+    block_kind: str = ""
+    canon_gate_result: CanonAdmissionGateResult | None = None
+
+    @property
+    def blocked(self) -> bool:
+        return bool(self.blocked_path or self.block_kind)
+
+    def __bool__(self) -> bool:
+        return self.blocked
+
+    @property
+    def repairable_scope(self) -> str:
+        if self.block_kind != "canon_quality" or self.canon_gate_result is None:
+            return ""
+        return str(self.canon_gate_result.required_repair_scope or "")
 
 _ENGINE_OUTCOME_TO_REVIEW_ACTION = {
     "auto_approve": "commit_clean",
@@ -373,7 +407,7 @@ def _apply_canon_quality_gate(
     chapter_number: int,
     writer_output: WriterOutput,
     verdict: ReviewVerdict,
-) -> str:
+) -> CanonQualityGateOutcome:
     latest_draft, latest_review = self._latest_draft_and_review_for_chapter(
         session=session,
         project_id=project_id,
@@ -422,7 +456,7 @@ def _apply_canon_quality_gate(
             reason=";".join(deferred_acceptance_errors),
             payload={"deferred_acceptance_errors": deferred_acceptance_errors},
         )
-        return "deferred-acceptance-blocked"
+        return CanonQualityGateOutcome(blocked_path="deferred-acceptance-blocked")
     obligation_repo = NarrativeObligationRepository(session)
     gate_obligations = [
         *obligation_repo.list_active_for_context(project_id, chapter_number=chapter_number),
@@ -469,7 +503,7 @@ def _apply_canon_quality_gate(
         payload=gate_result.model_dump(mode="json"),
     )
     if gate_result.commit_allowed:
-        return ""
+        return CanonQualityGateOutcome(gate_result=gate_result)
     frozen_path = ""
     if self.config.freeze_failed_candidates:
         frozen_path = self.artifact_store.save_frozen_candidate(
@@ -498,7 +532,10 @@ def _apply_canon_quality_gate(
         reason=gate_result.gate_summary,
         payload=gate_result.model_dump(mode="json"),
     )
-    return frozen_path or "canon-quality-gate-blocked"
+    return CanonQualityGateOutcome(
+        blocked_path=frozen_path or "canon-quality-gate-blocked",
+        gate_result=gate_result,
+    )
 
 def _run_obligation_form_gate(
     self,
@@ -916,7 +953,7 @@ def _apply_canon_candidate(
     chapter_number: int,
     writer_output: WriterOutput,
     verdict: ReviewVerdict,
-) -> str | None:
+) -> CanonApplyOutcome:
     self._record_decision_event(
         updater=updater,
         project_id=project_id,
@@ -932,7 +969,7 @@ def _apply_canon_candidate(
         },
     )
     try:
-        quality_blocked_path = self._apply_canon_quality_gate(
+        quality_outcome = self._apply_canon_quality_gate(
             session=session,
             repo=repo,
             updater=updater,
@@ -941,8 +978,12 @@ def _apply_canon_candidate(
             writer_output=writer_output,
             verdict=verdict,
         )
-        if quality_blocked_path:
-            return quality_blocked_path
+        if quality_outcome.blocked:
+            return CanonApplyOutcome(
+                blocked_path=quality_outcome.blocked_path,
+                block_kind="canon_quality",
+                canon_gate_result=quality_outcome.gate_result,
+            )
         v4_blocked_path = self._apply_world_v4_gate(
             session=session,
             repo=repo,
@@ -953,7 +994,10 @@ def _apply_canon_candidate(
             verdict=verdict,
         )
         if v4_blocked_path:
-            return v4_blocked_path
+            return CanonApplyOutcome(
+                blocked_path=v4_blocked_path,
+                block_kind="world_v4",
+            )
         self._validate_subworld_admission(
             repo=repo,
             project_id=project_id,
@@ -1012,7 +1056,7 @@ def _apply_canon_candidate(
             project_id=project_id,
             chapter_number=chapter_number,
         )
-        return None
+        return CanonApplyOutcome()
     except Exception as exc:
         logger.exception(
             "Canon update failed for chapter %d; keeping saved draft and review.",
@@ -1046,8 +1090,11 @@ def _apply_canon_candidate(
             failure_reason=str(exc),
             canon_artifact_path=frozen_path,
         )
-        return frozen_path or None
+        return CanonApplyOutcome(
+            blocked_path=frozen_path or "canon-apply-error",
+            block_kind="canon_apply_error",
+        )
 
 
 
-__all__ = ['_is_timeout_like', '_is_transient_llm_like', '_transient_retry_delay', '_current_model_identity', '_audit_operation_id', '_drain_llm_attempt_events', '_safe_prompt_trace_attempts', '_error_category_from_attempts', '_diagnostic_kind_for_failure', '_record_failure_prompt_trace', '_record_model_fallback_payloads', '_apply_canon_quality_gate', '_run_obligation_form_gate', '_prepare_deferred_acceptance_if_needed', '_band_scope_candidates', '_band_row_by_id', '_latest_draft_and_review_for_chapter', '_apply_canon_candidate', 'evaluate_structural_patch_completion_debt']
+__all__ = ['CanonQualityGateOutcome', 'CanonApplyOutcome', '_is_timeout_like', '_is_transient_llm_like', '_transient_retry_delay', '_current_model_identity', '_audit_operation_id', '_drain_llm_attempt_events', '_safe_prompt_trace_attempts', '_error_category_from_attempts', '_diagnostic_kind_for_failure', '_record_failure_prompt_trace', '_record_model_fallback_payloads', '_apply_canon_quality_gate', '_run_obligation_form_gate', '_prepare_deferred_acceptance_if_needed', '_band_scope_candidates', '_band_row_by_id', '_latest_draft_and_review_for_chapter', '_apply_canon_candidate', 'evaluate_structural_patch_completion_debt']

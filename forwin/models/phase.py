@@ -297,8 +297,12 @@ class ChapterRewriteAttempt(Base):
     )
     chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
     attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
-    repair_phase: Mapped[str] = mapped_column(String, default="review_repair")
-    phase_attempt_no: Mapped[int] = mapped_column(Integer, default=0)
+    repair_phase: Mapped[str] = mapped_column(
+        String,
+        default="review_repair",
+        server_default="review_repair",
+    )
+    phase_attempt_no: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     trigger_review_id: Mapped[str] = mapped_column(
         String, ForeignKey("chapter_reviews.id"), nullable=False
     )

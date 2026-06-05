@@ -11,29 +11,40 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "chapter_rewrite_attempts",
-        sa.Column("repair_phase", sa.String(), nullable=False, server_default="review_repair"),
-    )
-    op.add_column(
-        "chapter_rewrite_attempts",
-        sa.Column("phase_attempt_no", sa.Integer(), nullable=False, server_default="0"),
+    op.execute(
+        sa.text(
+            "ALTER TABLE chapter_rewrite_attempts "
+            "ADD COLUMN IF NOT EXISTS repair_phase VARCHAR NOT NULL DEFAULT 'review_repair'"
+        )
     )
     op.execute(
-        "UPDATE chapter_rewrite_attempts SET phase_attempt_no = attempt_no "
-        "WHERE phase_attempt_no = 0"
+        sa.text(
+            "ALTER TABLE chapter_rewrite_attempts "
+            "ADD COLUMN IF NOT EXISTS phase_attempt_no INTEGER NOT NULL DEFAULT 0"
+        )
     )
-    op.create_index(
-        "ix_chapter_rewrite_attempts_project_chapter_phase",
-        "chapter_rewrite_attempts",
-        ["project_id", "chapter_number", "repair_phase", "phase_attempt_no"],
+    op.execute(
+        sa.text(
+            "UPDATE chapter_rewrite_attempts SET phase_attempt_no = attempt_no "
+            "WHERE phase_attempt_no = 0"
+        )
+    )
+    op.execute(
+        sa.text(
+            "CREATE INDEX IF NOT EXISTS ix_chapter_rewrite_attempts_project_chapter_phase "
+            "ON chapter_rewrite_attempts "
+            "(project_id, chapter_number, repair_phase, phase_attempt_no)"
+        )
     )
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_chapter_rewrite_attempts_project_chapter_phase",
-        table_name="chapter_rewrite_attempts",
+    op.execute(
+        sa.text("DROP INDEX IF EXISTS ix_chapter_rewrite_attempts_project_chapter_phase")
     )
-    op.drop_column("chapter_rewrite_attempts", "phase_attempt_no")
-    op.drop_column("chapter_rewrite_attempts", "repair_phase")
+    op.execute(
+        sa.text("ALTER TABLE chapter_rewrite_attempts DROP COLUMN IF EXISTS phase_attempt_no")
+    )
+    op.execute(
+        sa.text("ALTER TABLE chapter_rewrite_attempts DROP COLUMN IF EXISTS repair_phase")
+    )

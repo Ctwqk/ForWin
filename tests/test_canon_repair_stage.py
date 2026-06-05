@@ -51,12 +51,14 @@ class _FakeEngine:
 class _RecordingAlembicOp:
     def __init__(self) -> None:
         self.statements: list[str] = []
+        self.add_column_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+        self.create_index_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     def add_column(self, *args, **kwargs) -> None:
-        return None
+        self.add_column_calls.append((args, kwargs))
 
     def create_index(self, *args, **kwargs) -> None:
-        return None
+        self.create_index_calls.append((args, kwargs))
 
     def execute(self, statement) -> None:
         self.statements.append(str(statement))
@@ -176,15 +178,20 @@ def test_alembic_revision_fits_version_table():
     assert len(migration.revision) <= 32
 
 
-def test_alembic_upgrade_backfills_phase_attempt_from_attempt_no(monkeypatch):
+def test_alembic_upgrade_uses_idempotent_sql_and_backfills_phase_attempt(monkeypatch):
     migration = _rewrite_attempt_phase_migration()
     fake_op = _RecordingAlembicOp()
     monkeypatch.setattr(migration, "op", fake_op)
 
     migration.upgrade()
 
-    assert any(
+    statements = "\n".join(fake_op.statements)
+    assert "ADD COLUMN IF NOT EXISTS repair_phase" in statements
+    assert "ADD COLUMN IF NOT EXISTS phase_attempt_no" in statements
+    assert "CREATE INDEX IF NOT EXISTS ix_chapter_rewrite_attempts_project_chapter_phase" in statements
+    assert (
         "UPDATE chapter_rewrite_attempts SET phase_attempt_no = attempt_no "
-        "WHERE phase_attempt_no = 0" in statement
-        for statement in fake_op.statements
-    )
+        "WHERE phase_attempt_no = 0"
+    ) in statements
+    assert fake_op.add_column_calls == []
+    assert fake_op.create_index_calls == []

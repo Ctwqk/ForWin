@@ -238,9 +238,9 @@ def _run_repair_loop_for_phase(
             current_review_row.review_meta_json = self._review_meta_json(current_review)
             session.add(current_review_row)
             if final_gate.decision == "force_accept":
-                if existing_attempts:
-                    existing_attempts[-1].forced_accept_applied = True
-                    session.add(existing_attempts[-1])
+                if phase_attempts:
+                    phase_attempts[-1].forced_accept_applied = True
+                    session.add(phase_attempts[-1])
                 self._record_decision_event(
                     updater=updater,
                     project_id=project_id,

@@ -120,14 +120,14 @@ class RepairProgressTests(unittest.TestCase):
 
 
 def test_review_repair_loop_emits_distinct_progress_stages() -> None:
-    source = inspect.getsource(WritingOrchestrator._review_and_maybe_rewrite)
+    source = inspect.getsource(WritingOrchestrator._run_repair_loop_for_phase)
 
     assert 'stage="repairing_chapter"' in source
     assert 'stage="repair_review"' in source
 
 
 def test_repair_loop_checks_pause_between_retry_attempts() -> None:
-    source = inspect.getsource(WritingOrchestrator._review_and_maybe_rewrite)
+    source = inspect.getsource(WritingOrchestrator._run_repair_loop_for_phase)
     retry_loop = source.split("while True:", 1)[1]
     pause_check = retry_loop.find("self._pause_requested()")
     attempt_load = retry_loop.find("repo.list_chapter_rewrite_attempts")

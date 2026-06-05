@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -11,8 +12,11 @@ from forwin.models.base import Base
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
-from forwin.project_ops.reviews import get_chapter_review
+from forwin.orchestrator_loop_core import repair_loop as repair_loop_module
 from forwin.orchestrator_loop_core.repair_loop import _attempts_for_repair_phase
+from forwin.project_ops.reviews import get_chapter_review
+from forwin.protocol.review import ReviewVerdict
+from forwin.review_engine.types import Decision
 
 
 def _session_factory():
@@ -216,3 +220,100 @@ def test_attempts_for_repair_phase_filters_history_without_deleting_total_histor
 
     assert len(attempts) == 4
     assert [item.repair_scope for item in phase_attempts] == ["draft"]
+
+
+def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
+    review_attempt = SimpleNamespace(
+        repair_scope="draft",
+        repair_phase="review_repair",
+        forced_accept_applied=False,
+    )
+    canon_attempt = SimpleNamespace(
+        repair_scope="draft",
+        repair_phase="canon_repair",
+        forced_accept_applied=False,
+    )
+
+    class _Repo:
+        def list_chapter_rewrite_attempts(self, _project_id, _chapter_number):
+            return [review_attempt, canon_attempt]
+
+    class _Session:
+        def add(self, _row) -> None:
+            return None
+
+    class _Orchestrator:
+        config = SimpleNamespace(operation_mode="blackbox")
+
+        def _pause_requested(self) -> bool:
+            return False
+
+        def _record_engine_decision_event(self, **_kwargs) -> None:
+            return None
+
+        def _record_decision_event(self, **_kwargs):
+            return SimpleNamespace(id="force-event")
+
+        def _review_meta_json(self, review: ReviewVerdict) -> str:
+            return json.dumps(
+                review.model_dump(mode="json", exclude_none=True),
+                ensure_ascii=False,
+            )
+
+    monkeypatch.setattr(
+        repair_loop_module,
+        "decide_repair_v2",
+        lambda _input: Decision(
+            outcome="manual_review",
+            reason="repair budget exhausted",
+            rule_id="test-repair-exhausted",
+            missing_evidence=[],
+            routed_from="test",
+            sub_action={},
+        ),
+    )
+
+    class _FinalGateEngine:
+        def __init__(self, _rules) -> None:
+            return None
+
+        def decide(self, _input) -> Decision:
+            return Decision(
+                outcome="manual_review",
+                reason="force accept",
+                rule_id="test-force-accept",
+                missing_evidence=[],
+                routed_from="test",
+                sub_action={
+                    "final_gate_decision": "force_accept",
+                    "forceable": True,
+                    "canon_risk": "low",
+                    "residual_issues": [],
+                    "requires_human": False,
+                },
+            )
+
+    monkeypatch.setattr(repair_loop_module, "AutoDecisionEngine", _FinalGateEngine)
+
+    _output, _review, forced_accept = repair_loop_module._run_repair_loop_for_phase(
+        _Orchestrator(),
+        session=_Session(),
+        repo=_Repo(),
+        updater=object(),
+        checker=object(),
+        project_id="p",
+        chapter_plan=SimpleNamespace(chapter_number=1),
+        current_context=object(),
+        current_output=object(),
+        current_draft=object(),
+        current_review=ReviewVerdict(verdict="fail", issues=[]),
+        current_review_row=SimpleNamespace(id="review-1", review_meta_json="{}"),
+        current_writer_trace_id="writer-trace",
+        current_review_trace_id="review-trace",
+        current_review_event=SimpleNamespace(id="review-event"),
+        repair_phase="review_repair",
+    )
+
+    assert forced_accept is True
+    assert review_attempt.forced_accept_applied is True
+    assert canon_attempt.forced_accept_applied is False

@@ -1152,6 +1152,7 @@ def _arc_payoff_patch_payload(
 __all__ = [
     "REVIEW_REPAIR_PHASE",
     "CANON_REPAIR_PHASE",
+    "_attempt_repair_phase",
     "_attempts_for_repair_phase",
     "_review_and_maybe_rewrite",
     "_run_repair_loop_for_phase",

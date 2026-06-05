@@ -12,6 +12,7 @@ from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.project_ops.reviews import get_chapter_review
+from forwin.orchestrator_loop_core.repair_loop import _attempts_for_repair_phase
 
 
 def _session_factory():
@@ -195,3 +196,23 @@ def test_alembic_upgrade_uses_idempotent_sql_and_backfills_phase_attempt(monkeyp
     ) in statements
     assert fake_op.add_column_calls == []
     assert fake_op.create_index_calls == []
+
+
+class _Attempt:
+    def __init__(self, repair_scope: str, repair_phase: str):
+        self.repair_scope = repair_scope
+        self.repair_phase = repair_phase
+
+
+def test_attempts_for_repair_phase_filters_history_without_deleting_total_history():
+    attempts = [
+        _Attempt("draft", "review_repair"),
+        _Attempt("draft", "review_repair"),
+        _Attempt("chapter_plan", "review_repair"),
+        _Attempt("draft", "canon_repair"),
+    ]
+
+    phase_attempts = _attempts_for_repair_phase(attempts, "canon_repair")
+
+    assert len(attempts) == 4
+    assert [item.repair_scope for item in phase_attempts] == ["draft"]

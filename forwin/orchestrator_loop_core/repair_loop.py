@@ -8,6 +8,21 @@ from forwin.review_engine.rules.repair_v2 import decide_repair_v2
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.reviser.local_rewrite_executor import LocalRewriteExecutor
 
+REVIEW_REPAIR_PHASE = "review_repair"
+CANON_REPAIR_PHASE = "canon_repair"
+
+
+def _attempt_repair_phase(attempt: object) -> str:
+    return str(getattr(attempt, "repair_phase", "") or REVIEW_REPAIR_PHASE)
+
+
+def _attempts_for_repair_phase(
+    attempts: list[object],
+    repair_phase: str,
+) -> list[object]:
+    normalized_phase = str(repair_phase or REVIEW_REPAIR_PHASE)
+    return [attempt for attempt in attempts if _attempt_repair_phase(attempt) == normalized_phase]
+
 
 def _final_gate_from_engine_decision(decision: Decision) -> FinalGateDecision:
     return FinalGateDecision(
@@ -125,10 +140,49 @@ def _review_and_maybe_rewrite(
     if current_review.verdict != "fail" or self.config.operation_mode != "blackbox":
         return current_output, current_review, False
 
+    return self._run_repair_loop_for_phase(
+        session=session,
+        repo=repo,
+        updater=updater,
+        checker=checker,
+        project_id=project_id,
+        chapter_plan=chapter_plan,
+        current_context=context,
+        current_output=current_output,
+        current_draft=current_draft,
+        current_review=current_review,
+        current_review_row=current_review_row,
+        current_writer_trace_id=current_writer_trace_id,
+        current_review_trace_id=current_review_trace_id,
+        current_review_event=current_review_event,
+        repair_phase=REVIEW_REPAIR_PHASE,
+    )
+
+
+def _run_repair_loop_for_phase(
+    self,
+    *,
+    session: Session,
+    repo: StateRepository,
+    updater: StateUpdater,
+    checker: ContinuityChecker,
+    project_id: str,
+    chapter_plan: ChapterPlan,
+    current_context,
+    current_output: WriterOutput,
+    current_draft: ChapterDraft,
+    current_review: ReviewVerdict,
+    current_review_row: ChapterReview,
+    current_writer_trace_id: str,
+    current_review_trace_id: str,
+    current_review_event,
+    repair_phase: str,
+) -> tuple[WriterOutput, ReviewVerdict, bool]:
     while True:
         if self._pause_requested():
             return current_output, current_review, False
         existing_attempts = repo.list_chapter_rewrite_attempts(project_id, chapter_plan.chapter_number)
+        phase_attempts = _attempts_for_repair_phase(existing_attempts, repair_phase)
         repair_v2_input = DecisionInput(
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
@@ -136,10 +190,10 @@ def _review_and_maybe_rewrite(
             signals=[],
             open_obligations=[],
             operation_mode=self.config.operation_mode,
-            attempts_completed=len(existing_attempts),
+            attempts_completed=len(phase_attempts),
             prior_scope_history=[
                 str(getattr(attempt, "repair_scope", "") or "")
-                for attempt in existing_attempts
+                for attempt in phase_attempts
             ],
             budget=None,
             target_total_chapters=0,
@@ -204,6 +258,7 @@ def _review_and_maybe_rewrite(
             return current_output, current_review, False
 
         attempt_no = len(existing_attempts) + 1
+        phase_attempt_no = len(phase_attempts) + 1
         repair_model_preference = {
             "preferred_provider_kind": "",
             "preferred_model": "",
@@ -265,6 +320,8 @@ def _review_and_maybe_rewrite(
                 project_id=project_id,
                 chapter_number=chapter_plan.chapter_number,
                 attempt_no=attempt_no,
+                repair_phase=repair_phase,
+                phase_attempt_no=phase_attempt_no,
                 trigger_review_id=current_review_row.id,
                 repair_scope=repair_scope,
                 design_patch=design_patch,
@@ -365,6 +422,8 @@ def _review_and_maybe_rewrite(
                     project_id=project_id,
                     chapter_number=chapter_plan.chapter_number,
                     attempt_no=attempt_no,
+                    repair_phase=repair_phase,
+                    phase_attempt_no=phase_attempt_no,
                     trigger_review_id=current_review_row.id,
                     repair_scope=repair_scope,
                     design_patch={**design_patch, "rewrite_error": str(exc)},
@@ -407,6 +466,8 @@ def _review_and_maybe_rewrite(
                 project_id=project_id,
                 chapter_number=chapter_plan.chapter_number,
                 attempt_no=attempt_no,
+                repair_phase=repair_phase,
+                phase_attempt_no=phase_attempt_no,
                 trigger_review_id=current_review_row.id,
                 repair_scope=repair_scope,
                 design_patch={**design_patch, "rewrite_error": "writer-returned-none"},
@@ -527,6 +588,8 @@ def _review_and_maybe_rewrite(
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
             attempt_no=attempt_no,
+            repair_phase=repair_phase,
+            phase_attempt_no=phase_attempt_no,
             trigger_review_id=current_review_row.id,
             repair_scope=repair_scope,
             design_patch=design_patch,
@@ -1086,4 +1149,21 @@ def _arc_payoff_patch_payload(
 
 
 
-__all__ = ['_review_and_maybe_rewrite', '_review_meta_json', '_default_repair_instruction', '_apply_repair_patch', '_replace_band_schedule', '_structure_data_from_row', '_reader_promise_from_row', '_current_chapter_repair_experience_plan', '_chapter_experience_patch_payload', '_countdown_repair_rule_anchors', '_band_schedule_patch_payload', '_arc_payoff_patch_payload']
+__all__ = [
+    "REVIEW_REPAIR_PHASE",
+    "CANON_REPAIR_PHASE",
+    "_attempts_for_repair_phase",
+    "_review_and_maybe_rewrite",
+    "_run_repair_loop_for_phase",
+    "_review_meta_json",
+    "_default_repair_instruction",
+    "_apply_repair_patch",
+    "_replace_band_schedule",
+    "_structure_data_from_row",
+    "_reader_promise_from_row",
+    "_current_chapter_repair_experience_plan",
+    "_chapter_experience_patch_payload",
+    "_countdown_repair_rule_anchors",
+    "_band_schedule_patch_payload",
+    "_arc_payoff_patch_payload",
+]

@@ -434,29 +434,6 @@ def _apply_canon_quality_gate(
         llm_client=gate_llm_client,
         return_raw_analyzer_results=True,
     )
-    deferred_acceptance_errors = self._prepare_deferred_acceptance_if_needed(
-        session=session,
-        project_id=project_id,
-        chapter_number=chapter_number,
-        draft_id=draft_id,
-        review_id=review_id,
-        verdict=verdict,
-        signals=analysis.signals,
-        target_total_chapters=int(getattr(session.get(Project, project_id), "target_total_chapters", 0) or 0),
-    )
-    if deferred_acceptance_errors:
-        self._record_decision_event(
-            updater=updater,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            event_family="evaluation_verdict",
-            event_type=DecisionEventType.CANON_COMMIT_BLOCKED,
-            scope="chapter",
-            summary=f"第{chapter_number}章 deferred acceptance 计划补丁失败。",
-            reason=";".join(deferred_acceptance_errors),
-            payload={"deferred_acceptance_errors": deferred_acceptance_errors},
-        )
-        return CanonQualityGateOutcome(blocked_path="deferred-acceptance-blocked")
     obligation_repo = NarrativeObligationRepository(session)
     gate_obligations = [
         *obligation_repo.list_active_for_context(project_id, chapter_number=chapter_number),
@@ -502,6 +479,32 @@ def _apply_canon_quality_gate(
         related_object_type="canon_admission_run",
         payload=gate_result.model_dump(mode="json"),
     )
+    deferred_acceptance_errors = self._prepare_deferred_acceptance_if_needed(
+        session=session,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        draft_id=draft_id,
+        review_id=review_id,
+        verdict=verdict,
+        signals=analysis.signals,
+        target_total_chapters=target_total_chapters,
+    )
+    if deferred_acceptance_errors:
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="evaluation_verdict",
+            event_type=DecisionEventType.CANON_COMMIT_BLOCKED,
+            scope="chapter",
+            summary=f"第{chapter_number}章 deferred acceptance 计划补丁失败。",
+            reason=";".join(deferred_acceptance_errors),
+            payload={"deferred_acceptance_errors": deferred_acceptance_errors},
+        )
+        return CanonQualityGateOutcome(
+            blocked_path="deferred-acceptance-blocked",
+            gate_result=gate_result,
+        )
     if gate_result.commit_allowed:
         return CanonQualityGateOutcome(gate_result=gate_result)
     frozen_path = ""

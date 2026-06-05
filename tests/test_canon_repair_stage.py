@@ -13,8 +13,12 @@ from forwin.models.base import Base
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.orchestrator_loop_core import quality_gates as quality_gates_module
 from forwin.orchestrator_loop_core import repair_loop as repair_loop_module
-from forwin.orchestrator_loop_core.quality_gates import CanonApplyOutcome
+from forwin.orchestrator_loop_core.quality_gates import (
+    CanonApplyOutcome,
+    CanonQualityGateOutcome,
+)
 from forwin.orchestrator_loop_core.repair_loop import _attempts_for_repair_phase
 from forwin.project_ops.reviews import get_chapter_review
 from forwin.protocol.review import ReviewVerdict
@@ -341,5 +345,102 @@ def test_canon_apply_outcome_preserves_gate_result_and_block_path():
     )
 
     assert outcome.blocked
+    assert outcome.blocked_path == "frozen/path.json"
+    assert outcome.block_kind == "canon_quality"
     assert outcome.repairable_scope == "draft"
     assert outcome.canon_gate_result is gate
+
+
+def test_canon_quality_gate_deferred_acceptance_block_preserves_gate_result(
+    monkeypatch,
+):
+    gate = CanonAdmissionGateResult(
+        project_id="p",
+        chapter_number=2,
+        draft_id="d1",
+        review_id="r1",
+        commit_allowed=True,
+        verdict="warn",
+        admission_mode="with_obligation",
+        gate_summary="canon quality gate strict: commit_allowed=True",
+    )
+    saved_gate_results: list[CanonAdmissionGateResult] = []
+
+    monkeypatch.setattr(
+        quality_gates_module,
+        "analyze_writer_output_quality",
+        lambda **_kwargs: SimpleNamespace(signals=[], raw_analyzer_results=[]),
+    )
+    monkeypatch.setattr(
+        quality_gates_module,
+        "evaluate_canon_admission",
+        lambda **_kwargs: gate,
+    )
+
+    class _ObligationRepo:
+        def __init__(self, _session) -> None:
+            return None
+
+        def list_active_for_context(self, *_args, **_kwargs):
+            return []
+
+        def list_planned_for_chapter(self, *_args, **_kwargs):
+            return []
+
+        def list_patches_by_ids(self, _ids):
+            return []
+
+    class _CanonQualityRepo:
+        def __init__(self, _session) -> None:
+            return None
+
+        def save_admission_run(self, gate_result, *, signals) -> None:
+            saved_gate_results.append(gate_result)
+
+    class _Session:
+        def get(self, _model, _id):
+            return SimpleNamespace(target_total_chapters=0)
+
+    class _Orchestrator:
+        config = SimpleNamespace(
+            canon_quality_gate="strict",
+            chapter_review_form_mode="off",
+            chapter_review_form_min_blocking_confidence=0.8,
+        )
+        llm_client = None
+
+        def _latest_draft_and_review_for_chapter(self, **_kwargs):
+            return SimpleNamespace(id="d1"), SimpleNamespace(id="r1")
+
+        def _prepare_deferred_acceptance_if_needed(self, **_kwargs):
+            return ["deferred patch failed"]
+
+        def _record_decision_event(self, **_kwargs) -> None:
+            return None
+
+    monkeypatch.setattr(
+        quality_gates_module,
+        "NarrativeObligationRepository",
+        _ObligationRepo,
+    )
+    monkeypatch.setattr(
+        quality_gates_module,
+        "CanonQualityRepository",
+        _CanonQualityRepo,
+    )
+
+    outcome = quality_gates_module._apply_canon_quality_gate(
+        _Orchestrator(),
+        session=_Session(),
+        repo=object(),
+        updater=object(),
+        project_id="p",
+        chapter_number=2,
+        writer_output=object(),
+        verdict=SimpleNamespace(verdict="warn"),
+    )
+
+    assert isinstance(outcome, CanonQualityGateOutcome)
+    assert outcome.blocked_path == "deferred-acceptance-blocked"
+    assert outcome.gate_result is gate
+    assert saved_gate_results == [gate]

@@ -23,8 +23,17 @@ def _coerce_canon_apply_outcome(value: object):
 
     if isinstance(value, CanonApplyOutcome):
         return value
+    if value is None:
+        return CanonApplyOutcome()
+    if isinstance(value, str):
+        if not value:
+            return CanonApplyOutcome()
+        return CanonApplyOutcome(blocked_path=value, block_kind="legacy_block")
     if value:
-        return CanonApplyOutcome(blocked_path=str(value), block_kind="legacy_block")
+        raise TypeError(
+            "_apply_canon_candidate returned unsupported canon outcome type: "
+            f"{type(value).__name__}"
+        )
     return CanonApplyOutcome()
 
 

@@ -4,6 +4,7 @@ import importlib
 import json
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -351,7 +352,7 @@ def test_canon_apply_outcome_preserves_gate_result_and_block_path():
     assert outcome.canon_gate_result is gate
 
 
-def test_canon_quality_gate_deferred_acceptance_block_preserves_gate_result(
+def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_side_effects(
     monkeypatch,
 ):
     gate = CanonAdmissionGateResult(
@@ -364,21 +365,24 @@ def test_canon_quality_gate_deferred_acceptance_block_preserves_gate_result(
         admission_mode="with_obligation",
         gate_summary="canon quality gate strict: commit_allowed=True",
     )
-    saved_gate_results: list[CanonAdmissionGateResult] = []
+    calls: list[str] = []
 
     monkeypatch.setattr(
         quality_gates_module,
         "analyze_writer_output_quality",
-        lambda **_kwargs: SimpleNamespace(signals=[], raw_analyzer_results=[]),
+        lambda **_kwargs: calls.append("analysis")
+        or SimpleNamespace(signals=[], raw_analyzer_results=[]),
     )
-    monkeypatch.setattr(
-        quality_gates_module,
-        "evaluate_canon_admission",
-        lambda **_kwargs: gate,
-    )
+
+    def _evaluate_canon_admission(**_kwargs):
+        calls.append("admission")
+        return gate
+
+    monkeypatch.setattr(quality_gates_module, "evaluate_canon_admission", _evaluate_canon_admission)
 
     class _ObligationRepo:
         def __init__(self, _session) -> None:
+            calls.append("obligation_repo")
             return None
 
         def list_active_for_context(self, *_args, **_kwargs):
@@ -392,10 +396,11 @@ def test_canon_quality_gate_deferred_acceptance_block_preserves_gate_result(
 
     class _CanonQualityRepo:
         def __init__(self, _session) -> None:
+            calls.append("canon_quality_repo")
             return None
 
         def save_admission_run(self, gate_result, *, signals) -> None:
-            saved_gate_results.append(gate_result)
+            calls.append("save_admission")
 
     class _Session:
         def get(self, _model, _id):
@@ -413,9 +418,11 @@ def test_canon_quality_gate_deferred_acceptance_block_preserves_gate_result(
             return SimpleNamespace(id="d1"), SimpleNamespace(id="r1")
 
         def _prepare_deferred_acceptance_if_needed(self, **_kwargs):
+            calls.append("deferred_acceptance")
             return ["deferred patch failed"]
 
-        def _record_decision_event(self, **_kwargs) -> None:
+        def _record_decision_event(self, **kwargs) -> None:
+            calls.append(f"event:{kwargs['event_type']}")
             return None
 
     monkeypatch.setattr(
@@ -442,5 +449,87 @@ def test_canon_quality_gate_deferred_acceptance_block_preserves_gate_result(
 
     assert isinstance(outcome, CanonQualityGateOutcome)
     assert outcome.blocked_path == "deferred-acceptance-blocked"
-    assert outcome.gate_result is gate
-    assert saved_gate_results == [gate]
+    assert outcome.gate_result is None
+    assert calls == [
+        "analysis",
+        "deferred_acceptance",
+        "event:canon_commit_blocked",
+    ]
+
+
+def test_apply_canon_candidate_exception_without_freeze_returns_unblocked_outcome(
+    monkeypatch,
+):
+    failed_rows: list[dict[str, object]] = []
+
+    class _CandidateDraftRepo:
+        def __init__(self, _session) -> None:
+            return None
+
+        def mark_canon_failed(self, **kwargs):
+            failed_rows.append(kwargs)
+            return None
+
+    class _Session:
+        def __init__(self) -> None:
+            self.rolled_back = False
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+    class _ArtifactStore:
+        def save_frozen_candidate(self, **_kwargs):
+            raise AssertionError("freeze_failed_candidates=False should not freeze")
+
+    class _Orchestrator:
+        config = SimpleNamespace(freeze_failed_candidates=False)
+        artifact_store = _ArtifactStore()
+
+        def _record_decision_event(self, **_kwargs) -> None:
+            return None
+
+        def _apply_canon_quality_gate(self, **_kwargs):
+            raise RuntimeError("canon apply failed")
+
+    monkeypatch.setattr(
+        quality_gates_module,
+        "CandidateDraftRepository",
+        _CandidateDraftRepo,
+    )
+    session = _Session()
+
+    outcome = quality_gates_module._apply_canon_candidate(
+        _Orchestrator(),
+        session=session,
+        repo=object(),
+        updater=object(),
+        project_id="p",
+        chapter_number=2,
+        writer_output=object(),
+        verdict=object(),
+    )
+
+    assert isinstance(outcome, CanonApplyOutcome)
+    assert not outcome.blocked
+    assert outcome.blocked_path == ""
+    assert outcome.block_kind == ""
+    assert session.rolled_back is True
+    assert failed_rows[0]["canon_artifact_path"] == ""
+
+
+def test_coerce_canon_apply_outcome_rejects_truthy_non_string_values():
+    from forwin.orchestrator_loop_core.project_chapters import (
+        _coerce_canon_apply_outcome,
+    )
+
+    existing = CanonApplyOutcome(blocked_path="path", block_kind="legacy_block")
+
+    assert _coerce_canon_apply_outcome(existing) is existing
+    assert not _coerce_canon_apply_outcome(None).blocked
+    assert not _coerce_canon_apply_outcome("").blocked
+    legacy = _coerce_canon_apply_outcome("legacy/path.json")
+    assert legacy.blocked
+    assert legacy.blocked_path == "legacy/path.json"
+    assert legacy.block_kind == "legacy_block"
+    with pytest.raises(TypeError):
+        _coerce_canon_apply_outcome({"blocked_path": "legacy/path.json"})

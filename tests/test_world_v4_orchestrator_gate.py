@@ -117,12 +117,13 @@ def test_apply_canon_candidate_blocks_review_failure_before_book_state_commit() 
                 minimax_api_key="",
                 minimax_model="fake-model",
                 chapter_review_form_mode="off",
+                freeze_failed_candidates=False,
             )
         )
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
             project, _chapter = _setup_project(session)
-            frozen = orchestrator._apply_canon_candidate(  # noqa: SLF001
+            outcome = orchestrator._apply_canon_candidate(  # noqa: SLF001
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -141,7 +142,10 @@ def test_apply_canon_candidate_blocks_review_failure_before_book_state_commit() 
         with Session() as session:
             graph_deltas = session.scalar(select(func.count()).select_from(GraphDeltaRow))
 
-        assert frozen
+        assert isinstance(outcome, CanonApplyOutcome)
+        assert outcome.blocked
+        assert outcome.blocked_path == "book-state-direct-extraction-blocked"
+        assert outcome.block_kind == "world_v4"
         assert graph_deltas == 0
 
 
@@ -244,6 +248,7 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
                 minimax_api_key="",
                 minimax_model="fake-model",
                 chapter_review_form_mode="off",
+                freeze_failed_candidates=False,
             )
         )
         with Session.begin() as session:
@@ -268,7 +273,10 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
         with Session() as session:
             graph_deltas = session.scalar(select(func.count()).select_from(GraphDeltaRow))
 
-        assert result
+        assert isinstance(result, CanonApplyOutcome)
+        assert result.blocked
+        assert result.blocked_path == "book-state-compile-blocked"
+        assert result.block_kind == "world_v4"
         assert graph_deltas == 0
 
 

@@ -7,6 +7,7 @@ from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
 from forwin.maintenance.deferred import DeferredMaintenanceRecord, record_deferred_maintenance
 from forwin.orchestrator_loop_core.result import RunResult
 from forwin.orchestrator_loop_core.common import *
+from forwin.orchestrator_loop_core.repair_loop import _canon_repair_scope
 
 logger = logging.getLogger(__name__)
 
@@ -563,31 +564,64 @@ def _run_project_chapters(
                 )
                 break
 
-            self._emit_progress(
-                "stage_changed",
-                stage="applying_canon",
-                project_id=project_id,
-                requested_chapters=requested_chapters,
-                current_chapter=chapter_num,
-                completed_chapters=completed_chapters,
-                failed_chapters=failed_chapters,
-                paused_chapters=paused_chapters,
-            )
-            canon_outcome = _coerce_canon_apply_outcome(
-                self._apply_canon_candidate(
-                    session=session,
-                    repo=repo,
-                    updater=updater,
+            while True:
+                self._emit_progress(
+                    "stage_changed",
+                    stage="applying_canon",
                     project_id=project_id,
-                    chapter_number=chapter_num,
-                    writer_output=writer_output,
-                    verdict=verdict,
+                    requested_chapters=requested_chapters,
+                    current_chapter=chapter_num,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
                 )
-            )
-            if canon_outcome.blocked:
+                canon_outcome = _coerce_canon_apply_outcome(
+                    self._apply_canon_candidate(
+                        session=session,
+                        repo=repo,
+                        updater=updater,
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                        writer_output=writer_output,
+                        verdict=verdict,
+                    )
+                )
+                if not canon_outcome.blocked:
+                    break
                 frozen_path = canon_outcome.blocked_path
                 if frozen_path:
                     frozen_artifacts.append(frozen_path)
+                gate_result = canon_outcome.canon_gate_result
+                repair_scope = (
+                    _canon_repair_scope(getattr(gate_result, "required_repair_scope", ""))
+                    if canon_outcome.block_kind == "canon_quality" and gate_result is not None
+                    else ""
+                )
+                if repair_scope and self.config.operation_mode == "blackbox":
+                    (
+                        writer_output,
+                        verdict,
+                        canon_force_accept_applied,
+                    ) = self._run_canon_repair_for_block(
+                        session=session,
+                        repo=repo,
+                        updater=updater,
+                        checker=checker,
+                        project_id=project_id,
+                        chapter_plan=chapter_plan,
+                        context=context,
+                        writer_output=writer_output,
+                        gate_result=gate_result,
+                    )
+                    force_accept_applied = force_accept_applied or canon_force_accept_applied
+                    repair_attempt_count = len(
+                        repo.list_chapter_rewrite_attempts(project_id, chapter_num)
+                    )
+                    residual_review_issues = self._review_issue_payloads(verdict)
+                    canon_risk_level = self._review_canon_risk(verdict)
+                    session.commit()
+                    if verdict.verdict != "fail" or force_accept_applied:
+                        continue
                 updater.mark_chapter_status(
                     project_id,
                     chapter_num,
@@ -610,6 +644,8 @@ def _run_project_chapters(
                     frozen_artifacts=frozen_artifacts,
                 )
                 repo, updater, checker = self._make_state_helpers(session)
+                break
+            if canon_outcome.blocked:
                 break
             if self._pause_requested():
                 session.commit()

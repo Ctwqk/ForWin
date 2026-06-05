@@ -31,6 +31,7 @@ from forwin.orchestrator_loop_core.repair_loop import (
     _review_and_maybe_rewrite,
     _review_from_canon_gate_block,
     _review_meta_json,
+    _run_canon_repair_for_block,
     _run_repair_loop_for_phase,
     _structure_data_from_row,
 )
@@ -160,6 +161,7 @@ WritingOrchestrator._review_with_repair_verification = _review_with_repair_verif
 WritingOrchestrator._repair_policy_requested_scope = _repair_policy_requested_scope
 WritingOrchestrator._review_has_structural_repair_issue = _review_has_structural_repair_issue
 WritingOrchestrator._review_and_maybe_rewrite = _review_and_maybe_rewrite
+WritingOrchestrator._run_canon_repair_for_block = _run_canon_repair_for_block
 WritingOrchestrator._run_repair_loop_for_phase = _run_repair_loop_for_phase
 WritingOrchestrator._review_from_canon_gate_block = _review_from_canon_gate_block
 WritingOrchestrator._review_meta_json = _review_meta_json

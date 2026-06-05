@@ -231,6 +231,73 @@ def _review_and_maybe_rewrite(
     )
 
 
+def _run_canon_repair_for_block(
+    self,
+    *,
+    session: Session,
+    repo: StateRepository,
+    updater: StateUpdater,
+    checker: ContinuityChecker,
+    project_id: str,
+    chapter_plan: ChapterPlan,
+    context,
+    writer_output: WriterOutput,
+    gate_result,
+) -> tuple[WriterOutput, ReviewVerdict, bool]:
+    latest_draft, _latest_review = self._latest_draft_and_review_for_chapter(
+        session=session,
+        project_id=project_id,
+        chapter_number=chapter_plan.chapter_number,
+    )
+    synthetic_review = _review_from_canon_gate_block(gate_result)
+    if latest_draft is None:
+        current_output, current_draft, current_review_row = self._persist_draft_and_review(
+            session=session,
+            updater=updater,
+            chapter_plan=chapter_plan,
+            project_id=project_id,
+            chapter_number=chapter_plan.chapter_number,
+            writer_output=writer_output,
+            review=synthetic_review,
+        )
+    else:
+        current_output = writer_output
+        current_draft = latest_draft
+        current_review_row = updater.save_review(latest_draft.id, synthetic_review)
+    current_review_event = self._record_decision_event(
+        updater=updater,
+        project_id=project_id,
+        chapter_number=chapter_plan.chapter_number,
+        event_family="evaluation_verdict",
+        event_type=DecisionEventType.REVIEW_VERDICT_RECORDED,
+        scope="chapter",
+        summary=(
+            f"第{chapter_plan.chapter_number}章 canon gate promoted review to fail "
+            "for canon_repair."
+        ),
+        related_object_type="chapter_review",
+        related_object_id=current_review_row.id,
+        payload=self._review_event_payload(synthetic_review),
+    )
+    return self._run_repair_loop_for_phase(
+        session=session,
+        repo=repo,
+        updater=updater,
+        checker=checker,
+        project_id=project_id,
+        chapter_plan=chapter_plan,
+        current_context=context,
+        current_output=current_output,
+        current_draft=current_draft,
+        current_review=synthetic_review,
+        current_review_row=current_review_row,
+        current_writer_trace_id="",
+        current_review_trace_id="",
+        current_review_event=current_review_event,
+        repair_phase=CANON_REPAIR_PHASE,
+    )
+
+
 def _run_repair_loop_for_phase(
     self,
     *,
@@ -1230,6 +1297,7 @@ __all__ = [
     "_canon_issue_type_for_scope",
     "_review_from_canon_gate_block",
     "_review_and_maybe_rewrite",
+    "_run_canon_repair_for_block",
     "_run_repair_loop_for_phase",
     "_review_meta_json",
     "_default_repair_instruction",

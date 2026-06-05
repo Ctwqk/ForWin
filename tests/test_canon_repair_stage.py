@@ -5,15 +5,18 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
+from tests.postgres import postgres_test_url
 from forwin.canon_quality.signals import CanonAdmissionGateResult
+from forwin.config import Config
 from forwin.models import base as base_module
-from forwin.models.base import Base
+from forwin.models.base import Base, get_engine, get_session_factory
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.orchestrator_loop_core import quality_gates as quality_gates_module
 from forwin.orchestrator_loop_core import repair_loop as repair_loop_module
 from forwin.orchestrator_loop_core.quality_gates import (
@@ -26,6 +29,7 @@ from forwin.orchestrator_loop_core.repair_loop import (
 )
 from forwin.project_ops.reviews import get_chapter_review
 from forwin.protocol.review import ReviewVerdict
+from forwin.protocol.writer import WriterOutput
 from forwin.review_engine.rules.repair_v2 import decide_repair_v2
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
 
@@ -575,6 +579,117 @@ def test_canon_gate_block_review_routes_to_required_draft_scope():
     assert review.issues[0].issue_type == "canon_admission_draft_block"
     assert decision.outcome == "local_repair"
     assert decision.sub_action["scope"] == "draft"
+
+
+def test_warn_review_canon_block_runs_canon_repair_before_accepting():
+    class WarnThenPassReviewHub:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def review(self, **_kwargs) -> ReviewVerdict:
+            self.calls += 1
+            if self.calls == 1:
+                return ReviewVerdict(
+                    verdict="warn",
+                    issues=[],
+                    review_summary="soft review warning",
+                )
+            return ReviewVerdict(verdict="pass", issues=[])
+
+    db_path = postgres_test_url("canon-repair-admission")
+    orchestrator = WritingOrchestrator(
+        Config(
+            database_url=db_path,
+            minimax_api_key="",
+            minimax_model="fake-model",
+            chapter_review_form_mode="off",
+            operation_mode="blackbox",
+            review_fail_max_rewrites=1,
+            auto_band_checkpoint=False,
+            manual_checkpoints_enabled=False,
+        )
+    )
+    apply_calls = {"count": 0}
+    try:
+        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: {
+            "arc_synopsis": "canon repair admission",
+            "setting_summary": "无",
+            "chapters": [
+                {
+                    "chapter_number": 1,
+                    "title": "第一章",
+                    "one_line": "开场",
+                    "goals": ["推进主线"],
+                }
+            ],
+            "characters": [],
+            "locations": [],
+            "factions": [],
+            "relations": [],
+            "plot_threads": [],
+            "initial_time": {"label": "开始", "description": "开始"},
+        }
+        orchestrator.writer.write_chapter = lambda context: WriterOutput(
+            chapter_number=context.chapter_number,
+            title=f"第{context.chapter_number}章",
+            body="正文" * 900,
+            char_count=1800,
+            end_of_chapter_summary="ok",
+            state_changes=[],
+            new_events=[],
+            thread_beats=[],
+            time_advance=None,
+        )
+        orchestrator.review_hub = WarnThenPassReviewHub()
+
+        def apply_canon_candidate(**_kwargs):
+            apply_calls["count"] += 1
+            if apply_calls["count"] == 1:
+                return CanonApplyOutcome(
+                    blocked_path="frozen/canon-quality.json",
+                    block_kind="canon_quality",
+                    canon_gate_result=CanonAdmissionGateResult(
+                        project_id="p",
+                        chapter_number=1,
+                        draft_id="d1",
+                        review_id="r1",
+                        commit_allowed=False,
+                        verdict="fail",
+                        admission_mode="blocked",
+                        required_repair_scope="draft",
+                        gate_summary="canon quality gate strict: commit_allowed=False",
+                        deterministic_issue_refs=["signal-1"],
+                    ),
+                )
+            return CanonApplyOutcome()
+
+        orchestrator._apply_canon_candidate = apply_canon_candidate
+
+        result = orchestrator.run("p", "g", 1)
+
+        engine = get_engine(db_path)
+        session = get_session_factory(engine)()
+        try:
+            attempts = session.execute(
+                select(ChapterRewriteAttempt).order_by(ChapterRewriteAttempt.attempt_no)
+            ).scalars().all()
+            plan = session.execute(select(ChapterPlan)).scalar_one()
+        finally:
+            session.close()
+            engine.dispose()
+    finally:
+        orchestrator.llm_client.close()
+        orchestrator.engine.dispose()
+
+    assert result.status == "completed"
+    assert apply_calls["count"] == 2
+    assert len(attempts) == 1
+    assert attempts[0].repair_phase == "canon_repair"
+    assert attempts[0].attempt_no == 1
+    assert attempts[0].phase_attempt_no == 1
+    assert attempts[0].repair_scope == "draft"
+    assert plan.status == "accepted"
+    assert plan.repair_attempt_count == 1
 
 
 def _canon_repair_decision_for_scope(raw_scope: object) -> tuple[ReviewVerdict, Decision]:

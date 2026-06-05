@@ -15,5 +15,6 @@ forwin.egg-info/
 .playwright-cli/
 .playwright-mcp/
 .codex-tmp/
+.worktrees/
 output/
 qidian-auth-*-latest.png

@@ -14,6 +14,7 @@ from forwin.config import Config
 from forwin.models import base as base_module
 from forwin.models.base import Base, get_engine, get_session_factory
 from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.models.governance import DecisionEvent
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.orchestrator.loop import WritingOrchestrator
@@ -28,7 +29,7 @@ from forwin.orchestrator_loop_core.repair_loop import (
     _review_from_canon_gate_block,
 )
 from forwin.project_ops.reviews import get_chapter_review
-from forwin.protocol.review import ReviewVerdict
+from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review_engine.rules.repair_v2 import decide_repair_v2
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
@@ -223,6 +224,60 @@ class _Attempt:
         self.repair_phase = repair_phase
 
 
+def _one_chapter_arc(arc_synopsis: str) -> dict[str, object]:
+    return {
+        "arc_synopsis": arc_synopsis,
+        "setting_summary": "无",
+        "chapters": [
+            {
+                "chapter_number": 1,
+                "title": "第一章",
+                "one_line": "开场",
+                "goals": ["推进主线"],
+            }
+        ],
+        "characters": [],
+        "locations": [],
+        "factions": [],
+        "relations": [],
+        "plot_threads": [],
+        "initial_time": {"label": "开始", "description": "开始"},
+    }
+
+
+def _writer_output(chapter_number: int, marker: str = "ok") -> WriterOutput:
+    return WriterOutput(
+        chapter_number=chapter_number,
+        title=f"第{chapter_number}章",
+        body=f"正文{marker}" * 900,
+        char_count=1800,
+        end_of_chapter_summary=marker,
+        state_changes=[],
+        new_events=[],
+        thread_beats=[],
+        time_advance=None,
+    )
+
+
+def _draft_blocking_review(summary: str = "canon repair still blocked") -> ReviewVerdict:
+    return ReviewVerdict(
+        verdict="fail",
+        issues=[
+            ContinuityIssue(
+                rule_name="canon_repair_regression",
+                severity="error",
+                description=summary,
+                reviewer="test",
+                issue_type="placeholder_leakage",
+                target_scope="draft",
+                evidence_refs=["signal-1"],
+                blocking=True,
+            )
+        ],
+        review_summary=summary,
+    )
+
+
 def test_attempts_for_repair_phase_filters_history_without_deleting_total_history():
     attempts = [
         _Attempt("draft", "review_repair"),
@@ -235,6 +290,20 @@ def test_attempts_for_repair_phase_filters_history_without_deleting_total_histor
 
     assert len(attempts) == 4
     assert [item.repair_scope for item in phase_attempts] == ["draft"]
+
+
+def test_canon_repair_budget_ignores_prior_review_repair_attempts():
+    attempts = [
+        _Attempt("draft", "review_repair"),
+        _Attempt("draft", "review_repair"),
+        _Attempt("chapter_plan", "review_repair"),
+        _Attempt("band_plan", "review_repair"),
+    ]
+
+    phase_attempts = _attempts_for_repair_phase(attempts, "canon_repair")
+
+    assert phase_attempts == []
+    assert len([attempt for attempt in attempts if attempt.repair_phase == "review_repair"]) == 4
 
 
 def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
@@ -691,6 +760,182 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
     assert attempts[0].repair_scope == "draft"
     assert plan.status == "accepted"
     assert plan.repair_attempt_count == 1
+
+
+def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts():
+    class WarnThenFailReviewHub:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def review(self, **_kwargs) -> ReviewVerdict:
+            self.calls += 1
+            if self.calls == 1:
+                return ReviewVerdict(
+                    verdict="warn",
+                    issues=[],
+                    review_summary="soft review warning",
+                )
+            return _draft_blocking_review(
+                f"canon quality gate strict: repair attempt {self.calls - 1} still blocked"
+            )
+
+    db_path = postgres_test_url("canon-repair-exhaustion-task6")
+    orchestrator = WritingOrchestrator(
+        Config(
+            database_url=db_path,
+            minimax_api_key="",
+            minimax_model="fake-model",
+            chapter_review_form_mode="off",
+            operation_mode="blackbox",
+            review_fail_max_rewrites=1,
+            auto_band_checkpoint=False,
+            manual_checkpoints_enabled=False,
+        )
+    )
+    try:
+        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: _one_chapter_arc(
+            "canon repair exhaustion"
+        )
+        orchestrator.writer.write_chapter = lambda context: _writer_output(context.chapter_number)
+        orchestrator.review_hub = WarnThenFailReviewHub()
+        orchestrator._write_chapter_with_attention_fallback = lambda **kwargs: _writer_output(
+            int(kwargs["chapter_number"]),
+            marker=f"repair-{orchestrator.review_hub.calls}",
+        )
+        orchestrator._apply_repair_patch = lambda **kwargs: (
+            {"repair_scope": kwargs["repair_scope"]},
+            kwargs["context"],
+            {},
+            {},
+            "",
+        )
+
+        def apply_canon_candidate(**_kwargs):
+            return CanonApplyOutcome(
+                block_kind="canon_quality",
+                canon_gate_result=CanonAdmissionGateResult(
+                    project_id="p",
+                    chapter_number=1,
+                    draft_id="d1",
+                    review_id="r1",
+                    commit_allowed=False,
+                    verdict="fail",
+                    admission_mode="blocked",
+                    required_repair_scope="draft",
+                    gate_summary="canon quality gate strict: commit_allowed=False",
+                    deterministic_issue_refs=["signal-1"],
+                ),
+            )
+
+        orchestrator._apply_canon_candidate = apply_canon_candidate
+
+        result = orchestrator.run("p", "g", 1)
+
+        engine = get_engine(db_path)
+        session = get_session_factory(engine)()
+        try:
+            attempts = session.execute(
+                select(ChapterRewriteAttempt).order_by(ChapterRewriteAttempt.attempt_no)
+            ).scalars().all()
+            plan = session.execute(select(ChapterPlan)).scalar_one()
+            latest_attempt_review = session.execute(
+                select(ChapterReview).where(ChapterReview.id == attempts[-1].result_review_id)
+            ).scalar_one()
+        finally:
+            session.close()
+            engine.dispose()
+    finally:
+        orchestrator.llm_client.close()
+        orchestrator.engine.dispose()
+
+    latest_review_meta = json.loads(latest_attempt_review.review_meta_json or "{}")
+    assert result.status == "needs_review"
+    assert len(attempts) >= 2
+    assert {attempt.repair_phase for attempt in attempts} == {"canon_repair"}
+    assert [attempt.phase_attempt_no for attempt in attempts] == list(range(1, len(attempts) + 1))
+    assert plan.status == "needs_review"
+    assert plan.canon_risk_level == "high"
+    assert latest_review_meta["repair_exhausted"] is True
+
+
+def test_non_repairable_canon_quality_block_records_system_block_without_repair():
+    class WarnReviewHub:
+        def review(self, **_kwargs) -> ReviewVerdict:
+            return ReviewVerdict(
+                verdict="warn",
+                issues=[],
+                review_summary="soft review warning",
+            )
+
+    db_path = postgres_test_url("canon-system-block-task6")
+    orchestrator = WritingOrchestrator(
+        Config(
+            database_url=db_path,
+            minimax_api_key="",
+            minimax_model="fake-model",
+            chapter_review_form_mode="off",
+            operation_mode="blackbox",
+            review_fail_max_rewrites=1,
+            auto_band_checkpoint=False,
+            manual_checkpoints_enabled=False,
+        )
+    )
+    try:
+        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: _one_chapter_arc(
+            "canon system block"
+        )
+        orchestrator.writer.write_chapter = lambda context: _writer_output(context.chapter_number)
+        orchestrator.review_hub = WarnReviewHub()
+        orchestrator._run_canon_repair_for_block = lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("non-repairable canon block should not run canon repair")
+        )
+        orchestrator._apply_canon_candidate = lambda **_kwargs: CanonApplyOutcome(
+            block_kind="canon_quality",
+            canon_gate_result=CanonAdmissionGateResult(
+                project_id="p",
+                chapter_number=1,
+                draft_id="d1",
+                review_id="r1",
+                commit_allowed=False,
+                verdict="fail",
+                admission_mode="blocked",
+                required_repair_scope=None,
+                gate_summary="canon quality gate strict: required_repair_scope=None",
+                deterministic_issue_refs=["signal-1"],
+            ),
+        )
+
+        result = orchestrator.run("p", "g", 1)
+
+        engine = get_engine(db_path)
+        session = get_session_factory(engine)()
+        try:
+            attempts = session.execute(select(ChapterRewriteAttempt)).scalars().all()
+            plan = session.execute(select(ChapterPlan)).scalar_one()
+            events = session.execute(select(DecisionEvent)).scalars().all()
+        finally:
+            session.close()
+            engine.dispose()
+    finally:
+        orchestrator.llm_client.close()
+        orchestrator.engine.dispose()
+
+    system_block_events = [
+        event
+        for event in events
+        if (json.loads(event.payload_json or "{}").get("outcome") == "system_block")
+    ]
+    assert result.status == "needs_review"
+    assert attempts == []
+    assert plan.status == "needs_review"
+    assert plan.repair_attempt_count == 0
+    assert system_block_events
+    system_block_event = system_block_events[-1]
+    system_block_payload = json.loads(system_block_event.payload_json or "{}")
+    assert system_block_payload["reason"] == "canon quality gate strict: required_repair_scope=None"
+    assert system_block_payload["required_repair_scope"] == ""
+    assert "canon quality gate" in system_block_event.summary
+    assert "canon quality gate" in system_block_event.reason
 
 
 @pytest.mark.parametrize(

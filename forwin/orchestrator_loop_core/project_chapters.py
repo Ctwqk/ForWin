@@ -621,6 +621,29 @@ def _run_project_chapters(
                     if verdict.verdict != "fail":
                         force_accept_applied = force_accept_applied or canon_force_accept_applied
                         continue
+                if canon_outcome.block_kind == "canon_quality" and not repair_scope:
+                    gate_summary = str(
+                        getattr(gate_result, "gate_summary", "")
+                        or "canon quality gate blocked commit"
+                    )
+                    self._record_decision_event(
+                        updater=updater,
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                        event_family="evaluation_verdict",
+                        event_type=DecisionEventType.CANON_COMMIT_BLOCKED,
+                        scope="chapter",
+                        summary=(
+                            f"第{chapter_num}章 canon quality gate system_block: "
+                            f"{gate_summary}"
+                        ),
+                        reason=gate_summary,
+                        payload={
+                            "outcome": "system_block",
+                            "reason": gate_summary,
+                            "required_repair_scope": canon_outcome.repairable_scope,
+                        },
+                    )
                 if frozen_path:
                     frozen_artifacts.append(frozen_path)
                 updater.mark_chapter_status(

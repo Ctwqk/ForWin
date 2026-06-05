@@ -447,6 +447,25 @@ class StateRepository:
             .order_by(ChapterRewriteAttempt.attempt_no.asc(), ChapterRewriteAttempt.created_at.asc())
         ).scalars().all()
 
+    def list_chapter_rewrite_attempts_for_phase(
+        self,
+        project_id: str,
+        chapter_number: int,
+        repair_phase: str,
+    ) -> list[ChapterRewriteAttempt]:
+        return self.session.execute(
+            select(ChapterRewriteAttempt)
+            .where(
+                ChapterRewriteAttempt.project_id == project_id,
+                ChapterRewriteAttempt.chapter_number == chapter_number,
+                ChapterRewriteAttempt.repair_phase == str(repair_phase or "review_repair"),
+            )
+            .order_by(
+                ChapterRewriteAttempt.phase_attempt_no.asc(),
+                ChapterRewriteAttempt.created_at.asc(),
+            )
+        ).scalars().all()
+
     def get_recent_canon_events(
         self,
         project_id: str,

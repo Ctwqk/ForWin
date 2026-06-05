@@ -74,6 +74,8 @@ class FinalGateDecisionInfo(BaseModel):
 
 class ChapterRewriteAttemptInfo(BaseModel):
     attempt_no: int
+    repair_phase: str = "review_repair"
+    phase_attempt_no: int = 0
     repair_scope: str = ""
     result_verdict: str = ""
     result_review_id: str = ""

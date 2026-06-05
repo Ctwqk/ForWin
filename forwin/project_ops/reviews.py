@@ -245,6 +245,8 @@ def get_chapter_review(
             rewrite_attempts=[
                 ChapterRewriteAttemptInfo(
                     attempt_no=int(item.attempt_no or 0),
+                    repair_phase=str(getattr(item, "repair_phase", "") or "review_repair"),
+                    phase_attempt_no=int(getattr(item, "phase_attempt_no", 0) or 0),
                     repair_scope=normalize_repair_scope(item.repair_scope or "", default=""),
                     result_verdict=str(item.result_verdict or ""),
                     result_review_id=str(getattr(item, "result_review_id", "") or ""),

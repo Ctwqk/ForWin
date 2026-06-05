@@ -926,6 +926,7 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
         if (json.loads(event.payload_json or "{}").get("outcome") == "system_block")
     ]
     assert result.status == "needs_review"
+    assert result.system_block_chapters == [1]
     assert attempts == []
     assert plan.status == "needs_review"
     assert plan.repair_attempt_count == 0

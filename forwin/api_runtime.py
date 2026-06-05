@@ -72,6 +72,20 @@ def _build_task_progress_changes(
     return changes
 
 
+def _paused_chapters_message(result, *, prefix: str = "") -> str:
+    system_block_chapters = [
+        int(chapter)
+        for chapter in getattr(result, "system_block_chapters", []) or []
+    ]
+    if system_block_chapters:
+        chapter_str = ", ".join(str(chapter) for chapter in system_block_chapters)
+        return f"{prefix}章节 {chapter_str} 遇到 canon system block，需处理系统阻断后重试"
+    paused_str = ", ".join(str(chapter) for chapter in getattr(result, "paused_chapters", []) or [])
+    if prefix:
+        return f"{prefix}遇到质量门阻断，需自动修复或重试章节: {paused_str}"
+    return f"质量门阻断，需自动修复或重试章节: {paused_str}"
+
+
 def build_home_page_settings(
     *,
     base_config: Config | None,
@@ -650,8 +664,7 @@ def run_generation_with_config(
                 ),
             )
         elif result.paused_chapters:
-            paused_str = ", ".join(str(chapter) for chapter in result.paused_chapters)
-            update_task(task_id, message=f"质量门阻断，需自动修复或重试章节: {paused_str}")
+            update_task(task_id, message=_paused_chapters_message(result))
         else:
             update_task(
                 task_id,
@@ -740,8 +753,7 @@ def run_continue_project_with_config(
                 ),
             )
         elif result.paused_chapters:
-            paused_str = ", ".join(str(chapter) for chapter in result.paused_chapters)
-            update_task(task_id, message=f"继续执行后遇到质量门阻断，需自动修复或重试章节: {paused_str}")
+            update_task(task_id, message=_paused_chapters_message(result, prefix="继续执行后"))
         elif result.completed_chapters:
             completed_str = ", ".join(str(chapter) for chapter in result.completed_chapters)
             update_task(task_id, message=f"继续执行完成章节: {completed_str}")

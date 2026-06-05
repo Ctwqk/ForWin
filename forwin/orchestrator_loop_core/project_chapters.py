@@ -112,6 +112,7 @@ def _run_project_chapters(
     failed_chapters: list[int] = []
     paused_chapters: list[int] = []
     frozen_artifacts: list[str] = []
+    system_block_chapters: list[int] = []
     last_requested_chapter = max(chapter_numbers, default=0)
     project = repo.get_project(project_id)
     if project is None:
@@ -622,6 +623,7 @@ def _run_project_chapters(
                         force_accept_applied = force_accept_applied or canon_force_accept_applied
                         continue
                 if canon_outcome.block_kind == "canon_quality" and not repair_scope:
+                    system_block_chapters.append(chapter_num)
                     gate_summary = str(
                         getattr(gate_result, "gate_summary", "")
                         or "canon quality gate blocked commit"
@@ -1042,6 +1044,7 @@ def _run_project_chapters(
         failed_chapters=failed_chapters,
         paused_chapters=paused_chapters,
         frozen_artifacts=frozen_artifacts,
+        system_block_chapters=system_block_chapters,
     )
 
 

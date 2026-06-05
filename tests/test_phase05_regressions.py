@@ -339,6 +339,30 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual(changes["completed_chapters"], [1])
         self.assertNotIn("title", changes)
 
+    def test_task_paused_message_reports_canon_system_block(self) -> None:
+        result = RunResult(
+            project_id="p",
+            requested_chapters=1,
+            paused_chapters=[1],
+            frozen_artifacts=["canon-quality-gate-blocked"],
+            system_block_chapters=[1],
+        )
+
+        message = api_runtime_module._paused_chapters_message(result)
+
+        self.assertEqual(message, "章节 1 遇到 canon system block，需处理系统阻断后重试")
+
+    def test_task_paused_message_keeps_repair_wording_for_plain_review_pause(self) -> None:
+        result = RunResult(
+            project_id="p",
+            requested_chapters=1,
+            paused_chapters=[1],
+        )
+
+        message = api_runtime_module._paused_chapters_message(result)
+
+        self.assertEqual(message, "质量门阻断，需自动修复或重试章节: 1")
+
     def test_project_task_center_items_batch_load_chapter_plans(self) -> None:
         tmp = TemporaryDirectory()
         engine = get_engine(postgres_test_url("task-center"))

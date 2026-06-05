@@ -13,6 +13,7 @@ class RunResult:
     failed_chapters: list[int] = field(default_factory=list)
     paused_chapters: list[int] = field(default_factory=list)
     frozen_artifacts: list[str] = field(default_factory=list)
+    system_block_chapters: list[int] = field(default_factory=list)
     cancelled: bool = False
     paused: bool = False
 

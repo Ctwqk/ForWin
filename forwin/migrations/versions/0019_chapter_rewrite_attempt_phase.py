@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision = "0019_chapter_rewrite_attempt_phase"
+revision = "0019_rewrite_attempt_phase"
 down_revision = "0018_publisher_bindings_covers"
 branch_labels = None
 depends_on = None
@@ -18,6 +18,10 @@ def upgrade() -> None:
     op.add_column(
         "chapter_rewrite_attempts",
         sa.Column("phase_attempt_no", sa.Integer(), nullable=False, server_default="0"),
+    )
+    op.execute(
+        "UPDATE chapter_rewrite_attempts SET phase_attempt_no = attempt_no "
+        "WHERE phase_attempt_no = 0"
     )
     op.create_index(
         "ix_chapter_rewrite_attempts_project_chapter_phase",

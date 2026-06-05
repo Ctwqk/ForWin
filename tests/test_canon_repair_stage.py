@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import importlib
 import json
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from forwin.models import base as base_module
 from forwin.models.base import Base
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.phase import ChapterRewriteAttempt
@@ -20,6 +22,50 @@ def _session_factory():
 
 def _noop_decision_refs(*args, **kwargs):
     return []
+
+
+class _RecordingConnection:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+        self.params: list[dict[str, object] | None] = []
+
+    def execute(self, statement, params=None):
+        self.statements.append(str(statement))
+        self.params.append(params)
+
+
+class _FakeEngine:
+    def __init__(self, conn: _RecordingConnection) -> None:
+        self.conn = conn
+
+    def begin(self):
+        return self
+
+    def __enter__(self) -> _RecordingConnection:
+        return self.conn
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        return None
+
+
+class _RecordingAlembicOp:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def add_column(self, *args, **kwargs) -> None:
+        return None
+
+    def create_index(self, *args, **kwargs) -> None:
+        return None
+
+    def execute(self, statement) -> None:
+        self.statements.append(str(statement))
+
+
+def _rewrite_attempt_phase_migration():
+    return importlib.import_module(
+        "forwin.migrations.versions.0019_chapter_rewrite_attempt_phase"
+    )
 
 
 def test_rewrite_attempt_phase_fields_are_serialized_in_review_detail():
@@ -84,3 +130,61 @@ def test_rewrite_attempt_phase_fields_are_serialized_in_review_detail():
     assert detail.rewrite_attempts[0].attempt_no == 2
     assert detail.rewrite_attempts[0].repair_phase == "canon_repair"
     assert detail.rewrite_attempts[0].phase_attempt_no == 1
+
+
+def test_runtime_upgrade_helper_backfills_rewrite_attempt_phase_columns():
+    conn = _RecordingConnection()
+
+    base_module._upgrade_chapter_rewrite_attempt_phase(conn)
+
+    statements = "\n".join(conn.statements)
+    assert (
+        "ALTER TABLE chapter_rewrite_attempts "
+        "ADD COLUMN IF NOT EXISTS repair_phase VARCHAR NOT NULL DEFAULT 'review_repair'"
+    ) in statements
+    assert (
+        "ALTER TABLE chapter_rewrite_attempts "
+        "ADD COLUMN IF NOT EXISTS phase_attempt_no INTEGER NOT NULL DEFAULT 0"
+    ) in statements
+    assert "UPDATE chapter_rewrite_attempts" in statements
+    assert "SET phase_attempt_no = attempt_no" in statements
+    assert "WHERE phase_attempt_no = 0" in statements
+    assert (
+        "CREATE INDEX IF NOT EXISTS ix_chapter_rewrite_attempts_project_chapter_phase"
+    ) in statements
+    assert "chapter_rewrite_attempt_phase_v1" in base_module.POSTGRES_BASELINE_MIGRATIONS
+
+
+def test_runtime_postgresql_upgrade_invokes_rewrite_attempt_phase_helper(monkeypatch):
+    called = False
+
+    def _record_call(conn):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(base_module, "_upgrade_chapter_rewrite_attempt_phase", _record_call)
+
+    base_module._upgrade_postgresql_database(_FakeEngine(_RecordingConnection()))
+
+    assert called
+
+
+def test_alembic_revision_fits_version_table():
+    migration = _rewrite_attempt_phase_migration()
+
+    assert migration.revision == "0019_rewrite_attempt_phase"
+    assert len(migration.revision) <= 32
+
+
+def test_alembic_upgrade_backfills_phase_attempt_from_attempt_no(monkeypatch):
+    migration = _rewrite_attempt_phase_migration()
+    fake_op = _RecordingAlembicOp()
+    monkeypatch.setattr(migration, "op", fake_op)
+
+    migration.upgrade()
+
+    assert any(
+        "UPDATE chapter_rewrite_attempts SET phase_attempt_no = attempt_no "
+        "WHERE phase_attempt_no = 0" in statement
+        for statement in fake_op.statements
+    )

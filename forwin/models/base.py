@@ -65,6 +65,7 @@ POSTGRES_BASELINE_MIGRATIONS = (
     "trope_usage_records_v1",
     "project_target_total_default_v1",
     "publisher_bindings_covers_v1",
+    "chapter_rewrite_attempt_phase_v1",
 )
 
 
@@ -179,6 +180,7 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
         _upgrade_arc_macro_progression(conn)
         _upgrade_project_progression_rules(conn)
         _upgrade_publisher_bindings_covers(conn)
+        _upgrade_chapter_rewrite_attempt_phase(conn)
         conn.execute(
             text(
                 """
@@ -829,6 +831,36 @@ def _upgrade_publisher_bindings_covers(conn) -> None:
         text(
             "CREATE INDEX IF NOT EXISTS ix_publisher_milestones_type "
             "ON publisher_milestones (milestone_type)"
+        )
+    )
+
+
+def _upgrade_chapter_rewrite_attempt_phase(conn) -> None:
+    conn.execute(
+        text(
+            "ALTER TABLE chapter_rewrite_attempts "
+            "ADD COLUMN IF NOT EXISTS repair_phase VARCHAR NOT NULL DEFAULT 'review_repair'"
+        )
+    )
+    conn.execute(
+        text(
+            "ALTER TABLE chapter_rewrite_attempts "
+            "ADD COLUMN IF NOT EXISTS phase_attempt_no INTEGER NOT NULL DEFAULT 0"
+        )
+    )
+    conn.execute(
+        text(
+            """
+            UPDATE chapter_rewrite_attempts
+            SET phase_attempt_no = attempt_no
+            WHERE phase_attempt_no = 0
+            """
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_chapter_rewrite_attempts_project_chapter_phase "
+            "ON chapter_rewrite_attempts (project_id, chapter_number, repair_phase, phase_attempt_no)"
         )
     )
 

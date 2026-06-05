@@ -7,7 +7,7 @@ from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
 from forwin.maintenance.deferred import DeferredMaintenanceRecord, record_deferred_maintenance
 from forwin.orchestrator_loop_core.result import RunResult
 from forwin.orchestrator_loop_core.common import *
-from forwin.orchestrator_loop_core.repair_loop import _canon_repair_scope
+from forwin.orchestrator_loop_core.repair_loop import _canon_repair_scope, _canon_repair_scope_can_run
 
 logger = logging.getLogger(__name__)
 
@@ -596,7 +596,8 @@ def _run_project_chapters(
                     if canon_outcome.block_kind == "canon_quality" and gate_result is not None
                     else ""
                 )
-                if repair_scope and self.config.operation_mode == "blackbox":
+                can_run_canon_repair = _canon_repair_scope_can_run(repair_scope)
+                if can_run_canon_repair and self.config.operation_mode == "blackbox":
                     (
                         writer_output,
                         verdict,
@@ -622,7 +623,7 @@ def _run_project_chapters(
                     if verdict.verdict != "fail":
                         force_accept_applied = force_accept_applied or canon_force_accept_applied
                         continue
-                if canon_outcome.block_kind == "canon_quality" and not repair_scope:
+                if canon_outcome.block_kind == "canon_quality" and not can_run_canon_repair:
                     system_block_chapters.append(chapter_num)
                     gate_summary = str(
                         getattr(gate_result, "gate_summary", "")

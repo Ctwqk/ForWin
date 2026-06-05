@@ -858,7 +858,18 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts():
     assert latest_review_meta["repair_exhausted"] is True
 
 
-def test_non_repairable_canon_quality_block_records_system_block_without_repair():
+@pytest.mark.parametrize(
+    ("raw_scope", "expected_payload_scope"),
+    [
+        (None, ""),
+        ("arc", "arc"),
+        ("book", "book"),
+    ],
+)
+def test_non_repairable_canon_quality_block_records_system_block_without_repair(
+    raw_scope,
+    expected_payload_scope,
+):
     class WarnReviewHub:
         def review(self, **_kwargs) -> ReviewVerdict:
             return ReviewVerdict(
@@ -899,8 +910,8 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
                 commit_allowed=False,
                 verdict="fail",
                 admission_mode="blocked",
-                required_repair_scope=None,
-                gate_summary="canon quality gate strict: required_repair_scope=None",
+                required_repair_scope=raw_scope,
+                gate_summary=f"canon quality gate strict: required_repair_scope={raw_scope}",
                 deterministic_issue_refs=["signal-1"],
             ),
         )
@@ -933,8 +944,8 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
     assert system_block_events
     system_block_event = system_block_events[-1]
     system_block_payload = json.loads(system_block_event.payload_json or "{}")
-    assert system_block_payload["reason"] == "canon quality gate strict: required_repair_scope=None"
-    assert system_block_payload["required_repair_scope"] == ""
+    assert system_block_payload["reason"] == f"canon quality gate strict: required_repair_scope={raw_scope}"
+    assert system_block_payload["required_repair_scope"] == expected_payload_scope
     assert "canon quality gate" in system_block_event.summary
     assert "canon quality gate" in system_block_event.reason
 

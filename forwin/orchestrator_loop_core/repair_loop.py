@@ -35,10 +35,15 @@ _CANON_SCOPE_TO_REPAIR_SCOPE = {
     "book": "book_plan",
     "book_plan": "book_plan",
 }
+_CANON_AUTO_REPAIR_SCOPES = frozenset({"draft", "chapter_plan", "band_plan"})
 
 
 def _canon_repair_scope(raw_scope: object) -> str:
     return _CANON_SCOPE_TO_REPAIR_SCOPE.get(str(raw_scope or "").strip().lower(), "")
+
+
+def _canon_repair_scope_can_run(repair_scope: str) -> bool:
+    return str(repair_scope or "") in _CANON_AUTO_REPAIR_SCOPES
 
 
 def _canon_issue_type_for_scope(repair_scope: str) -> str:
@@ -1294,6 +1299,7 @@ __all__ = [
     "_attempt_repair_phase",
     "_attempts_for_repair_phase",
     "_canon_repair_scope",
+    "_canon_repair_scope_can_run",
     "_canon_issue_type_for_scope",
     "_review_from_canon_gate_block",
     "_review_and_maybe_rewrite",

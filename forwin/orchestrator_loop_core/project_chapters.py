@@ -589,8 +589,6 @@ def _run_project_chapters(
                 if not canon_outcome.blocked:
                     break
                 frozen_path = canon_outcome.blocked_path
-                if frozen_path:
-                    frozen_artifacts.append(frozen_path)
                 gate_result = canon_outcome.canon_gate_result
                 repair_scope = (
                     _canon_repair_scope(getattr(gate_result, "required_repair_scope", ""))
@@ -620,8 +618,11 @@ def _run_project_chapters(
                     residual_review_issues = self._review_issue_payloads(verdict)
                     canon_risk_level = self._review_canon_risk(verdict)
                     session.commit()
-                    if verdict.verdict != "fail" or force_accept_applied:
+                    if verdict.verdict != "fail":
+                        force_accept_applied = force_accept_applied or canon_force_accept_applied
                         continue
+                if frozen_path:
+                    frozen_artifacts.append(frozen_path)
                 updater.mark_chapter_status(
                     project_id,
                     chapter_num,

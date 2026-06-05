@@ -682,6 +682,7 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
         orchestrator.engine.dispose()
 
     assert result.status == "completed"
+    assert result.frozen_artifacts == []
     assert apply_calls["count"] == 2
     assert len(attempts) == 1
     assert attempts[0].repair_phase == "canon_repair"
@@ -690,6 +691,119 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
     assert attempts[0].repair_scope == "draft"
     assert plan.status == "accepted"
     assert plan.repair_attempt_count == 1
+
+
+@pytest.mark.parametrize(
+    ("initial_force_accept", "canon_repair_force_accept"),
+    [
+        (True, False),
+        (False, True),
+    ],
+)
+def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
+    initial_force_accept,
+    canon_repair_force_accept,
+):
+    db_path = postgres_test_url("canon-repair-force-accept-fail")
+    orchestrator = WritingOrchestrator(
+        Config(
+            database_url=db_path,
+            minimax_api_key="",
+            minimax_model="fake-model",
+            chapter_review_form_mode="off",
+            operation_mode="blackbox",
+            review_fail_max_rewrites=1,
+            auto_band_checkpoint=False,
+            manual_checkpoints_enabled=False,
+        )
+    )
+    apply_calls = {"count": 0}
+    repair_calls = {"count": 0}
+    try:
+        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: {
+            "arc_synopsis": "canon repair force accept fail",
+            "setting_summary": "无",
+            "chapters": [
+                {
+                    "chapter_number": 1,
+                    "title": "第一章",
+                    "one_line": "开场",
+                    "goals": ["推进主线"],
+                }
+            ],
+            "characters": [],
+            "locations": [],
+            "factions": [],
+            "relations": [],
+            "plot_threads": [],
+            "initial_time": {"label": "开始", "description": "开始"},
+        }
+        orchestrator.writer.write_chapter = lambda context: WriterOutput(
+            chapter_number=context.chapter_number,
+            title=f"第{context.chapter_number}章",
+            body="正文" * 900,
+            char_count=1800,
+            end_of_chapter_summary="ok",
+            state_changes=[],
+            new_events=[],
+            thread_beats=[],
+            time_advance=None,
+        )
+
+        def force_accepted_review(**kwargs):
+            return (
+                kwargs["writer_output"],
+                ReviewVerdict(verdict="pass", issues=[]),
+                initial_force_accept,
+            )
+
+        gate = CanonAdmissionGateResult(
+            project_id="p",
+            chapter_number=1,
+            draft_id="d1",
+            review_id="r1",
+            commit_allowed=False,
+            verdict="fail",
+            admission_mode="blocked",
+            required_repair_scope="draft",
+            gate_summary="canon quality gate strict: commit_allowed=False",
+            deterministic_issue_refs=["signal-1"],
+        )
+
+        def apply_canon_candidate(**_kwargs):
+            apply_calls["count"] += 1
+            if apply_calls["count"] > 1:
+                raise AssertionError("canon should not be retried after failed canon repair")
+            return CanonApplyOutcome(
+                blocked_path="frozen/canon-quality.json",
+                block_kind="canon_quality",
+                canon_gate_result=gate,
+            )
+
+        def failed_canon_repair(**kwargs):
+            repair_calls["count"] += 1
+            return (
+                kwargs["writer_output"],
+                ReviewVerdict(
+                    verdict="fail",
+                    issues=[],
+                    repair_exhausted=True,
+                ),
+                canon_repair_force_accept,
+            )
+
+        orchestrator._review_and_maybe_rewrite = force_accepted_review
+        orchestrator._apply_canon_candidate = apply_canon_candidate
+        orchestrator._run_canon_repair_for_block = failed_canon_repair
+
+        result = orchestrator.run("p", "g", 1)
+    finally:
+        orchestrator.llm_client.close()
+        orchestrator.engine.dispose()
+
+    assert result.status == "needs_review"
+    assert apply_calls["count"] == 1
+    assert repair_calls["count"] == 1
 
 
 def _canon_repair_decision_for_scope(raw_scope: object) -> tuple[ReviewVerdict, Decision]:

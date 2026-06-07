@@ -261,6 +261,12 @@ class TropeUsageRecord(Base):
     __tablename__ = "trope_usage_records"
     __table_args__ = (
         Index("ix_trope_usage_project_band", "project_id", "band_id", "created_at"),
+        Index(
+            "ix_trope_usage_project_stage_created",
+            "project_id",
+            "usage_stage",
+            "created_at",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
@@ -270,6 +276,11 @@ class TropeUsageRecord(Base):
     chapter_number: Mapped[int] = mapped_column(Integer, default=0)
     template_id: Mapped[str] = mapped_column(String, nullable=False)
     category: Mapped[str] = mapped_column(String, nullable=False, default="")
+    usage_stage: Mapped[str] = mapped_column(
+        String,
+        default="accepted",
+        server_default="accepted",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 

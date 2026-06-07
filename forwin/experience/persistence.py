@@ -63,6 +63,7 @@ class ExperiencePersistence:
                 chapter_number=int(item.chapter_hint or 0),
                 template_id=template_id,
                 category=str(item.category or ""),
+                usage_stage="planned",
             )
 
     def save_chapter_experience_plan(

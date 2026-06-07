@@ -183,7 +183,11 @@ def _default_continue_executor(
             payload=payload,
             worker_config=worker_config,
         )
-        update_task = _db_task_updater(session_factory)
+        update_task = _db_task_updater(
+            session_factory,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+        )
         run_continue_project_with_config(
             task.id,
             str(task.project_id or ""),
@@ -231,7 +235,11 @@ def _default_new_executor(
             payload=payload,
             worker_config=worker_config,
         )
-        update_task = _db_task_updater(session_factory)
+        update_task = _db_task_updater(
+            session_factory,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+        )
         run_generation_with_config(
             task.id,
             payload.premise,
@@ -256,13 +264,25 @@ def _default_new_executor(
     return _execute
 
 
-def _db_task_updater(session_factory: Callable[[], Any]) -> Callable[..., None]:
+def _db_task_updater(
+    session_factory: Callable[[], Any],
+    *,
+    worker_id: str = "",
+    lease_seconds: int = 300,
+) -> Callable[..., None]:
     def _update(task_id: str, **changes: Any) -> None:
         with session_factory.begin() as session:
             row = session.get(GenerationTask, task_id)
             if row is None:
                 return
             _apply_task_changes(row, changes)
+            if str(worker_id or "").strip():
+                heartbeat_generation_task(
+                    session,
+                    task_id=task_id,
+                    worker_id=worker_id,
+                    lease_seconds=lease_seconds,
+                )
             session.add(row)
 
     return _update

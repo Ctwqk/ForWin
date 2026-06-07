@@ -7,7 +7,7 @@ from forwin.generation.task_lease import (
     generation_task_resume_from_chapter,
     heartbeat_generation_task,
 )
-from forwin.generation.worker import run_one_generation_task
+from forwin.generation.worker import _db_task_updater, run_one_generation_task
 from forwin.config import Config
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.task import GenerationTask
@@ -221,6 +221,58 @@ def test_heartbeat_extends_matching_running_lease() -> None:
             assert task is not None
             assert task.lease_expires_at is not None
             assert task.lease_expires_at > now + timedelta(seconds=60)
+    finally:
+        engine.dispose()
+
+
+def test_db_task_updater_refreshes_owned_running_lease_and_prevents_reclaim() -> None:
+    engine = get_engine(postgres_test_url("generation-task-runtime-heartbeat"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=10)).replace(tzinfo=None)
+    try:
+        with Session.begin() as session:
+            session.add(
+                GenerationTask(
+                    id="task-runtime-heartbeat",
+                    task_kind="generation",
+                    status="running",
+                    project_id="project-1",
+                    lease_owner="worker-1",
+                    lease_expires_at=expired,
+                    heartbeat_at=expired,
+                )
+            )
+
+        update_task = _db_task_updater(
+            Session,
+            worker_id="worker-1",
+            lease_seconds=300,
+        )
+        update_task(
+            "task-runtime-heartbeat",
+            current_stage="writing_chapter",
+            current_chapter=2,
+        )
+
+        with Session.begin() as session:
+            task = session.get(GenerationTask, "task-runtime-heartbeat")
+            assert task is not None
+            assert task.current_stage == "writing_chapter"
+            assert task.current_chapter == 2
+            assert task.heartbeat_at is not None
+            assert task.lease_expires_at is not None
+            assert task.heartbeat_at != expired
+            assert task.lease_expires_at != expired
+
+        with Session.begin() as session:
+            claim = claim_generation_task(
+                session,
+                worker_id="worker-2",
+                lease_seconds=300,
+            )
+
+        assert claim is None
     finally:
         engine.dispose()
 

@@ -373,6 +373,113 @@ def test_writer_prompt_suppresses_countdown_constraint_promoted_to_plan_patch() 
     assert "剩余 5 分钟" in content
 
 
+def test_writer_prompt_suppresses_countdown_constraint_with_generic_invariant_key() -> None:
+    context = ChapterContextPack(
+        project_id="p1",
+        project_title="灰城遗档",
+        premise="主角：陆明，旧城档案修复师。",
+        genre="悬疑科幻",
+        setting_summary="核心系统维持公共档案秩序。",
+        chapter_number=14,
+        chapter_plan_title="倒计时修正",
+        chapter_plan_one_line="陆明确认局部窗口。",
+        chapter_goals=["兑现计划补丁"],
+        canon_quality_context={
+            "suppressed_prompt_constraint_keys": ["invariant:countdown:倒计时甲"],
+            "countdown_constraints": [
+                {
+                    "countdown_key": "倒计时甲",
+                    "label": "倒计时甲",
+                    "latest_remaining_minutes": 10,
+                    "latest_chapter": 13,
+                    "raw_mention": "倒计时甲剩余十分钟。",
+                }
+            ],
+        },
+    )
+
+    prompt = build_single_chapter_draft_prompt(context)
+    content = "\n".join(message["content"] for message in prompt)
+
+    assert "倒计时甲" not in content
+
+
+def test_writer_prompt_includes_generic_invariant_constraints() -> None:
+    context = ChapterContextPack(
+        project_id="p1",
+        project_title="灰城遗档",
+        premise="主角：陆明，旧城档案修复师。",
+        genre="悬疑科幻",
+        setting_summary="核心系统维持公共档案秩序。",
+        chapter_number=14,
+        chapter_plan_title="强状态修正",
+        chapter_plan_one_line="陆明确认审计窗口和公开期限。",
+        chapter_goals=["承接强状态"],
+        canon_quality_context={
+            "invariant_constraints": [
+                {
+                    "invariant_key": "countdown:audit_window",
+                    "kind": "monotonic_numeric",
+                    "subject_key": "audit_window",
+                    "label": "审计窗口",
+                    "current_value": 12,
+                    "value_unit": "minutes",
+                    "latest_chapter": 13,
+                },
+                {
+                    "invariant_key": "deadline:public_hearing",
+                    "kind": "deadline",
+                    "subject_key": "public_hearing",
+                    "label": "公开听证期限",
+                    "current_value": {"deadline_chapter": 16},
+                    "constraints": {"cannot_extend_without_bridge": True},
+                },
+            ],
+        },
+    )
+
+    prompt = build_single_chapter_draft_prompt(context)
+    content = "\n".join(message["content"] for message in prompt)
+
+    assert "强状态 invariant ledger" in content
+    assert "审计窗口" in content
+    assert "小于等于 12 分钟" in content
+    assert "公开听证期限" in content
+    assert "截止" in content
+    assert "桥接" in content
+
+
+def test_writer_prompt_suppresses_generic_invariant_constraint_promoted_to_plan_patch() -> None:
+    context = ChapterContextPack(
+        project_id="p1",
+        project_title="灰城遗档",
+        premise="主角：陆明，旧城档案修复师。",
+        genre="悬疑科幻",
+        setting_summary="核心系统维持公共档案秩序。",
+        chapter_number=14,
+        chapter_plan_title="强状态修正",
+        chapter_plan_one_line="陆明确认公开期限。",
+        chapter_goals=["承接强状态"],
+        canon_quality_context={
+            "suppressed_prompt_constraint_keys": ["invariant:deadline:public_hearing"],
+            "invariant_constraints": [
+                {
+                    "invariant_key": "deadline:public_hearing",
+                    "kind": "deadline",
+                    "subject_key": "public_hearing",
+                    "label": "公开听证期限",
+                    "current_value": {"deadline_chapter": 16},
+                }
+            ],
+        },
+    )
+
+    prompt = build_single_chapter_draft_prompt(context)
+    content = "\n".join(message["content"] for message in prompt)
+
+    assert "公开听证期限" not in content
+
+
 def test_writer_prompt_includes_band_obligation_contract() -> None:
     context = ChapterContextPack(
         project_id="p1",

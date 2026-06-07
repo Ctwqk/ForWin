@@ -299,6 +299,57 @@ def test_canon_quality_context_keeps_closed_countdown_constraints() -> None:
         engine.dispose()
 
 
+def test_canon_quality_context_projects_countdowns_to_invariant_constraints() -> None:
+    engine = get_engine(postgres_test_url("future-plan-audit-invariant-context"))
+    init_db(engine)
+    session_factory = get_session_factory(engine)
+    try:
+        with session_factory() as session:
+            project = Project(title="强状态上下文", premise="测试", genre="悬疑", target_total_chapters=36)
+            session.add(project)
+            session.flush()
+            session.add(
+                CountdownLedgerRow(
+                    project_id=project.id,
+                    countdown_key="audit_window",
+                    label="审计窗口",
+                    chapter_number=12,
+                    normalized_remaining_minutes=18,
+                    raw_mention="审计窗口还剩十八分钟",
+                    status="consistent",
+                )
+            )
+            session.commit()
+
+            context = _build_canon_quality_context(
+                session=session,
+                project_id=project.id,
+                chapter_number=13,
+                target_total_chapters=36,
+            )
+
+        assert context["invariant_constraints"] == [
+            {
+                "invariant_key": "countdown:audit_window",
+                "kind": "monotonic_numeric",
+                "subject_key": "audit_window",
+                "label": "审计窗口",
+                "current_value": 18,
+                "value_unit": "minutes",
+                "status": "active",
+                "latest_chapter": 12,
+                "constraints": {
+                    "monotonic": True,
+                    "cannot_increase_without_bridge": True,
+                    "raw_mention": "审计窗口还剩十八分钟",
+                },
+                "allowed_bridges": ["reset", "reopened", "branch_clock"],
+            }
+        ]
+    finally:
+        engine.dispose()
+
+
 def test_canon_quality_context_drops_stale_generic_main_when_memory_reset_is_active() -> None:
     engine = get_engine(postgres_test_url("future-plan-audit-drop-stale-main-context"))
     init_db(engine)

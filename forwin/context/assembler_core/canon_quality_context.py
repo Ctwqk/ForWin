@@ -56,6 +56,7 @@ def _build_canon_quality_context(
         "canon_glossary": CanonGlossary().model_dump(mode="json"),
         "countdown_rule_profiles": {},
         "countdown_constraints": [],
+        "invariant_constraints": [],
         "character_state_constraints": [],
         "open_signals": [],
         "active_narrative_obligations": [],
@@ -127,6 +128,7 @@ def _build_canon_quality_context(
             for key, item in sorted(latest_by_key.items())
             if int(item.get("normalized_remaining_minutes") or 0) >= 0
         ]
+        invariant_constraints = _invariant_constraints_from_countdowns(countdown_constraints)
         latest_custody_by_character: dict[str, dict[str, Any]] = {}
         for transition in repo.list_character_transitions(
             project_id,
@@ -232,6 +234,7 @@ def _build_canon_quality_context(
         return {
             **base,
             "countdown_constraints": countdown_constraints,
+            "invariant_constraints": invariant_constraints,
             "character_state_constraints": character_state_constraints,
             "open_signals": open_signals,
             "active_narrative_obligations": active_narrative_obligations,
@@ -256,6 +259,45 @@ def _truthy(value: object) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "y", "on"}
     return bool(value)
+
+
+def _invariant_constraints_from_countdowns(countdown_constraints: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for item in countdown_constraints:
+        key = str(item.get("countdown_key") or "").strip()
+        if not key:
+            continue
+        raw_mention = str(item.get("raw_mention") or "")
+        result.append(
+            {
+                "invariant_key": f"countdown:{key}",
+                "kind": "monotonic_numeric",
+                "subject_key": key,
+                "label": str(item.get("label") or key),
+                "current_value": int(item.get("latest_remaining_minutes") or 0),
+                "value_unit": "minutes",
+                "status": _invariant_status(item.get("status")),
+                "latest_chapter": int(item.get("latest_chapter") or 0),
+                "constraints": {
+                    "monotonic": True,
+                    "cannot_increase_without_bridge": True,
+                    "raw_mention": raw_mention,
+                },
+                "allowed_bridges": ["reset", "reopened", "branch_clock"],
+            }
+        )
+    return result
+
+
+def _invariant_status(value: Any) -> str:
+    normalized = str(value or "").strip()
+    if normalized in {"active", "paused", "closed", "fulfilled", "resolved", "revoked", "warning", "conflict"}:
+        return normalized
+    if normalized in {"consistent", "open"}:
+        return "active"
+    if normalized in {"blocked", "error", "failed"}:
+        return "conflict"
+    return "unknown"
 
 
 _RECENT_CANON_CUSTODY_RELEASE_MARKERS = ("救出", "救下", "营救", "解救", "脱困", "释放", "获救")

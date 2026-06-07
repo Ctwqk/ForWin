@@ -96,16 +96,16 @@
 - Modify `forwin/writer/prompt_core/constraints.py`
 - Extend prompt/context regression tests
 
-- [ ] Write failing tests proving `invariant_constraints` appears in canon quality context while legacy `countdown_constraints` remains.
-- [ ] Write failing prompt tests for monotonic-minutes countdown invariants, deadline invariants, and generic suppression keys.
-- [ ] Implement context assembly using `BookStateQueryInterface.get_current_invariants()` or an equivalent compatibility projection through existing query boundaries.
-- [ ] Render invariant constraints in writer prompts:
+- [x] Write failing tests proving `invariant_constraints` appears in canon quality context while legacy `countdown_constraints` remains.
+- [x] Write failing prompt tests for monotonic-minutes countdown invariants, deadline invariants, and generic suppression keys.
+- [x] Implement context assembly using `BookStateQueryInterface.get_current_invariants()` or an equivalent compatibility projection through existing query boundaries.
+- [x] Render invariant constraints in writer prompts:
   - `monotonic_numeric` minutes as upper-bound / no-increase-without-bridge guidance;
   - `deadline` as deadline bridge guidance;
   - `state_transition` and `active_rule` as latest-state / revocation-boundary guidance when available.
-- [ ] Keep legacy countdown suppression keys supported during migration.
-- [ ] Re-run focused tests until green.
-- [ ] Commit: `feat: render canon invariant constraints`.
+- [x] Keep legacy countdown suppression keys supported during migration.
+- [x] Re-run focused tests until green.
+- [x] Commit: `feat: render canon invariant constraints`.
 
 ## Task 6: Verification And Runtime Recovery
 

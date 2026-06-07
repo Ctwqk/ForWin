@@ -35,6 +35,9 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
     countdown_constraints = [
         item for item in quality.get("countdown_constraints", []) or [] if isinstance(item, dict)
     ]
+    invariant_constraints = [
+        item for item in quality.get("invariant_constraints", []) or [] if isinstance(item, dict)
+    ]
     character_state_constraints = [
         item
         for item in quality.get("character_state_constraints", []) or []
@@ -64,6 +67,7 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
     )
     if not any((
         countdown_constraints,
+        invariant_constraints,
         character_state_constraints,
         open_signals,
         active_obligations,
@@ -74,19 +78,23 @@ def _canon_quality_context_section(context: ChapterContextPack) -> str | None:
         return None
     suppressed = _suppressed_prompt_constraint_keys(quality)
     countdown_constraints = _visible_countdown_constraints(countdown_constraints, suppressed=suppressed)
+    invariant_constraints = _visible_invariant_constraints(invariant_constraints, suppressed=suppressed)
     open_signals = _visible_open_signal_constraints(open_signals, suppressed=suppressed)
     active_obligations = _visible_obligation_constraints(active_obligations, suppressed=suppressed)
     _record_prompt_constraint_counts(
         quality,
         original_countdowns=quality.get("countdown_constraints", []) or [],
+        original_invariants=quality.get("invariant_constraints", []) or [],
         original_open_signals=quality.get("open_signals", []) or [],
         original_obligations=quality.get("active_narrative_obligations", []) or [],
         visible_countdowns=countdown_constraints,
+        visible_invariants=invariant_constraints,
         visible_open_signals=open_signals,
         visible_obligations=active_obligations,
     )
     sections = [
         *_final_chapter_constraint_section(is_final_chapter),
+        *_invariant_constraint_sections(invariant_constraints),
         *_countdown_constraint_sections(countdown_constraints, profiles=countdown_profiles),
         *_character_state_constraint_sections(character_state_constraints),
         *_open_signal_constraint_sections(open_signals, suppressed=set()),
@@ -229,6 +237,57 @@ def _character_state_constraint_sections(items: list[dict]) -> list[ConstraintSe
     return [ConstraintSection(key="character_state", priority=30, must_inject=True, text="\n".join(lines))]
 
 
+def _invariant_constraint_sections(items: list[dict]) -> list[ConstraintSection]:
+    if not items:
+        return []
+    lines = [
+        "  · 强状态 invariant ledger：",
+        "    · 这些状态优先于前情摘要、章节计划和旧设定；改写它们必须在正文内写出明确桥接事件。",
+    ]
+    for item in items[:8]:
+        invariant_key = str(item.get("invariant_key") or "").strip()
+        kind = str(item.get("kind") or "custom").strip()
+        label = str(item.get("label") or item.get("subject_key") or invariant_key).strip()
+        latest_chapter = int(item.get("latest_chapter") or item.get("last_updated_chapter") or 0)
+        current_value = item.get("current_value")
+        value_unit = str(item.get("value_unit") or "").strip()
+        if not invariant_key:
+            continue
+        if kind == "monotonic_numeric" and value_unit == "minutes":
+            latest = _optional_int(current_value)
+            if latest is None:
+                lines.append(
+                    f"    · {label}：当前是分钟级单调强状态；本章继续同一状态时不得增大，除非正文明确 reset、reopen 或分支窗口。"
+                )
+                continue
+            lines.append(
+                f"    · {label}：第{latest_chapter}章 ledger 当前值为 {latest} 分钟；"
+                f"本章继续同一状态时必须小于等于 {latest} 分钟，除非正文明确 reset、reopen 或分支窗口。"
+            )
+            continue
+        if kind == "deadline":
+            lines.append(
+                f"    · {label}：当前截止状态为 {_compact_value(current_value)}；"
+                "本章不得把截止条件静默延后、取消或改名；如要改变，必须写出明确桥接事件、代价或授权来源。"
+            )
+            continue
+        if kind == "state_transition":
+            lines.append(
+                f"    · {label}：当前状态为 {_compact_value(current_value)}；"
+                "本章必须承接该状态，状态改变需要明确桥接事件。"
+            )
+            continue
+        if kind == "active_rule":
+            lines.append(
+                f"    · {label}：当前 active rule 仍生效；本章必须遵守规则边界，撤销或豁免需要正文证据。"
+            )
+            continue
+        lines.append(
+            f"    · {label}：当前强状态为 {_compact_value(current_value)}；本章必须承接，改写需要明确桥接事件。"
+        )
+    return [ConstraintSection(key="invariants", priority=18, must_inject=True, text="\n".join(lines))]
+
+
 def _open_signal_constraint_sections(items: list[dict], *, suppressed: set[str]) -> list[ConstraintSection]:
     visible = [
         item for item in items
@@ -333,6 +392,19 @@ def _visible_countdown_constraints(items: list[dict], *, suppressed: set[str]) -
         item
         for item in items
         if _constraint_identity("countdown", str(item.get("countdown_key") or item.get("key") or "")) not in suppressed
+        and _constraint_identity(
+            "invariant",
+            f"countdown:{str(item.get('countdown_key') or item.get('key') or '').strip()}",
+        )
+        not in suppressed
+    ]
+
+
+def _visible_invariant_constraints(items: list[dict], *, suppressed: set[str]) -> list[dict]:
+    return [
+        item
+        for item in items
+        if _constraint_identity("invariant", str(item.get("invariant_key") or "")) not in suppressed
     ]
 
 
@@ -356,18 +428,21 @@ def _record_prompt_constraint_counts(
     quality: dict,
     *,
     original_countdowns: list,
+    original_invariants: list,
     original_open_signals: list,
     original_obligations: list,
     visible_countdowns: list,
+    visible_invariants: list,
     visible_open_signals: list,
     visible_obligations: list,
 ) -> None:
     original_count = (
         len([item for item in original_countdowns if isinstance(item, dict)])
+        + len([item for item in original_invariants if isinstance(item, dict)])
         + len([item for item in original_open_signals if isinstance(item, dict)])
         + len([item for item in original_obligations if isinstance(item, dict)])
     )
-    remaining_count = len(visible_countdowns) + len(visible_open_signals) + len(visible_obligations)
+    remaining_count = len(visible_countdowns) + len(visible_invariants) + len(visible_open_signals) + len(visible_obligations)
     quality["form_prompt_constraints_suppressed"] = max(original_count - remaining_count, 0)
     quality["form_prompt_constraints_remaining"] = remaining_count
 
@@ -380,12 +455,31 @@ def _display_countdown_label(*, key: str, label: str, profiles: dict | None = No
     return display_countdown_label(key=key, label=label, profiles=profiles)
 
 
+def _optional_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _compact_value(value: object) -> str:
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    if isinstance(value, list):
+        return json.dumps(value, ensure_ascii=False)
+    text = str(value or "").strip()
+    return text or "未知"
+
+
 __all__ = [
     'ConstraintSection',
     '_canon_quality_context_section',
     '_render_constraint_sections',
     '_final_chapter_constraint_section',
     '_countdown_constraint_sections',
+    '_invariant_constraint_sections',
     '_character_state_constraint_sections',
     '_open_signal_constraint_sections',
     '_future_plan_audit_sections',
@@ -393,6 +487,7 @@ __all__ = [
     '_structural_patch_debt_sections',
     '_suppressed_prompt_constraint_keys',
     '_visible_countdown_constraints',
+    '_visible_invariant_constraints',
     '_visible_open_signal_constraints',
     '_visible_obligation_constraints',
     '_constraint_identity',

@@ -16,6 +16,7 @@ from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.genesis import PromptTrace
 from forwin.models.governance import DecisionEvent
 from forwin.models.observability import PerformanceSpan
+from forwin.models.phase import TropeUsageRecord
 from forwin.models.project import ChapterPlan
 from forwin.models.task import GenerationTask
 
@@ -125,9 +126,11 @@ def compute_summary(
     *,
     events: list[DecisionEvent] | None = None,
     tasks: list[GenerationTask] | None = None,
+    trope_usage_counts: dict[str, int] | None = None,
 ) -> dict[str, object]:
     events = events or []
     tasks = tasks or []
+    trope_usage_counts = trope_usage_counts or {}
     missing_metric_sources = sorted(
         field.name
         for field in fields(ChapterMetric)
@@ -165,6 +168,18 @@ def compute_summary(
             events,
             issue_type="macro_status_evidence_gap",
         ),
+        "planned_trope_usage_count": int(trope_usage_counts.get("planned", 0)),
+        "accepted_trope_usage_count": int(trope_usage_counts.get("accepted", 0)),
+        "canon_commit_failed_count": _event_count(
+            events,
+            DecisionEventType.CANON_COMMIT_FAILED,
+        ),
+        "generation_worker_heartbeat_failed_count": _event_count(
+            events,
+            DecisionEventType.GENERATION_WORKER_HEARTBEAT_FAILED,
+        ),
+        "failed_chapter_stop_count": _failed_chapter_stop_count(tasks),
+        "context_memory_pruned_count": _context_memory_pruned_count(events),
         "missing_metric_sources": missing_metric_sources,
     }
 
@@ -175,12 +190,18 @@ def write_reports(
     *,
     events: list[DecisionEvent] | None = None,
     tasks: list[GenerationTask] | None = None,
+    trope_usage_counts: dict[str, int] | None = None,
 ) -> None:
     output.mkdir(parents=True, exist_ok=True)
     _write_metrics_csv(rows, output / "metrics.csv")
     (output / "summary.json").write_text(
         json.dumps(
-            compute_summary(rows, events=events, tasks=tasks),
+            compute_summary(
+                rows,
+                events=events,
+                tasks=tasks,
+                trope_usage_counts=trope_usage_counts,
+            ),
             ensure_ascii=False,
             indent=2,
             sort_keys=True,
@@ -217,7 +238,14 @@ def main(argv: list[str] | None = None) -> int:
             rows = collect_rows(session, args.project_id, args.chapters)
             events = _project_decision_events(session, args.project_id)
             tasks = _project_generation_tasks(session, args.project_id)
-        write_reports(rows, args.output, events=events, tasks=tasks)
+            trope_usage_counts = _trope_usage_counts(session, args.project_id)
+        write_reports(
+            rows,
+            args.output,
+            events=events,
+            tasks=tasks,
+            trope_usage_counts=trope_usage_counts,
+        )
     finally:
         engine.dispose()
     return 0
@@ -270,6 +298,21 @@ def _project_generation_tasks(session, project_id: str) -> list[GenerationTask]:
         .order_by(GenerationTask.updated_at.asc(), GenerationTask.created_at.asc())
         .all()
     )
+
+
+def _trope_usage_counts(session, project_id: str) -> dict[str, int]:  # noqa: ANN001
+    rows = (
+        session.query(TropeUsageRecord.usage_stage, TropeUsageRecord.id)
+        .filter(TropeUsageRecord.project_id == project_id)
+        .all()
+    )
+    counts = {"planned": 0, "accepted": 0}
+    for usage_stage, _row_id in rows:
+        stage = str(usage_stage or "accepted")
+        if stage not in counts:
+            stage = "accepted"
+        counts[stage] += 1
+    return counts
 
 
 def _decision_events_by_chapter(session, project_id: str) -> dict[int, list[DecisionEvent]]:  # noqa: ANN001
@@ -572,6 +615,29 @@ def _task_resume_success_rate(tasks: list[GenerationTask]) -> float | None:
         return None
     successes = sum(1 for task in resume_tasks if str(task.status or "") == "completed")
     return round(successes / len(resume_tasks), 3)
+
+
+def _event_count(events: list[DecisionEvent], event_type: str) -> int:
+    return sum(1 for event in events if str(event.event_type or "") == str(event_type))
+
+
+def _failed_chapter_stop_count(tasks: list[GenerationTask]) -> int:
+    return sum(len(_json_list_ints(task.failed_chapters_json)) for task in tasks)
+
+
+def _context_memory_pruned_count(events: list[DecisionEvent]) -> int:
+    total = 0
+    for event in events:
+        if str(event.event_type or "") != str(DecisionEventType.CONTEXT_PRUNED):
+            continue
+        payload = _json_loads(event.payload_json, {})
+        if not isinstance(payload, dict):
+            continue
+        try:
+            total += int(payload.get("pruned_memories") or 0)
+        except (TypeError, ValueError):
+            continue
+    return total
 
 
 def _future_plan_issue_rate(

@@ -6,6 +6,7 @@ from forwin.governance import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.governance import DecisionEvent
 from forwin.models.observability import PerformanceSpan
+from forwin.models.phase import TropeUsageRecord
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from scripts import pulp_pressure_test
@@ -83,9 +84,32 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
                     status="completed",
                     requested_chapters=2,
                     completed_chapters_json="[1, 2]",
+                    failed_chapters_json="[3]",
                     resume_from_chapter=2,
                     run_until_chapter=2,
                 )
+            )
+            session.add_all(
+                [
+                    TropeUsageRecord(
+                        project_id=project.id,
+                        arc_id=arc.id,
+                        band_id="band-1",
+                        chapter_number=1,
+                        template_id="trope-a",
+                        category="power",
+                        usage_stage="planned",
+                    ),
+                    TropeUsageRecord(
+                        project_id=project.id,
+                        arc_id=arc.id,
+                        band_id="band-1",
+                        chapter_number=1,
+                        template_id="trope-a",
+                        category="power",
+                        usage_stage="accepted",
+                    ),
+                ]
             )
             session.add_all(
                 [
@@ -155,6 +179,33 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
                         event_type="progression_rule_evaluated",
                         payload_json=json.dumps({"violated": True}, ensure_ascii=False),
                     ),
+                    DecisionEvent(
+                        project_id=project.id,
+                        chapter_number=2,
+                        event_type=DecisionEventType.CANON_COMMIT_FAILED,
+                        payload_json=json.dumps(
+                            {"reason": "apply_failed"},
+                            ensure_ascii=False,
+                        ),
+                    ),
+                    DecisionEvent(
+                        project_id=project.id,
+                        chapter_number=2,
+                        event_type=DecisionEventType.GENERATION_WORKER_HEARTBEAT_FAILED,
+                        payload_json=json.dumps(
+                            {"worker_id": "worker-1"},
+                            ensure_ascii=False,
+                        ),
+                    ),
+                    DecisionEvent(
+                        project_id=project.id,
+                        chapter_number=2,
+                        event_type=DecisionEventType.CONTEXT_PRUNED,
+                        payload_json=json.dumps(
+                            {"pruned_memories": 2},
+                            ensure_ascii=False,
+                        ),
+                    ),
                     PerformanceSpan(
                         project_id=project.id,
                         chapter_number=1,
@@ -208,6 +259,12 @@ def test_pressure_report_uses_real_chapter_rows(tmp_path, monkeypatch) -> None:
         assert summary["arc_macro_boundary_failure_rate"] == 1
         assert summary["progression_rule_violation_rate"] == 1
         assert summary["macro_status_evidence_gap_rate"] == 1
+        assert summary["planned_trope_usage_count"] == 1
+        assert summary["accepted_trope_usage_count"] == 1
+        assert summary["canon_commit_failed_count"] == 1
+        assert summary["generation_worker_heartbeat_failed_count"] == 1
+        assert summary["failed_chapter_stop_count"] == 1
+        assert summary["context_memory_pruned_count"] == 2
         assert "future versions can replace" not in (
             output / "README.md"
         ).read_text(encoding="utf-8").lower()

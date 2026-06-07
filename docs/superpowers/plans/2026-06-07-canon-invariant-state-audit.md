@@ -24,15 +24,15 @@
 **Files:**
 - Create `forwin/canon_quality/invariants.py`
 - Modify `forwin/book_state/query_interface.py`
-- Add `tests/test_book_state_query_interface.py`
+- Extend `tests/test_bookstate_query_interface.py`
 
-- [ ] Write failing tests proving countdown rows project to `CanonInvariant(kind="monotonic_numeric", value_unit="minutes")` while the old countdown view still works.
-- [ ] Write a failing test proving active rules with an `invariant` payload project through `get_current_invariants()`.
-- [ ] Run `.venv/bin/python -m pytest tests/test_book_state_query_interface.py -q` and confirm the failures are caused by missing invariant support.
-- [ ] Implement `CanonInvariant`, `InvariantDriftTarget`, `invariant_from_countdown_state()`, `invariant_from_active_rule()`, and `legacy_countdown_key_for_invariant()`.
-- [ ] Add `BookStateQueryInterface.get_current_invariants()` and `InvariantStateSnapshot.invariants`.
-- [ ] Re-run the focused test until green.
-- [ ] Commit: `feat: project canon invariants through book state query`.
+- [x] Write failing tests proving countdown rows project to `CanonInvariant(kind="monotonic_numeric", value_unit="minutes")` while the old countdown view still works.
+- [x] Write a failing test proving active rules with an `invariant` payload project through `get_current_invariants()`.
+- [x] Run `.venv/bin/python -m pytest tests/test_bookstate_query_interface.py -q` and confirm the failures are caused by missing invariant support.
+- [x] Implement `CanonInvariant`, `InvariantDriftTarget`, `invariant_from_countdown_state()`, `invariant_from_active_rule()`, and `legacy_countdown_key_for_invariant()`.
+- [x] Add `BookStateQueryInterface.get_current_invariants()` and `InvariantStateSnapshot.invariants`.
+- [x] Re-run the focused test until green.
+- [x] Commit: `feat: project canon invariants through book state query`.
 
 ## Task 2: ActiveRuleStore Temporal Semantics
 

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from forwin.models import Base, Project
 from forwin.models import ChapterPlan
 from forwin.models.phase import BandExperiencePlan
 from forwin.narrative_obligations.types import NarrativeObligation
@@ -22,6 +26,12 @@ def _plan(number: int, *, one_line: str, goals: list[str] | None = None) -> Chap
         experience_plan_json="{}",
         status="planned",
     )
+
+
+def _session():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine)()
 
 
 def test_future_plan_auditor_flags_day_scale_memory_reset_after_minute_ledger() -> None:
@@ -609,6 +619,50 @@ def test_future_plan_auditor_rewrites_custody_plan_after_recent_release() -> Non
     assert "仍被羁押" not in serialized
     assert "已脱困但仍受追踪器或系统权限限制" in serialized
     assert "不得把韩青写回被捕/羁押/固定状态" in serialized
+
+
+def test_audit_and_apply_clears_blocker_after_successful_future_plan_patch() -> None:
+    session = _session()
+    project = Project(
+        id="project-1",
+        title="未来计划修补",
+        premise="测试",
+        target_total_chapters=36,
+    )
+    plan = _plan(
+        32,
+        one_line="陆明在不破坏韩青被捕状态的前提下打开救援窗口。",
+        goals=["确认韩青仍被羁押，并让她提供核心系统底层档案库入口。"],
+    )
+    session.add(project)
+    session.add(plan)
+    session.commit()
+
+    result = FuturePlanAuditor().audit_and_apply(
+        session=session,
+        project_id="project-1",
+        current_chapter=31,
+        trigger_stage="post_acceptance",
+        plans=[plan],
+        canon_quality_context={
+            "character_state_constraints": [
+                {
+                    "character_name": "韩青",
+                    "transition_type": "custody_state",
+                    "latest_state": "free",
+                    "latest_chapter": 31,
+                    "evidence_refs": ["chapter:31"],
+                }
+            ]
+        },
+        obligations=[],
+        target_total_chapters=36,
+        include_current=False,
+    )
+
+    assert result.applied_plan_patch_ids
+    assert result.blocking_reasons == []
+    assert result.status == "warn"
 
 
 def test_future_plan_auditor_flags_closed_countdown_reopened_in_plan() -> None:

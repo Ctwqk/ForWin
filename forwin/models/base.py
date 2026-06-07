@@ -600,6 +600,7 @@ def _upgrade_trope_usage_records(conn) -> None:
                 chapter_number INTEGER NOT NULL DEFAULT 0,
                 template_id VARCHAR NOT NULL,
                 category VARCHAR NOT NULL DEFAULT '',
+                usage_stage VARCHAR NOT NULL DEFAULT 'accepted',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -607,8 +608,26 @@ def _upgrade_trope_usage_records(conn) -> None:
     )
     conn.execute(
         text(
+            "ALTER TABLE trope_usage_records "
+            "ADD COLUMN IF NOT EXISTS usage_stage VARCHAR NOT NULL DEFAULT 'accepted'"
+        )
+    )
+    conn.execute(
+        text(
+            "UPDATE trope_usage_records SET usage_stage = 'accepted' "
+            "WHERE usage_stage IS NULL OR usage_stage = ''"
+        )
+    )
+    conn.execute(
+        text(
             "CREATE INDEX IF NOT EXISTS ix_trope_usage_project_band "
             "ON trope_usage_records (project_id, band_id, created_at)"
+        )
+    )
+    conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_trope_usage_project_stage_created "
+            "ON trope_usage_records (project_id, usage_stage, created_at)"
         )
     )
 

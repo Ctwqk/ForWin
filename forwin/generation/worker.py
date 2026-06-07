@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -114,7 +115,18 @@ def run_one_generation_task(
             tags={"execution_mode": "continue" if project_id else "initial"},
             metrics={"resume_from_chapter": max(0, int(resume_from_chapter or 0))},
         ):
-            executor(task, resume_from_chapter)
+            stop_periodic_heartbeat = _start_periodic_heartbeat(
+                session_factory=session_factory,
+                config=config,
+                task_id=task_id,
+                project_id=project_id,
+                worker_id=worker_id,
+                lease_seconds=lease_seconds,
+            )
+            try:
+                executor(task, resume_from_chapter)
+            finally:
+                stop_periodic_heartbeat()
     except Exception as exc:
         logger.exception("Generation worker failed task %s", task_id)
         record_worker_execution_failed(
@@ -286,6 +298,61 @@ def _db_task_updater(
             session.add(row)
 
     return _update
+
+
+def _start_periodic_heartbeat(
+    *,
+    session_factory: Callable[[], Any],
+    config: Config | None,
+    task_id: str,
+    project_id: str,
+    worker_id: str,
+    lease_seconds: int,
+) -> Callable[[], None]:
+    stop_event = threading.Event()
+    interval_seconds = _heartbeat_interval_seconds(lease_seconds)
+
+    def _loop() -> None:
+        while not stop_event.wait(interval_seconds):
+            try:
+                with session_factory.begin() as session:
+                    heartbeat_ok = heartbeat_generation_task(
+                        session,
+                        task_id=task_id,
+                        worker_id=worker_id,
+                        lease_seconds=lease_seconds,
+                    )
+            except Exception:
+                logger.exception("Periodic heartbeat failed for generation task %s", task_id)
+                continue
+            if not heartbeat_ok:
+                record_worker_heartbeat_failed(
+                    session_factory=session_factory,
+                    config=config,
+                    task_id=task_id,
+                    project_id=project_id,
+                    worker_id=worker_id,
+                    lease_seconds=lease_seconds,
+                )
+                return
+
+    thread = threading.Thread(
+        target=_loop,
+        name=f"forwin-generation-heartbeat-{task_id}",
+        daemon=True,
+    )
+    thread.start()
+
+    def _stop() -> None:
+        stop_event.set()
+        thread.join(timeout=interval_seconds + 1.0)
+
+    return _stop
+
+
+def _heartbeat_interval_seconds(lease_seconds: int) -> float:
+    normalized = max(1, int(lease_seconds or 300))
+    return float(max(1, min(60, normalized // 3 or 1)))
 
 
 def _db_task_flag(

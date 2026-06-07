@@ -52,7 +52,7 @@ def _fatal_only_residual_refs(signals: list[CanonQualitySignal]) -> list[str]:
     ]
 
 
-def _fatal_only_required_repair_scope(
+def _required_repair_scope_for_signals(
     signals: list[CanonQualitySignal],
 ) -> Literal["draft", "chapter_plan", "band", "arc", "book"] | None:
     from forwin.reviewer.repair_scope_router import RepairScopeKind, route_signal_kind
@@ -188,7 +188,7 @@ def evaluate_canon_admission(
         )
         blocking = fatal_blocking
         deterministic_refs = [signal.signal_id for signal in fatal_blocking]
-        required_repair_scope = _fatal_only_required_repair_scope(fatal_blocking)
+        required_repair_scope = _required_repair_scope_for_signals(fatal_blocking)
         summary = (
             f"canon quality gate fatal_only: commit_allowed={commit_allowed}, "
             f"fatal_blocking={len(fatal_blocking)}, form_blocking={len(fatal_form_blocking_refs)}, "
@@ -219,7 +219,7 @@ def evaluate_canon_admission(
             f"narrative_obligations={len(active_obligations)}"
         )
     if resolved_mode != "fatal_only":
-        required_repair_scope = "draft" if blocking else None
+        required_repair_scope = _required_repair_scope_for_signals(blocking)
 
     return CanonAdmissionGateResult(
         project_id=project_id,

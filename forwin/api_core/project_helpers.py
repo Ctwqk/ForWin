@@ -298,6 +298,12 @@ def _update_task(task_id: str, **changes: Any) -> None:
         except (TypeError, ValueError):
             normalized["current_chapter"] = 0
     now = _utcnow()
+    next_status = str(normalized.get("status", task.get("status", "")) or "").strip()
+    if next_status == "running" and str(task.get("lease_owner", "") or "").strip():
+        normalized["heartbeat_at"] = now
+        normalized["lease_expires_at"] = now + timedelta(
+            seconds=_running_task_lease_seconds(task)
+        )
     if normalized.get("status") == "paused":
         if bool(task.get("pause_requested")) or bool(normalized.get("pause_requested")):
             normalized["pause_requested"] = True
@@ -337,6 +343,14 @@ def _update_task(task_id: str, **changes: Any) -> None:
             _mark_task_persistence_degraded(task_id, task, exc)
         else:
             _clear_task_persistence_degraded(task_id, task)
+
+
+def _running_task_lease_seconds(task: dict[str, Any]) -> int:
+    heartbeat_at = _coerce_task_datetime(task.get("heartbeat_at"))
+    lease_expires_at = _coerce_task_datetime(task.get("lease_expires_at"))
+    if heartbeat_at > datetime.min.replace(tzinfo=timezone.utc) and lease_expires_at > heartbeat_at:
+        return max(30, int((lease_expires_at - heartbeat_at).total_seconds()))
+    return 300
 
 
 def _task_should_abort(task_id: str) -> bool:

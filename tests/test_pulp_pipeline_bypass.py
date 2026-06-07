@@ -208,6 +208,21 @@ def test_fatal_only_routes_chapter_plan_fatal_signal_repair_scope() -> None:
     assert result.required_repair_scope == "chapter_plan"
 
 
+def test_strict_mode_does_not_route_operator_signal_to_draft_repair() -> None:
+    result = evaluate_canon_admission(
+        project_id="project-1",
+        chapter_number=1,
+        signals=[canon_signal("form_llm_unavailable", evidence_refs=[])],
+        mode="strict",
+    )
+
+    assert result.commit_allowed is False
+    assert result.verdict == "fail"
+    assert result.blocking_issue_count == 1
+    assert result.deterministic_issue_refs == ["sig-form_llm_unavailable"]
+    assert result.required_repair_scope is None
+
+
 def test_fatal_only_does_not_block_warning_signal() -> None:
     result = evaluate_canon_admission(
         project_id="project-1",

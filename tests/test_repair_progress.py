@@ -136,6 +136,30 @@ def test_repair_loop_checks_pause_between_retry_attempts() -> None:
     assert pause_check < attempt_load
 
 
+def test_repair_loop_checks_pause_after_rewrite_before_review() -> None:
+    source = inspect.getsource(WritingOrchestrator._run_repair_loop_for_phase)
+    rewrite_call = source.find("rewritten_output = self._write_chapter_with_attention_fallback")
+    after_rewrite = source.find("if self._pause_requested()", rewrite_call)
+    review_call = source.find("rewritten_review = self._review_current_output", rewrite_call)
+
+    assert rewrite_call != -1
+    assert after_rewrite != -1
+    assert review_call != -1
+    assert rewrite_call < after_rewrite < review_call
+
+
+def test_repair_loop_commits_repair_start_before_rewrite_call() -> None:
+    source = inspect.getsource(WritingOrchestrator._run_repair_loop_for_phase)
+    repair_started = source.find("repair_started_event = self._record_decision_event")
+    commit_after_start = source.find("session.commit()", repair_started)
+    rewrite_call = source.find("rewritten_output = self._write_chapter_with_attention_fallback")
+
+    assert repair_started != -1
+    assert commit_after_start != -1
+    assert rewrite_call != -1
+    assert repair_started < commit_after_start < rewrite_call
+
+
 def test_repair_must_fix_is_carried_into_writer_rule_anchors() -> None:
     payload = WritingOrchestrator._chapter_experience_patch_payload(
         ChapterExperiencePlan(rule_anchors=["保留既有规则"]),

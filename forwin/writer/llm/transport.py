@@ -59,7 +59,13 @@ class TransportMixin:
         thread.start()
         thread.join(wall_timeout)
         if thread.is_alive():
-            self._replace_timed_out_client(client)
+            try:
+                self._replace_timed_out_client(client)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Failed to replace timed-out LLM HTTP client; preserving current client state: %s",
+                    exc,
+                )
             raise httpx.ReadTimeout(
                 f"LLM HTTP request exceeded wall timeout ({wall_timeout:.1f}s)"
             )
@@ -69,17 +75,20 @@ class TransportMixin:
         return value  # type: ignore[return-value]
 
     def _replace_timed_out_client(self, timed_out_client: object) -> None:
-        close = getattr(timed_out_client, "close", None)
+        replacement = self._build_http_client()
+        close_timed_out = False
+        close_replacement = False
         with self._client_lock:
             if self.client is timed_out_client:
-                try:
-                    if callable(close):
-                        close()
-                finally:
-                    self.client = self._build_http_client()
-                return
-        if callable(close):
-            close()
+                self.client = replacement
+                close_timed_out = True
+            else:
+                close_replacement = True
+                close_timed_out = True
+        if close_replacement:
+            _close_http_client(replacement)
+        if close_timed_out:
+            _close_http_client(timed_out_client)
 
     def close(self) -> None:
         """Close the underlying httpx client."""
@@ -91,6 +100,12 @@ class TransportMixin:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+
+def _close_http_client(client: object) -> None:
+    close = getattr(client, "close", None)
+    if callable(close):
+        close()
 
 
 __all__ = [

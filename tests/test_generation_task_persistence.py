@@ -219,6 +219,41 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertEqual(paused["current_stage"], "paused")
         self.assertTrue(paused["pause_requested"])
 
+    def test_running_progress_update_refreshes_generation_task_lease(self) -> None:
+        task = api_module._create_task_record(title="lease progress", requested_chapters=1)
+        original_heartbeat = datetime.now(timezone.utc) - timedelta(minutes=10)
+        original_lease = original_heartbeat + timedelta(minutes=5)
+        task["status"] = "running"
+        task["current_stage"] = "writing_chapter"
+        task["lease_owner"] = "worker-progress"
+        task["heartbeat_at"] = original_heartbeat
+        task["lease_expires_at"] = original_lease
+        api_module._persist_generation_task("task-lease-progress", task)
+
+        api_module._update_task(
+            "task-lease-progress",
+            current_stage="continuity_review",
+            current_chapter=1,
+        )
+
+        loaded = api_module._get_generation_task_or_404("task-lease-progress")
+        loaded_heartbeat = api_module._coerce_task_datetime(loaded["heartbeat_at"])
+        loaded_lease = api_module._coerce_task_datetime(loaded["lease_expires_at"])
+        self.assertEqual(loaded["status"], "running")
+        self.assertEqual(loaded["current_stage"], "continuity_review")
+        self.assertGreater(loaded_heartbeat, original_heartbeat)
+        self.assertGreater(loaded_lease, original_lease)
+        self.assertGreater(
+            (loaded_lease - loaded_heartbeat).total_seconds(),
+            290,
+        )
+        with self.session_factory() as session:
+            row = session.get(GenerationTask, "task-lease-progress")
+            self.assertIsNotNone(row)
+            assert row is not None
+            self.assertGreater(api_module._coerce_task_datetime(row.heartbeat_at), original_heartbeat)
+            self.assertGreater(api_module._coerce_task_datetime(row.lease_expires_at), original_lease)
+
     def test_queued_generation_task_can_be_marked_pause_requested(self) -> None:
         task = api_module._create_task_record(title="queued pause", requested_chapters=1)
         task["project_id"] = "project-queued-pause"
@@ -407,6 +442,25 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertTrue(response.has_active_generation_task)
         self.assertFalse(response.safe_to_restart)
         self.assertEqual(response.active_task_ids, ["task-old-running"])
+
+    def test_active_generation_check_does_not_resurrect_terminal_db_task_from_cache(self) -> None:
+        running = api_module._create_task_record(title="缓存旧状态", requested_chapters=1)
+        running["project_id"] = "project-stale-cache"
+        running["status"] = "running"
+        running["current_stage"] = "repair_review"
+        api_module._persist_generation_task("task-stale-cache-1", running)
+
+        with self.session_factory.begin() as session:
+            row = session.get(GenerationTask, "task-stale-cache-1")
+            self.assertIsNotNone(row)
+            row.status = "needs_review"
+            row.current_stage = "paused_for_review"
+
+        response = api_module.active_generation_task_check("project-stale-cache")
+
+        self.assertFalse(response.has_active_generation_task)
+        self.assertTrue(response.safe_to_restart)
+        self.assertEqual(response.active_task_ids, [])
 
     def test_database_rejects_two_active_generation_tasks_for_same_project(self) -> None:
         now = datetime.now(timezone.utc)

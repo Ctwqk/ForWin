@@ -57,6 +57,16 @@ def test_publisher_compliance_reviewer_emits_error_for_contact_text() -> None:
     assert issue.evidence_refs
 
 
+def test_publisher_compliance_reviewer_allows_contact_label_in_fictional_record() -> None:
+    verdict = PublisherComplianceReviewer().review(
+        _context(),
+        _writer("档案表格的标题栏写着名字、地址、联系方式，林陈扫过几行。"),
+    )
+
+    assert verdict.verdict == "pass"
+    assert verdict.issues == []
+
+
 def test_publisher_compliance_reviewer_emits_warning_for_soft_promotional_text() -> None:
     verdict = PublisherComplianceReviewer().review(
         _context(),

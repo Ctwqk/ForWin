@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
+from threading import Event
 
 from forwin.generation.task_lease import (
     claim_generation_task,
@@ -332,6 +334,52 @@ def test_worker_claims_and_executes_queued_project_task() -> None:
             assert task is not None
             assert task.lease_owner == "worker-1"
             assert task.heartbeat_at is not None
+    finally:
+        engine.dispose()
+
+
+def test_worker_refreshes_lease_during_long_executor_call() -> None:
+    engine = get_engine(postgres_test_url("generation-worker-periodic-heartbeat"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    heartbeat_seen = Event()
+    try:
+        with Session.begin() as session:
+            session.add(
+                GenerationTask(
+                    id="task-worker-periodic-heartbeat",
+                    task_kind="generation",
+                    status="queued",
+                    project_id="project-1",
+                )
+            )
+
+        def execute(task: GenerationTask, resume: int) -> None:
+            _ = resume
+            with Session() as session:
+                row = session.get(GenerationTask, task.id)
+                baseline = row.heartbeat_at if row is not None else None
+            deadline = time.monotonic() + 4.0
+            while time.monotonic() < deadline:
+                time.sleep(0.05)
+                with Session() as session:
+                    row = session.get(GenerationTask, task.id)
+                    current = row.heartbeat_at if row is not None else None
+                if baseline is not None and current is not None and current != baseline:
+                    heartbeat_seen.set()
+                    return
+            raise AssertionError("periodic heartbeat did not refresh during executor call")
+
+        result = run_one_generation_task(
+            session_factory=Session,
+            worker_id="worker-periodic",
+            config=Config(),
+            lease_seconds=3,
+            execute_continue=execute,
+        )
+
+        assert result.executed is True
+        assert heartbeat_seen.is_set()
     finally:
         engine.dispose()
 

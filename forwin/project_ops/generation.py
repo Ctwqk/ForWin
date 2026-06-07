@@ -268,16 +268,16 @@ def extend_project_generation(
         waiting_acceptance = [plan.chapter_number for plan in plans if plan.status == "drafted"]
         if waiting_acceptance:
             raise HTTPException(409, f"仍有章节等待接受：{', '.join(str(item) for item in waiting_acceptance)}")
-        pending_generation = [
+        failed_generation = [
             plan.chapter_number
             for plan in plans
-            if str(plan.status or "") in {"planned", "failed"}
+            if str(plan.status or "") == "failed"
         ]
-        if pending_generation:
+        if failed_generation:
             raise HTTPException(
                 409,
-                "已有待生成章节计划，请先使用 continue-generation："
-                + ", ".join(str(item) for item in pending_generation[:12]),
+                "已有失败章节待处理，请先使用 retry/continue-generation："
+                + ", ".join(str(item) for item in failed_generation[:12]),
             )
 
         additional_chapters = int(req.additional_chapters or 0)

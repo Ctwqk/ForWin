@@ -244,9 +244,10 @@ class RoutingMixin:
             return "feedback_analysis"
         if stage in {
             "chapter_review",
+            "chapter_review_form",
             "chapter_review_json_repair",
             "repair_verification",
-        } or family in {"reviewer", "review"}:
+        } or family in {"chapter_review_form", "reviewer", "review"}:
             return "review_json"
         if any(token in stage for token in ("chapter_rewrite", "repair")) or family == "repair":
             return "repair_generation"

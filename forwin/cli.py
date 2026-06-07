@@ -19,19 +19,20 @@ from forwin.config import Config
 
 def _get_config(args: argparse.Namespace) -> Config:
     """Build Config from CLI args + environment."""
+    config = Config.from_env()
     kwargs: dict = {}
     database_url = getattr(args, "database_url", None)
     if database_url:
         kwargs["database_url"] = database_url
     if hasattr(args, "api_key") and args.api_key:
         kwargs["minimax_api_key"] = args.api_key
-    elif os.environ.get("MINIMAX_API_KEY"):
-        kwargs["minimax_api_key"] = os.environ["MINIMAX_API_KEY"]
     if hasattr(args, "model") and args.model:
         kwargs["minimax_model"] = args.model
     if hasattr(args, "base_url") and args.base_url:
         kwargs["minimax_base_url"] = args.base_url
-    return Config(**kwargs)
+    if kwargs:
+        return config.model_copy(update=kwargs)
+    return config
 
 
 # ------------------------------------------------------------------

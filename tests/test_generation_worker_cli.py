@@ -5,11 +5,33 @@ import logging
 from sqlalchemy import select
 
 from forwin.config import Config
+from forwin.cli import _get_config
 from forwin.generation.worker import GenerationWorkerResult
 from forwin.generation.worker_cli import run_generation_worker_loop
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.governance import DecisionEvent
 from tests.postgres import postgres_test_url
+
+
+def test_generation_worker_cli_config_loads_container_environment(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "FORWIN_DATABASE_URL",
+        "postgresql+psycopg://forwin:forwin@postgres:5432/forwin",
+    )
+    monkeypatch.setenv("FORWIN_QDRANT_URL", "http://qdrant:6333")
+    monkeypatch.setenv("MINIMAX_API_KEY", "sk-env")
+
+    class Args:
+        database_url = None
+        api_key = None
+        model = None
+        base_url = None
+
+    config = _get_config(Args())
+
+    assert config.database_url == "postgresql+psycopg://forwin:forwin@postgres:5432/forwin"
+    assert config.qdrant_url == "http://qdrant:6333"
+    assert config.minimax_api_key == "sk-env"
 
 
 def test_generation_worker_loop_once_exits_when_no_task(caplog) -> None:

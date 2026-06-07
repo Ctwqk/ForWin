@@ -231,29 +231,30 @@ def _active_generation_task_ids(project_id: str = "", *, session=None) -> list[s
         criteria = [
             GenerationTask.deleted_at.is_(None),
             GenerationTask.task_kind == "generation",
-            GenerationTask.status.notin_(tuple(api_state._GENERATION_TERMINAL_STATUSES)),
         ]
         if normalized_project_id:
             criteria.append(GenerationTask.project_id == normalized_project_id)
         rows = active_session.execute(
-            select(GenerationTask.id).where(*criteria).order_by(
+            select(GenerationTask.id, GenerationTask.status).where(*criteria).order_by(
                 GenerationTask.updated_at.desc(),
                 GenerationTask.id.desc(),
             )
-        ).scalars().all()
+        ).all()
         active_ids: list[str] = []
-        seen: set[str] = set()
-        for task_id in rows:
+        db_known_ids: set[str] = set()
+        for task_id, status in rows:
             normalized_task_id = str(task_id)
+            db_known_ids.add(normalized_task_id)
+            if _task_is_terminal(str(status or "").strip()):
+                continue
             cached_active = _cached_task_is_active(_cached_generation_task(normalized_task_id))
             if cached_active is False:
                 continue
             active_ids.append(normalized_task_id)
-            seen.add(normalized_task_id)
         with api_state._tasks_lock:
             cached_items = [(task_id, dict(task)) for task_id, task in api_state._tasks.items()]
         for task_id, task in cached_items:
-            if task_id in seen:
+            if task_id in db_known_ids:
                 continue
             if _cached_task_is_active(task):
                 active_ids.append(task_id)

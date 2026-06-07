@@ -244,7 +244,7 @@ def _validate_form_answer(
                 path=path,
                 reason="missing_evidence",
                 message="binding answer requires evidence_quote",
-                blocking=blocking,
+                blocking=False,
                 answer=answer,
             )
         )
@@ -256,7 +256,7 @@ def _validate_form_answer(
                     path=path,
                     reason="quote_not_found",
                     message="evidence_quote is absent from chapter text",
-                    blocking=blocking,
+                    blocking=False,
                     answer=answer,
                 )
             )

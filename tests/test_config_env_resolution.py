@@ -3,10 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config as AlembicConfig
 
 from forwin.api_runtime import build_runtime_config, copy_config
 from forwin.api_schemas import GenerateRequest
 from forwin.config import Config, DEFAULT_DATABASE_URL, DEFAULT_MINIMAX_BASE_URL
+from tests.postgres import postgres_test_url
 
 
 CONFIG_ENV_KEYS = {
@@ -188,6 +191,15 @@ def test_default_qdrant_url_uses_forwin_local_debug_port(
 
     assert Config.from_env().qdrant_url == "http://127.0.0.1:6335"
     assert Config().qdrant_url == "http://127.0.0.1:6335"
+
+
+def test_alembic_env_uses_forwin_database_url_when_ini_has_no_url(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    database_url = postgres_test_url("alembic-env-forwin-url")
+    _set_env_file(monkeypatch, tmp_path, [f"FORWIN_DATABASE_URL={database_url}"])
+
+    command.current(AlembicConfig("alembic.ini"))
 
 
 def test_default_minimax_base_url_uses_configured_cn_openai_endpoint() -> None:

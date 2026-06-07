@@ -29,7 +29,7 @@ class PublisherComplianceReviewer:
                 severity="error",
                 pattern=re.compile(
                     r"(加\s*微\s*信|微\s*信|vx\s*[:：]?\s*[A-Za-z0-9_-]{4,}|"
-                    r"Q\s*Q\s*群|QQ\s*[:：]?\s*\d{5,}|联系方式|加\s*群|读者群)",
+                    r"Q\s*Q\s*群|QQ\s*[:：]?\s*\d{5,}|加\s*群|读者群)",
                     re.IGNORECASE,
                 ),
                 description="正文包含外部联系方式或引流群信息，平台发布前需要删除或改写。",

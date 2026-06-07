@@ -81,12 +81,15 @@ def save_trope_usage(
     stage = _normalize_usage_stage(usage_stage)
     normalized_template_id = str(template_id or "").strip()
     existing = session.execute(
-        select(TropeUsageRecord).where(
+        select(TropeUsageRecord)
+        .where(
             TropeUsageRecord.project_id == project_id,
             TropeUsageRecord.chapter_number == int(chapter_number or 0),
             TropeUsageRecord.template_id == normalized_template_id,
             TropeUsageRecord.usage_stage == stage,
         )
+        .order_by(TropeUsageRecord.created_at.asc(), TropeUsageRecord.id.asc())
+        .limit(1)
     ).scalar_one_or_none()
     if existing is not None:
         return existing

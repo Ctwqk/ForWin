@@ -439,6 +439,7 @@ def _run_repair_loop_for_phase(
             },
             parent_event_id=str(current_review_event.id or ""),
         )
+        session.commit()
         (
             design_patch,
             updated_context,
@@ -561,6 +562,9 @@ def _run_repair_loop_for_phase(
                     llm_preferred_provider_kind=repair_model_preference["preferred_provider_kind"],
                     llm_preferred_model=repair_model_preference["preferred_model"],
                 )
+                if self._pause_requested():
+                    session.commit()
+                    return current_output, current_review, False
             except Exception as exc:  # noqa: BLE001
                 attempt_row = updater.save_chapter_rewrite_attempt(
                     project_id=project_id,

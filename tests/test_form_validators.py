@@ -28,6 +28,7 @@ def test_validator_rejects_quote_not_in_chapter() -> None:
 
     assert report.rejected
     assert report.rejected[0].reason == "quote_not_found"
+    assert report.rejected[0].blocking is False
 
 
 def test_validator_rejects_group_subject_for_singleton_state() -> None:
@@ -130,7 +131,7 @@ def test_validator_accepts_descriptive_alias_subject() -> None:
     assert report.rejected == []
 
 
-def test_validator_rejects_binding_answer_without_evidence() -> None:
+def test_validator_rejects_binding_answer_without_evidence_as_nonblocking_extraction_warning() -> None:
     form = _form_for_character("角色A")
     answers = _answers_for_character(
         "角色A",
@@ -145,7 +146,7 @@ def test_validator_rejects_binding_answer_without_evidence() -> None:
     report = validate_answers(form=form, answers=answers, chapter_text="角色A仍然站着。")
 
     assert report.rejected[0].reason == "missing_evidence"
-    assert report.rejected[0].blocking is True
+    assert report.rejected[0].blocking is False
     assert report.rejected[0].value == "dead"
     assert report.rejected[0].confidence == 0.96
 

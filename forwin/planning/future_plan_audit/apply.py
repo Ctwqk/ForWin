@@ -81,6 +81,8 @@ class FuturePlanApplyMixin:
             llm_client=self.llm_client,
             min_blocking_confidence=self.min_blocking_confidence,
         )
+        applied_patches: list[NarrativePlanPatch] = []
+        patch_failure_reasons: list[str] = []
         for patch in result.plan_patches:
             plan = None
             band_row = None
@@ -88,7 +90,7 @@ class FuturePlanApplyMixin:
             if patch.target_scope == "band":
                 band_row = bands_by_id.get(str(patch.target_band_id or ""))
                 if band_row is None:
-                    blocking_reasons.append(f"missing_band_for_patch:{patch.id or patch.target_band_id}")
+                    patch_failure_reasons.append(f"missing_band_for_patch:{patch.id or patch.target_band_id}")
                     continue
                 band_plan_bounds[str(band_row.band_id or "")] = (
                     int(band_row.chapter_start or 0),
@@ -97,7 +99,7 @@ class FuturePlanApplyMixin:
             else:
                 plan = plans_by_id.get(str(patch.target_plan_id or ""))
                 if plan is None:
-                    blocking_reasons.append(f"missing_plan_for_patch:{patch.id or patch.target_plan_id}")
+                    patch_failure_reasons.append(f"missing_plan_for_patch:{patch.id or patch.target_plan_id}")
                     continue
             patch_obligations = [
                 obligation
@@ -119,7 +121,7 @@ class FuturePlanApplyMixin:
                 },
             )
             if not validation.passed:
-                blocking_reasons.extend(f"plan_patch_validation_failed:{error}" for error in validation.errors)
+                patch_failure_reasons.extend(f"plan_patch_validation_failed:{error}" for error in validation.errors)
                 continue
             applied_patch = patch.model_copy(
                 update={
@@ -138,15 +140,77 @@ class FuturePlanApplyMixin:
             stored_patch = obligation_repo.create_plan_patch(applied_patch)
             applied_patch_ids.append(stored_patch.id)
             persisted_patches.append(stored_patch)
+            applied_patches.append(stored_patch)
+        resolved_blocking_reasons = _resolved_blocking_reasons_for_patches(
+            issues=result.issues,
+            applied_patches=applied_patches,
+        )
+        blocking_reasons = [
+            reason
+            for reason in blocking_reasons
+            if str(reason) not in resolved_blocking_reasons
+        ]
+        blocking_reasons.extend(patch_failure_reasons)
+        status: AuditStatus = "pass"
+        if blocking_reasons:
+            status = "fail"
+        elif result.issues:
+            status = "warn"
         result = result.model_copy(
             update={
                 "plan_patches": persisted_patches or result.plan_patches,
                 "applied_plan_patch_ids": applied_patch_ids,
+                "status": status,
                 "blocking_reasons": blocking_reasons,
             }
         )
         stored_run = FuturePlanAuditRepository(session).save_run(result)
         return stored_run.model_copy(update={"plan_patches": result.plan_patches})
+
+
+def _resolved_blocking_reasons_for_patches(
+    *,
+    issues: list[FuturePlanAuditIssue],
+    applied_patches: list[NarrativePlanPatch],
+) -> set[str]:
+    resolved: set[str] = set()
+    for issue in issues:
+        if not bool(issue.blocking):
+            continue
+        if not any(_patch_resolves_issue(patch, issue) for patch in applied_patches):
+            continue
+        resolved.add(f"{issue.issue_type}:{int(issue.target_chapter or 0)}")
+    return resolved
+
+
+def _patch_resolves_issue(
+    patch: NarrativePlanPatch,
+    issue: FuturePlanAuditIssue,
+) -> bool:
+    if str(patch.patch_type or "") != str(issue.patch_type or ""):
+        return False
+    target_chapter = int(issue.target_chapter or 0)
+    affected_chapters = {int(item) for item in patch.affected_chapters}
+    if target_chapter and target_chapter not in affected_chapters:
+        return False
+    if str(issue.target_plan_id or "").strip():
+        if patch.target_scope == "band":
+            if str(issue.target_plan_id or "") not in {
+                str(patch.target_band_id or ""),
+                str(patch.target_plan_id or ""),
+            }:
+                return False
+        elif str(patch.target_plan_id or "") != str(issue.target_plan_id or ""):
+            return False
+    if str(issue.description or "").strip() and str(patch.diff_summary or "").strip():
+        return str(issue.description or "").strip() == str(patch.diff_summary or "").strip()
+    issue_metadata = dict(issue.metadata or {})
+    patch_metadata = dict(patch.metadata or {})
+    if issue_metadata:
+        shared_keys = [key for key in issue_metadata if key in patch_metadata]
+        if shared_keys and all(issue_metadata[key] == patch_metadata[key] for key in shared_keys):
+            return True
+    return not issue_metadata
 
 
 def _with_macro_progression_boundary_issues(

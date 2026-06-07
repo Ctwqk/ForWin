@@ -160,11 +160,15 @@ class TaskView(BaseModel):
     error: str | None = None
     current_stage: str = ""
     requested_chapters: int = 0
+    run_until_chapter: int = 0
     current_chapter: int = 0
     completed_chapters: list[int] = Field(default_factory=list)
     failed_chapters: list[int] = Field(default_factory=list)
     paused_chapters: list[int] = Field(default_factory=list)
     pause_requested: bool = False
+    lease_owner: str = ""
+    lease_expires_at: str = ""
+    heartbeat_at: str = ""
     pausable: bool = False
     resumable: bool = False
     terminable: bool = False

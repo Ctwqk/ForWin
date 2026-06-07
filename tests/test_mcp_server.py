@@ -421,6 +421,41 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
         self.assertTrue(result.created_at)
         self.assertTrue(result.updated_at)
 
+    def test_task_get_includes_generation_run_target(self) -> None:
+        task_id = "task-with-run-target"
+        task = api_module._create_task_record(
+            "run target regression",
+            title="Run Target Regression",
+            subtitle="MCP task_get",
+            requested_chapters=11,
+        )
+        task["run_until_chapter"] = 60
+        api_module._persist_generation_task(task_id, task)
+
+        result = self._load_model(TaskView, self._call_tool("task_get", {"task_id": task_id}))
+
+        self.assertEqual(result.requested_chapters, 11)
+        self.assertEqual(result.run_until_chapter, 60)
+
+    def test_task_get_includes_generation_lease_diagnostics(self) -> None:
+        task_id = "task-with-lease"
+        task = api_module._create_task_record(
+            "lease regression",
+            title="Lease Regression",
+            subtitle="MCP task_get",
+            requested_chapters=1,
+        )
+        task["lease_owner"] = "worker-1"
+        task["lease_expires_at"] = api_module._utcnow()
+        task["heartbeat_at"] = api_module._utcnow()
+        api_module._persist_generation_task(task_id, task)
+
+        result = self._load_model(TaskView, self._call_tool("task_get", {"task_id": task_id}))
+
+        self.assertEqual(result.lease_owner, "worker-1")
+        self.assertTrue(result.lease_expires_at)
+        self.assertTrue(result.heartbeat_at)
+
     def test_health_endpoint_reports_upstream_ok(self) -> None:
         async def run():
             async with httpx.AsyncClient(

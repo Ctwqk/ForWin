@@ -4,7 +4,7 @@ from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.canon_quality import CharacterStateTransitionRow
+from forwin.models.canon_quality import CanonQualitySignalRow, CharacterStateTransitionRow
 from forwin.protocol.writer import WriterOutput
 
 
@@ -99,6 +99,65 @@ def test_service_rejects_subject_misattribution_without_state_write() -> None:
             assert result.blocking is True
             assert result.signals[0].signal_type == "form_answer_rejected"
             assert rows == []
+    finally:
+        engine.dispose()
+
+
+def test_service_supersedes_stale_chapter_signal_when_quote_later_validates() -> None:
+    engine = get_engine(postgres_test_url("canon_quality_service_supersedes_stale_quote_signal"))
+    init_db(engine)
+    session_factory = get_session_factory(engine)
+    try:
+        with session_factory() as session:
+            project = Project(title="表单质量", premise="主角：林青。", genre="悬疑", target_total_chapters=3)
+            session.add(project)
+            session.flush()
+            quote = "死了。2014年，心脏病发作"
+
+            rejected = analyze_writer_output_quality(
+                session=session,
+                project_id=project.id,
+                chapter_number=1,
+                writer_output=WriterOutput(
+                    project_id=project.id,
+                    chapter_number=1,
+                    title="第一章",
+                    body="苏皖只是摇头，没有继续回答。",
+                    end_of_chapter_summary="未确认状态。",
+                ),
+                draft_id="draft-old",
+                persist=True,
+                mode="primary",
+                llm_client=FakeFormClient(_payload(project.id, 1, character_quote=quote)),
+            )
+            assert rejected.blocking is False
+            assert rejected.signals[0].signal_type == "form_answer_rejected"
+            assert rejected.signals[0].severity == "warning"
+
+            accepted = analyze_writer_output_quality(
+                session=session,
+                project_id=project.id,
+                chapter_number=1,
+                writer_output=WriterOutput(
+                    project_id=project.id,
+                    chapter_number=1,
+                    title="第一章",
+                    body=f"苏皖说：“{quote}。”",
+                    end_of_chapter_summary="林青死亡。",
+                ),
+                draft_id="draft-new",
+                persist=True,
+                mode="primary",
+                llm_client=FakeFormClient(_payload(project.id, 1, character_quote=quote)),
+            )
+            session.commit()
+
+        with session_factory() as session:
+            signal_rows = session.query(CanonQualitySignalRow).filter_by(project_id=project.id).all()
+            open_rows = [row for row in signal_rows if row.status == "open"]
+            assert accepted.blocking is False
+            assert open_rows == []
+            assert {row.status for row in signal_rows} == {"superseded"}
     finally:
         engine.dispose()
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ssl
 import time
 import unittest
 from unittest.mock import patch
@@ -351,6 +352,56 @@ class LLMClientRetryTests(unittest.TestCase):
 
         self.assertLess(elapsed, 0.3)
         self.assertIsNot(client.client, original_client)
+
+    def test_timeout_replacement_failure_does_not_leave_shared_client_closed(self) -> None:
+        class RecoveringHTTPClient:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.closed = False
+
+            def post(self, url, **_kwargs):  # noqa: ANN001
+                self.calls += 1
+                if self.closed:
+                    raise RuntimeError("Cannot send a request, as the client has been closed.")
+                request = httpx.Request("POST", url)
+                if self.calls == 1:
+                    time.sleep(0.5)
+                    return httpx.Response(200, json={"late": True}, request=request)
+                return httpx.Response(200, json={"ok": True}, request=request)
+
+            def close(self) -> None:
+                self.closed = True
+
+        client = LLMClient(
+            api_key="test-key",
+            base_url="https://primary.example/v1",
+            model="primary-model",
+            retry_attempts=1,
+        )
+        recovering_client = RecoveringHTTPClient()
+        client.client = recovering_client  # type: ignore[assignment]
+
+        try:
+            with patch.object(client, "_build_http_client", side_effect=ssl.SSLError("PEM lib")):
+                with self.assertRaises(httpx.ReadTimeout):
+                    client._post_with_wall_timeout(
+                        "https://primary.example/v1/chat/completions",
+                        json={},
+                        headers={},
+                        timeout=httpx.Timeout(0.05),
+                    )
+            self.assertFalse(recovering_client.closed)
+            response = client._post_with_wall_timeout(
+                "https://primary.example/v1/chat/completions",
+                json={},
+                headers={},
+                timeout=httpx.Timeout(0.2),
+            )
+        finally:
+            client.close()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(recovering_client.calls, 2)
 
     def test_falls_back_to_next_profile_after_retryable_failures(self) -> None:
         client = LLMClient(
@@ -935,6 +986,33 @@ class LLMClientRetryTests(unittest.TestCase):
             client.close()
 
         self.assertEqual(route, "planning_json_low_risk")
+        self.assertEqual(routed[0]["model"], "MiniMax-M2.7")
+
+    def test_chapter_review_form_routes_as_review_json_for_minimax_fallback(self) -> None:
+        client = LLMClient(
+            api_key="minimax-key",
+            base_url="https://api.minimaxi.com/v1",
+            model="MiniMax-M2.7",
+            retry_attempts=1,
+        )
+        try:
+            route = client._llm_task_route(
+                task_family="chapter_review_form",
+                stage_key="chapter_review_form",
+                response_format={"type": "json_object"},
+                output_schema={"type": "object"},
+            )
+            routed = client._route_profiles(
+                client._request_profiles(),
+                task_family="chapter_review_form",
+                stage_key="chapter_review_form",
+                response_format={"type": "json_object"},
+                output_schema={"type": "object"},
+            )
+        finally:
+            client.close()
+
+        self.assertEqual(route, "review_json")
         self.assertEqual(routed[0]["model"], "MiniMax-M2.7")
 
     def test_minimax_only_canon_route_fails_without_call(self) -> None:

@@ -191,10 +191,16 @@ def _normalize_form_answer_shapes(payload: dict[str, Any]) -> None:
         fallback_evidence = _first_string(item, "evidence_quote", "quote", "supporting_quote")
         fallback_subject = _first_string(item, "subject_of_quote", "subject", "name")
         fallback_confidence = item.get("confidence")
+        if "appears_in_chapter" in item:
+            item["appears_in_chapter"] = _coerce_bool_field(item["appears_in_chapter"])
         for key in ("life_state", "custody_state", "participation"):
             if key in item:
+                fallback_value = ""
+                if key == "participation":
+                    fallback_value = "present_acting" if bool(item.get("appears_in_chapter")) else "mentioned_only"
                 item[key] = _coerce_form_answer(
                     item[key],
+                    fallback_value=fallback_value,
                     fallback_evidence=fallback_evidence,
                     fallback_subject=fallback_subject,
                     fallback_confidence=fallback_confidence,
@@ -204,6 +210,8 @@ def _normalize_form_answer_shapes(payload: dict[str, Any]) -> None:
         fallback_evidence = _first_string(item, "evidence_quote", "quote", "new_value_quote")
         fallback_subject = _first_string(item, "subject_of_quote", "subject", "key", "label")
         fallback_confidence = item.get("confidence")
+        if "mentioned_in_chapter" in item:
+            item["mentioned_in_chapter"] = _coerce_bool_field(item["mentioned_in_chapter"])
         item["inconsistency_kind"] = _normalize_inconsistency_kind(item.get("inconsistency_kind"))
         for key in ("status_in_this_chapter", "consistent_with_prior", "new_value_evidence"):
             if key in item and item[key] is not None:
@@ -258,6 +266,7 @@ def _normalize_form_answer_shapes(payload: dict[str, Any]) -> None:
 def _coerce_form_answer(
     value: Any,
     *,
+    fallback_value: Any = "",
     fallback_evidence: str = "",
     fallback_subject: str = "",
     fallback_confidence: Any = None,
@@ -266,6 +275,8 @@ def _coerce_form_answer(
         answer = dict(value)
         if "value" in answer:
             answer["value"] = _scalar_answer_value(answer.get("value"))
+        else:
+            answer["value"] = _scalar_answer_value(fallback_value)
     else:
         answer = {"value": _scalar_answer_value(value)}
     answer.setdefault("evidence_quote", fallback_evidence)
@@ -300,6 +311,25 @@ def _scalar_answer_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value or "")
+
+
+def _coerce_bool_field(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key in ("value", "present", "appears", "mentioned", "seen"):
+            if key in value:
+                return _coerce_bool_field(value.get(key))
+        return bool(_first_string(value, "evidence_quote", "quote", "supporting_quote", "subject_of_quote"))
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "y", "1", "是", "有", "出现", "提及", "mentioned", "present"}:
+            return True
+        if normalized in {"false", "no", "n", "0", "否", "无", "未出现", "未提及", "absent", "none"}:
+            return False
+    if value is None:
+        return False
+    return bool(value)
 
 
 def _normalize_inconsistency_kind(value: Any) -> str:

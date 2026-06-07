@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from forwin.protocol.context import ChapterContextPack
 from forwin.retrieval.broker_core.broker import RetrievalBroker
 from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
 
@@ -53,3 +54,67 @@ def test_broker_requests_raw_budget_and_returns_bucketed_memories() -> None:
 
     assert memory_index.limit == 2
     assert [item.summary for item in selected] == ["recent 1", "enemy 1"]
+
+
+def _typed_memory(summary: str, memory_type: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        summary=summary,
+        memory_type=memory_type,
+        chapter_number=1,
+    )
+
+
+def _pack_with_memories(memories: list[SimpleNamespace]) -> ChapterContextPack:
+    return ChapterContextPack.model_construct(
+        project_id="project-1",
+        project_title="P",
+        premise="p",
+        genre="都市",
+        setting_summary="s",
+        chapter_number=5,
+        chapter_plan_title="标题",
+        chapter_plan_one_line="一句话",
+        chapter_goals=[],
+        previous_chapter_summaries=[],
+        active_entities=[],
+        active_threads=[],
+        active_relations=[],
+        retrieved_memories=memories,
+    )
+
+
+def test_trim_pack_prunes_low_priority_memories_before_obligations() -> None:
+    broker = RetrievalBroker(context_budget_chars=2850)
+    pack = _pack_with_memories(
+        [
+            _typed_memory("recent " + "x" * 260, "recent"),
+            _typed_memory("promise " + "x" * 260, "promise"),
+            _typed_memory("enemy " + "x" * 260, "enemy"),
+        ]
+    )
+
+    trimmed = broker._trim_pack(pack)
+
+    assert [item.memory_type for item in trimmed.retrieved_memories] == ["promise", "enemy"]
+
+
+def test_finalize_context_summary_reports_memory_pruning() -> None:
+    broker = RetrievalBroker(context_budget_chars=2850)
+    base_pack = _pack_with_memories(
+        [
+            _typed_memory("recent " + "x" * 260, "recent"),
+            _typed_memory("promise " + "x" * 260, "promise"),
+            _typed_memory("enemy " + "x" * 260, "enemy"),
+        ]
+    )
+    trimmed = broker._trim_pack(base_pack)
+
+    broker._finalize_context_summary(
+        base_pack=base_pack,
+        pack=trimmed,
+        memories=list(base_pack.retrieved_memories),
+    )
+
+    assert broker.last_observability_summary["memories_count_before"] == 3
+    assert broker.last_observability_summary["memories_count_after"] == 2
+    assert broker.last_observability_summary["pruned_memories"] == 1

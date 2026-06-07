@@ -169,6 +169,12 @@ class RetrievalBroker:
                 estimate -= self._estimate_component_chars(removed)
                 pack = pack.model_copy(update={"active_relations": pack.active_relations[:-1]})
                 continue
+            memories = list(getattr(pack, "retrieved_memories", []) or [])
+            if memories:
+                next_memories, removed = self._drop_lowest_priority_memory(memories)
+                estimate -= self._estimate_component_chars(removed)
+                pack = pack.model_copy(update={"retrieved_memories": next_memories})
+                continue
             if len(pack.active_entities) > 3:
                 removed = pack.active_entities[-1]
                 estimate -= self._estimate_component_chars(removed)
@@ -209,6 +215,8 @@ class RetrievalBroker:
     ) -> None:
         before_chars = self._estimate_pack_with_components(base_pack)
         after_chars = self._estimate_pack_with_components(pack)
+        memories_before = len(getattr(base_pack, "retrieved_memories", []) or memories or [])
+        memories_after = len(getattr(pack, "retrieved_memories", []) or [])
         self.last_observability_summary = {
             "chapter_number": int(getattr(pack, "chapter_number", 0) or 0),
             "active_entities_count_before": len(base_pack.active_entities),
@@ -219,13 +227,42 @@ class RetrievalBroker:
             "threads_count_after": len(pack.active_threads),
             "summaries_count_before": len(base_pack.previous_chapter_summaries),
             "summaries_count_after": len(pack.previous_chapter_summaries),
-            "memories_count": len(getattr(pack, "retrieved_memories", []) or memories or []),
+            "memories_count_before": memories_before,
+            "memories_count_after": memories_after,
+            "memories_count": memories_after,
             "estimated_context_chars_before": before_chars,
             "estimated_context_chars_after": after_chars,
             "pruned_entities": max(0, len(base_pack.active_entities) - len(pack.active_entities)),
             "pruned_threads": max(0, len(base_pack.active_threads) - len(pack.active_threads)),
             "pruned_relations": max(0, len(base_pack.active_relations) - len(pack.active_relations)),
+            "pruned_memories": max(0, memories_before - memories_after),
         }
+
+    @staticmethod
+    def _memory_eviction_rank(memory: object) -> tuple[int, int]:
+        memory_type = str(getattr(memory, "memory_type", "") or "").strip()
+        priority = {
+            "recent": 0,
+            "relationship": 1,
+            "world": 1,
+            "enemy": 2,
+            "wealth_status": 2,
+            "promise": 2,
+        }.get(memory_type, 1)
+        return priority, int(getattr(memory, "chapter_number", 0) or 0)
+
+    def _drop_lowest_priority_memory(
+        self,
+        memories: list[object],
+    ) -> tuple[list[object], object | None]:
+        if not memories:
+            return memories, None
+        remove_index = min(
+            range(len(memories)),
+            key=lambda index: (self._memory_eviction_rank(memories[index]), -index),
+        )
+        removed = memories[remove_index]
+        return memories[:remove_index] + memories[remove_index + 1 :], removed
 
     def build_world_model_pack(
         self,

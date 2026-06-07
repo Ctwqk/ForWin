@@ -257,7 +257,12 @@ def _run_project_chapters(
                 )
                 if any(
                     int(context_summary.get(key) or 0) > 0
-                    for key in ("pruned_entities", "pruned_threads", "pruned_relations")
+                    for key in (
+                        "pruned_entities",
+                        "pruned_threads",
+                        "pruned_relations",
+                        "pruned_memories",
+                    )
                 ):
                     self._record_decision_event(
                         updater=updater,

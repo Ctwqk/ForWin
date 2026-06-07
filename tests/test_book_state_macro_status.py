@@ -56,7 +56,7 @@ def test_macro_status_projection_derives_from_accepted_chapter_experience() -> N
     assert status.enemy_tier == 2
     assert status.market_space == "县城"
     assert status.evidence_refs == ["chapter_plan:8"]
-    assert status.source == "accepted_chapter_macro_legacy_projection"
+    assert status.source == "accepted_chapter_macro_plan_projection"
 
 
 def test_macro_status_prefers_book_state_fact_evidence() -> None:

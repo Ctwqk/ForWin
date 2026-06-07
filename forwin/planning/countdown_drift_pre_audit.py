@@ -1,6 +1,6 @@
 from typing import Any
 
-from forwin.planning.ledger_state_drift_pre_audit import select_legacy_countdown_drift_targets
+from forwin.planning.ledger_state_drift_pre_audit import select_countdown_compat_drift_targets
 
 
 def select_countdown_drift_targets(
@@ -10,7 +10,7 @@ def select_countdown_drift_targets(
     as_of_chapter: int = 0,
     book_state_query: Any | None = None,
 ) -> list[dict[str, Any]]:
-    return select_legacy_countdown_drift_targets(
+    return select_countdown_compat_drift_targets(
         signals,
         project_id=project_id,
         as_of_chapter=as_of_chapter,

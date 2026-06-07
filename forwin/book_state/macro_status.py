@@ -125,7 +125,7 @@ def _derive_from_chapter_rows(
             source = "accepted_chapter_macro_evidence"
         else:
             refs.append(f"chapter_plan:{int(row.chapter_number or 0)}")
-            source = "accepted_chapter_macro_legacy_projection"
+            source = "accepted_chapter_macro_plan_projection"
         update["evidence_refs"] = refs[-8:]
         update["source"] = source
         status = status.model_copy(update=update)

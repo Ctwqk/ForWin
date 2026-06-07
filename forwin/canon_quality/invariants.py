@@ -120,7 +120,7 @@ def invariant_from_active_rule(rule: Any) -> CanonInvariant:
     )
 
 
-def legacy_countdown_key_for_invariant(invariant_key: str) -> str:
+def countdown_key_for_invariant(invariant_key: str) -> str:
     return str(invariant_key or "").strip().removeprefix("countdown:")
 
 
@@ -158,5 +158,5 @@ __all__ = [
     "InvariantStatus",
     "invariant_from_active_rule",
     "invariant_from_countdown_state",
-    "legacy_countdown_key_for_invariant",
+    "countdown_key_for_invariant",
 ]

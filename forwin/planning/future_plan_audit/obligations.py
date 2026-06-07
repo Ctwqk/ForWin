@@ -54,12 +54,12 @@ class FuturePlanObligationMixin:
             result.append((issue, patch))
             if candidate.source_signal_id:
                 consumed_signal_ids.add(candidate.source_signal_id)
-        legacy_countdown_signals = [
+        countdown_compat_signals = [
             signal
             for signal in open_signals
             if str(signal.get("signal_id") or "").strip() not in consumed_signal_ids
         ]
-        for candidate in select_countdown_drift_targets(legacy_countdown_signals):
+        for candidate in select_countdown_drift_targets(countdown_compat_signals):
             plan = _first_eligible_plan(plans, current_chapter=current_chapter, include_current=include_current)
             if plan is None:
                 continue

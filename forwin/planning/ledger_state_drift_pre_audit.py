@@ -27,7 +27,7 @@ def select_ledger_state_drift_targets(
         if signal_type == "form_invariant_drift":
             target = _invariant_target(signal=signal, payload=payload)
         elif signal_type == "form_countdown_inconsistency":
-            target = _legacy_countdown_target(signal=signal, payload=payload, live_countdowns=live_countdowns)
+            target = _countdown_compat_target(signal=signal, payload=payload, live_countdowns=live_countdowns)
         else:
             target = None
         if target is not None:
@@ -35,7 +35,7 @@ def select_ledger_state_drift_targets(
     return targets
 
 
-def select_legacy_countdown_drift_targets(
+def select_countdown_compat_drift_targets(
     signals: list[Any],
     *,
     project_id: str = "",
@@ -103,7 +103,7 @@ def _invariant_target(*, signal: Any, payload: dict[str, Any]) -> InvariantDrift
     )
 
 
-def _legacy_countdown_target(
+def _countdown_compat_target(
     *,
     signal: Any,
     payload: dict[str, Any],
@@ -238,4 +238,4 @@ def _normalize_kind(value: Any) -> InvariantKind:
     return "custom"
 
 
-__all__ = ["select_ledger_state_drift_targets", "select_legacy_countdown_drift_targets"]
+__all__ = ["select_ledger_state_drift_targets", "select_countdown_compat_drift_targets"]

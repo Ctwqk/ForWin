@@ -59,15 +59,15 @@
 - Add `tests/test_invariant_drift_pre_audit.py`
 - Extend `tests/test_plan_patcher_loop_closure.py`
 
-- [ ] Write failing tests for `form_invariant_drift` producing an `InvariantDriftTarget`.
-- [ ] Write failing tests for legacy `form_countdown_inconsistency` adapting into a generic monotonic-minutes drift target.
-- [ ] Write a failing test proving a deadline target does not use countdown-specific wording.
-- [ ] Write or extend a failing plan-patcher test proving `ledger_state_drift_pre_write` patches use `suppression_key="invariant:<key>"`.
-- [ ] Run focused tests and confirm red.
-- [ ] Implement `select_ledger_state_drift_targets()` and keep `select_countdown_drift_targets()` as a compatibility wrapper.
-- [ ] Add a generic pre-write patch path that dedupes legacy countdown signals by `source_signal_id`.
-- [ ] Re-run focused tests until green.
-- [ ] Commit: `feat: add generic ledger state drift pre-audit`.
+- [x] Write failing tests for `form_invariant_drift` producing an `InvariantDriftTarget`.
+- [x] Write failing tests for legacy `form_countdown_inconsistency` adapting into a generic monotonic-minutes drift target.
+- [x] Write a failing test proving a deadline target does not use countdown-specific wording.
+- [x] Write or extend a failing plan-patcher test proving `ledger_state_drift_pre_write` patches use `suppression_key="invariant:<key>"`.
+- [x] Run focused tests and confirm red.
+- [x] Implement `select_ledger_state_drift_targets()` and keep `select_countdown_drift_targets()` as a compatibility wrapper.
+- [x] Add a generic pre-write patch path that dedupes legacy countdown signals by `source_signal_id`.
+- [x] Re-run focused tests until green.
+- [x] Commit: `feat: add generic ledger state drift pre-audit`.
 
 ## Task 4: Signal Payloads, Gate, And Review Routing
 

@@ -151,7 +151,7 @@ def test_countdown_drift_signal_creates_next_chapter_plan_patch() -> None:
     ]
 
 
-def test_future_plan_auditor_promotes_countdown_drift_signal_to_plan_patch() -> None:
+def test_future_plan_auditor_promotes_countdown_drift_signal_to_ledger_state_patch() -> None:
     plan = _plan(13, one_line="角色A继续处理事件-1。")
 
     result = FuturePlanAuditor().audit_plans(
@@ -165,9 +165,10 @@ def test_future_plan_auditor_promotes_countdown_drift_signal_to_plan_patch() -> 
         include_current=False,
     )
 
-    assert [issue.issue_type for issue in result.issues] == ["countdown_drift_pre_write_required"]
-    assert result.plan_patches[0].patch_type == "countdown_drift_pre_write"
-    assert result.metadata["suppressed_prompt_constraint_keys"] == ["countdown:倒计时甲"]
+    assert [issue.issue_type for issue in result.issues] == ["ledger_state_drift_pre_write_required"]
+    assert result.plan_patches[0].patch_type == "ledger_state_drift_pre_write"
+    assert result.plan_patches[0].writer_context_injections[0]["type"] == "ledger_state_drift_resolution"
+    assert result.metadata["suppressed_prompt_constraint_keys"] == ["invariant:countdown:倒计时甲"]
     assert result.metadata["form_plan_patch_signals_consumed"] == 1
     assert result.issues[0].metadata["source_signal_id"] == "sig-form_countdown_inconsistency"
 

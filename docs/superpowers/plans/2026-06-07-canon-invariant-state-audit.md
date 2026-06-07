@@ -80,14 +80,14 @@
 - Modify `forwin/review_engine/rules/review_outcome.py` as needed
 - Extend review-engine and plan-patcher tests
 
-- [ ] Write failing tests proving countdown form drift payloads contain both legacy fields and generic invariant fields.
-- [ ] Write failing tests proving `form_invariant_drift` is a blocking canon signal when evidence supports an error.
-- [ ] Write a failing review-outcome test for `form_countdown_inconsistency`/`form_invariant_drift` so the issue no longer falls to the "no automatic route" system block.
-- [ ] Implement generic signal kind and gate classification.
-- [ ] Enrich legacy countdown drift payloads with `invariant_key`, `invariant_kind`, `expected`, `observed`, `allowed_bridges`, `generic_patch_kind`, and `generic_suppression_key`.
-- [ ] Route by payload/evidence instead of blindly choosing active-rule repair. For the current ChapterReviewForm drift profile, default to rewrite or plan patch when the contradiction is in the current body or stale plan context, and keep operator review for ambiguous profiles.
-- [ ] Re-run focused tests until green.
-- [ ] Commit: `feat: route invariant drift through review repair`.
+- [x] Write failing tests proving countdown form drift payloads contain both legacy fields and generic invariant fields.
+- [x] Write failing tests proving `form_invariant_drift` is a blocking canon signal when evidence supports an error.
+- [x] Write a failing review-outcome test for `form_countdown_inconsistency`/`form_invariant_drift` so the issue no longer falls to the "no automatic route" system block.
+- [x] Implement generic signal kind and gate classification.
+- [x] Enrich legacy countdown drift payloads with `invariant_key`, `invariant_kind`, `expected`, `observed`, `allowed_bridges`, `generic_patch_kind`, and `generic_suppression_key`.
+- [x] Route by payload/evidence instead of blindly choosing active-rule repair. For the current ChapterReviewForm drift profile, default to rewrite or plan patch when the contradiction is in the current body or stale plan context, and keep operator review for ambiguous profiles.
+- [x] Re-run focused tests until green.
+- [x] Commit: `feat: route invariant drift through review repair`.
 
 ## Task 5: Context And Prompt Rendering
 

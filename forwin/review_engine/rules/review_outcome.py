@@ -21,6 +21,8 @@ _CHAPTER_DEFER_TYPES = {
     "motivation_gap",
     "transition_bridge_needed",
     "foreshadowing_payoff",
+    "form_countdown_inconsistency",
+    "form_invariant_drift",
 }
 _BAND_DEFER_TYPES = {
     "reader_promise_payoff",
@@ -176,6 +178,7 @@ def decide_review_outcome(input: DecisionInput) -> Decision:
             reason=f"{issue_class} can be deferred only with a future chapter plan patch",
             primary_issue_class=issue_class,
             minimum_scope="chapter_plan",
+            blocking_signal_ids=blocking_signal_ids,
         )
     if facts:
         has_error = any(fact.severity == "error" for fact in facts)

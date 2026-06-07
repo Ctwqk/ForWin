@@ -100,6 +100,20 @@ def test_form_signals_are_plan_patchable() -> None:
     assert payload_by_type["form_countdown_inconsistency"]["plan_patchable"] is True
     assert payload_by_type["form_countdown_inconsistency"]["patch_kind"] == "countdown_drift"
     assert payload_by_type["form_countdown_inconsistency"]["suppression_key"] == "countdown:倒计时甲"
+    assert payload_by_type["form_countdown_inconsistency"]["generic_patch_kind"] == "ledger_state_drift"
+    assert payload_by_type["form_countdown_inconsistency"]["generic_suppression_key"] == "invariant:countdown:倒计时甲"
+    assert payload_by_type["form_countdown_inconsistency"]["invariant_key"] == "countdown:倒计时甲"
+    assert payload_by_type["form_countdown_inconsistency"]["invariant_kind"] == "monotonic_numeric"
+    assert payload_by_type["form_countdown_inconsistency"]["expected"] == {
+        "current_value": 12,
+        "status": "active",
+        "value_unit": "minutes",
+    }
+    assert payload_by_type["form_countdown_inconsistency"]["observed"] == {
+        "current_value": 20,
+        "status": "advanced",
+        "value_unit": "minutes",
+    }
     assert payload_by_type["form_countdown_inconsistency"]["prior_value_minutes"] == 12
     assert payload_by_type["form_countdown_inconsistency"]["prior_status"] == "active"
     assert payload_by_type["form_obligation_unresolved"]["plan_patchable"] is True

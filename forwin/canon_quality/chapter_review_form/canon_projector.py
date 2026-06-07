@@ -242,15 +242,32 @@ def _countdown_prior_payload(
     index: int,
 ) -> dict[str, Any]:
     ask = _matching_countdown_ask(form=form, answer=answer, index=index)
-    if ask is None:
-        return {}
-    payload: dict[str, Any] = {
-        "countdown_label": ask.label,
-        "prior_status": ask.prior_status,
-        "prior_chapter": ask.last_updated_chapter,
+    label = ask.label if ask is not None else answer.key
+    expected: dict[str, Any] = {"value_unit": "minutes"}
+    observed: dict[str, Any] = {
+        "status": answer.status_in_this_chapter.value,
+        "value_unit": "minutes",
     }
+    if answer.new_value_minutes is not None:
+        observed["current_value"] = int(answer.new_value_minutes)
+    payload: dict[str, Any] = {
+        "countdown_label": label,
+        "invariant_key": f"countdown:{answer.key}",
+        "invariant_kind": "monotonic_numeric",
+        "expected": expected,
+        "observed": observed,
+        "allowed_bridges": ["reset", "reopened", "branch_clock"],
+        "generic_patch_kind": "ledger_state_drift",
+        "generic_suppression_key": f"invariant:countdown:{answer.key}",
+    }
+    if ask is None:
+        return payload
+    payload["prior_status"] = ask.prior_status
+    payload["prior_chapter"] = ask.last_updated_chapter
+    expected["status"] = ask.prior_status
     if ask.prior_value_minutes is not None:
         payload["prior_value_minutes"] = int(ask.prior_value_minutes)
+        expected["current_value"] = int(ask.prior_value_minutes)
     return payload
 
 

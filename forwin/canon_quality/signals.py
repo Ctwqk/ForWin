@@ -14,6 +14,7 @@ class SignalKind(StrEnum):
     form_open_signal_persisting = "form_open_signal_persisting"
     form_obligation_unresolved = "form_obligation_unresolved"
     form_countdown_inconsistency = "form_countdown_inconsistency"
+    form_invariant_drift = "form_invariant_drift"
     form_final_chapter_unresolved = "form_final_chapter_unresolved"
     form_schema_invalid = "form_schema_invalid"
     form_llm_unavailable = "form_llm_unavailable"

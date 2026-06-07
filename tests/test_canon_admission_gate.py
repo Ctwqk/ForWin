@@ -60,3 +60,32 @@ def test_canon_admission_shadow_records_but_allows_commit() -> None:
     assert result.verdict == "warn"
     assert result.blocking_issue_count == 1
     assert "shadow" in result.gate_summary
+
+
+def test_canon_admission_fatal_only_blocks_form_invariant_drift_with_evidence() -> None:
+    result = evaluate_canon_admission(
+        project_id="p1",
+        chapter_number=26,
+        draft_id="d1",
+        review_id="r1",
+        review_verdict="warn",
+        signals=[
+            CanonQualitySignal(
+                signal_id="sig-invariant",
+                project_id="p1",
+                chapter_number=26,
+                signal_type="form_invariant_drift",
+                severity="error",
+                target_scope="chapter",
+                subject_key="city_renovation_deadline",
+                description="deadline contradicted prior canon",
+                evidence_refs=["quote:1"],
+            )
+        ],
+        mode="fatal_only",
+    )
+
+    assert result.commit_allowed is False
+    assert result.verdict == "fail"
+    assert result.deterministic_issue_refs == ["sig-invariant"]
+    assert result.required_repair_scope == "chapter_plan"

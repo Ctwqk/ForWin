@@ -160,12 +160,37 @@ def _with_macro_progression_boundary_issues(
         project_id=project_id,
         as_of_chapter=int(current_chapter or 0),
     )
+    successful_audited_arc_ids = _successful_macro_boundary_audited_arc_ids(
+        session,
+        project_id=project_id,
+    )
     boundary_arcs = session.execute(
         select(ArcPlanVersion).where(
             ArcPlanVersion.project_id == project_id,
-            ArcPlanVersion.chapter_end == int(current_chapter or 0),
+            ArcPlanVersion.chapter_end > 0,
+            ArcPlanVersion.chapter_end <= int(current_chapter or 0),
         )
+        .order_by(ArcPlanVersion.chapter_end.asc(), ArcPlanVersion.arc_number.asc())
     ).scalars().all()
+    boundary_arcs = [
+        arc
+        for arc in boundary_arcs
+        if str(arc.id or "") not in successful_audited_arc_ids
+    ]
+    audited_arc_ids = sorted(
+        {
+            *successful_audited_arc_ids,
+            *[str(arc.id or "") for arc in boundary_arcs if str(arc.id or "")],
+        }
+    )
+    result = result.model_copy(
+        update={
+            "metadata": {
+                **dict(result.metadata or {}),
+                "macro_boundary_audited_arc_ids": audited_arc_ids,
+            }
+        }
+    )
     macro_issues = [
         issue
         for arc in boundary_arcs
@@ -192,6 +217,46 @@ def _with_macro_progression_boundary_issues(
             "blocking_reasons": blocking_reasons,
         }
     )
+
+
+def _successful_macro_boundary_audited_arc_ids(
+    session: Session,
+    *,
+    project_id: str,
+) -> set[str]:
+    rows = session.execute(
+        select(FuturePlanAuditRunRow)
+        .where(
+            FuturePlanAuditRunRow.project_id == project_id,
+            FuturePlanAuditRunRow.status != "fail",
+        )
+        .order_by(FuturePlanAuditRunRow.created_at.asc())
+    ).scalars().all()
+    audited: set[str] = set()
+    for row in rows:
+        metadata = _loads_json(row.metadata_json, {})
+        if isinstance(metadata, dict):
+            ids = metadata.get("macro_boundary_audited_arc_ids")
+            if isinstance(ids, list):
+                audited.update(str(item) for item in ids if str(item).strip())
+        issues = _loads_json(row.issues_json, [])
+        if isinstance(issues, list):
+            for issue in issues:
+                if not isinstance(issue, dict):
+                    continue
+                if issue.get("patch_type") != "macro_progression_boundary":
+                    continue
+                metadata = issue.get("metadata")
+                if isinstance(metadata, dict) and metadata.get("arc_id"):
+                    audited.add(str(metadata["arc_id"]))
+    return audited
+
+
+def _loads_json(value: Any, fallback: Any) -> Any:
+    try:
+        return json.loads(value or "")
+    except (TypeError, json.JSONDecodeError):
+        return fallback
 
 
 __all__ = ["FuturePlanApplyMixin"]

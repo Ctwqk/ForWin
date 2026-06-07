@@ -36,3 +36,65 @@ def test_active_rule_store_register_query_revoke_cycle() -> None:
         revoked = store.revoke_rule(project_id="p1", rule_key="hidden_timer", revoke_chapter=19, reason="resolved")
         assert revoked.applied is True
         assert store.query_active_as_of(project_id="p1", chapter_number=20) == []
+
+
+def test_active_rule_store_preserves_as_of_history_after_revoke() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session.begin() as session:
+        store = CanonQualityActiveRuleStore(session)
+        store.register_rule(
+            project_id="p1",
+            rule=ActiveRule(rule_key="window", summary="窗口开启", valid_from_chapter=5),
+            trigger_quote=TriggerQuote(chapter_number=5, quote="窗口开启。"),
+        )
+        store.revoke_rule(project_id="p1", rule_key="window", revoke_chapter=9, reason="closed")
+
+        assert [rule.rule_key for rule in store.query_active_as_of(project_id="p1", chapter_number=8)] == ["window"]
+        assert store.query_active_as_of(project_id="p1", chapter_number=9) == []
+
+
+def test_active_rule_store_honors_valid_until_chapter() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session.begin() as session:
+        store = CanonQualityActiveRuleStore(session)
+        store.register_rule(
+            project_id="p1",
+            rule=ActiveRule(
+                rule_key="window",
+                summary="窗口开启",
+                valid_from_chapter=5,
+                valid_until_chapter=7,
+            ),
+            trigger_quote=TriggerQuote(chapter_number=5, quote="窗口开启。"),
+        )
+
+        assert [rule.rule_key for rule in store.query_active_as_of(project_id="p1", chapter_number=7)] == ["window"]
+        assert store.query_active_as_of(project_id="p1", chapter_number=8) == []
+
+
+def test_active_rule_store_allows_non_overlapping_registration_after_revoke() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session.begin() as session:
+        store = CanonQualityActiveRuleStore(session)
+        store.register_rule(
+            project_id="p1",
+            rule=ActiveRule(rule_key="window", summary="旧窗口", valid_from_chapter=5),
+            trigger_quote=TriggerQuote(chapter_number=5, quote="旧窗口开启。"),
+        )
+        store.revoke_rule(project_id="p1", rule_key="window", revoke_chapter=9, reason="closed")
+
+        result = store.register_rule(
+            project_id="p1",
+            rule=ActiveRule(rule_key="window", summary="新窗口", valid_from_chapter=10),
+            trigger_quote=TriggerQuote(chapter_number=10, quote="新窗口开启。"),
+        )
+
+        assert result.applied is True
+        assert [rule.summary for rule in store.query_active_as_of(project_id="p1", chapter_number=8)] == ["旧窗口"]
+        assert [rule.summary for rule in store.query_active_as_of(project_id="p1", chapter_number=10)] == ["新窗口"]

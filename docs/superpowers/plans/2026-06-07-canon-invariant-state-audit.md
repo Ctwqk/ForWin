@@ -40,15 +40,15 @@
 - Modify `forwin/canon_quality/active_rule_store.py`
 - Extend `tests/test_active_rule_store.py`
 
-- [ ] Write failing tests for as-of reads before and after a revoke.
-- [ ] Write a failing test proving `valid_until_chapter` hides expired rules.
-- [ ] Write a failing or characterization test for duplicate registration after a non-overlapping revoke.
-- [ ] Run `.venv/bin/python -m pytest tests/test_active_rule_store.py -q` and confirm the historical revoke case fails for the current mutable-row behavior.
-- [ ] Change revocation to append an `active_rule_revoked` signal or otherwise preserve historical reads.
-- [ ] Update `query_active_as_of()` to honor valid-from, valid-until, and revocation chapters.
-- [ ] Keep current `query_active()` behavior compatible with existing callers.
-- [ ] Re-run active-rule tests until green.
-- [ ] Commit: `fix: preserve active rule as-of history`.
+- [x] Write failing tests for as-of reads before and after a revoke.
+- [x] Write a failing test proving `valid_until_chapter` hides expired rules.
+- [x] Write a failing or characterization test for duplicate registration after a non-overlapping revoke.
+- [x] Run `.venv/bin/python -m pytest tests/test_active_rule_store.py -q` and confirm the historical revoke case fails for the current mutable-row behavior.
+- [x] Change revocation to append an `active_rule_revoked` signal or otherwise preserve historical reads.
+- [x] Update `query_active_as_of()` to honor valid-from, valid-until, and revocation chapters.
+- [x] Keep current `query_active()` behavior compatible with existing callers.
+- [x] Re-run active-rule tests until green.
+- [x] Commit: `fix: preserve active rule as-of history`.
 
 ## Task 3: Generic Ledger-State Drift Selector And Plan Patch
 

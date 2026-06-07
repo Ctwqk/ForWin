@@ -139,6 +139,10 @@ def test_builder_includes_open_low_severity_signals_when_budget_allows() -> None
 
 
 def test_builder_prunes_low_severity_signal_before_error_signal(caplog: pytest.LogCaptureFixture) -> None:
+    logging.disable(logging.NOTSET)
+    logger = logging.getLogger("forwin.canon_quality.chapter_review_form.pruning")
+    logger.disabled = False
+    logger.propagate = True
     caplog.set_level(logging.INFO, logger="forwin.canon_quality.chapter_review_form.pruning")
 
     form = build_form(

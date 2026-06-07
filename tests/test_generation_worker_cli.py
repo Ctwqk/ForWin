@@ -41,7 +41,7 @@ def test_generation_worker_loop_once_exits_when_no_task(caplog) -> None:
         calls.append(kwargs)
         return GenerationWorkerResult(claimed=False, message="no_claimable_generation_task")
 
-    caplog.set_level(logging.DEBUG, logger="forwin.generation.worker_cli")
+    _enable_worker_cli_logging(caplog, logging.DEBUG)
     exit_code = run_generation_worker_loop(
         session_factory=lambda: None,
         config=Config(minimax_api_key="sk-test"),
@@ -71,7 +71,7 @@ def test_generation_worker_loop_no_claim_does_not_write_decision_events(caplog) 
         return GenerationWorkerResult(claimed=False, message="no_claimable_generation_task")
 
     try:
-        caplog.set_level(logging.DEBUG, logger="forwin.generation.worker_cli")
+        _enable_worker_cli_logging(caplog, logging.DEBUG)
         exit_code = run_generation_worker_loop(
             session_factory=Session,
             config=Config(database_url=database_url, minimax_api_key="sk-test"),
@@ -105,7 +105,7 @@ def test_generation_worker_loop_polls_until_stop_after_claim(caplog) -> None:
             )
         return GenerationWorkerResult(claimed=False, message="no_claimable_generation_task")
 
-    caplog.set_level(logging.DEBUG, logger="forwin.generation.worker_cli")
+    _enable_worker_cli_logging(caplog, logging.DEBUG)
     exit_code = run_generation_worker_loop(
         session_factory=lambda: None,
         config=Config(minimax_api_key="sk-test"),
@@ -129,7 +129,7 @@ def test_generation_worker_loop_logs_exception_before_raising(caplog) -> None:
     def fake_run_once(**_kwargs):
         raise RuntimeError("loop failed")
 
-    caplog.set_level(logging.ERROR, logger="forwin.generation.worker_cli")
+    _enable_worker_cli_logging(caplog, logging.ERROR)
     try:
         run_generation_worker_loop(
             session_factory=lambda: None,
@@ -146,3 +146,11 @@ def test_generation_worker_loop_logs_exception_before_raising(caplog) -> None:
         raise AssertionError("run_generation_worker_loop should propagate loop failure")
 
     assert any("Generation worker loop failed" in record.getMessage() for record in caplog.records)
+
+
+def _enable_worker_cli_logging(caplog, level: int) -> None:
+    logging.disable(logging.NOTSET)
+    logger = logging.getLogger("forwin.generation.worker_cli")
+    logger.disabled = False
+    logger.propagate = True
+    caplog.set_level(level, logger="forwin.generation.worker_cli")

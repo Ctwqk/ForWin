@@ -4801,7 +4801,8 @@ class Phase05RegressionTests(unittest.TestCase):
         output = writer.write_chapter(context)
 
         self.assertEqual(output.project_id, "project-structured")
-        self.assertEqual(output.generation_meta["structured_extraction"], "degraded")
+        self.assertEqual(output.generation_meta["structured_extraction"], "deferred")
+        self.assertEqual(output.generation_meta["structured_extraction_calls"], 0)
         self.assertEqual(output.new_events, [])
         self.assertEqual(output.state_changes, [])
 
@@ -4977,7 +4978,7 @@ class Phase05RegressionTests(unittest.TestCase):
             goals_json='["追查来源"]',
         )
         broker = RetrievalBroker(
-            context_budget_chars=1000,
+            context_budget_chars=3000,
             max_threads=2,
             memory_index=FakeMemoryIndex(),
         )

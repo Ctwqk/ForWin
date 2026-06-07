@@ -34,6 +34,39 @@ def test_verify_pulp_beats_flags_missing_payoff() -> None:
     assert "visible_payoff_present" in result.missing_fields
 
 
+def test_verify_pulp_beats_detects_xuanhuan_payoff_without_urban_words() -> None:
+    body = (
+        "宗门长老当众威胁逐他出山。林远当场运转灵诀突破境界，擂台全场震动，"
+        "敌人经脉受创退下，灵石奖励入袋。秘境入口忽然开启。"
+    )
+
+    result = verify_pulp_beats(body, track="xuanhuan")
+
+    assert result.pressure_present is True
+    assert result.protagonist_action_present is True
+    assert result.visible_payoff_present is True
+    assert result.audience_reaction_present is True
+    assert result.enemy_or_obstacle_damage_present is True
+    assert result.new_gain_or_status_shift_present is True
+    assert result.next_hook_present is True
+
+
+def test_verify_pulp_beats_detects_treasure_medicine_gain_separately() -> None:
+    body = (
+        "掌柜当众质疑他没眼力。沈青当场施针验出古玉暗纹，围观客人哗然，"
+        "病人苏醒，假专家脸色大变。鉴定证书到手，后院忽然传来求救声。"
+    )
+
+    result = verify_pulp_beats(body, track="treasure_medicine")
+
+    assert result.pressure_present is True
+    assert result.visible_payoff_present is True
+    assert result.new_gain_or_status_shift_present is True
+    assert result.enemy_or_obstacle_damage_present is True
+    assert "visible_payoff_present" not in result.missing_fields
+    assert "new_gain_or_status_shift_present" not in result.missing_fields
+
+
 def test_pulp_policy_blocks_consecutive_missing_payoff() -> None:
     engine = get_engine(postgres_test_url("pulp-policy-consecutive"))
     init_db(engine)

@@ -38,6 +38,12 @@ def _coerce_canon_apply_outcome(value: object):
     return CanonApplyOutcome()
 
 
+def _stop_on_chapter_failure_enabled(config: object) -> bool:
+    policy = getattr(config, "long_run_policy", None)
+    value = getattr(policy, "stop_on_chapter_failure", True)
+    return value if isinstance(value, bool) else True
+
+
 def _record_pulp_beat_evaluation(
     self,
     *,
@@ -1011,6 +1017,12 @@ def _run_project_chapters(
             if isinstance(exc, TransientLLMChapterFailure) or self._is_transient_llm_like(exc):
                 logger.warning(
                     "Stopping run after transient LLM failure on chapter %d to avoid cascading failures.",
+                    chapter_num,
+                )
+                break
+            if _stop_on_chapter_failure_enabled(self.config):
+                logger.warning(
+                    "Stopping run after chapter %d failure because stop_on_chapter_failure is enabled.",
                     chapter_num,
                 )
                 break

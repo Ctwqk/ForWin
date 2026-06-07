@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import select
 
 from forwin.config import Config
+from forwin.experience.trope_cooldown import recent_trope_usage
 from forwin.long_run_policy import LongRunPolicy
 from forwin.models.base import get_engine, get_session_factory
 from forwin.models.project import ChapterPlan
@@ -38,6 +41,27 @@ def _two_chapter_arc() -> dict[str, object]:
                 "title": "第二章",
                 "one_line": "承接",
                 "goals": ["继续推进主线"],
+            },
+        ],
+        "characters": [],
+        "locations": [],
+        "factions": [],
+        "relations": [],
+        "plot_threads": [],
+        "initial_time": {"label": "开始", "description": "开始"},
+    }
+
+
+def _one_chapter_arc() -> dict[str, object]:
+    return {
+        "arc_synopsis": "accepted trope usage",
+        "setting_summary": "无",
+        "chapters": [
+            {
+                "chapter_number": 1,
+                "title": "第一章",
+                "one_line": "开场",
+                "goals": ["推进主线"],
             },
         ],
         "characters": [],
@@ -171,3 +195,52 @@ def test_generic_chapter_failure_can_continue_when_policy_disables_stop() -> Non
     assert result.completed_chapters == [2]
     assert result.failed_chapters == [1]
     assert statuses == [(1, "failed"), (2, "accepted")]
+
+
+def test_accepted_chapter_records_accepted_trope_usage() -> None:
+    db_path = postgres_test_url("accepted-chapter-trope-usage")
+    orchestrator = WritingOrchestrator(_config(db_path))
+    try:
+        orchestrator.arc_director.plan_arc = (
+            lambda _premise, _genre, _num_chapters: _one_chapter_arc()
+        )
+        orchestrator.review_hub = PassReviewHub()
+        orchestrator._apply_canon_candidate = lambda **_kwargs: CanonApplyOutcome()
+        orchestrator._strict_progression_block = lambda **_kwargs: ("", "", "")
+
+        def audit_current_plan_before_write(**kwargs):
+            chapter_plan = kwargs["chapter_plan"]
+            chapter_plan.experience_plan_json = json.dumps(
+                {
+                    "selected_template_ids": ["power-a"],
+                    "planned_reward_tags": ["power"],
+                },
+                ensure_ascii=False,
+            )
+            return kwargs["context"]
+
+        orchestrator._audit_current_plan_before_write = audit_current_plan_before_write
+        orchestrator._write_chapter_with_attention_fallback = (
+            lambda **kwargs: _writer_output(int(kwargs["chapter_number"]))
+        )
+
+        result = orchestrator.run("p", "g", 1)
+
+        engine = get_engine(db_path)
+        session = get_session_factory(engine)()
+        try:
+            template_ids, categories = recent_trope_usage(
+                session,
+                project_id=result.project_id,
+            )
+        finally:
+            session.close()
+            engine.dispose()
+    finally:
+        orchestrator.llm_client.close()
+        orchestrator.engine.dispose()
+
+    assert result.status == "completed"
+    assert result.completed_chapters == [1]
+    assert template_ids == ["power-a"]
+    assert categories == ["power"]

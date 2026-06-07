@@ -4,6 +4,7 @@ import logging
 
 from forwin.checker.hard_floor import run_hard_floor
 from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
+from forwin.experience.trope_cooldown import save_accepted_trope_usage_for_chapter
 from forwin.maintenance.deferred import DeferredMaintenanceRecord, record_deferred_maintenance
 from forwin.orchestrator_loop_core.result import RunResult
 from forwin.orchestrator_loop_core.common import *
@@ -710,6 +711,16 @@ def _run_project_chapters(
                     residual_review_issues if force_accept_applied else []
                 ),
                     canon_risk_level=canon_risk_level,
+            )
+            save_accepted_trope_usage_for_chapter(
+                session,
+                project_id=project_id,
+                arc_id=str(getattr(chapter_plan, "arc_plan_id", "") or ""),
+                band_id="",
+                chapter_number=chapter_num,
+                experience_plan_json=str(
+                    getattr(chapter_plan, "experience_plan_json", "") or "{}"
+                ),
             )
             _defer_structured_extraction_if_needed(
                 updater=updater,

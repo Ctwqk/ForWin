@@ -534,7 +534,7 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
     ]
 
 
-def test_apply_canon_candidate_exception_without_freeze_returns_unblocked_outcome(
+def test_apply_canon_candidate_exception_without_freeze_returns_blocked_outcome(
     monkeypatch,
 ):
     failed_rows: list[dict[str, object]] = []
@@ -587,9 +587,9 @@ def test_apply_canon_candidate_exception_without_freeze_returns_unblocked_outcom
     )
 
     assert isinstance(outcome, CanonApplyOutcome)
-    assert not outcome.blocked
+    assert outcome.blocked
     assert outcome.blocked_path == ""
-    assert outcome.block_kind == ""
+    assert outcome.block_kind == "canon_apply_error"
     assert session.rolled_back is True
     assert failed_rows[0]["canon_artifact_path"] == ""
 
@@ -610,6 +610,59 @@ def test_coerce_canon_apply_outcome_rejects_truthy_non_string_values():
     assert legacy.block_kind == "string_block"
     with pytest.raises(TypeError):
         _coerce_canon_apply_outcome({"blocked_path": "legacy/path.json"})
+
+
+def test_canon_apply_exception_without_freeze_pauses_chapter_instead_of_accepting():
+    class PassReviewHub:
+        def review(self, **_kwargs) -> ReviewVerdict:
+            return ReviewVerdict(
+                verdict="pass",
+                issues=[],
+                review_summary="accepted by test reviewer",
+            )
+
+    db_path = postgres_test_url("canon-apply-exception-no-freeze")
+    orchestrator = WritingOrchestrator(
+        Config(
+            database_url=db_path,
+            minimax_api_key="",
+            minimax_model="fake-model",
+            chapter_review_form_mode="off",
+            operation_mode="blackbox",
+            freeze_failed_candidates=False,
+            auto_band_checkpoint=False,
+            manual_checkpoints_enabled=False,
+        )
+    )
+    try:
+        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: _one_chapter_arc(
+            "canon apply exception"
+        )
+        orchestrator.writer.write_chapter = lambda context: _writer_output(context.chapter_number)
+        orchestrator.review_hub = PassReviewHub()
+
+        def fail_canon_quality_gate(**_kwargs):
+            raise RuntimeError("canon apply failed")
+
+        orchestrator._apply_canon_quality_gate = fail_canon_quality_gate
+
+        result = orchestrator.run("p", "g", 1)
+
+        engine = get_engine(db_path)
+        session = get_session_factory(engine)()
+        try:
+            plan = session.execute(select(ChapterPlan)).scalar_one()
+        finally:
+            session.close()
+            engine.dispose()
+    finally:
+        orchestrator.llm_client.close()
+        orchestrator.engine.dispose()
+
+    assert result.status == "needs_review"
+    assert result.completed_chapters == []
+    assert result.paused_chapters == [1]
+    assert plan.status == "needs_review"
 
 
 def test_canon_gate_block_review_routes_to_required_draft_scope():

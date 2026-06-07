@@ -123,4 +123,5 @@
 - [ ] Use ForWin MCP state tools to confirm project `8ac86975f5a345abb9c781e7246b48b9` has no active generation task before mutating.
 - [ ] Retry or continue chapter 26 through the normal review/rewrite path, not manual approval.
 - [ ] Monitor until either the run resumes cleanly, reaches another actionable gate, or reaches 60 accepted chapters.
+- [x] Runtime discovery: chapter 27 repair verification built a 304k-char LLM prompt and timed out. Added bounded repair-verification prompt serialization plus regression coverage so full review/draft payloads no longer leak into verifier input.
 - [ ] If all 60 chapters are accepted and no active/failing gate remains, mark the active goal complete.

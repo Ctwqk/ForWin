@@ -87,7 +87,7 @@ def _defer_structured_extraction_if_needed(
         for part in _STRUCTURED_EXTRACTION_PARTS
         if str(meta.get(part, "") or "").strip() == "degraded"
     ]
-    if status not in {"degraded", "partial_degraded"} and not degraded_parts:
+    if status not in {"degraded", "partial_degraded", "deferred"} and not degraded_parts:
         return
     record_deferred_maintenance(
         updater,

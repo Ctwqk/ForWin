@@ -344,18 +344,19 @@ class ChapterWriter:
             raw_draft,
             fallback_title=context.chapter_plan_title or f"第{context.chapter_number}章",
         )
-        extracted = self._extract_structured(
-            context,
-            draft_data.get("title", context.chapter_plan_title or f"第{context.chapter_number}章"),
-            draft_data.get("body", ""),
-        )
         merged = dict(draft_data)
-        merged.update(extracted)
+        merged["_generation_meta"] = {
+            "structured_extraction": "deferred",
+            "structured_extraction_calls": 0,
+            "state_event_extraction": "deferred",
+            "thread_time_extraction": "deferred",
+            "lore_timeline_notes_extraction": "deferred",
+        }
         output = self._writer_output_from_dict(context, merged)
         output.generation_meta.update(
             {
                 "mode": "single",
-                "call_count": 4,
+                "call_count": 1,
                 "scene_count": len(output.scene_outputs),
                 "prompt_trace": self._build_prompt_trace(
                     base_messages=base_messages,

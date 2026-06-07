@@ -49,7 +49,7 @@ class SplitWriterPipelineTests(unittest.TestCase):
         self.assertEqual(plan.reward_beat_tag, "mystery")
         self.assertEqual(output.reward_beat_tag, "social")
 
-    def test_single_writer_uses_tagged_body_and_split_structured_extraction(self) -> None:
+    def test_single_writer_uses_tagged_body_and_defers_structured_extraction(self) -> None:
         class FakeClient:
             def __init__(self) -> None:
                 self.responses = [
@@ -103,15 +103,19 @@ class SplitWriterPipelineTests(unittest.TestCase):
 
         self.assertEqual(output.title, "雨夜旧站")
         self.assertGreater(output.char_count, 200)
-        self.assertEqual(output.state_changes[0].new_value, "旧站台")
-        self.assertEqual(output.thread_beats[0].thread_name, "旧站疑云")
-        self.assertEqual(output.time_advance.new_time_label, "深夜")
-        self.assertEqual(output.lore_candidates[0].subject_name, "旧站台")
-        self.assertEqual(output.timeline_hints[0].projected_time_label, "深夜继续")
-        self.assertEqual(output.writer_notes[0].target_name, "旧站疑云")
+        self.assertEqual(output.state_changes, [])
+        self.assertEqual(output.thread_beats, [])
+        self.assertIsNone(output.time_advance)
+        self.assertEqual(output.lore_candidates, [])
+        self.assertEqual(output.timeline_hints, [])
+        self.assertEqual(output.writer_notes, [])
         self.assertEqual(output.generation_meta["mode"], "single")
-        self.assertEqual(output.generation_meta["call_count"], 4)
-        self.assertEqual(output.generation_meta["structured_extraction_calls"], 3)
+        self.assertEqual(output.generation_meta["call_count"], 1)
+        self.assertEqual(output.generation_meta["structured_extraction"], "deferred")
+        self.assertEqual(output.generation_meta["structured_extraction_calls"], 0)
+        self.assertEqual(output.generation_meta["state_event_extraction"], "deferred")
+        self.assertEqual(output.generation_meta["thread_time_extraction"], "deferred")
+        self.assertEqual(output.generation_meta["lore_timeline_notes_extraction"], "deferred")
 
     def test_single_writer_prompt_trace_records_business_retry_reason(self) -> None:
         class FakeClient:

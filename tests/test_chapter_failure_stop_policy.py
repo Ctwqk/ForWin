@@ -6,8 +6,10 @@ from sqlalchemy import select
 
 from forwin.config import Config
 from forwin.experience.trope_cooldown import recent_trope_usage
+from forwin.governance import DecisionEventType
 from forwin.long_run_policy import LongRunPolicy
 from forwin.models.base import get_engine, get_session_factory
+from forwin.models.governance import DecisionEvent
 from forwin.models.project import ChapterPlan
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.orchestrator_loop_core.quality_gates import CanonApplyOutcome
@@ -85,6 +87,19 @@ def _writer_output(chapter_number: int) -> WriterOutput:
         thread_beats=[],
         time_advance=None,
     )
+
+
+def _writer_output_with_deferred_extraction(chapter_number: int) -> WriterOutput:
+    output = _writer_output(chapter_number)
+    output.generation_meta.update(
+        {
+            "structured_extraction": "deferred",
+            "state_event_extraction": "deferred",
+            "thread_time_extraction": "deferred",
+            "lore_timeline_notes_extraction": "deferred",
+        }
+    )
+    return output
 
 
 def _config(database_url: str, *, stop_on_chapter_failure: bool | None = None) -> Config:
@@ -244,3 +259,47 @@ def test_accepted_chapter_records_accepted_trope_usage() -> None:
     assert result.completed_chapters == [1]
     assert template_ids == ["power-a"]
     assert categories == ["power"]
+
+
+def test_accepted_chapter_records_deferred_structured_extraction() -> None:
+    db_path = postgres_test_url("accepted-chapter-deferred-structured")
+    orchestrator = WritingOrchestrator(_config(db_path))
+    try:
+        orchestrator.arc_director.plan_arc = (
+            lambda _premise, _genre, _num_chapters: _one_chapter_arc()
+        )
+        orchestrator.review_hub = PassReviewHub()
+        orchestrator._apply_canon_candidate = lambda **_kwargs: CanonApplyOutcome()
+        orchestrator._strict_progression_block = lambda **_kwargs: ("", "", "")
+        orchestrator._write_chapter_with_attention_fallback = (
+            lambda **kwargs: _writer_output_with_deferred_extraction(
+                int(kwargs["chapter_number"])
+            )
+        )
+
+        result = orchestrator.run("p", "g", 1)
+
+        engine = get_engine(db_path)
+        session = get_session_factory(engine)()
+        try:
+            events = list(
+                session.execute(
+                    select(DecisionEvent).where(
+                        DecisionEvent.project_id == result.project_id,
+                        DecisionEvent.event_type
+                        == DecisionEventType.DEFERRED_MAINTENANCE_RECORDED,
+                    )
+                ).scalars()
+            )
+        finally:
+            session.close()
+            engine.dispose()
+    finally:
+        orchestrator.llm_client.close()
+        orchestrator.engine.dispose()
+
+    assert result.status == "completed"
+    assert len(events) == 1
+    payload = json.loads(events[0].payload_json)
+    assert payload["task_type"] == "structured_extraction"
+    assert payload["structured_extraction"] == "deferred"

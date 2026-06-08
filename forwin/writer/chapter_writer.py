@@ -450,6 +450,7 @@ class ChapterWriter:
                 max_attempts=2,
                 retry_on_timeout=True,
             )
+            output = self._complete_scene_fallback_structured_extraction(context, output)
             output.generation_meta.update(
                 {
                     "fallback_from_scene": True,
@@ -457,6 +458,39 @@ class ChapterWriter:
                 }
             )
             return output
+
+    def _complete_scene_fallback_structured_extraction(
+        self,
+        context: ChapterContextPack,
+        output: WriterOutput,
+    ) -> WriterOutput:
+        if output.generation_meta.get("structured_extraction") != "deferred":
+            return output
+
+        extracted = self._extract_structured(context, output.title, output.body)
+        enriched = self._writer_output_from_dict(
+            context,
+            {
+                "title": output.title,
+                "body": output.body,
+                "end_of_chapter_summary": output.end_of_chapter_summary,
+                **extracted,
+            },
+            scene_outputs=output.scene_outputs,
+        )
+        enriched.prompt_revision_hash = output.prompt_revision_hash
+
+        structured_meta = dict(extracted.get("_generation_meta") or {})
+        structured_meta.setdefault("structured_extraction", "completed")
+        merged_meta = dict(output.generation_meta)
+        base_call_count = int(merged_meta.get("call_count") or 0)
+        structured_calls = int(structured_meta.get("structured_extraction_calls") or 0)
+        merged_meta.update(structured_meta)
+        if base_call_count:
+            merged_meta["call_count"] = base_call_count + structured_calls
+        merged_meta["fallback_structured_extraction"] = "performed"
+        enriched.generation_meta = merged_meta
+        return enriched
 
     def _writer_output_from_dict(
         self,

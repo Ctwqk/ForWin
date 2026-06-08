@@ -117,6 +117,71 @@ class SplitWriterPipelineTests(unittest.TestCase):
         self.assertEqual(output.generation_meta["thread_time_extraction"], "deferred")
         self.assertEqual(output.generation_meta["lore_timeline_notes_extraction"], "deferred")
 
+    def test_scene_fallback_completes_structured_extraction(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.responses = [
+                    (
+                        "<<FORWIN_TITLE>>\n"
+                        "雨夜旧站\n"
+                        "<<FORWIN_BODY>>\n"
+                        + "林夜踩着积水穿过旧站台，听见广播里多出了一段不属于这个时代的报站声。" * 20
+                        + "\n<<FORWIN_SUMMARY>>\n"
+                        "林夜确认旧站台里还藏着第二条线索。"
+                    ),
+                    (
+                        '{"state_changes":[{"entity_name":"林夜","entity_kind":"character",'
+                        '"field":"location","old_value":"街口","new_value":"旧站台","reason":"进入调查现场"}],'
+                        '"new_events":[{"summary":"林夜进入旧站台调查","significance":"major",'
+                        '"involved_entity_names":["林夜"],"roles":["protagonist"]}]}'
+                    ),
+                    (
+                        '{"thread_beats":[{"thread_name":"旧站疑云","beat_type":"escalation",'
+                        '"description":"主角确认异常报站并继续深挖"}],'
+                        '"time_advance":{"new_time_label":"深夜","duration_description":"片刻后"}}'
+                    ),
+                    (
+                        '{"lore_candidates":[{"subject_name":"旧站台","subject_type":"location",'
+                        '"description":"旧站台存在不属于当前时代的报站声","evidence_refs":["body:报站声"],'
+                        '"confidence":0.8}],'
+                        '"timeline_hints":[{"current_time_label":"深夜","projected_time_label":"深夜继续",'
+                        '"duration_hint":"片刻后","evidence_refs":["body:深夜"],"confidence":0.7}],'
+                        '"writer_notes":[{"note_type":"continuity","target_name":"旧站疑云",'
+                        '"note":"下一章继续承接异常报站声","evidence_refs":["body:报站声"]}]}'
+                    ),
+                ]
+
+            def chat(self, _messages, temperature: float, max_tokens: int, **_kwargs) -> str:
+                return self.responses.pop(0)
+
+        class FallbackWriter(ChapterWriter):
+            def _plan_scenes(self, context, *, skill_layers=None):  # type: ignore[no-untyped-def]
+                raise ValueError("scene failed")
+
+        writer = FallbackWriter(FakeClient(), writer_mode="scene")
+        context = ChapterContextPack(
+            project_id="p1",
+            project_title="测试书",
+            premise="前提",
+            genre="悬疑",
+            setting_summary="旧城站台",
+            chapter_number=3,
+            chapter_plan_title="第三章",
+            chapter_plan_one_line="主角继续追查",
+            chapter_goals=["确认异响来源", "推进旧站线索"],
+        )
+
+        output = writer.write_chapter(context)
+
+        self.assertTrue(output.generation_meta["fallback_from_scene"])
+        self.assertEqual(output.generation_meta["fallback_structured_extraction"], "performed")
+        self.assertEqual(output.generation_meta["structured_extraction"], "completed")
+        self.assertEqual(output.generation_meta["structured_extraction_calls"], 3)
+        self.assertEqual(output.generation_meta["call_count"], 4)
+        self.assertEqual(output.state_changes[0].entity_name, "林夜")
+        self.assertEqual(output.thread_beats[0].thread_name, "旧站疑云")
+        self.assertEqual(output.lore_candidates[0].subject_name, "旧站台")
+
     def test_single_writer_prompt_trace_records_business_retry_reason(self) -> None:
         class FakeClient:
             def __init__(self) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import logging
+import os
 from typing import Any, Sequence
 
 from sqlalchemy import func, or_, select
@@ -25,7 +26,18 @@ from forwin.llm.compat import call_chat_compat
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 
 logger = logging.getLogger(__name__)
-_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS = 8.0
+
+
+def _read_optional_phase4_llm_timeout_seconds(env: dict[str, str] | None = None) -> float:
+    raw = (env or os.environ).get("FORWIN_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS", "20")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 20.0
+    return value if value > 0 else 20.0
+
+
+_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS = _read_optional_phase4_llm_timeout_seconds()
 
 _POSITIVE_COMMENT_KEYWORDS = ("喜欢", "精彩", "好看", "期待", "爽", "牛", "神")
 _NEGATIVE_COMMENT_KEYWORDS = ("水", "拖", "崩", "失望", "弃", "烂", "短", "乱")

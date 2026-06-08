@@ -1022,6 +1022,13 @@ def _apply_canon_candidate(
         updater.apply_state_changes(
             project_id, chapter_number, filtered_state_changes
         )
+        self._ensure_event_mentioned_non_character_entities(
+            repo,
+            updater,
+            project_id,
+            chapter_number,
+            writer_output,
+        )
         filtered_events = self._filter_resolvable_events(
             repo,
             project_id,

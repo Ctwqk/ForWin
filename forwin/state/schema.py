@@ -16,6 +16,9 @@ class CharacterState(_BaseStateModel):
     goal: str = ""
     power_level: str = ""
     mood: str = ""
+    role_state: str = ""
+    knowledge_state: str = ""
+    possession_state: str = ""
     life_state: str = ""
     custody_state: str = ""
     injury_state: str = ""
@@ -50,6 +53,35 @@ KNOWN_STATE_FIELDS: dict[str, set[str]] = {
     for kind, model_cls in SCHEMA_BY_KIND.items()
 }
 
+STATE_FIELD_ALIASES: dict[str, dict[str, str]] = {
+    "character": {
+        "role": "role_state",
+        "角色": "role_state",
+        "身份": "role_state",
+        "knowledge": "knowledge_state",
+        "认知": "knowledge_state",
+        "认知状态": "knowledge_state",
+        "已知信息": "knowledge_state",
+        "知道的信息": "knowledge_state",
+        "possession": "possession_state",
+        "possessions": "possession_state",
+        "持有物": "possession_state",
+        "持有物品": "possession_state",
+        "持有证据": "possession_state",
+        "目标": "goal",
+        "状态": "status",
+        "情绪": "mood",
+        "位置": "location",
+        "地点": "location",
+    }
+}
+
+
+def normalize_state_field(kind: str, field: str) -> str:
+    normalized_field = field.strip()
+    aliases = STATE_FIELD_ALIASES.get(kind, {})
+    return aliases.get(normalized_field, normalized_field)
+
 
 def normalize_state_payload(state: dict[str, Any]) -> dict[str, str]:
     if not isinstance(state, dict):
@@ -83,7 +115,7 @@ def prepare_state_change(
     field: str,
     new_value: Any,
 ) -> tuple[str, dict[str, str]]:
-    normalized_field = field.strip()
+    normalized_field = normalize_state_field(kind, field)
     if not normalized_field:
         raise ValueError("State change field cannot be empty.")
 

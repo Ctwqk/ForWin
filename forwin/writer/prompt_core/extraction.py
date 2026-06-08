@@ -55,9 +55,11 @@ def build_state_event_extraction_prompt(
         "3. new_events.significance 只能是 major、minor、background 之一。\n"
         "4. state_changes 最多 8 条，只保留会影响后续章节连续性的变化。\n"
         "5. new_events 最多 4 条，只保留本章关键事件。\n"
-        "6. 字段值必须短句，不要展开分析。\n"
-        "7. 没有对应内容就返回空数组。\n"
-        "8. 只输出 JSON。\n\n"
+        "6. character 的 field 必须优先使用英文白名单：location、status、goal、power_level、mood、role_state、knowledge_state、possession_state、life_state、custody_state、injury_state、participation_state。\n"
+        "7. location 的 field 优先使用 status、controlled_by；faction 的 field 优先使用 status、location、goal、power_level。\n"
+        "8. 字段值必须短句，不要展开分析。\n"
+        "9. 没有对应内容就返回空数组。\n"
+        "10. 只输出 JSON。\n\n"
         f"正文：\n{chapter_body}\n\n{schema}"
     )
     return [
@@ -157,7 +159,7 @@ def build_lore_timeline_notes_extraction_prompt(
         "2. lore_candidates 只放可进入后续设定候选池的事实，不要写评价。\n"
         "3. timeline_hints 用来帮助下一章保持时间连续，不确定就返回空数组。\n"
         "4. writer_notes 是给下一章 writer 的短提示，不能改 canon。\n"
-        "5. entity_mentions 只记录正文中出现的命名实体，尤其是命名角色；泛称路人不要记为 is_named=true。\n"
+        "5. entity_mentions 只记录正文中出现的命名实体，尤其是命名角色；new_events 引用的命名组织、地点、物件、规则也必须记录，并使用 character/location/faction/item/rule；泛称路人不要记为 is_named=true。\n"
         "6. evidence_refs 使用 body:短语 格式指向正文证据。\n"
         "7. lore_candidates 最多 6 条，timeline_hints 最多 3 条，writer_notes 最多 5 条，entity_mentions 最多 8 条。\n"
         "8. 每个 description、note 和 evidence_refs 项都必须短，不要复述整段正文。\n"

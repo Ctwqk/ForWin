@@ -92,7 +92,7 @@ from forwin.narrative_obligations.transaction import DeferAcceptanceTransaction
 from forwin.narrative_obligations.types import NarrativeObligation, NarrativePlanPatch
 from forwin.runtime.services import RuntimeServices
 from forwin.state.repo import StateRepository
-from forwin.state.schema import KNOWN_STATE_FIELDS
+from forwin.state.schema import KNOWN_STATE_FIELDS, normalize_state_field
 from forwin.state.updater import StateUpdater
 from forwin.observability.llm_trace import (
     build_llm_decision_event_payloads,

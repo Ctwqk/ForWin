@@ -943,13 +943,16 @@ def _filter_supported_state_changes(changes):
     filtered = []
     for change in changes:
         known_fields = KNOWN_STATE_FIELDS.get(change.entity_kind, set())
-        if known_fields and change.field not in known_fields:
+        normalized_field = normalize_state_field(change.entity_kind, change.field)
+        if known_fields and normalized_field not in known_fields:
             logger.warning(
                 "Dropping unsupported state change field %r for entity kind %r.",
                 change.field,
                 change.entity_kind,
             )
             continue
+        if normalized_field != change.field:
+            change = change.model_copy(update={"field": normalized_field})
         filtered.append(change)
     return filtered
 

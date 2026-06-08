@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from forwin.llm.compat import call_chat_compat
@@ -17,6 +18,15 @@ def _trim(text: str, limit: int = 64) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: max(0, limit - 1)] + "…"
+
+
+def _read_timeout_seconds(env_name: str, default: float) -> float:
+    raw = os.environ.get(env_name, "")
+    try:
+        value = float(raw) if raw.strip() else default
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
 
 
 class LLMWebNovelReviewer:
@@ -56,7 +66,10 @@ class LLMWebNovelReviewer:
                 messages,
                 temperature=0.1,
                 max_tokens=3000,
-                timeout_seconds=45,
+                timeout_seconds=_read_timeout_seconds(
+                    "FORWIN_WEBNOVEL_REVIEW_TIMEOUT_SECONDS",
+                    75.0,
+                ),
                 retry_on_timeout=True,
                 task_family="reviewer",
                 stage_key="chapter_review",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from pydantic import ValidationError
@@ -53,6 +54,15 @@ SYSTEM_PROMPT = (
 )
 
 
+def _read_timeout_seconds(env_name: str, default: float) -> float:
+    raw = os.environ.get(env_name, "")
+    try:
+        value = float(raw) if raw.strip() else default
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
 def call_form(
     *,
     form: ChapterReviewForm,
@@ -60,12 +70,17 @@ def call_form(
     prior_canon_summary: str,
     llm_client: object,
     max_tokens: int = 4000,
-    timeout_seconds: float = 60.0,
+    timeout_seconds: float | None = None,
     max_schema_retries: int = 1,
 ) -> ChapterReviewAnswers:
     base_messages = _messages(form=form, chapter_text=chapter_text, prior_canon_summary=prior_canon_summary)
     output_schema = ChapterReviewAnswers.model_json_schema()
     max_attempts = max(0, int(max_schema_retries)) + 1
+    effective_timeout_seconds = (
+        float(timeout_seconds)
+        if timeout_seconds is not None
+        else _read_timeout_seconds("FORWIN_CHAPTER_REVIEW_FORM_TIMEOUT_SECONDS", 90.0)
+    )
     last_error = ""
     last_raw: dict[str, Any] = {}
     for attempt_index in range(max_attempts):
@@ -80,7 +95,7 @@ def call_form(
                 messages=messages,
                 output_schema=output_schema,
                 max_tokens=max_tokens,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=effective_timeout_seconds,
             )
         except ChapterReviewFormUnavailable:
             raise

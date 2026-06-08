@@ -139,6 +139,24 @@ def test_call_form_uses_single_structured_json_call() -> None:
     assert client.calls[0]["output_schema"]["title"] == "ChapterReviewAnswers"
 
 
+def test_call_form_default_timeout_can_be_overridden_by_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FORWIN_CHAPTER_REVIEW_FORM_TIMEOUT_SECONDS", "123")
+    client = FakeClient()
+    form = ChapterReviewForm(
+        project_id="p1",
+        chapter_number=1,
+        form_schema_version=FORM_SCHEMA_VERSION,
+        characters=[],
+        countdowns=[],
+        obligations=[],
+        open_signals=[],
+    )
+
+    call_form(form=form, chapter_text="正文", prior_canon_summary="既有 canon", llm_client=client)
+
+    assert client.calls[0]["timeout_seconds"] == 123.0
+
+
 def test_call_form_fills_schema_envelope_from_form() -> None:
     form = ChapterReviewForm(
         project_id="p1",

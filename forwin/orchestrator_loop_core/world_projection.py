@@ -3,6 +3,27 @@ from __future__ import annotations
 from forwin.subworld_manager import SubWorldManager
 from forwin.orchestrator_loop_core.common import *
 
+_EVENT_STUB_ENTITY_KINDS = {"location", "faction", "item", "rule"}
+_EVENT_STUB_KIND_ALIASES = {
+    "地点": "location",
+    "位置": "location",
+    "场所": "location",
+    "组织": "faction",
+    "势力": "faction",
+    "机构": "faction",
+    "团体": "faction",
+    "org": "faction",
+    "organization": "faction",
+    "物品": "item",
+    "物件": "item",
+    "道具": "item",
+    "证物": "item",
+    "规则": "rule",
+    "机制": "rule",
+    "协议": "rule",
+}
+_EVENT_STUB_MAX_NAME_LENGTH = 40
+
 @staticmethod
 def _prompt_trace_success_summary(writer_output: WriterOutput) -> dict[str, object]:
     generation_meta = getattr(writer_output, "generation_meta", {}) or {}
@@ -357,6 +378,62 @@ def _filter_resolvable_events(
     return filtered
 
 @staticmethod
+def _ensure_event_mentioned_non_character_entities(
+    repo: StateRepository,
+    updater: StateUpdater,
+    project_id: str,
+    chapter_number: int,
+    writer_output: WriterOutput,
+) -> int:
+    event_names = list(
+        dict.fromkeys(
+            str(name).strip()
+            for event in getattr(writer_output, "new_events", []) or []
+            for name in getattr(event, "involved_entity_names", []) or []
+            if str(name).strip()
+        )
+    )
+    if not event_names:
+        return 0
+    existing = repo.get_entities_by_names(project_id, event_names)
+    mention_kind_by_name: dict[str, str] = {}
+    for mention in getattr(writer_output, "entity_mentions", []) or []:
+        name = str(getattr(mention, "entity_name", "") or "").strip()
+        if not name or name not in event_names or len(name) > _EVENT_STUB_MAX_NAME_LENGTH:
+            continue
+        if not bool(getattr(mention, "is_named", True)):
+            continue
+        if not bool(getattr(mention, "is_on_stage", True)):
+            continue
+        raw_kind = str(getattr(mention, "entity_kind", "") or "").strip()
+        kind = _EVENT_STUB_KIND_ALIASES.get(raw_kind, raw_kind.lower())
+        if kind in _EVENT_STUB_ENTITY_KINDS:
+            mention_kind_by_name.setdefault(name, kind)
+
+    created = 0
+    for name, kind in mention_kind_by_name.items():
+        if existing.get(name) is not None:
+            continue
+        entity = updater.create_entity(
+            project_id=project_id,
+            kind=kind,
+            name=name,
+            description=f"第{chapter_number}章事件引用的{kind}实体；由本章entity_mentions补建。",
+            aliases=[],
+            importance=4,
+            chapter=chapter_number,
+        )
+        existing[name] = entity
+        created += 1
+    if created:
+        logger.info(
+            "Seeded %d event-mentioned non-character canon entities in chapter %d.",
+            created,
+            chapter_number,
+        )
+    return created
+
+@staticmethod
 def _filter_resolvable_state_changes(
     repo: StateRepository,
     project_id: str,
@@ -657,4 +734,4 @@ def _run_phase3_pass(
 
 
 
-__all__ = ['_prompt_trace_success_summary', '_apply_world_v4_gate', '_filter_resolvable_events', '_filter_resolvable_state_changes', '_ensure_genesis_canon_seed_entities', '_collect_subworld_candidate_names', '_validate_subworld_admission', '_run_phase3_pass']
+__all__ = ['_prompt_trace_success_summary', '_apply_world_v4_gate', '_filter_resolvable_events', '_ensure_event_mentioned_non_character_entities', '_filter_resolvable_state_changes', '_ensure_genesis_canon_seed_entities', '_collect_subworld_candidate_names', '_validate_subworld_admission', '_run_phase3_pass']

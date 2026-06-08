@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 
 def test_publisher_browser_is_profile_gated() -> None:
     compose = Path("docker-compose.yml").read_text(encoding="utf-8")
@@ -11,3 +13,17 @@ def test_publisher_browser_is_profile_gated() -> None:
 
     assert "profiles:" in service_block
     assert '"publisher"' in service_block or "'publisher'" in service_block
+
+
+def test_generation_worker_is_compose_managed_with_current_image() -> None:
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+
+    worker = compose["services"]["generation-worker"]
+
+    assert worker["build"] == "."
+    assert worker["container_name"] == "forwin-generation-worker"
+    assert worker["command"][:3] == ["python", "-m", "forwin.cli"]
+    assert "generation-worker" in worker["command"]
+    assert "forwin-data:/app/data" in worker["volumes"]
+    assert worker["environment"] == compose["services"]["forwin"]["environment"]
+    assert worker["healthcheck"] == {"disable": True}

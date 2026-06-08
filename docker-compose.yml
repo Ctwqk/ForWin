@@ -26,6 +26,47 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
+  generation-worker:
+    build: .
+    container_name: forwin-generation-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    command:
+      [
+        "python",
+        "-m",
+        "forwin.cli",
+        "-v",
+        "generation-worker",
+        "--worker-id",
+        "${FORWIN_GENERATION_WORKER_ID:-forwin-generation-worker}",
+        "--lease-seconds",
+        "${FORWIN_GENERATION_WORKER_LEASE_SECONDS:-300}",
+        "--poll-interval",
+        "${FORWIN_GENERATION_WORKER_POLL_INTERVAL:-2}",
+      ]
+    env_file:
+      - path: ${FORWIN_ENV_FILE:-.env}
+        required: false
+    environment:
+      - FORWIN_DATABASE_URL=${FORWIN_DATABASE_URL:-postgresql+psycopg://forwin:forwin@postgres:5432/forwin}
+      - FORWIN_HTTP_BIND=${FORWIN_HTTP_BIND:-127.0.0.1}
+      - FORWIN_ALLOW_BIND_ALL_INTERFACES=${FORWIN_ALLOW_BIND_ALL_INTERFACES:-false}
+      - FORWIN_ALLOW_UNAUTHENTICATED_LAN=${FORWIN_ALLOW_UNAUTHENTICATED_LAN:-false}
+      - FORWIN_QDRANT_URL=${FORWIN_QDRANT_URL:-http://qdrant:6333}
+    volumes:
+      - forwin-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     container_name: forwin-postgres

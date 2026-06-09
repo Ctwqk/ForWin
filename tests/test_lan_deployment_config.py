@@ -14,10 +14,41 @@ def _dockerfile_text() -> str:
     return (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
 
+def _dockerfile_stage(text: str, stage_name: str) -> str:
+    lines = text.splitlines()
+    start = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("FROM ") and line.rstrip().endswith(f" AS {stage_name}")
+    )
+    end = next(
+        (
+            index
+            for index, line in enumerate(lines[start + 1 :], start + 1)
+            if line.startswith("FROM ")
+        ),
+        len(lines),
+    )
+    return "\n".join(lines[start:end])
+
+
 def test_dockerfile_includes_runtime_skill_registry() -> None:
     dockerfile = _dockerfile_text()
 
     assert "COPY forwin_skills/ forwin_skills/" in dockerfile
+
+
+def test_dockerfile_splits_browser_runtime_from_default_runtime() -> None:
+    dockerfile = _dockerfile_text()
+    browser_stage = _dockerfile_stage(dockerfile, "publisher-browser-runtime")
+    default_stage = _dockerfile_stage(dockerfile, "forwin-runtime")
+    from_lines = [line for line in dockerfile.splitlines() if line.startswith("FROM ")]
+
+    assert from_lines[-1].endswith(" AS forwin-runtime")
+    assert "apt-get install -y --no-install-recommends chromium xvfb xauth" in browser_stage
+    assert "python -m playwright install --with-deps chromium" in browser_stage
+    assert "chromium xvfb xauth" not in default_stage
+    assert "playwright install --with-deps chromium" not in default_stage
 
 
 def test_compose_env_file_does_not_reference_personal_path() -> None:
@@ -93,3 +124,11 @@ def test_readme_names_service_process_target_roles() -> None:
     assert "forwin-publisher-worker-swarm" in readme
     assert "forwin-publisher-browser-swarm" in readme
     assert "Postgres/Qdrant/MinIO services instead of starting app-local stateful containers on 126" in normalized
+
+
+def test_operations_docs_record_mcp_image_split_decision() -> None:
+    ops = (ROOT / "docs" / "operations" / "forwin-production-processes.md").read_text(encoding="utf-8")
+    normalized = " ".join(ops.lower().replace("`", "").split())
+
+    assert "forwin-mcp-swarm uses the slim default runtime" in normalized
+    assert "do not split the mcp image" in normalized

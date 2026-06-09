@@ -156,7 +156,9 @@ services:
     restart: unless-stopped
 
   publisher-browser:
-    build: .
+    build:
+      context: .
+      target: publisher-browser-runtime
     container_name: forwin-publisher-browser
     profiles:
       - "publisher"

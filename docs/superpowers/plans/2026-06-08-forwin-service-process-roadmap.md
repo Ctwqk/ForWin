@@ -337,22 +337,22 @@ outbox while preserving the synchronous generation/canon path.
 - Modify: production deploy docs/stack definitions
 - Test: Docker/Compose structure tests
 
-- [ ] **Step 1: Extract publisher-browser image**
+- [x] **Step 1: Extract publisher-browser image**
 
   Create the first role-specific image for Chromium/extension/browser scripts.
   Keep API and generation worker images unchanged at this step.
 
-- [ ] **Step 2: Slim web-api image**
+- [x] **Step 2: Slim web-api image**
 
   Remove browser-only dependencies from the API image after browser image
   extraction is proven.
 
-- [ ] **Step 3: Decide whether MCP image split is worth it**
+- [x] **Step 3: Decide whether MCP image split is worth it**
 
   Only split `forwin-mcp` if the smaller image materially improves deployment
   speed or operational risk.
 
-- [ ] **Step 4: Verify Phase 4**
+- [x] **Step 4: Verify Phase 4**
 
   Run:
 

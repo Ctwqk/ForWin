@@ -8,7 +8,7 @@ COPY frontend/world-studio/index.html frontend/world-studio/tsconfig.json fronte
 COPY frontend/world-studio/src/ src/
 RUN npm run build
 
-FROM python:3.13-slim
+FROM python:3.13-slim AS python-base
 
 WORKDIR /app
 
@@ -18,22 +18,33 @@ COPY forwin/ forwin/
 COPY forwin_skills/ forwin_skills/
 
 RUN pip install --no-cache-dir . py-spy
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends chromium xvfb xauth ca-certificates postgresql-client \
-    && rm -rf /var/lib/apt/lists/*
-RUN python -m playwright install --with-deps chromium
 COPY --from=world-studio-builder /app/frontend/world-studio/dist/ frontend/world-studio/dist/
 COPY browser_extension/ browser_extension/
 COPY scripts/ scripts/
 
 RUN mkdir -p /app/data
 
-EXPOSE 8899
-
 ENV MINIMAX_API_KEY=""
 ENV MINIMAX_BASE_URL="https://api.minimaxi.com/v1"
 ENV MINIMAX_MODEL="MiniMax-M2.7"
 ENV FORWIN_DATABASE_URL="postgresql+psycopg://forwin:forwin@postgres:5432/forwin"
+
+FROM python-base AS publisher-browser-runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium xvfb xauth ca-certificates postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+RUN python -m playwright install --with-deps chromium
+
+CMD ["bash", "-lc", "exec scripts/launch_linux_extension_browser.sh"]
+
+FROM python-base AS forwin-runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+EXPOSE 8899
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import httpx; httpx.get('http://localhost:8899/health')" || exit 1

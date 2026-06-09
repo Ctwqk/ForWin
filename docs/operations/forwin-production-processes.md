@@ -49,6 +49,18 @@ Useful checks:
 | MCP health/upstream API connectivity | Confirms `forwin-mcp-swarm` can reach `forwin-app-swarm` |
 | publisher browser heartbeat | Confirms browser automation is logged in and connected |
 
+## Runtime Images
+
+`forwin-app-swarm`, `forwin-generation-worker-swarm`, and `forwin-mcp-swarm`
+use the slim default runtime image. `forwin-publisher-browser-swarm` uses the
+browser runtime image target because it owns Chromium, Xvfb, extension profile
+qualification, and browser heartbeat checks.
+
+`forwin-mcp-swarm` uses the slim default runtime and should not get a dedicated
+image yet. Do not split the MCP image until measured deploy size, startup time,
+or dependency-risk data shows the split is worth the extra build and rollout
+surface.
+
 ## Generation Worker Operation
 
 The worker should run the existing CLI command:

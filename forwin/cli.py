@@ -218,6 +218,7 @@ def cmd_llm_eval(args: argparse.Namespace) -> None:
 def cmd_generation_worker(args: argparse.Namespace) -> None:
     """Run the durable generation worker."""
     from forwin.api_core import state as api_state
+    from forwin.api_core.generation import _create_continue_generation_task
     from forwin.generation.worker_cli import default_worker_id, run_generation_worker_loop
     from forwin.models.base import get_engine, get_session_factory, init_db
     from forwin.runtime.container import RuntimeContainer
@@ -239,6 +240,7 @@ def cmd_generation_worker(args: argparse.Namespace) -> None:
             lease_seconds=args.lease_seconds,
             poll_interval=args.poll_interval,
             once=args.once,
+            create_continue_generation_task=_create_continue_generation_task,
         )
     finally:
         engine.dispose()

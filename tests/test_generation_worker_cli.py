@@ -61,6 +61,31 @@ def test_generation_worker_loop_once_exits_when_no_task(caplog) -> None:
     assert any("Generation worker stopping" in message for message in messages)
 
 
+def test_generation_worker_loop_forwards_continue_task_factory() -> None:
+    calls = []
+
+    def create_continue_generation_task(**kwargs):
+        return f"task-for-{kwargs['project_id']}"
+
+    def fake_run_once(**kwargs):
+        calls.append(kwargs)
+        return GenerationWorkerResult(claimed=False, message="no_claimable_generation_task")
+
+    exit_code = run_generation_worker_loop(
+        session_factory=lambda: None,
+        config=Config(minimax_api_key="sk-test"),
+        worker_id="worker-test",
+        lease_seconds=300,
+        poll_interval=0,
+        once=True,
+        run_once=fake_run_once,
+        create_continue_generation_task=create_continue_generation_task,
+    )
+
+    assert exit_code == 0
+    assert calls[0]["create_continue_generation_task"] is create_continue_generation_task
+
+
 def test_generation_worker_loop_no_claim_does_not_write_decision_events(caplog) -> None:
     database_url = postgres_test_url("generation-worker-cli-no-claim")
     engine = get_engine(database_url)

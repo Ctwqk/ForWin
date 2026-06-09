@@ -66,12 +66,7 @@ def test_mcp_gateway_does_not_import_database_modules() -> None:
             assert pattern not in source, f"{path.relative_to(ROOT)} imports {pattern}"
 
 
-def test_generation_to_api_core_dependency_is_limited_to_auto_continue_allowlist() -> None:
-    allowed = {
-        Path("forwin/generation/worker.py"): {
-            "from forwin.api_core.generation import _create_continue_generation_task",
-        },
-    }
+def test_generation_package_does_not_depend_on_api_core() -> None:
     for path in sorted((ROOT / "forwin" / "generation").glob("*.py")):
         source = path.read_text(encoding="utf-8")
         matches = {
@@ -79,8 +74,7 @@ def test_generation_to_api_core_dependency_is_limited_to_auto_continue_allowlist
             for line in source.splitlines()
             if "forwin.api_core" in line
         }
-        expected = allowed.get(path.relative_to(ROOT), set())
-        assert matches == expected, f"{path.relative_to(ROOT)} has unexpected api_core dependency: {matches}"
+        assert matches == set(), f"{path.relative_to(ROOT)} has unexpected api_core dependency: {matches}"
 
 
 def test_publisher_browser_entrypoint_scripts_do_not_open_database_sessions() -> None:

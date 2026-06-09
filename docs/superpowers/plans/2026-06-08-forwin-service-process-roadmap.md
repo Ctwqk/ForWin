@@ -205,7 +205,7 @@ docs.
 - Test: `tests/test_service_process_boundaries.py`
 - Add focused contract tests for each port introduced
 
-- [ ] **Step 1: Introduce generation task port**
+- [x] **Step 1: Introduce generation task port**
 
   Extract generation enqueue/active-check/follow-up task creation into a port
   that can be used by both API code and worker auto-continue logic.

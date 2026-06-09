@@ -376,18 +376,18 @@ consider physical database split only if proven necessary.
 - Add migrations only after specific ownership changes are approved
 - Add contract tests around any schema ownership enforcement
 
-- [ ] **Step 1: Document schema ownership**
+- [x] **Step 1: Document schema ownership**
 
   Define owner domains for publisher, observability, knowledge, generation, and
   BookState/canon. This is a documentation and contract step, not a physical DB
   split.
 
-- [ ] **Step 2: Add ownership enforcement tests**
+- [x] **Step 2: Add ownership enforcement tests**
 
   Add tests or lint checks that prevent direct writes from non-owner modules
   where practical.
 
-- [ ] **Step 3: Evaluate physical DB candidates**
+- [x] **Step 3: Evaluate physical DB candidates**
 
   Consider physical DB splits only in this order:
 
@@ -397,7 +397,7 @@ consider physical database split only if proven necessary.
   4. generation task history
   5. BookState/canon last
 
-- [ ] **Step 4: Require a separate design before any physical split**
+- [x] **Step 4: Require a separate design before any physical split**
 
   Each physical DB split needs its own design covering migration, rollback,
   idempotency, failure behavior, backup/restore, and operator checks.

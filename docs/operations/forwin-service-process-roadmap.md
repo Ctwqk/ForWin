@@ -75,7 +75,9 @@ when operational value is clear.
 ### Phase 5: Schema Ownership
 
 Document schema ownership before considering physical database splits. Candidate
-physical splits come later, with BookState/canon last.
+physical splits come later, with BookState/canon last. See
+`docs/operations/forwin-schema-ownership.md` for the owner domains, enforcement
+guardrails, and split-order constraints.
 
 ## Guardrails
 

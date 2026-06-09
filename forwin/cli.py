@@ -271,6 +271,7 @@ def cmd_publisher_worker(args: argparse.Namespace) -> None:
 def cmd_outbox_worker(args: argparse.Namespace) -> None:
     """Run eventually consistent outbox side effects."""
     from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.outbox.handlers import build_default_outbox_handlers
     from forwin.outbox.worker import run_outbox_worker_loop
 
     config = _get_config(args)
@@ -281,7 +282,10 @@ def cmd_outbox_worker(args: argparse.Namespace) -> None:
         exit_code = run_outbox_worker_loop(
             session_factory=Session,
             worker_id=args.worker_id,
-            handlers={},
+            handlers=build_default_outbox_handlers(
+                session_factory=Session,
+                config=config,
+            ),
             poll_interval=args.poll_interval,
             once=args.once,
             max_attempts=args.max_attempts,

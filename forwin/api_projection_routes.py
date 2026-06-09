@@ -6,11 +6,14 @@ from typing import Any, Callable
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from forwin.knowledge_system import KnowledgeProjectionRefresher
-from forwin.llm_kb import LLMKnowledgeBaseCompiler
+from forwin.knowledge_system.projection_jobs import (
+    KNOWLEDGE_PROJECTION_REFRESH_EVENT,
+    enqueue_projection_refresh,
+    normalize_projection_kind,
+    refresh_projection_now,
+)
 from forwin.models.project import Project
 from forwin.models.world_model import WorldModelPageRow
-from forwin.obsidian import ObsidianExporter
 from forwin.world_model import api as world_model_api
 
 
@@ -39,60 +42,49 @@ def build_handlers(
         observer_id: str = "reader",  # noqa: ARG001
         role_scope: str = "human",  # noqa: ARG001
         force: bool = False,  # noqa: ARG001 - digest skip/write policy is handled by compilers.
+        defer: bool = False,
     ) -> dict[str, Any]:
-        kind = str(projection_kind or "all").strip().lower()
+        _ = (observer_type, observer_id, role_scope, force)
         with get_session() as session:
             _require_project(session, project_id)
-            if kind in {"all", "obsidian", "world_studio"}:
-                if kind == "obsidian":
-                    result = ObsidianExporter(session).export_project(
-                        project_id,
-                        vault_root=obsidian_root,
+            try:
+                kind = normalize_projection_kind(projection_kind)
+                if defer:
+                    event = enqueue_projection_refresh(
+                        session,
+                        project_id=project_id,
+                        projection_kind=kind,
                         as_of_chapter=as_of_chapter,
+                        trigger="projection_api_refresh",
                     )
                     session.commit()
                     return {
                         "ok": True,
+                        "deferred": True,
                         "project_id": project_id,
                         "projection_kind": kind,
-                        "obsidian": result.as_dict(),
+                        "as_of_chapter": int(as_of_chapter or 0),
+                        "event_type": KNOWLEDGE_PROJECTION_REFRESH_EVENT,
+                        "outbox_event_id": event.event_id,
+                        "outbox_row_id": event.id,
                     }
-                refresh = KnowledgeProjectionRefresher(
+                payload = refresh_projection_now(
                     session,
+                    project_id=project_id,
+                    projection_kind=kind,
+                    as_of_chapter=as_of_chapter,
+                    trigger="projection_api_refresh",
                     obsidian_root=obsidian_root,
                     llm_kb_root=llm_kb_root,
                     qdrant_url=_qdrant_url(),
                     qdrant_collection=_llm_kb_collection(),
                     qdrant_client=qdrant_client,
                     qdrant_models=qdrant_models,
-                ).refresh(project_id, as_of_chapter=as_of_chapter, trigger="projection_api_refresh")
+                )
                 session.commit()
-                payload = refresh.as_dict()
-                payload["projection_kind"] = kind
                 return payload
-            if kind == "llm_kb":
-                result = LLMKnowledgeBaseCompiler(
-                    session,
-                    root=llm_kb_root,
-                    qdrant_url=_qdrant_url(),
-                    qdrant_collection=_llm_kb_collection(),
-                    qdrant_client=qdrant_client,
-                    qdrant_models=qdrant_models,
-                ).rebuild(project_id, as_of_chapter=as_of_chapter)
-                session.commit()
-                return {
-                    "ok": True,
-                    "project_id": project_id,
-                    "projection_kind": kind,
-                    "llm_kb": {
-                        "root": result.root,
-                        "as_of_chapter": result.as_of_chapter,
-                        "files": list(result.files),
-                        "source_digest": result.source_digest,
-                        "vector_index": dict(result.vector_index),
-                    },
-                }
-        raise HTTPException(status_code=400, detail="projection_kind must be all, obsidian, world_studio, or llm_kb")
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     def get_projection_status(project_id: str, projection_kind: str = "") -> dict[str, Any]:
         with get_session() as session:

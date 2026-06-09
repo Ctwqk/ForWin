@@ -300,7 +300,7 @@ outbox while preserving the synchronous generation/canon path.
   Use row locking and bounded retries. Do not block main generation if the
   outbox worker is down.
 
-- [ ] **Step 3: Move only safe side effects**
+- [x] **Step 3: Move only safe side effects**
 
   Candidate side effects:
 
@@ -312,7 +312,7 @@ outbox while preserving the synchronous generation/canon path.
 
   Do not move BookState compile or chapter acceptance to outbox.
 
-- [ ] **Step 4: Verify Phase 3**
+- [x] **Step 4: Verify Phase 3**
 
   Run:
 

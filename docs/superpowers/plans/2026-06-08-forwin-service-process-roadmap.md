@@ -272,7 +272,7 @@ outbox while preserving the synchronous generation/canon path.
 - Test: `tests/test_outbox_worker.py`
 - Test: contract tests for moved side effects
 
-- [ ] **Step 1: Add outbox schema and store**
+- [x] **Step 1: Add outbox schema and store**
 
   Add `outbox_events` with:
 
@@ -288,7 +288,7 @@ outbox while preserving the synchronous generation/canon path.
   - `processed_at`
   - `error_message`
 
-- [ ] **Step 2: Add outbox worker CLI**
+- [x] **Step 2: Add outbox worker CLI**
 
   Add:
 

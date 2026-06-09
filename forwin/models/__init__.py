@@ -17,6 +17,7 @@ from .event import CanonEvent, EventEntityLink
 from .genesis import BookGenesisRevision, PromptTrace
 from .governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
 from .observability import PerformanceSpan
+from .outbox import OutboxEvent
 from .narrative_obligation import FuturePlanAuditRunRow, NarrativeObligationRow, NarrativePlanPatchRow
 from .phase import (
     ArcEnvelope,
@@ -108,6 +109,7 @@ __all__ = [
     "get_engine",
     "get_session_factory",
     "init_db",
+    "OutboxEvent",
     "new_id",
     # project
     "Project",

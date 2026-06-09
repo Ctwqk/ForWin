@@ -66,6 +66,7 @@ POSTGRES_BASELINE_MIGRATIONS = (
     "project_target_total_default_v1",
     "publisher_bindings_covers_v1",
     "chapter_rewrite_attempt_phase_v1",
+    "outbox_events_v1",
 )
 
 
@@ -181,6 +182,7 @@ def _upgrade_postgresql_database(engine: Engine) -> None:
         _upgrade_project_progression_rules(conn)
         _upgrade_publisher_bindings_covers(conn)
         _upgrade_chapter_rewrite_attempt_phase(conn)
+        _upgrade_outbox_events(conn)
         conn.execute(
             text(
                 """
@@ -882,6 +884,53 @@ def _upgrade_chapter_rewrite_attempt_phase(conn) -> None:
             "ON chapter_rewrite_attempts (project_id, chapter_number, repair_phase, phase_attempt_no)"
         )
     )
+
+
+def _upgrade_outbox_events(conn) -> None:
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS outbox_events (
+                id VARCHAR PRIMARY KEY,
+                event_id VARCHAR NOT NULL,
+                aggregate_type VARCHAR NOT NULL DEFAULT '',
+                aggregate_id VARCHAR NOT NULL DEFAULT '',
+                event_type VARCHAR NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                status VARCHAR NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                available_at TIMESTAMP NULL,
+                locked_by VARCHAR NOT NULL DEFAULT '',
+                locked_at TIMESTAMP NULL,
+                processed_at TIMESTAMP NULL,
+                error_message TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    for column, ddl in (
+        ("event_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("aggregate_type", "VARCHAR NOT NULL DEFAULT ''"),
+        ("aggregate_id", "VARCHAR NOT NULL DEFAULT ''"),
+        ("event_type", "VARCHAR NOT NULL DEFAULT ''"),
+        ("payload_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("status", "VARCHAR NOT NULL DEFAULT 'pending'"),
+        ("attempts", "INTEGER NOT NULL DEFAULT 0"),
+        ("available_at", "TIMESTAMP NULL"),
+        ("locked_by", "VARCHAR NOT NULL DEFAULT ''"),
+        ("locked_at", "TIMESTAMP NULL"),
+        ("processed_at", "TIMESTAMP NULL"),
+        ("error_message", "TEXT NOT NULL DEFAULT ''"),
+        ("created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+        ("updated_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP"),
+    ):
+        conn.execute(text(f"ALTER TABLE outbox_events ADD COLUMN IF NOT EXISTS {column} {ddl}"))
+    conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_outbox_events_event_id ON outbox_events (event_id)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_outbox_events_status_available ON outbox_events (status, available_at, created_at)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_outbox_events_aggregate ON outbox_events (aggregate_type, aggregate_id, created_at)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_outbox_events_event_type ON outbox_events (event_type, status, created_at)"))
 
 
 def upgrade_db(engine: Engine) -> None:

@@ -268,6 +268,31 @@ def cmd_publisher_worker(args: argparse.Namespace) -> None:
         engine.dispose()
 
 
+def cmd_outbox_worker(args: argparse.Namespace) -> None:
+    """Run eventually consistent outbox side effects."""
+    from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.outbox.worker import run_outbox_worker_loop
+
+    config = _get_config(args)
+    engine = get_engine(config.database_url)
+    try:
+        init_db(engine)
+        Session = get_session_factory(engine)
+        exit_code = run_outbox_worker_loop(
+            session_factory=Session,
+            worker_id=args.worker_id,
+            handlers={},
+            poll_interval=args.poll_interval,
+            once=args.once,
+            max_attempts=args.max_attempts,
+            retry_delay_seconds=args.retry_delay_seconds,
+        )
+    finally:
+        engine.dispose()
+    if exit_code:
+        sys.exit(exit_code)
+
+
 # ------------------------------------------------------------------
 # Argument parser
 # ------------------------------------------------------------------
@@ -333,6 +358,13 @@ def build_parser() -> argparse.ArgumentParser:
     publisher_worker.add_argument("--once", action="store_true", help="只执行一轮后退出")
     publisher_worker.add_argument("--limit", type=int, default=1, help="单轮处理任务数")
 
+    outbox_worker = sub.add_parser("outbox-worker", help="运行 outbox side-effect worker")
+    outbox_worker.add_argument("--worker-id", default="", help="Worker id")
+    outbox_worker.add_argument("--poll-interval", type=float, default=2.0, help="无事件时轮询间隔秒数")
+    outbox_worker.add_argument("--once", action="store_true", help="只 claim 一次后退出")
+    outbox_worker.add_argument("--max-attempts", type=int, default=3, help="单个事件最大尝试次数")
+    outbox_worker.add_argument("--retry-delay-seconds", type=int, default=30, help="失败重试等待秒数")
+
     return parser
 
 
@@ -363,6 +395,8 @@ def main() -> None:
         cmd_generation_worker(args)
     elif args.command == "publisher-worker":
         cmd_publisher_worker(args)
+    elif args.command == "outbox-worker":
+        cmd_outbox_worker(args)
     else:
         parser.print_help()
 

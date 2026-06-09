@@ -138,7 +138,7 @@ docs.
 - Test: `tests/test_docker_compose_profiles.py`
 - Test: `tests/test_lan_deployment_config.py`
 
-- [ ] **Step 1: Document production process roles**
+- [x] **Step 1: Document production process roles**
 
   Document the intended 126-host processes:
 
@@ -150,7 +150,7 @@ docs.
 
   Also document that production data stores remain on 150.
 
-- [ ] **Step 2: Define worker operational checks**
+- [x] **Step 2: Define worker operational checks**
 
   Add commands or documented checks for:
 
@@ -163,7 +163,7 @@ docs.
   The checks should prefer existing API/MCP/task surfaces over raw DB
   inspection when an equivalent operator tool exists.
 
-- [ ] **Step 3: Tighten local Compose parity**
+- [x] **Step 3: Tighten local Compose parity**
 
   Confirm local Compose has:
 
@@ -173,7 +173,7 @@ docs.
 
   Add or update tests only if the current tests do not cover these facts.
 
-- [ ] **Step 4: Verify Phase 1**
+- [x] **Step 4: Verify Phase 1**
 
   Run:
 

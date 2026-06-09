@@ -128,7 +128,11 @@ single-host compose layout described above.
   branch `master`.
 - Production deploy target:
   `10.0.0.126:/Users/magi1/ForWin-swarm`.
-- Swarm services: `forwin-app-swarm` and `forwin-mcp-swarm`.
+- Current baseline Swarm services: `forwin-app-swarm` and `forwin-mcp-swarm`.
+- Service-process target roles for this repository:
+  `forwin-app-swarm`, `forwin-generation-worker-swarm`,
+  `forwin-mcp-swarm`, `forwin-publisher-worker-swarm`, and optional
+  `forwin-publisher-browser-swarm`.
 - User-facing URL: `http://10.0.0.126:8899`.
 - MCP/API helper port: `10.0.0.126:8896`.
 - Production deploys are picked up by the 150 GitHub sync job after changes are
@@ -142,6 +146,12 @@ Production data stores are centralized on `10.0.0.150`. This repository still
 contains database models, migrations, storage code, and local compose profiles,
 but production ForWin should connect to the 150-hosted Postgres/Qdrant/MinIO
 services instead of starting app-local stateful containers on 126.
+
+The API process should handle UI/API/read/enqueue work. Generation execution is
+owned by the durable generation worker, publisher backend jobs by the publisher
+worker, and browser automation by the optional publisher-browser process. See
+`docs/operations/forwin-production-processes.md` for operator checks and role
+details.
 
 ### Personal LAN deployment
 

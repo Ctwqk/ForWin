@@ -81,3 +81,15 @@ def test_publisher_extension_manifest_does_not_request_all_hosts() -> None:
 
     assert '"http://*/*"' not in manifest
     assert '"https://*/*"' not in manifest
+
+
+def test_readme_names_service_process_target_roles() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    normalized = " ".join(readme.split())
+
+    assert "forwin-app-swarm" in readme
+    assert "forwin-generation-worker-swarm" in readme
+    assert "forwin-mcp-swarm" in readme
+    assert "forwin-publisher-worker-swarm" in readme
+    assert "forwin-publisher-browser-swarm" in readme
+    assert "Postgres/Qdrant/MinIO services instead of starting app-local stateful containers on 126" in normalized

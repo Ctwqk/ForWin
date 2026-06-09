@@ -82,7 +82,7 @@ cross-boundary drift.
 - Modify: existing docs that describe operator or deploy expectations, if they
   conflict with the roadmap
 
-- [ ] **Step 1: Add current ownership documentation**
+- [x] **Step 1: Add current ownership documentation**
 
   Document the current writer authority for:
 
@@ -98,7 +98,7 @@ cross-boundary drift.
   The document must state that ownership is logical write authority, not
   physical database ownership.
 
-- [ ] **Step 2: Add initial boundary tests**
+- [x] **Step 2: Add initial boundary tests**
 
   Create `tests/test_service_process_boundaries.py` with focused source scans:
 
@@ -111,7 +111,7 @@ cross-boundary drift.
   Keep the tests narrow so they pass against the current repository while still
   exposing the known allowlist debt.
 
-- [ ] **Step 3: Verify Phase 0**
+- [x] **Step 3: Verify Phase 0**
 
   Run:
 

@@ -212,23 +212,23 @@ docs.
 
   The worker must no longer import `forwin.api_core.generation`.
 
-- [ ] **Step 2: Introduce CanonPort**
+- [x] **Step 2: Introduce CanonPort**
 
   Create a narrow canon write contract for approved GraphDelta input and
   snapshot/result output. Do not change canon behavior in this step; wrap the
   current write path first.
 
-- [ ] **Step 3: Introduce ReviewPort**
+- [x] **Step 3: Introduce ReviewPort**
 
   Create a narrow review contract for chapter review, retry/repair instruction,
   and verdict output. Keep review execution in-process.
 
-- [ ] **Step 4: Introduce PublisherJobClient**
+- [x] **Step 4: Introduce PublisherJobClient**
 
   Wrap upload, cover, and comment-sync job creation/claim/result flows behind a
   publisher job contract. Keep browser worker API-only as the future target.
 
-- [ ] **Step 5: Introduce KnowledgeIndexPort**
+- [x] **Step 5: Introduce KnowledgeIndexPort**
 
   Isolate expensive rebuild/index commands from read APIs. Do not remote-split
   query/read paths yet.

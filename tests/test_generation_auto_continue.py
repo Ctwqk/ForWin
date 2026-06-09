@@ -22,6 +22,7 @@ class ResultStub:
     completed_chapters: list[int] | None = None
     failed_chapters: list[int] | None = None
     paused_chapters: list[int] | None = None
+    system_block_chapters: list[int] | None = None
     paused: bool = False
     cancelled: bool = False
 
@@ -343,5 +344,78 @@ def test_controller_stops_on_pending_review_and_records_audit_event() -> None:
         assert decision.decision == "stop"
         assert decision.reason == "pending_review_blocker"
         assert any(event.event_type == "auto_continue_decision" for event in events)
+    finally:
+        engine.dispose()
+
+
+def test_controller_auto_retries_system_block_review_once() -> None:
+    engine, Session = _session_factory("auto-continue-review-auto-retry")
+    calls: list[dict[str, object]] = []
+    runtime_config = object()
+    try:
+        with Session.begin() as session:
+            project = _project(session)
+            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=3)
+            _chapter(session, project_id=project.id, arc_id="arc-1", number=1, status="accepted")
+            _chapter(session, project_id=project.id, arc_id="arc-1", number=2, status="needs_review")
+            _chapter(session, project_id=project.id, arc_id="arc-1", number=3, status="planned")
+            plan = session.get(ChapterPlan, "plan-2")
+            assert plan is not None
+            plan.repair_attempt_count = 0
+            plan.canon_risk_level = "high"
+            plan.residual_review_issues_json = '[{"rule_name":"canon_system_block"}]'
+            session.add(plan)
+
+        controller = GenerationAutoContinueController(
+            session_factory=Session,
+            create_continue_generation_task=lambda **kwargs: calls.append(kwargs) or "task-auto-retry",
+        )
+        decision = controller.after_task_completion(
+            ResultStub(
+                project_id="project-auto",
+                completed_chapters=[1],
+                paused_chapters=[2],
+                system_block_chapters=[2],
+            ),
+            parent_task_id="task-prev",
+            run_until_chapter=6,
+            max_chapters=None,
+            auto_continue=True,
+            runtime_config=runtime_config,
+        )
+
+        with Session() as session:
+            plan = session.get(ChapterPlan, "plan-2")
+            assert plan is not None
+            events = session.query(DecisionEvent).filter_by(project_id="project-auto").all()
+            retry_events = [
+                event
+                for event in events
+                if event.event_type == "retry_attempt"
+                and event.event_family == "audit_action"
+                and event.actor_type == "system"
+            ]
+
+        assert decision == AutoContinueDecision(
+            decision="continue",
+            reason="auto_retry_review_blocker",
+            next_task_id="task-auto-retry",
+            next_chapter=2,
+            run_until_chapter=6,
+            target_total_chapters=6,
+            requested_chapters=2,
+            workset_reason="active_arc_pending",
+        )
+        assert calls[0]["project_id"] == "project-auto"
+        assert calls[0]["requested_chapters"] == 2
+        assert calls[0]["max_chapters"] == 5
+        assert calls[0]["auto_continue"] is True
+        assert calls[0]["run_until_chapter"] == 6
+        assert calls[0]["runtime_config"] is runtime_config
+        assert calls[0]["message"] == "第2章 needs_review 已自动重置并重试。"
+        assert plan.status == "planned"
+        assert plan.canon_risk_level == ""
+        assert plan.residual_review_issues_json == "[]"
+        assert retry_events
     finally:
         engine.dispose()

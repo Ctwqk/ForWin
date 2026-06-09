@@ -356,51 +356,74 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertIn("运行中的生成任务", str(ctx.exception.detail))
         self.assertEqual(accept_calls, [])
 
-    def test_approve_review_does_not_continue_when_canon_gate_keeps_review_pending(self) -> None:
+    def test_approve_review_auto_retries_canon_gate_review_blocker_once(self) -> None:
         project = self._create_project(project_id="proj-review-gate-block")
         with self.session_factory() as session:
+            project_row = session.get(Project, project.id)
+            project_row.creation_status = "writing"
             arc = ArcPlanVersion(
                 id="arc-review-gate-block",
                 project_id=project.id,
                 arc_synopsis="测试弧线",
                 status="active",
+                arc_number=1,
+                chapter_start=1,
+                chapter_end=3,
             )
             session.add(arc)
-            session.add(
-                ChapterPlan(
-                    id="plan-review-gate-block",
-                    project_id=project.id,
-                    arc_plan_id=arc.id,
-                    chapter_number=1,
-                    title="第一章",
-                    status="needs_review",
+            for chapter_number, status in [(1, "needs_review"), (2, "planned"), (3, "planned")]:
+                session.add(
+                    ChapterPlan(
+                        id=f"plan-review-gate-block-{chapter_number}",
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=chapter_number,
+                        title=f"第{chapter_number}章",
+                        status=status,
+                    )
                 )
-            )
             session.commit()
 
         def accept_review(*_args, **_kwargs):
+            with self.session_factory() as session:
+                plan = session.get(ChapterPlan, "plan-review-gate-block-1")
+                plan.status = "needs_review"
+                plan.canon_risk_level = "high"
+                plan.repair_attempt_count = 0
+                plan.residual_review_issues_json = '[{"rule_name":"canon_apply_error"}]'
+                session.add(plan)
+                session.commit()
             return {
                 "status": "needs_review",
                 "message": "第1章 canon gate 阻止接受，已转为 needs_review。",
                 "frozen_artifact": "artifact.json",
             }
 
+        captured: dict[str, object] = {}
+
+        def capture_task_creation(**kwargs):
+            captured.update(kwargs)
+            return "task-review-gate-auto-retry"
+
         api_module._orchestrator = SimpleNamespace(accept_review=accept_review)
 
-        payload = api_module.approve_chapter_review(
-            project.id,
-            1,
-            ChapterReviewApproveRequest(continue_generation=True, reason="guard regression"),
-        )
+        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+            payload = api_module.approve_chapter_review(
+                project.id,
+                1,
+                ChapterReviewApproveRequest(continue_generation=True, reason="guard regression"),
+            )
 
-        self.assertEqual(payload.status, "needs_review")
-        self.assertEqual(payload.task_id, "")
-        self.assertIn("未启动后续章节", payload.message)
+        self.assertEqual(payload.status, "planned")
+        self.assertEqual(payload.task_id, "task-review-gate-auto-retry")
+        self.assertIn("已自动重置并启动重试", payload.message)
+        self.assertEqual(captured["requested_chapters"], 3)
         with self.session_factory() as session:
-            task_count = session.query(GenerationTask).filter(
-                GenerationTask.project_id == project.id
-            ).count()
-        self.assertEqual(task_count, 0)
+            plan = session.get(ChapterPlan, "plan-review-gate-block-1")
+            self.assertEqual(plan.status, "planned")
+            self.assertEqual(plan.repair_attempt_count, 0)
+            self.assertEqual(plan.residual_review_issues_json, "[]")
+            self.assertEqual(plan.canon_risk_level, "")
 
     def test_approve_review_continue_uses_remaining_active_workset_count(self) -> None:
         project = self._create_project(project_id="proj-approve-workset-count")

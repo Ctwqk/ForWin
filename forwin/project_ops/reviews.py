@@ -54,6 +54,11 @@ from forwin.generation.continue_workset import (
     ContinueGenerationWorkset,
     build_continue_generation_workset,
 )
+from forwin.generation.review_auto_retry import (
+    eligible_for_auto_review_retry,
+    prior_auto_review_retry_count,
+    reset_chapter_for_auto_review_retry,
+)
 from forwin.genesis_handoff import StartWritingCommand
 from forwin.governance import (
     DecisionEventInfo,
@@ -475,6 +480,22 @@ def approve_chapter_review(
             frozen_artifacts=[result["frozen_artifact"]] if result["frozen_artifact"] else [],
         )
         message = f"{message} 已启动后续章节继续执行。"
+    elif req.continue_generation and accepted_status == "needs_review":
+        auto_retry_payload = _auto_retry_review_approve_blocker(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            result=result,
+            message=message,
+            reason=reason,
+            runtime_config=runtime_config,
+            get_session=get_session,
+            active_generation_task_error_cls=active_generation_task_error_cls,
+            create_continue_generation_task=create_continue_generation_task,
+            update_task=update_task,
+        )
+        if auto_retry_payload is not None:
+            return auto_retry_payload
+        message = f"{message} 未启动后续章节。"
     elif req.continue_generation:
         message = f"{message} 未启动后续章节。"
 
@@ -486,6 +507,87 @@ def approve_chapter_review(
         message=message,
         task_id=task_id,
         frozen_artifact=result.get("frozen_artifact") or "",
+    )
+
+
+def _auto_retry_review_approve_blocker(
+    *,
+    project_id: str,
+    chapter_number: int,
+    result: dict[str, Any],
+    message: str,
+    reason: str,
+    runtime_config: Any,
+    get_session,
+    active_generation_task_error_cls,
+    create_continue_generation_task,
+    update_task,
+) -> ChapterReviewApproveResponse | None:
+    frozen_artifact = str(result.get("frozen_artifact") or "")
+    task_id = ""
+    requested_chapters = 0
+    session = get_session()
+    try:
+        plan = session.execute(
+            select(ChapterPlan).where(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number == chapter_number,
+            )
+        ).scalar_one_or_none()
+        if plan is None or str(plan.status or "") != "needs_review":
+            return None
+        if not eligible_for_auto_review_retry(plan):
+            return None
+        if prior_auto_review_retry_count(session, project_id, chapter_number) > 0:
+            return None
+        reset_chapter_for_auto_review_retry(
+            session,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            plan=plan,
+            source="review_approve_auto_retry",
+            reason=reason or "review_approve_auto_retry",
+            summary=f"第{chapter_number}章 canon gate needs_review 自动重置为 planned。",
+            terminal_block_reason="review_approve_canon_gate",
+            system_block=True,
+            frozen_artifact=frozen_artifact,
+        )
+        workset = build_continue_generation_workset(
+            session,
+            project_id,
+            source="review_approve_auto_retry",
+        )
+        requested_chapters = int(workset.requested_chapters or 0)
+        session.commit()
+    finally:
+        session.close()
+
+    if requested_chapters > 0:
+        try:
+            task_id = create_continue_generation_task(
+                project_id=project_id,
+                runtime_config=runtime_config,
+                requested_chapters=requested_chapters,
+                message=f"第{chapter_number}章 canon gate 阻断后已自动重置，准备重新生成。",
+            )
+        except active_generation_task_error_cls as exc:
+            raise HTTPException(409, str(exc)) from exc
+        update_task(
+            task_id,
+            frozen_artifacts=[frozen_artifact] if frozen_artifact else [],
+        )
+        message = f"{message} 已自动重置并启动重试。"
+    else:
+        message = f"{message} 已自动重置为 planned，但没有剩余章节需要继续执行。"
+
+    return ChapterReviewApproveResponse(
+        ok=True,
+        project_id=project_id,
+        chapter_number=chapter_number,
+        status="planned",
+        message=message,
+        task_id=task_id,
+        frozen_artifact=frozen_artifact,
     )
 
 def retry_chapter_review(

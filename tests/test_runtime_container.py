@@ -23,6 +23,22 @@ def test_runtime_container_imports_in_fresh_process() -> None:
     assert result.stdout.strip() == "RuntimeContainer"
 
 
+def test_runtime_container_records_validated_role() -> None:
+    from forwin.runtime.container import RuntimeContainer
+
+    config = Config(database_url="postgresql+psycopg://fake/forwin", minimax_api_key="")
+
+    assert RuntimeContainer.from_config(config, role="api").role == "api"
+    assert RuntimeContainer.for_generation_worker(config).role == "generation_worker"
+
+    try:
+        RuntimeContainer.from_config(config, role="browser")
+    except ValueError as exc:
+        assert "Unsupported runtime role" in str(exc)
+    else:
+        raise AssertionError("invalid runtime role should raise ValueError")
+
+
 class _FakeURL:
     def render_as_string(self, *, hide_password: bool = True) -> str:
         return "postgresql+psycopg://fake/forwin"

@@ -245,7 +245,7 @@ async def lifespan(app: FastAPI):
     if api_state._runtime_container is None:
         database_url = os.environ.get("FORWIN_DATABASE_URL", api_state._config.database_url)
         api_state._config = api_state._config.model_copy(update={"database_url": database_url})
-        api_state._runtime_container = RuntimeContainer.from_config(api_state._config)
+        api_state._runtime_container = RuntimeContainer.from_config(api_state._config, role="api")
         runtime_services = api_state._runtime_container.services()
         api_state._engine = runtime_services.engine
         api_state._SessionFactory = runtime_services.session_factory

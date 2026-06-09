@@ -7,7 +7,7 @@ from forwin.config import Config
 
 class RuntimeContainerPort(Protocol):
     @classmethod
-    def from_config(cls, config: Config) -> "RuntimeContainerPort":
+    def from_config(cls, config: Config, *, role: str = "full") -> "RuntimeContainerPort":
         ...
 
     def services(self):

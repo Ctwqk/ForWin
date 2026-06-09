@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from typing import Callable
+from typing import Callable, Literal
 
 from forwin.book_genesis import BookGenesisService
 from forwin.config import Config
@@ -33,15 +33,46 @@ from forwin.writer.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
+RuntimeRole = Literal[
+    "full",
+    "api",
+    "generation_worker",
+    "publisher_worker",
+    "mcp",
+    "maintenance",
+]
+_RUNTIME_ROLES: set[str] = {
+    "full",
+    "api",
+    "generation_worker",
+    "publisher_worker",
+    "mcp",
+    "maintenance",
+}
+
 
 @dataclass(slots=True)
 class RuntimeContainer:
     config: Config
+    role: RuntimeRole = "full"
     _services: RuntimeServices | None = None
 
     @classmethod
-    def from_config(cls, config: Config) -> "RuntimeContainer":
-        return cls(config=config)
+    def from_config(cls, config: Config, *, role: RuntimeRole = "full") -> "RuntimeContainer":
+        normalized_role = _validate_runtime_role(role)
+        return cls(config=config, role=normalized_role)
+
+    @classmethod
+    def for_api(cls, config: Config) -> "RuntimeContainer":
+        return cls.from_config(config, role="api")
+
+    @classmethod
+    def for_generation_worker(cls, config: Config) -> "RuntimeContainer":
+        return cls.from_config(config, role="generation_worker")
+
+    @classmethod
+    def for_publisher_worker(cls, config: Config) -> "RuntimeContainer":
+        return cls.from_config(config, role="publisher_worker")
 
     def services(self) -> RuntimeServices:
         if self._services is None:
@@ -338,3 +369,10 @@ class RuntimeContainer:
             minio_prefix=config.minio_prefix,
             minio_secure=config.minio_secure,
         )
+
+
+def _validate_runtime_role(role: str) -> RuntimeRole:
+    normalized = str(role or "full").strip() or "full"
+    if normalized not in _RUNTIME_ROLES:
+        raise ValueError(f"Unsupported runtime role: {role}")
+    return normalized  # type: ignore[return-value]

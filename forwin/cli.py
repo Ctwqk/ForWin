@@ -231,7 +231,7 @@ def cmd_generation_worker(args: argparse.Namespace) -> None:
         api_state._config = config
         api_state._engine = engine
         api_state._SessionFactory = Session
-        api_state._runtime_container = RuntimeContainer.from_config(config)
+        api_state._runtime_container = RuntimeContainer.from_config(config, role="generation_worker")
 
         exit_code = run_generation_worker_loop(
             session_factory=Session,
@@ -258,7 +258,7 @@ def cmd_publisher_worker(args: argparse.Namespace) -> None:
     try:
         init_db(engine)
         Session = get_session_factory(engine)
-        runtime = RuntimeContainer.from_config(config).services().publisher_runtime
+        runtime = RuntimeContainer.from_config(config, role="publisher_worker").services().publisher_runtime
         handled = runtime.backend_jobs.run_pending_once(limit=args.limit)
         if handled:
             print("\n".join(handled))

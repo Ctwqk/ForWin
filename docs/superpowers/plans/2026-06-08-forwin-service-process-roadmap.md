@@ -233,14 +233,14 @@ docs.
   Isolate expensive rebuild/index commands from read APIs. Do not remote-split
   query/read paths yet.
 
-- [ ] **Step 6: Make RuntimeContainer role-aware**
+- [x] **Step 6: Make RuntimeContainer role-aware**
 
   Add a role-oriented construction path or laziness so API startup does not
   eagerly build browser/worker-only resources. Keep the existing
   `RuntimeContainer.from_config()` compatibility path until call sites are
   migrated.
 
-- [ ] **Step 7: Verify Phase 2**
+- [x] **Step 7: Verify Phase 2**
 
   Run:
 

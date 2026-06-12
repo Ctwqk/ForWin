@@ -570,8 +570,23 @@ class ContinuityChecker:
 
     @staticmethod
     def _candidate_character_name(name: str) -> str:
-        text = ContinuityChecker._normalize_character_reference(name)
+        raw_text = str(name or "").strip()
+        if ContinuityChecker._has_malformed_parenthetical_annotation(raw_text):
+            return ""
+        text = ContinuityChecker._normalize_character_reference(raw_text)
         return text if ContinuityChecker._looks_like_named_character(text) else ""
+
+    @staticmethod
+    def _has_malformed_parenthetical_annotation(name: str) -> bool:
+        text = str(name or "").strip()
+        if not text:
+            return False
+        for opener, closer in (("（", "）"), ("(", ")")):
+            if text.count(opener) != text.count(closer):
+                return True
+            if opener in text and closer in text and text.rfind(opener) > text.rfind(closer):
+                return True
+        return False
 
     @staticmethod
     def _looks_like_generic_character_reference(name: str) -> bool:

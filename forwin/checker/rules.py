@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import logging
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -80,6 +81,7 @@ GENERIC_CHARACTER_ROLE_SUFFIXES = (
     "员工",
     "主管",
     "残影",
+    "调度员",
 )
 POSSESSIVE_GENERIC_ROLE_SUFFIXES = (
     "手下",
@@ -95,6 +97,17 @@ POSSESSIVE_GENERIC_ROLE_SUFFIXES = (
     "保镖",
     "安保",
     "员工",
+)
+ROLE_PREFIXED_PERSON_NAME_PREFIXES = (
+    "馆员",
+    "审计员",
+    "调度员",
+    "接线员",
+    "管理员",
+    "工程师",
+)
+NUMBERED_NON_CAST_ENTITY_SUFFIXES = (
+    "分割体",
 )
 NON_CHARACTER_NAME_KEYWORDS = (
     "集团",
@@ -574,7 +587,34 @@ class ContinuityChecker:
         if ContinuityChecker._has_malformed_parenthetical_annotation(raw_text):
             return ""
         text = ContinuityChecker._normalize_character_reference(raw_text)
+        text = ContinuityChecker._strip_role_prefix_from_person_name(text)
         return text if ContinuityChecker._looks_like_named_character(text) else ""
+
+    @staticmethod
+    def _strip_role_prefix_from_person_name(name: str) -> str:
+        text = str(name or "").strip()
+        for prefix in ROLE_PREFIXED_PERSON_NAME_PREFIXES:
+            if not text.startswith(prefix) or len(text) <= len(prefix):
+                continue
+            suffix = text[len(prefix) :].strip()
+            if (
+                2 <= len(suffix) <= 4
+                and "的" not in suffix
+                and not any(ch.isdigit() for ch in suffix)
+                and all("\u4e00" <= ch <= "\u9fff" or ch == "·" for ch in suffix)
+                and not ContinuityChecker._looks_like_generic_character_reference(suffix)
+                and not ContinuityChecker._looks_like_non_character_reference(suffix)
+            ):
+                return suffix
+        return text
+
+    @staticmethod
+    def _looks_like_numbered_non_cast_entity(name: str) -> bool:
+        text = str(name or "").strip()
+        if not text:
+            return False
+        suffixes = "|".join(re.escape(suffix) for suffix in NUMBERED_NON_CAST_ENTITY_SUFFIXES)
+        return bool(re.fullmatch(rf"[0-9０-９]{{2,4}}号(?:{suffixes})", text))
 
     @staticmethod
     def _has_malformed_parenthetical_annotation(name: str) -> bool:
@@ -594,6 +634,8 @@ class ContinuityChecker:
         if not text:
             return False
         if text in GENERIC_CHARACTER_REFERENCES:
+            return True
+        if ContinuityChecker._looks_like_numbered_non_cast_entity(text):
             return True
         if "的" in text:
             _prefix, suffix = text.rsplit("的", 1)

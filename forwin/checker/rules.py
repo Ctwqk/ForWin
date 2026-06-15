@@ -79,6 +79,7 @@ GENERIC_CHARACTER_ROLE_SUFFIXES = (
     "巡检员",
     "员工",
     "主管",
+    "残影",
 )
 POSSESSIVE_GENERIC_ROLE_SUFFIXES = (
     "手下",
@@ -94,7 +95,6 @@ POSSESSIVE_GENERIC_ROLE_SUFFIXES = (
     "保镖",
     "安保",
     "员工",
-    "残影",
 )
 NON_CHARACTER_NAME_KEYWORDS = (
     "集团",

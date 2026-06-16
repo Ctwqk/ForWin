@@ -156,6 +156,91 @@ class SubWorldControlTests(unittest.TestCase):
         ]
         self.assertEqual(unknown, ["灰鸦"])
 
+    def test_subworld_admission_generalizes_non_cast_reference_filtering(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"沈岚", "陈潮白", "许晏", "馆员"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=68,
+                title="第40份密钥：灯塔管理员",
+                body=(
+                    "沈岚收到老环线调度员留下的L-7坐标。"
+                    "馆员陈潮白记录QT-7741与L7-09同时失联。"
+                    "第004号分割体和第40份密钥都指向VT-7-19-γ。"
+                    "许晏/馆员的双重身份被写入XU-CH-1997-0847。"
+                    "灰鸦仍未获准进入本章。"
+                )
+                * 30,
+                end_of_chapter_summary="沈岚确认坐标与双重身份证据。",
+                entity_mentions=[
+                    EntityMention(entity_name="沈岚", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="老环线调度员", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="系统巡检员", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="馆员陈潮白", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="003号分割体", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="第004号分割体", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="第40份密钥", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="L-7", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="L7-09", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="QT-7741", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="VT-7-19-γ", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="E-7749", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="XU-CH-1997-0847", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="许晏/馆员", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="许晏与馆员", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="许晏（馆员人格）", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
+                ],
+            ),
+        )
+
+        unknown = [
+            issue.entity_names[0]
+            for issue in verdict.issues
+            if issue.rule_name == "sub_world_unknown_named_entity"
+        ]
+        self.assertEqual(unknown, ["灰鸦"])
+        self.assertEqual(ContinuityChecker._candidate_character_name("馆员陈潮白"), "陈潮白")
+
+    def test_reference_classifier_direct_shapes_are_not_overfit_to_exact_strings(self) -> None:
+        non_candidates = [
+            "老环线调度员",
+            "系统巡检员",
+            "第七区溺水者残影",
+            "003号分割体",
+            "第004号分割体",
+            "第40份密钥",
+            "L-7",
+            "L7-09",
+            "QT-7741",
+            "VT-7-19-γ",
+            "E-7749",
+            "XU-CH-1997-0847",
+            "许晏/馆员",
+            "许晏与馆员",
+            "许晏（馆员人格）",
+        ]
+        for name in non_candidates:
+            with self.subTest(name=name):
+                self.assertEqual(ContinuityChecker._candidate_character_name(name), "")
+                self.assertFalse(ContinuityChecker._looks_like_named_character(name))
+
+        self.assertEqual(ContinuityChecker._candidate_character_name("馆员陈潮白"), "陈潮白")
+        self.assertEqual(ContinuityChecker._candidate_character_name("灰鸦"), "灰鸦")
+
     def test_subworld_admission_ignores_non_cast_entities_and_offstage_record_names(self) -> None:
         class FakeRepo:
             def get_active_entities(self, _project_id: str) -> list[object]:

@@ -12,6 +12,14 @@ from forwin.protocol.review import ReviewVerdict, ContinuityIssue
 from forwin.governance import issue_group_for_issue
 from forwin.canon_quality.placeholder import extract_expected_protagonist_names
 from forwin.canon_names import extract_canon_name_anchors, find_canon_name_violations
+from forwin.checker.reference_classifier import (
+    candidate_character_name,
+    has_malformed_parenthetical_annotation,
+    looks_like_generic_character_reference,
+    looks_like_named_character,
+    looks_like_non_character_reference,
+    normalize_character_reference,
+)
 
 logger = logging.getLogger(__name__)
 DEAD_STATUS_KEYWORDS = {
@@ -24,116 +32,6 @@ DEAD_STATUS_KEYWORDS = {
     "阵亡",
     "已阵亡",
 }
-GENERIC_CHARACTER_REFERENCES = {
-    "路人",
-    "守卫",
-    "老板",
-    "店小二",
-    "师兄",
-    "师姐",
-    "弟子",
-    "首席运营官",
-    "运营负责人",
-    "财务总监",
-    "财务负责人",
-    "法务负责人",
-    "部门总监",
-    "部门负责人",
-    "集团高管",
-    "同学",
-    "众人",
-    "人群",
-    "旁人",
-    "馆员",
-    "管理员",
-    "工作人员",
-    "服务员",
-    "追踪者",
-    "不明追踪者",
-    "无脸人",
-    "手下",
-    "下属",
-    "部下",
-    "同伙",
-    "随从",
-}
-GENERIC_CHARACTER_ROLE_SUFFIXES = (
-    "手下",
-    "下属",
-    "部下",
-    "同伙",
-    "随从",
-    "技术员",
-    "工程师",
-    "程序员",
-    "黑客",
-    "线人",
-    "中间人",
-    "摊主",
-    "追兵",
-    "追踪者",
-    "安保",
-    "保镖",
-    "警员",
-    "警察",
-    "巡检员",
-    "员工",
-    "主管",
-    "残影",
-)
-POSSESSIVE_GENERIC_ROLE_SUFFIXES = (
-    "手下",
-    "下属",
-    "部下",
-    "同伙",
-    "随从",
-    "队员",
-    "巡检员",
-    "追兵",
-    "追踪者",
-    "守卫",
-    "保镖",
-    "安保",
-    "员工",
-)
-NON_CHARACTER_NAME_KEYWORDS = (
-    "集团",
-    "公司",
-    "机构",
-    "报社",
-    "系统",
-    "账本",
-    "记忆馆",
-    "旧港",
-    "火灾",
-    "事故",
-    "码头",
-    "咖啡馆",
-    "档案",
-    "论坛",
-    "市场",
-    "大楼",
-    "实验室",
-    "实验区",
-)
-RELATIONAL_REFERENCE_SUFFIXES = (
-    "母亲",
-    "父亲",
-    "妈妈",
-    "爸爸",
-    "姐姐",
-    "妹妹",
-    "哥哥",
-    "弟弟",
-    "的母亲",
-    "的父亲",
-    "的妈妈",
-    "的爸爸",
-    "的姐姐",
-    "的妹妹",
-    "的哥哥",
-    "的弟弟",
-)
 ABSENCE_ONLY_CHANGE_KEYWORDS = (
     "不存在",
     "消失",
@@ -561,67 +459,27 @@ class ContinuityChecker:
 
     @staticmethod
     def _looks_like_named_character(name: str) -> bool:
-        text = ContinuityChecker._normalize_character_reference(name)
-        if not text or ContinuityChecker._looks_like_generic_character_reference(text):
-            return False
-        if ContinuityChecker._looks_like_non_character_reference(text):
-            return False
-        return len(text) <= 12
+        return looks_like_named_character(name)
 
     @staticmethod
     def _candidate_character_name(name: str) -> str:
-        raw_text = str(name or "").strip()
-        if ContinuityChecker._has_malformed_parenthetical_annotation(raw_text):
-            return ""
-        text = ContinuityChecker._normalize_character_reference(raw_text)
-        return text if ContinuityChecker._looks_like_named_character(text) else ""
+        return candidate_character_name(name)
 
     @staticmethod
     def _has_malformed_parenthetical_annotation(name: str) -> bool:
-        text = str(name or "").strip()
-        if not text:
-            return False
-        for opener, closer in (("（", "）"), ("(", ")")):
-            if text.count(opener) != text.count(closer):
-                return True
-            if opener in text and closer in text and text.rfind(opener) > text.rfind(closer):
-                return True
-        return False
+        return has_malformed_parenthetical_annotation(name)
 
     @staticmethod
     def _looks_like_generic_character_reference(name: str) -> bool:
-        text = str(name or "").strip()
-        if not text:
-            return False
-        if text in GENERIC_CHARACTER_REFERENCES:
-            return True
-        if "的" in text:
-            _prefix, suffix = text.rsplit("的", 1)
-            if suffix and any(suffix.endswith(role) for role in POSSESSIVE_GENERIC_ROLE_SUFFIXES):
-                return True
-        return len(text) <= 8 and any(text.endswith(suffix) for suffix in GENERIC_CHARACTER_ROLE_SUFFIXES)
+        return looks_like_generic_character_reference(name)
 
     @staticmethod
     def _normalize_character_reference(name: str) -> str:
-        text = str(name or "").strip()
-        for opener, closer in (("（", "）"), ("(", ")")):
-            if opener not in text or not text.endswith(closer):
-                continue
-            prefix, suffix = text.rsplit(opener, 1)
-            suffix = suffix[: -len(closer)].strip()
-            prefix = prefix.strip()
-            if suffix in {"提及", "无名", "记录", "旁白", "幕后", "间接"} and prefix:
-                text = prefix
-            elif prefix and ContinuityChecker._looks_like_generic_character_reference(prefix):
-                text = prefix
-        return text
+        return normalize_character_reference(name)
 
     @staticmethod
     def _looks_like_non_character_reference(name: str) -> bool:
-        text = str(name or "").strip()
-        if any(text.endswith(suffix) for suffix in RELATIONAL_REFERENCE_SUFFIXES):
-            return True
-        return any(keyword in text for keyword in NON_CHARACTER_NAME_KEYWORDS)
+        return looks_like_non_character_reference(name)
 
     @staticmethod
     def _is_absence_only_state_change(change) -> bool:  # noqa: ANN001

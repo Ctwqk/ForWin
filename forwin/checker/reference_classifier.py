@@ -29,6 +29,10 @@ GENERIC_CHARACTER_REFERENCES = {
     "追踪者",
     "不明追踪者",
     "无脸人",
+    "未知人物",
+    "神秘人物",
+    "匿名人物",
+    "无名人物",
     "手下",
     "下属",
     "部下",
@@ -103,6 +107,14 @@ NON_CHARACTER_NAME_KEYWORDS = (
     "实验室",
     "实验区",
 )
+NON_CHARACTER_NAME_SUFFIXES = (
+    "宗邦",
+    "董事会",
+    "委员会",
+    "档案署",
+    "审计局",
+    "管理局",
+)
 RELATIONAL_REFERENCE_SUFFIXES = (
     "母亲",
     "父亲",
@@ -157,7 +169,21 @@ def normalize_character_reference(name: str) -> str:
             text = prefix
         elif prefix and looks_like_generic_character_reference(prefix):
             text = prefix
+    text = normalize_mixed_technical_alias(text)
     return strip_role_prefix_from_person_name(text)
+
+
+def normalize_mixed_technical_alias(name: str) -> str:
+    text = str(name or "").strip()
+    for separator in ("/", "／"):
+        if separator not in text:
+            continue
+        left, right = (part.strip() for part in text.split(separator, 1))
+        if looks_like_technical_identifier(right) and is_plain_chinese_person_name(left):
+            return left
+        if looks_like_technical_identifier(left) and is_plain_chinese_person_name(right):
+            return right
+    return text
 
 
 def strip_role_prefix_from_person_name(name: str) -> str:
@@ -222,6 +248,8 @@ def looks_like_generic_character_reference(name: str) -> bool:
 def looks_like_non_character_reference(name: str) -> bool:
     text = str(name or "").strip()
     if any(text.endswith(suffix) for suffix in RELATIONAL_REFERENCE_SUFFIXES):
+        return True
+    if any(text.endswith(suffix) for suffix in NON_CHARACTER_NAME_SUFFIXES):
         return True
     return any(keyword in text for keyword in NON_CHARACTER_NAME_KEYWORDS)
 

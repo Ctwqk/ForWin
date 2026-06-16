@@ -241,6 +241,66 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual(ContinuityChecker._candidate_character_name("馆员陈潮白"), "陈潮白")
         self.assertEqual(ContinuityChecker._candidate_character_name("灰鸦"), "灰鸦")
 
+    def test_reference_classifier_handles_follow_up_generic_org_and_mixed_id_shapes(self) -> None:
+        non_candidates = [
+            "未知人物",
+            "神秘人物",
+            "匿名人物",
+            "若槐宗邦",
+            "潮汐董事会",
+            "群环档案署",
+        ]
+        for name in non_candidates:
+            with self.subTest(name=name):
+                self.assertEqual(ContinuityChecker._candidate_character_name(name), "")
+                self.assertFalse(ContinuityChecker._looks_like_named_character(name))
+
+        self.assertEqual(ContinuityChecker._candidate_character_name("灰鸦/L-7"), "灰鸦")
+        self.assertEqual(ContinuityChecker._candidate_character_name("L-7/灰鸦"), "灰鸦")
+
+    def test_subworld_admission_follow_up_shapes_do_not_hide_real_unknown_character(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"沈岚"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=54,
+                title="旧地铁的幽灵环线",
+                body=(
+                    "沈岚进入旧地铁，若槐宗邦的记录指向L-7。"
+                    "未知人物留下匿名提示，灰鸦/L-7的署名闪烁，灰鸦仍未获准进入本章。"
+                )
+                * 40,
+                end_of_chapter_summary="沈岚获得旧地铁线索。",
+                entity_mentions=[
+                    EntityMention(entity_name="沈岚", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="若槐宗邦", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="未知人物", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="灰鸦/L-7", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
+                ],
+            ),
+        )
+
+        unknown = [
+            issue.entity_names[0]
+            for issue in verdict.issues
+            if issue.rule_name == "sub_world_unknown_named_entity"
+        ]
+        self.assertEqual(unknown, ["灰鸦"])
+
     def test_subworld_admission_ignores_non_cast_entities_and_offstage_record_names(self) -> None:
         class FakeRepo:
             def get_active_entities(self, _project_id: str) -> list[object]:

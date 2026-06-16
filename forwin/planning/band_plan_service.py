@@ -261,11 +261,9 @@ def _normalize_trope_cost_ceiling(value: object) -> int:
 
 
 _ENTRY_TARGET_PATTERNS = [
-    re.compile(r"(?:引入|介绍|接触|遇见|认识|结识)(?P<name>[\u4e00-\u9fffA-Za-z0-9·]{2,12})(?=作为|并|，|,|、|。|；|;|$)"),
-    re.compile(r"与(?P<name>[\u4e00-\u9fffA-Za-z0-9·]{2,12})(?:接触|会面|交涉|交易|对话)"),
+    re.compile(r"(?:引入|介绍|接触|遇见|认识|结识)(?P<name>[\u4e00-\u9fffA-Za-z0-9·]{2,12})(?:作为|，|,|、|。|；|;|$)"),
     re.compile(r"(?:让|使)(?P<name>[\u4e00-\u9fffA-Za-z0-9·]{2,12})(?:首次)?登场"),
     re.compile(r"(?P<name>[\u4e00-\u9fffA-Za-z0-9·]{2,12})(?:首次)?登场"),
-    re.compile(r"(?:查明|确认|发现|得知|获知)?(?P<name>(?:馆员|审计员|调度员|接线员|管理员|工程师)?[\u4e00-\u9fff·]{2,4})(?:存在|持有|掌握|暴露|揭示)"),
 ]
 
 _ENTRY_TARGET_NON_NAMES = {
@@ -281,14 +279,6 @@ _ENTRY_TARGET_NON_NAMES = {
     "危机",
     "伏笔",
 }
-_ENTRY_TARGET_ROLE_PREFIXES = (
-    "馆员",
-    "审计员",
-    "调度员",
-    "接线员",
-    "管理员",
-    "工程师",
-)
 
 
 def _chapter_entry_targets_for_plan(*, schedule: object, plan: ChapterPlan) -> list[ChapterEntryTarget]:
@@ -337,7 +327,6 @@ def _infer_plan_entry_target_names(plan: ChapterPlan) -> list[str]:
 
 def _normalize_entry_target_name(value: str) -> str:
     name = str(value or "").strip(" \t\r\n：:，,。；;、")
-    name = _strip_entry_target_role_prefix(name)
     if not name or name in _ENTRY_TARGET_NON_NAMES:
         return ""
     if "的" in name or len(name) > 8:
@@ -345,19 +334,3 @@ def _normalize_entry_target_name(value: str) -> str:
     if any(token in name for token in ("任务", "主线", "危机", "线索", "关系", "权限", "信息")):
         return ""
     return name
-
-
-def _strip_entry_target_role_prefix(name: str) -> str:
-    text = str(name or "").strip()
-    for prefix in _ENTRY_TARGET_ROLE_PREFIXES:
-        if not text.startswith(prefix) or len(text) <= len(prefix):
-            continue
-        suffix = text[len(prefix) :].strip()
-        if (
-            2 <= len(suffix) <= 4
-            and "的" not in suffix
-            and not any(ch.isdigit() for ch in suffix)
-            and all("\u4e00" <= ch <= "\u9fff" or ch == "·" for ch in suffix)
-        ):
-            return suffix
-    return text

@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.27';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.28';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { getPlatformAdapter } from './lib/platforms.js';
 import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';

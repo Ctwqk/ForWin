@@ -1249,6 +1249,64 @@ test('controller heartbeat sends login QR notification when known login URL is v
   assert.equal(loginQrNotifications[0].source, 'qidian:456:login');
 });
 
+test('controller heartbeat retries login QR notification after a failed attempt', async () => {
+  let notifyAttempts = 0;
+  const loginQrNotifications = [];
+  const { controller } = makeController({
+    inspectPlatformState: async (platformId) => (
+      platformId === 'fanqie'
+        ? {
+          ok: true,
+          tabId: 789,
+          currentUrl: 'https://fanqienovel.com/main/writer/login',
+          platform: 'fanqie',
+          authenticated: false,
+          loginVisible: true,
+        }
+        : null
+    ),
+    captureLoginQrImage: async () => ({
+      ok: true,
+      imageDataUrl: 'data:image/png;base64,cXI=',
+      source: 'debugger-screenshot',
+    }),
+    getPlatformState: async () => ({}),
+    getCookies: async (platformId) => (
+      platformId === 'fanqie'
+        ? [{ name: 'sessionid' }, { name: 'passport_auth_status' }]
+        : []
+    ),
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
+      getBrowserSession: async () => null,
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      claimNextCommentSyncJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
+      notifyLoginQr: async (payload) => {
+        notifyAttempts += 1;
+        if (notifyAttempts === 1) {
+          throw new Error('network down');
+        }
+        loginQrNotifications.push(payload);
+        return { message: 'queued', dispatched: false };
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+      updateCommentSyncJobResult: async () => ({ ok: true }),
+    },
+  });
+
+  await controller.sendHeartbeat();
+  await controller.sendHeartbeat();
+
+  assert.equal(notifyAttempts, 2);
+  assert.equal(loginQrNotifications.length, 1);
+  assert.equal(loginQrNotifications[0].platform, 'fanqie');
+});
+
 test('controller heartbeat does not display connected before page verification', async () => {
   const payloads = [];
   const { controller } = makeController({

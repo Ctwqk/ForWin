@@ -1118,7 +1118,7 @@ export class PublisherExtensionController {
         loginVisible: true,
       },
     );
-    if (!result?.skipped) {
+    if (result && !result.skipped && result.ok !== false) {
       this.heartbeatLoginQrNotificationKeys.add(key);
     }
     return result;

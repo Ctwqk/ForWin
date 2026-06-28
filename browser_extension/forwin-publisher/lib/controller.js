@@ -1025,6 +1025,9 @@ export class PublisherExtensionController {
     }
 
     if (inspection && !inspection.authenticated) {
+      if (inspection.loginVisible) {
+        await this.maybeNotifyLoginQr(session, inspection);
+      }
       await this.deps.notifyPage(session.originTabId, 'login-status', {
         platform: session.platformId,
         connected: false,
@@ -1032,6 +1035,45 @@ export class PublisherExtensionController {
           ? '已打开登录页，请继续扫码或完成登录。'
           : '正在等待平台确认作者后台登录状态...',
       });
+    }
+  }
+
+  async maybeNotifyLoginQr(session, inspection) {
+    if (
+      session.loginQrNotificationAttempted
+      || !inspection?.loginVisible
+      || typeof this.deps.captureLoginQrImage !== 'function'
+      || typeof this.deps.backend?.notifyLoginQr !== 'function'
+    ) {
+      return { skipped: true };
+    }
+    try {
+      const settings = await this.deps.getSettings();
+      if (!settings.backendBaseUrl || !settings.apiKey) {
+        return { skipped: true };
+      }
+      const capture = await this.deps.captureLoginQrImage(
+        session.popupTabId,
+        session.platformId,
+        inspection,
+      );
+      const imageDataUrl = typeof capture === 'string'
+        ? capture
+        : String(capture?.imageDataUrl || capture?.image_data_url || '');
+      if (!imageDataUrl) {
+        return { skipped: true };
+      }
+      session.loginQrNotificationAttempted = true;
+      return await this.deps.backend.notifyLoginQr({
+        client_id: await this.deps.getClientId(),
+        platform: session.platformId,
+        current_url: String(inspection.currentUrl || session.lastUrl || ''),
+        image_data_url: imageDataUrl,
+        source: String(capture?.source || ''),
+        captured_at: new Date().toISOString(),
+      });
+    } catch (_error) {
+      return { ok: false };
     }
   }
 }

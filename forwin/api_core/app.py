@@ -276,6 +276,7 @@ async def lifespan(app: FastAPI):
             strict_preferred_client=api_state._config.publisher_strict_preferred_client,
             publisher_session_secret=api_state._config.publisher_session_secret,
             publisher_session_encryption_required=api_state._config.publisher_session_encryption_required,
+            publisher_login_discord_webhook_url=api_state._config.publisher_login_discord_webhook_url,
             codex_intervention_handler=build_codex_intervention_handler(api_state._config),
         )
     api_state._publisher_manager.requeue_interrupted_upload_jobs()

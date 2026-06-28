@@ -45,13 +45,15 @@ Firefox 临时加载：
 
 - 起点扫码登录
 - 番茄扫码登录
+- 扫码登录二维码通过后端转发到 Discord webhook（后端需配置
+  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` 或
+  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE`）
 - 保存草稿 / 直接发布
 - 扩展心跳回写
 
 当前明确不做：
 
 - 服务端浏览器会话
-- 服务器端二维码中转
 - 短信验证码 / 滑块自动化
 
 Linux 侧联调：

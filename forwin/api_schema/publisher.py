@@ -144,6 +144,22 @@ class ExtensionHeartbeatResponse(BaseModel):
     server_time: str
 
 
+class ExtensionLoginQrNotifyRequest(BaseModel):
+    client_id: str
+    platform: str
+    current_url: str = ""
+    image_data_url: str = Field(max_length=6_000_000)
+    source: str = ""
+    captured_at: str = ""
+
+
+class ExtensionLoginQrNotifyResponse(BaseModel):
+    ok: bool
+    message: str
+    server_time: str
+    dispatched: bool = False
+
+
 class ExtensionSessionSyncRequest(BaseModel):
     client_id: str
     platform: str
@@ -379,6 +395,8 @@ __all__ = [
     'ExtensionPlatformHeartbeat',
     'ExtensionHeartbeatRequest',
     'ExtensionHeartbeatResponse',
+    'ExtensionLoginQrNotifyRequest',
+    'ExtensionLoginQrNotifyResponse',
     'ExtensionSessionSyncRequest',
     'ExtensionSessionSyncResponse',
     'ExtensionBrowserSessionResponse',

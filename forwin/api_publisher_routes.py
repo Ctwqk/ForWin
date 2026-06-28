@@ -12,6 +12,7 @@ from forwin.api_schemas import (
     ExtensionClaimUploadJobRequest,
     ExtensionCommentsBatchRequest,
     ExtensionHeartbeatRequest,
+    ExtensionLoginQrNotifyRequest,
     ExtensionSessionSyncRequest,
     PublisherBrowserSessionSummaryResponse,
     PublisherAuditSyncRequest,
@@ -165,6 +166,16 @@ def build_handlers(
             x_forwin_extension_key=x_forwin_extension_key,
         )
 
+    def publisher_extension_login_qr_notify(
+        req: ExtensionLoginQrNotifyRequest,
+        x_forwin_extension_key: str | None = Header(default=None),
+    ):
+        return api_publisher_ops.publisher_extension_login_qr_notify(
+            req,
+            publisher_manager=get_publisher_manager(),
+            x_forwin_extension_key=x_forwin_extension_key,
+        )
+
     def publisher_extension_get_browser_session(
         platform: str,
         x_forwin_extension_key: str | None = Header(default=None),
@@ -278,6 +289,7 @@ def build_handlers(
         "terminate_publisher_upload_job": terminate_publisher_upload_job,
         "delete_publisher_upload_job": delete_publisher_upload_job,
         "publisher_extension_heartbeat": publisher_extension_heartbeat,
+        "publisher_extension_login_qr_notify": publisher_extension_login_qr_notify,
         "publisher_extension_session_sync": publisher_extension_session_sync,
         "publisher_extension_get_browser_session": publisher_extension_get_browser_session,
         "get_publisher_browser_session_summary": get_publisher_browser_session_summary,

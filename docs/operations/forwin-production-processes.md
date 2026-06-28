@@ -118,3 +118,5 @@ real browser login or browser clicking.
   operator network.
 - Keep Basic Auth enabled when exposing the API beyond localhost.
 - Keep publisher extension API keys and session secrets separate from Basic Auth.
+- Keep Discord login QR webhooks in environment secrets or mounted secret files;
+  do not commit webhook URLs or paste them into deployment logs.

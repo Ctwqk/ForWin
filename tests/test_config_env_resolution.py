@@ -66,6 +66,8 @@ CONFIG_ENV_KEYS = {
     "FORWIN_PERSONALITY_REVIEW_ENABLED",
     "FORWIN_PROVISIONAL_PREVIEW_ENABLED",
     "FORWIN_PUBLISHER_EXTENSION_API_KEY",
+    "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE",
+    "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL",
     "FORWIN_PUBLISHER_PREFERRED_CLIENT_ID",
     "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED",
     "FORWIN_PUBLISHER_SESSION_SECRET",
@@ -294,6 +296,37 @@ def test_publisher_extension_legacy_alias_still_works(
     config = Config.from_env()
 
     assert config.publisher_extension_api_key == "legacy-extension-key"
+
+
+def test_publisher_login_discord_webhook_env_is_loaded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _set_env_file(
+        monkeypatch,
+        tmp_path,
+        ["FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL=https://discord.invalid/api/webhooks/test"],
+    )
+
+    config = Config.from_env()
+
+    assert config.publisher_login_discord_webhook_url == "https://discord.invalid/api/webhooks/test"
+    assert config.publisher.login_discord_webhook_url == "https://discord.invalid/api/webhooks/test"
+
+
+def test_publisher_login_discord_webhook_file_is_loaded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    secret_path = tmp_path / "discord-webhook.secret"
+    secret_path.write_text("https://discord.invalid/api/webhooks/from-file\n", encoding="utf-8")
+    _set_env_file(
+        monkeypatch,
+        tmp_path,
+        [f"FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE={secret_path}"],
+    )
+
+    config = Config.from_env()
+
+    assert config.publisher_login_discord_webhook_url == "https://discord.invalid/api/webhooks/from-file"
 
 
 @pytest.mark.parametrize(

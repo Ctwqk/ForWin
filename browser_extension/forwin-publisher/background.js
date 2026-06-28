@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.23';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.24';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { getPlatformAdapter } from './lib/platforms.js';
 import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
@@ -1226,6 +1226,51 @@ async function inspectLoginState(tabId) {
   return { ok: false, authenticated: false, loginVisible: false, currentUrl: '' };
 }
 
+async function captureLoginQrImage(tabId) {
+  if (!tabId) {
+    return { ok: false, error: 'missing-tab-id' };
+  }
+  let ready = await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 3000);
+  if (!ready) {
+    ready = await probePlatformAgentResponsive(tabId);
+    if (ready) {
+      tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
+    }
+  }
+  if (ready) {
+    try {
+      const response = await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
+        channel: PLATFORM_AGENT_CHANNEL,
+        action: 'extract-login-qr-image',
+      });
+      if (response?.imageDataUrl) {
+        return response;
+      }
+    } catch (_error) {
+      // Fall through to a visible-tab screenshot when DOM extraction is blocked.
+    }
+  }
+  try {
+    const tab = await getTab(tabId);
+    const windowId = Number(tab?.windowId || 0);
+    if (!windowId || typeof extensionApi.tabs?.captureVisibleTab !== 'function') {
+      return { ok: false, error: 'visible-tab-capture-unavailable' };
+    }
+    const imageDataUrl = await wrapCall(
+      extensionApi.tabs,
+      'captureVisibleTab',
+      windowId,
+      { format: 'png' },
+    );
+    if (typeof imageDataUrl === 'string' && imageDataUrl.startsWith('data:image/')) {
+      return { ok: true, imageDataUrl, source: 'visible-tab-screenshot' };
+    }
+  } catch (_error) {
+    return { ok: false, error: 'visible-tab-capture-failed' };
+  }
+  return { ok: false, error: 'login-qr-not-found' };
+}
+
 async function inspectPlatformState(platformId) {
   const tabs = await queryTabs({}) || [];
   const candidates = tabs
@@ -1388,6 +1433,7 @@ const controller = new PublisherExtensionController({
   runCommentSyncCommand,
   inspectLoginState,
   inspectPlatformState,
+  captureLoginQrImage,
   ensureHeartbeatAlarm,
 });
 

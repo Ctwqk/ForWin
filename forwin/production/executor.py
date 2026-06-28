@@ -199,5 +199,8 @@ class ProductionExecutor:
             publisher_session_encryption_required=bool(
                 getattr(self.config, "publisher_session_encryption_required", False)
             ),
+            publisher_login_discord_webhook_url=str(
+                getattr(self.config, "publisher_login_discord_webhook_url", "") or ""
+            ),
             codex_intervention_handler=build_codex_intervention_handler(self.config),
         )

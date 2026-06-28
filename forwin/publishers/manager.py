@@ -37,6 +37,7 @@ from forwin.publisher_runtime.connection_state import (
     ensure_extension_client,
     upsert_extension_platform_state,
 )
+from forwin.publisher_runtime.login_qr_notifications import DiscordLoginQrNotifier
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.publisher_runtime.upload_jobs import CodexInterventionHandler
 from forwin.publisher_runtime.platform_catalog import PlatformSpec
@@ -59,6 +60,7 @@ class PublisherManager:
         strict_preferred_client: bool = False,
         publisher_session_secret: str = "",
         publisher_session_encryption_required: bool = False,
+        publisher_login_discord_webhook_url: str = "",
         codex_intervention_handler: CodexInterventionHandler | None = None,
     ) -> None:
         self.session_factory = session_factory
@@ -69,6 +71,9 @@ class PublisherManager:
         self.publisher_session_secret = str(publisher_session_secret or "").strip()
         self.publisher_session_encryption_required = bool(
             publisher_session_encryption_required
+        )
+        self.login_qr_notifier = DiscordLoginQrNotifier(
+            publisher_login_discord_webhook_url
         )
         self.runtime = PublisherRuntimeService(
             session_factory=session_factory,
@@ -103,6 +108,25 @@ class PublisherManager:
     def list_platforms(self) -> list[dict[str, Any]]:
         self._sync_runtime_config()
         return self.runtime.connection_state.list_platforms()
+
+    def notify_login_qr(
+        self,
+        *,
+        client_id: str,
+        platform: str,
+        current_url: str,
+        image_data_url: str,
+        source: str = "",
+        captured_at: str = "",
+    ) -> dict[str, Any]:
+        return self.login_qr_notifier.notify(
+            client_id=client_id,
+            platform=platform,
+            current_url=current_url,
+            image_data_url=image_data_url,
+            source=source,
+            captured_at=captured_at,
+        )
 
     def list_upload_jobs(
         self,

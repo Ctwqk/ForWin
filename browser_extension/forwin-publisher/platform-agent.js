@@ -621,6 +621,158 @@
     };
   }
 
+  function elementLabel(element) {
+    if (!element) {
+      return '';
+    }
+    const attrs = [
+      element.id,
+      element.className,
+      element.getAttribute?.('alt'),
+      element.getAttribute?.('aria-label'),
+      element.getAttribute?.('title'),
+      element.getAttribute?.('src'),
+      element.parentElement?.id,
+      element.parentElement?.className,
+    ];
+    return attrs.map((item) => String(item || '')).join(' ').toLowerCase();
+  }
+
+  function visibleElementRect(element) {
+    if (!element || typeof element.getBoundingClientRect !== 'function') {
+      return null;
+    }
+    const rect = element.getBoundingClientRect();
+    if (!rect || rect.width < 64 || rect.height < 64) {
+      return null;
+    }
+    const style = window.getComputedStyle(element);
+    if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || '1') === 0) {
+      return null;
+    }
+    return rect;
+  }
+
+  function loginQrCandidateScore(element) {
+    const rect = visibleElementRect(element);
+    if (!rect) {
+      return -1;
+    }
+    const label = elementLabel(element);
+    const lowerTag = String(element.tagName || '').toLowerCase();
+    const squareRatio = Math.min(rect.width, rect.height) / Math.max(rect.width, rect.height);
+    let score = 0;
+    if (lowerTag === 'canvas' || lowerTag === 'img') {
+      score += 3;
+    }
+    if (squareRatio > 0.72) {
+      score += 2;
+    }
+    if (rect.width >= 96 && rect.height >= 96) {
+      score += 1;
+    }
+    if (includesAny(label, ['qr', 'qrcode', '二维码', '扫码', 'scan', 'wechat', 'weixin', 'douyin'])) {
+      score += 4;
+    }
+    if (includesAny(pageText().slice(0, 2000), ['扫码登录', '微信扫码', '抖音登录', '请扫码'])) {
+      score += 1;
+    }
+    return score;
+  }
+
+  function loginQrCandidates() {
+    const selectors = [
+      'canvas',
+      'img[src^="data:image"]',
+      'img[alt*="二维码"]',
+      'img[alt*="扫码"]',
+      'img[class*="qr" i]',
+      'img[id*="qr" i]',
+      '[class*="qr" i] canvas',
+      '[class*="qr" i] img',
+      '[id*="qr" i] canvas',
+      '[id*="qr" i] img',
+      '[class*="qrcode" i] canvas',
+      '[class*="qrcode" i] img',
+    ];
+    const seen = new Set();
+    const candidates = [];
+    for (const element of document.querySelectorAll(selectors.join(','))) {
+      if (seen.has(element)) {
+        continue;
+      }
+      seen.add(element);
+      const score = loginQrCandidateScore(element);
+      if (score >= 4) {
+        candidates.push({ element, score });
+      }
+    }
+    candidates.sort((left, right) => right.score - left.score);
+    return candidates.map((item) => item.element);
+  }
+
+  function canvasToLoginQrDataUrl(canvas) {
+    if (!canvas || !canvas.width || !canvas.height) {
+      return '';
+    }
+    try {
+      return canvas.toDataURL('image/png');
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('blob-read-failed'));
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function imageToLoginQrDataUrl(image) {
+    const source = String(image.currentSrc || image.src || image.getAttribute('src') || '');
+    if (source.startsWith('data:image/')) {
+      return source;
+    }
+    if (!source) {
+      return '';
+    }
+    try {
+      const response = await fetch(source, { credentials: 'include', cache: 'no-store' });
+      const blob = await response.blob();
+      if (!String(blob.type || '').startsWith('image/')) {
+        return '';
+      }
+      return await blobToDataUrl(blob);
+    } catch (_error) {
+      return '';
+    }
+  }
+
+  async function extractLoginQrImage() {
+    for (const element of loginQrCandidates()) {
+      const tag = String(element.tagName || '').toLowerCase();
+      const imageDataUrl = tag === 'canvas'
+        ? canvasToLoginQrDataUrl(element)
+        : await imageToLoginQrDataUrl(element);
+      if (imageDataUrl && imageDataUrl.startsWith('data:image/')) {
+        return {
+          ok: true,
+          currentUrl: window.location.href,
+          imageDataUrl,
+          source: tag === 'canvas' ? 'canvas' : 'image',
+        };
+      }
+    }
+    return {
+      ok: false,
+      currentUrl: window.location.href,
+      error: 'login-qr-not-found',
+    };
+  }
+
   function selectorsForTitle() {
     return [
       'input[placeholder*="标题"]',
@@ -3418,6 +3570,18 @@
     if (message.action === 'inspect-login-state') {
       sendResponse(inspectLoginState());
       return false;
+    }
+    if (message.action === 'extract-login-qr-image') {
+      extractLoginQrImage()
+        .then(sendResponse)
+        .catch((error) => {
+          sendResponse({
+            ok: false,
+            currentUrl: window.location.href,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      return true;
     }
     if (message.action === 'inspect-fanqie-editor-state') {
       sendResponse({

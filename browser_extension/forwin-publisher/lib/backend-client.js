@@ -71,6 +71,15 @@ export function createBackendClient(fetchImpl, rawSettings) {
       return parseJson(response);
     },
 
+    async notifyLoginQr(payload) {
+      const response = await fetchImpl(`${settings.backendBaseUrl}/api/publishers/extension/login-qr`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(payload),
+      });
+      return parseJson(response);
+    },
+
     async getBrowserSession(platformId) {
       const response = await fetchImpl(
         `${settings.backendBaseUrl}/api/publishers/extension/browser-sessions/${encodeURIComponent(platformId)}`,

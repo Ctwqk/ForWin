@@ -119,6 +119,12 @@ For publisher-browser work, keep the extension enabled but replace
 `FORWIN_PUBLISHER_EXTENSION_API_KEY` and `FORWIN_PUBLISHER_SESSION_SECRET` with
 long random values before starting the backend.
 
+If you want login QR codes forwarded to Discord when a publisher platform asks
+for scan-login, set `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`. In production,
+prefer `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` and mount the webhook as a
+secret file so it is not committed, printed in shell history, or baked into an
+image.
+
 ### Current production deployment
 
 Current production is a distributed Docker Swarm deployment, not the local
@@ -196,6 +202,11 @@ long random value so ForWin encrypts stored publishing-platform cookies. If this
 secret is lost, encrypted sessions cannot be recovered and the publishing
 platform must be logged in again. Protect `.env` backups that contain this
 secret; without it, old encrypted cookies cannot be decrypted.
+
+Set `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` or
+`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` only on trusted deployments. The
+webhook is used server-side; browser extensions never store the Discord webhook
+and only send the captured QR image to the authenticated ForWin extension API.
 
 ### Codex / MCP operator
 

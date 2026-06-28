@@ -51,6 +51,7 @@ class PublisherConfig(BaseModel):
     extension_api_key: str = ""
     session_secret: str = ""
     session_encryption_required: bool = False
+    login_discord_webhook_url: str = ""
 
 
 class ObservabilityConfig(BaseModel):
@@ -132,6 +133,17 @@ def _env_str(env: dict[str, str], key: str, default: str = "") -> str:
     if value == "":
         return default
     return value
+
+
+def _env_secret_file(env: dict[str, str], key: str) -> str:
+    path = _env_str(env, key, "")
+    if not path:
+        return ""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError as exc:
+        raise ValueError(f"Unable to read {key}: {path}") from exc
 
 
 def _normalize_progression_mode(value: object) -> str:
@@ -343,6 +355,10 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         "publisher_session_encryption_required": _env_bool(
             env, "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED", False
         ),
+        "publisher_login_discord_webhook_url": _env_str(
+            env, "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL"
+        )
+        or _env_secret_file(env, "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE"),
         "publisher_preferred_client_id": _env_str(
             env,
             "FORWIN_PUBLISHER_PREFERRED_CLIENT_ID", ""
@@ -688,6 +704,7 @@ class _ConfigFields:
     publisher_extension_api_key: str = ""
     publisher_session_secret: str = ""
     publisher_session_encryption_required: bool = False
+    publisher_login_discord_webhook_url: str = ""
     publisher_preferred_client_id: str = ""
     publisher_strict_preferred_client: bool = False
     http_bind: str = "127.0.0.1"
@@ -917,6 +934,7 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
             extension_api_key=self.publisher_extension_api_key,
             session_secret=self.publisher_session_secret,
             session_encryption_required=self.publisher_session_encryption_required,
+            login_discord_webhook_url=self.publisher_login_discord_webhook_url,
         )
 
     @property

@@ -6,6 +6,7 @@ import { PublisherExtensionController } from '../lib/controller.js';
 function makeController(overrides = {}) {
   const events = [];
   const uploadResults = [];
+  const loginQrNotifications = [];
   const closedTabs = [];
   const restoredCookies = [];
   const deps = {
@@ -30,6 +31,7 @@ function makeController(overrides = {}) {
       summary: '作品管理 章节管理 写新章',
     }),
     navigateTab: async () => {},
+    captureLoginQrImage: async () => null,
     closePopup: async () => {},
     closeTab: async (tabId) => {
       closedTabs.push(tabId);
@@ -85,6 +87,10 @@ function makeController(overrides = {}) {
         publish: true,
       }),
       syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
+      notifyLoginQr: async (payload) => {
+        loginQrNotifications.push(payload);
+        return { ok: true, dispatched: true };
+      },
       updateUploadJobResult: async (_jobId, payload) => {
         uploadResults.push(payload);
         return { ok: true };
@@ -93,7 +99,7 @@ function makeController(overrides = {}) {
     },
     ...overrides,
   };
-  return { controller: new PublisherExtensionController(deps), events, uploadResults, closedTabs, restoredCookies };
+  return { controller: new PublisherExtensionController(deps), events, uploadResults, loginQrNotifications, closedTabs, restoredCookies };
 }
 
 test('controller opens login popup and closes it after successful tab update', async () => {
@@ -229,6 +235,85 @@ test('controller still opens login popup when heartbeat sync fails', async () =>
   assert.match(response.message, /状态同步失败/);
   assert.equal(events.length, 1);
   assert.match(events[0].payload.message, /状态同步稍后重试/);
+});
+
+test('controller sends login QR notification once when scan login is visible', async () => {
+  let inspectCount = 0;
+  const { controller, events, loginQrNotifications } = makeController({
+    inspectLoginState: async () => {
+      inspectCount += 1;
+      return {
+        ok: true,
+        currentUrl: 'https://fanqienovel.com/main/writer/login?ticket=secret',
+        platform: 'fanqie',
+        authenticated: false,
+        loginVisible: true,
+      };
+    },
+    captureLoginQrImage: async (tabId, platformId) => ({
+      ok: true,
+      imageDataUrl: 'data:image/png;base64,cXI=',
+      source: `${platformId}:${tabId}`,
+    }),
+  });
+
+  await controller.handleMessage(
+    { action: 'open-login', payload: { platform: 'fanqie' } },
+    { tab: { id: 99 } },
+  );
+  await controller.handleTabUpdated(42, { url: 'https://fanqienovel.com/main/writer/login' }, { id: 42 });
+  await controller.handleTabUpdated(42, { url: 'https://fanqienovel.com/main/writer/login' }, { id: 42 });
+
+  assert.equal(inspectCount, 2);
+  assert.equal(loginQrNotifications.length, 1);
+  assert.equal(loginQrNotifications[0].client_id, 'client-1');
+  assert.equal(loginQrNotifications[0].platform, 'fanqie');
+  assert.equal(loginQrNotifications[0].current_url, 'https://fanqienovel.com/main/writer/login?ticket=secret');
+  assert.equal(loginQrNotifications[0].image_data_url, 'data:image/png;base64,cXI=');
+  assert.equal(loginQrNotifications[0].source, 'fanqie:42');
+  assert.equal(events.at(-1).payload.connected, false);
+});
+
+test('controller ignores login QR notification failures while login remains visible', async () => {
+  const { controller, events } = makeController({
+    inspectLoginState: async () => ({
+      ok: true,
+      currentUrl: 'https://write.qq.com/login',
+      platform: 'qidian',
+      authenticated: false,
+      loginVisible: true,
+    }),
+    captureLoginQrImage: async () => ({
+      ok: true,
+      imageDataUrl: 'data:image/png;base64,cXI=',
+      source: 'canvas',
+    }),
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
+      getBrowserSession: async () => null,
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      claimNextCommentSyncJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
+      notifyLoginQr: async () => {
+        throw new Error('network down');
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+      updateCommentSyncJobResult: async () => ({ ok: true }),
+    },
+  });
+
+  await controller.handleMessage(
+    { action: 'open-login', payload: { platform: 'qidian' } },
+    { tab: { id: 99 } },
+  );
+  await controller.handleTabUpdated(42, { url: 'https://write.qq.com/login' }, { id: 42 });
+
+  assert.equal(events.at(-1).eventName, 'login-status');
+  assert.equal(events.at(-1).payload.connected, false);
 });
 
 test('controller restores backend sessions before heartbeat even when local browser already has cookies', async () => {

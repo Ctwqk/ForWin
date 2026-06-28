@@ -20,6 +20,8 @@ from forwin.api_schemas import (
     ExtensionCommentsBatchResponse,
     ExtensionHeartbeatRequest,
     ExtensionHeartbeatResponse,
+    ExtensionLoginQrNotifyRequest,
+    ExtensionLoginQrNotifyResponse,
     ExtensionSessionSyncRequest,
     ExtensionSessionSyncResponse,
     PublisherCommentSyncJobRequest,
@@ -407,6 +409,29 @@ def publisher_extension_heartbeat(
         ],
     )
     return ExtensionHeartbeatResponse(**payload)
+
+
+def publisher_extension_login_qr_notify(
+    req: ExtensionLoginQrNotifyRequest,
+    *,
+    publisher_manager,
+    x_forwin_extension_key: str | None = None,
+) -> ExtensionLoginQrNotifyResponse:
+    _require_extension_auth(publisher_manager, x_forwin_extension_key)
+    try:
+        payload = publisher_manager.notify_login_qr(
+            client_id=req.client_id,
+            platform=req.platform,
+            current_url=req.current_url,
+            image_data_url=req.image_data_url,
+            source=req.source,
+            captured_at=req.captured_at,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return ExtensionLoginQrNotifyResponse(**payload)
 
 
 def publisher_extension_session_sync(

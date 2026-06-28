@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.28';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.29';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { getPlatformAdapter } from './lib/platforms.js';
 import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
@@ -19,6 +19,7 @@ const CLIENT_ID_KEY = 'forwinPublisherClientId';
 const PLATFORM_STATE_KEY = 'forwinPublisherPlatformStates';
 const BACKGROUND_STATUS_KEY = 'forwinPublisherBackgroundStatus';
 const BACKGROUND_ERRORS_KEY = 'forwinPublisherBackgroundErrors';
+const LOGIN_QR_NOTIFICATIONS_KEY = 'forwinPublisherLoginQrNotifications';
 const HEARTBEAT_ALARM = 'forwinPublisherHeartbeat';
 const tabReadyRegistry = new TabReadyRegistry();
 
@@ -68,6 +69,46 @@ async function appendBackgroundError(context, error) {
     lastErrorAt: entry.at,
     lastErrorContext: context,
     lastErrorMessage: message,
+  });
+}
+
+function safeStatusUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`.slice(0, 500);
+  } catch (_error) {
+    return raw.slice(0, 500);
+  }
+}
+
+async function appendLoginQrNotificationStatus(event) {
+  const entry = {
+    at: String(event?.at || new Date().toISOString()),
+    platform: String(event?.platform || ''),
+    tab_id: Number(event?.tab_id || 0),
+    current_url: safeStatusUrl(event?.current_url),
+    phase: String(event?.phase || ''),
+    reason: String(event?.reason || ''),
+    source: String(event?.source || ''),
+    image_data_url_length: Number(event?.image_data_url_length || 0),
+    ok: Boolean(event?.ok),
+    dispatched: Boolean(event?.dispatched),
+    message: String(event?.message || '').slice(0, 500),
+    error: String(event?.error || '').slice(0, 500),
+  };
+  const existing = await getStorageValue(LOGIN_QR_NOTIFICATIONS_KEY, []);
+  const events = Array.isArray(existing) ? existing : [];
+  await setStorageValue(LOGIN_QR_NOTIFICATIONS_KEY, [entry, ...events].slice(0, 20));
+  await updateBackgroundStatus({
+    lastLoginQrNotificationAt: entry.at,
+    lastLoginQrNotificationPlatform: entry.platform,
+    lastLoginQrNotificationPhase: entry.phase,
+    lastLoginQrNotificationDispatched: entry.dispatched,
+    lastLoginQrNotificationError: entry.error,
   });
 }
 
@@ -1449,6 +1490,7 @@ const controller = new PublisherExtensionController({
   inspectLoginState,
   inspectPlatformState,
   captureLoginQrImage,
+  recordLoginQrNotification: appendLoginQrNotificationStatus,
   ensureHeartbeatAlarm,
 });
 

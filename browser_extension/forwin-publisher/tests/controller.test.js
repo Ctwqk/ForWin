@@ -7,6 +7,7 @@ function makeController(overrides = {}) {
   const events = [];
   const uploadResults = [];
   const loginQrNotifications = [];
+  const loginQrStatusEvents = [];
   const closedTabs = [];
   const restoredCookies = [];
   const deps = {
@@ -97,9 +98,20 @@ function makeController(overrides = {}) {
       },
       updateCommentSyncJobResult: async () => ({ ok: true }),
     },
+    recordLoginQrNotification: async (event) => {
+      loginQrStatusEvents.push(event);
+    },
     ...overrides,
   };
-  return { controller: new PublisherExtensionController(deps), events, uploadResults, loginQrNotifications, closedTabs, restoredCookies };
+  return {
+    controller: new PublisherExtensionController(deps),
+    events,
+    uploadResults,
+    loginQrNotifications,
+    loginQrStatusEvents,
+    closedTabs,
+    restoredCookies,
+  };
 }
 
 test('controller opens login popup and closes it after successful tab update', async () => {
@@ -1249,10 +1261,48 @@ test('controller heartbeat sends login QR notification when known login URL is v
   assert.equal(loginQrNotifications[0].source, 'qidian:456:login');
 });
 
+test('controller records login QR notification status for successful heartbeat send', async () => {
+  const { controller, loginQrStatusEvents } = makeController({
+    inspectPlatformState: async (platformId) => (
+      platformId === 'fanqie'
+        ? {
+          ok: true,
+          tabId: 321,
+          currentUrl: 'https://fanqienovel.com/main/writer/login?ticket=secret',
+          platform: 'fanqie',
+          authenticated: false,
+          loginVisible: true,
+        }
+        : null
+    ),
+    captureLoginQrImage: async () => ({
+      ok: true,
+      imageDataUrl: 'data:image/png;base64,cXI=',
+      source: 'debugger-screenshot',
+    }),
+    getPlatformState: async () => ({}),
+    getCookies: async () => [],
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      notifyLoginQr: async () => ({ ok: true, dispatched: false, message: 'not configured' }),
+    },
+  });
+
+  await controller.sendHeartbeat();
+
+  assert.deepEqual(
+    loginQrStatusEvents.map((event) => event.phase),
+    ['capture-start', 'captured', 'sent'],
+  );
+  assert.equal(loginQrStatusEvents[2].platform, 'fanqie');
+  assert.equal(loginQrStatusEvents[2].dispatched, false);
+  assert.equal(loginQrStatusEvents[1].image_data_url_length, 'data:image/png;base64,cXI='.length);
+});
+
 test('controller heartbeat retries login QR notification after a failed attempt', async () => {
   let notifyAttempts = 0;
   const loginQrNotifications = [];
-  const { controller } = makeController({
+  const { controller, loginQrStatusEvents } = makeController({
     inspectPlatformState: async (platformId) => (
       platformId === 'fanqie'
         ? {
@@ -1305,6 +1355,8 @@ test('controller heartbeat retries login QR notification after a failed attempt'
   assert.equal(notifyAttempts, 2);
   assert.equal(loginQrNotifications.length, 1);
   assert.equal(loginQrNotifications[0].platform, 'fanqie');
+  assert.equal(loginQrStatusEvents.filter((event) => event.phase === 'failed').length, 1);
+  assert.equal(loginQrStatusEvents.filter((event) => event.phase === 'sent').length, 1);
 });
 
 test('controller heartbeat does not display connected before page verification', async () => {

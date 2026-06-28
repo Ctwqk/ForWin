@@ -1052,8 +1052,22 @@ export class PublisherExtensionController {
     try {
       const settings = await this.deps.getSettings();
       if (!settings.backendBaseUrl || !settings.apiKey) {
+        await this.recordLoginQrNotificationEvent({
+          platform: session.platformId,
+          tab_id: session.popupTabId,
+          current_url: String(inspection.currentUrl || session.lastUrl || ''),
+          phase: 'skipped',
+          reason: 'backend-settings-missing',
+        });
         return { skipped: true };
       }
+      const currentUrl = String(inspection.currentUrl || session.lastUrl || '');
+      await this.recordLoginQrNotificationEvent({
+        platform: session.platformId,
+        tab_id: session.popupTabId,
+        current_url: currentUrl,
+        phase: 'capture-start',
+      });
       const capture = await this.deps.captureLoginQrImage(
         session.popupTabId,
         session.platformId,
@@ -1063,19 +1077,66 @@ export class PublisherExtensionController {
         ? capture
         : String(capture?.imageDataUrl || capture?.image_data_url || '');
       if (!imageDataUrl) {
+        await this.recordLoginQrNotificationEvent({
+          platform: session.platformId,
+          tab_id: session.popupTabId,
+          current_url: currentUrl,
+          phase: 'capture-empty',
+          reason: String(capture?.error || 'login-qr-image-empty'),
+          source: String(capture?.source || ''),
+        });
         return { skipped: true };
       }
       session.loginQrNotificationAttempted = true;
-      return await this.deps.backend.notifyLoginQr({
+      await this.recordLoginQrNotificationEvent({
+        platform: session.platformId,
+        tab_id: session.popupTabId,
+        current_url: currentUrl,
+        phase: 'captured',
+        source: String(capture?.source || ''),
+        image_data_url_length: imageDataUrl.length,
+      });
+      const result = await this.deps.backend.notifyLoginQr({
         client_id: await this.deps.getClientId(),
         platform: session.platformId,
-        current_url: String(inspection.currentUrl || session.lastUrl || ''),
+        current_url: currentUrl,
         image_data_url: imageDataUrl,
         source: String(capture?.source || ''),
         captured_at: new Date().toISOString(),
       });
-    } catch (_error) {
+      await this.recordLoginQrNotificationEvent({
+        platform: session.platformId,
+        tab_id: session.popupTabId,
+        current_url: currentUrl,
+        phase: 'sent',
+        ok: Boolean(result?.ok),
+        dispatched: Boolean(result?.dispatched),
+        message: String(result?.message || ''),
+      });
+      return result;
+    } catch (error) {
+      await this.recordLoginQrNotificationEvent({
+        platform: session.platformId,
+        tab_id: session.popupTabId,
+        current_url: String(inspection.currentUrl || session.lastUrl || ''),
+        phase: 'failed',
+        error: error instanceof Error ? error.message : String(error || ''),
+      });
       return { ok: false };
+    }
+  }
+
+  async recordLoginQrNotificationEvent(event) {
+    if (typeof this.deps.recordLoginQrNotification !== 'function') {
+      return;
+    }
+    try {
+      await this.deps.recordLoginQrNotification({
+        ...(event || {}),
+        at: new Date().toISOString(),
+      });
+    } catch (_error) {
+      // Diagnostic storage must not block login checks or publisher jobs.
     }
   }
 

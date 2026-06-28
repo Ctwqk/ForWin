@@ -17,3 +17,12 @@ test('background login QR fallback captures screenshots through debugger protoco
   assert.match(source, /Page\.captureScreenshot/);
   assert.match(source, /data:image\/png;base64,\$\{screenshot\.data\}/);
 });
+
+test('background treats known publisher login URLs as inspectable login pages', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /function\s+isPlatformLoginUrl\s*\(\s*platformId,\s*url\s*=\s*''\s*\)/);
+  assert.match(source, /\/main\/writer\/login/);
+  assert.match(source, /\/portal\/login/);
+  assert.match(source, /summary:\s*'known login url'/);
+});

@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.29';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.30';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { getPlatformAdapter } from './lib/platforms.js';
 import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
@@ -1144,6 +1144,17 @@ function isPlatformStatusUrl(platformId, url = '') {
   return false;
 }
 
+function isPlatformLoginUrl(platformId, url = '') {
+  const value = String(url || '');
+  if (platformId === 'fanqie') {
+    return value.includes('fanqienovel.com') && value.includes('/main/writer/login');
+  }
+  if (platformId === 'qidian') {
+    return value.includes('write.qq.com') && value.includes('/portal/login');
+  }
+  return false;
+}
+
 async function waitForUploadEditorTab(platformId, currentTabId, timeoutMs = 8000) {
   const startedAt = Date.now();
   while ((Date.now() - startedAt) < timeoutMs) {
@@ -1342,18 +1353,27 @@ async function inspectPlatformState(platformId) {
     if (!tabId) {
       continue;
     }
+    const candidateUrl = String(candidate?.url || '');
     const ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
       || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 800)
       || (candidate?.status === 'complete' && await probePlatformAgentResponsive(tabId));
-    if (!ready) {
-      continue;
-    }
-    if (candidate?.status === 'complete') {
+    if (ready && candidate?.status === 'complete') {
       tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
     }
-    const inspection = await inspectLoginState(tabId);
+    const inspection = ready ? await inspectLoginState(tabId) : null;
     if (inspection?.ok) {
       return { ...inspection, tabId };
+    }
+    if (isPlatformLoginUrl(platformId, candidateUrl)) {
+      return {
+        ok: true,
+        tabId,
+        currentUrl: candidateUrl,
+        platform: platformId,
+        authenticated: false,
+        loginVisible: true,
+        summary: 'known login url',
+      };
     }
   }
   return null;

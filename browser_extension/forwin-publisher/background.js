@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.25';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.26';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { getPlatformAdapter } from './lib/platforms.js';
 import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
@@ -1391,6 +1391,9 @@ const controller = new PublisherExtensionController({
     },
     async syncBrowserSession(payload) {
       return withBackendClient((client) => client.syncBrowserSession(payload));
+    },
+    async notifyLoginQr(payload) {
+      return withBackendClient((client) => client.notifyLoginQr(payload));
     },
     async getBrowserSession(platformId) {
       return withBackendClient((client) => client.getBrowserSession(platformId));

@@ -751,7 +751,34 @@
     }
   }
 
+  function isVisibleSmallClickTarget(element) {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0
+      && rect.height > 0
+      && rect.width <= 240
+      && rect.height <= 96;
+  }
+
+  async function activateScanLoginTab() {
+    const candidates = Array.from(document.querySelectorAll('button,a,span,div,[role="button"]'));
+    const scanTab = candidates.find((element) => {
+      const text = normalizeText(element.innerText || element.textContent || '');
+      return isVisibleSmallClickTarget(element)
+        && (text === '扫码登录' || (text.includes('扫码登录') && text.length <= 12));
+    });
+    if (!scanTab) {
+      return false;
+    }
+    scanTab.click();
+    await sleep(900);
+    return true;
+  }
+
   async function extractLoginQrImage() {
+    await activateScanLoginTab();
     for (const element of loginQrCandidates()) {
       const tag = String(element.tagName || '').toLowerCase();
       const imageDataUrl = tag === 'canvas'

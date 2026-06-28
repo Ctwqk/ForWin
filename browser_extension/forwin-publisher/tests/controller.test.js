@@ -1214,6 +1214,41 @@ test('controller heartbeat sends login QR notification once when inspected login
   assert.equal(loginQrNotifications[0].source, 'qidian:123');
 });
 
+test('controller heartbeat sends login QR notification when known login URL is visible', async () => {
+  const { controller, loginQrNotifications } = makeController({
+    inspectPlatformState: async (platformId) => (
+      platformId === 'qidian'
+        ? {
+          ok: true,
+          tabId: 456,
+          currentUrl: 'https://write.qq.com/portal/login',
+          platform: 'qidian',
+          authenticated: false,
+          loginVisible: false,
+        }
+        : null
+    ),
+    captureLoginQrImage: async (tabId, platformId, inspection) => ({
+      ok: true,
+      imageDataUrl: 'data:image/png;base64,cXI=',
+      source: `${platformId}:${tabId}:${inspection.loginVisible ? 'login' : 'missing'}`,
+    }),
+    getPlatformState: async () => ({}),
+    getCookies: async (platformId) => (
+      platformId === 'qidian'
+        ? [{ name: 'AppAuthToken' }, { name: 'pubtoken' }]
+        : []
+    ),
+  });
+
+  await controller.sendHeartbeat();
+
+  assert.equal(loginQrNotifications.length, 1);
+  assert.equal(loginQrNotifications[0].platform, 'qidian');
+  assert.equal(loginQrNotifications[0].current_url, 'https://write.qq.com/portal/login');
+  assert.equal(loginQrNotifications[0].source, 'qidian:456:login');
+});
+
 test('controller heartbeat does not display connected before page verification', async () => {
   const payloads = [];
   const { controller } = makeController({

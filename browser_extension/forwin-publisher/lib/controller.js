@@ -1111,7 +1111,12 @@ export class PublisherExtensionController {
         lastUrl: currentUrl,
         loginQrNotificationAttempted: false,
       },
-      inspection,
+      {
+        ...(inspection || {}),
+        currentUrl,
+        authenticated: false,
+        loginVisible: true,
+      },
     );
     if (!result?.skipped) {
       this.heartbeatLoginQrNotificationKeys.add(key);

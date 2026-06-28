@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.26';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.27';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { getPlatformAdapter } from './lib/platforms.js';
 import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
@@ -538,6 +538,27 @@ async function detachDebugger(tabId) {
 
 async function sendDebuggerCommand(tabId, method, commandParams = {}) {
   return wrapCall(extensionApi.debugger, 'sendCommand', { tabId }, method, commandParams);
+}
+
+async function captureTabScreenshotWithDebugger(tabId) {
+  await attachDebugger(tabId);
+  try {
+    const screenshot = await sendDebuggerCommand(tabId, 'Page.captureScreenshot', {
+      format: 'png',
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    if (!screenshot?.data) {
+      return { ok: false, error: 'debugger-screenshot-empty' };
+    }
+    return {
+      ok: true,
+      imageDataUrl: `data:image/png;base64,${screenshot.data}`,
+      source: 'debugger-screenshot',
+    };
+  } finally {
+    await detachDebugger(tabId);
+  }
 }
 
 async function setFileInputFiles(tabId, selector, files) {
@@ -1251,22 +1272,13 @@ async function captureLoginQrImage(tabId) {
     }
   }
   try {
-    const tab = await getTab(tabId);
-    const windowId = Number(tab?.windowId || 0);
-    if (!windowId || typeof extensionApi.tabs?.captureVisibleTab !== 'function') {
-      return { ok: false, error: 'visible-tab-capture-unavailable' };
+    const screenshot = await captureTabScreenshotWithDebugger(tabId);
+    if (screenshot?.imageDataUrl) {
+      return screenshot;
     }
-    const imageDataUrl = await wrapCall(
-      extensionApi.tabs,
-      'captureVisibleTab',
-      windowId,
-      { format: 'png' },
-    );
-    if (typeof imageDataUrl === 'string' && imageDataUrl.startsWith('data:image/')) {
-      return { ok: true, imageDataUrl, source: 'visible-tab-screenshot' };
-    }
+    return screenshot;
   } catch (_error) {
-    return { ok: false, error: 'visible-tab-capture-failed' };
+    return { ok: false, error: 'debugger-screenshot-failed' };
   }
   return { ok: false, error: 'login-qr-not-found' };
 }

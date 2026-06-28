@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.30';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.31';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { getPlatformAdapter } from './lib/platforms.js';
 import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
@@ -20,6 +20,7 @@ const PLATFORM_STATE_KEY = 'forwinPublisherPlatformStates';
 const BACKGROUND_STATUS_KEY = 'forwinPublisherBackgroundStatus';
 const BACKGROUND_ERRORS_KEY = 'forwinPublisherBackgroundErrors';
 const LOGIN_QR_NOTIFICATIONS_KEY = 'forwinPublisherLoginQrNotifications';
+const HEARTBEAT_PLATFORM_STATES_KEY = 'forwinPublisherHeartbeatPlatformStates';
 const HEARTBEAT_ALARM = 'forwinPublisherHeartbeat';
 const tabReadyRegistry = new TabReadyRegistry();
 
@@ -109,6 +110,30 @@ async function appendLoginQrNotificationStatus(event) {
     lastLoginQrNotificationPhase: entry.phase,
     lastLoginQrNotificationDispatched: entry.dispatched,
     lastLoginQrNotificationError: entry.error,
+  });
+}
+
+async function appendHeartbeatPlatformState(event) {
+  const entry = {
+    at: String(event?.at || new Date().toISOString()),
+    platform: String(event?.platform || ''),
+    inspection_ok: Boolean(event?.inspection_ok),
+    inspection_tab_id: Number(event?.inspection_tab_id || 0),
+    inspection_login_visible: Boolean(event?.inspection_login_visible),
+    inspection_authenticated: Boolean(event?.inspection_authenticated),
+    inspection_current_url: safeStatusUrl(event?.inspection_current_url),
+    raw_page_login_visible: Boolean(event?.raw_page_login_visible),
+    raw_page_authenticated: Boolean(event?.raw_page_authenticated),
+    raw_current_url: safeStatusUrl(event?.raw_current_url),
+  };
+  const existing = await getStorageValue(HEARTBEAT_PLATFORM_STATES_KEY, []);
+  const events = Array.isArray(existing) ? existing : [];
+  await setStorageValue(HEARTBEAT_PLATFORM_STATES_KEY, [entry, ...events].slice(0, 40));
+  await updateBackgroundStatus({
+    lastHeartbeatPlatformStateAt: entry.at,
+    lastHeartbeatPlatformStatePlatform: entry.platform,
+    lastHeartbeatPlatformStateInspectionOk: entry.inspection_ok,
+    lastHeartbeatPlatformStateLoginVisible: entry.raw_page_login_visible,
   });
 }
 
@@ -1511,6 +1536,7 @@ const controller = new PublisherExtensionController({
   inspectPlatformState,
   captureLoginQrImage,
   recordLoginQrNotification: appendLoginQrNotificationStatus,
+  recordHeartbeatPlatformState: appendHeartbeatPlatformState,
   ensureHeartbeatAlarm,
 });
 

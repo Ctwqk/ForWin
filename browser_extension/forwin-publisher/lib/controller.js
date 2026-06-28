@@ -840,6 +840,17 @@ export class PublisherExtensionController {
       const savedState = await this.deps.getPlatformState(platformId);
       const inspection = await this.inspectPlatformState(platformId);
       const heartbeatState = buildHeartbeatState(platformId, cookies, savedState, inspection);
+      await this.recordHeartbeatPlatformState({
+        platform: platformId,
+        inspection_ok: Boolean(inspection?.ok),
+        inspection_tab_id: Number(inspection?.tabId || inspection?.tab_id || 0),
+        inspection_login_visible: Boolean(inspection?.loginVisible),
+        inspection_authenticated: Boolean(inspection?.authenticated),
+        inspection_current_url: String(inspection?.currentUrl || inspection?.url || ''),
+        raw_page_login_visible: Boolean(heartbeatState.raw_state?.page_login_visible),
+        raw_page_authenticated: Boolean(heartbeatState.raw_state?.page_authenticated),
+        raw_current_url: String(heartbeatState.raw_state?.current_url || ''),
+      });
       await this.maybeNotifyHeartbeatLoginQr(platformId, inspection, heartbeatState);
       platforms.push({
         ...heartbeatState,
@@ -1137,6 +1148,20 @@ export class PublisherExtensionController {
       });
     } catch (_error) {
       // Diagnostic storage must not block login checks or publisher jobs.
+    }
+  }
+
+  async recordHeartbeatPlatformState(event) {
+    if (typeof this.deps.recordHeartbeatPlatformState !== 'function') {
+      return;
+    }
+    try {
+      await this.deps.recordHeartbeatPlatformState({
+        ...(event || {}),
+        at: new Date().toISOString(),
+      });
+    } catch (_error) {
+      // Diagnostic storage must not block heartbeat delivery.
     }
   }
 

@@ -49,6 +49,26 @@ Useful checks:
 | MCP health/upstream API connectivity | Confirms `forwin-mcp-swarm` can reach `forwin-app-swarm` |
 | publisher browser heartbeat | Confirms browser automation is logged in and connected |
 
+For two-hour intervention windows, use the read-only monitor from a source
+checkout or deployed copy:
+
+```bash
+python scripts/monitor_forwin_runtime.py \
+  --api-base http://10.0.0.126:8899 \
+  --mcp-url http://10.0.0.126:8896/mcp \
+  --mcp-health-url http://10.0.0.126:8896/health \
+  --docker-context swarm-manager-150 \
+  --colima-profile swarmbridged \
+  --expect-platform-connected fanqie \
+  --expect-platform-connected qidian \
+  --duration-minutes 120
+```
+
+The monitor samples API health, MCP health, Swarm service replicas, publisher
+platform connection state, and MCP generation activity. It writes JSONL and
+returns non-zero if any required sample fails. It does not publish, retry jobs,
+start generation, or mutate ForWin project/task/chapter state.
+
 ## Runtime Images
 
 `forwin-app-swarm`, `forwin-generation-worker-swarm`, and `forwin-mcp-swarm`

@@ -124,8 +124,8 @@ long random values before starting the backend.
 Current production is a distributed Docker Swarm deployment, not the local
 single-host compose layout described above.
 
-- Source-of-truth development checkout: `10.0.0.246:/home/kikuhiko/ForWin` on
-  branch `master`.
+- Source-of-truth code: GitHub repository `Ctwqk/ForWin`, branch `master`.
+  Use a fresh local clone or isolated worktree for code changes.
 - Production deploy target:
   `10.0.0.126:/Users/magi1/ForWin-swarm`.
 - Current baseline Swarm services: `forwin-app-swarm` and `forwin-mcp-swarm`.
@@ -141,6 +141,8 @@ single-host compose layout described above.
 The 126 directory is a deployment output with `.deploy-sync-project` and
 `.deploy-sync-source-commit` markers. Do not create a long-lived Codex coding
 project there unless the task is explicitly about inspecting the deployed copy.
+If a former LAN development host is unavailable, clone from GitHub instead of
+using the deploy output as the source workspace.
 
 Production data stores are centralized on `10.0.0.150`. This repository still
 contains database models, migrations, storage code, and local compose profiles,

@@ -1,9 +1,13 @@
 # PR Automation
 
-ForWin uses two machines for the normal development loop:
+ForWin uses GitHub branches plus the production deploy sync for the normal
+development loop:
 
-- Production: `10.0.0.150`, `/home/taiwei/ForWin`, branch `master`
-- Development: `10.0.0.246` WSL, `/home/kikuhiko/ForWin`, development branches
+- Source: GitHub `Ctwqk/ForWin`, branch `master` plus feature branches.
+- Production sync: `10.0.0.150` deploy job, which updates
+  `10.0.0.126:/Users/magi1/ForWin-swarm`.
+- Development: a fresh local clone or isolated worktree. Do not use the 126
+  deployment output as the long-lived source workspace.
 
 Production should stay on `master`. It evaluates candidate branches in a
 temporary git worktree, so pre-PR checks do not switch or dirty the running
@@ -18,14 +22,14 @@ production checkout.
 5. Push the branch to GitHub.
 6. On production, run `scripts/pre_pr_eval.sh`.
 7. Review and merge the PR.
-8. On production, pull `master` and redeploy.
+8. Trigger or wait for the 150 GitHub deploy sync to deploy `master`.
 
 ## Example
 
-On the development machine:
+In a local source clone:
 
 ```bash
-cd /home/kikuhiko/ForWin
+cd /path/to/ForWin
 git checkout codex/dev
 cp docs/designs/TEMPLATE.md docs/designs/2026-04-28-example-feature.md
 git add docs/designs/2026-04-28-example-feature.md
@@ -34,7 +38,7 @@ git commit -m "docs: design example feature"
 git push origin codex/dev
 ```
 
-On the production machine:
+On a machine that has the production evaluator checkout:
 
 ```bash
 cd /home/taiwei/ForWin

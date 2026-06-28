@@ -1,5 +1,9 @@
 # ForWin Service Process Roadmap Design
 
+> Operational update, 2026-06-27: the source-of-truth edit location is GitHub
+> `Ctwqk/ForWin` on `master` plus fresh local clones or isolated worktrees. The
+> former LAN development checkout is no longer an operator dependency.
+
 ## Context
 
 ForWin is a long-form Chinese web novel generation and publishing system. Its
@@ -10,8 +14,7 @@ review/governance, retrieval, observability, and local infrastructure profiles.
 
 The current production topology is distributed but not microservice-oriented:
 
-- `10.0.0.246:/home/kikuhiko/ForWin` is the source-of-truth development
-  checkout.
+- GitHub `Ctwqk/ForWin` `master` is the source-of-truth code branch.
 - `10.0.0.126:/Users/magi1/ForWin-swarm` is the production deploy output.
 - `forwin-app-swarm` and `forwin-mcp-swarm` currently run on 126.
 - Postgres, Qdrant, and MinIO are centralized on `10.0.0.150`.

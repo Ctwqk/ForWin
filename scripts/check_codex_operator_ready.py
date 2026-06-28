@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -34,6 +35,47 @@ def docker_ps_has_services(output: str, required_services: tuple[str, ...]) -> b
     return True
 
 
+def _replicas_are_running(value: str) -> bool:
+    parts = str(value or "").split("/", 1)
+    if len(parts) != 2:
+        return False
+    try:
+        running = int(parts[0])
+        desired = int(parts[1])
+    except ValueError:
+        return False
+    return desired > 0 and running >= desired
+
+
+def swarm_service_ls_has_services(output: str, required_services: tuple[str, ...]) -> bool:
+    lines = str(output or "").splitlines()
+    service_replicas: dict[str, str] = {}
+    for line in lines:
+        parts = line.split()
+        if len(parts) >= 2 and parts[0] in required_services:
+            service_replicas[parts[0]] = parts[1]
+        elif len(parts) >= 4 and parts[1] in required_services:
+            service_replicas[parts[1]] = parts[3]
+    return all(_replicas_are_running(service_replicas.get(service, "")) for service in required_services)
+
+
+def docker_container_ps_has_services(output: str, required_services: tuple[str, ...]) -> bool:
+    lines = str(output or "").splitlines()
+    running_services: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if "Up " not in stripped:
+            continue
+        parts = stripped.split(maxsplit=1)
+        if not parts:
+            continue
+        container_name = parts[0]
+        for service in required_services:
+            if container_name == service or container_name.startswith(f"{service}."):
+                running_services.add(service)
+    return all(service in running_services for service in required_services)
+
+
 def codex_mcp_has_forwin(output: str) -> bool:
     for line in str(output or "").splitlines():
         parts = line.split()
@@ -59,14 +101,68 @@ def run_command(args: list[str], *, cwd: Path = REPO_ROOT, timeout: float = 15.0
 
 def check_docker_services() -> CheckResult:
     proc = run_command(["docker", "compose", "ps", "forwin", "forwin-mcp"])
+    compose_detail = ""
     if proc is None:
-        return CheckResult("docker compose services", False, "docker compose command is unavailable or timed out", required=False)
-    output = "\n".join([proc.stdout, proc.stderr]).strip()
-    if proc.returncode != 0:
-        return CheckResult("docker compose services", False, output or f"exit code {proc.returncode}", required=False)
-    if not docker_ps_has_services(output, ("forwin", "forwin-mcp")):
-        return CheckResult("docker compose services", False, "forwin and forwin-mcp are not both running", required=False)
-    return CheckResult("docker compose services", True, "forwin and forwin-mcp appear to be running", required=False)
+        compose_detail = "docker compose command is unavailable or timed out"
+    else:
+        output = "\n".join([proc.stdout, proc.stderr]).strip()
+        if proc.returncode == 0 and docker_ps_has_services(output, ("forwin", "forwin-mcp")):
+            return CheckResult("docker compose services", True, "forwin and forwin-mcp appear to be running", required=False)
+        compose_detail = output or f"exit code {proc.returncode}"
+
+    contexts = []
+    configured_context = os.environ.get("FORWIN_SWARM_DOCKER_CONTEXT", "").strip()
+    if configured_context:
+        contexts.append(configured_context)
+    contexts.append("swarm-manager-150")
+    for context in dict.fromkeys(contexts):
+        swarm_proc = run_command(["docker", "--context", context, "service", "ls", "--filter", "name=forwin"], timeout=10)
+        if swarm_proc is None:
+            continue
+        swarm_output = "\n".join([swarm_proc.stdout, swarm_proc.stderr]).strip()
+        if swarm_proc.returncode == 0 and swarm_service_ls_has_services(swarm_output, ("forwin-app-swarm", "forwin-mcp-swarm")):
+            return CheckResult(
+                "docker swarm services",
+                True,
+                f"forwin-app-swarm and forwin-mcp-swarm are running via context {context}",
+                required=False,
+            )
+
+    colima_profile = os.environ.get("FORWIN_COLIMA_PROFILE", "swarmbridged").strip()
+    if colima_profile:
+        colima_proc = run_command(
+            [
+                "colima",
+                "ssh",
+                "-p",
+                colima_profile,
+                "--",
+                "docker",
+                "ps",
+                "--format",
+                "{{.Names}} {{.Image}} {{.Status}}",
+            ],
+            timeout=10,
+        )
+        if colima_proc is not None:
+            colima_output = "\n".join([colima_proc.stdout, colima_proc.stderr]).strip()
+            if colima_proc.returncode == 0 and docker_container_ps_has_services(
+                colima_output,
+                ("forwin-app-swarm", "forwin-mcp-swarm"),
+            ):
+                return CheckResult(
+                    "docker colima containers",
+                    True,
+                    f"forwin-app-swarm and forwin-mcp-swarm are running via colima profile {colima_profile}",
+                    required=False,
+                )
+
+    return CheckResult(
+        "docker compose/swarm services",
+        False,
+        compose_detail or "forwin services were not found through compose or swarm",
+        required=False,
+    )
 
 
 def check_json_health(name: str, url: str) -> CheckResult:

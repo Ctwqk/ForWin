@@ -5,7 +5,7 @@ runtime. Use it when changing application services so production keeps one
 shared infra layer instead of recreating databases or browser managers inside
 each app.
 
-Status date: 2026-05-29.
+Status date: 2026-06-27.
 
 ## Current Topology
 
@@ -27,8 +27,8 @@ Production is deployed by GitHub-tracked repositories, but the runtime copies on
 
 | Project | Source-of-truth edit location | Production target |
 | --- | --- | --- |
-| ForWin | `10.0.0.246:/home/kikuhiko/ForWin` on branch `master` | `10.0.0.126:/Users/magi1/ForWin-swarm` |
-| VideoProcess | Preferred dev checkout `10.0.0.246:/home/kikuhiko/videoprocess` on branch `main`; auxiliary checkouts `10.0.0.126:/Users/magi1/VideoProcess-app` and `10.0.0.150:/home/taiwei/Constructure-repos/videoprocess` | `10.0.0.127:/Users/wenjieliu/VideoProcess-app` |
+| ForWin | GitHub repo `Ctwqk/ForWin` on branch `master`; use a fresh local clone or isolated worktree for edits | `10.0.0.126:/Users/magi1/ForWin-swarm` |
+| VideoProcess | GitHub repo `Ctwqk/videoprocess` on branch `main`; auxiliary checkout `10.0.0.150:/home/taiwei/Constructure-repos/videoprocess` | `10.0.0.127:/Users/wenjieliu/VideoProcess-app` |
 | Policy Decision Service | `10.0.0.150:/home/taiwei/Constructure-repos/policy-decision-service` | `10.0.0.127:/Users/wenjieliu/.deploy-build/policy-decision-service` |
 | VP Feature Aggregator | `10.0.0.150:/home/taiwei/Constructure-repos/vp-feature-aggregator` | `10.0.0.127:/Users/wenjieliu/.deploy-build/vp-feature-aggregator` |
 | Arb | `10.0.0.150:/home/taiwei/Constructure-repos/arb` | `10.0.0.127:/Users/wenjieliu/arb-swarm-src` |
@@ -138,8 +138,8 @@ The 150 cron job runs:
 
 It tracks GitHub branches, builds deploy images, rsyncs target directories to
 126/127, updates Swarm services, and writes `.deploy-sync-project` plus
-`.deploy-sync-source-commit` markers. ForWin changes must be made in the 246
-ForWin repo and pushed to `master` before this deploy path can pick them up.
+`.deploy-sync-source-commit` markers. ForWin changes must be made in a GitHub
+source clone and pushed to `master` before this deploy path can pick them up.
 
 ## Triage Commands
 

@@ -31,6 +31,7 @@ export class PublisherExtensionController {
     this.commentDispatchInFlight = null;
     this.executionTasks = new Map();
     this.executionTabToTask = new Map();
+    this.heartbeatLoginQrNotificationKeys = new Set();
   }
 
   async bootstrap() {
@@ -839,6 +840,7 @@ export class PublisherExtensionController {
       const savedState = await this.deps.getPlatformState(platformId);
       const inspection = await this.inspectPlatformState(platformId);
       const heartbeatState = buildHeartbeatState(platformId, cookies, savedState, inspection);
+      await this.maybeNotifyHeartbeatLoginQr(platformId, inspection, heartbeatState);
       platforms.push({
         ...heartbeatState,
         raw_state: {
@@ -1075,5 +1077,45 @@ export class PublisherExtensionController {
     } catch (_error) {
       return { ok: false };
     }
+  }
+
+  clearHeartbeatLoginQrNotifications(platformId) {
+    const prefix = `${platformId}:`;
+    for (const key of Array.from(this.heartbeatLoginQrNotificationKeys)) {
+      if (key.startsWith(prefix)) {
+        this.heartbeatLoginQrNotificationKeys.delete(key);
+      }
+    }
+  }
+
+  async maybeNotifyHeartbeatLoginQr(platformId, inspection, heartbeatState) {
+    const rawState = heartbeatState?.raw_state || {};
+    const loginVisible = rawState.page_login_visible && !rawState.page_authenticated;
+    if (!loginVisible) {
+      this.clearHeartbeatLoginQrNotifications(platformId);
+      return { skipped: true };
+    }
+    const tabId = Number(inspection?.tabId || inspection?.tab_id || 0);
+    if (!tabId) {
+      return { skipped: true };
+    }
+    const currentUrl = String(inspection?.currentUrl || inspection?.url || rawState.current_url || '');
+    const key = `${platformId}:${tabId}:${currentUrl}`;
+    if (this.heartbeatLoginQrNotificationKeys.has(key)) {
+      return { skipped: true };
+    }
+    const result = await this.maybeNotifyLoginQr(
+      {
+        platformId,
+        popupTabId: tabId,
+        lastUrl: currentUrl,
+        loginQrNotificationAttempted: false,
+      },
+      inspection,
+    );
+    if (!result?.skipped) {
+      this.heartbeatLoginQrNotificationKeys.add(key);
+    }
+    return result;
   }
 }

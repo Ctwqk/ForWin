@@ -113,6 +113,8 @@ test('background prefers qidian top-level dashboard evidence over loginOut child
 
   assert.match(source, /function\s+isQidianAuthenticatedTopLevelTab\s*\(/);
   assert.match(source, /candidate\?\.title[\s\S]*工作台[\s\S]*作家专区/);
+  assert.match(source, /function\s+isQidianAuthenticatedTopLevelTab[\s\S]*const\s+status\s*=\s*String\(candidate\?\.status/);
+  assert.match(source, /function\s+isQidianAuthenticatedTopLevelTab[\s\S]*status\s*===\s*'complete'/);
   assert.match(source, /isQidianLoginOutUrl[\s\S]*inspection\.currentUrl/);
   assert.match(source, /authenticated:\s*true[\s\S]*loginVisible:\s*false/);
 });

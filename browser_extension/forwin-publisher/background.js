@@ -1206,10 +1206,12 @@ function isQidianLoginOutUrl(url = '') {
 function isQidianAuthenticatedTopLevelTab(candidate, url = '') {
   const value = String(url || candidate?.url || '');
   const title = String(candidate?.title || '');
+  const status = String(candidate?.status || '');
   return value.includes('write.qq.com')
     && (value.includes('/portal/dashboard') || value.includes('/portal/home'))
     && (
-      title.includes('工作台')
+      status === 'complete'
+      || title.includes('工作台')
       || title.includes('作家专区')
       || title.includes('作品管理')
     );

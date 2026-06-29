@@ -32,6 +32,16 @@ test('background throttles login QR notifications at the backend boundary', asyn
   assert.match(source, /async\s+notifyLoginQr\s*\(\s*payload\s*\)[\s\S]*notifyLoginQrWithThrottle\(payload\)/);
 });
 
+test('background persists login QR throttle from sent notification status events', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /function\s+loginQrNotificationTimestampMs\s*\(\s*entry\s*\)/);
+  assert.match(source, /appendLoginQrNotificationStatus[\s\S]*entry\.phase\s*===\s*'sent'/);
+  assert.match(source, /appendLoginQrNotificationStatus[\s\S]*entry\.ok/);
+  assert.match(source, /appendLoginQrNotificationStatus[\s\S]*!entry\.message\.includes\('throttled'\)/);
+  assert.match(source, /setLoginQrLastNotifiedAtMs\(\s*entry\.platform,\s*entry\.current_url,\s*loginQrNotificationTimestampMs\(entry\),?\s*\)/);
+});
+
 test('background login QR fallback captures screenshots through debugger protocol', async () => {
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 

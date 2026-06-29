@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.45';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.46';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js';
@@ -91,6 +91,14 @@ function safeStatusUrl(value) {
   }
 }
 
+function loginQrNotificationTimestampMs(entry) {
+  const parsed = Date.parse(String(entry?.at || ''));
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed;
+  }
+  return Date.now();
+}
+
 async function appendLoginQrNotificationStatus(event) {
   const entry = {
     at: String(event?.at || new Date().toISOString()),
@@ -109,6 +117,19 @@ async function appendLoginQrNotificationStatus(event) {
   const existing = await getStorageValue(LOGIN_QR_NOTIFICATIONS_KEY, []);
   const events = Array.isArray(existing) ? existing : [];
   await setStorageValue(LOGIN_QR_NOTIFICATIONS_KEY, [entry, ...events].slice(0, 20));
+  if (
+    entry.phase === 'sent'
+    && entry.ok
+    && entry.platform
+    && entry.current_url
+    && !entry.message.includes('throttled')
+  ) {
+    await setLoginQrLastNotifiedAtMs(
+      entry.platform,
+      entry.current_url,
+      loginQrNotificationTimestampMs(entry),
+    );
+  }
   await updateBackgroundStatus({
     lastLoginQrNotificationAt: entry.at,
     lastLoginQrNotificationPlatform: entry.platform,

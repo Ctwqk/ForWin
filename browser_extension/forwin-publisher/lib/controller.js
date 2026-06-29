@@ -818,7 +818,7 @@ export class PublisherExtensionController {
       }
     }
     if (
-      inspection
+      inspection?.ok
       || !context?.probeCookieSignal
       || typeof this.deps.ensurePlatformProbeInspection !== 'function'
     ) {

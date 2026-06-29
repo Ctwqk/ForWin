@@ -1767,6 +1767,59 @@ test('controller heartbeat probes dashboard when cookie signal has no platform t
   assert.equal(qidian.raw_state.current_url, 'https://write.qq.com/portal/dashboard');
 });
 
+test('controller heartbeat probes dashboard when platform inspection is not ok', async () => {
+  const payloads = [];
+  const probes = [];
+  const { controller } = makeController({
+    backend: {
+      heartbeat: async (payload) => {
+        payloads.push(payload);
+        return { ok: true };
+      },
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+    },
+    inspectPlatformState: async () => ({
+      ok: false,
+      authenticated: false,
+      loginVisible: false,
+      currentUrl: '',
+    }),
+    ensurePlatformProbeInspection: async (platformId) => {
+      probes.push(platformId);
+      if (platformId !== 'qidian') {
+        return null;
+      }
+      return {
+        ok: true,
+        tabId: 88,
+        currentUrl: 'https://write.qq.com/portal/dashboard',
+        platform: 'qidian',
+        authenticated: true,
+        loginVisible: false,
+        summary: 'probe dashboard evidence',
+      };
+    },
+    getPlatformState: async () => ({}),
+    getCookies: async (platformId) => (
+      platformId === 'qidian'
+        ? [{ name: 'AppAuthToken' }, { name: 'pubtoken' }]
+        : []
+    ),
+  });
+
+  await controller.sendHeartbeat();
+
+  assert.deepEqual(probes, ['qidian']);
+  const qidian = payloads[0].platforms.find((item) => item.platform === 'qidian');
+  assert.equal(qidian.connected, true);
+  assert.equal(qidian.raw_state.page_authenticated, true);
+});
+
 test('controller session sync carries unverified page evidence', async () => {
   const payloads = [];
   const { controller } = makeController({

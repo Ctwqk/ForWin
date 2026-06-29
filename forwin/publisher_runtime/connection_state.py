@@ -259,17 +259,21 @@ class ExtensionConnectionService:
                 session_client and self.is_recent(session_client.last_heartbeat_at)
             )
             state_recent = bool(state and self.is_recent(state.last_heartbeat_at))
-            login_evidence_recent = (
-                bool(preferred_state and preferred_state_recent and row_login_evidence(preferred_state))
-                or bool(state and state_recent and row_login_evidence(state))
+            preferred_login_evidence_recent = bool(
+                preferred_state
+                and preferred_state_recent
+                and row_login_evidence(preferred_state)
             )
-            unverified_cookie_recent = (
-                bool(
-                    preferred_state
-                    and preferred_state_recent
-                    and row_unverified_cookie_signal(preferred_state)
-                )
-                or bool(state and state_recent and row_unverified_cookie_signal(state))
+            latest_login_evidence_recent = bool(
+                state and state_recent and row_login_evidence(state)
+            )
+            preferred_unverified_cookie_recent = bool(
+                preferred_state
+                and preferred_state_recent
+                and row_unverified_cookie_signal(preferred_state)
+            )
+            latest_unverified_cookie_recent = bool(
+                state and state_recent and row_unverified_cookie_signal(state)
             )
             extension_heartbeat_at = None
             if preferred_client_recent and preferred_client.last_heartbeat_at:
@@ -301,9 +305,15 @@ class ExtensionConnectionService:
                 preferred_state
                 and preferred_state.connected
                 and self.is_recent(preferred_state.last_heartbeat_at)
+                and not preferred_login_evidence_recent
+                and not preferred_unverified_cookie_recent
             )
             global_connected = bool(
-                state and state.connected and self.is_recent(state.last_heartbeat_at)
+                state
+                and state.connected
+                and self.is_recent(state.last_heartbeat_at)
+                and not latest_login_evidence_recent
+                and not latest_unverified_cookie_recent
             )
             browser_connected = bool(
                 browser_session
@@ -313,34 +323,6 @@ class ExtensionConnectionService:
                     browser_session.last_error,
                 )
             )
-            connected = False
-            if login_evidence_recent or unverified_cookie_recent:
-                connected = False
-            elif self.preferred_client_id:
-                connected = preferred_connected
-            elif (
-                preferred_connected
-            ):
-                connected = True
-            elif global_connected:
-                connected = True
-            elif browser_connected:
-                connected = True
-
-            last_error = (
-                preferred_state.last_error
-                if preferred_state and self.is_recent(preferred_state.last_heartbeat_at)
-                else (
-                    state.last_error
-                    if state and self.is_recent(state.last_heartbeat_at)
-                    else ""
-                )
-            )
-            if not last_error and browser_session:
-                last_error = browser_session.last_error
-            if not last_error and summary_browser_session:
-                last_error = summary_browser_session.last_error
-
             preferred_client_id = (
                 preferred_state.client_id
                 if preferred_state and preferred_state.client_id
@@ -353,7 +335,11 @@ class ExtensionConnectionService:
                 browser_session.client_id if browser_session and browser_session.client_id else ""
             )
             fallback_client_id = ""
-            if self.preferred_client_id and not connected:
+            if (
+                self.preferred_client_id
+                and not self.strict_preferred_client
+                and not preferred_connected
+            ):
                 if (
                     latest_client_id
                     and latest_client_id != self.preferred_client_id
@@ -366,16 +352,49 @@ class ExtensionConnectionService:
                     and browser_connected
                 ):
                     fallback_client_id = session_client_id
-            selected_extension_client_id = (
-                preferred_client_id
-                if self.preferred_client_id
-                else (
-                    latest_client_id
-                    or session_client_id
-                    or (
-                        summary_browser_session.extension_client_id
-                        if summary_browser_session
+
+            connected = bool(
+                preferred_connected
+                or (
+                    not self.strict_preferred_client
+                    and (global_connected or browser_connected)
+                )
+            )
+
+            if connected and fallback_client_id == latest_client_id and state:
+                last_error = state.last_error if self.is_recent(state.last_heartbeat_at) else ""
+            elif connected and fallback_client_id == session_client_id:
+                last_error = browser_session.last_error if browser_session else ""
+            else:
+                last_error = (
+                    preferred_state.last_error
+                    if preferred_state
+                    and self.is_recent(preferred_state.last_heartbeat_at)
+                    else (
+                        state.last_error
+                        if state and self.is_recent(state.last_heartbeat_at)
                         else ""
+                    )
+                )
+            if not connected:
+                if not last_error and browser_session:
+                    last_error = browser_session.last_error
+                if not last_error and summary_browser_session:
+                    last_error = summary_browser_session.last_error
+
+            selected_extension_client_id = (
+                fallback_client_id
+                or (
+                    preferred_client_id
+                    if self.preferred_client_id
+                    else (
+                        latest_client_id
+                        or session_client_id
+                        or (
+                            summary_browser_session.extension_client_id
+                            if summary_browser_session
+                            else ""
+                        )
                     )
                 )
             )

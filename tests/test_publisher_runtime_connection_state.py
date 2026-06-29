@@ -116,7 +116,7 @@ def test_connection_state_unverified_cookie_signal_does_not_display_logged_in() 
         engine.dispose()
 
 
-def test_connection_state_marks_latest_client_as_fallback_not_connected_when_preferred_is_stale() -> None:
+def test_connection_state_uses_latest_connected_client_when_preferred_is_stale() -> None:
     engine, runtime = _runtime(
         "publisher-runtime-connection-preferred",
         preferred_client_id="linux-client",
@@ -152,15 +152,68 @@ def test_connection_state_marks_latest_client_as_fallback_not_connected_when_pre
             session.commit()
 
         items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
-        assert items["fanqie"]["connected"] is False
+        assert items["fanqie"]["connected"] is True
         assert items["fanqie"]["extension_online"] is True
-        assert items["fanqie"]["extension_client_id"] == "linux-client"
+        assert items["fanqie"]["extension_client_id"] == "laptop-client"
         assert items["fanqie"]["preferred_client_state"]["client_id"] == "linux-client"
         assert items["fanqie"]["preferred_client_state"]["recent"] is False
         assert items["fanqie"]["latest_client_state"]["client_id"] == "laptop-client"
         assert items["fanqie"]["latest_client_state"]["connected"] is True
         assert items["fanqie"]["fallback_available"] is True
         assert items["fanqie"]["fallback_client_id"] == "laptop-client"
+    finally:
+        engine.dispose()
+
+
+def test_connection_state_uses_latest_connected_client_when_preferred_is_login_required() -> None:
+    engine, runtime = _runtime(
+        "publisher-runtime-connection-preferred-login-required",
+        preferred_client_id="linux-client",
+    )
+    try:
+        runtime.connection_state.heartbeat(
+            client_id="linux-client",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://10.0.0.150:8899",
+            platforms=[
+                {
+                    "platform": "qidian",
+                    "connected": False,
+                    "cookie_signal": False,
+                    "last_error": "login-required",
+                }
+            ],
+        )
+        runtime.connection_state.heartbeat(
+            client_id="laptop-client",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://10.0.0.35:8899",
+            platforms=[
+                {
+                    "platform": "qidian",
+                    "connected": True,
+                    "cookie_signal": True,
+                    "page_authenticated": True,
+                    "last_error": "",
+                }
+            ],
+        )
+
+        items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
+        assert items["qidian"]["connected"] is True
+        assert items["qidian"]["extension_client_id"] == "laptop-client"
+        assert items["qidian"]["last_error"] == ""
+        assert items["qidian"]["preferred_client_state"]["client_id"] == "linux-client"
+        assert items["qidian"]["preferred_client_state"]["connected"] is False
+        assert items["qidian"]["preferred_client_state"]["recent"] is True
+        assert items["qidian"]["latest_client_state"]["client_id"] == "laptop-client"
+        assert items["qidian"]["latest_client_state"]["connected"] is True
+        assert items["qidian"]["fallback_available"] is True
+        assert items["qidian"]["fallback_client_id"] == "laptop-client"
     finally:
         engine.dispose()
 

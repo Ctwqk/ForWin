@@ -5828,9 +5828,9 @@ class Phase05RegressionTests(unittest.TestCase):
                 session.commit()
 
             items = {item["platform_id"]: item for item in manager.list_platforms()}
-            self.assertFalse(items["fanqie"]["connected"])
+            self.assertTrue(items["fanqie"]["connected"])
             self.assertTrue(items["fanqie"]["extension_online"])
-            self.assertEqual(items["fanqie"]["extension_client_id"], "linux-client")
+            self.assertEqual(items["fanqie"]["extension_client_id"], "laptop-client")
             self.assertTrue(items["fanqie"]["fallback_available"])
             self.assertEqual(items["fanqie"]["fallback_client_id"], "laptop-client")
             self.assertTrue(items["fanqie"]["latest_client_state"]["connected"])

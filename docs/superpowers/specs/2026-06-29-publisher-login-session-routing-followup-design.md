@@ -203,13 +203,17 @@ Automated tests should fail before the implementation and pass after it:
 - Regression test: a Qidian tab with a loginOut iframe cannot cause
   `run-upload` to return the iframe login failure when the top frame is the
   target.
+- Connection-state test: when strict preferred-client mode is disabled, a
+  recently connected latest client can make the platform connected even if the
+  configured preferred client is stale or currently reports `login-required`.
 
 Manual/production verification:
 
 - Deploy the updated publisher browser image.
 - Open `/publishers` in the production publisher browser.
 - Confirm `/api/publishers/platforms` shows Fanqie and Qidian connected through
-  the same preferred client after user scan.
+  the preferred client, or through a recent fallback client when strict
+  preferred-client mode is disabled.
 - Trigger a fresh Fanqie QR after expiration and confirm Discord receives a new
   QR message from a new capture attempt.
 - Run safe upload probes with `publish=false` and `create_if_missing=false`

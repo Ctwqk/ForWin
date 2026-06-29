@@ -19,6 +19,7 @@ test('platform agent uses browser-like scan tab activation and delayed QR wait',
   assert.match(source, /waitForLoginQrCandidate/);
   assert.match(source, /timeoutMs\s*=\s*8000/);
   assert.match(source, /li,\[role="button"\],\[tab\]/);
+  assert.match(source, /text\s*===\s*label[\s\S]*text\.includes\(label\)/);
   assert.match(source, /connect\/qrcode/);
 });
 

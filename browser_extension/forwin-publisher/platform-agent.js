@@ -956,11 +956,16 @@
     const candidates = Array.from(document.querySelectorAll('button,a,span,div,li,[role="button"],[tab]'));
     const preferredLabels = ['扫码登录', '微信登录'];
     const scanTab = preferredLabels
-      .map((label) => candidates.find((element) => {
-        const text = normalizeText(element.innerText || element.textContent || '');
-        return isVisibleSmallClickTarget(element)
-          && (text === label || (text.includes(label) && text.length <= 12));
-      }))
+      .map((label) => (
+        candidates.find((element) => {
+          const text = normalizeText(element.innerText || element.textContent || '');
+          return isVisibleSmallClickTarget(element) && text === label;
+        })
+        || candidates.find((element) => {
+          const text = normalizeText(element.innerText || element.textContent || '');
+          return isVisibleSmallClickTarget(element) && text.includes(label) && text.length <= 12;
+        })
+      ))
       .find(Boolean);
     if (!scanTab) {
       return false;

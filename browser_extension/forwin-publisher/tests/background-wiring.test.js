@@ -116,3 +116,13 @@ test('background prefers qidian top-level dashboard evidence over loginOut child
   assert.match(source, /isQidianLoginOutUrl[\s\S]*inspection\.currentUrl/);
   assert.match(source, /authenticated:\s*true[\s\S]*loginVisible:\s*false/);
 });
+
+test('background keeps qidian top-level writing pages authenticated over child outline inspections', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /function\s+isQidianAuthenticatedWritingTab\s*\(/);
+  assert.match(source, /\/portal\/booknovels\/chaptertmp\//);
+  assert.match(source, /candidate\?\.title[\s\S]*写作/);
+  assert.match(source, /isQidianAuthenticatedWritingTab[\s\S]*inspection\.currentUrl/);
+  assert.match(source, /summary:\s*'qidian top-level writing evidence'/);
+});

@@ -1215,6 +1215,21 @@ function isQidianAuthenticatedTopLevelTab(candidate, url = '') {
     );
 }
 
+function isQidianAuthenticatedWritingTab(candidate, url = '') {
+  const value = String(url || candidate?.url || '');
+  const title = String(candidate?.title || '');
+  return value.includes('write.qq.com')
+    && (
+      value.includes('/chaptertmp/')
+      || value.includes('/portal/booknovels/chaptertmp/')
+    )
+    && (
+      title.includes('写作')
+      || title.includes('章节')
+      || title.includes('作品管理')
+    );
+}
+
 function normalizePlatformInspection(platformId, candidate, candidateUrl, inspection) {
   if (
     platformId === 'qidian'
@@ -1229,6 +1244,21 @@ function normalizePlatformInspection(platformId, candidate, candidateUrl, inspec
       authenticated: true,
       loginVisible: false,
       summary: 'qidian top-level dashboard evidence',
+    };
+  }
+  if (
+    platformId === 'qidian'
+    && inspection?.ok
+    && isQidianAuthenticatedWritingTab(candidate, candidateUrl)
+    && !isPlatformLoginUrl(platformId, inspection.currentUrl || inspection.url)
+  ) {
+    return {
+      ...inspection,
+      currentUrl: candidateUrl,
+      platform: platformId,
+      authenticated: true,
+      loginVisible: false,
+      summary: 'qidian top-level writing evidence',
     };
   }
   return inspection;

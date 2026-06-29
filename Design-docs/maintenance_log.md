@@ -9,6 +9,28 @@
 - 如果改动尚未部署到 `8899`，必须明确写“未部署原因”和“切换条件”。
 - 旧的专项日志可保留，但关键结论需要汇总到这里。
 
+## 2026-06-29
+
+### Publisher Browser 登录状态恢复与二维码推送修复
+
+修复发布浏览器在扫码后仍持续推送登录二维码、以及没有平台 tab 时起点/番茄不能从已恢复 Cookie 回到 connected 的问题。
+
+关键变化：
+
+- 扩展心跳在检测到强登录 Cookie 但没有可检查的平台页时，会后台打开或复用平台 dashboard 作为 probe，并用页面认证结果上报 connected。
+- 保留原安全边界：只有 Cookie 但没有页面验证时仍不会直接显示已登录；如果 probe 看到登录页，继续按登录页证据处理。
+- 起点二维码抽取、二维码通知节流和服务 worker 重启后的节流持久化保持有效，避免重复向 Discord 推送旧二维码。
+- 扩展版本更新到 `0.1.47`，background import cache-bust 同步更新。
+
+验证：
+
+- `cd browser_extension/forwin-publisher && node --test --test-name-pattern 'dashboard probe|probes dashboard|dashboard probe tab' tests/controller.test.js tests/background-wiring.test.js`
+- `cd browser_extension/forwin-publisher && node --test tests/controller.test.js tests/background-wiring.test.js tests/platforms.test.js`
+- `cd browser_extension/forwin-publisher && npm test`
+- `cd browser_extension/forwin-publisher && npm run build:chromium`
+
+部署状态：待部署到 `8899`。切换条件：构建 `publisher-browser-runtime` 镜像并滚动更新 `forwin-publisher-browser-swarm` 后，确认两个平台 heartbeat 重新显示 connected。
+
 ## 2026-05-06
 
 ### Design Cleanup Architecture Index

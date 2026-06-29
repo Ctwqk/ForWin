@@ -152,6 +152,16 @@ test('background uses qidian top-level dashboard evidence when the agent is not 
   assert.match(source, /summary:\s*'qidian top-level dashboard evidence'/);
 });
 
+test('background opens a dashboard probe tab for cookie-backed heartbeat verification', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /async\s+function\s+ensurePlatformProbeInspection\s*\(\s*platformId\s*\)/);
+  assert.match(source, /getPlatformAdapter\(platformId\)/);
+  assert.match(source, /extensionApi\.tabs,\s*'create',\s*\{\s*url:\s*adapter\.dashboardUrl,\s*active:\s*false/s);
+  assert.match(source, /inspectPlatformState\(platformId\)/);
+  assert.match(source, /ensurePlatformProbeInspection,/);
+});
+
 test('background keeps qidian top-level writing pages authenticated over child outline inspections', async () => {
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 

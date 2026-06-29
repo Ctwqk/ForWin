@@ -806,14 +806,38 @@ export class PublisherExtensionController {
     await this.dispatchPendingCommentSyncJobs();
   }
 
-  async inspectPlatformState(platformId) {
+  async inspectPlatformState(platformId, context = {}) {
+    let inspection = null;
     if (typeof this.deps.inspectPlatformState !== 'function') {
-      return null;
+      inspection = null;
+    } else {
+      try {
+        inspection = await this.deps.inspectPlatformState(platformId);
+      } catch (_error) {
+        inspection = null;
+      }
     }
+    if (
+      inspection
+      || !context?.probeCookieSignal
+      || typeof this.deps.ensurePlatformProbeInspection !== 'function'
+    ) {
+      return inspection;
+    }
+
+    const cookies = Array.isArray(context.cookies) ? context.cookies : [];
+    const savedState = context.savedState && typeof context.savedState === 'object'
+      ? context.savedState
+      : {};
+    const provisionalState = buildHeartbeatState(platformId, cookies, savedState, inspection);
+    if (!provisionalState.raw_state?.cookie_signal) {
+      return inspection;
+    }
+
     try {
-      return await this.deps.inspectPlatformState(platformId);
+      return await this.deps.ensurePlatformProbeInspection(platformId) || inspection;
     } catch (_error) {
-      return null;
+      return inspection;
     }
   }
 
@@ -822,7 +846,11 @@ export class PublisherExtensionController {
     for (const platformId of Object.keys(PLATFORM_ADAPTERS)) {
       const savedState = await this.deps.getPlatformState(platformId);
       const cookies = await this.deps.getCookies(platformId);
-      const inspection = await this.inspectPlatformState(platformId);
+      const inspection = await this.inspectPlatformState(platformId, {
+        cookies,
+        savedState,
+        probeCookieSignal: true,
+      });
       const heartbeatState = buildHeartbeatState(platformId, cookies, savedState, inspection);
       const loggedOutByPage = heartbeatState.raw_state?.page_login_visible
         && !heartbeatState.raw_state?.page_authenticated;
@@ -844,7 +872,11 @@ export class PublisherExtensionController {
     for (const platformId of Object.keys(PLATFORM_ADAPTERS)) {
       const cookies = await this.deps.getCookies(platformId);
       const savedState = await this.deps.getPlatformState(platformId);
-      const inspection = await this.inspectPlatformState(platformId);
+      const inspection = await this.inspectPlatformState(platformId, {
+        cookies,
+        savedState,
+        probeCookieSignal: true,
+      });
       const heartbeatState = buildHeartbeatState(platformId, cookies, savedState, inspection);
       await this.recordHeartbeatPlatformState({
         platform: platformId,
@@ -886,7 +918,11 @@ export class PublisherExtensionController {
     for (const platformId of Object.keys(PLATFORM_ADAPTERS)) {
       const savedState = await this.deps.getPlatformState(platformId);
       const cookies = await this.deps.getCookies(platformId);
-      const inspection = await this.inspectPlatformState(platformId);
+      const inspection = await this.inspectPlatformState(platformId, {
+        cookies,
+        savedState,
+        probeCookieSignal: true,
+      });
       const heartbeatState = buildHeartbeatState(platformId, cookies, savedState, inspection);
       const loggedOutByPage = heartbeatState.raw_state?.page_login_visible
         && !heartbeatState.raw_state?.page_authenticated;

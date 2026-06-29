@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.46';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.47';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js';
@@ -1882,6 +1882,44 @@ async function inspectPlatformState(platformId) {
   return null;
 }
 
+async function ensurePlatformProbeInspection(platformId) {
+  const adapter = getPlatformAdapter(platformId);
+  const existingTabs = await queryTabs({}) || [];
+  const hasPlatformTab = existingTabs.some((tab) => (
+    isPlatformStatusUrl(platformId, String(tab?.url || ''))
+  ));
+  let probeTabId = 0;
+  if (!hasPlatformTab) {
+    const tab = await wrapCall(extensionApi.tabs, 'create', {
+      url: adapter.dashboardUrl,
+      active: false,
+    });
+    probeTabId = Number(tab?.id || 0);
+    await updateBackgroundStatus({
+      lastPlatformProbeAt: new Date().toISOString(),
+      lastPlatformProbePlatform: platformId,
+      lastPlatformProbeTabId: probeTabId,
+      lastPlatformProbeUrl: safeStatusUrl(adapter.dashboardUrl),
+    });
+  }
+
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    const inspection = await inspectPlatformState(platformId);
+    if (inspection?.ok) {
+      return inspection;
+    }
+    if (probeTabId) {
+      const tab = await getTab(probeTabId);
+      if (!tab) {
+        probeTabId = 0;
+      }
+    }
+    await sleep(500);
+  }
+  return await inspectPlatformState(platformId);
+}
+
 async function verifyFanqieDraftOnPage(tabId, chapterTitle) {
   let ready = tabReadyRegistry.isReady(tabId, READY_CHANNELS.PLATFORM_AGENT)
     || await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 5000);
@@ -2012,6 +2050,7 @@ const controller = new PublisherExtensionController({
   runCommentSyncCommand,
   inspectLoginState,
   inspectPlatformState,
+  ensurePlatformProbeInspection,
   captureLoginQrImage,
   recordLoginQrNotification: appendLoginQrNotificationStatus,
   getLoginQrLastNotifiedAtMs,

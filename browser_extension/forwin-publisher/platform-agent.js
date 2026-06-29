@@ -797,9 +797,10 @@
     }
     element.dispatchEvent(new MouseEvent('mouseup', { ...commonInit, buttons: 0 }));
     element.dispatchEvent(new MouseEvent('click', { ...commonInit, buttons: 0, detail: 1 }));
+    element.click?.();
   }
 
-  async function waitForLoginQrCandidate(timeoutMs = 4000) {
+  async function waitForLoginQrCandidate(timeoutMs = 8000) {
     return waitForCondition(() => loginQrCandidates()[0] || null, timeoutMs);
   }
 
@@ -807,7 +808,7 @@
     if (loginQrCandidates()[0]) {
       return true;
     }
-    const candidates = Array.from(document.querySelectorAll('button,a,span,div,[role="button"]'));
+    const candidates = Array.from(document.querySelectorAll('button,a,span,div,li,[role="button"],[tab]'));
     const preferredLabels = ['扫码登录', '微信登录'];
     const scanTab = preferredLabels
       .map((label) => candidates.find((element) => {

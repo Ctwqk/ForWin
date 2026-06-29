@@ -82,10 +82,7 @@ def _review_action_for_engine_decision(decision: Decision) -> str:
 @staticmethod
 def _is_timeout_like(exc: Exception) -> bool:
     message = str(exc).lower()
-    return any(
-        token in message
-        for token in ("timed out", "timeout", "read operation timed out")
-    )
+    return any(token in message for token in ("timed out", "timeout", "read operation timed out"))
 
 @staticmethod
 def _is_transient_llm_like(exc: Exception) -> bool:
@@ -853,7 +850,6 @@ def _prepare_deferred_acceptance_if_needed(
     )
     return [] if result.success else list(result.errors)
 
-
 @staticmethod
 def _band_scope_candidates(
     *,
@@ -1101,5 +1097,4 @@ def _apply_canon_candidate(
             blocked_path=frozen_path,
             block_kind="canon_apply_error",
         )
-
 __all__ = ['CanonQualityGateOutcome', 'CanonApplyOutcome', '_is_timeout_like', '_is_transient_llm_like', '_transient_retry_delay', '_current_model_identity', '_audit_operation_id', '_drain_llm_attempt_events', '_safe_prompt_trace_attempts', '_error_category_from_attempts', '_diagnostic_kind_for_failure', '_record_failure_prompt_trace', '_record_model_fallback_payloads', '_apply_canon_quality_gate', '_run_obligation_form_gate', '_prepare_deferred_acceptance_if_needed', '_band_scope_candidates', '_band_row_by_id', '_latest_draft_and_review_for_chapter', '_apply_canon_candidate', 'evaluate_structural_patch_completion_debt']

@@ -282,7 +282,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
         )
         self.assertEqual({row.target_name for row in rows}, {""})
 
-    def test_comment_analyzer_uses_short_optional_llm_timeout(self) -> None:
+    def test_comment_analyzer_uses_runtime_safe_optional_llm_timeout(self) -> None:
         project = self._create_project()
         comment = self._add_comment(
             work_name=project.title,
@@ -319,7 +319,7 @@ class AudienceFeedbackAlignmentTests(unittest.TestCase):
             chapter_number=3,
         )
 
-        self.assertEqual(llm.kwargs[0]["timeout_seconds"], 8.0)
+        self.assertEqual(llm.kwargs[0]["timeout_seconds"], 20.0)
         self.assertIs(llm.kwargs[0]["retry_on_timeout"], False)
 
     def test_comment_analyzer_accepts_extended_signal_type_schema(self) -> None:

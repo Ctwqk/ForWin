@@ -3820,9 +3820,9 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertIn("逼近失踪信号核心", intents[0].objective)
         self.assertEqual(world.pressure_level, "critical")
         self.assertIn("围堵主角", world.pressure_summary)
-        self.assertEqual(intent_llm.kwargs[0]["timeout_seconds"], 8.0)
+        self.assertEqual(intent_llm.kwargs[0]["timeout_seconds"], 20.0)
         self.assertIs(intent_llm.kwargs[0]["retry_on_timeout"], False)
-        self.assertEqual(world_llm.kwargs[0]["timeout_seconds"], 8.0)
+        self.assertEqual(world_llm.kwargs[0]["timeout_seconds"], 20.0)
         self.assertIs(world_llm.kwargs[0]["retry_on_timeout"], False)
 
     def test_orchestrator_records_phase4_outputs(self) -> None:

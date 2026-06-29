@@ -21,15 +21,80 @@ jobs:
   test-python:
     # Install dependencies and run tests
     docker:
-      - image: cimg/python:3.8-node
+      - image: cimg/python:3.12-node
+      - image: postgres:16-alpine
+        environment:
+          POSTGRES_USER: forwin
+          POSTGRES_PASSWORD: forwin
+          POSTGRES_DB: forwin_test
+      - image: qdrant/qdrant:v1.17.1
+        environment:
+          QDRANT__SERVICE__HTTP_PORT: "6335"
+    environment:
+      FORWIN_DATABASE_URL: postgresql+psycopg://forwin:forwin@127.0.0.1:5432/forwin_test
+      FORWIN_TEST_DATABASE_URL: postgresql+psycopg://forwin:forwin@127.0.0.1:5432/forwin_test
+      FORWIN_QDRANT_URL: http://127.0.0.1:6335
+      FORWIN_CODEX_ENABLED: "false"
+      MINIMAX_API_KEY: ci-test-key
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
     steps:
       - checkout
-      - python/install-packages
       - run:
-          name: Run tests
-          command: pytest --junitxml=junit.xml || ((($? == 5)) && echo 'Did not find any tests to run.')
+          name: Install Python dependencies
+          command: |
+            python -m pip install --upgrade pip
+            python -m pip install -e ".[test]"
+      - run:
+          name: Build World Studio frontend
+          command: |
+            npm --prefix frontend/world-studio ci
+            npm --prefix frontend/world-studio run build
+      - run:
+          name: Install Playwright Chromium
+          command: python -m playwright install --with-deps chromium
+      - run:
+          name: Wait for service dependencies
+          command: |
+            python - <<'PY'
+            import socket
+            import time
+
+            import psycopg
+
+            checks = [
+                ("postgres", "127.0.0.1", 5432),
+                ("qdrant", "127.0.0.1", 6335),
+            ]
+            deadline = time.monotonic() + 60
+            while True:
+                pending = []
+                for name, host, port in checks:
+                    try:
+                        with socket.create_connection((host, port), timeout=1):
+                            pass
+                    except OSError as exc:
+                        pending.append(f"{name}: {exc}")
+                if not pending:
+                    try:
+                        with psycopg.connect(
+                            "postgresql://forwin:forwin@127.0.0.1:5432/forwin_test",
+                            connect_timeout=2,
+                        ):
+                            pass
+                        break
+                    except psycopg.Error as exc:
+                        pending.append(f"postgres auth: {exc}")
+                if time.monotonic() > deadline:
+                    raise SystemExit("Timed out waiting for services: " + "; ".join(pending))
+                time.sleep(1)
+            PY
+      - run:
+          name: Run Python tests
+          command: |
+            mkdir -p test-results/pytest
+            pytest --junitxml=test-results/pytest/junit.xml || ((($? == 5)) && echo 'Did not find any tests to run.')
       - store_test_results:
-          path: junit.xml
+          path: test-results
   deploy:
     # This is an example deploy job, not actually used by the workflow
     docker:

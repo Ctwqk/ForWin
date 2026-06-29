@@ -235,6 +235,8 @@ python -m pytest -q
 Browser tests require Playwright browsers:
 
 ```bash
+npm --prefix frontend/world-studio ci
+npm --prefix frontend/world-studio run build
 python -m playwright install chromium
 python -m pytest tests/browser -q
 ```

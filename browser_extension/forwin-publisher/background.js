@@ -1193,9 +1193,45 @@ function isPlatformLoginUrl(platformId, url = '') {
   }
   if (platformId === 'qidian') {
     return (value.includes('write.qq.com') && value.includes('/portal/login'))
-      || (value.includes('pcwrite.yuewen.com') && value.includes('/authorh5/loginOut'));
+      || isQidianLoginOutUrl(value);
   }
   return false;
+}
+
+function isQidianLoginOutUrl(url = '') {
+  const value = String(url || '');
+  return value.includes('pcwrite.yuewen.com') && value.includes('/authorh5/loginOut');
+}
+
+function isQidianAuthenticatedTopLevelTab(candidate, url = '') {
+  const value = String(url || candidate?.url || '');
+  const title = String(candidate?.title || '');
+  return value.includes('write.qq.com')
+    && (value.includes('/portal/dashboard') || value.includes('/portal/home'))
+    && (
+      title.includes('工作台')
+      || title.includes('作家专区')
+      || title.includes('作品管理')
+    );
+}
+
+function normalizePlatformInspection(platformId, candidate, candidateUrl, inspection) {
+  if (
+    platformId === 'qidian'
+    && inspection?.ok
+    && isQidianLoginOutUrl(inspection.currentUrl || inspection.url)
+    && isQidianAuthenticatedTopLevelTab(candidate, candidateUrl)
+  ) {
+    return {
+      ...inspection,
+      currentUrl: candidateUrl,
+      platform: platformId,
+      authenticated: true,
+      loginVisible: false,
+      summary: 'qidian top-level dashboard evidence',
+    };
+  }
+  return inspection;
 }
 
 function rankPlatformInspection(item) {
@@ -1499,7 +1535,12 @@ async function inspectPlatformState(platformId) {
     if (ready && candidate?.status === 'complete') {
       tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
     }
-    const inspection = ready ? await inspectLoginState(tabId) : null;
+    const inspection = normalizePlatformInspection(
+      platformId,
+      candidate,
+      candidateUrl,
+      ready ? await inspectLoginState(tabId) : null,
+    );
     if (inspection?.ok) {
       inspectedCandidates.push({
         tabId,

@@ -107,3 +107,12 @@ test('background treats qidian authorh5 loginOut as a known login url', async ()
   assert.match(source, /authorh5\/loginOut/);
   assert.match(source, /isPlatformLoginUrl[\s\S]*authorh5\/loginOut/);
 });
+
+test('background prefers qidian top-level dashboard evidence over loginOut child inspections', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /function\s+isQidianAuthenticatedTopLevelTab\s*\(/);
+  assert.match(source, /candidate\?\.title[\s\S]*工作台[\s\S]*作家专区/);
+  assert.match(source, /isQidianLoginOutUrl[\s\S]*inspection\.currentUrl/);
+  assert.match(source, /authenticated:\s*true[\s\S]*loginVisible:\s*false/);
+});

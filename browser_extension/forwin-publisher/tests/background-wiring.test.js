@@ -75,3 +75,35 @@ test('background keeps retrying direct QR extraction before screenshot fallback'
   assert.match(source, /Date\.now\(\)\s*<\s*directExtractionDeadline/);
   assert.match(source, /captureLoginQrImage[\s\S]*extractLoginQrFromTopFrame[\s\S]*extractLoginQrFromFrames[\s\S]*await\s+sleep\(1200\)[\s\S]*captureTabScreenshotWithDebugger/);
 });
+
+test('background routes platform business commands to the top frame', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /const\s+TOP_FRAME_MESSAGE_OPTIONS\s*=\s*\{\s*frameId:\s*0\s*\}/);
+  assert.match(source, /sendPlatformAgentMessage[\s\S]*TOP_FRAME_MESSAGE_OPTIONS/);
+  assert.match(source, /runUploadCommand[\s\S]*sendPlatformAgentMessage\([\s\S]*'run-upload'[\s\S]*TOP_FRAME_MESSAGE_OPTIONS/);
+  assert.match(source, /runCommentSyncCommand[\s\S]*sendPlatformAgentMessage\([\s\S]*'run-comment-sync'[\s\S]*TOP_FRAME_MESSAGE_OPTIONS/);
+});
+
+test('background inspects publisher login state in the top frame', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /probePlatformAgentResponsive[\s\S]*'inspect-login-state'[\s\S]*TOP_FRAME_MESSAGE_OPTIONS/);
+  assert.match(source, /inspectLoginState[\s\S]*'inspect-login-state'[\s\S]*TOP_FRAME_MESSAGE_OPTIONS/);
+});
+
+test('background ranks authenticated platform inspections before login tabs', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /function\s+rankPlatformInspection\s*\(/);
+  assert.match(source, /authenticated[\s\S]*return\s+100/);
+  assert.match(source, /loginVisible[\s\S]*return\s+10/);
+  assert.match(source, /inspectedCandidates\.sort/);
+});
+
+test('background treats qidian authorh5 loginOut as a known login url', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /authorh5\/loginOut/);
+  assert.match(source, /isPlatformLoginUrl[\s\S]*authorh5\/loginOut/);
+});

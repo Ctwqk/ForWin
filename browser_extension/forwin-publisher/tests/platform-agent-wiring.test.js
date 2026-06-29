@@ -53,3 +53,11 @@ test('platform agent can pass required login agreement gates before QR activatio
   assert.match(source, /agree6/);
   assert.match(source, /wxLoginButton/);
 });
+
+test('platform agent does not authenticate qidian loginOut authorh5 pages', async () => {
+  const source = await readFile(new URL('../platform-agent.js', import.meta.url), 'utf8');
+
+  assert.match(source, /function\s+isQidianLoginOutUrl\s*\(/);
+  assert.match(source, /authorh5\/loginOut/);
+  assert.match(source, /authenticated\s*=\s*!qidianLoginOut/);
+});

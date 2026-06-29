@@ -128,6 +128,11 @@
     return keywords.some((keyword) => text.includes(keyword));
   }
 
+  function isQidianLoginOutUrl(url) {
+    const value = String(url || '');
+    return value.includes('pcwrite.yuewen.com') && value.includes('/authorh5/loginOut');
+  }
+
   function normalizeText(value) {
     return String(value || '').replace(/\s+/g, ' ').trim();
   }
@@ -554,14 +559,15 @@
     const text = pageText();
 
     if (url.includes('write.qq.com') || url.includes('pcwrite.yuewen.com')) {
-      const loginVisible = includesAny(text, [
+      const qidianLoginOut = isQidianLoginOutUrl(url);
+      const loginVisible = qidianLoginOut || includesAny(text, [
         '扫码登录',
         '微信扫码',
         '手机扫码',
         '账号登录',
         '验证码登录',
       ]);
-      const authenticated = (!loginVisible && includesAny(text, [
+      const authenticated = !qidianLoginOut && !loginVisible && includesAny(text, [
         '作品管理',
         '作家专区',
         '章节管理',
@@ -570,7 +576,7 @@
         '数据概览',
         '消息中心',
         '消息通知',
-      ])) || url.includes('/authorh5/');
+      ]);
       return {
         ok: true,
         currentUrl: url,

@@ -24,6 +24,7 @@ const LOGIN_QR_NOTIFICATIONS_KEY = 'forwinPublisherLoginQrNotifications';
 const HEARTBEAT_PLATFORM_STATES_KEY = 'forwinPublisherHeartbeatPlatformStates';
 const HEARTBEAT_ALARM = 'forwinPublisherHeartbeat';
 const LOGIN_QR_DIRECT_EXTRACTION_TIMEOUT_MS = 15000;
+const TOP_FRAME_MESSAGE_OPTIONS = { frameId: 0 };
 const tabReadyRegistry = new TabReadyRegistry();
 
 function randomId() {
@@ -543,7 +544,7 @@ async function probePlatformAgentResponsive(tabId) {
     const response = await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
       channel: PLATFORM_AGENT_CHANNEL,
       action: 'inspect-login-state',
-    });
+    }, TOP_FRAME_MESSAGE_OPTIONS);
     return Boolean(response);
   } catch (_error) {
     return false;
@@ -554,13 +555,19 @@ async function sleep(ms) {
   await new Promise((resolve) => globalThis.setTimeout(resolve, ms));
 }
 
-async function sendPlatformAgentMessage(tabId, action, payload, timeoutMs = 12000) {
+async function sendPlatformAgentMessage(
+  tabId,
+  action,
+  payload,
+  timeoutMs = 12000,
+  options = TOP_FRAME_MESSAGE_OPTIONS,
+) {
   return Promise.race([
     wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
       channel: PLATFORM_AGENT_CHANNEL,
       action,
       payload,
-    }),
+    }, options),
     new Promise((resolve) => {
       globalThis.setTimeout(() => {
         resolve({
@@ -859,6 +866,7 @@ async function runUploadCommand(tabId, payload) {
         'run-upload',
         payload,
         uploadMessageTimeoutMs(payload.platform),
+        TOP_FRAME_MESSAGE_OPTIONS,
       );
       if (response) {
         if (!response.ok && response.errorCode === 'platform-agent-timeout') {
@@ -1051,7 +1059,7 @@ async function runCommentSyncCommand(tabId, payload) {
       errorCode: 'comment-sync-page-not-ready',
     };
   }
-  return sendPlatformAgentMessage(tabId, 'run-comment-sync', payload, 45000);
+  return sendPlatformAgentMessage(tabId, 'run-comment-sync', payload, 45000, TOP_FRAME_MESSAGE_OPTIONS);
 }
 
 async function runCoverUploadCommand(tabId, payload) {
@@ -1068,7 +1076,13 @@ async function runCoverUploadCommand(tabId, payload) {
       errorCode: 'cover-upload-page-not-ready',
     };
   }
-  const prepare = await sendPlatformAgentMessage(tabId, 'prepare-cover-upload', payload, 20000);
+  const prepare = await sendPlatformAgentMessage(
+    tabId,
+    'prepare-cover-upload',
+    payload,
+    20000,
+    TOP_FRAME_MESSAGE_OPTIONS,
+  );
   if (!prepare?.ok) {
     return prepare || {
       ok: false,
@@ -1099,6 +1113,7 @@ async function runCoverUploadCommand(tabId, payload) {
       fileInputSelector: prepare.fileInputSelector || 'input[type="file"]',
     },
     45000,
+    TOP_FRAME_MESSAGE_OPTIONS,
   );
 }
 
@@ -1116,7 +1131,7 @@ async function runAuditSyncCommand(tabId, payload) {
       errorCode: 'audit-sync-page-not-ready',
     };
   }
-  return sendPlatformAgentMessage(tabId, 'run-audit-sync', payload, 45000);
+  return sendPlatformAgentMessage(tabId, 'run-audit-sync', payload, 45000, TOP_FRAME_MESSAGE_OPTIONS);
 }
 
 function isUploadEditorUrl(platformId, url = '') {
@@ -1177,9 +1192,37 @@ function isPlatformLoginUrl(platformId, url = '') {
     return value.includes('fanqienovel.com') && value.includes('/main/writer/login');
   }
   if (platformId === 'qidian') {
-    return value.includes('write.qq.com') && value.includes('/portal/login');
+    return (value.includes('write.qq.com') && value.includes('/portal/login'))
+      || (value.includes('pcwrite.yuewen.com') && value.includes('/authorh5/loginOut'));
   }
   return false;
+}
+
+function rankPlatformInspection(item) {
+  const inspection = item?.inspection || item || {};
+  if (inspection.authenticated) {
+    return 100;
+  }
+  if (inspection.ok && !inspection.loginVisible) {
+    return 50;
+  }
+  if (inspection.loginVisible) {
+    return 10;
+  }
+  return 0;
+}
+
+function rankPlatformUrl(platformId, url = '') {
+  if (isUploadEditorUrl(platformId, url)) {
+    return 30;
+  }
+  if (isPlatformWorkflowUrl(platformId, url)) {
+    return 20;
+  }
+  if (isPlatformLoginUrl(platformId, url)) {
+    return 0;
+  }
+  return 5;
 }
 
 async function waitForUploadEditorTab(platformId, currentTabId, timeoutMs = 8000) {
@@ -1315,7 +1358,7 @@ async function inspectLoginState(tabId) {
       const response = await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
         channel: PLATFORM_AGENT_CHANNEL,
         action: 'inspect-login-state',
-      });
+      }, TOP_FRAME_MESSAGE_OPTIONS);
       if (response) {
         return response;
       }
@@ -1432,6 +1475,7 @@ async function captureLoginQrImage(tabId) {
 
 async function inspectPlatformState(platformId) {
   const tabs = await queryTabs({}) || [];
+  const inspectedCandidates = [];
   const candidates = tabs
     .filter((tab) => isPlatformStatusUrl(platformId, String(tab?.url || '')))
     .sort((left, right) => {
@@ -1457,19 +1501,50 @@ async function inspectPlatformState(platformId) {
     }
     const inspection = ready ? await inspectLoginState(tabId) : null;
     if (inspection?.ok) {
-      return { ...inspection, tabId };
+      inspectedCandidates.push({
+        tabId,
+        active: Boolean(candidate?.active),
+        url: String(inspection.currentUrl || candidateUrl),
+        inspection: { ...inspection, tabId },
+      });
+      continue;
     }
     if (isPlatformLoginUrl(platformId, candidateUrl)) {
-      return {
-        ok: true,
+      inspectedCandidates.push({
         tabId,
-        currentUrl: candidateUrl,
-        platform: platformId,
-        authenticated: false,
-        loginVisible: true,
-        summary: 'known login url',
-      };
+        active: Boolean(candidate?.active),
+        url: candidateUrl,
+        inspection: {
+          ok: true,
+          tabId,
+          currentUrl: candidateUrl,
+          platform: platformId,
+          authenticated: false,
+          loginVisible: true,
+          summary: 'known login url',
+        },
+      });
     }
+  }
+  inspectedCandidates.sort((left, right) => {
+    const rankDelta = rankPlatformInspection(right) - rankPlatformInspection(left);
+    if (rankDelta) {
+      return rankDelta;
+    }
+    const urlDelta = rankPlatformUrl(platformId, right.url) - rankPlatformUrl(platformId, left.url);
+    if (urlDelta) {
+      return urlDelta;
+    }
+    if (left.active && !right.active) {
+      return -1;
+    }
+    if (right.active && !left.active) {
+      return 1;
+    }
+    return (right.tabId || 0) - (left.tabId || 0);
+  });
+  if (inspectedCandidates.length) {
+    return inspectedCandidates[0].inspection;
   }
   return null;
 }

@@ -7,6 +7,12 @@ import {
 } from './platforms.js';
 import { uploadExecutionTimeoutMs } from './upload-timeouts.js?v=0.1.23';
 
+const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 60_000;
+
+function defaultNowMs() {
+  return Date.now();
+}
+
 function hasRecoverableQidianDraftUrl(platformId, url) {
   if (String(platformId || '').trim() !== 'qidian') {
     return false;
@@ -31,7 +37,7 @@ export class PublisherExtensionController {
     this.commentDispatchInFlight = null;
     this.executionTasks = new Map();
     this.executionTabToTask = new Map();
-    this.heartbeatLoginQrNotificationKeys = new Set();
+    this.heartbeatLoginQrNotificationSessions = new Map();
   }
 
   async bootstrap() {
@@ -1052,10 +1058,16 @@ export class PublisherExtensionController {
   }
 
   async maybeNotifyLoginQr(session, inspection) {
+    const nowMs = typeof this.deps.nowMs === 'function' ? Number(this.deps.nowMs()) : defaultNowMs();
+    const lastNotifiedAtMs = Number(session.loginQrLastNotifiedAtMs || 0);
+    if (session.loginQrNotificationInFlight) {
+      return { skipped: true, reason: 'in-flight' };
+    }
+    if (lastNotifiedAtMs > 0 && nowMs - lastNotifiedAtMs < LOGIN_QR_NOTIFICATION_THROTTLE_MS) {
+      return { skipped: true, reason: 'throttled' };
+    }
     if (
-      session.loginQrNotificationAttempted
-      || session.loginQrNotificationInFlight
-      || !inspection?.loginVisible
+      !inspection?.loginVisible
       || typeof this.deps.captureLoginQrImage !== 'function'
       || typeof this.deps.backend?.notifyLoginQr !== 'function'
     ) {
@@ -1113,7 +1125,6 @@ export class PublisherExtensionController {
         });
         return { skipped: true };
       }
-      session.loginQrNotificationAttempted = true;
       await this.recordLoginQrNotificationEvent({
         platform: session.platformId,
         tab_id: session.popupTabId,
@@ -1130,6 +1141,7 @@ export class PublisherExtensionController {
         source: captureSource,
         captured_at: new Date().toISOString(),
       });
+      session.loginQrLastNotifiedAtMs = nowMs;
       await this.recordLoginQrNotificationEvent({
         platform: session.platformId,
         tab_id: session.popupTabId,
@@ -1184,9 +1196,9 @@ export class PublisherExtensionController {
 
   clearHeartbeatLoginQrNotifications(platformId) {
     const prefix = `${platformId}:`;
-    for (const key of Array.from(this.heartbeatLoginQrNotificationKeys)) {
+    for (const key of Array.from(this.heartbeatLoginQrNotificationSessions.keys())) {
       if (key.startsWith(prefix)) {
-        this.heartbeatLoginQrNotificationKeys.delete(key);
+        this.heartbeatLoginQrNotificationSessions.delete(key);
       }
     }
   }
@@ -1213,18 +1225,19 @@ export class PublisherExtensionController {
         loginVisible: true,
       });
     }
-    const key = `${platformId}:${tabId}:${currentUrl}`;
-    if (this.heartbeatLoginQrNotificationKeys.has(key)) {
-      return { skipped: true };
-    }
-    this.heartbeatLoginQrNotificationKeys.add(key);
-    const result = await this.maybeNotifyLoginQr(
-      {
+    const key = `${platformId}:${tabId}`;
+    let pseudoSession = this.heartbeatLoginQrNotificationSessions.get(key);
+    if (!pseudoSession) {
+      pseudoSession = {
         platformId,
         popupTabId: tabId,
         lastUrl: currentUrl,
-        loginQrNotificationAttempted: false,
-      },
+      };
+      this.heartbeatLoginQrNotificationSessions.set(key, pseudoSession);
+    }
+    pseudoSession.lastUrl = currentUrl;
+    const result = await this.maybeNotifyLoginQr(
+      pseudoSession,
       {
         ...(inspection || {}),
         currentUrl,
@@ -1232,8 +1245,12 @@ export class PublisherExtensionController {
         loginVisible: true,
       },
     );
-    if (!result || result.skipped || result.ok === false) {
-      this.heartbeatLoginQrNotificationKeys.delete(key);
+    if (
+      !result
+      || result.ok === false
+      || (result.skipped && result.reason !== 'throttled' && result.reason !== 'in-flight')
+    ) {
+      this.heartbeatLoginQrNotificationSessions.delete(key);
     }
     return result;
   }

@@ -319,6 +319,42 @@ test('controller suppresses concurrent login QR sends for the same session', asy
   assert.equal(loginQrNotifications.length, 1);
 });
 
+test('controller sends a fresh login QR again after the throttle window', async () => {
+  let captureCalls = 0;
+  let nowMs = 1_000_000;
+  const { controller, loginQrNotifications } = makeController({
+    nowMs: () => nowMs,
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      return {
+        ok: true,
+        imageDataUrl: `data:image/png;base64,cXI${captureCalls}=`,
+        source: `image-${captureCalls}`,
+      };
+    },
+  });
+  const session = {
+    platformId: 'fanqie',
+    popupTabId: 42,
+    lastUrl: 'https://fanqienovel.com/main/writer/login',
+  };
+  const inspection = {
+    currentUrl: 'https://fanqienovel.com/main/writer/login',
+    authenticated: false,
+    loginVisible: true,
+  };
+
+  await controller.maybeNotifyLoginQr(session, inspection);
+  await controller.maybeNotifyLoginQr(session, inspection);
+  nowMs += 60_001;
+  await controller.maybeNotifyLoginQr(session, inspection);
+
+  assert.equal(captureCalls, 2);
+  assert.equal(loginQrNotifications.length, 2);
+  assert.equal(loginQrNotifications[0].image_data_url, 'data:image/png;base64,cXI1=');
+  assert.equal(loginQrNotifications[1].image_data_url, 'data:image/png;base64,cXI2=');
+});
+
 test('controller ignores login QR notification failures while login remains visible', async () => {
   const { controller, events } = makeController({
     inspectLoginState: async () => ({
@@ -1327,6 +1363,88 @@ test('controller heartbeat suppresses concurrent login QR sends for the same ins
 
   assert.equal(captureCalls, 1);
   assert.equal(loginQrNotifications.length, 1);
+});
+
+test('controller heartbeat sends a fresh login QR after throttle for unchanged login URL', async () => {
+  let nowMs = 2_000_000;
+  let captureCalls = 0;
+  const { controller, loginQrNotifications } = makeController({
+    nowMs: () => nowMs,
+    inspectPlatformState: async (platformId) => (
+      platformId === 'fanqie'
+        ? {
+          ok: true,
+          tabId: 321,
+          currentUrl: 'https://fanqienovel.com/main/writer/login',
+          platform: 'fanqie',
+          authenticated: false,
+          loginVisible: true,
+        }
+        : null
+    ),
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      return {
+        ok: true,
+        imageDataUrl: `data:image/png;base64,aHI${captureCalls}=`,
+        source: `heartbeat-${captureCalls}`,
+      };
+    },
+    getPlatformState: async () => ({}),
+    getCookies: async () => [],
+  });
+
+  await controller.sendHeartbeat();
+  await controller.sendHeartbeat();
+  nowMs += 60_001;
+  await controller.sendHeartbeat();
+
+  assert.equal(captureCalls, 2);
+  assert.equal(loginQrNotifications.length, 2);
+  assert.equal(loginQrNotifications[1].source, 'heartbeat-2');
+});
+
+test('controller heartbeat keeps login QR throttled across repeated skipped heartbeats', async () => {
+  let nowMs = 3_000_000;
+  let captureCalls = 0;
+  const { controller, loginQrNotifications } = makeController({
+    nowMs: () => nowMs,
+    inspectPlatformState: async (platformId) => (
+      platformId === 'fanqie'
+        ? {
+          ok: true,
+          tabId: 654,
+          currentUrl: 'https://fanqienovel.com/main/writer/login',
+          platform: 'fanqie',
+          authenticated: false,
+          loginVisible: true,
+        }
+        : null
+    ),
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      return {
+        ok: true,
+        imageDataUrl: `data:image/png;base64,aHI${captureCalls}=`,
+        source: `heartbeat-throttle-${captureCalls}`,
+      };
+    },
+    getPlatformState: async () => ({}),
+    getCookies: async () => [],
+  });
+
+  await controller.sendHeartbeat();
+  await controller.sendHeartbeat();
+  await controller.sendHeartbeat();
+
+  assert.equal(captureCalls, 1);
+  assert.equal(loginQrNotifications.length, 1);
+
+  nowMs += 60_001;
+  await controller.sendHeartbeat();
+
+  assert.equal(captureCalls, 2);
+  assert.equal(loginQrNotifications.length, 2);
 });
 
 test('controller lets active login sessions own QR notifications for their tabs', async () => {

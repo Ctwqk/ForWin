@@ -817,11 +817,11 @@ export class PublisherExtensionController {
         inspection = null;
       }
     }
-    if (
-      inspection?.ok
-      || !context?.probeCookieSignal
-      || typeof this.deps.ensurePlatformProbeInspection !== 'function'
-    ) {
+    const canProbeCookieSignal = Boolean(
+      context?.probeCookieSignal
+      && typeof this.deps.ensurePlatformProbeInspection === 'function',
+    );
+    if (!canProbeCookieSignal) {
       return inspection;
     }
 
@@ -831,6 +831,13 @@ export class PublisherExtensionController {
       : {};
     const provisionalState = buildHeartbeatState(platformId, cookies, savedState, inspection);
     if (!provisionalState.raw_state?.cookie_signal) {
+      return inspection;
+    }
+    const loggedOutByInspectedLoginPage = Boolean(
+      provisionalState.raw_state?.page_login_visible
+      && !provisionalState.raw_state?.page_authenticated,
+    );
+    if (inspection?.ok && !loggedOutByInspectedLoginPage) {
       return inspection;
     }
 

@@ -1885,11 +1885,12 @@ async function inspectPlatformState(platformId) {
 async function ensurePlatformProbeInspection(platformId) {
   const adapter = getPlatformAdapter(platformId);
   const existingTabs = await queryTabs({}) || [];
-  const hasPlatformTab = existingTabs.some((tab) => (
+  const hasVerificationTab = existingTabs.some((tab) => (
     isPlatformStatusUrl(platformId, String(tab?.url || ''))
+    && !isPlatformLoginUrl(platformId, String(tab?.url || ''))
   ));
   let probeTabId = 0;
-  if (!hasPlatformTab) {
+  if (!hasVerificationTab) {
     const tab = await wrapCall(extensionApi.tabs, 'create', {
       url: adapter.dashboardUrl,
       active: false,

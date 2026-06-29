@@ -1292,6 +1292,78 @@ test('controller heartbeat uses inspected login page to override stale auth cook
   assert.equal(qidian.raw_state.page_login_visible, true);
 });
 
+test('controller heartbeat probes dashboard when login page has strong cookies', async () => {
+  const payloads = [];
+  const probes = [];
+  let captureCalls = 0;
+  const { controller, loginQrNotifications } = makeController({
+    backend: {
+      heartbeat: async (payload) => {
+        payloads.push(payload);
+        return { ok: true };
+      },
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+    },
+    inspectPlatformState: async (platformId) => (
+      platformId === 'qidian'
+        ? {
+          ok: true,
+          tabId: 123,
+          currentUrl: 'https://write.qq.com/portal/login',
+          platform: 'qidian',
+          authenticated: false,
+          loginVisible: true,
+        }
+        : null
+    ),
+    ensurePlatformProbeInspection: async (platformId) => {
+      probes.push(platformId);
+      if (platformId !== 'qidian') {
+        return null;
+      }
+      return {
+        ok: true,
+        tabId: 88,
+        currentUrl: 'https://write.qq.com/portal/dashboard',
+        platform: 'qidian',
+        authenticated: true,
+        loginVisible: false,
+        summary: 'probe dashboard evidence',
+      };
+    },
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      return {
+        ok: true,
+        imageDataUrl: 'data:image/png;base64,cXI=',
+        source: 'image',
+      };
+    },
+    getPlatformState: async () => ({}),
+    getCookies: async (platformId) => (
+      platformId === 'qidian'
+        ? [{ name: 'AppAuthToken' }, { name: 'pubtoken' }]
+        : []
+    ),
+  });
+
+  await controller.sendHeartbeat();
+
+  assert.deepEqual(probes, ['qidian']);
+  assert.equal(captureCalls, 0);
+  assert.equal(loginQrNotifications.length, 0);
+  const qidian = payloads[0].platforms.find((item) => item.platform === 'qidian');
+  assert.equal(qidian.connected, true);
+  assert.equal(qidian.raw_state.cookie_signal, true);
+  assert.equal(qidian.raw_state.page_authenticated, true);
+  assert.equal(qidian.raw_state.current_url, 'https://write.qq.com/portal/dashboard');
+});
+
 test('controller heartbeat sends login QR notification once when inspected login page is visible', async () => {
   const { controller, loginQrNotifications } = makeController({
     inspectPlatformState: async (platformId) => (

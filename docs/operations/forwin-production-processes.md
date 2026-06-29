@@ -49,8 +49,78 @@ Useful checks:
 | MCP health/upstream API connectivity | Confirms `forwin-mcp-swarm` can reach `forwin-app-swarm` |
 | publisher browser heartbeat | Confirms browser automation is logged in and connected |
 
-For two-hour intervention windows, use the read-only monitor from a source
-checkout or deployed copy:
+For recurring two-hour Codex/operator intervention checks, install the
+read-only supervisor on 150 from a source checkout or deployed copy. It checks
+GitHub PRs/issues, publisher upload jobs, MCP generation task state, publisher
+browser login/heartbeat state, and Codex Bridge health. It writes one redacted
+JSON object per run and exits non-zero when follow-up is required.
+
+Manual one-shot run:
+
+```bash
+python scripts/supervise_forwin_interventions.py \
+  --api-base http://10.0.0.126:8899 \
+  --mcp-url http://10.0.0.126:8896/mcp \
+  --github-repo Ctwqk/ForWin \
+  --expect-platform-connected fanqie \
+  --expect-platform-connected qidian \
+  --output-jsonl /home/taiwei/forwin-supervisor/logs/forwin-supervisor.jsonl \
+  --latest-json /home/taiwei/forwin-supervisor/latest.json
+```
+
+The supervisor is intentionally read-only. It must not publish content, bypass
+publisher login, replay cookies, mutate project/task/chapter state, or resolve
+MFA/captcha/risk-control prompts. Login expiry is reported as a blocked item
+for a human operator.
+
+Example user-level systemd service on 150:
+
+```ini
+[Unit]
+Description=ForWin Codex intervention supervisor
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/taiwei/ForWin-source-github
+ExecStart=/home/taiwei/ForWin-source-github/.venv/bin/python scripts/supervise_forwin_interventions.py \
+  --api-base http://10.0.0.126:8899 \
+  --mcp-url http://10.0.0.126:8896/mcp \
+  --github-repo Ctwqk/ForWin \
+  --expect-platform-connected fanqie \
+  --expect-platform-connected qidian \
+  --output-jsonl /home/taiwei/forwin-supervisor/logs/forwin-supervisor.jsonl \
+  --latest-json /home/taiwei/forwin-supervisor/latest.json
+```
+
+Example timer:
+
+```ini
+[Unit]
+Description=Run ForWin Codex intervention supervisor every two hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=2h
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+```
+
+Install and trigger once:
+
+```bash
+mkdir -p ~/.config/systemd/user /home/taiwei/forwin-supervisor/logs
+$EDITOR ~/.config/systemd/user/forwin-codex-supervisor.service
+$EDITOR ~/.config/systemd/user/forwin-codex-supervisor.timer
+systemctl --user daemon-reload
+systemctl --user enable --now forwin-codex-supervisor.timer
+systemctl --user start forwin-codex-supervisor.service
+systemctl --user status forwin-codex-supervisor.service
+```
+
+For focused manual runtime windows, use the read-only runtime monitor:
 
 ```bash
 python scripts/monitor_forwin_runtime.py \

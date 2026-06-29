@@ -2,6 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
+test('background cache-busts the controller import with the manifest version', async () => {
+  const [source, manifestText] = await Promise.all([
+    readFile(new URL('../background.js', import.meta.url), 'utf8'),
+    readFile(new URL('../manifest.json', import.meta.url), 'utf8'),
+  ]);
+  const manifest = JSON.parse(manifestText);
+  const escapedVersion = String(manifest.version).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  assert.match(source, new RegExp(`\\.\\/lib\\/controller\\.js\\?v=${escapedVersion}`));
+});
+
 test('background backend adapter wires login QR notifications', async () => {
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 

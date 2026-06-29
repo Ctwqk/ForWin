@@ -195,8 +195,10 @@ real browser login or browser clicking.
   such as "二维码已失效 / 点击刷新" are intentionally rejected.
 - Publisher login QR reminders are intentionally rate limited. If a login page
   remains visible, the extension may send a fresh QR after the cooldown window,
-  but it must not spam Discord every heartbeat. During incident triage, close
-  the stale login tab to stop reminders before reopening a fresh login page.
+  but it must not spam Discord every heartbeat. The cooldown state is persisted
+  in extension storage so a service worker restart does not reset the throttle.
+  During incident triage, close the stale login tab to stop reminders before
+  reopening a fresh login page.
 - Qidian/WeChat QR capture should prefer direct image extraction from the login
   iframe. The extension uses a scripting fallback for cross-frame QR images and
   rejects full-page screenshots as unsafe login QR payloads.

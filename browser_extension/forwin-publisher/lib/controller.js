@@ -1059,7 +1059,8 @@ export class PublisherExtensionController {
 
   async maybeNotifyLoginQr(session, inspection) {
     const nowMs = typeof this.deps.nowMs === 'function' ? Number(this.deps.nowMs()) : defaultNowMs();
-    const lastNotifiedAtMs = Number(session.loginQrLastNotifiedAtMs || 0);
+    const currentUrl = String(inspection?.currentUrl || session.lastUrl || '');
+    const lastNotifiedAtMs = await this.getLoginQrLastNotifiedAtMs(session, currentUrl);
     if (session.loginQrNotificationInFlight) {
       return { skipped: true, reason: 'in-flight' };
     }
@@ -1086,7 +1087,6 @@ export class PublisherExtensionController {
         });
         return { skipped: true };
       }
-      const currentUrl = String(inspection.currentUrl || session.lastUrl || '');
       await this.recordLoginQrNotificationEvent({
         platform: session.platformId,
         tab_id: session.popupTabId,
@@ -1141,7 +1141,7 @@ export class PublisherExtensionController {
         source: captureSource,
         captured_at: new Date().toISOString(),
       });
-      session.loginQrLastNotifiedAtMs = nowMs;
+      await this.setLoginQrLastNotifiedAtMs(session, currentUrl, nowMs);
       await this.recordLoginQrNotificationEvent({
         platform: session.platformId,
         tab_id: session.popupTabId,
@@ -1177,6 +1177,34 @@ export class PublisherExtensionController {
       });
     } catch (_error) {
       // Diagnostic storage must not block login checks or publisher jobs.
+    }
+  }
+
+  async getLoginQrLastNotifiedAtMs(session, currentUrl) {
+    const memoryValue = Number(session?.loginQrLastNotifiedAtMs || 0);
+    if (typeof this.deps.getLoginQrLastNotifiedAtMs !== 'function') {
+      return memoryValue;
+    }
+    try {
+      const storedValue = Number(
+        await this.deps.getLoginQrLastNotifiedAtMs(session.platformId, currentUrl),
+      );
+      return Math.max(memoryValue, Number.isFinite(storedValue) ? storedValue : 0);
+    } catch (_error) {
+      return memoryValue;
+    }
+  }
+
+  async setLoginQrLastNotifiedAtMs(session, currentUrl, notifiedAtMs) {
+    const value = Number(notifiedAtMs || 0);
+    session.loginQrLastNotifiedAtMs = value;
+    if (typeof this.deps.setLoginQrLastNotifiedAtMs !== 'function') {
+      return;
+    }
+    try {
+      await this.deps.setLoginQrLastNotifiedAtMs(session.platformId, currentUrl, value);
+    } catch (_error) {
+      // Persistent throttle state is best-effort; in-memory throttling still applies.
     }
   }
 

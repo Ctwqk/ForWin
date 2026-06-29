@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.43';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.44';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js';
@@ -21,6 +21,7 @@ const PLATFORM_STATE_KEY = 'forwinPublisherPlatformStates';
 const BACKGROUND_STATUS_KEY = 'forwinPublisherBackgroundStatus';
 const BACKGROUND_ERRORS_KEY = 'forwinPublisherBackgroundErrors';
 const LOGIN_QR_NOTIFICATIONS_KEY = 'forwinPublisherLoginQrNotifications';
+const LOGIN_QR_THROTTLE_KEY = 'forwinPublisherLoginQrThrottle';
 const HEARTBEAT_PLATFORM_STATES_KEY = 'forwinPublisherHeartbeatPlatformStates';
 const HEARTBEAT_ALARM = 'forwinPublisherHeartbeat';
 const LOGIN_QR_DIRECT_EXTRACTION_TIMEOUT_MS = 15000;
@@ -114,6 +115,48 @@ async function appendLoginQrNotificationStatus(event) {
     lastLoginQrNotificationDispatched: entry.dispatched,
     lastLoginQrNotificationError: entry.error,
   });
+}
+
+function loginQrThrottleKey(platformId, currentUrl) {
+  const platform = String(platformId || '').trim();
+  const url = safeStatusUrl(currentUrl);
+  if (!platform || !url) {
+    return '';
+  }
+  return `${platform}:${url}`;
+}
+
+async function getLoginQrLastNotifiedAtMs(platformId, currentUrl) {
+  const key = loginQrThrottleKey(platformId, currentUrl);
+  if (!key) {
+    return 0;
+  }
+  const state = await getStorageValue(LOGIN_QR_THROTTLE_KEY, {});
+  return Number(state?.[key]?.last_notified_at_ms || 0);
+}
+
+async function setLoginQrLastNotifiedAtMs(platformId, currentUrl, notifiedAtMs) {
+  const key = loginQrThrottleKey(platformId, currentUrl);
+  const value = Number(notifiedAtMs || 0);
+  if (!key || !Number.isFinite(value) || value <= 0) {
+    return;
+  }
+  const state = await getStorageValue(LOGIN_QR_THROTTLE_KEY, {});
+  const nextState = {
+    ...(state && typeof state === 'object' ? state : {}),
+    [key]: {
+      platform: String(platformId || '').trim(),
+      current_url: safeStatusUrl(currentUrl),
+      last_notified_at_ms: value,
+      updated_at: new Date().toISOString(),
+    },
+  };
+  const prunedEntries = Object.entries(nextState)
+    .sort((left, right) => (
+      Number(right[1]?.last_notified_at_ms || 0) - Number(left[1]?.last_notified_at_ms || 0)
+    ))
+    .slice(0, 40);
+  await setStorageValue(LOGIN_QR_THROTTLE_KEY, Object.fromEntries(prunedEntries));
 }
 
 async function appendHeartbeatPlatformState(event) {
@@ -1928,6 +1971,8 @@ const controller = new PublisherExtensionController({
   inspectPlatformState,
   captureLoginQrImage,
   recordLoginQrNotification: appendLoginQrNotificationStatus,
+  getLoginQrLastNotifiedAtMs,
+  setLoginQrLastNotifiedAtMs,
   recordHeartbeatPlatformState: appendHeartbeatPlatformState,
   ensureHeartbeatAlarm,
 });

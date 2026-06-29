@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -43,7 +44,7 @@ from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.publisher_runtime.upload_jobs import CodexInterventionHandler
 from forwin.publisher_runtime.platform_catalog import PlatformSpec
 
-LOGIN_QR_NOTIFICATION_THROTTLE_SECONDS = 10 * 60
+LOGIN_QR_NOTIFICATION_THROTTLE_SECONDS = 2 * 60
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -64,6 +65,13 @@ def _login_qr_throttle_url(value: str) -> str:
     if not parsed.scheme or not parsed.netloc:
         return raw[:500]
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))[:500]
+
+
+def _login_qr_image_fingerprint(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class PublisherManager:
@@ -91,7 +99,7 @@ class PublisherManager:
         self.login_qr_notifier = DiscordLoginQrNotifier(
             publisher_login_discord_webhook_url
         )
-        self._login_qr_notification_throttle: dict[tuple[str, str], datetime] = {}
+        self._login_qr_notification_throttle: dict[tuple[str, str], tuple[datetime, str]] = {}
         self.runtime = PublisherRuntimeService(
             session_factory=session_factory,
             extension_api_key=self.extension_api_key,
@@ -140,11 +148,18 @@ class PublisherManager:
         platform_id = str(platform or "").strip()
         throttle_url = _login_qr_throttle_url(current_url)
         throttle_key = (platform_id, throttle_url)
-        last_notified_at = self._login_qr_notification_throttle.get(throttle_key)
-        if (
-            last_notified_at is not None
-            and now - last_notified_at < timedelta(seconds=LOGIN_QR_NOTIFICATION_THROTTLE_SECONDS)
-        ):
+        image_fingerprint = _login_qr_image_fingerprint(image_data_url)
+        last_notification = self._login_qr_notification_throttle.get(throttle_key)
+        if last_notification is not None:
+            last_notified_at, last_image_fingerprint = last_notification
+            same_image = bool(image_fingerprint and image_fingerprint == last_image_fingerprint)
+            recently_notified = now - last_notified_at < timedelta(
+                seconds=LOGIN_QR_NOTIFICATION_THROTTLE_SECONDS
+            )
+        else:
+            same_image = False
+            recently_notified = False
+        if same_image or recently_notified:
             return {
                 "ok": True,
                 "dispatched": False,
@@ -162,7 +177,7 @@ class PublisherManager:
             captured_at=captured_at,
         )
         if result.get("ok") and result.get("dispatched") and throttle_key[0] and throttle_key[1]:
-            self._login_qr_notification_throttle[throttle_key] = now
+            self._login_qr_notification_throttle[throttle_key] = (now, image_fingerprint)
         return result
 
     def list_upload_jobs(

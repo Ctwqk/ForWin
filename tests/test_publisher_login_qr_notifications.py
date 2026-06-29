@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime, timedelta, timezone
 from urllib.request import Request
 
 import pytest
 
+import forwin.publishers.manager as publisher_manager_module
 from forwin.publishers.manager import PublisherManager
 from forwin.publisher_runtime.login_qr_notifications import DiscordLoginQrNotifier
 
@@ -81,6 +83,68 @@ def test_publisher_manager_throttles_duplicate_login_qr_notifications() -> None:
     assert second["ok"] is True
     assert second["dispatched"] is False
     assert second["throttled"] is True
+    assert len(notifier.calls) == 1
+
+
+def test_publisher_manager_allows_fresh_login_qr_after_short_throttle_window(monkeypatch) -> None:
+    base_time = datetime(2026, 6, 29, 21, 0, tzinfo=timezone.utc)
+    times = iter([base_time, base_time + timedelta(seconds=121)])
+    monkeypatch.setattr(publisher_manager_module, "_utc_now", lambda: next(times))
+
+    manager = PublisherManager(lambda: None)
+    notifier = _FakeLoginQrNotifier()
+    manager.login_qr_notifier = notifier
+
+    first = manager.notify_login_qr(
+        client_id="client-1",
+        platform="fanqie",
+        current_url="https://fanqienovel.com/main/writer/login",
+        image_data_url=_png_data_url(b"first-qr"),
+        source="image",
+    )
+    second = manager.notify_login_qr(
+        client_id="client-1",
+        platform="fanqie",
+        current_url="https://fanqienovel.com/main/writer/login",
+        image_data_url=_png_data_url(b"fresh-qr"),
+        source="image",
+    )
+
+    assert first["dispatched"] is True
+    assert second["dispatched"] is True
+    assert len(notifier.calls) == 2
+
+
+def test_publisher_manager_never_reposts_same_login_qr_image(monkeypatch) -> None:
+    base_time = datetime(2026, 6, 29, 21, 0, tzinfo=timezone.utc)
+    times = iter([base_time, base_time + timedelta(seconds=121)])
+    monkeypatch.setattr(publisher_manager_module, "_utc_now", lambda: next(times))
+
+    manager = PublisherManager(lambda: None)
+    notifier = _FakeLoginQrNotifier()
+    manager.login_qr_notifier = notifier
+    same_image = _png_data_url(b"same-qr")
+
+    first = manager.notify_login_qr(
+        client_id="client-1",
+        platform="qidian",
+        current_url="https://write.qq.com/portal/login",
+        image_data_url=same_image,
+        source="frame:image",
+    )
+    second = manager.notify_login_qr(
+        client_id="client-1",
+        platform="qidian",
+        current_url="https://write.qq.com/portal/login",
+        image_data_url=same_image,
+        source="frame:image",
+    )
+
+    assert first["dispatched"] is True
+    assert second["ok"] is True
+    assert second["dispatched"] is False
+    assert second["throttled"] is True
+    assert second["message"] == "login QR notification throttled"
     assert len(notifier.calls) == 1
 
 

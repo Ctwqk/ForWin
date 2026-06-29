@@ -684,6 +684,9 @@
     const selectors = [
       'canvas',
       'img[src^="data:image"]',
+      'img[src*="/connect/qrcode/"]',
+      'img[src*="qrcode" i]',
+      'img[src*="qrconnect" i]',
       'img[alt*="二维码"]',
       'img[alt*="扫码"]',
       'img[class*="qr" i]',
@@ -762,18 +765,62 @@
       && rect.height <= 96;
   }
 
+  function eventPositionForElement(element) {
+    const rect = element.getBoundingClientRect();
+    return {
+      clientX: rect.left + (rect.width / 2),
+      clientY: rect.top + (rect.height / 2),
+    };
+  }
+
+  function dispatchPointerClick(element) {
+    const position = eventPositionForElement(element);
+    const commonInit = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      ...position,
+      button: 0,
+    };
+    const pointerInit = {
+      ...commonInit,
+      pointerId: 1,
+      pointerType: 'mouse',
+      isPrimary: true,
+    };
+    if (typeof PointerEvent === 'function') {
+      element.dispatchEvent(new PointerEvent('pointerdown', { ...pointerInit, buttons: 1 }));
+    }
+    element.dispatchEvent(new MouseEvent('mousedown', { ...commonInit, buttons: 1 }));
+    if (typeof PointerEvent === 'function') {
+      element.dispatchEvent(new PointerEvent('pointerup', { ...pointerInit, buttons: 0 }));
+    }
+    element.dispatchEvent(new MouseEvent('mouseup', { ...commonInit, buttons: 0 }));
+    element.dispatchEvent(new MouseEvent('click', { ...commonInit, buttons: 0, detail: 1 }));
+  }
+
+  async function waitForLoginQrCandidate(timeoutMs = 4000) {
+    return waitForCondition(() => loginQrCandidates()[0] || null, timeoutMs);
+  }
+
   async function activateScanLoginTab() {
+    if (loginQrCandidates()[0]) {
+      return true;
+    }
     const candidates = Array.from(document.querySelectorAll('button,a,span,div,[role="button"]'));
-    const scanTab = candidates.find((element) => {
-      const text = normalizeText(element.innerText || element.textContent || '');
-      return isVisibleSmallClickTarget(element)
-        && (text === '扫码登录' || (text.includes('扫码登录') && text.length <= 12));
-    });
+    const preferredLabels = ['扫码登录', '微信登录'];
+    const scanTab = preferredLabels
+      .map((label) => candidates.find((element) => {
+        const text = normalizeText(element.innerText || element.textContent || '');
+        return isVisibleSmallClickTarget(element)
+          && (text === label || (text.includes(label) && text.length <= 12));
+      }))
+      .find(Boolean);
     if (!scanTab) {
       return false;
     }
-    scanTab.click();
-    await sleep(900);
+    dispatchPointerClick(scanTab);
+    await waitForLoginQrCandidate();
     return true;
   }
 

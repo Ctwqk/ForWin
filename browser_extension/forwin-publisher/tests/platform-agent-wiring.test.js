@@ -9,3 +9,12 @@ test('platform agent activates scan login tab before extracting QR images', asyn
   assert.match(source, /扫码登录/);
   assert.match(source, /await\s+activateScanLoginTab\s*\(\s*\)/);
 });
+
+test('platform agent uses browser-like scan tab activation and delayed QR wait', async () => {
+  const source = await readFile(new URL('../platform-agent.js', import.meta.url), 'utf8');
+
+  assert.match(source, /function\s+dispatchPointerClick\s*\(/);
+  assert.match(source, /pointerdown/);
+  assert.match(source, /waitForLoginQrCandidate/);
+  assert.match(source, /connect\/qrcode/);
+});

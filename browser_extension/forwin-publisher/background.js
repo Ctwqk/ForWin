@@ -2,6 +2,7 @@ import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
 import { PublisherExtensionController } from './lib/controller.js?v=0.1.31';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
+import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js';
 import { DEFAULT_SETTINGS, getBackendOrigin, normalizeSettings } from './lib/settings.js';
 import { READY_CHANNELS, TabReadyRegistry } from './lib/tab-ready-registry.js';
@@ -1324,6 +1325,51 @@ async function inspectLoginState(tabId) {
   return { ok: false, authenticated: false, loginVisible: false, currentUrl: '' };
 }
 
+async function sendLoginQrExtractionMessage(tabId, options = null) {
+  const message = {
+    channel: PLATFORM_AGENT_CHANNEL,
+    action: 'extract-login-qr-image',
+  };
+  if (options) {
+    return wrapCall(extensionApi.tabs, 'sendMessage', tabId, message, options);
+  }
+  return wrapCall(extensionApi.tabs, 'sendMessage', tabId, message);
+}
+
+async function queryLoginQrFrames(tabId) {
+  if (!extensionApi.webNavigation?.getAllFrames) {
+    return [];
+  }
+  try {
+    const frames = await wrapCall(extensionApi.webNavigation, 'getAllFrames', { tabId });
+    return findLoginQrFrameTargets(frames);
+  } catch (_error) {
+    return [];
+  }
+}
+
+async function extractLoginQrFromFrames(tabId) {
+  const targets = (await queryLoginQrFrames(tabId))
+    .filter((target) => target.frameId !== 0);
+  for (const target of targets) {
+    try {
+      const response = await sendLoginQrExtractionMessage(tabId, { frameId: target.frameId });
+      if (response?.imageDataUrl) {
+        return {
+          ...response,
+          frameUrl: target.url,
+          source: response.source
+            ? `frame:${target.frameId}:${response.source}`
+            : `frame:${target.frameId}:image`,
+        };
+      }
+    } catch (_error) {
+      // Continue to the next frame and then to the debugger fallback.
+    }
+  }
+  return null;
+}
+
 async function captureLoginQrImage(tabId) {
   if (!tabId) {
     return { ok: false, error: 'missing-tab-id' };
@@ -1337,16 +1383,17 @@ async function captureLoginQrImage(tabId) {
   }
   if (ready) {
     try {
-      const response = await wrapCall(extensionApi.tabs, 'sendMessage', tabId, {
-        channel: PLATFORM_AGENT_CHANNEL,
-        action: 'extract-login-qr-image',
-      });
+      const response = await sendLoginQrExtractionMessage(tabId);
       if (response?.imageDataUrl) {
         return response;
       }
     } catch (_error) {
       // Fall through to a visible-tab screenshot when DOM extraction is blocked.
     }
+  }
+  const frameResponse = await extractLoginQrFromFrames(tabId);
+  if (frameResponse?.imageDataUrl) {
+    return frameResponse;
   }
   try {
     const screenshot = await captureTabScreenshotWithDebugger(tabId);

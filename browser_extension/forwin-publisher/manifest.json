@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "ForWin Publisher Bridge",
-  "version": "0.1.31",
+  "version": "0.1.32",
   "description": "Handle publisher login and upload for ForWin through browser-side automation.",
   "permissions": [
     "alarms",
     "cookies",
     "debugger",
     "storage",
-    "tabs"
+    "tabs",
+    "webNavigation"
   ],
   "host_permissions": [
     "http://127.0.0.1/*",
@@ -17,6 +18,7 @@
     "https://*.qq.com/*",
     "https://*.write.qq.com/*",
     "https://*.yuewen.com/*",
+    "https://open.weixin.qq.com/*",
     "https://fanqienovel.com/*",
     "https://*.fanqienovel.com/*"
   ],
@@ -47,6 +49,7 @@
         "https://*.write.qq.com/*",
         "https://pcwrite.yuewen.com/*",
         "https://*.yuewen.com/*",
+        "https://open.weixin.qq.com/*",
         "https://fanqienovel.com/*",
         "https://*.fanqienovel.com/*"
       ],
@@ -54,7 +57,8 @@
         "channels-runtime.js",
         "platform-agent.js"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ]
 }

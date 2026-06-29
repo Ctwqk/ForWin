@@ -26,3 +26,12 @@ test('background treats known publisher login URLs as inspectable login pages', 
   assert.match(source, /\/portal\/login/);
   assert.match(source, /summary:\s*'known login url'/);
 });
+
+test('background login QR extraction asks matching child frames before screenshot fallback', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /findLoginQrFrameTargets/);
+  assert.match(source, /webNavigation/);
+  assert.match(source, /frameId:\s*target\.frameId/);
+  assert.match(source, /extractLoginQrFromFrames/);
+});

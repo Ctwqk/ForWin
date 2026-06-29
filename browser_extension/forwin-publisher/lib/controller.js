@@ -1054,12 +1054,14 @@ export class PublisherExtensionController {
   async maybeNotifyLoginQr(session, inspection) {
     if (
       session.loginQrNotificationAttempted
+      || session.loginQrNotificationInFlight
       || !inspection?.loginVisible
       || typeof this.deps.captureLoginQrImage !== 'function'
       || typeof this.deps.backend?.notifyLoginQr !== 'function'
     ) {
       return { skipped: true };
     }
+    session.loginQrNotificationInFlight = true;
     try {
       const settings = await this.deps.getSettings();
       if (!settings.backendBaseUrl || !settings.apiKey) {
@@ -1147,6 +1149,8 @@ export class PublisherExtensionController {
         error: error instanceof Error ? error.message : String(error || ''),
       });
       return { ok: false };
+    } finally {
+      session.loginQrNotificationInFlight = false;
     }
   }
 
@@ -1203,6 +1207,7 @@ export class PublisherExtensionController {
     if (this.heartbeatLoginQrNotificationKeys.has(key)) {
       return { skipped: true };
     }
+    this.heartbeatLoginQrNotificationKeys.add(key);
     const result = await this.maybeNotifyLoginQr(
       {
         platformId,
@@ -1217,8 +1222,8 @@ export class PublisherExtensionController {
         loginVisible: true,
       },
     );
-    if (result && !result.skipped && result.ok !== false) {
-      this.heartbeatLoginQrNotificationKeys.add(key);
+    if (!result || result.skipped || result.ok === false) {
+      this.heartbeatLoginQrNotificationKeys.delete(key);
     }
     return result;
   }

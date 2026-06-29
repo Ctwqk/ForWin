@@ -286,6 +286,39 @@ test('controller sends login QR notification once when scan login is visible', a
   assert.equal(events.at(-1).payload.connected, false);
 });
 
+test('controller suppresses concurrent login QR sends for the same session', async () => {
+  let captureCalls = 0;
+  const { controller, loginQrNotifications } = makeController({
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      await new Promise((resolve) => { setTimeout(resolve, 20); });
+      return {
+        ok: true,
+        imageDataUrl: 'data:image/png;base64,cXI=',
+        source: 'image',
+      };
+    },
+  });
+  const session = {
+    platformId: 'fanqie',
+    popupTabId: 42,
+    lastUrl: 'https://fanqienovel.com/main/writer/login',
+  };
+  const inspection = {
+    currentUrl: 'https://fanqienovel.com/main/writer/login',
+    authenticated: false,
+    loginVisible: true,
+  };
+
+  await Promise.all([
+    controller.maybeNotifyLoginQr(session, inspection),
+    controller.maybeNotifyLoginQr(session, inspection),
+  ]);
+
+  assert.equal(captureCalls, 1);
+  assert.equal(loginQrNotifications.length, 1);
+});
+
 test('controller ignores login QR notification failures while login remains visible', async () => {
   const { controller, events } = makeController({
     inspectLoginState: async () => ({
@@ -1257,6 +1290,43 @@ test('controller heartbeat sends login QR notification once when inspected login
   assert.equal(loginQrNotifications[0].current_url, 'https://write.qq.com/portal/login');
   assert.equal(loginQrNotifications[0].image_data_url, 'data:image/png;base64,cXI=');
   assert.equal(loginQrNotifications[0].source, 'qidian:123');
+});
+
+test('controller heartbeat suppresses concurrent login QR sends for the same inspected page', async () => {
+  let captureCalls = 0;
+  const { controller, loginQrNotifications } = makeController({
+    inspectPlatformState: async (platformId) => (
+      platformId === 'fanqie'
+        ? {
+          ok: true,
+          tabId: 321,
+          currentUrl: 'https://fanqienovel.com/main/writer/login',
+          platform: 'fanqie',
+          authenticated: false,
+          loginVisible: true,
+        }
+        : null
+    ),
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      await new Promise((resolve) => { setTimeout(resolve, 20); });
+      return {
+        ok: true,
+        imageDataUrl: 'data:image/png;base64,cXI=',
+        source: 'image',
+      };
+    },
+    getPlatformState: async () => ({}),
+    getCookies: async () => [],
+  });
+
+  await Promise.all([
+    controller.sendHeartbeat(),
+    controller.sendHeartbeat(),
+  ]);
+
+  assert.equal(captureCalls, 1);
+  assert.equal(loginQrNotifications.length, 1);
 });
 
 test('controller heartbeat sends login QR notification when known login URL is visible', async () => {

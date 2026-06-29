@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
@@ -42,12 +43,27 @@ from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.publisher_runtime.upload_jobs import CodexInterventionHandler
 from forwin.publisher_runtime.platform_catalog import PlatformSpec
 
+LOGIN_QR_NOTIFICATION_THROTTLE_SECONDS = 10 * 60
+
 
 def _as_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _login_qr_throttle_url(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlsplit(raw)
+    except ValueError:
+        return raw[:500]
+    if not parsed.scheme or not parsed.netloc:
+        return raw[:500]
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))[:500]
 
 
 class PublisherManager:
@@ -75,6 +91,7 @@ class PublisherManager:
         self.login_qr_notifier = DiscordLoginQrNotifier(
             publisher_login_discord_webhook_url
         )
+        self._login_qr_notification_throttle: dict[tuple[str, str], datetime] = {}
         self.runtime = PublisherRuntimeService(
             session_factory=session_factory,
             extension_api_key=self.extension_api_key,
@@ -119,7 +136,24 @@ class PublisherManager:
         source: str = "",
         captured_at: str = "",
     ) -> dict[str, Any]:
-        return self.login_qr_notifier.notify(
+        now = _utc_now()
+        platform_id = str(platform or "").strip()
+        throttle_url = _login_qr_throttle_url(current_url)
+        throttle_key = (platform_id, throttle_url)
+        last_notified_at = self._login_qr_notification_throttle.get(throttle_key)
+        if (
+            last_notified_at is not None
+            and now - last_notified_at < timedelta(seconds=LOGIN_QR_NOTIFICATION_THROTTLE_SECONDS)
+        ):
+            return {
+                "ok": True,
+                "dispatched": False,
+                "throttled": True,
+                "message": "login QR notification throttled",
+                "server_time": _isoformat(now),
+            }
+
+        result = self.login_qr_notifier.notify(
             client_id=client_id,
             platform=platform,
             current_url=current_url,
@@ -127,6 +161,9 @@ class PublisherManager:
             source=source,
             captured_at=captured_at,
         )
+        if result.get("ok") and result.get("dispatched") and throttle_key[0] and throttle_key[1]:
+            self._login_qr_notification_throttle[throttle_key] = now
+        return result
 
     def list_upload_jobs(
         self,

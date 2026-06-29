@@ -20,7 +20,7 @@
 - 扩展心跳在检测到强登录 Cookie 但没有可检查的平台页时，会后台打开或复用平台 dashboard 作为 probe，并用页面认证结果上报 connected。
 - 如果现有平台检查只返回 `ok:false`，仍视为没有可用页面证据，会继续触发 dashboard probe。
 - 保留原安全边界：只有 Cookie 但没有页面验证时仍不会直接显示已登录；如果 probe 看到登录页，继续按登录页证据处理。
-- 起点二维码抽取、二维码通知节流和服务 worker 重启后的节流持久化保持有效，避免重复向 Discord 推送旧二维码。
+- 起点二维码抽取保持 frame/image 优先；Discord 推送节流下沉到后端 `PublisherManager.notify_login_qr`，同平台同登录 URL 10 分钟内只允许一次真实推送，避免 MV3 service worker 重启绕过扩展本地节流。
 - 扩展版本更新到 `0.1.48`，background import cache-bust 同步更新。
 
 验证：
@@ -29,8 +29,9 @@
 - `cd browser_extension/forwin-publisher && node --test tests/controller.test.js tests/background-wiring.test.js tests/platforms.test.js`
 - `cd browser_extension/forwin-publisher && npm test`
 - `cd browser_extension/forwin-publisher && npm run build:chromium`
+- `.venv/bin/python -m pytest tests/test_publisher_login_qr_notifications.py`
 
-部署状态：待部署到 `8899`。切换条件：构建 `publisher-browser-runtime` 镜像并滚动更新 `forwin-publisher-browser-swarm` 后，确认两个平台 heartbeat 重新显示 connected。
+部署状态：待部署到 `8899`。切换条件：重建并滚动更新 `forwin-app-swarm` 与 `forwin-publisher-browser-swarm` 后，确认重复二维码推送被后端 throttle，两个平台重新扫码后 heartbeat 显示 connected。
 
 ## 2026-05-06
 

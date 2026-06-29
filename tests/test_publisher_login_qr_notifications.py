@@ -6,6 +6,7 @@ from urllib.request import Request
 
 import pytest
 
+from forwin.publishers.manager import PublisherManager
 from forwin.publisher_runtime.login_qr_notifications import DiscordLoginQrNotifier
 
 
@@ -27,6 +28,20 @@ def _png_data_url(payload: bytes = b"png-bytes") -> str:
     return f"data:image/png;base64,{encoded}"
 
 
+class _FakeLoginQrNotifier:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
+
+    def notify(self, **kwargs) -> dict[str, object]:
+        self.calls.append(kwargs)
+        return {
+            "ok": True,
+            "dispatched": True,
+            "message": "sent",
+            "server_time": "2026-06-29T21:00:00+00:00",
+        }
+
+
 def test_login_qr_notification_skips_when_webhook_is_not_configured() -> None:
     notifier = DiscordLoginQrNotifier("")
 
@@ -40,6 +55,33 @@ def test_login_qr_notification_skips_when_webhook_is_not_configured() -> None:
 
     assert result["ok"] is True
     assert result["dispatched"] is False
+
+
+def test_publisher_manager_throttles_duplicate_login_qr_notifications() -> None:
+    manager = PublisherManager(lambda: None)
+    notifier = _FakeLoginQrNotifier()
+    manager.login_qr_notifier = notifier
+
+    first = manager.notify_login_qr(
+        client_id="client-1",
+        platform="qidian",
+        current_url="https://write.qq.com/portal/login?ticket=secret",
+        image_data_url=_png_data_url(),
+        source="frame:image",
+    )
+    second = manager.notify_login_qr(
+        client_id="client-1",
+        platform="qidian",
+        current_url="https://write.qq.com/portal/login?ticket=rotated",
+        image_data_url=_png_data_url(),
+        source="frame:image",
+    )
+
+    assert first["dispatched"] is True
+    assert second["ok"] is True
+    assert second["dispatched"] is False
+    assert second["throttled"] is True
+    assert len(notifier.calls) == 1
 
 
 def test_login_qr_notification_posts_multipart_payload() -> None:

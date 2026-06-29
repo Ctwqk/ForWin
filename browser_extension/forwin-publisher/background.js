@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.44';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.45';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js';
@@ -24,6 +24,7 @@ const LOGIN_QR_NOTIFICATIONS_KEY = 'forwinPublisherLoginQrNotifications';
 const LOGIN_QR_THROTTLE_KEY = 'forwinPublisherLoginQrThrottle';
 const HEARTBEAT_PLATFORM_STATES_KEY = 'forwinPublisherHeartbeatPlatformStates';
 const HEARTBEAT_ALARM = 'forwinPublisherHeartbeat';
+const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 10 * 60_000;
 const LOGIN_QR_DIRECT_EXTRACTION_TIMEOUT_MS = 15000;
 const TOP_FRAME_MESSAGE_OPTIONS = { frameId: 0 };
 const tabReadyRegistry = new TabReadyRegistry();
@@ -499,6 +500,27 @@ async function withBackendClient(callback) {
   const settings = await getSettings();
   const client = createBackendClient(globalThis.fetch.bind(globalThis), settings);
   return callback(client);
+}
+
+async function notifyLoginQrWithThrottle(payload) {
+  const platform = String(payload?.platform || '').trim();
+  const currentUrl = String(payload?.current_url || '');
+  const nowMs = Date.now();
+  const lastNotifiedAtMs = await getLoginQrLastNotifiedAtMs(platform, currentUrl);
+  if (
+    lastNotifiedAtMs > 0
+    && nowMs - lastNotifiedAtMs < LOGIN_QR_NOTIFICATION_THROTTLE_MS
+  ) {
+    return {
+      ok: true,
+      dispatched: false,
+      throttled: true,
+      message: 'login QR notification throttled',
+    };
+  }
+  const result = await withBackendClient((client) => client.notifyLoginQr(payload));
+  await setLoginQrLastNotifiedAtMs(platform, currentUrl, nowMs);
+  return result;
 }
 
 async function inspectFanqieEditorState(tabId) {
@@ -1926,7 +1948,7 @@ const controller = new PublisherExtensionController({
       return withBackendClient((client) => client.syncBrowserSession(payload));
     },
     async notifyLoginQr(payload) {
-      return withBackendClient((client) => client.notifyLoginQr(payload));
+      return notifyLoginQrWithThrottle(payload);
     },
     async getBrowserSession(platformId) {
       return withBackendClient((client) => client.getBrowserSession(platformId));

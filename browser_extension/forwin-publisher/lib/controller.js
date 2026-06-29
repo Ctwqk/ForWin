@@ -1202,6 +1202,10 @@ export class PublisherExtensionController {
     if (!tabId) {
       return { skipped: true };
     }
+    const activeSession = this.loginSessions.get(tabId);
+    if (activeSession?.platformId === platformId) {
+      return { skipped: true };
+    }
     const currentUrl = String(inspection?.currentUrl || inspection?.url || rawState.current_url || '');
     const key = `${platformId}:${tabId}:${currentUrl}`;
     if (this.heartbeatLoginQrNotificationKeys.has(key)) {

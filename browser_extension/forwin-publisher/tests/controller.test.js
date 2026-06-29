@@ -1329,6 +1329,50 @@ test('controller heartbeat suppresses concurrent login QR sends for the same ins
   assert.equal(loginQrNotifications.length, 1);
 });
 
+test('controller lets active login sessions own QR notifications for their tabs', async () => {
+  let captureCalls = 0;
+  const { controller, loginQrNotifications } = makeController({
+    inspectLoginState: async () => ({
+      ok: true,
+      currentUrl: 'https://fanqienovel.com/main/writer/login',
+      platform: 'fanqie',
+      authenticated: false,
+      loginVisible: true,
+    }),
+    inspectPlatformState: async (platformId) => (
+      platformId === 'fanqie'
+        ? {
+          ok: true,
+          tabId: 42,
+          currentUrl: 'https://fanqienovel.com/main/writer/login',
+          platform: 'fanqie',
+          authenticated: false,
+          loginVisible: true,
+        }
+        : null
+    ),
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      return {
+        ok: true,
+        imageDataUrl: 'data:image/png;base64,cXI=',
+        source: 'image',
+      };
+    },
+    getPlatformState: async () => ({}),
+    getCookies: async () => [],
+  });
+
+  await controller.handleMessage(
+    { action: 'open-login', payload: { platform: 'fanqie' } },
+    { tab: { id: 99 } },
+  );
+  await controller.handleTabUpdated(42, { url: 'https://fanqienovel.com/main/writer/login' }, { id: 42 });
+
+  assert.equal(captureCalls, 1);
+  assert.equal(loginQrNotifications.length, 1);
+});
+
 test('controller heartbeat sends login QR notification when known login URL is visible', async () => {
   const { controller, loginQrNotifications } = makeController({
     inspectPlatformState: async (platformId) => (

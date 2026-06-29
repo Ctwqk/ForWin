@@ -20,8 +20,8 @@
 - 扩展心跳在检测到强登录 Cookie 但没有可检查的平台页时，会后台打开或复用平台 dashboard 作为 probe，并用页面认证结果上报 connected。
 - 如果现有平台检查只返回 `ok:false`，仍视为没有可用页面证据，会继续触发 dashboard probe。
 - 保留原安全边界：只有 Cookie 但没有页面验证时仍不会直接显示已登录；如果 probe 看到登录页，继续按登录页证据处理。
-- 起点二维码抽取保持 frame/image 优先；Discord 推送节流下沉到后端 `PublisherManager.notify_login_qr`，同平台同登录 URL 2 分钟内只允许一次真实推送，并对同一张 QR 图片做指纹去重，避免 MV3 service worker 重启绕过扩展本地节流或重复推旧码。
-- 扩展版本更新到 `0.1.48`，background import cache-bust 同步更新。
+- 起点二维码抽取保持 frame/image 优先；Discord 推送节流在扩展侧和后端侧均使用 2 分钟窗口，后端对同一张 QR 图片做指纹去重，避免 MV3 service worker 重启绕过扩展本地节流或重复推旧码。
+- 扩展版本更新到 `0.1.49`，background import cache-bust 同步更新。
 
 验证：
 
@@ -31,7 +31,8 @@
 - `cd browser_extension/forwin-publisher && npm run build:chromium`
 - `.venv/bin/python -m pytest tests/test_publisher_login_qr_notifications.py`
 - `.venv/bin/python -m pytest tests/test_publisher_login_qr_notifications.py tests/test_publisher_routes_security.py -q`
-- 现场验证：`forwin-forwin:deploy-b294976006c8` 已滚动更新 `forwin-app-swarm`、`forwin-generation-worker-swarm`、`forwin-mcp-swarm`、`forwin-outbox-worker-swarm`；`forwin-publisher-browser:deploy-1bcfb06899f0` 已运行且扩展版本为 `0.1.48`。
+- `cd browser_extension/forwin-publisher && node --test --test-name-pattern 'login QR|throttle|cache-bust' tests/controller.test.js tests/background-wiring.test.js`
+- 现场验证：`forwin-forwin` 已滚动更新 `forwin-app-swarm`、`forwin-generation-worker-swarm`、`forwin-mcp-swarm`、`forwin-outbox-worker-swarm`；`forwin-publisher-browser` 已运行且扩展版本为 `0.1.49`。
 - 现场验证：重新打开起点/番茄后台入口后均跳转登录页；最新一轮二维码已分别推送到 Discord，下一轮同 URL 推送返回 `login QR notification throttled` 且 `dispatched=false`。
 
 部署状态：已部署到 `8899`。剩余人工门槛：需扫码最新一轮 Discord 起点/番茄二维码；扫码完成后以 publisher heartbeat 显示两个平台 `connected=true` 作为登录态恢复验收。

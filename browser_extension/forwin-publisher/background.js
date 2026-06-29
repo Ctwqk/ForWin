@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.48';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.49';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js';
@@ -24,7 +24,7 @@ const LOGIN_QR_NOTIFICATIONS_KEY = 'forwinPublisherLoginQrNotifications';
 const LOGIN_QR_THROTTLE_KEY = 'forwinPublisherLoginQrThrottle';
 const HEARTBEAT_PLATFORM_STATES_KEY = 'forwinPublisherHeartbeatPlatformStates';
 const HEARTBEAT_ALARM = 'forwinPublisherHeartbeat';
-const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 10 * 60_000;
+const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
 const LOGIN_QR_DIRECT_EXTRACTION_TIMEOUT_MS = 15000;
 const TOP_FRAME_MESSAGE_OPTIONS = { frameId: 0 };
 const tabReadyRegistry = new TabReadyRegistry();

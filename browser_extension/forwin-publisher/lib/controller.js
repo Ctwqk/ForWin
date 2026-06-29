@@ -7,7 +7,7 @@ import {
 } from './platforms.js';
 import { uploadExecutionTimeoutMs } from './upload-timeouts.js?v=0.1.23';
 
-const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 10 * 60_000;
+const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
 
 function defaultNowMs() {
   return Date.now();

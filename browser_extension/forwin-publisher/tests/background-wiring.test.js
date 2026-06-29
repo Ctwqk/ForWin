@@ -23,7 +23,7 @@ test('background backend adapter wires login QR notifications', async () => {
 test('background throttles login QR notifications at the backend boundary', async () => {
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 
-  assert.match(source, /LOGIN_QR_NOTIFICATION_THROTTLE_MS\s*=\s*10\s*\*\s*60_000/);
+  assert.match(source, /LOGIN_QR_NOTIFICATION_THROTTLE_MS\s*=\s*2\s*\*\s*60_000/);
   assert.match(source, /async\s+function\s+notifyLoginQrWithThrottle\s*\(\s*payload\s*\)/);
   assert.match(source, /getLoginQrLastNotifiedAtMs\(platform,\s*currentUrl\)/);
   assert.match(source, /throttled:\s*true/);

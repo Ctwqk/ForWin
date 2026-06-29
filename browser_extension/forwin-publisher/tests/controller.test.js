@@ -319,7 +319,7 @@ test('controller suppresses concurrent login QR sends for the same session', asy
   assert.equal(loginQrNotifications.length, 1);
 });
 
-test('controller waits ten minutes before sending another login QR for the same page', async () => {
+test('controller waits for the login QR throttle window before sending another code for the same page', async () => {
   let captureCalls = 0;
   let nowMs = 1_000_000;
   const { controller, loginQrNotifications } = makeController({
@@ -348,7 +348,7 @@ test('controller waits ten minutes before sending another login QR for the same 
   await controller.maybeNotifyLoginQr(session, inspection);
   nowMs += 60_001;
   await controller.maybeNotifyLoginQr(session, inspection);
-  nowMs += 540_000;
+  nowMs += 60_000;
   await controller.maybeNotifyLoginQr(session, inspection);
 
   assert.equal(captureCalls, 2);
@@ -1367,7 +1367,7 @@ test('controller heartbeat suppresses concurrent login QR sends for the same ins
   assert.equal(loginQrNotifications.length, 1);
 });
 
-test('controller heartbeat sends a fresh login QR after the long throttle for unchanged login URL', async () => {
+test('controller heartbeat sends a fresh login QR after the short throttle for unchanged login URL', async () => {
   let nowMs = 2_000_000;
   let captureCalls = 0;
   const { controller, loginQrNotifications } = makeController({
@@ -1398,7 +1398,7 @@ test('controller heartbeat sends a fresh login QR after the long throttle for un
 
   await controller.sendHeartbeat();
   await controller.sendHeartbeat();
-  nowMs += 600_001;
+  nowMs += 120_001;
   await controller.sendHeartbeat();
 
   assert.equal(captureCalls, 2);
@@ -1442,7 +1442,7 @@ test('controller heartbeat keeps login QR throttled across repeated skipped hear
   assert.equal(captureCalls, 1);
   assert.equal(loginQrNotifications.length, 1);
 
-  nowMs += 600_001;
+  nowMs += 120_001;
   await controller.sendHeartbeat();
 
   assert.equal(captureCalls, 2);
@@ -1500,7 +1500,7 @@ test('controller heartbeat keeps login QR throttled after service worker restart
   assert.equal(captureCalls, 1);
   assert.equal(loginQrNotifications.length, 1);
 
-  nowMs += 540_000;
+  nowMs += 60_000;
   await makeRestartedController().sendHeartbeat();
 
   assert.equal(captureCalls, 2);

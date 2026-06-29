@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.42';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.43';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js';
@@ -1487,6 +1487,143 @@ async function queryLoginQrFrames(tabId) {
   }
 }
 
+async function extractLoginQrWithScripting(tabId, frameId) {
+  if (!extensionApi.scripting?.executeScript) {
+    return null;
+  }
+  try {
+    const injections = await wrapCall(extensionApi.scripting, 'executeScript', {
+      target: { tabId, frameIds: [frameId] },
+      func: async () => {
+        const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(new Error('blob-read-failed'));
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.readAsDataURL(blob);
+        });
+        const textOf = (value) => String(value || '').toLowerCase();
+        const labelFor = (element) => [
+          element.id,
+          element.className,
+          element.getAttribute?.('alt'),
+          element.getAttribute?.('aria-label'),
+          element.getAttribute?.('title'),
+          element.getAttribute?.('src'),
+          element.parentElement?.id,
+          element.parentElement?.className,
+        ].map(textOf).join(' ');
+        const sourceFor = (element) => String(
+          element.currentSrc || element.src || element.getAttribute?.('src') || '',
+        );
+        const scoreElement = (element) => {
+          const tag = String(element.tagName || '').toLowerCase();
+          const source = sourceFor(element).toLowerCase();
+          const label = labelFor(element);
+          const width = Number(element.naturalWidth || element.width || 0);
+          const height = Number(element.naturalHeight || element.height || 0);
+          if (width < 40 || height < 40) {
+            return -1;
+          }
+          const squareRatio = Math.min(width, height) / Math.max(width, height);
+          let score = 0;
+          if (tag === 'canvas' || tag === 'img') {
+            score += 5;
+          }
+          if (squareRatio > 0.72) {
+            score += 8;
+          }
+          if (width >= 96 && height >= 96) {
+            score += 8;
+          }
+          if (source.startsWith('data:image/')) {
+            score += 8;
+          }
+          if (source.includes('/connect/qrcode/')) {
+            score += 40;
+          }
+          if (/qr|qrcode|二维码|扫码|wechat|weixin/.test(`${source} ${label}`)) {
+            score += 16;
+          }
+          if (/expired|已失效|已过期/.test(`${source} ${label}`)) {
+            score -= 100;
+          }
+          return score;
+        };
+        const candidates = Array.from(document.querySelectorAll('img,canvas'))
+          .map((element) => ({ element, score: scoreElement(element) }))
+          .filter((item) => item.score >= 20)
+          .sort((left, right) => right.score - left.score);
+        for (const { element } of candidates) {
+          const tag = String(element.tagName || '').toLowerCase();
+          if (tag === 'canvas') {
+            try {
+              const dataUrl = element.toDataURL('image/png');
+              if (dataUrl.startsWith('data:image/')) {
+                return {
+                  ok: true,
+                  currentUrl: `${location.origin}${location.pathname}`,
+                  imageDataUrl: dataUrl,
+                  source: 'scripting:canvas',
+                };
+              }
+            } catch (_error) {
+              continue;
+            }
+          }
+          const source = sourceFor(element);
+          if (source.startsWith('data:image/')) {
+            return {
+              ok: true,
+              currentUrl: `${location.origin}${location.pathname}`,
+              imageDataUrl: source,
+              source: 'scripting:image',
+            };
+          }
+          if (!source) {
+            continue;
+          }
+          try {
+            const response = await fetch(new URL(source, location.href).href, {
+              credentials: 'include',
+              cache: 'no-store',
+            });
+            if (!response.ok) {
+              continue;
+            }
+            const blob = await response.blob();
+            if (!String(blob.type || '').startsWith('image/')) {
+              continue;
+            }
+            const dataUrl = await blobToDataUrl(blob);
+            if (dataUrl.startsWith('data:image/')) {
+              return {
+                ok: true,
+                currentUrl: `${location.origin}${location.pathname}`,
+                imageDataUrl: dataUrl,
+                source: 'scripting:image',
+              };
+            }
+          } catch (_error) {
+            continue;
+          }
+        }
+        return {
+          ok: false,
+          currentUrl: `${location.origin}${location.pathname}`,
+          error: 'login-qr-not-found',
+        };
+      },
+    });
+    const result = Array.isArray(injections) ? injections.find((item) => item?.result)?.result : null;
+    if (result?.imageDataUrl) {
+      return result;
+    }
+  } catch (_error) {
+    return null;
+  }
+  return null;
+}
+
 async function extractLoginQrFromFrames(tabId) {
   for (let frameExtractionAttempt = 0; frameExtractionAttempt < 2; frameExtractionAttempt += 1) {
     const targets = (await queryLoginQrFrames(tabId))
@@ -1505,6 +1642,16 @@ async function extractLoginQrFromFrames(tabId) {
         }
       } catch (_error) {
         // Continue to the next frame and then to the debugger fallback.
+      }
+      const scriptedResponse = await extractLoginQrWithScripting(tabId, target.frameId);
+      if (scriptedResponse?.imageDataUrl) {
+        return {
+          ...scriptedResponse,
+          frameUrl: target.url,
+          source: scriptedResponse.source
+            ? `frame:${target.frameId}:${scriptedResponse.source}`
+            : `frame:${target.frameId}:scripting`,
+        };
       }
     }
     if (frameExtractionAttempt === 0) {

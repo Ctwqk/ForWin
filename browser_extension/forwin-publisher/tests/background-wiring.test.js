@@ -44,6 +44,9 @@ test('background login QR extraction asks matching child frames before screensho
   assert.match(source, /findLoginQrFrameTargets/);
   assert.match(source, /webNavigation/);
   assert.match(source, /frameId:\s*target\.frameId/);
+  assert.match(source, /extractLoginQrWithScripting/);
+  assert.match(source, /extensionApi\.scripting/);
+  assert.match(source, /executeScript/);
   assert.match(source, /extractLoginQrFromFrames/);
   assert.match(source, /frameExtractionAttempt/);
   assert.match(source, /await\s+sleep\(500\)/);

@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.41';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.42';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js';
@@ -23,6 +23,7 @@ const BACKGROUND_ERRORS_KEY = 'forwinPublisherBackgroundErrors';
 const LOGIN_QR_NOTIFICATIONS_KEY = 'forwinPublisherLoginQrNotifications';
 const HEARTBEAT_PLATFORM_STATES_KEY = 'forwinPublisherHeartbeatPlatformStates';
 const HEARTBEAT_ALARM = 'forwinPublisherHeartbeat';
+const LOGIN_QR_DIRECT_EXTRACTION_TIMEOUT_MS = 15000;
 const tabReadyRegistry = new TabReadyRegistry();
 
 function randomId() {
@@ -1403,13 +1404,19 @@ async function captureLoginQrImage(tabId) {
       tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
     }
   }
-  const topFrameResponse = await extractLoginQrFromTopFrame(tabId);
-  if (topFrameResponse?.imageDataUrl) {
-    return topFrameResponse;
-  }
-  const frameResponse = await extractLoginQrFromFrames(tabId);
-  if (frameResponse?.imageDataUrl) {
-    return frameResponse;
+  const directExtractionDeadline = Date.now() + LOGIN_QR_DIRECT_EXTRACTION_TIMEOUT_MS;
+  while (Date.now() < directExtractionDeadline) {
+    const topFrameResponse = await extractLoginQrFromTopFrame(tabId);
+    if (topFrameResponse?.imageDataUrl) {
+      return topFrameResponse;
+    }
+    const frameResponse = await extractLoginQrFromFrames(tabId);
+    if (frameResponse?.imageDataUrl) {
+      return frameResponse;
+    }
+    if (Date.now() < directExtractionDeadline) {
+      await sleep(1200);
+    }
   }
   try {
     const screenshot = await captureTabScreenshotWithDebugger(tabId);

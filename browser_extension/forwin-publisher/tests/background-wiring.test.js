@@ -66,3 +66,12 @@ test('background retries top-frame login QR extraction before screenshot fallbac
   assert.match(source, /extractLoginQrFromTopFrame[\s\S]*await\s+sleep\(700\)/);
   assert.match(source, /captureLoginQrImage[\s\S]*extractLoginQrFromTopFrame[\s\S]*extractLoginQrFromFrames[\s\S]*captureTabScreenshotWithDebugger/);
 });
+
+test('background keeps retrying direct QR extraction before screenshot fallback', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /LOGIN_QR_DIRECT_EXTRACTION_TIMEOUT_MS\s*=\s*15000/);
+  assert.match(source, /directExtractionDeadline/);
+  assert.match(source, /Date\.now\(\)\s*<\s*directExtractionDeadline/);
+  assert.match(source, /captureLoginQrImage[\s\S]*extractLoginQrFromTopFrame[\s\S]*extractLoginQrFromFrames[\s\S]*await\s+sleep\(1200\)[\s\S]*captureTabScreenshotWithDebugger/);
+});

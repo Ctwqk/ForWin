@@ -1230,16 +1230,14 @@ function isQidianAuthenticatedWritingTab(candidate, url = '') {
     );
 }
 
-function normalizePlatformInspection(platformId, candidate, candidateUrl, inspection) {
+function buildAuthenticatedInspectionFromTopLevelEvidence(platformId, candidate, candidateUrl) {
   if (
     platformId === 'qidian'
-    && inspection?.ok
-    && isQidianLoginOutUrl(inspection.currentUrl || inspection.url)
     && isQidianAuthenticatedTopLevelTab(candidate, candidateUrl)
   ) {
     return {
-      ...inspection,
-      currentUrl: candidateUrl,
+      ok: true,
+      currentUrl: String(candidateUrl || candidate?.url || ''),
       platform: platformId,
       authenticated: true,
       loginVisible: false,
@@ -1248,17 +1246,46 @@ function normalizePlatformInspection(platformId, candidate, candidateUrl, inspec
   }
   if (
     platformId === 'qidian'
-    && inspection?.ok
     && isQidianAuthenticatedWritingTab(candidate, candidateUrl)
-    && !isPlatformLoginUrl(platformId, inspection.currentUrl || inspection.url)
+    && !isPlatformLoginUrl(platformId, candidateUrl)
   ) {
     return {
-      ...inspection,
-      currentUrl: candidateUrl,
+      ok: true,
+      currentUrl: String(candidateUrl || candidate?.url || ''),
       platform: platformId,
       authenticated: true,
       loginVisible: false,
       summary: 'qidian top-level writing evidence',
+    };
+  }
+  return null;
+}
+
+function normalizePlatformInspection(platformId, candidate, candidateUrl, inspection) {
+  const topLevelEvidence = buildAuthenticatedInspectionFromTopLevelEvidence(platformId, candidate, candidateUrl);
+  if (!inspection?.ok && topLevelEvidence) {
+    return topLevelEvidence;
+  }
+  if (
+    platformId === 'qidian'
+    && inspection?.ok
+    && isQidianLoginOutUrl(inspection.currentUrl || inspection.url)
+    && topLevelEvidence?.summary === 'qidian top-level dashboard evidence'
+  ) {
+    return {
+      ...inspection,
+      ...topLevelEvidence,
+    };
+  }
+  if (
+    platformId === 'qidian'
+    && inspection?.ok
+    && topLevelEvidence?.summary === 'qidian top-level writing evidence'
+    && !isPlatformLoginUrl(platformId, inspection.currentUrl || inspection.url)
+  ) {
+    return {
+      ...inspection,
+      ...topLevelEvidence,
     };
   }
   return inspection;

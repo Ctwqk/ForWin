@@ -117,6 +117,14 @@ test('background prefers qidian top-level dashboard evidence over loginOut child
   assert.match(source, /authenticated:\s*true[\s\S]*loginVisible:\s*false/);
 });
 
+test('background uses qidian top-level dashboard evidence when the agent is not ready', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /function\s+buildAuthenticatedInspectionFromTopLevelEvidence\s*\(/);
+  assert.match(source, /if\s*\(\s*!inspection\?\.\s*ok\s*&&\s*topLevelEvidence\s*\)/);
+  assert.match(source, /summary:\s*'qidian top-level dashboard evidence'/);
+});
+
 test('background keeps qidian top-level writing pages authenticated over child outline inspections', async () => {
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 

@@ -57,3 +57,12 @@ test('background login QR extraction probes the top frame before screenshot fall
   assert.match(source, /captureLoginQrImage[\s\S]*extractLoginQrFromFrames/);
   assert.match(source, /captureLoginQrImage[\s\S]*captureTabScreenshotWithDebugger/);
 });
+
+test('background retries top-frame login QR extraction before screenshot fallback', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /topFrameExtractionAttempt/);
+  assert.match(source, /topFrameExtractionAttempt\s*<\s*3/);
+  assert.match(source, /extractLoginQrFromTopFrame[\s\S]*await\s+sleep\(700\)/);
+  assert.match(source, /captureLoginQrImage[\s\S]*extractLoginQrFromTopFrame[\s\S]*extractLoginQrFromFrames[\s\S]*captureTabScreenshotWithDebugger/);
+});

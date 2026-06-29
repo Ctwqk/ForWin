@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.37';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.38';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js';
@@ -1376,15 +1376,20 @@ async function extractLoginQrFromFrames(tabId) {
 }
 
 async function extractLoginQrFromTopFrame(tabId) {
-  try {
-    const response = await sendLoginQrExtractionMessage(tabId);
-    if (response?.imageDataUrl) {
-      return response;
+  for (let topFrameExtractionAttempt = 0; topFrameExtractionAttempt < 3; topFrameExtractionAttempt += 1) {
+    try {
+      const response = await sendLoginQrExtractionMessage(tabId);
+      if (response?.imageDataUrl) {
+        return response;
+      }
+    } catch (_error) {
+      // Continue through short retries before trying child frames and debugger fallback.
     }
-    return null;
-  } catch (_error) {
-    return null;
+    if (topFrameExtractionAttempt < 2) {
+      await sleep(700);
+    }
   }
+  return null;
 }
 
 async function captureLoginQrImage(tabId) {

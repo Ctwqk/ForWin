@@ -26,6 +26,7 @@ def test_docker_services_snapshot_requires_runtime_swarm_services(monkeypatch) -
                     "aaa forwin-app-swarm replicated 1/1 forwin-forwin:deploy-abc *:8899->8899/tcp",
                     "bbb forwin-generation-worker-swarm replicated 1/1 forwin-forwin:deploy-abc",
                     "ccc forwin-mcp-swarm replicated 1/1 forwin-forwin:deploy-abc *:8896->8896/tcp",
+                    "eee forwin-publisher-worker-swarm replicated 1/1 forwin-forwin:deploy-abc",
                     "ddd forwin-outbox-worker-swarm replicated 1/1 forwin-forwin:deploy-abc",
                 ]
             ),
@@ -42,6 +43,7 @@ def test_docker_services_snapshot_requires_runtime_swarm_services(monkeypatch) -
         "forwin-app-swarm",
         "forwin-generation-worker-swarm",
         "forwin-mcp-swarm",
+        "forwin-publisher-worker-swarm",
         "forwin-outbox-worker-swarm",
     }
 
@@ -56,6 +58,7 @@ def test_docker_services_snapshot_reports_missing_required_service(monkeypatch) 
                     "aaa forwin-app-swarm replicated 1/1 forwin-forwin:deploy-abc",
                     "bbb forwin-generation-worker-swarm replicated 0/1 forwin-forwin:deploy-abc",
                     "ccc forwin-mcp-swarm replicated 1/1 forwin-forwin:deploy-abc",
+                    "eee forwin-publisher-worker-swarm replicated 1/1 forwin-forwin:deploy-abc",
                     "ddd forwin-outbox-worker-swarm replicated 1/1 forwin-forwin:deploy-abc",
                 ]
             ),
@@ -68,6 +71,30 @@ def test_docker_services_snapshot_reports_missing_required_service(monkeypatch) 
 
     assert snapshot["ok"] is False
     assert snapshot["missing"] == ["forwin-generation-worker-swarm"]
+
+
+def test_docker_services_snapshot_requires_publisher_worker(monkeypatch) -> None:
+    def fake_run_command(args, **kwargs):
+        return {
+            "ok": True,
+            "stdout": "\n".join(
+                [
+                    "ID NAME MODE REPLICAS IMAGE",
+                    "aaa forwin-app-swarm replicated 1/1 forwin-forwin:deploy-abc",
+                    "bbb forwin-generation-worker-swarm replicated 1/1 forwin-forwin:deploy-abc",
+                    "ccc forwin-mcp-swarm replicated 1/1 forwin-forwin:deploy-abc",
+                    "ddd forwin-outbox-worker-swarm replicated 1/1 forwin-forwin:deploy-abc",
+                ]
+            ),
+            "stderr": "",
+        }
+
+    monkeypatch.setattr("scripts.monitor_forwin_runtime.run_command", fake_run_command)
+
+    snapshot = docker_services_snapshot("swarm-manager-150")
+
+    assert snapshot["ok"] is False
+    assert snapshot["missing"] == ["forwin-publisher-worker-swarm"]
 
 
 def test_docker_services_snapshot_uses_colima_fallback_when_context_fails(monkeypatch) -> None:
@@ -85,6 +112,7 @@ def test_docker_services_snapshot_uses_colima_fallback_when_context_fails(monkey
                         "forwin-app-swarm.1.aaa image Up 5 hours (healthy)",
                         "forwin-generation-worker-swarm.1.bbb image Up 5 hours",
                         "forwin-mcp-swarm.1.ccc image Up 5 hours (healthy)",
+                        "forwin-publisher-worker-swarm.1.eee image Up 5 hours",
                         "forwin-outbox-worker-swarm.1.ddd image Up 5 hours",
                     ]
                 ),

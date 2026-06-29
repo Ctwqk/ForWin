@@ -15,6 +15,7 @@ Qdrant, or MinIO containers for ForWin.
 | `forwin-generation-worker-swarm` | Claims and executes durable generation tasks | Start with 1; raise only for multi-project throughput |
 | `forwin-mcp-swarm` | MCP gateway that talks to the API | Start with 1 and expose only on trusted paths |
 | `forwin-publisher-worker-swarm` | Backend publisher jobs such as cover generation | Start with 1 |
+| `forwin-outbox-worker-swarm` | Eventually consistent side effects from the outbox table | Start with 1 |
 | `forwin-publisher-browser-swarm` | Optional Chromium/extension automation | Start only when browser publishing is needed |
 
 The generation worker can scale above 1 for multiple projects, but the system
@@ -175,7 +176,7 @@ If there is no claimable task, a no-work one-shot run should exit cleanly.
 The publisher backend worker should run:
 
 ```bash
-python -m forwin.cli -v publisher-worker --limit 1
+python -m forwin.cli -v publisher-worker --limit 1 --poll-interval 2
 ```
 
 It is responsible for backend-owned publisher jobs. It is not responsible for

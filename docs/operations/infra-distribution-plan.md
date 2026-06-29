@@ -21,7 +21,7 @@
 | 生产部署目录 | `10.0.0.126:/Users/magi1/ForWin-swarm` | 由 150 deploy sync 写入，不是源码工作区 |
 | 生产 URL | `http://10.0.0.126:8899` | ForWin UI/API |
 | MCP 端口 | `10.0.0.126:8896` | `forwin-mcp-swarm` |
-| Swarm 服务 | `forwin-app-swarm`、`forwin-generation-worker-swarm`、`forwin-mcp-swarm`、`forwin-outbox-worker-swarm`、按需 `forwin-publisher-browser-swarm` | 由 150 Swarm manager 管理 |
+| Swarm 服务 | `forwin-app-swarm`、`forwin-generation-worker-swarm`、`forwin-mcp-swarm`、`forwin-publisher-worker-swarm`、`forwin-outbox-worker-swarm`、按需 `forwin-publisher-browser-swarm` | 由 150 Swarm manager 管理 |
 
 ForWin 机器上没有 ForWin 自己的 Postgres/MinIO/Qdrant，并不代表代码里没有数据库相关内容。仓库仍然包含数据库模型、迁移、存储层、配置和本地 compose profile；只是生产运行时连接 150 提供的数据层。
 

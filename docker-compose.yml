@@ -155,6 +155,40 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  publisher-worker:
+    build: .
+    container_name: forwin-publisher-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    command:
+      [
+        "python",
+        "-m",
+        "forwin.cli",
+        "-v",
+        "publisher-worker",
+        "--limit",
+        "${FORWIN_PUBLISHER_WORKER_LIMIT:-1}",
+        "--poll-interval",
+        "${FORWIN_PUBLISHER_WORKER_POLL_INTERVAL:-2}",
+      ]
+    env_file:
+      - path: ${FORWIN_ENV_FILE:-.env}
+        required: false
+    environment:
+      - FORWIN_DATABASE_URL=${FORWIN_DATABASE_URL:-postgresql+psycopg://forwin:forwin@postgres:5432/forwin}
+      - FORWIN_ARTIFACT_BACKEND=${FORWIN_ARTIFACT_BACKEND:-minio}
+    volumes:
+      - forwin-data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
   publisher-browser:
     build:
       context: .

@@ -126,6 +126,16 @@ def test_readme_names_service_process_target_roles() -> None:
     assert "Postgres/Qdrant/MinIO services instead of starting app-local stateful containers on 126" in normalized
 
 
+def test_compose_defines_publisher_worker_service() -> None:
+    compose = _compose_text()
+
+    assert "\n  publisher-worker:\n" in compose
+    publisher_worker_block = compose.split("\n  publisher-worker:\n", 1)[1].split("\n  publisher-browser:\n", 1)[0]
+
+    assert '"publisher-worker"' in publisher_worker_block
+    assert "--limit" in publisher_worker_block
+
+
 def test_operations_docs_record_mcp_image_split_decision() -> None:
     ops = (ROOT / "docs" / "operations" / "forwin-production-processes.md").read_text(encoding="utf-8")
     normalized = " ".join(ops.lower().replace("`", "").split())

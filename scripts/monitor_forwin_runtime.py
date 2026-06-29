@@ -142,6 +142,7 @@ def docker_services_snapshot(context: str, *, colima_profile: str = "") -> dict[
         "forwin-app-swarm",
         "forwin-generation-worker-swarm",
         "forwin-mcp-swarm",
+        "forwin-publisher-worker-swarm",
         "forwin-outbox-worker-swarm",
     }
     proc = run_command(

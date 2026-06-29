@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 from forwin.config import Config
@@ -248,6 +249,26 @@ def cmd_generation_worker(args: argparse.Namespace) -> None:
         sys.exit(exit_code)
 
 
+def run_publisher_worker_loop(
+    backend_jobs,
+    *,
+    limit: int,
+    once: bool,
+    poll_interval: float,
+    sleep=time.sleep,
+) -> None:
+    while True:
+        handled = backend_jobs.run_pending_once(limit=limit)
+        if handled:
+            print("\n".join(handled))
+        elif once:
+            print("no publisher backend jobs")
+        if once:
+            return
+        if not handled:
+            sleep(max(float(poll_interval), 0.1))
+
+
 def cmd_publisher_worker(args: argparse.Namespace) -> None:
     """Run publisher backend-owned jobs such as cover generation."""
     from forwin.models.base import get_engine, get_session_factory, init_db
@@ -259,11 +280,12 @@ def cmd_publisher_worker(args: argparse.Namespace) -> None:
         init_db(engine)
         Session = get_session_factory(engine)
         runtime = RuntimeContainer.from_config(config, role="publisher_worker").services().publisher_runtime
-        handled = runtime.backend_jobs.run_pending_once(limit=args.limit)
-        if handled:
-            print("\n".join(handled))
-        elif args.once:
-            print("no publisher backend jobs")
+        run_publisher_worker_loop(
+            runtime.backend_jobs,
+            limit=args.limit,
+            once=args.once,
+            poll_interval=args.poll_interval,
+        )
     finally:
         engine.dispose()
 
@@ -361,6 +383,7 @@ def build_parser() -> argparse.ArgumentParser:
     publisher_worker = sub.add_parser("publisher-worker", help="运行 publisher 后端任务 worker")
     publisher_worker.add_argument("--once", action="store_true", help="只执行一轮后退出")
     publisher_worker.add_argument("--limit", type=int, default=1, help="单轮处理任务数")
+    publisher_worker.add_argument("--poll-interval", type=float, default=2.0, help="无任务时轮询间隔秒数")
 
     outbox_worker = sub.add_parser("outbox-worker", help="运行 outbox side-effect worker")
     outbox_worker.add_argument("--worker-id", default="", help="Worker id")

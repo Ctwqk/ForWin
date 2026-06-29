@@ -1580,6 +1580,56 @@ test('controller heartbeat keeps login QR throttled after service worker restart
   assert.equal(loginQrNotifications[1].source, 'restart-2');
 });
 
+test('controller does not locally throttle login QR when backend does not dispatch', async () => {
+  let captureCalls = 0;
+  const loginQrNotifications = [];
+  const throttleState = new Map();
+  const { controller } = makeController({
+    inspectPlatformState: async (platformId) => (
+      platformId === 'qidian'
+        ? {
+          ok: true,
+          tabId: 987,
+          currentUrl: 'https://write.qq.com/portal/login',
+          platform: 'qidian',
+          authenticated: false,
+          loginVisible: true,
+        }
+        : null
+    ),
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      return {
+        ok: true,
+        imageDataUrl: `data:image/png;base64,cXI${captureCalls}=`,
+        source: `not-dispatched-${captureCalls}`,
+      };
+    },
+    getPlatformState: async () => ({}),
+    getCookies: async () => [],
+    getLoginQrLastNotifiedAtMs: async (platformId, currentUrl) => (
+      throttleState.get(`${platformId}:${currentUrl}`) || 0
+    ),
+    setLoginQrLastNotifiedAtMs: async (platformId, currentUrl, notifiedAtMs) => {
+      throttleState.set(`${platformId}:${currentUrl}`, Number(notifiedAtMs || 0));
+    },
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      notifyLoginQr: async (payload) => {
+        loginQrNotifications.push(payload);
+        return { ok: true, dispatched: false, throttled: true, message: 'login QR notification throttled' };
+      },
+    },
+  });
+
+  await controller.sendHeartbeat();
+  await controller.sendHeartbeat();
+
+  assert.equal(captureCalls, 2);
+  assert.equal(loginQrNotifications.length, 2);
+  assert.equal(throttleState.size, 0);
+});
+
 test('controller lets active login sessions own QR notifications for their tabs', async () => {
   let captureCalls = 0;
   const { controller, loginQrNotifications } = makeController({

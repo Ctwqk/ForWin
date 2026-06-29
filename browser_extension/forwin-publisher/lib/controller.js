@@ -1184,7 +1184,9 @@ export class PublisherExtensionController {
         source: captureSource,
         captured_at: new Date().toISOString(),
       });
-      await this.setLoginQrLastNotifiedAtMs(session, currentUrl, nowMs);
+      if (result?.ok && result?.dispatched) {
+        await this.setLoginQrLastNotifiedAtMs(session, currentUrl, nowMs);
+      }
       await this.recordLoginQrNotificationEvent({
         platform: session.platformId,
         tab_id: session.popupTabId,

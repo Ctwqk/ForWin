@@ -115,7 +115,7 @@ def test_publisher_manager_allows_fresh_login_qr_after_short_throttle_window(mon
     assert len(notifier.calls) == 2
 
 
-def test_publisher_manager_never_reposts_same_login_qr_image(monkeypatch) -> None:
+def test_publisher_manager_allows_same_login_qr_after_short_throttle_window(monkeypatch) -> None:
     base_time = datetime(2026, 6, 29, 21, 0, tzinfo=timezone.utc)
     times = iter([base_time, base_time + timedelta(seconds=121)])
     monkeypatch.setattr(publisher_manager_module, "_utc_now", lambda: next(times))
@@ -142,10 +142,8 @@ def test_publisher_manager_never_reposts_same_login_qr_image(monkeypatch) -> Non
 
     assert first["dispatched"] is True
     assert second["ok"] is True
-    assert second["dispatched"] is False
-    assert second["throttled"] is True
-    assert second["message"] == "login QR notification throttled"
-    assert len(notifier.calls) == 1
+    assert second["dispatched"] is True
+    assert len(notifier.calls) == 2
 
 
 def test_login_qr_notification_posts_multipart_payload() -> None:

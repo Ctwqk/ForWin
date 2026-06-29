@@ -120,6 +120,7 @@ async function appendLoginQrNotificationStatus(event) {
   if (
     entry.phase === 'sent'
     && entry.ok
+    && entry.dispatched
     && entry.platform
     && entry.current_url
     && !entry.message.includes('throttled')
@@ -540,7 +541,9 @@ async function notifyLoginQrWithThrottle(payload) {
     };
   }
   const result = await withBackendClient((client) => client.notifyLoginQr(payload));
-  await setLoginQrLastNotifiedAtMs(platform, currentUrl, nowMs);
+  if (result?.ok && result?.dispatched) {
+    await setLoginQrLastNotifiedAtMs(platform, currentUrl, nowMs);
+  }
   return result;
 }
 

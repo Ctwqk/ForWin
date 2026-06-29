@@ -658,6 +658,9 @@
     if (!rect) {
       return -1;
     }
+    if (isExpiredLoginQrImage(element)) {
+      return -1;
+    }
     const label = elementLabel(element);
     const lowerTag = String(element.tagName || '').toLowerCase();
     const squareRatio = Math.min(rect.width, rect.height) / Math.max(rect.width, rect.height);
@@ -680,7 +683,22 @@
     return score;
   }
 
-  function loginQrCandidates() {
+  function isExpiredLoginQrImage(element) {
+    if (!element) {
+      return false;
+    }
+    const source = String(element.currentSrc || element.src || element.getAttribute?.('src') || '').toLowerCase();
+    const label = elementLabel(element);
+    return includesAny(`${source} ${label}`, [
+      'qrcode_expired',
+      'qr_expired',
+      '二维码已过期',
+      '已过期',
+      'expired',
+    ]);
+  }
+
+  function loginQrCandidates(options = {}) {
     const selectors = [
       'canvas',
       'img[src^="data:image"]',
@@ -706,7 +724,7 @@
       }
       seen.add(element);
       const score = loginQrCandidateScore(element);
-      if (score >= 4) {
+      if (score >= 4 || (options.includeExpired && isExpiredLoginQrImage(element))) {
         candidates.push({ element, score });
       }
     }
@@ -735,6 +753,9 @@
   }
 
   async function imageToLoginQrDataUrl(image) {
+    if (isExpiredLoginQrImage(image)) {
+      return '';
+    }
     const source = String(image.currentSrc || image.src || image.getAttribute('src') || '');
     if (source.startsWith('data:image/')) {
       return source;
@@ -752,6 +773,20 @@
     } catch (_error) {
       return '';
     }
+  }
+
+  function visibleClickTarget(element) {
+    if (!(element instanceof HTMLElement)) {
+      return false;
+    }
+    const rect = element.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+      return false;
+    }
+    const style = window.getComputedStyle(element);
+    return style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && Number(style.opacity || '1') !== 0;
   }
 
   function isVisibleSmallClickTarget(element) {
@@ -800,11 +835,121 @@
     element.click?.();
   }
 
+  async function acceptVisibleLoginAgreements() {
+    const selectors = [
+      '#agree6',
+      'label[for="agree6"]',
+      '#agree5',
+      'label[for="agree5"]',
+      '#loginArgeeAcount6',
+      'label[for="loginArgeeAcount6"]',
+      'input.agree-button[type="checkbox"]',
+      '.pact input[type="checkbox"]',
+      '.slogin-form-protocol input[type="checkbox"]',
+      '.slogin-form-protocol__checkbox',
+      '.slogin-form-protocol [role="checkbox"]',
+    ];
+    const elements = Array.from(document.querySelectorAll(selectors.join(',')))
+      .filter((element) => visibleClickTarget(element));
+    let clicked = false;
+    for (const element of elements) {
+      const input = element instanceof HTMLInputElement
+        ? element
+        : (element.getAttribute('for')
+          ? document.getElementById(element.getAttribute('for'))
+          : element.querySelector?.('input[type="checkbox"]'));
+      if (input instanceof HTMLInputElement && input.checked) {
+        continue;
+      }
+      dispatchPointerClick(element);
+      if (input instanceof HTMLInputElement && !input.checked) {
+        input.checked = true;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+      clicked = true;
+    }
+    if (clicked) {
+      await sleep(250);
+    }
+    return clicked;
+  }
+
+  async function clickVisibleLoginQrLaunchers() {
+    const selectors = [
+      '#wxLoginButton',
+      '.wechat-login button.login-btn',
+      '.weixin-login button.login-btn',
+      '#div_wxCheckAgree button',
+    ];
+    const launcher = Array.from(document.querySelectorAll(selectors.join(',')))
+      .find((element) => visibleClickTarget(element)
+        && /立即登录|微信登录|登录/.test(normalizeText(element.innerText || element.textContent || '')));
+    if (!launcher) {
+      return false;
+    }
+    dispatchPointerClick(launcher);
+    await sleep(500);
+    return true;
+  }
+
+  function loginQrRefreshControls() {
+    const selectors = [
+      '.js_refresh_qrcode',
+      '.js_web_qrcode_reload',
+      '#imgQrCodeReload',
+      '.web_qrcode_refresh_btn',
+      '.js_refresh_qrcode_mask',
+      'button',
+      'a',
+      'div',
+      'span',
+    ];
+    const seen = new Set();
+    return Array.from(document.querySelectorAll(selectors.join(',')))
+      .filter((element) => {
+        if (seen.has(element)) {
+          return false;
+        }
+        seen.add(element);
+        const label = normalizeText([
+          element.innerText,
+          element.textContent,
+          element.className,
+          element.id,
+          element.getAttribute?.('aria-label'),
+          element.getAttribute?.('title'),
+        ].join(' '));
+        return /刷新|重试|再次登录|reload|refresh|js_refresh_qrcode|imgQrCodeReload/.test(label);
+      });
+  }
+
+  async function refreshExpiredLoginQr() {
+    const expired = loginQrCandidates({ includeExpired: true }).find((element) => isExpiredLoginQrImage(element));
+    const hasExpiredText = includesAny(pageText(), ['二维码已过期', '请点击刷新', '重试', '再次扫描登录']);
+    if (!expired && !hasExpiredText) {
+      return false;
+    }
+    const controls = loginQrRefreshControls();
+    for (const control of controls) {
+      dispatchPointerClick(control);
+      await sleep(500);
+      const candidate = await waitForLoginQrCandidate(5000);
+      if (candidate && !isExpiredLoginQrImage(candidate)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   async function waitForLoginQrCandidate(timeoutMs = 8000) {
     return waitForCondition(() => loginQrCandidates()[0] || null, timeoutMs);
   }
 
   async function activateScanLoginTab() {
+    await acceptVisibleLoginAgreements();
+    await clickVisibleLoginQrLaunchers();
+    await refreshExpiredLoginQr();
     if (loginQrCandidates()[0]) {
       return true;
     }
@@ -821,12 +966,16 @@
       return false;
     }
     dispatchPointerClick(scanTab);
-    await waitForLoginQrCandidate();
-    return true;
+    await sleep(300);
+    await acceptVisibleLoginAgreements();
+    await clickVisibleLoginQrLaunchers();
+    await refreshExpiredLoginQr();
+    return Boolean(await waitForLoginQrCandidate());
   }
 
   async function extractLoginQrImage() {
     await activateScanLoginTab();
+    await refreshExpiredLoginQr();
     for (const element of loginQrCandidates()) {
       const tag = String(element.tagName || '').toLowerCase();
       const imageDataUrl = tag === 'canvas'

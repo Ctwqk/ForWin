@@ -328,6 +328,39 @@ test('controller ignores login QR notification failures while login remains visi
   assert.equal(events.at(-1).payload.connected, false);
 });
 
+test('controller refuses to send debugger screenshots as login QR notifications', async () => {
+  const { controller, loginQrNotifications, loginQrStatusEvents } = makeController({
+    inspectPlatformState: async (platformId) => (
+      platformId === 'fanqie'
+        ? {
+          ok: true,
+          tabId: 321,
+          currentUrl: 'https://fanqienovel.com/main/writer/login',
+          platform: 'fanqie',
+          authenticated: false,
+          loginVisible: true,
+        }
+        : null
+    ),
+    captureLoginQrImage: async () => ({
+      ok: true,
+      imageDataUrl: 'data:image/png;base64,c2NyZWVuc2hvdA==',
+      source: 'debugger-screenshot',
+    }),
+    getPlatformState: async () => ({}),
+    getCookies: async () => [],
+  });
+
+  await controller.sendHeartbeat();
+
+  assert.equal(loginQrNotifications.length, 0);
+  assert.deepEqual(
+    loginQrStatusEvents.map((event) => event.phase),
+    ['capture-start', 'capture-rejected'],
+  );
+  assert.equal(loginQrStatusEvents[1].reason, 'non-qr-screenshot-capture');
+});
+
 test('controller restores backend sessions before heartbeat even when local browser already has cookies', async () => {
   const heartbeatCalls = [];
   const { controller, restoredCookies } = makeController({
@@ -1278,7 +1311,7 @@ test('controller records login QR notification status for successful heartbeat s
     captureLoginQrImage: async () => ({
       ok: true,
       imageDataUrl: 'data:image/png;base64,cXI=',
-      source: 'debugger-screenshot',
+      source: 'image',
     }),
     getPlatformState: async () => ({}),
     getCookies: async () => [],
@@ -1318,7 +1351,7 @@ test('controller heartbeat retries login QR notification after a failed attempt'
     captureLoginQrImage: async () => ({
       ok: true,
       imageDataUrl: 'data:image/png;base64,cXI=',
-      source: 'debugger-screenshot',
+      source: 'image',
     }),
     getPlatformState: async () => ({}),
     getCookies: async (platformId) => (

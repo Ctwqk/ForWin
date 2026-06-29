@@ -21,3 +21,21 @@ test('platform agent uses browser-like scan tab activation and delayed QR wait',
   assert.match(source, /li,\[role="button"\],\[tab\]/);
   assert.match(source, /connect\/qrcode/);
 });
+
+test('platform agent refreshes expired login QR images before extraction', async () => {
+  const source = await readFile(new URL('../platform-agent.js', import.meta.url), 'utf8');
+
+  assert.match(source, /function\s+isExpiredLoginQrImage\s*\(/);
+  assert.match(source, /qrcode_expired/);
+  assert.match(source, /async\s+function\s+refreshExpiredLoginQr\s*\(/);
+  assert.match(source, /js_refresh_qrcode/);
+  assert.match(source, /imgQrCodeReload/);
+});
+
+test('platform agent can pass required login agreement gates before QR activation', async () => {
+  const source = await readFile(new URL('../platform-agent.js', import.meta.url), 'utf8');
+
+  assert.match(source, /async\s+function\s+acceptVisibleLoginAgreements\s*\(/);
+  assert.match(source, /agree6/);
+  assert.match(source, /wxLoginButton/);
+});

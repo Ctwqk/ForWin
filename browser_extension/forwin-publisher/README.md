@@ -47,7 +47,8 @@ Firefox 临时加载：
 - 番茄扫码登录
 - 扫码登录二维码通过后端转发到 Discord webhook（后端需配置
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` 或
-  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE`）
+  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE`）。扩展只应转发直接提取到的
+  新鲜二维码图片；整页截图和已过期二维码会被拦截。
 - 保存草稿 / 直接发布
 - 扩展心跳回写
 

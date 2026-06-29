@@ -120,3 +120,5 @@ real browser login or browser clicking.
 - Keep publisher extension API keys and session secrets separate from Basic Auth.
 - Keep Discord login QR webhooks in environment secrets or mounted secret files;
   do not commit webhook URLs or paste them into deployment logs.
+- Keep QR forwarding disabled until a deployed browser build has verified a
+  direct, non-expired QR capture source; screenshots are intentionally rejected.

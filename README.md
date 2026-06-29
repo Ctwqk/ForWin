@@ -123,7 +123,8 @@ If you want login QR codes forwarded to Discord when a publisher platform asks
 for scan-login, set `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`. In production,
 prefer `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` and mount the webhook as a
 secret file so it is not committed, printed in shell history, or baked into an
-image.
+image. The publisher extension only forwards directly extracted, fresh QR images;
+full-page screenshots and expired QR placeholders are not sent.
 
 ### Current production deployment
 

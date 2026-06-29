@@ -1370,6 +1370,18 @@ async function extractLoginQrFromFrames(tabId) {
   return null;
 }
 
+async function extractLoginQrFromTopFrame(tabId) {
+  try {
+    const response = await sendLoginQrExtractionMessage(tabId);
+    if (response?.imageDataUrl) {
+      return response;
+    }
+    return null;
+  } catch (_error) {
+    return null;
+  }
+}
+
 async function captureLoginQrImage(tabId) {
   if (!tabId) {
     return { ok: false, error: 'missing-tab-id' };
@@ -1381,15 +1393,9 @@ async function captureLoginQrImage(tabId) {
       tabReadyRegistry.markReady(tabId, READY_CHANNELS.PLATFORM_AGENT);
     }
   }
-  if (ready) {
-    try {
-      const response = await sendLoginQrExtractionMessage(tabId);
-      if (response?.imageDataUrl) {
-        return response;
-      }
-    } catch (_error) {
-      // Fall through to a visible-tab screenshot when DOM extraction is blocked.
-    }
+  const topFrameResponse = await extractLoginQrFromTopFrame(tabId);
+  if (topFrameResponse?.imageDataUrl) {
+    return topFrameResponse;
   }
   const frameResponse = await extractLoginQrFromFrames(tabId);
   if (frameResponse?.imageDataUrl) {

@@ -1087,6 +1087,7 @@ export class PublisherExtensionController {
       const imageDataUrl = typeof capture === 'string'
         ? capture
         : String(capture?.imageDataUrl || capture?.image_data_url || '');
+      const captureSource = String(capture?.source || '');
       if (!imageDataUrl) {
         await this.recordLoginQrNotificationEvent({
           platform: session.platformId,
@@ -1094,7 +1095,19 @@ export class PublisherExtensionController {
           current_url: currentUrl,
           phase: 'capture-empty',
           reason: String(capture?.error || 'login-qr-image-empty'),
-          source: String(capture?.source || ''),
+          source: captureSource,
+        });
+        return { skipped: true };
+      }
+      if (captureSource === 'debugger-screenshot') {
+        await this.recordLoginQrNotificationEvent({
+          platform: session.platformId,
+          tab_id: session.popupTabId,
+          current_url: currentUrl,
+          phase: 'capture-rejected',
+          reason: 'non-qr-screenshot-capture',
+          source: captureSource,
+          image_data_url_length: imageDataUrl.length,
         });
         return { skipped: true };
       }
@@ -1104,7 +1117,7 @@ export class PublisherExtensionController {
         tab_id: session.popupTabId,
         current_url: currentUrl,
         phase: 'captured',
-        source: String(capture?.source || ''),
+        source: captureSource,
         image_data_url_length: imageDataUrl.length,
       });
       const result = await this.deps.backend.notifyLoginQr({
@@ -1112,7 +1125,7 @@ export class PublisherExtensionController {
         platform: session.platformId,
         current_url: currentUrl,
         image_data_url: imageDataUrl,
-        source: String(capture?.source || ''),
+        source: captureSource,
         captured_at: new Date().toISOString(),
       });
       await this.recordLoginQrNotificationEvent({

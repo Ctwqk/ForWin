@@ -638,12 +638,37 @@
     return attrs.map((item) => String(item || '')).join(' ').toLowerCase();
   }
 
-  function visibleElementRect(element) {
+  function nearbyLoginQrText(element, maxDepth = 4) {
+    const parts = [];
+    let node = element;
+    let depth = 0;
+    while (node && depth < maxDepth) {
+      if (node instanceof HTMLElement) {
+        const rect = node.getBoundingClientRect();
+        const style = window.getComputedStyle(node);
+        if (rect.width > 0
+          && rect.height > 0
+          && style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && Number(style.opacity || '1') !== 0) {
+          parts.push(node.innerText || node.textContent || '');
+        }
+      }
+      node = node.parentElement;
+      depth += 1;
+    }
+    return normalizeText(parts.join(' ')).toLowerCase();
+  }
+
+  function visibleElementRect(element, options = {}) {
     if (!element || typeof element.getBoundingClientRect !== 'function') {
       return null;
     }
     const rect = element.getBoundingClientRect();
-    if (!rect || rect.width < 64 || rect.height < 64) {
+    if (!rect) {
+      return null;
+    }
+    if (!options.allowSmall && (rect.width < 64 || rect.height < 64)) {
       return null;
     }
     const style = window.getComputedStyle(element);
@@ -653,8 +678,32 @@
     return rect;
   }
 
+  function intrinsicLoginQrRect(element) {
+    if (!(element instanceof HTMLImageElement)) {
+      return null;
+    }
+    const source = String(element.currentSrc || element.src || element.getAttribute?.('src') || '');
+    const label = elementLabel(element);
+    const naturalWidth = Number(element.naturalWidth || 0);
+    const naturalHeight = Number(element.naturalHeight || 0);
+    const isDirectWeChatQr = source.includes('/connect/qrcode/')
+      || label.includes('js_qrcode_img')
+      || label.includes('web_qrcode_img');
+    if (!isDirectWeChatQr || naturalWidth < 96 || naturalHeight < 96) {
+      return null;
+    }
+    return {
+      width: naturalWidth,
+      height: naturalHeight,
+    };
+  }
+
+  function loginQrCandidateRect(element) {
+    return visibleElementRect(element) || intrinsicLoginQrRect(element);
+  }
+
   function loginQrCandidateScore(element) {
-    const rect = visibleElementRect(element);
+    const rect = loginQrCandidateRect(element);
     if (!rect) {
       return -1;
     }
@@ -689,11 +738,14 @@
     }
     const source = String(element.currentSrc || element.src || element.getAttribute?.('src') || '').toLowerCase();
     const label = elementLabel(element);
-    return includesAny(`${source} ${label}`, [
+    const nearbyText = nearbyLoginQrText(element);
+    return includesAny(`${source} ${label} ${nearbyText}`, [
       'qrcode_expired',
       'qr_expired',
       '二维码已过期',
+      '二维码已失效',
       '已过期',
+      '已失效',
       'expired',
     ]);
   }
@@ -907,26 +959,64 @@
     ];
     const seen = new Set();
     return Array.from(document.querySelectorAll(selectors.join(',')))
-      .filter((element) => {
+      .map((element) => {
         if (seen.has(element)) {
-          return false;
+          return null;
         }
         seen.add(element);
-        const label = normalizeText([
-          element.innerText,
-          element.textContent,
-          element.className,
-          element.id,
-          element.getAttribute?.('aria-label'),
-          element.getAttribute?.('title'),
-        ].join(' '));
-        return /刷新|重试|再次登录|reload|refresh|js_refresh_qrcode|imgQrCodeReload/.test(label);
-      });
+        const score = loginQrRefreshControlScore(element);
+        return score > 0 ? { element, score } : null;
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.score - left.score)
+      .map((item) => item.element);
+  }
+
+  function loginQrRefreshControlScore(element) {
+    if (!visibleClickTarget(element)) {
+      return -1;
+    }
+    const label = normalizeText([
+      element.innerText,
+      element.textContent,
+      element.className,
+      element.id,
+      element.getAttribute?.('aria-label'),
+      element.getAttribute?.('title'),
+    ].join(' '));
+    if (!/刷新|点击刷新|重试|再次登录|reload|refresh|js_refresh_qrcode|imgQrCodeReload/.test(label)) {
+      return -1;
+    }
+    const rect = element.getBoundingClientRect();
+    let score = 1;
+    if (/^(点击刷新|刷新|重试|再次登录)$/.test(label)) {
+      score += 30;
+    } else if (/点击刷新|请点击刷新/.test(label)) {
+      score += 20;
+    }
+    if (/js_refresh_qrcode|imgQrCodeReload|web_qrcode_refresh|qrcode.*cover|code__cover/i.test(label)) {
+      score += 15;
+    }
+    if (rect.width <= 260 && rect.height <= 260) {
+      score += 10;
+    }
+    if (rect.width > 480 || rect.height > 480 || label.length > 180) {
+      score -= 20;
+    }
+    return score;
   }
 
   async function refreshExpiredLoginQr() {
     const expired = loginQrCandidates({ includeExpired: true }).find((element) => isExpiredLoginQrImage(element));
-    const hasExpiredText = includesAny(pageText(), ['二维码已过期', '请点击刷新', '重试', '再次扫描登录']);
+    const hasExpiredText = includesAny(pageText(), [
+      '二维码已过期',
+      '二维码已失效',
+      '已失效',
+      '请点击刷新',
+      '点击刷新',
+      '重试',
+      '再次扫描登录',
+    ]);
     if (!expired && !hasExpiredText) {
       return false;
     }

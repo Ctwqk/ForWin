@@ -121,4 +121,5 @@ real browser login or browser clicking.
 - Keep Discord login QR webhooks in environment secrets or mounted secret files;
   do not commit webhook URLs or paste them into deployment logs.
 - Keep QR forwarding disabled until a deployed browser build has verified a
-  direct, non-expired QR capture source; screenshots are intentionally rejected.
+  direct, non-expired QR capture source; screenshots and invalid QR placeholders
+  such as "二维码已失效 / 点击刷新" are intentionally rejected.

@@ -124,7 +124,8 @@ for scan-login, set `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`. In production,
 prefer `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` and mount the webhook as a
 secret file so it is not committed, printed in shell history, or baked into an
 image. The publisher extension only forwards directly extracted, fresh QR images;
-full-page screenshots and expired QR placeholders are not sent.
+full-page screenshots and expired/invalid QR placeholders such as "二维码已失效 /
+点击刷新" are not sent.
 
 ### Current production deployment
 

@@ -28,9 +28,22 @@ test('platform agent refreshes expired login QR images before extraction', async
 
   assert.match(source, /function\s+isExpiredLoginQrImage\s*\(/);
   assert.match(source, /qrcode_expired/);
+  assert.match(source, /二维码已失效/);
+  assert.match(source, /nearbyLoginQrText/);
   assert.match(source, /async\s+function\s+refreshExpiredLoginQr\s*\(/);
   assert.match(source, /js_refresh_qrcode/);
   assert.match(source, /imgQrCodeReload/);
+  assert.match(source, /点击刷新/);
+  assert.match(source, /loginQrRefreshControlScore/);
+});
+
+test('platform agent can extract direct WeChat QR images with intrinsic dimensions', async () => {
+  const source = await readFile(new URL('../platform-agent.js', import.meta.url), 'utf8');
+
+  assert.match(source, /function\s+loginQrCandidateRect\s*\(/);
+  assert.match(source, /naturalWidth/);
+  assert.match(source, /connect\/qrcode/);
+  assert.match(source, /js_qrcode_img/);
 });
 
 test('platform agent can pass required login agreement gates before QR activation', async () => {

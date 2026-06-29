@@ -1349,22 +1349,27 @@ async function queryLoginQrFrames(tabId) {
 }
 
 async function extractLoginQrFromFrames(tabId) {
-  const targets = (await queryLoginQrFrames(tabId))
-    .filter((target) => target.frameId !== 0);
-  for (const target of targets) {
-    try {
-      const response = await sendLoginQrExtractionMessage(tabId, { frameId: target.frameId });
-      if (response?.imageDataUrl) {
-        return {
-          ...response,
-          frameUrl: target.url,
-          source: response.source
-            ? `frame:${target.frameId}:${response.source}`
-            : `frame:${target.frameId}:image`,
-        };
+  for (let frameExtractionAttempt = 0; frameExtractionAttempt < 2; frameExtractionAttempt += 1) {
+    const targets = (await queryLoginQrFrames(tabId))
+      .filter((target) => target.frameId !== 0);
+    for (const target of targets) {
+      try {
+        const response = await sendLoginQrExtractionMessage(tabId, { frameId: target.frameId });
+        if (response?.imageDataUrl) {
+          return {
+            ...response,
+            frameUrl: target.url,
+            source: response.source
+              ? `frame:${target.frameId}:${response.source}`
+              : `frame:${target.frameId}:image`,
+          };
+        }
+      } catch (_error) {
+        // Continue to the next frame and then to the debugger fallback.
       }
-    } catch (_error) {
-      // Continue to the next frame and then to the debugger fallback.
+    }
+    if (frameExtractionAttempt === 0) {
+      await sleep(500);
     }
   }
   return null;

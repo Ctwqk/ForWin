@@ -610,18 +610,13 @@ test('controller ignores login QR notification failures while login remains visi
 
 test('controller refuses to send debugger screenshots as active login QR notifications', async () => {
   const { controller, loginQrNotifications, loginQrStatusEvents } = makeController({
-    inspectPlatformState: async (platformId) => (
-      platformId === 'fanqie'
-        ? {
-          ok: true,
-          tabId: 321,
-          currentUrl: 'https://fanqienovel.com/main/writer/login',
-          platform: 'fanqie',
-          authenticated: false,
-          loginVisible: true,
-        }
-        : null
-    ),
+    inspectLoginState: async () => ({
+      ok: true,
+      currentUrl: 'https://fanqienovel.com/main/writer/login',
+      platform: 'fanqie',
+      authenticated: false,
+      loginVisible: true,
+    }),
     captureLoginQrImage: async () => ({
       ok: true,
       imageDataUrl: 'data:image/png;base64,c2NyZWVuc2hvdA==',
@@ -636,7 +631,11 @@ test('controller refuses to send debugger screenshots as active login QR notific
     popupTabId: 321,
     lastUrl: 'https://fanqienovel.com/main/writer/login',
   });
-  await controller.sendHeartbeat();
+  await controller.handleTabUpdated(
+    321,
+    { url: 'https://fanqienovel.com/main/writer/login' },
+    { id: 321 },
+  );
 
   assert.equal(loginQrNotifications.length, 0);
   assert.deepEqual(
@@ -1619,9 +1618,9 @@ test('controller heartbeat does not send login QR notification without an active
   );
 });
 
-test('controller heartbeat suppresses concurrent login QR sends for an active login session', async () => {
+test('controller heartbeat suppresses login QR sends for an active login session', async () => {
   let captureCalls = 0;
-  const { controller, loginQrNotifications } = makeController({
+  const { controller, loginQrNotifications, loginQrStatusEvents } = makeController({
     inspectPlatformState: async (platformId) => (
       platformId === 'fanqie'
         ? {
@@ -1657,8 +1656,15 @@ test('controller heartbeat suppresses concurrent login QR sends for an active lo
     controller.sendHeartbeat(),
   ]);
 
-  assert.equal(captureCalls, 1);
-  assert.equal(loginQrNotifications.length, 1);
+  assert.equal(captureCalls, 0);
+  assert.equal(loginQrNotifications.length, 0);
+  assert.deepEqual(
+    loginQrStatusEvents.map((event) => event.reason),
+    [
+      'heartbeat-active-login-session-qr-suppressed',
+      'heartbeat-active-login-session-qr-suppressed',
+    ],
+  );
 });
 
 test('controller heartbeat never sends a fresh QR for repeated plain login-page heartbeats', async () => {
@@ -1782,23 +1788,18 @@ test('controller heartbeat does not dispatch login QR after service worker resta
   assert.equal(throttleState.size, 0);
 });
 
-test('controller locally throttles login QR when backend accepts without dispatch', async () => {
+test('controller locally throttles active login QR when backend accepts without dispatch', async () => {
   let captureCalls = 0;
   const loginQrNotifications = [];
   const throttleState = new Map();
   const { controller } = makeController({
-    inspectPlatformState: async (platformId) => (
-      platformId === 'qidian'
-        ? {
-          ok: true,
-          tabId: 987,
-          currentUrl: 'https://write.qq.com/portal/login',
-          platform: 'qidian',
-          authenticated: false,
-          loginVisible: true,
-        }
-        : null
-    ),
+    inspectLoginState: async () => ({
+      ok: true,
+      currentUrl: 'https://write.qq.com/portal/login',
+      platform: 'qidian',
+      authenticated: false,
+      loginVisible: true,
+    }),
     captureLoginQrImage: async () => {
       captureCalls += 1;
       return {
@@ -1829,8 +1830,16 @@ test('controller locally throttles login QR when backend accepts without dispatc
     popupTabId: 987,
     lastUrl: 'https://write.qq.com/portal/login',
   });
-  await controller.sendHeartbeat();
-  await controller.sendHeartbeat();
+  await controller.handleTabUpdated(
+    987,
+    { url: 'https://write.qq.com/portal/login' },
+    { id: 987 },
+  );
+  await controller.handleTabUpdated(
+    987,
+    { url: 'https://write.qq.com/portal/login' },
+    { id: 987 },
+  );
 
   assert.equal(captureCalls, 1);
   assert.equal(loginQrNotifications.length, 1);
@@ -1957,22 +1966,17 @@ test('controller records skipped login QR notification status for plain heartbea
   assert.equal(loginQrStatusEvents[0].reason, 'heartbeat-login-page-without-active-login-session');
 });
 
-test('controller heartbeat retries active login QR notification after a failed attempt', async () => {
+test('controller retries active login QR notification after a failed attempt', async () => {
   let notifyAttempts = 0;
   const loginQrNotifications = [];
   const { controller, loginQrStatusEvents } = makeController({
-    inspectPlatformState: async (platformId) => (
-      platformId === 'fanqie'
-        ? {
-          ok: true,
-          tabId: 789,
-          currentUrl: 'https://fanqienovel.com/main/writer/login',
-          platform: 'fanqie',
-          authenticated: false,
-          loginVisible: true,
-        }
-        : null
-    ),
+    inspectLoginState: async () => ({
+      ok: true,
+      currentUrl: 'https://fanqienovel.com/main/writer/login',
+      platform: 'fanqie',
+      authenticated: false,
+      loginVisible: true,
+    }),
     captureLoginQrImage: async () => ({
       ok: true,
       imageDataUrl: 'data:image/png;base64,cXI=',
@@ -2012,8 +2016,16 @@ test('controller heartbeat retries active login QR notification after a failed a
     popupTabId: 789,
     lastUrl: 'https://fanqienovel.com/main/writer/login',
   });
-  await controller.sendHeartbeat();
-  await controller.sendHeartbeat();
+  await controller.handleTabUpdated(
+    789,
+    { url: 'https://fanqienovel.com/main/writer/login' },
+    { id: 789 },
+  );
+  await controller.handleTabUpdated(
+    789,
+    { url: 'https://fanqienovel.com/main/writer/login' },
+    { id: 789 },
+  );
 
   assert.equal(notifyAttempts, 2);
   assert.equal(loginQrNotifications.length, 1);
@@ -2022,23 +2034,18 @@ test('controller heartbeat retries active login QR notification after a failed a
   assert.equal(loginQrStatusEvents.filter((event) => event.phase === 'sent').length, 1);
 });
 
-test('controller heartbeat throttles active login QR notification after backend accepts it without Discord dispatch', async () => {
+test('controller throttles active login QR notification after backend accepts it without Discord dispatch', async () => {
   let notifyAttempts = 0;
   let captureCalls = 0;
   const loginQrNotifications = [];
   const { controller, loginQrStatusEvents } = makeController({
-    inspectPlatformState: async (platformId) => (
-      platformId === 'fanqie'
-        ? {
-          ok: true,
-          tabId: 789,
-          currentUrl: 'https://fanqienovel.com/main/writer/login',
-          platform: 'fanqie',
-          authenticated: false,
-          loginVisible: true,
-        }
-        : null
-    ),
+    inspectLoginState: async () => ({
+      ok: true,
+      currentUrl: 'https://fanqienovel.com/main/writer/login',
+      platform: 'fanqie',
+      authenticated: false,
+      loginVisible: true,
+    }),
     captureLoginQrImage: async () => {
       captureCalls += 1;
       return {
@@ -2078,8 +2085,16 @@ test('controller heartbeat throttles active login QR notification after backend 
     popupTabId: 789,
     lastUrl: 'https://fanqienovel.com/main/writer/login',
   });
-  await controller.sendHeartbeat();
-  await controller.sendHeartbeat();
+  await controller.handleTabUpdated(
+    789,
+    { url: 'https://fanqienovel.com/main/writer/login' },
+    { id: 789 },
+  );
+  await controller.handleTabUpdated(
+    789,
+    { url: 'https://fanqienovel.com/main/writer/login' },
+    { id: 789 },
+  );
 
   assert.equal(notifyAttempts, 1);
   assert.equal(captureCalls, 1);

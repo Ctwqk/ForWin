@@ -1350,12 +1350,14 @@ export class PublisherExtensionController {
     const activeSession = this.loginSessions.get(tabId);
     if (activeSession?.platformId === platformId) {
       activeSession.lastUrl = currentUrl || activeSession.lastUrl;
-      return this.maybeNotifyLoginQr(activeSession, {
-        ...(inspection || {}),
-        currentUrl,
-        authenticated: false,
-        loginVisible: true,
+      await this.recordLoginQrNotificationEvent({
+        platform: platformId,
+        tab_id: tabId,
+        current_url: currentUrl,
+        phase: 'skipped',
+        reason: 'heartbeat-active-login-session-qr-suppressed',
       });
+      return { skipped: true, reason: 'heartbeat-active-login-session-qr-suppressed' };
     }
     this.heartbeatLoginQrNotificationSessions.delete(`${platformId}:${tabId}`);
     await this.recordLoginQrNotificationEvent({

@@ -265,6 +265,8 @@ with sync_playwright() as p:
                     "ok": False,
                     "error": f"{type(exc).__name__}: {str(exc)[:240]}",
                 }
+            finally:
+                page.close()
     finally:
         browser.close()
 print(json.dumps({"ok": True, "pages": results}, ensure_ascii=False))

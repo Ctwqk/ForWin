@@ -32,11 +32,11 @@ test('background throttles login QR notifications at the backend boundary', asyn
   assert.match(source, /async\s+notifyLoginQr\s*\(\s*payload\s*\)[\s\S]*notifyLoginQrWithThrottle\(payload\)/);
 });
 
-test('background only persists login QR throttle after Discord dispatch', async () => {
+test('background persists login QR throttle after backend accepts notification', async () => {
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 
-  assert.match(source, /if\s*\(\s*result\?\.ok\s*&&\s*result\?\.dispatched\s*\)/);
-  assert.match(source, /result\?\.dispatched[\s\S]*setLoginQrLastNotifiedAtMs\(platform,\s*currentUrl,\s*nowMs\)/);
+  assert.match(source, /if\s*\(\s*result\?\.ok\s*\)\s*\{\s*await\s+setLoginQrLastNotifiedAtMs\(platform,\s*currentUrl,\s*nowMs\)/);
+  assert.doesNotMatch(source, /if\s*\(\s*result\?\.ok\s*&&\s*result\?\.dispatched\s*\)/);
 });
 
 test('background persists login QR throttle from sent notification status events', async () => {
@@ -45,7 +45,6 @@ test('background persists login QR throttle from sent notification status events
   assert.match(source, /function\s+loginQrNotificationTimestampMs\s*\(\s*entry\s*\)/);
   assert.match(source, /appendLoginQrNotificationStatus[\s\S]*entry\.phase\s*===\s*'sent'/);
   assert.match(source, /appendLoginQrNotificationStatus[\s\S]*entry\.ok/);
-  assert.match(source, /appendLoginQrNotificationStatus[\s\S]*entry\.dispatched/);
   assert.match(source, /appendLoginQrNotificationStatus[\s\S]*!entry\.message\.includes\('throttled'\)/);
   assert.match(source, /setLoginQrLastNotifiedAtMs\(\s*entry\.platform,\s*entry\.current_url,\s*loginQrNotificationTimestampMs\(entry\),?\s*\)/);
 });

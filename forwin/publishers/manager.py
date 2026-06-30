@@ -177,7 +177,7 @@ class PublisherManager:
             source=source,
             captured_at=captured_at,
         )
-        if result.get("ok") and result.get("dispatched") and throttle_key[0] and throttle_key[1]:
+        if result.get("ok") and throttle_key[0] and throttle_key[1]:
             self._login_qr_notification_throttle[throttle_key] = (now, image_fingerprint)
         return result
 

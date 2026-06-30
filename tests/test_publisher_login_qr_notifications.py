@@ -86,6 +86,45 @@ def test_login_qr_notification_skips_when_webhook_is_not_configured() -> None:
     assert result["dispatched"] is False
 
 
+def test_publisher_manager_throttles_duplicate_login_qr_after_notifier_accepts_without_dispatch() -> None:
+    manager = PublisherManager(lambda: None)
+    notifier = _FakeLoginQrNotifier()
+
+    def accept_without_dispatch(**kwargs) -> dict[str, object]:
+        notifier.calls.append(kwargs)
+        return {
+            "ok": True,
+            "dispatched": False,
+            "message": "Discord login QR webhook is not configured.",
+            "server_time": "2026-06-29T21:00:00+00:00",
+        }
+
+    notifier.notify = accept_without_dispatch  # type: ignore[method-assign]
+    manager.login_qr_notifier = notifier
+
+    first = manager.notify_login_qr(
+        client_id="client-1",
+        platform="fanqie",
+        current_url="https://fanqienovel.com/main/writer/login?ticket=secret",
+        image_data_url=_png_data_url(),
+        source="frame:image",
+    )
+    second = manager.notify_login_qr(
+        client_id="client-1",
+        platform="fanqie",
+        current_url="https://fanqienovel.com/main/writer/login?ticket=rotated",
+        image_data_url=_png_data_url(),
+        source="frame:image",
+    )
+
+    assert first["ok"] is True
+    assert first["dispatched"] is False
+    assert second["ok"] is True
+    assert second["dispatched"] is False
+    assert second["throttled"] is True
+    assert len(notifier.calls) == 1
+
+
 def test_publisher_manager_throttles_duplicate_login_qr_notifications() -> None:
     manager = PublisherManager(lambda: None)
     notifier = _FakeLoginQrNotifier()

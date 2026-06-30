@@ -1573,7 +1573,7 @@ test('controller heartbeat does not dispatch login QR after service worker resta
   assert.equal(throttleState.size, 0);
 });
 
-test('controller does not locally throttle login QR when backend does not dispatch', async () => {
+test('controller locally throttles login QR when backend accepts without dispatch', async () => {
   let captureCalls = 0;
   const loginQrNotifications = [];
   const throttleState = new Map();
@@ -1610,7 +1610,7 @@ test('controller does not locally throttle login QR when backend does not dispat
       heartbeat: async () => ({ ok: true }),
       notifyLoginQr: async (payload) => {
         loginQrNotifications.push(payload);
-        return { ok: true, dispatched: false, throttled: true, message: 'login QR notification throttled' };
+        return { ok: true, dispatched: false, message: 'Discord login QR webhook is not configured.' };
       },
     },
   });
@@ -1623,9 +1623,9 @@ test('controller does not locally throttle login QR when backend does not dispat
   await controller.sendHeartbeat();
   await controller.sendHeartbeat();
 
-  assert.equal(captureCalls, 2);
-  assert.equal(loginQrNotifications.length, 2);
-  assert.equal(throttleState.size, 0);
+  assert.equal(captureCalls, 1);
+  assert.equal(loginQrNotifications.length, 1);
+  assert.equal(throttleState.size, 1);
 });
 
 test('controller lets active login sessions own QR notifications for their tabs', async () => {
@@ -1810,6 +1810,71 @@ test('controller heartbeat retries active login QR notification after a failed a
   assert.equal(loginQrNotifications.length, 1);
   assert.equal(loginQrNotifications[0].platform, 'fanqie');
   assert.equal(loginQrStatusEvents.filter((event) => event.phase === 'failed').length, 1);
+  assert.equal(loginQrStatusEvents.filter((event) => event.phase === 'sent').length, 1);
+});
+
+test('controller heartbeat throttles active login QR notification after backend accepts it without Discord dispatch', async () => {
+  let notifyAttempts = 0;
+  let captureCalls = 0;
+  const loginQrNotifications = [];
+  const { controller, loginQrStatusEvents } = makeController({
+    inspectPlatformState: async (platformId) => (
+      platformId === 'fanqie'
+        ? {
+          ok: true,
+          tabId: 789,
+          currentUrl: 'https://fanqienovel.com/main/writer/login',
+          platform: 'fanqie',
+          authenticated: false,
+          loginVisible: true,
+        }
+        : null
+    ),
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      return {
+        ok: true,
+        imageDataUrl: 'data:image/png;base64,cXI=',
+        source: 'image',
+      };
+    },
+    getPlatformState: async () => ({}),
+    getCookies: async (platformId) => (
+      platformId === 'fanqie'
+        ? [{ name: 'sessionid' }, { name: 'passport_auth_status' }]
+        : []
+    ),
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
+      getBrowserSession: async () => null,
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      claimNextCommentSyncJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      syncCommentsBatch: async () => ({ ok: true, inserted: 0, updated: 0 }),
+      notifyLoginQr: async (payload) => {
+        notifyAttempts += 1;
+        loginQrNotifications.push(payload);
+        return { ok: true, dispatched: false, message: 'Discord login QR webhook is not configured.' };
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+      updateCommentSyncJobResult: async () => ({ ok: true }),
+    },
+  });
+
+  controller.loginSessions.set(789, {
+    platformId: 'fanqie',
+    popupTabId: 789,
+    lastUrl: 'https://fanqienovel.com/main/writer/login',
+  });
+  await controller.sendHeartbeat();
+  await controller.sendHeartbeat();
+
+  assert.equal(notifyAttempts, 1);
+  assert.equal(captureCalls, 1);
+  assert.equal(loginQrNotifications.length, 1);
   assert.equal(loginQrStatusEvents.filter((event) => event.phase === 'sent').length, 1);
 });
 

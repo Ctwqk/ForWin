@@ -188,6 +188,61 @@ def test_browser_session_sync_does_not_downgrade_authenticated_heartbeat() -> No
         engine.dispose()
 
 
+def test_unverified_heartbeat_does_not_downgrade_authenticated_page_state() -> None:
+    engine, runtime = _runtime(
+        "publisher-runtime-heartbeat-preserve-authenticated",
+        preferred_client_id="client-1",
+    )
+    try:
+        runtime.connection_state.heartbeat(
+            client_id="client-1",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://forwin-app-swarm:8899",
+            platforms=[
+                {
+                    "platform": "qidian",
+                    "connected": True,
+                    "cookie_signal": True,
+                    "page_evidence_required": True,
+                    "page_inspected": True,
+                    "page_authenticated": True,
+                    "page_login_visible": False,
+                    "current_url": "https://write.qq.com/portal/dashboard",
+                    "last_error": "",
+                }
+            ],
+        )
+
+        runtime.connection_state.heartbeat(
+            client_id="client-1",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://forwin-app-swarm:8899",
+            platforms=[
+                {
+                    "platform": "qidian",
+                    "connected": True,
+                    "cookie_signal": True,
+                    "page_evidence_required": True,
+                    "page_inspected": False,
+                    "page_authenticated": False,
+                    "page_login_visible": False,
+                    "current_url": "",
+                    "last_error": "",
+                }
+            ],
+        )
+
+        items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
+        assert items["qidian"]["connected"] is True
+        assert items["qidian"]["preferred_client_state"]["connected"] is True
+    finally:
+        engine.dispose()
+
+
 def test_login_page_session_sync_does_not_overwrite_restorable_fanqie_session() -> None:
     engine, runtime = _runtime(
         "publisher-runtime-browser-fanqie-login-page-skip",

@@ -493,9 +493,37 @@ class ExtensionConnectionService:
                     if state is None:
                         state = PublisherConnectionState(platform_id=platform_id)
                         session.add(state)
+                    existing_payload: dict[str, Any] = {}
+                    if state.status_json:
+                        try:
+                            parsed = json.loads(str(state.status_json or "{}"))
+                        except json.JSONDecodeError:
+                            parsed = {}
+                        if isinstance(parsed, dict):
+                            existing_payload = parsed
                     state.extension_client_id = client_id
                     cookie_signal = bool(item.get("cookie_signal"))
                     login_evidence = platform_login_evidence(platform_id, item)
+                    preserve_authenticated_heartbeat = bool(
+                        status_payload_unverified_cookie_signal(item)
+                        and not login_evidence
+                        and state.connected
+                        and existing_payload.get("page_authenticated")
+                        and not platform_login_evidence(platform_id, existing_payload)
+                    )
+                    if preserve_authenticated_heartbeat:
+                        state.last_heartbeat_at = now
+                        self.upsert_extension_platform_state(
+                            session,
+                            client_id=client_id,
+                            platform_id=platform_id,
+                            connected=state.connected,
+                            login_method=state.login_method,
+                            last_error=state.last_error,
+                            status_payload=existing_payload,
+                            last_heartbeat_at=now,
+                        )
+                        continue
                     state.connected = bool(
                         (cookie_signal or bool(item.get("page_authenticated")))
                         and not login_evidence

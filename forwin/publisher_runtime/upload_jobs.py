@@ -759,6 +759,8 @@ class UploadJobService:
             job = session.get(PublisherUploadJob, job_id)
             if job is None or job.deleted_at is not None:
                 raise ValueError("上传任务不存在。")
+            if job.status in {"succeeded", "failed", "cancelled"}:
+                return self.serialize_upload_job(job)
 
             self.connection_state.ensure_extension_client(session, client_id)
             if client_id:

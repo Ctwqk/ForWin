@@ -8,7 +8,7 @@ from forwin.governance import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.governance import DecisionEvent
 from forwin.models.project import Project
-from forwin.models.publisher import PublisherUploadJob
+from forwin.models.publisher import PublisherConnectionState, PublisherUploadJob
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.publishers.manager import PublisherManager
 
@@ -156,6 +156,58 @@ def test_claim_next_upload_job_does_not_return_cover_generate() -> None:
         )
 
         assert claimed is None
+    finally:
+        engine.dispose()
+
+
+def test_terminal_upload_success_ignores_late_failure_result() -> None:
+    engine, runtime = _runtime("publisher-runtime-terminal-result-ignored")
+    try:
+        created = runtime.upload_jobs.create_upload_job(
+            platform="qidian",
+            book_name="测试书",
+            chapter_title="第一章",
+            body="正文",
+            upload_url=None,
+            publish=False,
+        )
+
+        succeeded = runtime.upload_jobs.update_upload_job_result(
+            job_id=created["job_id"],
+            client_id="client-1",
+            status="succeeded",
+            message="章节草稿已保存到起点。",
+            current_url="https://write.qq.com/portal/booknovels/chaptertmp/CBID/123456?entry=publish#ccid=987654321",
+            error="",
+            result_payload={
+                "mode": "draft",
+                "official_status": "drafted",
+                "remote_chapter_id": "987654321",
+            },
+        )
+        late_failure = runtime.upload_jobs.update_upload_job_result(
+            job_id=created["job_id"],
+            client_id="client-1",
+            status="failed",
+            message="上传失败。",
+            current_url="https://write.qq.com/portal/login",
+            error="平台页面没有准备好，无法执行上传。",
+            result_payload={"error_code": "platform-not-ready"},
+        )
+
+        assert succeeded["status"] == "succeeded"
+        assert late_failure["status"] == "succeeded"
+        assert late_failure["message"] == "章节草稿已保存到起点。"
+        assert late_failure["error"] == ""
+        assert late_failure["current_url"].endswith("#ccid=987654321")
+        assert late_failure["result_payload"]["remote_chapter_id"] == "987654321"
+        assert "error_code" not in late_failure["result_payload"]
+
+        with runtime.session_factory() as session:
+            state = session.get(PublisherConnectionState, "qidian")
+            assert state is not None
+            assert state.connected is True
+            assert state.last_error == ""
     finally:
         engine.dispose()
 

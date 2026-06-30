@@ -153,6 +153,33 @@ def test_publisher_manager_throttles_duplicate_login_qr_notifications() -> None:
     assert len(notifier.calls) == 1
 
 
+def test_publisher_manager_allows_changed_login_qr_inside_throttle_window() -> None:
+    manager = PublisherManager(lambda: None)
+    notifier = _FakeLoginQrNotifier()
+    manager.login_qr_notifier = notifier
+
+    first = manager.notify_login_qr(
+        client_id="client-1",
+        platform="fanqie",
+        current_url="https://fanqienovel.com/main/writer/login",
+        image_data_url=_png_data_url(b"first-qr"),
+        source="image",
+    )
+    second = manager.notify_login_qr(
+        client_id="client-1",
+        platform="fanqie",
+        current_url="https://fanqienovel.com/main/writer/login",
+        image_data_url=_png_data_url(b"fresh-qr"),
+        source="image",
+    )
+
+    assert first["dispatched"] is True
+    assert second["ok"] is True
+    assert second["dispatched"] is True
+    assert "throttled" not in second
+    assert len(notifier.calls) == 2
+
+
 def test_publisher_manager_allows_fresh_login_qr_after_short_throttle_window(monkeypatch) -> None:
     base_time = datetime(2026, 6, 29, 21, 0, tzinfo=timezone.utc)
     times = iter([base_time, base_time + timedelta(seconds=121)])

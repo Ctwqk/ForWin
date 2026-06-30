@@ -154,9 +154,12 @@ class PublisherManager:
         image_fingerprint = _login_qr_image_fingerprint(image_data_url)
         last_notification = self._login_qr_notification_throttle.get(throttle_key)
         if last_notification is not None:
-            last_notified_at, _last_image_fingerprint = last_notification
+            last_notified_at, last_image_fingerprint = last_notification
             recently_notified = now - last_notified_at < timedelta(
                 seconds=LOGIN_QR_NOTIFICATION_THROTTLE_SECONDS
+            )
+            recently_notified = (
+                recently_notified and image_fingerprint == last_image_fingerprint
             )
         else:
             recently_notified = False

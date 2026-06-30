@@ -50,6 +50,30 @@ Useful checks:
 | MCP health/upstream API connectivity | Confirms `forwin-mcp-swarm` can reach `forwin-app-swarm` |
 | publisher browser heartbeat | Confirms browser automation is logged in and connected |
 
+For a one-shot production publisher baseline check:
+
+```bash
+python scripts/check_production_publisher_baseline.py \
+  --api-base http://10.0.0.126:8899 \
+  --mcp-health-url http://10.0.0.126:8896/health \
+  --docker-context swarm-manager-150 \
+  --colima-profile swarmbridged
+```
+
+Interpretation:
+
+- `ok`: six ForWin Swarm services are healthy, app/MCP health checks pass, the
+  Discord publisher login webhook env is absent, and Fanqie/Qidian are connected
+  by both API and browser page evidence.
+- `degraded`: runtime is up, but a platform needs human login or page/API state
+  has not converged. Follow `blocked_items[*].human_action` and rerun the same
+  command.
+- `failed`: a required service, health endpoint, publisher browser, or Discord
+  env policy check failed.
+
+The verifier is read-only for ForWin business state. It must not create books,
+upload chapters, publish content, or record secrets.
+
 For recurring two-hour Codex/operator intervention checks, install the
 read-only supervisor on 150 from a source checkout or deployed copy. It checks
 GitHub PRs/issues, publisher upload jobs, MCP generation task state, publisher

@@ -169,6 +169,24 @@ publishing is enabled. See
 `docs/operations/forwin-production-processes.md` for operator checks and role
 details.
 
+Production publisher login and service baseline can be checked without
+publishing content:
+
+```bash
+python scripts/check_production_publisher_baseline.py \
+  --api-base http://10.0.0.126:8899 \
+  --mcp-health-url http://10.0.0.126:8896/health \
+  --docker-context swarm-manager-150 \
+  --colima-profile swarmbridged
+```
+
+The command emits one redacted JSON object. `status=ok` means service health,
+MCP health, publisher browser state, Discord-login-alert policy, and
+Fanqie/Qidian page/API login evidence all agree. `status=degraded` with
+`publisher_login_required` means the operator must log in to the named platform
+in the shared production publisher browser profile, then rerun the command. The
+command must not publish content or send Discord login messages.
+
 ### Personal LAN deployment
 
 1. Copy `.env.example` to `.env`.

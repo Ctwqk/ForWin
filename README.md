@@ -214,10 +214,8 @@ Set `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` or
 `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` only on trusted deployments. The
 webhook is used server-side; browser extensions never store the Discord webhook
 and only send the captured QR image to the authenticated ForWin extension API.
-Automatic heartbeats do not capture or send QR-code images. Once a platform
-moves from disconnected to connected, heartbeat or backend browser-session sync
-sends one Discord login-success confirmation so the operator knows the scan
-worked.
+Heartbeat and backend browser-session sync do not send Discord login-success
+confirmation messages.
 
 ### Codex / MCP operator
 

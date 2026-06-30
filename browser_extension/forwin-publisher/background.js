@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.50';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.51';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js';
@@ -26,6 +26,7 @@ const LOGIN_QR_DISABLED_KEY = 'forwinPublisherLoginQrDisabled';
 const HEARTBEAT_PLATFORM_STATES_KEY = 'forwinPublisherHeartbeatPlatformStates';
 const HEARTBEAT_ALARM = 'forwinPublisherHeartbeat';
 const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
+const LOGIN_QR_PLATFORM_THROTTLE_URL = '__platform__';
 const LOGIN_QR_DIRECT_EXTRACTION_TIMEOUT_MS = 15000;
 const TOP_FRAME_MESSAGE_OPTIONS = { frameId: 0 };
 const tabReadyRegistry = new TabReadyRegistry();
@@ -102,6 +103,9 @@ function loginQrNotificationTimestampMs(entry) {
 
 function loginQrNotificationsDisabled(result) {
   if (result?.disabled) {
+    return true;
+  }
+  if (result?.ok && result?.dispatched === false && !result?.throttled) {
     return true;
   }
   const message = String(result?.message || '').toLowerCase();
@@ -577,7 +581,10 @@ async function notifyLoginQrWithThrottle(payload) {
       message: 'login QR notifications disabled because Discord webhook is not configured',
     };
   }
-  const lastNotifiedAtMs = await getLoginQrLastNotifiedAtMs(platform, currentUrl);
+  const lastNotifiedAtMs = Math.max(
+    await getLoginQrLastNotifiedAtMs(platform, currentUrl),
+    await getLoginQrLastNotifiedAtMs(platform, LOGIN_QR_PLATFORM_THROTTLE_URL),
+  );
   if (
     lastNotifiedAtMs > 0
     && nowMs - lastNotifiedAtMs < LOGIN_QR_NOTIFICATION_THROTTLE_MS
@@ -592,6 +599,7 @@ async function notifyLoginQrWithThrottle(payload) {
   const result = await withBackendClient((client) => client.notifyLoginQr(payload));
   if (result?.ok) {
     await setLoginQrLastNotifiedAtMs(platform, currentUrl, nowMs);
+    await setLoginQrLastNotifiedAtMs(platform, LOGIN_QR_PLATFORM_THROTTLE_URL, nowMs);
   }
   if (loginQrNotificationsDisabled(result)) {
     await setLoginQrNotificationsDisabled(platform, true);

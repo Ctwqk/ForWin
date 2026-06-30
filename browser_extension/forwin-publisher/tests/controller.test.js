@@ -451,9 +451,12 @@ test('controller keeps login QR notifications disabled across refreshed login UR
 
 test('controller keeps disabled login QR notifications across service worker restart and refreshed login URLs', async () => {
   let captureCalls = 0;
+  let nowMs = 1_000_000;
   const throttleState = new Map();
+  const disabledState = new Map();
   const loginQrNotifications = [];
   const makeRestartedController = () => makeController({
+    nowMs: () => nowMs,
     captureLoginQrImage: async () => {
       captureCalls += 1;
       return {
@@ -467,6 +470,12 @@ test('controller keeps disabled login QR notifications across service worker res
     ),
     setLoginQrLastNotifiedAtMs: async (platformId, currentUrl, notifiedAtMs) => {
       throttleState.set(`${platformId}:${currentUrl}`, Number(notifiedAtMs || 0));
+    },
+    getLoginQrNotificationsDisabled: async (platformId) => (
+      Boolean(disabledState.get(platformId))
+    ),
+    setLoginQrNotificationsDisabled: async (platformId, disabled) => {
+      disabledState.set(platformId, Boolean(disabled));
     },
     backend: {
       heartbeat: async () => ({ ok: true }),
@@ -492,6 +501,7 @@ test('controller keeps disabled login QR notifications across service worker res
     authenticated: false,
     loginVisible: true,
   });
+  nowMs += 10 * 60_000;
 
   const restartedSession = {
     platformId: 'fanqie',
@@ -499,6 +509,54 @@ test('controller keeps disabled login QR notifications across service worker res
     lastUrl: 'https://fanqienovel.com/main/writer/login',
   };
   await makeRestartedController().maybeNotifyLoginQr(restartedSession, {
+    currentUrl: 'https://fanqienovel.com/main/writer/login?ticket=second',
+    authenticated: false,
+    loginVisible: true,
+  });
+
+  assert.equal(captureCalls, 1);
+  assert.equal(loginQrNotifications.length, 1);
+});
+
+test('controller treats accepted non-dispatched login QR result as disabled', async () => {
+  let captureCalls = 0;
+  let nowMs = 1_000_000;
+  const loginQrNotifications = [];
+  const { controller } = makeController({
+    nowMs: () => nowMs,
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      return {
+        ok: true,
+        imageDataUrl: `data:image/png;base64,nodispatch${captureCalls}=`,
+        source: `no-dispatch-${captureCalls}`,
+      };
+    },
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      notifyLoginQr: async (payload) => {
+        loginQrNotifications.push(payload);
+        return {
+          ok: true,
+          dispatched: false,
+          message: 'notification not dispatched',
+        };
+      },
+    },
+  });
+  const session = {
+    platformId: 'fanqie',
+    popupTabId: 42,
+    lastUrl: 'https://fanqienovel.com/main/writer/login',
+  };
+
+  await controller.maybeNotifyLoginQr(session, {
+    currentUrl: 'https://fanqienovel.com/main/writer/login?ticket=first',
+    authenticated: false,
+    loginVisible: true,
+  });
+  nowMs += 10 * 60_000;
+  await controller.maybeNotifyLoginQr(session, {
     currentUrl: 'https://fanqienovel.com/main/writer/login?ticket=second',
     authenticated: false,
     loginVisible: true,

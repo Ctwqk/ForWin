@@ -18,6 +18,9 @@ function loginQrNotificationsDisabled(result) {
   if (result?.disabled) {
     return true;
   }
+  if (result?.ok && result?.dispatched === false && !result?.throttled) {
+    return true;
+  }
   const message = String(result?.message || '').toLowerCase();
   return message.includes('webhook is not configured');
 }

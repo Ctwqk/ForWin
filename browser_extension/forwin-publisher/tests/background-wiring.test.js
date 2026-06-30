@@ -24,12 +24,22 @@ test('background throttles login QR notifications at the backend boundary', asyn
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 
   assert.match(source, /LOGIN_QR_NOTIFICATION_THROTTLE_MS\s*=\s*2\s*\*\s*60_000/);
+  assert.match(source, /LOGIN_QR_PLATFORM_THROTTLE_URL\s*=\s*'__platform__'/);
   assert.match(source, /async\s+function\s+notifyLoginQrWithThrottle\s*\(\s*payload\s*\)/);
   assert.match(source, /getLoginQrLastNotifiedAtMs\(platform,\s*currentUrl\)/);
+  assert.match(source, /getLoginQrLastNotifiedAtMs\(platform,\s*LOGIN_QR_PLATFORM_THROTTLE_URL\)/);
   assert.match(source, /throttled:\s*true/);
   assert.match(source, /client\)\s*=>\s*client\.notifyLoginQr\(payload\)/);
   assert.match(source, /setLoginQrLastNotifiedAtMs\(platform,\s*currentUrl,\s*nowMs\)/);
+  assert.match(source, /setLoginQrLastNotifiedAtMs\(platform,\s*LOGIN_QR_PLATFORM_THROTTLE_URL,\s*nowMs\)/);
   assert.match(source, /async\s+notifyLoginQr\s*\(\s*payload\s*\)[\s\S]*notifyLoginQrWithThrottle\(payload\)/);
+});
+
+test('background treats accepted non-dispatched login QR responses as disabled', async () => {
+  const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
+
+  assert.match(source, /result\?\.ok\s*&&\s*result\?\.dispatched\s*===\s*false\s*&&\s*!result\?\.throttled/);
+  assert.match(source, /loginQrNotificationsDisabled\(result\)[\s\S]*setLoginQrNotificationsDisabled\(platform,\s*true\)/);
 });
 
 test('background persists login QR throttle after backend accepts notification', async () => {

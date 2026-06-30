@@ -84,6 +84,7 @@ def test_login_qr_notification_skips_when_webhook_is_not_configured() -> None:
 
     assert result["ok"] is True
     assert result["dispatched"] is False
+    assert result["disabled"] is True
 
 
 def test_publisher_manager_throttles_duplicate_login_qr_after_notifier_accepts_without_dispatch() -> None:

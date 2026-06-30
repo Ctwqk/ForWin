@@ -357,6 +357,52 @@ test('controller waits for the login QR throttle window before sending another c
   assert.equal(loginQrNotifications[1].image_data_url, 'data:image/png;base64,cXI2=');
 });
 
+test('controller stops repeating login QR notifications when backend reports notifications disabled', async () => {
+  let captureCalls = 0;
+  let nowMs = 1_000_000;
+  const loginQrNotifications = [];
+  const { controller } = makeController({
+    nowMs: () => nowMs,
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      return {
+        ok: true,
+        imageDataUrl: `data:image/png;base64,disabled${captureCalls}=`,
+        source: `disabled-${captureCalls}`,
+      };
+    },
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      notifyLoginQr: async (payload) => {
+        loginQrNotifications.push(payload);
+        return {
+          ok: true,
+          dispatched: false,
+          disabled: true,
+          message: 'Discord login QR webhook is not configured.',
+        };
+      },
+    },
+  });
+  const session = {
+    platformId: 'fanqie',
+    popupTabId: 42,
+    lastUrl: 'https://fanqienovel.com/main/writer/login',
+  };
+  const inspection = {
+    currentUrl: 'https://fanqienovel.com/main/writer/login',
+    authenticated: false,
+    loginVisible: true,
+  };
+
+  await controller.maybeNotifyLoginQr(session, inspection);
+  nowMs += 121_000;
+  await controller.maybeNotifyLoginQr(session, inspection);
+
+  assert.equal(captureCalls, 1);
+  assert.equal(loginQrNotifications.length, 1);
+});
+
 test('controller ignores login QR notification failures while login remains visible', async () => {
   const { controller, events } = makeController({
     inspectLoginState: async () => ({

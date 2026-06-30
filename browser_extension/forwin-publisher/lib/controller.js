@@ -13,6 +13,14 @@ function defaultNowMs() {
   return Date.now();
 }
 
+function loginQrNotificationsDisabled(result) {
+  if (result?.disabled) {
+    return true;
+  }
+  const message = String(result?.message || '').toLowerCase();
+  return message.includes('webhook is not configured');
+}
+
 function hasRecoverableQidianDraftUrl(platformId, url) {
   if (String(platformId || '').trim() !== 'qidian') {
     return false;
@@ -1103,6 +1111,12 @@ export class PublisherExtensionController {
   async maybeNotifyLoginQr(session, inspection) {
     const nowMs = typeof this.deps.nowMs === 'function' ? Number(this.deps.nowMs()) : defaultNowMs();
     const currentUrl = String(inspection?.currentUrl || session.lastUrl || '');
+    if (session.loginQrNotificationsDisabledUrl === currentUrl) {
+      return { skipped: true, reason: 'notifications-disabled' };
+    }
+    if (session.loginQrNotificationsDisabledUrl && session.loginQrNotificationsDisabledUrl !== currentUrl) {
+      delete session.loginQrNotificationsDisabledUrl;
+    }
     const lastNotifiedAtMs = await this.getLoginQrLastNotifiedAtMs(session, currentUrl);
     if (session.loginQrNotificationInFlight) {
       return { skipped: true, reason: 'in-flight' };
@@ -1186,6 +1200,9 @@ export class PublisherExtensionController {
       });
       if (result?.ok) {
         await this.setLoginQrLastNotifiedAtMs(session, currentUrl, nowMs);
+      }
+      if (loginQrNotificationsDisabled(result)) {
+        session.loginQrNotificationsDisabledUrl = currentUrl;
       }
       await this.recordLoginQrNotificationEvent({
         platform: session.platformId,

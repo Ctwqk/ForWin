@@ -160,6 +160,7 @@ class ExtensionLoginQrNotifyResponse(BaseModel):
     message: str
     server_time: str
     dispatched: bool = False
+    disabled: bool = False
 
 
 class ExtensionSessionSyncRequest(BaseModel):

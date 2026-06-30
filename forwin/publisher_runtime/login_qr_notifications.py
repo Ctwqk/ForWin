@@ -130,6 +130,7 @@ class DiscordLoginQrNotifier:
                 "message": "Discord login QR webhook is not configured.",
                 "server_time": now,
                 "dispatched": False,
+                "disabled": True,
             }
         platform_id = str(platform or "").strip() or "unknown"
         mime_type, image_bytes = _parse_image_data_url(image_data_url)

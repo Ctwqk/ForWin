@@ -51,6 +51,16 @@ def isoformat(value: datetime | None) -> str:
     return parsed.astimezone(_DISPLAY_TZ).strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
+def status_payload_unverified_cookie_signal(payload: dict[str, Any] | None) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    return bool(
+        payload.get("page_evidence_required")
+        and payload.get("cookie_signal")
+        and not payload.get("page_authenticated")
+    )
+
+
 def is_retryable_db_error(exc: OperationalError) -> bool:
     orig = getattr(exc, "orig", None)
     sqlstate = str(
@@ -449,11 +459,29 @@ class BrowserSessionService:
             metadata = self.codec.decode_metadata(raw)
             cookie_names = self.codec.cookie_names_from_json(raw)
             last_error = str(getattr(row, "last_error", "") or "") or metadata["error"]
+            state = session.get(PublisherConnectionState, platform)
+            status_payload: dict[str, Any] = {}
+            if state is not None:
+                try:
+                    parsed = json.loads(str(state.status_json or "{}"))
+                except json.JSONDecodeError:
+                    parsed = {}
+                if isinstance(parsed, dict):
+                    status_payload = parsed
+                    status_payload.setdefault("last_error", state.last_error or "")
             connected = self.codec.is_browser_session_connected(
                 platform,
                 raw,
                 last_error,
             )
+            if (
+                connected
+                and (
+                    status_payload_unverified_cookie_signal(status_payload)
+                    or platform_login_evidence(platform, status_payload)
+                )
+            ):
+                connected = False
             return {
                 "platform": platform,
                 "client_id": str(

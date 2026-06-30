@@ -22,6 +22,7 @@ from .browser_sessions import (
     is_retryable_db_error,
     isoformat,
     pick_browser_sessions_by_platform,
+    status_payload_unverified_cookie_signal,
     utc_now,
 )
 from .login_evidence import platform_login_evidence
@@ -54,11 +55,7 @@ def row_unverified_cookie_signal(row: Any) -> bool:
         return False
     if not isinstance(status_payload, dict):
         return False
-    return bool(
-        status_payload.get("page_evidence_required")
-        and status_payload.get("cookie_signal")
-        and not status_payload.get("page_authenticated")
-    )
+    return status_payload_unverified_cookie_signal(status_payload)
 
 
 def ensure_extension_client(
@@ -275,6 +272,12 @@ class ExtensionConnectionService:
             latest_unverified_cookie_recent = bool(
                 state and state_recent and row_unverified_cookie_signal(state)
             )
+            browser_session_blocked_by_page_evidence = bool(
+                preferred_login_evidence_recent
+                or latest_login_evidence_recent
+                or preferred_unverified_cookie_recent
+                or latest_unverified_cookie_recent
+            )
             extension_heartbeat_at = None
             if preferred_client_recent and preferred_client.last_heartbeat_at:
                 extension_heartbeat_at = preferred_client.last_heartbeat_at
@@ -317,6 +320,7 @@ class ExtensionConnectionService:
             )
             browser_connected = bool(
                 browser_session
+                and not browser_session_blocked_by_page_evidence
                 and self.is_browser_session_connected(
                     spec.platform_id,
                     browser_session.cookies_json,

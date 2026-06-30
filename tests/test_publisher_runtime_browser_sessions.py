@@ -90,6 +90,9 @@ def test_browser_session_sync_keeps_unverified_cookie_signal_logged_out() -> Non
         items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
         assert items["qidian"]["connected"] is False
         assert items["qidian"]["extension_online"] is True
+        summary = runtime.browser_sessions.get_browser_session_summary("qidian")
+        assert summary is not None
+        assert summary["connected"] is False
     finally:
         engine.dispose()
 

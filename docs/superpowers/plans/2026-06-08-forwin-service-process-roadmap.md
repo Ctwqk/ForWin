@@ -146,7 +146,7 @@ docs.
   - `forwin-generation-worker-swarm`
   - `forwin-mcp-swarm`
   - `forwin-publisher-worker-swarm`
-  - optional `forwin-publisher-browser-swarm`
+  - `forwin-publisher-browser-swarm` when the production publishing path is enabled
 
   Also document that production data stores remain on 150.
 

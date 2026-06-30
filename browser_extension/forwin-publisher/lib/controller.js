@@ -1298,33 +1298,14 @@ export class PublisherExtensionController {
         loginVisible: true,
       });
     }
-    const key = `${platformId}:${tabId}`;
-    let pseudoSession = this.heartbeatLoginQrNotificationSessions.get(key);
-    if (!pseudoSession) {
-      pseudoSession = {
-        platformId,
-        popupTabId: tabId,
-        lastUrl: currentUrl,
-      };
-      this.heartbeatLoginQrNotificationSessions.set(key, pseudoSession);
-    }
-    pseudoSession.lastUrl = currentUrl;
-    const result = await this.maybeNotifyLoginQr(
-      pseudoSession,
-      {
-        ...(inspection || {}),
-        currentUrl,
-        authenticated: false,
-        loginVisible: true,
-      },
-    );
-    if (
-      !result
-      || result.ok === false
-      || (result.skipped && result.reason !== 'throttled' && result.reason !== 'in-flight')
-    ) {
-      this.heartbeatLoginQrNotificationSessions.delete(key);
-    }
-    return result;
+    this.heartbeatLoginQrNotificationSessions.delete(`${platformId}:${tabId}`);
+    await this.recordLoginQrNotificationEvent({
+      platform: platformId,
+      tab_id: tabId,
+      current_url: currentUrl,
+      phase: 'skipped',
+      reason: 'heartbeat-login-page-without-active-login-session',
+    });
+    return { skipped: true, reason: 'heartbeat-login-page-without-active-login-session' };
   }
 }

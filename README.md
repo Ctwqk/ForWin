@@ -119,13 +119,15 @@ For publisher-browser work, keep the extension enabled but replace
 `FORWIN_PUBLISHER_EXTENSION_API_KEY` and `FORWIN_PUBLISHER_SESSION_SECRET` with
 long random values before starting the backend.
 
-If you want login QR codes forwarded to Discord when a publisher platform asks
-for scan-login, set `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`. In production,
-prefer `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` and mount the webhook as a
-secret file so it is not committed, printed in shell history, or baked into an
-image. The publisher extension only forwards directly extracted, fresh QR images;
-full-page screenshots and expired/invalid QR placeholders such as "二维码已失效 /
-点击刷新" are not sent.
+If you want login QR codes forwarded to Discord when an operator explicitly asks
+for publisher scan-login, set `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`. In
+production, prefer `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` and mount the
+webhook as a secret file so it is not committed, printed in shell history, or
+baked into an image. Ordinary publisher heartbeat checks must only report
+`login-required`; they must not capture QR images or notify Discord. The
+publisher extension only forwards directly extracted, fresh QR images from an
+active login session; full-page screenshots and expired/invalid QR placeholders
+such as "二维码已失效 / 点击刷新" are not sent.
 
 ### Current production deployment
 
@@ -136,15 +138,17 @@ single-host compose layout described above.
   Use a fresh local clone or isolated worktree for code changes.
 - Production deploy target:
   `10.0.0.126:/Users/magi1/ForWin-swarm`.
-- Current baseline Swarm services: `forwin-app-swarm` and `forwin-mcp-swarm`.
-- Service-process target roles for this repository:
+- Current baseline Swarm services for this repository:
   `forwin-app-swarm`, `forwin-generation-worker-swarm`,
-  `forwin-mcp-swarm`, `forwin-publisher-worker-swarm`, and optional
+  `forwin-mcp-swarm`, `forwin-publisher-worker-swarm`,
+  `forwin-outbox-worker-swarm`, and
   `forwin-publisher-browser-swarm`.
 - User-facing URL: `http://10.0.0.126:8899`.
 - MCP/API helper port: `10.0.0.126:8896`.
 - Production deploys are picked up by the 150 GitHub sync job after changes are
-  pushed to GitHub.
+  pushed to GitHub. The ForWin deploy builds both `forwin-forwin:deploy-<commit>`
+  and `forwin-publisher-browser:deploy-<commit>`, then updates the app, worker,
+  MCP, outbox, publisher-worker, and publisher-browser Swarm services together.
 
 The 126 directory is a deployment output with `.deploy-sync-project` and
 `.deploy-sync-source-commit` markers. Do not create a long-lived Codex coding
@@ -159,7 +163,8 @@ services instead of starting app-local stateful containers on 126.
 
 The API process should handle UI/API/read/enqueue work. Generation execution is
 owned by the durable generation worker, publisher backend jobs by the publisher
-worker, and browser automation by the optional publisher-browser process. See
+worker, and browser automation by the publisher-browser process when production
+publishing is enabled. See
 `docs/operations/forwin-production-processes.md` for operator checks and role
 details.
 

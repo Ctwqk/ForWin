@@ -1,5 +1,10 @@
 # Publisher Login Session Routing Follow-Up Design
 
+> Superseded on 2026-06-30 for heartbeat QR behavior: ordinary extension
+> heartbeats must not capture QR images or notify Discord when a publisher login
+> page is visible. QR notification is allowed only for an active
+> operator-requested login session.
+
 ## Context
 
 The production ForWin publisher browser uses one persistent Chromium profile for
@@ -21,8 +26,8 @@ This shows two related gaps beyond the existing QR extraction design:
 
 ## Goals
 
-- Ensure every Discord login QR notification is captured freshly at send time,
-  with only short throttling to avoid spam.
+- Ensure every operator-requested Discord login QR notification is captured
+  freshly at send time, with only short throttling to avoid spam.
 - Keep one persistent publisher-browser profile for Fanqie and Qidian.
 - Route upload, comment sync, audit sync, cover upload, and editor inspection
   commands to the top frame of the selected tab.
@@ -152,8 +157,9 @@ Expected code changes are limited to the publisher extension and tests:
 
 - `browser_extension/forwin-publisher/lib/controller.js`
   - Replace permanent QR notification dedupe in `maybeNotifyLoginQr`.
-  - Replace heartbeat QR key permanence in `maybeNotifyHeartbeatLoginQr` with
-    the same 60-second successful-send throttle.
+  - Keep QR capture/Discord notification in active operator-requested login
+    sessions only; ordinary heartbeat login-page detection should record
+    `login-required` without creating pseudo sessions.
 - `browser_extension/forwin-publisher/background.js`
   - Add top-frame options to `sendPlatformAgentMessage` or its business-command
     callers.
@@ -174,8 +180,11 @@ are expected.
 ## Data Flow
 
 1. Heartbeat inspects platform tabs without reading cookies or session stores.
-2. If login is visible, the controller captures a QR image at that moment and
-   posts it to the backend unless the short throttle window is active.
+2. If login is visible during ordinary heartbeat, the controller records
+   `login-required` and skips QR capture/Discord notification. If the login tab
+   belongs to an active operator-requested login session, the controller captures
+   a QR image at that moment and posts it to the backend unless the short
+   throttle window is active.
 3. When an upload job is claimed, the controller opens or reuses the platform
    workflow page.
 4. Background waits for a runnable platform tab and sends `run-upload` only to
@@ -214,8 +223,9 @@ Manual/production verification:
 - Confirm `/api/publishers/platforms` shows Fanqie and Qidian connected through
   the preferred client, or through a recent fallback client when strict
   preferred-client mode is disabled.
-- Trigger a fresh Fanqie QR after expiration and confirm Discord receives a new
-  QR message from a new capture attempt.
+- Trigger a fresh Fanqie QR from an explicit operator login session after
+  expiration and confirm Discord receives a new QR message from a new capture
+  attempt.
 - Run safe upload probes with `publish=false` and `create_if_missing=false`
   against existing test books for both Fanqie and Qidian.
 - Confirm failed probes, if any, report the top-frame URL and precise editor

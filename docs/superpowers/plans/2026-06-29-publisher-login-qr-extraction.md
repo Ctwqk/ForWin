@@ -332,7 +332,10 @@ Use the repository deployment scripts already used for the current swarm, preser
 
 - [ ] **Step 4: Production verification**
 
-Open or refresh both publisher login pages in the production publisher browser, trigger the extension heartbeat, and confirm Discord receives QR-focused images whose source is not `debugger-screenshot`.
+Start an explicit operator-requested login flow for any platform that needs a QR,
+then confirm Discord receives QR-focused images whose source is not
+`debugger-screenshot`. Do not use ordinary extension heartbeat as the QR trigger;
+heartbeat login-page detection must only report `login-required`.
 
 Run health checks:
 

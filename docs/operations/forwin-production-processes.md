@@ -16,7 +16,7 @@ Qdrant, or MinIO containers for ForWin.
 | `forwin-mcp-swarm` | MCP gateway that talks to the API | Start with 1 and expose only on trusted paths |
 | `forwin-publisher-worker-swarm` | Backend publisher jobs such as cover generation | Start with 1 |
 | `forwin-outbox-worker-swarm` | Eventually consistent side effects from the outbox table | Start with 1 |
-| `forwin-publisher-browser-swarm` | Optional Chromium/extension automation | Start only when browser publishing is needed |
+| `forwin-publisher-browser-swarm` | Chromium/extension automation for publisher login, heartbeat, upload, and publish flows | Start with 1 when the production publishing path is enabled |
 
 The generation worker can scale above 1 for multiple projects, but the system
 must still prevent same-project adjacent chapter parallelism through task
@@ -143,10 +143,12 @@ start generation, or mutate ForWin project/task/chapter state.
 
 ## Runtime Images
 
-`forwin-app-swarm`, `forwin-generation-worker-swarm`, and `forwin-mcp-swarm`
-use the slim default runtime image. `forwin-publisher-browser-swarm` uses the
-browser runtime image target because it owns Chromium, Xvfb, extension profile
-qualification, and browser heartbeat checks.
+`forwin-app-swarm`, `forwin-generation-worker-swarm`, `forwin-mcp-swarm`,
+`forwin-publisher-worker-swarm`, and `forwin-outbox-worker-swarm` use the slim
+default runtime image. `forwin-publisher-browser-swarm` uses the browser runtime
+image target because it owns Chromium, Xvfb, extension profile qualification,
+and browser heartbeat checks. The GitHub deploy sync must build and update both
+runtime images for the same source commit.
 
 `forwin-mcp-swarm` uses the slim default runtime and should not get a dedicated
 image yet. Do not split the MCP image until measured deploy size, startup time,
@@ -195,12 +197,11 @@ real browser login or browser clicking.
 - Keep QR forwarding disabled until a deployed browser build has verified a
   direct, non-expired QR capture source; screenshots and invalid QR placeholders
   such as "二维码已失效 / 点击刷新" are intentionally rejected.
-- Publisher login QR reminders are intentionally rate limited. If a login page
-  remains visible, the extension may send a fresh QR after the cooldown window,
-  but it must not spam Discord every heartbeat. The cooldown state is persisted
-  in extension storage so a service worker restart does not reset the throttle.
-  During incident triage, close the stale login tab to stop reminders before
-  reopening a fresh login page.
+- Publisher login QR reminders are only allowed for an active operator-requested
+  login session. Ordinary heartbeat checks may record `login-required`, but they
+  must not capture QR images or notify Discord just because a login page is
+  visible. During incident triage, close stale login tabs before starting a fresh
+  operator login session.
 - Qidian/WeChat QR capture should prefer direct image extraction from the login
   iframe. The extension uses a scripting fallback for cross-frame QR images and
   rejects full-page screenshots as unsafe login QR payloads.

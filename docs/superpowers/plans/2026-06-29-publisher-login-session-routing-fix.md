@@ -1,5 +1,10 @@
 # Publisher Login Session Routing Fix Implementation Plan
 
+> Superseded on 2026-06-30 for heartbeat QR behavior: do not implement heartbeat
+> pseudo sessions that capture QR images or notify Discord. Ordinary heartbeat
+> login-page detection must only report `login-required`; QR notification is
+> reserved for active operator-requested login sessions.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make publisher QR notifications fresh and prevent stale login tabs or child login frames from handling upload/session business commands.
@@ -14,7 +19,8 @@
 
 - Modify `browser_extension/forwin-publisher/lib/controller.js`
   - Replace permanent QR dedupe with a 60-second successful-send throttle.
-  - Make heartbeat pseudo sessions use the same retry/throttle path.
+  - Keep QR notification on active login sessions only; ordinary heartbeats must
+    not create pseudo sessions that notify Discord.
 - Modify `browser_extension/forwin-publisher/background.js`
   - Route business commands to `{ frameId: 0 }`.
   - Keep login QR extraction able to target child frame IDs.
@@ -117,56 +123,18 @@ node --test tests/controller.test.js --test-name-pattern "login QR|fresh login Q
 
 Expected: PASS for QR-related tests.
 
-### Task 2: Heartbeat QR Retry Semantics
+### Task 2: Heartbeat QR Suppression Semantics
 
 **Files:**
 - Modify: `browser_extension/forwin-publisher/tests/controller.test.js`
 - Modify: `browser_extension/forwin-publisher/lib/controller.js`
 
-- [ ] **Step 1: Write the failing heartbeat resend test**
+- [ ] **Step 1: Write the heartbeat suppression test**
 
-Add this test near `controller heartbeat sends login QR notification once when inspected login page is visible`:
-
-```js
-test('controller heartbeat sends a fresh login QR after throttle for unchanged login URL', async () => {
-  let nowMs = 2_000_000;
-  let captureCalls = 0;
-  const { controller, loginQrNotifications } = makeController({
-    nowMs: () => nowMs,
-    inspectPlatformState: async (platformId) => (
-      platformId === 'fanqie'
-        ? {
-          ok: true,
-          tabId: 321,
-          currentUrl: 'https://fanqienovel.com/main/writer/login',
-          platform: 'fanqie',
-          authenticated: false,
-          loginVisible: true,
-        }
-        : null
-    ),
-    captureLoginQrImage: async () => {
-      captureCalls += 1;
-      return {
-        ok: true,
-        imageDataUrl: `data:image/png;base64,aHI${captureCalls}=`,
-        source: `heartbeat-${captureCalls}`,
-      };
-    },
-    getPlatformState: async () => ({}),
-    getCookies: async () => [],
-  });
-
-  await controller.sendHeartbeat();
-  await controller.sendHeartbeat();
-  nowMs += 60_001;
-  await controller.sendHeartbeat();
-
-  assert.equal(captureCalls, 2);
-  assert.equal(loginQrNotifications.length, 2);
-  assert.equal(loginQrNotifications[1].source, 'heartbeat-2');
-});
-```
+Add or keep a regression test proving that repeated ordinary heartbeat
+inspection of a visible login page does not call `captureLoginQrImage` and does
+not call `notifyLoginQr`. Active login-session tests should separately prove
+that explicit operator login flows can still send QR notifications.
 
 - [ ] **Step 2: Run the failing heartbeat test**
 

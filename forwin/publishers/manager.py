@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -45,6 +46,8 @@ from forwin.publisher_runtime.upload_jobs import CodexInterventionHandler
 from forwin.publisher_runtime.platform_catalog import PlatformSpec
 
 LOGIN_QR_NOTIFICATION_THROTTLE_SECONDS = 2 * 60
+
+logger = logging.getLogger(__name__)
 
 
 def _as_int(value: Any, default: int = 0) -> int:
@@ -177,6 +180,32 @@ class PublisherManager:
         if result.get("ok") and result.get("dispatched") and throttle_key[0] and throttle_key[1]:
             self._login_qr_notification_throttle[throttle_key] = (now, image_fingerprint)
         return result
+
+    def _notify_login_success_platforms(
+        self,
+        *,
+        client_id: str,
+        platforms: list[str],
+    ) -> list[str]:
+        dispatched: list[str] = []
+        for platform in dict.fromkeys(str(item or "").strip() for item in platforms):
+            if not platform:
+                continue
+            try:
+                result = self.login_qr_notifier.notify_login_success(
+                    client_id=client_id,
+                    platform=platform,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Publisher login success Discord notification failed for %s: %s",
+                    platform,
+                    exc,
+                )
+                continue
+            if result.get("ok") and result.get("dispatched"):
+                dispatched.append(platform)
+        return dispatched
 
     def list_upload_jobs(
         self,
@@ -468,12 +497,17 @@ class PublisherManager:
         cookies: list[dict[str, Any]],
         raw_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        return self.runtime.browser_sessions.record_browser_session(
+        result = self.runtime.browser_sessions.record_browser_session(
             client_id=client_id,
             platform=platform,
             cookies=cookies,
             raw_state=raw_state,
         )
+        result["login_success_notifications"] = self._notify_login_success_platforms(
+            client_id=client_id,
+            platforms=list(result.get("login_success_platforms") or []),
+        )
+        return result
 
     def get_browser_session(self, platform: str) -> dict[str, Any] | None:
         return self.runtime.browser_sessions.get_browser_session(platform)
@@ -533,7 +567,7 @@ class PublisherManager:
         platforms: list[dict[str, Any]],
     ) -> dict[str, Any]:
         self._sync_runtime_config()
-        return self.runtime.connection_state.heartbeat(
+        result = self.runtime.connection_state.heartbeat(
             client_id=client_id,
             extension_version=extension_version,
             browser_name=browser_name,
@@ -541,6 +575,11 @@ class PublisherManager:
             backend_base_url=backend_base_url,
             platforms=platforms,
         )
+        result["login_success_notifications"] = self._notify_login_success_platforms(
+            client_id=client_id,
+            platforms=list(result.get("login_success_platforms") or []),
+        )
+        return result
 
     def update_upload_job_result(
         self,

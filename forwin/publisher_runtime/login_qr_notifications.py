@@ -34,6 +34,15 @@ def _safe_url(value: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))[:500]
 
 
+def _redacted_client_id(value: str) -> str:
+    client_id = str(value or "").strip()
+    if not client_id:
+        return "unknown"
+    if len(client_id) <= 6:
+        return client_id
+    return f"...{client_id[-6:]}"
+
+
 def _parse_image_data_url(value: str) -> tuple[str, bytes]:
     text = str(value or "").strip()
     if not text.startswith("data:") or "," not in text:
@@ -164,6 +173,56 @@ class DiscordLoginQrNotifier:
         return {
             "ok": True,
             "message": "Discord login QR notification sent.",
+            "server_time": now,
+            "dispatched": True,
+        }
+
+    def notify_login_success(
+        self,
+        *,
+        client_id: str,
+        platform: str,
+        detected_at: str = "",
+    ) -> dict[str, Any]:
+        now = utc_now_iso()
+        if not self.webhook_url:
+            return {
+                "ok": True,
+                "message": "Discord login success webhook is not configured.",
+                "server_time": now,
+                "dispatched": False,
+            }
+        platform_id = str(platform or "").strip() or "unknown"
+        timestamp = str(detected_at or "").strip() or now
+        payload = {
+            "content": "\n".join(
+                [
+                    "ForWin publisher login confirmed.",
+                    f"Platform: {platform_id}",
+                    f"Client: {_redacted_client_id(client_id)}",
+                    f"Detected: {timestamp}",
+                ]
+            ),
+        }
+        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        request = Request(
+            self.webhook_url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "ForWin-Publisher/1.0",
+            },
+            method="POST",
+        )
+        with self.urlopen_impl(request, timeout=self.timeout_seconds) as response:
+            status = int(getattr(response, "status", 0) or response.getcode() or 0)
+        if status and status >= 400:
+            raise RuntimeError(
+                f"Discord login success webhook failed with HTTP {status}"
+            )
+        return {
+            "ok": True,
+            "message": "Discord login success notification sent.",
             "server_time": now,
             "dispatched": True,
         }

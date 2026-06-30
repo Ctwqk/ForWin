@@ -473,6 +473,7 @@ class ExtensionConnectionService:
         platforms: list[dict[str, Any]],
     ) -> dict[str, Any]:
         now = utc_now()
+        login_success_platforms: list[str] = []
         try:
             with self.session_factory() as session:
                 client = self.ensure_extension_client(session, client_id)
@@ -488,6 +489,7 @@ class ExtensionConnectionService:
                     if not platform_id or not self.platform_catalog.has(platform_id):
                         continue
                     state = session.get(PublisherConnectionState, platform_id)
+                    was_connected = bool(state.connected) if state is not None else False
                     if state is None:
                         state = PublisherConnectionState(platform_id=platform_id)
                         session.add(state)
@@ -498,6 +500,8 @@ class ExtensionConnectionService:
                         (cookie_signal or bool(item.get("page_authenticated")))
                         and not login_evidence
                     )
+                    if state.connected and not was_connected:
+                        login_success_platforms.append(platform_id)
                     state.login_method = str(item.get("login_method", "")).strip()
                     state.last_error = (
                         "login-required"
@@ -532,7 +536,12 @@ class ExtensionConnectionService:
                 "retryable": True,
             }
 
-        return {"ok": True, "message": "扩展心跳已记录。", "server_time": isoformat(now)}
+        return {
+            "ok": True,
+            "message": "扩展心跳已记录。",
+            "server_time": isoformat(now),
+            "login_success_platforms": login_success_platforms,
+        }
 
     def preferred_client_heartbeat(
         self,

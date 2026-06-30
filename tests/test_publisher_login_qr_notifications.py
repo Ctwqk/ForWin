@@ -8,6 +8,7 @@ from urllib.request import Request
 import pytest
 
 import forwin.publishers.manager as publisher_manager_module
+from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.publishers.manager import PublisherManager
 from forwin.publisher_runtime.login_qr_notifications import DiscordLoginQrNotifier
 
@@ -30,9 +31,26 @@ def _png_data_url(payload: bytes = b"png-bytes") -> str:
     return f"data:image/png;base64,{encoded}"
 
 
+QIDIAN_LOGIN_COOKIES = [
+    {
+        "name": "AppAuthToken",
+        "value": "token-secret",
+        "domain": ".write.qq.com",
+        "path": "/",
+    },
+    {
+        "name": "pubtoken",
+        "value": "pub-secret",
+        "domain": ".write.qq.com",
+        "path": "/",
+    },
+]
+
+
 class _FakeLoginQrNotifier:
     def __init__(self) -> None:
         self.calls: list[dict[str, str]] = []
+        self.success_calls: list[dict[str, str]] = []
 
     def notify(self, **kwargs) -> dict[str, object]:
         self.calls.append(kwargs)
@@ -40,6 +58,15 @@ class _FakeLoginQrNotifier:
             "ok": True,
             "dispatched": True,
             "message": "sent",
+            "server_time": "2026-06-29T21:00:00+00:00",
+        }
+
+    def notify_login_success(self, **kwargs) -> dict[str, object]:
+        self.success_calls.append(kwargs)
+        return {
+            "ok": True,
+            "dispatched": True,
+            "message": "success sent",
             "server_time": "2026-06-29T21:00:00+00:00",
         }
 
@@ -187,6 +214,41 @@ def test_login_qr_notification_posts_multipart_payload() -> None:
     assert "https://write.qq.com/login" in payload["content"]
 
 
+def test_login_success_notification_posts_json_payload() -> None:
+    calls: list[Request] = []
+
+    def fake_urlopen(request: Request, *, timeout: float):
+        calls.append(request)
+        assert timeout == 8.0
+        return _FakeResponse()
+
+    notifier = DiscordLoginQrNotifier(
+        "https://discord.invalid/api/webhooks/test",
+        urlopen_impl=fake_urlopen,
+    )
+
+    result = notifier.notify_login_success(
+        client_id="client-secret-123456",
+        platform="fanqie",
+        detected_at="2026-06-30T01:55:00Z",
+    )
+
+    assert result["ok"] is True
+    assert result["dispatched"] is True
+    assert len(calls) == 1
+    request = calls[0]
+    assert request.full_url == "https://discord.invalid/api/webhooks/test"
+    assert request.get_method() == "POST"
+    assert request.headers["Content-type"] == "application/json"
+    assert request.data is not None
+    payload = json.loads(request.data.decode("utf-8"))
+    assert "ForWin publisher login confirmed" in payload["content"]
+    assert "Platform: fanqie" in payload["content"]
+    assert "client-secret" not in payload["content"]
+    assert "123456" in payload["content"]
+    assert "2026-06-30T01:55:00Z" in payload["content"]
+
+
 def test_login_qr_notification_rejects_non_image_data_url() -> None:
     notifier = DiscordLoginQrNotifier("https://discord.invalid/api/webhooks/test")
 
@@ -198,3 +260,112 @@ def test_login_qr_notification_rejects_non_image_data_url() -> None:
             image_data_url="data:text/plain;base64,Zm9v",
             source="test",
         )
+
+
+def test_publisher_manager_notifies_login_success_once_from_heartbeat() -> None:
+    engine = get_engine(postgres_test_url("publisher-login-success-heartbeat"))
+    init_db(engine)
+    manager = PublisherManager(get_session_factory(engine))
+    notifier = _FakeLoginQrNotifier()
+    manager.login_qr_notifier = notifier
+    try:
+        first = manager.record_extension_heartbeat(
+            client_id="client-secret-123456",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="149.0",
+            backend_base_url="http://forwin-app:8899",
+            platforms=[
+                {
+                    "platform": "fanqie",
+                    "connected": False,
+                    "cookie_signal": True,
+                    "page_evidence_required": True,
+                    "page_authenticated": False,
+                    "page_login_visible": True,
+                    "login_method": "scan",
+                    "last_error": "login-required",
+                }
+            ],
+        )
+        second = manager.record_extension_heartbeat(
+            client_id="client-secret-123456",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="149.0",
+            backend_base_url="http://forwin-app:8899",
+            platforms=[
+                {
+                    "platform": "fanqie",
+                    "connected": True,
+                    "cookie_signal": True,
+                    "page_evidence_required": True,
+                    "page_authenticated": True,
+                    "page_login_visible": False,
+                    "login_method": "scan",
+                    "last_error": "",
+                }
+            ],
+        )
+        third = manager.record_extension_heartbeat(
+            client_id="client-secret-123456",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="149.0",
+            backend_base_url="http://forwin-app:8899",
+            platforms=[
+                {
+                    "platform": "fanqie",
+                    "connected": True,
+                    "cookie_signal": True,
+                    "page_evidence_required": True,
+                    "page_authenticated": True,
+                    "page_login_visible": False,
+                    "login_method": "scan",
+                    "last_error": "",
+                }
+            ],
+        )
+
+        assert first["login_success_notifications"] == []
+        assert second["login_success_notifications"] == ["fanqie"]
+        assert third["login_success_notifications"] == []
+        assert notifier.success_calls == [
+            {
+                "client_id": "client-secret-123456",
+                "platform": "fanqie",
+            }
+        ]
+    finally:
+        engine.dispose()
+
+
+def test_publisher_manager_notifies_login_success_from_browser_session_sync() -> None:
+    engine = get_engine(postgres_test_url("publisher-login-success-browser-session"))
+    init_db(engine)
+    manager = PublisherManager(get_session_factory(engine))
+    notifier = _FakeLoginQrNotifier()
+    manager.login_qr_notifier = notifier
+    try:
+        payload = manager.record_browser_session(
+            client_id="client-secret-654321",
+            platform="qidian",
+            cookies=QIDIAN_LOGIN_COOKIES,
+            raw_state={
+                "cookie_signal": True,
+                "page_evidence_required": True,
+                "page_authenticated": True,
+                "page_login_visible": False,
+                "current_url": "https://write.qq.com/portal/dashboard",
+            },
+        )
+
+        assert payload["login_success_notifications"] == ["qidian"]
+        assert notifier.success_calls == [
+            {
+                "client_id": "client-secret-654321",
+                "platform": "qidian",
+            }
+        ]
+    finally:
+        engine.dispose()

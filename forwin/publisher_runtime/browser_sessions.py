@@ -308,6 +308,7 @@ class BrowserSessionService:
             if isinstance(item, dict) and str(item.get("name", "")).strip()
         ]
         encoded_cookies = self.codec.encode(normalized)
+        login_success_platforms: list[str] = []
         try:
             with self.session_factory() as session:
                 self.connection_state.ensure_extension_client(session, client_id)
@@ -356,11 +357,14 @@ class BrowserSessionService:
                 )
 
                 state = session.get(PublisherConnectionState, platform)
+                was_connected = bool(state.connected) if state is not None else False
                 if state is None:
                     state = PublisherConnectionState(platform_id=platform)
                     session.add(state)
                 state.extension_client_id = client_id
                 state.connected = connected
+                if state.connected and not was_connected:
+                    login_success_platforms.append(platform)
                 state.login_method = state.login_method or "scan"
                 if state.connected:
                     state.last_error = ""
@@ -406,6 +410,7 @@ class BrowserSessionService:
             "message": f"{spec.display_name} 浏览器会话已同步到后端。",
             "server_time": isoformat(now),
             "cookie_count": len(normalized),
+            "login_success_platforms": login_success_platforms,
         }
 
     def get_browser_session(self, platform: str) -> dict[str, Any] | None:

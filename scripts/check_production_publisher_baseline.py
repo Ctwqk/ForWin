@@ -38,6 +38,50 @@ PLATFORM_URLS = {
 }
 
 
+def classify_page_evidence(
+    *,
+    platform: str,
+    final_url: str,
+    title: str,
+    text: str,
+    navigation_error: str = "",
+) -> dict[str, Any]:
+    final_url = str(final_url or "")
+    title = str(title or "")
+    text = str(text or "")
+    navigation_error = str(navigation_error or "")
+    login_visible = (
+        "/login" in final_url
+        or "扫码登录" in text
+        or "验证码登录" in text
+        or "登录/注册" in text
+        or "密码登录" in text
+    )
+    dashboard_visible = (
+        not login_visible
+        and (
+            "工作台" in text
+            or "作品管理" in text
+            or "新建作品" in text
+            or "稿酬" in text
+            or "工作台" in title
+        )
+    )
+    payload = {
+        "platform_id": platform,
+        "ok": bool(login_visible or dashboard_visible or not navigation_error),
+        "final_url": final_url,
+        "title": title,
+        "login_visible": login_visible,
+        "dashboard_visible": dashboard_visible,
+    }
+    if navigation_error:
+        payload["navigation_error"] = navigation_error[:240]
+        if not payload["ok"]:
+            payload["error"] = navigation_error[:240]
+    return payload
+
+
 def classify_platform(api_state: dict[str, Any], page_state: dict[str, Any]) -> dict[str, Any]:
     platform_id = str(api_state.get("platform_id") or page_state.get("platform_id") or "")
     final_url = str(page_state.get("final_url") or "")
@@ -57,6 +101,8 @@ def classify_platform(api_state: dict[str, Any], page_state: dict[str, Any]) -> 
             "login_visible": login_visible,
         },
     }
+    if page_state.get("navigation_error"):
+        base["page"]["navigation_error"] = str(page_state.get("navigation_error") or "")
     if login_visible:
         base.update(
             {
@@ -147,6 +193,43 @@ def browser_pages_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     script = r'''
 from playwright.sync_api import sync_playwright
 import json
+
+def classify_page_evidence(platform, final_url, title, text, navigation_error=""):
+    final_url = str(final_url or "")
+    title = str(title or "")
+    text = str(text or "")
+    navigation_error = str(navigation_error or "")
+    login_visible = (
+        "/login" in final_url
+        or "扫码登录" in text
+        or "验证码登录" in text
+        or "登录/注册" in text
+        or "密码登录" in text
+    )
+    dashboard_visible = (
+        not login_visible
+        and (
+            "工作台" in text
+            or "作品管理" in text
+            or "新建作品" in text
+            or "稿酬" in text
+            or "工作台" in title
+        )
+    )
+    payload = {
+        "platform_id": platform,
+        "ok": bool(login_visible or dashboard_visible or not navigation_error),
+        "final_url": final_url,
+        "title": title,
+        "login_visible": login_visible,
+        "dashboard_visible": dashboard_visible,
+    }
+    if navigation_error:
+        payload["navigation_error"] = navigation_error[:240]
+        if not payload["ok"]:
+            payload["error"] = navigation_error[:240]
+    return payload
+
 urls = {
     "qidian": "https://write.qq.com/portal/dashboard",
     "fanqie": "https://fanqienovel.com/main/writer/",
@@ -158,36 +241,24 @@ with sync_playwright() as p:
         ctx = browser.contexts[0]
         for platform, url in urls.items():
             page = ctx.new_page()
+            navigation_error = ""
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                page.wait_for_timeout(5000)
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    page.wait_for_timeout(5000)
+                except Exception as exc:
+                    navigation_error = f"{type(exc).__name__}: {str(exc)[:240]}"
+                    page.wait_for_timeout(2000)
                 text = page.locator("body").inner_text(timeout=5000)[:1200]
                 final_url = page.url
                 title = page.title()
-                login_visible = (
-                    "/login" in final_url
-                    or "扫码登录" in text
-                    or "验证码登录" in text
-                    or "登录/注册" in text
-                    or "密码登录" in text
+                results[platform] = classify_page_evidence(
+                    platform=platform,
+                    final_url=final_url,
+                    title=title,
+                    text=text,
+                    navigation_error=navigation_error,
                 )
-                dashboard_visible = (
-                    not login_visible
-                    and (
-                        "工作台" in text
-                        or "作品管理" in text
-                        or "新建作品" in text
-                        or "稿酬" in text
-                    )
-                )
-                results[platform] = {
-                    "platform_id": platform,
-                    "ok": True,
-                    "final_url": final_url,
-                    "title": title,
-                    "login_visible": login_visible,
-                    "dashboard_visible": dashboard_visible,
-                }
             except Exception as exc:
                 results[platform] = {
                     "platform_id": platform,

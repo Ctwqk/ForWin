@@ -73,6 +73,21 @@ def test_browser_failure_classifies_platform_browser_unreachable() -> None:
     assert result["connected"] is False
 
 
+def test_page_evidence_accepts_dashboard_after_navigation_timeout() -> None:
+    result = baseline.classify_page_evidence(
+        platform="qidian",
+        final_url="https://write.qq.com/portal/dashboard",
+        title="工作台-阅文作家专区",
+        text="工作台\n作品管理\n数据中心",
+        navigation_error="TimeoutError: Page.goto timeout",
+    )
+
+    assert result["ok"] is True
+    assert result["dashboard_visible"] is True
+    assert result["login_visible"] is False
+    assert result["navigation_error"] == "TimeoutError: Page.goto timeout"
+
+
 def test_rollup_status_marks_degraded_for_human_login_required() -> None:
     assert (
         baseline.rollup_status(

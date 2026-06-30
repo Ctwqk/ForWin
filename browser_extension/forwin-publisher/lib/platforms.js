@@ -147,7 +147,9 @@ function heartbeatPayload(platformId, cookieNames, savedState, cookieSignal, ins
   const connected = (loggedOutByPage || loggedOutBySavedError)
     ? false
     : (page.authenticated || (!waitingForPageEvidence && cookieSignal));
-  const lastError = (loggedOutByPage || loggedOutBySavedError) ? 'login-required' : savedError;
+  const lastError = (loggedOutByPage || loggedOutBySavedError)
+    ? 'login-required'
+    : (page.authenticated && savedLoginRequired ? '' : savedError);
   return {
     platform: platformId,
     connected,

@@ -118,6 +118,28 @@ test('qidian heartbeat reports logged out when inspected page is the login scree
   assert.equal(state.raw_state.page_login_visible, true);
 });
 
+test('qidian heartbeat clears stale login-required after authenticated inspection', () => {
+  const state = buildHeartbeatState('qidian', [
+    { name: 'AppAuthToken' },
+    { name: 'pubtoken' },
+  ], {
+    connected: false,
+    loginMethod: 'scan',
+    lastError: 'login-required',
+  }, {
+    ok: true,
+    currentUrl: 'https://write.qq.com/portal/dashboard',
+    platform: 'qidian',
+    authenticated: true,
+    loginVisible: false,
+  });
+
+  assert.equal(state.connected, true);
+  assert.equal(state.last_error, '');
+  assert.equal(state.raw_state.cookie_signal, true);
+  assert.equal(state.raw_state.page_authenticated, true);
+});
+
 test('qidian heartbeat does not display connected from unverified auth cookies', () => {
   const state = buildHeartbeatState('qidian', [
     { name: 'AppAuthToken' },

@@ -25,7 +25,7 @@ from .browser_sessions import (
     status_payload_unverified_cookie_signal,
     utc_now,
 )
-from .login_evidence import platform_login_evidence
+from .login_evidence import LOGIN_REQUIRED_ERRORS, payload_value, platform_login_evidence
 from .platform_catalog import PlatformCatalog
 
 logger = logging.getLogger(__name__)
@@ -502,13 +502,13 @@ class ExtensionConnectionService:
                         if isinstance(parsed, dict):
                             existing_payload = parsed
                     state.extension_client_id = client_id
-                    cookie_signal = bool(item.get("cookie_signal"))
+                    cookie_signal = bool(payload_value(item, "cookie_signal"))
                     login_evidence = platform_login_evidence(platform_id, item)
                     preserve_authenticated_heartbeat = bool(
                         status_payload_unverified_cookie_signal(item)
                         and not login_evidence
                         and state.connected
-                        and existing_payload.get("page_authenticated")
+                        and payload_value(existing_payload, "page_authenticated")
                         and not platform_login_evidence(platform_id, existing_payload)
                     )
                     if preserve_authenticated_heartbeat:
@@ -524,17 +524,20 @@ class ExtensionConnectionService:
                             last_heartbeat_at=now,
                         )
                         continue
+                    page_authenticated = bool(payload_value(item, "page_authenticated"))
                     state.connected = bool(
-                        (cookie_signal or bool(item.get("page_authenticated")))
-                        and not login_evidence
+                        (cookie_signal or page_authenticated) and not login_evidence
                     )
                     if state.connected and not was_connected:
                         login_success_platforms.append(platform_id)
                     state.login_method = str(item.get("login_method", "")).strip()
+                    last_error = str(payload_value(item, "last_error") or "").strip()
+                    if page_authenticated and last_error.lower() in LOGIN_REQUIRED_ERRORS:
+                        last_error = ""
                     state.last_error = (
                         "login-required"
                         if login_evidence
-                        else str(item.get("last_error", "")).strip()
+                        else last_error
                     )
                     state.status_json = json.dumps(item, ensure_ascii=False)
                     state.last_heartbeat_at = now

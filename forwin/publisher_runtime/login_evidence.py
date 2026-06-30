@@ -11,14 +11,29 @@ LOGIN_REQUIRED_ERRORS = {
 }
 
 
+def payload_value(payload: dict[str, Any], key: str, default: Any = None) -> Any:
+    if key in payload:
+        return payload.get(key)
+    raw_state = payload.get("raw_state")
+    if isinstance(raw_state, dict) and key in raw_state:
+        return raw_state.get(key)
+    return default
+
+
 def platform_login_evidence(platform_id: str, payload: dict[str, Any]) -> bool:
-    current_url = str(payload.get("current_url") or payload.get("url") or "").strip()
-    last_error = str(payload.get("last_error") or "").strip().lower()
-    if bool(payload.get("page_authenticated")):
+    current_url = str(
+        payload_value(payload, "current_url")
+        or payload_value(payload, "url")
+        or ""
+    ).strip()
+    last_error = str(payload_value(payload, "last_error") or "").strip().lower()
+    if bool(payload_value(payload, "page_authenticated")):
         return False
     if last_error in LOGIN_REQUIRED_ERRORS:
         return True
-    if bool(payload.get("page_login_visible")) and not bool(payload.get("page_authenticated")):
+    if bool(payload_value(payload, "page_login_visible")) and not bool(
+        payload_value(payload, "page_authenticated")
+    ):
         return True
     if platform_id == "qidian" and "write.qq.com" in current_url and "/portal/login" in current_url:
         return True

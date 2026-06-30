@@ -14,7 +14,7 @@ from forwin.models.publisher import (
     PublisherBrowserSessionEntry,
     PublisherConnectionState,
 )
-from .login_evidence import platform_login_evidence
+from .login_evidence import payload_value, platform_login_evidence
 from forwin.secret_store import (
     SecretStoreError,
     decrypt_json_with_secret,
@@ -55,9 +55,9 @@ def status_payload_unverified_cookie_signal(payload: dict[str, Any] | None) -> b
     if not isinstance(payload, dict):
         return False
     return bool(
-        payload.get("page_evidence_required")
-        and payload.get("cookie_signal")
-        and not payload.get("page_authenticated")
+        payload_value(payload, "page_evidence_required")
+        and payload_value(payload, "cookie_signal")
+        and not payload_value(payload, "page_authenticated")
     )
 
 

@@ -85,6 +85,44 @@ def test_connection_state_login_page_evidence_overrides_cookie_signal() -> None:
         engine.dispose()
 
 
+def test_connection_state_trusts_nested_authenticated_heartbeat_over_stale_login_error() -> None:
+    engine, runtime = _runtime(
+        "publisher-runtime-connection-nested-authenticated",
+        preferred_client_id="client-1",
+    )
+    try:
+        runtime.connection_state.heartbeat(
+            client_id="client-1",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://127.0.0.1:8899",
+            platforms=[
+                {
+                    "platform": "qidian",
+                    "connected": True,
+                    "login_method": "scan",
+                    "last_error": "login-required",
+                    "raw_state": {
+                        "cookie_signal": True,
+                        "page_inspected": True,
+                        "page_authenticated": True,
+                        "page_login_visible": False,
+                        "current_url": "https://write.qq.com/portal/dashboard",
+                    },
+                }
+            ],
+        )
+        items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
+
+        assert items["qidian"]["connected"] is True
+        assert items["qidian"]["preferred_client_state"]["connected"] is True
+        assert items["qidian"]["latest_client_state"]["connected"] is True
+        assert items["qidian"]["last_error"] == ""
+    finally:
+        engine.dispose()
+
+
 def test_connection_state_unverified_cookie_signal_does_not_display_logged_in() -> None:
     engine, runtime = _runtime("publisher-runtime-connection-cookie-unverified")
     try:

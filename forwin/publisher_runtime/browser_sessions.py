@@ -312,6 +312,89 @@ class BrowserSessionService:
         try:
             with self.session_factory() as session:
                 self.connection_state.ensure_extension_client(session, client_id)
+                cookie_connected = self.codec.is_browser_session_connected(
+                    platform,
+                    encoded_cookies,
+                    "",
+                )
+                evidence_payload = dict(raw_state or {})
+                cookie_signal = bool(evidence_payload.get("cookie_signal", cookie_connected))
+                page_authenticated = bool(evidence_payload.get("page_authenticated"))
+                login_evidence = platform_login_evidence(platform, evidence_payload)
+                unverified_cookie_signal = bool(
+                    evidence_payload.get("page_evidence_required")
+                    and cookie_signal
+                    and not page_authenticated
+                )
+                state = session.get(PublisherConnectionState, platform)
+                was_connected = bool(state.connected) if state is not None else False
+                existing_payload: dict[str, Any] = {}
+                if state is not None:
+                    try:
+                        parsed = json.loads(str(state.status_json or "{}"))
+                    except json.JSONDecodeError:
+                        parsed = {}
+                    if isinstance(parsed, dict):
+                        existing_payload = parsed
+                existing_login_evidence = platform_login_evidence(
+                    platform,
+                    existing_payload,
+                )
+                reject_session_sync = bool(
+                    not page_authenticated
+                    and (login_evidence or existing_login_evidence)
+                )
+                if reject_session_sync:
+                    if state is None:
+                        state = PublisherConnectionState(platform_id=platform)
+                        session.add(state)
+                    login_method = state.login_method or "scan"
+                    state_payload = {
+                        "platform": platform,
+                        "connected": False,
+                        "login_method": login_method,
+                        "last_error": "login-required",
+                        "cookie_names": self.codec.cookie_names_from_json(encoded_cookies),
+                        "session_sync_skipped": True,
+                        **existing_payload,
+                        **evidence_payload,
+                        "cookie_signal": cookie_signal,
+                    }
+                    if existing_login_evidence and not login_evidence:
+                        for key in (
+                            "current_url",
+                            "page_authenticated",
+                            "page_login_visible",
+                        ):
+                            if key in existing_payload:
+                                state_payload[key] = existing_payload[key]
+                    state_payload["connected"] = False
+                    state_payload["last_error"] = "login-required"
+                    state.extension_client_id = client_id
+                    state.connected = False
+                    state.login_method = login_method
+                    state.last_error = "login-required"
+                    state.status_json = json.dumps(state_payload, ensure_ascii=False)
+                    state.last_heartbeat_at = now
+                    self.connection_state.upsert_extension_platform_state(
+                        session,
+                        client_id=client_id,
+                        platform_id=platform,
+                        connected=False,
+                        login_method=login_method,
+                        last_error="login-required",
+                        status_payload=state_payload,
+                        last_heartbeat_at=now,
+                    )
+                    session.commit()
+                    return {
+                        "ok": True,
+                        "skipped": True,
+                        "message": f"{spec.display_name} 浏览器会话未写入：当前页面仍需要登录。",
+                        "server_time": isoformat(now),
+                        "cookie_count": len(normalized),
+                        "login_success_platforms": [],
+                    }
                 entry = session.get(
                     PublisherBrowserSessionEntry,
                     {"client_id": client_id, "platform_id": platform},
@@ -336,36 +419,12 @@ class BrowserSessionService:
                 stored.cookies_json = encoded_cookies
                 stored.synced_at = now
                 stored.last_error = ""
-                cookie_connected = self.codec.is_browser_session_connected(
-                    platform,
-                    stored.cookies_json,
-                    "",
-                )
-                evidence_payload = dict(raw_state or {})
-                cookie_signal = bool(evidence_payload.get("cookie_signal", cookie_connected))
-                page_authenticated = bool(evidence_payload.get("page_authenticated"))
-                login_evidence = platform_login_evidence(platform, evidence_payload)
-                unverified_cookie_signal = bool(
-                    evidence_payload.get("page_evidence_required")
-                    and cookie_signal
-                    and not page_authenticated
-                )
                 connected = bool(
                     (cookie_signal or page_authenticated)
                     and not login_evidence
                     and not unverified_cookie_signal
                 )
 
-                state = session.get(PublisherConnectionState, platform)
-                was_connected = bool(state.connected) if state is not None else False
-                existing_payload: dict[str, Any] = {}
-                if state is not None:
-                    try:
-                        parsed = json.loads(str(state.status_json or "{}"))
-                    except json.JSONDecodeError:
-                        parsed = {}
-                    if isinstance(parsed, dict):
-                        existing_payload = parsed
                 preserve_authenticated_heartbeat = bool(
                     unverified_cookie_signal
                     and not login_evidence

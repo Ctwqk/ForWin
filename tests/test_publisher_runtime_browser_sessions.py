@@ -23,6 +23,42 @@ QIDIAN_COOKIES = [
     },
 ]
 
+FANQIE_COOKIES = [
+    {
+        "name": "sessionid",
+        "value": "fanqie-session-good",
+        "domain": ".fanqienovel.com",
+        "path": "/",
+    },
+    {
+        "name": "has_biz_token",
+        "value": "fanqie-biz-good",
+        "domain": ".fanqienovel.com",
+        "path": "/",
+    },
+]
+
+FANQIE_LOGIN_PAGE_COOKIES = [
+    {
+        "name": "sessionid",
+        "value": "fanqie-session-login-page",
+        "domain": ".fanqienovel.com",
+        "path": "/",
+    },
+    {
+        "name": "has_biz_token",
+        "value": "fanqie-biz-login-page",
+        "domain": ".fanqienovel.com",
+        "path": "/",
+    },
+    {
+        "name": "ttwid",
+        "value": "fanqie-tracking-login-page",
+        "domain": ".fanqienovel.com",
+        "path": "/",
+    },
+]
+
 
 def _runtime(
     name: str,
@@ -148,6 +184,76 @@ def test_browser_session_sync_does_not_downgrade_authenticated_heartbeat() -> No
         items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
         assert items["qidian"]["connected"] is True
         assert items["qidian"]["preferred_client_state"]["connected"] is True
+    finally:
+        engine.dispose()
+
+
+def test_login_page_session_sync_does_not_overwrite_restorable_fanqie_session() -> None:
+    engine, runtime = _runtime(
+        "publisher-runtime-browser-fanqie-login-page-skip",
+        preferred_client_id="client-1",
+    )
+    try:
+        runtime.browser_sessions.record_browser_session(
+            client_id="client-1",
+            platform="fanqie",
+            cookies=FANQIE_COOKIES,
+            raw_state={
+                "connected": True,
+                "cookie_signal": True,
+                "page_evidence_required": True,
+                "page_inspected": True,
+                "page_authenticated": True,
+                "page_login_visible": False,
+                "current_url": "https://fanqienovel.com/main/writer/",
+                "last_error": "",
+            },
+        )
+
+        runtime.connection_state.heartbeat(
+            client_id="client-1",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://forwin-app-swarm:8899",
+            platforms=[
+                {
+                    "platform": "fanqie",
+                    "connected": False,
+                    "cookie_signal": True,
+                    "page_evidence_required": True,
+                    "page_inspected": True,
+                    "page_authenticated": False,
+                    "page_login_visible": True,
+                    "current_url": "https://fanqienovel.com/main/writer/login",
+                    "last_error": "login-required",
+                }
+            ],
+        )
+
+        payload = runtime.browser_sessions.record_browser_session(
+            client_id="client-1",
+            platform="fanqie",
+            cookies=FANQIE_LOGIN_PAGE_COOKIES,
+            raw_state={
+                "cookie_signal": True,
+                "page_evidence_required": False,
+                "page_inspected": False,
+                "page_authenticated": False,
+                "page_login_visible": False,
+                "last_error": "",
+            },
+        )
+
+        assert payload["skipped"] is True
+        assert payload["cookie_count"] == len(FANQIE_LOGIN_PAGE_COOKIES)
+        restored = runtime.browser_sessions.get_browser_session("fanqie")
+        assert restored is not None
+        assert restored["cookie_count"] == len(FANQIE_COOKIES)
+        assert [item["value"] for item in restored["cookies"]] == [
+            "fanqie-session-good",
+            "fanqie-biz-good",
+        ]
     finally:
         engine.dispose()
 

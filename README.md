@@ -154,8 +154,9 @@ single-host compose layout described above.
 The 126 directory is a deployment output with `.deploy-sync-project` and
 `.deploy-sync-source-commit` markers. Do not create a long-lived Codex coding
 project there unless the task is explicitly about inspecting the deployed copy.
-If a former LAN development host is unavailable, clone from GitHub instead of
-using the deploy output as the source workspace.
+The former LAN development host at `10.0.0.246` is retired/unavailable; clone
+from GitHub instead of using either 246 or the deploy output as the source
+workspace.
 
 Production data stores are centralized on `10.0.0.150`. This repository still
 contains database models, migrations, storage code, and local compose profiles,

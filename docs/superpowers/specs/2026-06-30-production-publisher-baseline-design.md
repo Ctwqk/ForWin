@@ -19,7 +19,8 @@ evidence.
 ## Current Evidence
 
 - Production source of truth is GitHub `Ctwqk/ForWin` on `master`; the old
-  `10.0.0.246` source path is not required.
+  `10.0.0.246` source path is retired/unavailable and must not be used as a
+  deployment or coding dependency.
 - `10.0.0.126:/Users/magi1/ForWin-swarm` is a deploy output, not the long-lived
   coding workspace.
 - Production data services live on `10.0.0.150`; ForWin production should not

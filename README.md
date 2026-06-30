@@ -120,11 +120,12 @@ For publisher-browser work, keep the extension enabled but replace
 long random values before starting the backend.
 
 If you want login QR codes forwarded to Discord when an operator explicitly asks
-for publisher scan-login, set `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`. In
-production, prefer `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` and mount the
-webhook as a secret file so it is not committed, printed in shell history, or
-baked into an image. Ordinary publisher heartbeat checks must only report
-`login-required`; they must not capture QR images or notify Discord. The
+for publisher scan-login, set `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` for
+that trusted deployment only. The production Swarm deployment intentionally
+leaves both `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` and
+`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` unset so publisher login status
+does not send Discord messages. Ordinary publisher heartbeat checks must only
+report `login-required`; they must not capture QR images or notify Discord. The
 publisher extension only forwards directly extracted, fresh QR images from an
 active login session; full-page screenshots and expired/invalid QR placeholders
 such as "二维码已失效 / 点击刷新" are not sent.
@@ -210,10 +211,10 @@ secret is lost, encrypted sessions cannot be recovered and the publishing
 platform must be logged in again. Protect `.env` backups that contain this
 secret; without it, old encrypted cookies cannot be decrypted.
 
-Set `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` or
-`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` only on trusted deployments. The
-webhook is used server-side; browser extensions never store the Discord webhook
-and only send the captured QR image to the authenticated ForWin extension API.
+Do not set `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` or
+`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` on the shared production Swarm
+deployment unless Discord login alerts are being deliberately re-enabled. The
+webhook is used server-side; browser extensions never store the Discord webhook.
 Heartbeat and backend browser-session sync do not send Discord login-success
 confirmation messages.
 

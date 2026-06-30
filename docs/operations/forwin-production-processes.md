@@ -82,8 +82,9 @@ Description=ForWin Codex intervention supervisor
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/taiwei/ForWin-source-github
-ExecStart=/home/taiwei/ForWin-source-github/.venv/bin/python scripts/supervise_forwin_interventions.py \
+WorkingDirectory=/home/taiwei/deploy-github-sync/repos/ForWin
+Environment=PYTHONWARNINGS=ignore
+ExecStart=/usr/bin/python3 scripts/supervise_forwin_interventions.py \
   --api-base http://10.0.0.126:8899 \
   --mcp-url http://10.0.0.126:8896/mcp \
   --github-repo Ctwqk/ForWin \

@@ -24,14 +24,19 @@ QIDIAN_COOKIES = [
 ]
 
 
-def _runtime(name: str, *, secret: str = "") -> tuple[object, PublisherRuntimeService]:
+def _runtime(
+    name: str,
+    *,
+    secret: str = "",
+    preferred_client_id: str = "",
+) -> tuple[object, PublisherRuntimeService]:
     engine = get_engine(postgres_test_url(name))
     init_db(engine)
     return engine, PublisherRuntimeService(
         session_factory=get_session_factory(engine),
         extension_api_key="secret",
         heartbeat_stale_seconds=90,
-        preferred_client_id="",
+        preferred_client_id=preferred_client_id,
         publisher_session_secret=secret,
         publisher_session_encryption_required=False,
     )
@@ -93,6 +98,56 @@ def test_browser_session_sync_keeps_unverified_cookie_signal_logged_out() -> Non
         summary = runtime.browser_sessions.get_browser_session_summary("qidian")
         assert summary is not None
         assert summary["connected"] is False
+    finally:
+        engine.dispose()
+
+
+def test_browser_session_sync_does_not_downgrade_authenticated_heartbeat() -> None:
+    engine, runtime = _runtime(
+        "publisher-runtime-browser-preserve-authenticated",
+        preferred_client_id="client-1",
+    )
+    try:
+        runtime.connection_state.heartbeat(
+            client_id="client-1",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://forwin-app-swarm:8899",
+            platforms=[
+                {
+                    "platform": "qidian",
+                    "connected": True,
+                    "cookie_signal": True,
+                    "page_evidence_required": True,
+                    "page_inspected": True,
+                    "page_authenticated": True,
+                    "page_login_visible": False,
+                    "current_url": "https://write.qq.com/portal/dashboard",
+                    "last_error": "",
+                }
+            ],
+        )
+
+        runtime.browser_sessions.record_browser_session(
+            client_id="client-1",
+            platform="qidian",
+            cookies=QIDIAN_COOKIES,
+            raw_state={
+                "connected": True,
+                "cookie_signal": True,
+                "page_evidence_required": True,
+                "page_inspected": True,
+                "page_authenticated": False,
+                "page_login_visible": False,
+                "current_url": "https://write.qq.com/portal/booknovels/chaptertmp/CBID/1#ccid=2",
+                "last_error": "",
+            },
+        )
+
+        items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
+        assert items["qidian"]["connected"] is True
+        assert items["qidian"]["preferred_client_state"]["connected"] is True
     finally:
         engine.dispose()
 

@@ -358,38 +358,55 @@ class BrowserSessionService:
 
                 state = session.get(PublisherConnectionState, platform)
                 was_connected = bool(state.connected) if state is not None else False
+                existing_payload: dict[str, Any] = {}
+                if state is not None:
+                    try:
+                        parsed = json.loads(str(state.status_json or "{}"))
+                    except json.JSONDecodeError:
+                        parsed = {}
+                    if isinstance(parsed, dict):
+                        existing_payload = parsed
+                preserve_authenticated_heartbeat = bool(
+                    unverified_cookie_signal
+                    and not login_evidence
+                    and state is not None
+                    and state.connected
+                    and existing_payload.get("page_authenticated")
+                    and not platform_login_evidence(platform, existing_payload)
+                )
                 if state is None:
                     state = PublisherConnectionState(platform_id=platform)
                     session.add(state)
-                state.extension_client_id = client_id
-                state.connected = connected
-                if state.connected and not was_connected:
-                    login_success_platforms.append(platform)
-                state.login_method = state.login_method or "scan"
-                if state.connected:
-                    state.last_error = ""
-                state_payload = {
-                    "platform": platform,
-                    "connected": connected,
-                    "login_method": state.login_method,
-                    "last_error": state.last_error,
-                    "cookie_names": self.codec.cookie_names_from_json(stored.cookies_json),
-                    "session_synced": True,
-                    **evidence_payload,
-                    "cookie_signal": cookie_signal,
-                }
-                state.status_json = json.dumps(state_payload, ensure_ascii=False)
-                state.last_heartbeat_at = now
-                self.connection_state.upsert_extension_platform_state(
-                    session,
-                    client_id=client_id,
-                    platform_id=platform,
-                    connected=connected,
-                    login_method=state.login_method,
-                    last_error="",
-                    status_payload=state_payload,
-                    last_heartbeat_at=now,
-                )
+                if not preserve_authenticated_heartbeat:
+                    state.extension_client_id = client_id
+                    state.connected = connected
+                    if state.connected and not was_connected:
+                        login_success_platforms.append(platform)
+                    state.login_method = state.login_method or "scan"
+                    if state.connected:
+                        state.last_error = ""
+                    state_payload = {
+                        "platform": platform,
+                        "connected": connected,
+                        "login_method": state.login_method,
+                        "last_error": state.last_error,
+                        "cookie_names": self.codec.cookie_names_from_json(stored.cookies_json),
+                        "session_synced": True,
+                        **evidence_payload,
+                        "cookie_signal": cookie_signal,
+                    }
+                    state.status_json = json.dumps(state_payload, ensure_ascii=False)
+                    state.last_heartbeat_at = now
+                    self.connection_state.upsert_extension_platform_state(
+                        session,
+                        client_id=client_id,
+                        platform_id=platform,
+                        connected=connected,
+                        login_method=state.login_method,
+                        last_error="",
+                        status_payload=state_payload,
+                        last_heartbeat_at=now,
+                    )
                 session.commit()
         except OperationalError as exc:
             if not is_retryable_db_error(exc):

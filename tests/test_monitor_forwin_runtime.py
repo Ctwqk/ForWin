@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from scripts.monitor_forwin_runtime import (
+    discord_login_webhook_env_snapshot,
     docker_services_snapshot,
     parse_replicas,
     publisher_platforms_snapshot,
@@ -158,6 +159,57 @@ def test_docker_services_snapshot_uses_colima_fallback_when_context_fails(monkey
     assert snapshot["source"] == "colima:swarmbridged"
     assert snapshot["missing"] == []
     assert ("colima", "ssh", "-p", "swarmbridged", "--", "docker", "ps", "--format", "{{.Names}} {{.Image}} {{.Status}}") in calls
+
+
+def test_discord_login_webhook_env_snapshot_passes_when_unset(monkeypatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run_command(args, **kwargs):
+        calls.append(tuple(args))
+        return {"ok": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr("scripts.monitor_forwin_runtime.run_command", fake_run_command)
+
+    snapshot = discord_login_webhook_env_snapshot(
+        ["forwin-app-swarm", "forwin-publisher-browser-swarm"],
+        docker_context="swarm-manager-150",
+    )
+
+    assert snapshot == {
+        "ok": True,
+        "source": "docker-context:swarm-manager-150",
+        "configured": [],
+        "errors": [],
+    }
+    assert len(calls) == 2
+
+
+def test_discord_login_webhook_env_snapshot_fails_when_set(monkeypatch) -> None:
+    def fake_run_command(args, **kwargs):
+        service_name = next((arg for arg in args if str(arg).startswith("forwin-")), "")
+        if service_name == "forwin-app-swarm":
+            return {
+                "ok": True,
+                "stdout": "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE=SET\n",
+                "stderr": "",
+            }
+        return {"ok": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr("scripts.monitor_forwin_runtime.run_command", fake_run_command)
+
+    snapshot = discord_login_webhook_env_snapshot(
+        ["forwin-app-swarm", "forwin-publisher-browser-swarm"],
+        docker_context="swarm-manager-150",
+    )
+
+    assert snapshot["ok"] is False
+    assert snapshot["configured"] == [
+        {
+            "service": "forwin-app-swarm",
+            "env": "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE",
+        }
+    ]
+    assert snapshot["errors"] == []
 
 
 def test_publisher_platforms_snapshot_requires_expected_connected_platforms(monkeypatch) -> None:

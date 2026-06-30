@@ -205,6 +205,55 @@ def docker_services_snapshot(context: str, *, colima_profile: str = "") -> dict[
     return {"ok": False, "source": f"docker-context:{context}", "error": context_error}
 
 
+def discord_login_webhook_env_snapshot(
+    service_names: list[str],
+    *,
+    docker_context: str,
+) -> dict[str, Any]:
+    configured: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+    for service_name in service_names:
+        proc = run_command(
+            [
+                "docker",
+                "--context",
+                docker_context,
+                "service",
+                "inspect",
+                service_name,
+                "--format",
+                "{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}",
+            ],
+            timeout=15,
+        )
+        if not proc.get("ok"):
+            errors.append(
+                {
+                    "service": service_name,
+                    "error": str(
+                        proc.get("stderr")
+                        or proc.get("error")
+                        or proc.get("stdout")
+                        or "inspect failed"
+                    )[:320],
+                }
+            )
+            continue
+        for line in str(proc.get("stdout") or "").splitlines():
+            name = line.split("=", 1)[0]
+            if name in {
+                "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL",
+                "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE",
+            }:
+                configured.append({"service": service_name, "env": name})
+    return {
+        "ok": not configured and not errors,
+        "source": f"docker-context:{docker_context}",
+        "configured": configured,
+        "errors": errors,
+    }
+
+
 def publisher_platforms_snapshot(api_base: str, expected_platforms: set[str]) -> dict[str, Any]:
     response = http_json(f"{api_base.rstrip('/')}/api/publishers/platforms")
     payload = response.get("payload")

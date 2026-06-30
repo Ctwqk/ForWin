@@ -391,22 +391,27 @@ def publisher_extension_heartbeat(
     x_forwin_extension_key: str | None = None,
 ) -> ExtensionHeartbeatResponse:
     _require_extension_auth(publisher_manager, x_forwin_extension_key)
+    def _platform_state(item):
+        extra = getattr(item, "model_extra", None) or {}
+        raw_state = {
+            **extra,
+            **item.raw_state,
+        }
+        return {
+            "platform": item.platform,
+            "connected": item.connected,
+            "login_method": item.login_method,
+            "last_error": item.last_error,
+            **raw_state,
+        }
+
     payload = publisher_manager.record_extension_heartbeat(
         client_id=req.client_id,
         extension_version=req.extension_version,
         browser_name=req.browser_name,
         browser_version=req.browser_version,
         backend_base_url=req.backend_base_url,
-        platforms=[
-            {
-                "platform": item.platform,
-                "connected": item.connected,
-                "login_method": item.login_method,
-                "last_error": item.last_error,
-                **item.raw_state,
-            }
-            for item in req.platforms
-        ],
+        platforms=[_platform_state(item) for item in req.platforms],
     )
     return ExtensionHeartbeatResponse(**payload)
 

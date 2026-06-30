@@ -6,12 +6,13 @@ import pytest
 from fastapi import HTTPException
 
 from forwin.api_publisher_routes import build_handlers
-from forwin.api_schemas import ExtensionLoginQrNotifyRequest
+from forwin.api_schemas import ExtensionHeartbeatRequest, ExtensionLoginQrNotifyRequest
 
 
 class _FakePublisherManager:
     def __init__(self) -> None:
         self.checked_keys: list[str | None] = []
+        self.heartbeat_payloads: list[dict[str, object]] = []
         self.login_qr_payloads: list[dict[str, str]] = []
 
     def verify_extension_api_key(self, value: str | None) -> None:
@@ -32,6 +33,14 @@ class _FakePublisherManager:
             "cookies": [],
             "synced_at": "",
             "last_error": "",
+        }
+
+    def record_extension_heartbeat(self, **kwargs):
+        self.heartbeat_payloads.append(kwargs)
+        return {
+            "ok": True,
+            "message": "recorded",
+            "server_time": "2026-06-28T12:00:00Z",
         }
 
     def notify_login_qr(self, **kwargs):
@@ -76,6 +85,44 @@ def test_extension_browser_session_does_not_request_plaintext_upgrade() -> None:
     assert response is not None
     assert response.platform == "qidian"
     assert manager.checked_keys == ["secret"]
+
+
+def test_extension_heartbeat_preserves_flat_platform_evidence_fields() -> None:
+    manager = _FakePublisherManager()
+    handlers = build_handlers(
+        get_publisher_manager=lambda: manager,
+        extension_root=Path("browser_extension/forwin-publisher"),
+    )
+    req = ExtensionHeartbeatRequest(
+        client_id="client-1",
+        extension_version="0.1.0",
+        browser_name="Chrome",
+        browser_version="123.0",
+        backend_base_url="http://forwin-app-swarm:8899",
+        platforms=[
+            {
+                "platform": "qidian",
+                "connected": True,
+                "login_method": "scan",
+                "last_error": "",
+                "cookie_signal": True,
+                "page_authenticated": True,
+                "page_login_visible": False,
+                "current_url": "https://write.qq.com/portal/dashboard",
+            }
+        ],
+    )
+
+    response = handlers["publisher_extension_heartbeat"](
+        req,
+        x_forwin_extension_key="secret",
+    )
+
+    assert response.ok is True
+    forwarded = manager.heartbeat_payloads[0]["platforms"][0]
+    assert forwarded["cookie_signal"] is True
+    assert forwarded["page_authenticated"] is True
+    assert forwarded["current_url"] == "https://write.qq.com/portal/dashboard"
 
 
 def test_extension_login_qr_notify_requires_extension_key_and_forwards_payload() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from forwin.config import DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
 from forwin.governance import (
@@ -121,6 +121,8 @@ class ExtensionBrowserCookie(BaseModel):
 
 
 class ExtensionPlatformHeartbeat(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     platform: str
     connected: bool = False
     login_method: str = "scan"

@@ -262,8 +262,8 @@ def test_login_qr_notification_rejects_non_image_data_url() -> None:
         )
 
 
-def test_publisher_manager_notifies_login_success_once_from_heartbeat() -> None:
-    engine = get_engine(postgres_test_url("publisher-login-success-heartbeat"))
+def test_publisher_manager_does_not_notify_login_success_from_heartbeat() -> None:
+    engine = get_engine(postgres_test_url("publisher-login-success-heartbeat-disabled"))
     init_db(engine)
     manager = PublisherManager(get_session_factory(engine))
     notifier = _FakeLoginQrNotifier()
@@ -328,20 +328,15 @@ def test_publisher_manager_notifies_login_success_once_from_heartbeat() -> None:
         )
 
         assert first["login_success_notifications"] == []
-        assert second["login_success_notifications"] == ["fanqie"]
+        assert second["login_success_notifications"] == []
         assert third["login_success_notifications"] == []
-        assert notifier.success_calls == [
-            {
-                "client_id": "client-secret-123456",
-                "platform": "fanqie",
-            }
-        ]
+        assert notifier.success_calls == []
     finally:
         engine.dispose()
 
 
-def test_publisher_manager_notifies_login_success_from_browser_session_sync() -> None:
-    engine = get_engine(postgres_test_url("publisher-login-success-browser-session"))
+def test_publisher_manager_does_not_notify_login_success_from_browser_session_sync() -> None:
+    engine = get_engine(postgres_test_url("publisher-login-success-browser-session-disabled"))
     init_db(engine)
     manager = PublisherManager(get_session_factory(engine))
     notifier = _FakeLoginQrNotifier()
@@ -360,12 +355,7 @@ def test_publisher_manager_notifies_login_success_from_browser_session_sync() ->
             },
         )
 
-        assert payload["login_success_notifications"] == ["qidian"]
-        assert notifier.success_calls == [
-            {
-                "client_id": "client-secret-654321",
-                "platform": "qidian",
-            }
-        ]
+        assert payload["login_success_notifications"] == []
+        assert notifier.success_calls == []
     finally:
         engine.dispose()

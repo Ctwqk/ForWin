@@ -8,6 +8,7 @@ import {
 import { uploadExecutionTimeoutMs } from './upload-timeouts.js?v=0.1.23';
 
 const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
+const LOGIN_QR_PLATFORM_THROTTLE_URL = '__platform__';
 
 function defaultNowMs() {
   return Date.now();
@@ -1111,11 +1112,8 @@ export class PublisherExtensionController {
   async maybeNotifyLoginQr(session, inspection) {
     const nowMs = typeof this.deps.nowMs === 'function' ? Number(this.deps.nowMs()) : defaultNowMs();
     const currentUrl = String(inspection?.currentUrl || session.lastUrl || '');
-    if (session.loginQrNotificationsDisabledUrl === currentUrl) {
+    if (await this.areLoginQrNotificationsDisabled(session)) {
       return { skipped: true, reason: 'notifications-disabled' };
-    }
-    if (session.loginQrNotificationsDisabledUrl && session.loginQrNotificationsDisabledUrl !== currentUrl) {
-      delete session.loginQrNotificationsDisabledUrl;
     }
     const lastNotifiedAtMs = await this.getLoginQrLastNotifiedAtMs(session, currentUrl);
     if (session.loginQrNotificationInFlight) {
@@ -1200,9 +1198,10 @@ export class PublisherExtensionController {
       });
       if (result?.ok) {
         await this.setLoginQrLastNotifiedAtMs(session, currentUrl, nowMs);
+        await this.setLoginQrLastNotifiedAtMs(session, LOGIN_QR_PLATFORM_THROTTLE_URL, nowMs);
       }
       if (loginQrNotificationsDisabled(result)) {
-        session.loginQrNotificationsDisabledUrl = currentUrl;
+        await this.setLoginQrNotificationsDisabled(session, true);
       }
       await this.recordLoginQrNotificationEvent({
         platform: session.platformId,
@@ -1251,7 +1250,17 @@ export class PublisherExtensionController {
       const storedValue = Number(
         await this.deps.getLoginQrLastNotifiedAtMs(session.platformId, currentUrl),
       );
-      return Math.max(memoryValue, Number.isFinite(storedValue) ? storedValue : 0);
+      const platformValue = Number(
+        await this.deps.getLoginQrLastNotifiedAtMs(
+          session.platformId,
+          LOGIN_QR_PLATFORM_THROTTLE_URL,
+        ),
+      );
+      return Math.max(
+        memoryValue,
+        Number.isFinite(storedValue) ? storedValue : 0,
+        Number.isFinite(platformValue) ? platformValue : 0,
+      );
     } catch (_error) {
       return memoryValue;
     }
@@ -1267,6 +1276,36 @@ export class PublisherExtensionController {
       await this.deps.setLoginQrLastNotifiedAtMs(session.platformId, currentUrl, value);
     } catch (_error) {
       // Persistent throttle state is best-effort; in-memory throttling still applies.
+    }
+  }
+
+  async areLoginQrNotificationsDisabled(session) {
+    if (session?.loginQrNotificationsDisabled) {
+      return true;
+    }
+    if (typeof this.deps.getLoginQrNotificationsDisabled !== 'function') {
+      return false;
+    }
+    try {
+      const disabled = Boolean(await this.deps.getLoginQrNotificationsDisabled(session.platformId));
+      if (disabled) {
+        session.loginQrNotificationsDisabled = true;
+      }
+      return disabled;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  async setLoginQrNotificationsDisabled(session, disabled) {
+    session.loginQrNotificationsDisabled = Boolean(disabled);
+    if (typeof this.deps.setLoginQrNotificationsDisabled !== 'function') {
+      return;
+    }
+    try {
+      await this.deps.setLoginQrNotificationsDisabled(session.platformId, Boolean(disabled));
+    } catch (_error) {
+      // Persistent disabled state is best-effort; in-memory disabled state still applies.
     }
   }
 

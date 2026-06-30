@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.49';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.50';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js';
@@ -22,6 +22,7 @@ const BACKGROUND_STATUS_KEY = 'forwinPublisherBackgroundStatus';
 const BACKGROUND_ERRORS_KEY = 'forwinPublisherBackgroundErrors';
 const LOGIN_QR_NOTIFICATIONS_KEY = 'forwinPublisherLoginQrNotifications';
 const LOGIN_QR_THROTTLE_KEY = 'forwinPublisherLoginQrThrottle';
+const LOGIN_QR_DISABLED_KEY = 'forwinPublisherLoginQrDisabled';
 const HEARTBEAT_PLATFORM_STATES_KEY = 'forwinPublisherHeartbeatPlatformStates';
 const HEARTBEAT_ALARM = 'forwinPublisherHeartbeat';
 const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;
@@ -99,6 +100,14 @@ function loginQrNotificationTimestampMs(entry) {
   return Date.now();
 }
 
+function loginQrNotificationsDisabled(result) {
+  if (result?.disabled) {
+    return true;
+  }
+  const message = String(result?.message || '').toLowerCase();
+  return message.includes('webhook is not configured');
+}
+
 async function appendLoginQrNotificationStatus(event) {
   const entry = {
     at: String(event?.at || new Date().toISOString()),
@@ -129,6 +138,9 @@ async function appendLoginQrNotificationStatus(event) {
       entry.current_url,
       loginQrNotificationTimestampMs(entry),
     );
+  }
+  if (entry.phase === 'sent' && entry.ok && entry.platform && loginQrNotificationsDisabled(entry)) {
+    await setLoginQrNotificationsDisabled(entry.platform, true);
   }
   await updateBackgroundStatus({
     lastLoginQrNotificationAt: entry.at,
@@ -179,6 +191,35 @@ async function setLoginQrLastNotifiedAtMs(platformId, currentUrl, notifiedAtMs) 
     ))
     .slice(0, 40);
   await setStorageValue(LOGIN_QR_THROTTLE_KEY, Object.fromEntries(prunedEntries));
+}
+
+async function getLoginQrNotificationsDisabled(platformId) {
+  const platform = String(platformId || '').trim();
+  if (!platform) {
+    return false;
+  }
+  const state = await getStorageValue(LOGIN_QR_DISABLED_KEY, {});
+  return Boolean(state?.[platform]?.disabled);
+}
+
+async function setLoginQrNotificationsDisabled(platformId, disabled) {
+  const platform = String(platformId || '').trim();
+  if (!platform) {
+    return;
+  }
+  const state = await getStorageValue(LOGIN_QR_DISABLED_KEY, {});
+  const nextState = state && typeof state === 'object' ? { ...state } : {};
+  if (disabled) {
+    nextState[platform] = {
+      platform,
+      disabled: true,
+      updated_at: new Date().toISOString(),
+      reason: 'discord-webhook-not-configured',
+    };
+  } else {
+    delete nextState[platform];
+  }
+  await setStorageValue(LOGIN_QR_DISABLED_KEY, nextState);
 }
 
 async function appendHeartbeatPlatformState(event) {
@@ -527,6 +568,15 @@ async function notifyLoginQrWithThrottle(payload) {
   const platform = String(payload?.platform || '').trim();
   const currentUrl = String(payload?.current_url || '');
   const nowMs = Date.now();
+  if (await getLoginQrNotificationsDisabled(platform)) {
+    return {
+      ok: true,
+      dispatched: false,
+      disabled: true,
+      throttled: true,
+      message: 'login QR notifications disabled because Discord webhook is not configured',
+    };
+  }
   const lastNotifiedAtMs = await getLoginQrLastNotifiedAtMs(platform, currentUrl);
   if (
     lastNotifiedAtMs > 0
@@ -542,6 +592,9 @@ async function notifyLoginQrWithThrottle(payload) {
   const result = await withBackendClient((client) => client.notifyLoginQr(payload));
   if (result?.ok) {
     await setLoginQrLastNotifiedAtMs(platform, currentUrl, nowMs);
+  }
+  if (loginQrNotificationsDisabled(result)) {
+    await setLoginQrNotificationsDisabled(platform, true);
   }
   return result;
 }
@@ -2058,6 +2111,8 @@ const controller = new PublisherExtensionController({
   recordLoginQrNotification: appendLoginQrNotificationStatus,
   getLoginQrLastNotifiedAtMs,
   setLoginQrLastNotifiedAtMs,
+  getLoginQrNotificationsDisabled,
+  setLoginQrNotificationsDisabled,
   recordHeartbeatPlatformState: appendHeartbeatPlatformState,
   ensureHeartbeatAlarm,
 });

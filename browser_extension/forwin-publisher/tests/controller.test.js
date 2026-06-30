@@ -403,6 +403,111 @@ test('controller stops repeating login QR notifications when backend reports not
   assert.equal(loginQrNotifications.length, 1);
 });
 
+test('controller keeps login QR notifications disabled across refreshed login URLs', async () => {
+  let captureCalls = 0;
+  const loginQrNotifications = [];
+  const { controller } = makeController({
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      return {
+        ok: true,
+        imageDataUrl: `data:image/png;base64,refreshed${captureCalls}=`,
+        source: `refreshed-${captureCalls}`,
+      };
+    },
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      notifyLoginQr: async (payload) => {
+        loginQrNotifications.push(payload);
+        return {
+          ok: true,
+          dispatched: false,
+          disabled: true,
+          message: 'Discord login QR webhook is not configured.',
+        };
+      },
+    },
+  });
+  const session = {
+    platformId: 'fanqie',
+    popupTabId: 42,
+    lastUrl: 'https://fanqienovel.com/main/writer/login',
+  };
+
+  await controller.maybeNotifyLoginQr(session, {
+    currentUrl: 'https://fanqienovel.com/main/writer/login?ticket=first',
+    authenticated: false,
+    loginVisible: true,
+  });
+  await controller.maybeNotifyLoginQr(session, {
+    currentUrl: 'https://fanqienovel.com/main/writer/login?ticket=second',
+    authenticated: false,
+    loginVisible: true,
+  });
+
+  assert.equal(captureCalls, 1);
+  assert.equal(loginQrNotifications.length, 1);
+});
+
+test('controller keeps disabled login QR notifications across service worker restart and refreshed login URLs', async () => {
+  let captureCalls = 0;
+  const throttleState = new Map();
+  const loginQrNotifications = [];
+  const makeRestartedController = () => makeController({
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      return {
+        ok: true,
+        imageDataUrl: `data:image/png;base64,restart${captureCalls}=`,
+        source: `restart-${captureCalls}`,
+      };
+    },
+    getLoginQrLastNotifiedAtMs: async (platformId, currentUrl) => (
+      throttleState.get(`${platformId}:${currentUrl}`) || 0
+    ),
+    setLoginQrLastNotifiedAtMs: async (platformId, currentUrl, notifiedAtMs) => {
+      throttleState.set(`${platformId}:${currentUrl}`, Number(notifiedAtMs || 0));
+    },
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      notifyLoginQr: async (payload) => {
+        loginQrNotifications.push(payload);
+        return {
+          ok: true,
+          dispatched: false,
+          disabled: true,
+          message: 'Discord login QR webhook is not configured.',
+        };
+      },
+    },
+  }).controller;
+
+  const firstSession = {
+    platformId: 'fanqie',
+    popupTabId: 42,
+    lastUrl: 'https://fanqienovel.com/main/writer/login',
+  };
+  await makeRestartedController().maybeNotifyLoginQr(firstSession, {
+    currentUrl: 'https://fanqienovel.com/main/writer/login?ticket=first',
+    authenticated: false,
+    loginVisible: true,
+  });
+
+  const restartedSession = {
+    platformId: 'fanqie',
+    popupTabId: 42,
+    lastUrl: 'https://fanqienovel.com/main/writer/login',
+  };
+  await makeRestartedController().maybeNotifyLoginQr(restartedSession, {
+    currentUrl: 'https://fanqienovel.com/main/writer/login?ticket=second',
+    authenticated: false,
+    loginVisible: true,
+  });
+
+  assert.equal(captureCalls, 1);
+  assert.equal(loginQrNotifications.length, 1);
+});
+
 test('controller ignores login QR notification failures while login remains visible', async () => {
   const { controller, events } = makeController({
     inspectLoginState: async () => ({
@@ -1671,7 +1776,7 @@ test('controller locally throttles login QR when backend accepts without dispatc
 
   assert.equal(captureCalls, 1);
   assert.equal(loginQrNotifications.length, 1);
-  assert.equal(throttleState.size, 1);
+  assert.equal(throttleState.size, 2);
 });
 
 test('controller lets active login sessions own QR notifications for their tabs', async () => {

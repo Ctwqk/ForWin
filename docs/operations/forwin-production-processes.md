@@ -63,8 +63,9 @@ python scripts/check_production_publisher_baseline.py \
 Interpretation:
 
 - `ok`: six ForWin Swarm services are healthy, app/MCP health checks pass, the
-  Discord publisher login webhook env is absent, and Fanqie/Qidian are connected
-  by both API and browser page evidence.
+  Discord publisher login webhook env is absent or limited to the app service's
+  mounted secret file, and Fanqie/Qidian are connected by both API and browser
+  page evidence.
 - `degraded`: runtime is up, but a platform needs human login or page/API state
   has not converged. Follow `blocked_items[*].human_action` and rerun the same
   command.

@@ -206,11 +206,11 @@ The verifier must redact or omit:
 - `FORWIN_PUBLISHER_SESSION_SECRET`
 - Discord webhook URLs or secret file contents
 
-It should explicitly check that shared production services do not have
-`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` or
-`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` configured. If either is present,
-that is a `failed` baseline condition because it contradicts the current shared
-production policy.
+It should explicitly check that shared production services do not expose unsafe
+Discord webhook environment. `forwin-app-swarm` may use
+`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` for the mounted secret file. Any
+`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`, or any Discord webhook env on
+browser/worker services, is a `failed` baseline condition.
 
 ## Verification Strategy
 
@@ -221,7 +221,7 @@ Automated tests should cover:
 - Classification of a login page as `human_login_required`.
 - Classification of authenticated page plus disconnected API after heartbeat as
   `state_sync_mismatch`.
-- Discord webhook environment presence causing a failed baseline.
+- Unsafe Discord webhook environment causing a failed baseline.
 - The verifier continuing independent checks after one platform fails.
 
 Manual production verification should run the new verifier once and confirm:

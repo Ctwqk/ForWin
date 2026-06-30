@@ -211,6 +211,7 @@ def discord_login_webhook_env_snapshot(
     docker_context: str,
 ) -> dict[str, Any]:
     configured: list[dict[str, str]] = []
+    violations: list[dict[str, str]] = []
     errors: list[dict[str, str]] = []
     for service_name in service_names:
         proc = run_command(
@@ -245,11 +246,18 @@ def discord_login_webhook_env_snapshot(
                 "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL",
                 "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE",
             }:
-                configured.append({"service": service_name, "env": name})
+                item = {"service": service_name, "env": name}
+                configured.append(item)
+                if not (
+                    service_name == "forwin-app-swarm"
+                    and name == "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE"
+                ):
+                    violations.append(item)
     return {
-        "ok": not configured and not errors,
+        "ok": not violations and not errors,
         "source": f"docker-context:{docker_context}",
         "configured": configured,
+        "violations": violations,
         "errors": errors,
     }
 

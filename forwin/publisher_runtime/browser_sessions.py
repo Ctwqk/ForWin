@@ -340,9 +340,18 @@ class BrowserSessionService:
                     platform,
                     existing_payload,
                 )
+                fanqie_requires_authenticated_page = bool(
+                    platform == "fanqie"
+                    and normalized
+                    and not page_authenticated
+                )
                 reject_session_sync = bool(
                     not page_authenticated
-                    and (login_evidence or existing_login_evidence)
+                    and (
+                        login_evidence
+                        or existing_login_evidence
+                        or fanqie_requires_authenticated_page
+                    )
                 )
                 if reject_session_sync:
                     if state is None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -238,6 +239,23 @@ def _platform_by_id(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {str(item.get("platform_id") or ""): item for item in items if isinstance(item, dict)}
 
 
+def _classify_platforms(
+    platform_api: dict[str, Any],
+    browser: dict[str, Any],
+    expected: set[str],
+) -> list[dict[str, Any]]:
+    api_by_id = _platform_by_id(platform_api.get("platforms", []))
+    page_by_id = browser.get("pages", {}) if isinstance(browser.get("pages"), dict) else {}
+    platform_ids = sorted(expected or (set(api_by_id) | set(page_by_id)))
+    return [
+        classify_platform(
+            api_by_id.get(platform_id, {"platform_id": platform_id}),
+            page_by_id.get(platform_id, {"platform_id": platform_id, "ok": False}),
+        )
+        for platform_id in platform_ids
+    ]
+
+
 def build_baseline(args: argparse.Namespace) -> dict[str, Any]:
     checked_at = utc_now()
     expected = set(getattr(args, "expect_platform_connected", []) or [])
@@ -255,16 +273,13 @@ def build_baseline(args: argparse.Namespace) -> dict[str, Any]:
         else {"ok": False, "error": container.get("error"), "pages": {}}
     )
 
-    api_by_id = _platform_by_id(platform_api.get("platforms", []))
-    page_by_id = browser.get("pages", {}) if isinstance(browser.get("pages"), dict) else {}
-    platform_ids = sorted(expected or (set(api_by_id) | set(page_by_id)))
-    platforms = [
-        classify_platform(
-            api_by_id.get(platform_id, {"platform_id": platform_id}),
-            page_by_id.get(platform_id, {"platform_id": platform_id, "ok": False}),
-        )
-        for platform_id in platform_ids
-    ]
+    platforms = _classify_platforms(platform_api, browser, expected)
+    if any(item.get("status") == "state_sync_mismatch" for item in platforms):
+        wait_seconds = max(float(getattr(args, "wait_heartbeat_seconds", 0.0) or 0.0), 0.0)
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+            platform_api = publisher_platforms_snapshot(args.api_base, expected)
+            platforms = _classify_platforms(platform_api, browser, expected)
     checks = {
         "services": services,
         "api_health": api_health,

@@ -187,25 +187,10 @@ class PublisherManager:
         client_id: str,
         platforms: list[str],
     ) -> list[str]:
-        dispatched: list[str] = []
-        for platform in dict.fromkeys(str(item or "").strip() for item in platforms):
-            if not platform:
-                continue
-            try:
-                result = self.login_qr_notifier.notify_login_success(
-                    client_id=client_id,
-                    platform=platform,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Publisher login success Discord notification failed for %s: %s",
-                    platform,
-                    exc,
-                )
-                continue
-            if result.get("ok") and result.get("dispatched"):
-                dispatched.append(platform)
-        return dispatched
+        # Login success can be detected during ordinary heartbeats, browser
+        # restarts, and backend session restores. Keep Discord QR delivery tied
+        # to explicit operator login flows; do not send automatic success noise.
+        return []
 
     def list_upload_jobs(
         self,

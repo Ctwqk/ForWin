@@ -573,7 +573,10 @@ async function notifyLoginQrWithThrottle(payload) {
   const currentUrl = String(payload?.current_url || '');
   const nowMs = Date.now();
   const settings = await getSettings();
-  if (settings.loginQrNotificationsEnabled !== true) {
+  if (
+    settings.loginQrNotificationsEnabled !== true
+    || settings.loginQrNotificationsAllowed !== true
+  ) {
     return {
       ok: true,
       dispatched: false,

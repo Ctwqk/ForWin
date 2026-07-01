@@ -224,6 +224,59 @@ def test_endpoint_smoke_checks_safe_surfaces_and_cleans_api_job(monkeypatch) -> 
     assert ("POST", "http://forwin.example/api/publishers/upload-jobs") in calls
 
 
+def test_endpoint_smoke_checks_heartbeat_for_reported_extension_client(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http_json(method, url, *, payload=None, headers=None, timeout=10.0):
+        calls.append((method, url))
+        if url.endswith("/api/publishers/platforms"):
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": [
+                    {
+                        "platform_id": "fanqie",
+                        "connected": True,
+                        "extension_online": True,
+                        "extension_client_id": "client-1",
+                    }
+                ],
+            }
+        if url.endswith("/api/publishers/browser-sessions/fanqie"):
+            return {"ok": True, "status": 200, "payload": {"platform": "fanqie", "connected": True}}
+        if url.endswith("/api/publishers/extension/heartbeat-status?client_id=client-1"):
+            assert headers == {"X-Forwin-Extension-Key": "test-extension-key"}
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {
+                    "ok": True,
+                    "client_id": "client-1",
+                    "recent_platforms": ["fanqie"],
+                },
+            }
+        if url.endswith("/api/publishers/preflight"):
+            return {"ok": True, "status": 200, "payload": {"ok": True, "blocking": [], "warnings": []}}
+        if url.endswith("/api/publishers/work-bindings"):
+            return {"ok": True, "status": 200, "payload": []}
+        if url.endswith("/api/publishers/chapter-bindings"):
+            return {"ok": True, "status": 200, "payload": []}
+        raise AssertionError(url)
+
+    monkeypatch.setattr(smoke, "http_json", fake_http_json)
+    monkeypatch.setenv("FORWIN_PUBLISHER_EXTENSION_API_KEY", "test-extension-key")
+
+    report = smoke.build_report(args(expect_platform_connected=["fanqie"]))
+
+    assert report["status"] == "ok"
+    assert report["publisher_api"]["heartbeat_status"]["payload"]["client_id"] == "client-1"
+    assert report["platforms"][0]["extension_client_id"] == "client-1"
+    assert (
+        "GET",
+        "http://forwin.example/api/publishers/extension/heartbeat-status?client_id=client-1",
+    ) in calls
+
+
 def test_upload_smoke_skips_create_when_platform_not_connected(monkeypatch) -> None:
     monkeypatch.setattr(
         smoke,

@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
@@ -294,6 +295,7 @@ def summarize_platform(item: dict[str, Any]) -> dict[str, Any]:
     return redact_report(
         {
             "platform_id": str(item.get("platform_id") or ""),
+            "extension_client_id": str(item.get("extension_client_id") or ""),
             "connected": bool(item.get("connected")),
             "preferred_connected": bool(preferred.get("connected")),
             "latest_connected": bool(latest.get("connected")),
@@ -303,6 +305,17 @@ def summarize_platform(item: dict[str, Any]) -> dict[str, Any]:
             "last_error": short_text(item.get("last_error")),
         }
     )
+
+
+def heartbeat_status_url(api_base: str, platforms: list[dict[str, Any]]) -> str:
+    client_id = ""
+    for item in platforms:
+        candidate = str(item.get("extension_client_id") or "").strip()
+        if candidate:
+            client_id = candidate
+            break
+    query = {"client_id": client_id} if client_id else {"allow_latest_recent_fallback": "true"}
+    return _api_url(api_base, f"/api/publishers/extension/heartbeat-status?{urlencode(query)}")
 
 
 def summarize_browser_session(platform: str, payload: Any) -> dict[str, Any]:
@@ -657,7 +670,7 @@ def run_endpoint_smoke(args: Any, report: dict[str, Any]) -> None:
     if headers:
         heartbeat = http_json(
             "GET",
-            _api_url(args.api_base, "/api/publishers/extension/heartbeat-status"),
+            heartbeat_status_url(args.api_base, platforms),
             headers=headers,
         )
         report["publisher_api"]["heartbeat_status"] = redact_report(

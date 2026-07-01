@@ -119,12 +119,12 @@ For publisher-browser work, keep the extension enabled but replace
 `FORWIN_PUBLISHER_EXTENSION_API_KEY` and `FORWIN_PUBLISHER_SESSION_SECRET` with
 long random values before starting the backend.
 
-Shared production Swarm keeps Discord publisher login webhooks disabled by
-default. To route scan-login QR and login-success notifications to Discord, set
-`FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true` and either
-`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` or
-`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` on `forwin-app-swarm` only. Do not
-put Discord webhook env on browser or worker services. The publisher extension's
+Shared production Swarm keeps Discord publisher login webhooks disabled. The
+legacy `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK`,
+`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`, and
+`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` settings are ignored by runtime
+config and must not be used to route scan-login state to Discord. Do not put
+Discord webhook env on browser or worker services. The publisher extension's
 login QR notification setting is also disabled by default; while it is disabled,
 the extension must not capture a QR image or call
 `/api/publishers/extension/login-qr`. A stale

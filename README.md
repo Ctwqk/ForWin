@@ -124,20 +124,28 @@ legacy `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK`,
 `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`, and
 `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` settings are ignored by runtime
 config and must not be used to route scan-login state to Discord. Do not put
-Discord webhook env on browser or worker services. The publisher extension's
-login QR notification setting is also disabled by default; while it is disabled,
-the extension must not capture a QR image or call
-`/api/publishers/extension/login-qr`. A stale
+Discord webhook env on browser or worker services. QR forwarding is only allowed
+through the operator-requested `POST /api/publishers/login-qr-one-shot`
+endpoint, which accepts a temporary webhook URL in the request body and keeps it
+in memory for a short TTL. The publisher extension's login QR notification
+setting is also disabled by default; while it is disabled, the extension must
+not capture a QR image or call `/api/publishers/extension/login-qr`. A stale
 profile value of `loginQrNotificationsEnabled=true` is not enough to re-enable
 QR forwarding; an operator must also set the hidden
 `loginQrNotificationsAllowed=true` guard and a future
 `loginQrNotificationsAllowedUntilMs` timestamp for the temporary window.
-Ordinary publisher heartbeat checks must only report `login-required`. The publisher extension only
-forwards directly extracted, fresh QR images from an active login session;
-full-page screenshots and expired/invalid QR placeholders such as
-"二维码已失效 / 点击刷新" are not sent. When Discord forwarding is explicitly
-enabled and a platform moves from disconnected to connected, the backend sends
-one login-success confirmation so the operator knows the scan worked.
+Ordinary publisher heartbeat checks must only report `login-required`.
+
+The publisher extension only forwards directly extracted, fresh QR images from
+an active login session. It first tries canvas/data URLs and page-visible
+`img.src`/`currentSrc` values, fetching image responses from the page context
+with credentials when a QR URL is exposed. Chrome extensions cannot generally
+read arbitrary cross-origin network response bodies, so raw response extraction
+is best-effort through those page-visible image URLs. Full-page screenshots and
+expired/invalid QR placeholders such as "二维码已失效 / 点击刷新" are not sent.
+When Discord forwarding is explicitly enabled and a platform moves from
+disconnected to connected, the backend sends one login-success confirmation so
+the operator knows the scan worked.
 
 ### Current production deployment
 
@@ -241,12 +249,12 @@ secret; without it, old encrypted cookies cannot be decrypted.
 
 For shared production Swarm, keep Discord login alerts disabled. The legacy
 publisher login webhook env keys are ignored by runtime config, and browser
-extensions never store a webhook. QR forwarding also requires a temporary hidden
-extension allowance with a future `loginQrNotificationsAllowedUntilMs`
-timestamp. Automatic heartbeats do not capture or send QR-code images. When a
-platform moves from
-disconnected to connected, heartbeat or backend browser-session sync sends one
-login-success confirmation.
+extensions never store a webhook. QR forwarding uses the one-shot operator API
+plus a temporary hidden extension allowance with a future
+`loginQrNotificationsAllowedUntilMs` timestamp. Automatic heartbeats do not
+capture or send QR-code images. When a platform moves from disconnected to
+connected, heartbeat or backend browser-session sync sends one login-success
+confirmation.
 
 ### Codex / MCP operator
 

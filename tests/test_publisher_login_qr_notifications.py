@@ -126,6 +126,73 @@ def test_publisher_manager_throttles_duplicate_login_qr_after_notifier_accepts_w
     assert len(notifier.calls) == 1
 
 
+def test_publisher_manager_one_shot_login_qr_uses_temporary_webhook_once() -> None:
+    manager = PublisherManager(lambda: None)
+    notifier = _FakeLoginQrNotifier()
+    manager.login_qr_notifier = notifier
+
+    opened = manager.start_login_qr_one_shot(
+        platform="fanqie",
+        webhook_url="https://discord.invalid/api/webhooks/one-shot",
+        ttl_seconds=300,
+        max_dispatches=1,
+    )
+
+    assert opened["ok"] is True
+    assert opened["platform"] == "fanqie"
+    assert opened["remaining_dispatches"] == 1
+    assert opened["login_qr_notifications_allowed"] is True
+
+    first = manager.notify_login_qr(
+        client_id="client-1",
+        platform="fanqie",
+        current_url="https://fanqienovel.com/main/writer/login",
+        image_data_url=_png_data_url(b"first-qr"),
+        source="frame:1:scripting:image",
+    )
+    second = manager.notify_login_qr(
+        client_id="client-1",
+        platform="fanqie",
+        current_url="https://fanqienovel.com/main/writer/login",
+        image_data_url=_png_data_url(b"second-qr"),
+        source="frame:1:scripting:image",
+    )
+
+    assert first["ok"] is True
+    assert first["dispatched"] is True
+    assert first["one_shot"] is True
+    assert second["ok"] is True
+    assert second["dispatched"] is False
+    assert second["disabled"] is True
+    assert len(notifier.calls) == 1
+
+
+def test_publisher_manager_one_shot_login_qr_rejects_screenshot_sources() -> None:
+    manager = PublisherManager(lambda: None)
+    notifier = _FakeLoginQrNotifier()
+    manager.login_qr_notifier = notifier
+    manager.start_login_qr_one_shot(
+        platform="qidian",
+        webhook_url="https://discord.invalid/api/webhooks/one-shot",
+        ttl_seconds=300,
+        max_dispatches=1,
+    )
+
+    result = manager.notify_login_qr(
+        client_id="client-1",
+        platform="qidian",
+        current_url="https://write.qq.com/portal/login",
+        image_data_url=_png_data_url(b"screenshot"),
+        source="debugger-screenshot",
+    )
+
+    assert result["ok"] is True
+    assert result["dispatched"] is False
+    assert result["disabled"] is True
+    assert result["message"] == "login QR screenshot capture is not allowed for one-shot delivery."
+    assert notifier.calls == []
+
+
 def test_publisher_manager_throttles_duplicate_login_qr_notifications() -> None:
     manager = PublisherManager(lambda: None)
     notifier = _FakeLoginQrNotifier()

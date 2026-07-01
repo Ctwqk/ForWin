@@ -50,15 +50,21 @@ Firefox 临时加载：
   `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true`、
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` 或
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE`，避免登录状态向 Discord 发消息。
-  扩展设置里的二维码通知开关也默认关闭；即使旧 profile 里遗留
-  `loginQrNotificationsEnabled=true`，没有隐藏的
-  `loginQrNotificationsAllowed=true` 和未来的
-  `loginQrNotificationsAllowedUntilMs` 临时时间窗时，扩展也不会截图或
-  POST `/api/publishers/extension/login-qr`。
+  临时转发必须通过 operator 主动调用
+  `POST /api/publishers/login-qr-one-shot` 打开短 TTL 窗口；webhook 只放在
+  这次请求体里，不能写入服务 env 或浏览器 profile。扩展设置里的二维码通知
+  开关也默认关闭；即使旧 profile 里遗留 `loginQrNotificationsEnabled=true`，
+  没有隐藏的 `loginQrNotificationsAllowed=true` 和未来的
+  `loginQrNotificationsAllowedUntilMs` 临时时间窗时，扩展也不会截图或 POST
+  `/api/publishers/extension/login-qr`。
   只有用户主动打开的登录会话可以触发二维码通知；扩展心跳检测到登录页时只回写
   `login-required`，不会截图或发送 Discord。扩展只应转发直接提取到的新鲜二维码
-  图片，发送前会重新提取并短重试等待页面生成，同一登录页的并发通知会去重；整页
-  截图、已过期二维码和“二维码已失效 / 点击刷新”占位图会被拦截。
+  图片，发送前会重新提取并短重试等待页面生成，同一登录页的并发通知会去重。提取
+  优先使用页面内 canvas/data URL，以及页面可见的 `img.src`/`currentSrc`；
+  当二维码 URL 暴露时，页面代理会用 `fetch(..., { credentials: 'include' })`
+  读取该图片 response 并转成 data URL。Chrome 扩展不能通用读取任意跨域网络
+  response body，所以这条 response 路径是基于页面可见图片 URL 的 best-effort。
+  整页截图、已过期二维码和“二维码已失效 / 点击刷新”占位图会被拦截。
 - 保存草稿 / 直接发布
 - 扩展心跳回写
 

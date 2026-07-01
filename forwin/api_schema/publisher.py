@@ -357,6 +357,24 @@ class PublisherPreflightResponse(BaseModel):
     requires_reviewer: bool = False
 
 
+class PublisherLoginQrOneShotRequest(BaseModel):
+    platform: str
+    webhook_url: str = Field(max_length=2000)
+    ttl_seconds: int = 300
+    max_dispatches: int = 1
+
+
+class PublisherLoginQrOneShotResponse(BaseModel):
+    ok: bool
+    message: str
+    server_time: str
+    platform: str
+    expires_at: str
+    allowed_until_ms: int
+    remaining_dispatches: int
+    login_qr_notifications_allowed: bool
+
+
 class PublisherRawCommentInput(BaseModel):
     remote_comment_id: str
     work_id: str = ""
@@ -421,6 +439,8 @@ __all__ = [
     'PublisherAuditSyncRequest',
     'PublisherPreflightRequest',
     'PublisherPreflightResponse',
+    'PublisherLoginQrOneShotRequest',
+    'PublisherLoginQrOneShotResponse',
     'PublisherRawCommentInput',
     'ExtensionCommentsBatchRequest',
     'ExtensionCommentsBatchResponse',

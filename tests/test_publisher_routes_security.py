@@ -6,7 +6,11 @@ import pytest
 from fastapi import HTTPException
 
 from forwin.api_publisher_routes import build_handlers
-from forwin.api_schemas import ExtensionHeartbeatRequest, ExtensionLoginQrNotifyRequest
+from forwin.api_schemas import (
+    ExtensionHeartbeatRequest,
+    ExtensionLoginQrNotifyRequest,
+    PublisherLoginQrOneShotRequest,
+)
 
 
 class _FakePublisherManager:
@@ -14,6 +18,7 @@ class _FakePublisherManager:
         self.checked_keys: list[str | None] = []
         self.heartbeat_payloads: list[dict[str, object]] = []
         self.login_qr_payloads: list[dict[str, str]] = []
+        self.one_shot_payloads: list[dict[str, object]] = []
 
     def verify_extension_api_key(self, value: str | None) -> None:
         self.checked_keys.append(value)
@@ -50,6 +55,19 @@ class _FakePublisherManager:
             "message": "sent",
             "server_time": "2026-06-28T12:00:00Z",
             "dispatched": True,
+        }
+
+    def start_login_qr_one_shot(self, **kwargs):
+        self.one_shot_payloads.append(kwargs)
+        return {
+            "ok": True,
+            "message": "one-shot ready",
+            "server_time": "2026-06-28T12:00:00Z",
+            "platform": kwargs["platform"],
+            "expires_at": "2026-06-28T12:05:00Z",
+            "allowed_until_ms": 1782648300000,
+            "remaining_dispatches": kwargs["max_dispatches"],
+            "login_qr_notifications_allowed": True,
         }
 
 
@@ -163,5 +181,33 @@ def test_extension_login_qr_notify_requires_extension_key_and_forwards_payload()
             "image_data_url": "data:image/png;base64,cXI=",
             "source": "canvas",
             "captured_at": "2026-06-28T12:00:00Z",
+        }
+    ]
+
+
+def test_publisher_login_qr_one_shot_start_forwards_operator_request() -> None:
+    manager = _FakePublisherManager()
+    handlers = build_handlers(
+        get_publisher_manager=lambda: manager,
+        extension_root=Path("browser_extension/forwin-publisher"),
+    )
+    req = PublisherLoginQrOneShotRequest(
+        platform="qidian",
+        webhook_url="https://discord.invalid/api/webhooks/one-shot",
+        ttl_seconds=240,
+        max_dispatches=1,
+    )
+
+    response = handlers["start_publisher_login_qr_one_shot"](req)
+
+    assert response.ok is True
+    assert response.platform == "qidian"
+    assert response.login_qr_notifications_allowed is True
+    assert manager.one_shot_payloads == [
+        {
+            "platform": "qidian",
+            "webhook_url": "https://discord.invalid/api/webhooks/one-shot",
+            "ttl_seconds": 240,
+            "max_dispatches": 1,
         }
     ]

@@ -20,6 +20,7 @@ from forwin.api_schemas import (
     PublisherCoverGenerateRequest,
     PublisherCoverSelectRequest,
     PublisherCoverUploadRequest,
+    PublisherLoginQrOneShotRequest,
     PublisherPreflightRequest,
     PublisherUploadJobCreateRequest,
     UploadJobResultRequest,
@@ -130,6 +131,12 @@ def build_handlers(
 
     def publisher_preflight(req: PublisherPreflightRequest):
         return api_publisher_ops.publisher_preflight(
+            req,
+            publisher_manager=get_publisher_manager(),
+        )
+
+    def start_publisher_login_qr_one_shot(req: PublisherLoginQrOneShotRequest):
+        return api_publisher_ops.start_publisher_login_qr_one_shot(
             req,
             publisher_manager=get_publisher_manager(),
         )
@@ -286,6 +293,7 @@ def build_handlers(
         "enqueue_publisher_cover_upload": enqueue_publisher_cover_upload,
         "enqueue_publisher_audit_sync": enqueue_publisher_audit_sync,
         "publisher_preflight": publisher_preflight,
+        "start_publisher_login_qr_one_shot": start_publisher_login_qr_one_shot,
         "terminate_publisher_upload_job": terminate_publisher_upload_job,
         "delete_publisher_upload_job": delete_publisher_upload_job,
         "publisher_extension_heartbeat": publisher_extension_heartbeat,

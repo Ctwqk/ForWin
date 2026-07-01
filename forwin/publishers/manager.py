@@ -103,6 +103,8 @@ class PublisherManager:
             publisher_login_discord_webhook_url
         )
         self._login_qr_notification_throttle: dict[tuple[str, str], tuple[datetime, str]] = {}
+        self._login_qr_one_shots: dict[str, dict[str, Any]] = {}
+        self._login_qr_one_shot_exhausted_until: dict[str, datetime] = {}
         self.runtime = PublisherRuntimeService(
             session_factory=session_factory,
             extension_api_key=self.extension_api_key,
@@ -137,6 +139,96 @@ class PublisherManager:
         self._sync_runtime_config()
         return self.runtime.connection_state.list_platforms()
 
+    def start_login_qr_one_shot(
+        self,
+        *,
+        platform: str,
+        webhook_url: str,
+        ttl_seconds: int = 300,
+        max_dispatches: int = 1,
+    ) -> dict[str, Any]:
+        platform_id = str(platform or "").strip()
+        webhook = str(webhook_url or "").strip()
+        if not platform_id:
+            raise ValueError("platform is required for login QR one-shot.")
+        if not webhook:
+            raise ValueError("webhook_url is required for login QR one-shot.")
+        if not webhook.startswith("https://"):
+            raise ValueError("login QR one-shot webhook_url must be an https URL.")
+        ttl = max(30, min(_as_int(ttl_seconds, 300), 15 * 60))
+        dispatches = max(1, min(_as_int(max_dispatches, 1), 3))
+        now = _utc_now()
+        expires_at = now + timedelta(seconds=ttl)
+        self._login_qr_one_shot_exhausted_until.pop(platform_id, None)
+        self._login_qr_one_shots[platform_id] = {
+            "platform": platform_id,
+            "webhook_url": webhook,
+            "expires_at": expires_at,
+            "remaining_dispatches": dispatches,
+        }
+        return {
+            "ok": True,
+            "message": "login QR one-shot enabled",
+            "server_time": _isoformat(now),
+            "platform": platform_id,
+            "expires_at": _isoformat(expires_at),
+            "allowed_until_ms": int(expires_at.timestamp() * 1000),
+            "remaining_dispatches": dispatches,
+            "login_qr_notifications_allowed": True,
+        }
+
+    def _active_login_qr_one_shot(self, platform_id: str, now: datetime) -> dict[str, Any] | None:
+        one_shot = self._login_qr_one_shots.get(platform_id)
+        if not one_shot:
+            return None
+        expires_at = one_shot.get("expires_at")
+        if _as_int(one_shot.get("remaining_dispatches"), 0) <= 0:
+            self._login_qr_one_shots.pop(platform_id, None)
+            if isinstance(expires_at, datetime) and now < expires_at:
+                self._login_qr_one_shot_exhausted_until[platform_id] = expires_at
+            return None
+        if not isinstance(expires_at, datetime) or now >= expires_at:
+            self._login_qr_one_shots.pop(platform_id, None)
+            self._login_qr_one_shot_exhausted_until.pop(platform_id, None)
+            return None
+        return one_shot
+
+    def _login_qr_one_shot_exhausted(self, platform_id: str, now: datetime) -> bool:
+        exhausted_until = self._login_qr_one_shot_exhausted_until.get(platform_id)
+        if not isinstance(exhausted_until, datetime):
+            return False
+        if now >= exhausted_until:
+            self._login_qr_one_shot_exhausted_until.pop(platform_id, None)
+            return False
+        return True
+
+    def _notify_with_one_shot_webhook(
+        self,
+        one_shot: dict[str, Any],
+        *,
+        client_id: str,
+        platform: str,
+        current_url: str,
+        image_data_url: str,
+        source: str = "",
+        captured_at: str = "",
+    ) -> dict[str, Any]:
+        old_webhook_url = getattr(self.login_qr_notifier, "webhook_url", "")
+        if hasattr(self.login_qr_notifier, "webhook_url"):
+            self.login_qr_notifier.webhook_url = str(one_shot.get("webhook_url") or "")
+        try:
+            return self.login_qr_notifier.notify(
+                client_id=client_id,
+                platform=platform,
+                current_url=current_url,
+                image_data_url=image_data_url,
+                source=source,
+                captured_at=captured_at,
+            )
+        finally:
+            if hasattr(self.login_qr_notifier, "webhook_url"):
+                self.login_qr_notifier.webhook_url = old_webhook_url
+
     def notify_login_qr(
         self,
         *,
@@ -149,6 +241,25 @@ class PublisherManager:
     ) -> dict[str, Any]:
         now = _utc_now()
         platform_id = str(platform or "").strip()
+        one_shot = self._active_login_qr_one_shot(platform_id, now)
+        if one_shot is None and self._login_qr_one_shot_exhausted(platform_id, now):
+            return {
+                "ok": True,
+                "dispatched": False,
+                "disabled": True,
+                "one_shot": True,
+                "message": "login QR one-shot has already dispatched.",
+                "server_time": _isoformat(now),
+            }
+        if one_shot is not None and "screenshot" in str(source or "").lower():
+            return {
+                "ok": True,
+                "dispatched": False,
+                "disabled": True,
+                "one_shot": True,
+                "message": "login QR screenshot capture is not allowed for one-shot delivery.",
+                "server_time": _isoformat(now),
+            }
         throttle_url = _login_qr_throttle_url(current_url)
         throttle_key = (platform_id, throttle_url)
         image_fingerprint = _login_qr_image_fingerprint(image_data_url)
@@ -171,6 +282,27 @@ class PublisherManager:
                 "message": "login QR notification throttled",
                 "server_time": _isoformat(now),
             }
+
+        if one_shot is not None:
+            result = self._notify_with_one_shot_webhook(
+                one_shot,
+                client_id=client_id,
+                platform=platform,
+                current_url=current_url,
+                image_data_url=image_data_url,
+                source=source,
+                captured_at=captured_at,
+            )
+            result["one_shot"] = True
+            if result.get("ok") and result.get("dispatched"):
+                remaining = _as_int(one_shot.get("remaining_dispatches"), 0) - 1
+                one_shot["remaining_dispatches"] = remaining
+                if remaining <= 0:
+                    self._login_qr_one_shots.pop(platform_id, None)
+                    expires_at = one_shot.get("expires_at")
+                    if isinstance(expires_at, datetime) and now < expires_at:
+                        self._login_qr_one_shot_exhausted_until[platform_id] = expires_at
+            return result
 
         result = self.login_qr_notifier.notify(
             client_id=client_id,

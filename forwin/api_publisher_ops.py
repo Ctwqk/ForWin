@@ -34,6 +34,8 @@ from forwin.api_schemas import (
     PublisherCoverSelectRequest,
     PublisherCoverUploadRequest,
     PublisherPlatformInfo,
+    PublisherLoginQrOneShotRequest,
+    PublisherLoginQrOneShotResponse,
     PublisherPreflightRequest,
     PublisherPreflightResponse,
     PublisherUploadJobCreateRequest,
@@ -382,6 +384,23 @@ def delete_publisher_upload_job(job_id: str, *, publisher_manager) -> TaskMutati
         status="deleted",
         message="任务已删除。",
     )
+
+
+def start_publisher_login_qr_one_shot(
+    req: PublisherLoginQrOneShotRequest,
+    *,
+    publisher_manager,
+) -> PublisherLoginQrOneShotResponse:
+    try:
+        payload = publisher_manager.start_login_qr_one_shot(
+            platform=req.platform,
+            webhook_url=req.webhook_url,
+            ttl_seconds=req.ttl_seconds,
+            max_dispatches=req.max_dispatches,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return PublisherLoginQrOneShotResponse(**payload)
 
 
 def publisher_extension_heartbeat(

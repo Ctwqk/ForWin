@@ -1839,10 +1839,11 @@ async function extractLoginQrFromTopFrame(tabId) {
   return null;
 }
 
-async function captureLoginQrImage(tabId) {
+async function captureLoginQrImage(tabId, options = {}) {
   if (!tabId) {
     return { ok: false, error: 'missing-tab-id' };
   }
+  const allowScreenshotFallback = options?.allowScreenshotFallback === true;
   let ready = await tabReadyRegistry.waitFor(tabId, READY_CHANNELS.PLATFORM_AGENT, 3000);
   if (!ready) {
     ready = await probePlatformAgentResponsive(tabId);
@@ -1863,6 +1864,9 @@ async function captureLoginQrImage(tabId) {
     if (Date.now() < directExtractionDeadline) {
       await sleep(1200);
     }
+  }
+  if (!allowScreenshotFallback) {
+    return { ok: false, error: 'login-qr-direct-extraction-failed' };
   }
   try {
     const screenshot = await captureTabScreenshotWithDebugger(tabId);

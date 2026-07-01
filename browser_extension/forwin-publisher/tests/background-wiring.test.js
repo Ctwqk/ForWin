@@ -80,7 +80,7 @@ test('background treats known publisher login URLs as inspectable login pages', 
   assert.match(source, /summary:\s*'known login url'/);
 });
 
-test('background login QR extraction asks matching child frames before screenshot fallback', async () => {
+test('background login QR extraction asks matching child frames through direct image paths', async () => {
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 
   assert.match(source, /findLoginQrFrameTargets/);
@@ -94,31 +94,34 @@ test('background login QR extraction asks matching child frames before screensho
   assert.match(source, /await\s+sleep\(500\)/);
 });
 
-test('background login QR extraction probes the top frame before screenshot fallback', async () => {
+test('background login QR extraction probes the top frame before child frames', async () => {
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 
   assert.match(source, /async\s+function\s+extractLoginQrFromTopFrame\s*\(/);
   assert.match(source, /captureLoginQrImage[\s\S]*extractLoginQrFromTopFrame/);
   assert.match(source, /captureLoginQrImage[\s\S]*extractLoginQrFromFrames/);
-  assert.match(source, /captureLoginQrImage[\s\S]*captureTabScreenshotWithDebugger/);
+  assert.match(source, /allowScreenshotFallback/);
 });
 
-test('background retries top-frame login QR extraction before screenshot fallback', async () => {
+test('background retries top-frame login QR extraction before child frame extraction', async () => {
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 
   assert.match(source, /topFrameExtractionAttempt/);
   assert.match(source, /topFrameExtractionAttempt\s*<\s*3/);
   assert.match(source, /extractLoginQrFromTopFrame[\s\S]*await\s+sleep\(700\)/);
-  assert.match(source, /captureLoginQrImage[\s\S]*extractLoginQrFromTopFrame[\s\S]*extractLoginQrFromFrames[\s\S]*captureTabScreenshotWithDebugger/);
+  assert.match(source, /captureLoginQrImage[\s\S]*extractLoginQrFromTopFrame[\s\S]*extractLoginQrFromFrames/);
 });
 
-test('background keeps retrying direct QR extraction before screenshot fallback', async () => {
+test('background keeps retrying direct QR extraction and disables screenshot fallback by default', async () => {
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 
   assert.match(source, /LOGIN_QR_DIRECT_EXTRACTION_TIMEOUT_MS\s*=\s*15000/);
   assert.match(source, /directExtractionDeadline/);
   assert.match(source, /Date\.now\(\)\s*<\s*directExtractionDeadline/);
-  assert.match(source, /captureLoginQrImage[\s\S]*extractLoginQrFromTopFrame[\s\S]*extractLoginQrFromFrames[\s\S]*await\s+sleep\(1200\)[\s\S]*captureTabScreenshotWithDebugger/);
+  assert.match(source, /captureLoginQrImage\(tabId,\s*options\s*=\s*\{\}\)/);
+  assert.match(source, /allowScreenshotFallback\s*=\s*options\?\.allowScreenshotFallback\s*===\s*true/);
+  assert.match(source, /if\s*\(!allowScreenshotFallback\)\s*\{[\s\S]*error:\s*'login-qr-direct-extraction-failed'/);
+  assert.match(source, /allowScreenshotFallback[\s\S]*captureTabScreenshotWithDebugger/);
 });
 
 test('background routes platform business commands to the top frame', async () => {

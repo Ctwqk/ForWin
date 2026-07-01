@@ -2091,7 +2091,7 @@ test('controller records local login-required state when heartbeat sees a login 
   ]);
 });
 
-test('controller skips platform probe when local state already says login is required', async () => {
+test('controller skips platform probe when local state says login is required without cookie signal', async () => {
   let probeCalls = 0;
   const { controller } = makeController({
     inspectPlatformState: async () => null,
@@ -2110,16 +2110,66 @@ test('controller skips platform probe when local state already says login is req
         ? { connected: false, loginMethod: 'scan', lastError: 'login-required' }
         : {}
     ),
+    getCookies: async () => [],
+  });
+
+  await controller.sendHeartbeat();
+
+  assert.equal(probeCalls, 0);
+});
+
+test('controller probes Fanqie dashboard when strong cookies outlive stale login-required state', async () => {
+  const payloads = [];
+  const probes = [];
+  const { controller } = makeController({
+    backend: {
+      heartbeat: async (payload) => {
+        payloads.push(payload);
+        return { ok: true };
+      },
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+    },
+    inspectPlatformState: async () => null,
+    ensurePlatformProbeInspection: async (platformId) => {
+      probes.push(platformId);
+      if (platformId !== 'fanqie') {
+        return null;
+      }
+      return {
+        ok: true,
+        tabId: 92,
+        currentUrl: 'https://fanqienovel.com/main/writer/',
+        platform: 'fanqie',
+        authenticated: true,
+        loginVisible: false,
+        summary: '作家专区 工作台 作品管理',
+      };
+    },
+    getPlatformState: async (platformId) => (
+      platformId === 'fanqie'
+        ? { connected: false, loginMethod: 'scan', lastError: 'login-required' }
+        : {}
+    ),
     getCookies: async (platformId) => (
-      platformId === 'qidian'
-        ? [{ name: 'AppAuthToken' }, { name: 'pubtoken' }]
+      platformId === 'fanqie'
+        ? [{ name: 'sessionid' }, { name: 'has_biz_token' }]
         : []
     ),
   });
 
   await controller.sendHeartbeat();
 
-  assert.equal(probeCalls, 0);
+  assert.deepEqual(probes, ['fanqie']);
+  const fanqie = payloads[0].platforms.find((item) => item.platform === 'fanqie');
+  assert.equal(fanqie.connected, true);
+  assert.equal(fanqie.last_error, '');
+  assert.equal(fanqie.raw_state.cookie_signal, true);
+  assert.equal(fanqie.raw_state.page_authenticated, true);
 });
 
 test('controller records skipped login QR notification status for plain heartbeat login page', async () => {

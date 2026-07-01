@@ -859,9 +859,6 @@ export class PublisherExtensionController {
     if (!provisionalState.raw_state?.cookie_signal) {
       return inspection;
     }
-    if (isLoginRequiredError(savedState.lastError) && !inspection?.authenticated) {
-      return inspection;
-    }
     const loggedOutByInspectedLoginPage = Boolean(
       provisionalState.raw_state?.page_login_visible
       && !provisionalState.raw_state?.page_authenticated,

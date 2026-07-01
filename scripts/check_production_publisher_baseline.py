@@ -37,6 +37,12 @@ PLATFORM_URLS = {
     "fanqie": "https://fanqienovel.com/main/writer/",
 }
 
+TRANSIENT_PLATFORM_STATUSES = {
+    "browser_unreachable",
+    "state_sync_mismatch",
+    "unknown",
+}
+
 
 def classify_page_evidence(
     *,
@@ -329,6 +335,20 @@ def _classify_platforms(
     ]
 
 
+def _should_poll_platforms(platforms: list[dict[str, Any]]) -> bool:
+    statuses = {str(item.get("status") or "") for item in platforms}
+    if "human_login_required" in statuses:
+        return False
+    return bool(statuses & TRANSIENT_PLATFORM_STATUSES)
+
+
+def _heartbeat_poll_interval(args: argparse.Namespace, remaining_seconds: float) -> float:
+    interval = max(float(getattr(args, "heartbeat_poll_interval_seconds", 0.0) or 0.0), 0.0)
+    if interval <= 0:
+        interval = remaining_seconds
+    return min(interval, remaining_seconds)
+
+
 def build_baseline(args: argparse.Namespace) -> dict[str, Any]:
     checked_at = utc_now()
     expected = set(getattr(args, "expect_platform_connected", []) or [])
@@ -347,12 +367,18 @@ def build_baseline(args: argparse.Namespace) -> dict[str, Any]:
     )
 
     platforms = _classify_platforms(platform_api, browser, expected)
-    if any(item.get("status") == "state_sync_mismatch" for item in platforms):
-        wait_seconds = max(float(getattr(args, "wait_heartbeat_seconds", 0.0) or 0.0), 0.0)
-        if wait_seconds > 0:
-            time.sleep(wait_seconds)
-            platform_api = publisher_platforms_snapshot(args.api_base, expected)
-            platforms = _classify_platforms(platform_api, browser, expected)
+    wait_seconds = max(float(getattr(args, "wait_heartbeat_seconds", 0.0) or 0.0), 0.0)
+    waited_seconds = 0.0
+    while wait_seconds > waited_seconds and _should_poll_platforms(platforms):
+        remaining_seconds = wait_seconds - waited_seconds
+        sleep_seconds = _heartbeat_poll_interval(args, remaining_seconds)
+        if sleep_seconds <= 0:
+            break
+        time.sleep(sleep_seconds)
+        waited_seconds += sleep_seconds
+        platform_api = publisher_platforms_snapshot(args.api_base, expected)
+        browser = browser_pages_snapshot(args) if container.get("ok") else browser
+        platforms = _classify_platforms(platform_api, browser, expected)
     checks = {
         "services": services,
         "api_health": api_health,
@@ -392,6 +418,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--colima-profile", default="swarmbridged")
     parser.add_argument("--skip-browser", action="store_true")
     parser.add_argument("--wait-heartbeat-seconds", type=float, default=75.0)
+    parser.add_argument("--heartbeat-poll-interval-seconds", type=float, default=15.0)
     parser.add_argument(
         "--expect-platform-connected",
         action="append",

@@ -282,11 +282,12 @@ real browser login or browser clicking.
   operator network.
 - Keep Basic Auth enabled when exposing the API beyond localhost.
 - Keep publisher extension API keys and session secrets separate from Basic Auth.
-- Keep Discord login QR webhooks disabled in shared production. The legacy
-  `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK`,
-  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`, and
-  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` keys are ignored by runtime
-  config; do not commit webhook URLs or paste them into deployment logs.
+- Keep Discord login QR webhooks disabled in shared production unless an
+  operator explicitly opens a login window. When enabled, set
+  `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true` and either
+  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` or
+  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` on `forwin-app-swarm` only; do
+  not commit webhook URLs or paste them into deployment logs.
 - Keep the publisher extension's login QR notification setting disabled in the
   shared production browser profile by default. When disabled, the extension
   must not capture QR images or call `/api/publishers/extension/login-qr`.

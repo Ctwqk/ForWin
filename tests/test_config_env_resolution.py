@@ -317,7 +317,7 @@ def test_publisher_login_discord_webhook_env_is_disabled_by_default(
     assert config.publisher.login_discord_webhook_url == ""
 
 
-def test_publisher_login_discord_webhook_env_is_ignored_even_when_enabled(
+def test_publisher_login_discord_webhook_env_is_used_when_enabled(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _set_env_file(
@@ -331,12 +331,18 @@ def test_publisher_login_discord_webhook_env_is_ignored_even_when_enabled(
 
     config = Config.from_env()
 
-    assert config.publisher_login_discord_webhook_enabled is False
-    assert config.publisher_login_discord_webhook_url == ""
-    assert config.publisher.login_discord_webhook_url == ""
+    assert config.publisher_login_discord_webhook_enabled is True
+    assert (
+        config.publisher_login_discord_webhook_url
+        == "https://discord.invalid/api/webhooks/test"
+    )
+    assert (
+        config.publisher.login_discord_webhook_url
+        == "https://discord.invalid/api/webhooks/test"
+    )
 
 
-def test_publisher_login_discord_webhook_file_is_ignored_even_when_enabled(
+def test_publisher_login_discord_webhook_file_is_used_when_enabled(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     secret_path = tmp_path / "discord-webhook.secret"
@@ -352,9 +358,15 @@ def test_publisher_login_discord_webhook_file_is_ignored_even_when_enabled(
 
     config = Config.from_env()
 
-    assert config.publisher_login_discord_webhook_enabled is False
-    assert config.publisher_login_discord_webhook_url == ""
-    assert config.publisher.login_discord_webhook_url == ""
+    assert config.publisher_login_discord_webhook_enabled is True
+    assert (
+        config.publisher_login_discord_webhook_url
+        == "https://discord.invalid/api/webhooks/from-file"
+    )
+    assert (
+        config.publisher.login_discord_webhook_url
+        == "https://discord.invalid/api/webhooks/from-file"
+    )
 
 
 @pytest.mark.parametrize(

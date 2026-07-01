@@ -206,11 +206,12 @@ The verifier must redact or omit:
 - `FORWIN_PUBLISHER_SESSION_SECRET`
 - Discord webhook URLs or secret file contents
 
-It should explicitly check that shared production services do not expose unsafe
-Discord webhook environment. `forwin-app-swarm` may use
-`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` for the mounted secret file. Any
-`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`, or any Discord webhook env on
-browser/worker services, is a `failed` baseline condition.
+It should explicitly check that shared production services do not expose Discord
+webhook settings outside the app. `forwin-app-swarm` may use
+`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` for a mounted secret file or
+`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` for a tightly scoped operator login
+window. Any Discord webhook env on browser/worker services is a `failed`
+baseline condition.
 
 ## Verification Strategy
 

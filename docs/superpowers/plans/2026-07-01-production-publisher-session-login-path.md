@@ -124,16 +124,17 @@ Run:
 
 Expected: FAIL. The current README and extension README still describe the one-shot Discord QR handoff as an allowed operator path, and they do not contain the new routine-session marker sentence.
 
-- [ ] **Step 3: Commit the failing tests**
+- [ ] **Step 3: Keep the failing test uncommitted until the docs fix lands**
 
 Run:
 
 ```bash
-git add tests/test_publisher_session_login_path_policy.py
-git commit -m "Test publisher session login path policy"
+git status --short
 ```
 
-Expected: commit succeeds with only the new test file staged.
+Expected: `tests/test_publisher_session_login_path_policy.py` is untracked. Do
+not commit the failing test by itself on `master`; commit it with the docs fix
+after the policy suite passes.
 
 ## Task 2: Update Routine Operator Documentation
 
@@ -366,16 +367,16 @@ Run:
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit the docs update**
+- [ ] **Step 7: Commit the passing policy tests and docs update**
 
 Run:
 
 ```bash
-git add README.md docs/operations/forwin-production-processes.md browser_extension/forwin-publisher/README.md
+git add tests/test_publisher_session_login_path_policy.py README.md docs/operations/forwin-production-processes.md browser_extension/forwin-publisher/README.md
 git commit -m "Document publisher session login path"
 ```
 
-Expected: commit succeeds with only the three docs files staged.
+Expected: commit succeeds with the policy test and the three docs files staged.
 
 ## Task 3: Verify Existing Runtime Tests Cover The Contract
 

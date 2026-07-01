@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from unittest.mock import patch
 
-from forwin.api_system_routes import _load_review_engine_breakdown
+from forwin.api_system_routes import _load_review_engine_breakdown, build_handlers
 
 
 class _ScalarResult:
@@ -55,3 +56,53 @@ def test_home_breakdown_loads_from_persisted_review_engine_events() -> None:
     assert session.closed is True
     assert breakdown[0]["rule_id"] == "auto_approve_policy_disabled"
     assert breakdown[0]["count"] == 1
+
+
+def _codex_health_handler(config: SimpleNamespace):
+    return build_handlers(
+        get_config=lambda: config,
+        get_runtime_settings=lambda: None,
+        get_publisher_manager=lambda: None,
+        get_session=lambda: None,
+        render_home_page=lambda **_kwargs: "",
+        render_publishers_page=lambda **_kwargs: "",
+        build_home_page_settings=lambda **_kwargs: {},
+        build_runtime_config=lambda *_args, **_kwargs: None,
+        copy_config=lambda *_args, **_kwargs: None,
+        create_generation_task=lambda *_args, **_kwargs: "",
+        serialize_task=lambda *_args, **_kwargs: {},
+        get_generation_task_or_404=lambda _task_id: {},
+        project_has_active_generation_task=lambda *_args, **_kwargs: False,
+        generation_task_conflict_message=lambda _project_id: "",
+        resolve_project_governance=lambda *_args, **_kwargs: None,
+        governance_request_payload=lambda _req: {},
+        serialize_llm_settings=lambda *_args, **_kwargs: {},
+        active_generation_task_error_cls=RuntimeError,
+    )["get_codex_bridge_status"]
+
+
+def test_codex_health_rejects_ok_payload_without_bridge_identity() -> None:
+    class WrongServiceClient:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def health(self) -> dict[str, object]:
+            return {"status": "ok"}
+
+        def close(self) -> None:
+            pass
+
+    config = SimpleNamespace(
+        codex_enabled=True,
+        codex_bridge_url="http://10.0.0.150:8897",
+        codex_bridge_token="",
+        codex_sync_timeout_seconds=90,
+    )
+    handler = _codex_health_handler(config)
+
+    with patch("forwin.api_system_routes.CodexBridgeClient", WrongServiceClient):
+        result = handler()
+
+    assert result.healthy is False
+    assert result.status == "wrong_backend"
+    assert "Codex Bridge" in result.message

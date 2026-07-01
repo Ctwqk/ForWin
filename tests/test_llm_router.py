@@ -105,6 +105,42 @@ class LLMRouterTests(unittest.TestCase):
         self.assertEqual(len(codex.calls), 1)
         self.assertEqual(len(ordinary.calls), 0)
 
+    def test_codex_primary_for_structured_planning_when_enabled(self) -> None:
+        ordinary = OrdinaryAdapter()
+        codex = FakeCodexClient()
+        router = LLMCallRouter(ordinary_adapter=ordinary, codex_client=codex, codex_enabled=True)
+
+        result = router.chat(
+            [{"role": "user", "content": "plan arc"}],
+            intent=LLMCallIntent(
+                task_family="planning",
+                stage_key="arc_plan",
+                output_schema={"type": "object"},
+            ),
+        )
+
+        self.assertEqual(result, '{"source":"codex"}')
+        self.assertEqual(len(codex.calls), 1)
+        self.assertEqual(len(ordinary.calls), 0)
+
+    def test_codex_primary_for_chapter_review_form_when_enabled(self) -> None:
+        ordinary = OrdinaryAdapter()
+        codex = FakeCodexClient()
+        router = LLMCallRouter(ordinary_adapter=ordinary, codex_client=codex, codex_enabled=True)
+
+        result = router.chat(
+            [{"role": "user", "content": "review form"}],
+            intent=LLMCallIntent(
+                task_family="chapter_review_form",
+                stage_key="chapter_review_form",
+                output_schema={"type": "object"},
+            ),
+        )
+
+        self.assertEqual(result, '{"source":"codex"}')
+        self.assertEqual(len(codex.calls), 1)
+        self.assertEqual(len(ordinary.calls), 0)
+
     def test_codex_failure_falls_back_to_ordinary_and_records_event(self) -> None:
         ordinary = OrdinaryAdapter()
         codex = FakeCodexClient(fail=True)
@@ -146,6 +182,21 @@ class LLMRouterTests(unittest.TestCase):
         result = adapter.chat(
             [{"role": "user", "content": "write chapter"}],
             task_family="writer",
+            stage_key="chapter_draft",
+        )
+
+        self.assertEqual(result, '{"source":"ordinary"}')
+        self.assertEqual(len(ordinary.calls), 1)
+        self.assertEqual(len(codex.calls), 0)
+
+    def test_write_chapter_family_uses_ordinary_before_codex_fallback(self) -> None:
+        ordinary = OrdinaryAdapter()
+        codex = FakeCodexClient()
+        adapter = RoutedModelAdapter(LLMCallRouter(ordinary_adapter=ordinary, codex_client=codex, codex_enabled=True))
+
+        result = adapter.chat(
+            [{"role": "user", "content": "write chapter"}],
+            task_family="write_chapter",
             stage_key="chapter_draft",
         )
 

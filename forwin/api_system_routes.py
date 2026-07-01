@@ -254,6 +254,16 @@ def build_handlers(
         )
         try:
             health = client.health()
+            backend = str(health.get("backend", "") or "").strip()
+            if backend != "codex_bridge":
+                return CodexBridgeStatusResponse(
+                    enabled=True,
+                    bridge_url=bridge_url,
+                    healthy=False,
+                    status="wrong_backend",
+                    message="FORWIN_CODEX_BRIDGE_URL 未返回 Codex Bridge health payload。",
+                    health=health,
+                )
             healthy = bool(health.get("available", False) or health.get("status") == "ok")
             return CodexBridgeStatusResponse(
                 enabled=True,

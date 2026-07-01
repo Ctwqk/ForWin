@@ -17,6 +17,13 @@ export FORWIN_CODEX_BRIDGE_PORT=8897
 forwin-codex-bridge
 ```
 
+Production on the shared 150 host uses port `8895` because `8897` is already
+reserved by another browser-management service. For that environment use:
+
+```bash
+export FORWIN_CODEX_BRIDGE_PORT=8895
+```
+
 The bridge exposes:
 
 - `GET /health`
@@ -42,13 +49,23 @@ FORWIN_CODEX_JOB_TIMEOUT_SECONDS=900
 
 `docker-compose.yml` maps `host.docker.internal` to the host gateway for the `forwin` service.
 
+For production Swarm on 126/150, point app and generation services at the 150
+bridge explicitly:
+
+```bash
+FORWIN_CODEX_BRIDGE_URL=http://10.0.0.150:8895
+```
+
 Routing policy:
 
-- `chapter_plan_materialization` always uses the ordinary OpenAI-compatible adapter.
-- `genesis`, `reviewer`, `review`, `phase4`, `world_model`, writer state extraction, thread-time extraction, lore-timeline extraction, and scene breakdown use Codex first, then ordinary fallback.
-- Writer prose stages such as `chapter_draft`, `scene_generation`, `scene_stitch`, `chapter_rewrite`, and `repair` use ordinary first, then Codex fallback if the ordinary chain fails.
-- A stage that explicitly prefers `spark`, `codex`, `codex_bridge`, or a `gpt-5.3` / `codex` model keeps Codex enabled and sends that model to the bridge.
-- Each bridge or ordinary fallback records model fallback metadata.
+| Task route | Primary chain | Fallback chain |
+| --- | --- | --- |
+| Genesis, structured planning, arc planning, reviewer, chapter review form, review, Phase 4 feedback, world model, writer state extraction, thread-time extraction, lore-timeline extraction, scene breakdown | Codex 5.3 bridge | ordinary OpenAI-compatible profiles |
+| Writer prose such as `chapter_draft`, `scene_generation`, `scene_stitch`, `chapter_rewrite`, and repair generation | ordinary OpenAI-compatible profiles | Codex 5.3 bridge when the ordinary chain fails |
+| `chapter_plan_materialization` | ordinary OpenAI-compatible profiles | no Codex bridge route |
+| Explicit `spark`, `codex`, `codex_bridge`, `gpt-5.3`, or `codex` model preference | Codex 5.3 bridge | ordinary profiles only if the explicit Codex call fails |
+
+Each bridge or ordinary fallback records model fallback metadata.
 
 ## Governed Writes
 
@@ -69,10 +86,20 @@ Check the bridge directly from the host:
 curl http://127.0.0.1:8897/health
 ```
 
+On 150 production, use:
+
+```bash
+curl http://127.0.0.1:8895/health
+```
+
 Check the ForWin view of bridge health:
 
 ```bash
 curl http://127.0.0.1:8899/api/settings/codex/health
 ```
+
+ForWin treats a health payload as valid only when it identifies
+`backend=codex_bridge`. A generic `{"status":"ok"}` response from another
+service must not be treated as a usable Codex Bridge.
 
 Bridge health is optional for MCP operation. A Codex operator can still inspect and control ForWin through MCP when the bridge is disabled.

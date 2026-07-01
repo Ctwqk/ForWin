@@ -50,6 +50,28 @@ Useful checks:
 | MCP health/upstream API connectivity | Confirms `forwin-mcp-swarm` can reach `forwin-app-swarm` |
 | publisher browser heartbeat | Confirms browser automation is logged in and connected |
 
+## Codex Bridge Runtime
+
+The production Codex Bridge runs on 150 and exposes the ForWin bridge API on
+port `8895`:
+
+```bash
+curl http://10.0.0.150:8895/health
+curl http://10.0.0.150:8895/openapi.json
+```
+
+ForWin app, generation-worker, and MCP services that enable Codex routing must
+use:
+
+```bash
+FORWIN_CODEX_BRIDGE_URL=http://10.0.0.150:8895
+FORWIN_CODEX_DEFAULT_MODEL=gpt-5.3-codex-spark
+```
+
+Do not point ForWin at `10.0.0.150:8897` for Codex. That port is reserved by a
+separate browser-management service in the shared production environment and
+does not expose `/v1/codex/chat`.
+
 For a one-shot production publisher baseline check:
 
 ```bash
@@ -269,6 +291,9 @@ real browser login or browser clicking.
 - Keep the publisher extension's login QR notification setting disabled in the
   shared production browser profile by default. When disabled, the extension
   must not capture QR images or call `/api/publishers/extension/login-qr`.
+  A stale `loginQrNotificationsEnabled=true` profile value does not re-enable
+  QR forwarding unless the hidden `loginQrNotificationsAllowed=true` guard is
+  also set for the operator-requested temporary window.
 - Keep QR forwarding disabled until a deployed browser build has verified a
   direct, non-expired QR capture source; screenshots and invalid QR placeholders
   such as "二维码已失效 / 点击刷新" are intentionally rejected.

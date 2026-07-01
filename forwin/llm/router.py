@@ -7,16 +7,36 @@ from forwin.model_adapter import ModelCapabilities, adapter_capabilities
 
 
 CODEX_ALLOWED_FAMILIES = {
+    "arc_planning",
+    "chapter_review_form",
+    "feedback",
     "genesis",
+    "planning",
+    "reader_feedback",
     "writer",
+    "write_chapter",
     "review",
+    "review_chapter",
     "reviewer",
     "repair",
     "phase4",
     "world_model",
 }
 CODEX_EXCLUDED_FAMILIES = {"chapter_plan_materialization"}
-CODEX_PRIMARY_FAMILIES = {"genesis", "review", "reviewer", "phase4", "world_model"}
+CODEX_PRIMARY_FAMILIES = {
+    "arc_planning",
+    "chapter_review_form",
+    "feedback",
+    "genesis",
+    "planning",
+    "reader_feedback",
+    "review",
+    "review_chapter",
+    "reviewer",
+    "phase4",
+    "world_model",
+}
+WRITER_FAMILIES = {"writer", "write_chapter"}
 CODEX_PRIMARY_WRITER_STAGES = {
     "state_event_extraction",
     "thread_time_extraction",
@@ -190,7 +210,7 @@ class LLMCallRouter:
             return "codex_primary"
         if family in CODEX_PRIMARY_FAMILIES:
             return "codex_primary"
-        if family == "writer":
+        if family in WRITER_FAMILIES:
             if stage in CODEX_PRIMARY_WRITER_STAGES or any(
                 token in stage for token in ("state_event", "thread_time", "lore_timeline")
             ):

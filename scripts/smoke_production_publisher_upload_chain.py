@@ -53,6 +53,85 @@ def short_text(value: Any, limit: int = 240) -> str:
     return text[: max(0, limit - 3)] + "..."
 
 
+def _summary_count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _summarize_binding(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        "id": value.get("id") or "",
+        "platform": value.get("platform") or "",
+        "project_id": value.get("project_id") or "",
+        "platform_status": value.get("platform_status") or "",
+        "publish_state": value.get("publish_state") or "",
+        "remote_url": short_text(value.get("remote_url")),
+        "remote_book_id": value.get("remote_book_id") or "",
+        "remote_chapter_id": value.get("remote_chapter_id") or "",
+        "chapter_number": value.get("chapter_number") or 0,
+        "chapter_title": short_text(value.get("chapter_title")),
+        "word_count": value.get("word_count") or 0,
+    }
+
+
+def summarize_result_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for key in (
+        "mode",
+        "official_status",
+        "phase",
+        "verified_via",
+        "project_id",
+        "task_kind",
+        "word_count",
+        "upload_execution_timeout_ms",
+    ):
+        if key in payload:
+            summary[key] = payload.get(key)
+    for key in (
+        "cover_generation_enabled",
+        "cover_confirmation_required",
+        "auto_cover_upload_enabled",
+        "publisher_compliance_required",
+    ):
+        if key in payload:
+            summary[key] = bool(payload.get(key))
+    preflight = payload.get("preflight") if isinstance(payload.get("preflight"), dict) else {}
+    if preflight:
+        summary["preflight"] = {
+            "ok": bool(preflight.get("ok")),
+            "blocking_count": _summary_count(preflight.get("blocking")),
+            "warning_count": _summary_count(preflight.get("warnings")),
+            "requires_reviewer": bool(preflight.get("requires_reviewer")),
+        }
+    platform_meta = (
+        payload.get("platform_meta") if isinstance(payload.get("platform_meta"), dict) else {}
+    )
+    if platform_meta:
+        summary["platform_meta"] = {
+            "platform": platform_meta.get("platform") or "",
+            "required_fields": platform_meta.get("required_fields")
+            if isinstance(platform_meta.get("required_fields"), list)
+            else [],
+            "warning_count": _summary_count(platform_meta.get("warnings")),
+        }
+    work_binding = _summarize_binding(payload.get("work_binding"))
+    if work_binding:
+        summary["work_binding"] = work_binding
+    chapter_binding = _summarize_binding(payload.get("chapter_binding"))
+    if chapter_binding:
+        summary["chapter_binding"] = chapter_binding
+    tab_cleanup = payload.get("tab_cleanup") if isinstance(payload.get("tab_cleanup"), dict) else {}
+    if tab_cleanup:
+        summary["tab_cleanup"] = {
+            "attempted": bool(tab_cleanup.get("attempted")),
+            "closed_count": _summary_count(tab_cleanup.get("closed_tab_ids")),
+            "failed_count": _summary_count(tab_cleanup.get("failed_tab_ids")),
+        }
+    return redact_report(summary)
+
+
 def summarize_upload_job(job: dict[str, Any]) -> dict[str, Any]:
     payload = job.get("result_payload") if isinstance(job.get("result_payload"), dict) else {}
     return redact_report(
@@ -69,7 +148,7 @@ def summarize_upload_job(job: dict[str, Any]) -> dict[str, Any]:
             "current_url": short_text(job.get("current_url")),
             "message": short_text(job.get("message")),
             "error": short_text(job.get("error")),
-            "result_payload": payload,
+            "result_payload": summarize_result_payload(payload),
             "abort_requested": bool(job.get("abort_requested")),
             "created_at": job.get("created_at") or "",
             "updated_at": job.get("updated_at") or "",
@@ -80,6 +159,44 @@ def summarize_upload_job(job: dict[str, Any]) -> dict[str, Any]:
             "deletable": bool(job.get("deletable")),
         }
     )
+
+
+def summarize_upload_job_response(response: dict[str, Any]) -> dict[str, Any]:
+    payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
+    summary = summarize_upload_job(payload) if payload else {}
+    return {
+        "ok": bool(response.get("ok")),
+        "status_code": response.get("status"),
+        **summary,
+    }
+
+
+def brief_upload_job(job: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "job_id": job.get("job_id") or "",
+        "task_kind": job.get("task_kind") or "chapter_upload",
+        "project_id": job.get("project_id") or "",
+        "platform": job.get("platform") or "",
+        "status": job.get("status") or "",
+        "book_name": short_text(job.get("book_name")),
+        "chapter_title": short_text(job.get("chapter_title")),
+        "publish": bool(job.get("publish")),
+        "extension_client_id": job.get("extension_client_id") or "",
+        "created_at": job.get("created_at") or "",
+        "updated_at": job.get("updated_at") or "",
+        "finished_at": job.get("finished_at") or "",
+    }
+
+
+def summarize_upload_job_list_response(response: dict[str, Any]) -> dict[str, Any]:
+    payload = _payload_list(response)
+    jobs = [brief_upload_job(item) for item in payload if isinstance(item, dict)]
+    return {
+        "ok": bool(response.get("ok")),
+        "status_code": response.get("status"),
+        "count": len(jobs),
+        "jobs": jobs,
+    }
 
 
 def safe_upload_payload(
@@ -594,13 +711,18 @@ def run_endpoint_smoke(args: Any, report: dict[str, Any]) -> None:
         created_payload = created.get("payload") if isinstance(created.get("payload"), dict) else {}
         job_id = str(created_payload.get("job_id") or "")
         endpoint["api_job"] = summarize_upload_job(created_payload) if job_id else redact_report(created)
-        endpoint["api_job_list"] = http_json(
-            "GET",
-            _api_url(args.api_base, "/api/publishers/upload-jobs?limit=10"),
+        endpoint["api_job_list"] = summarize_upload_job_list_response(
+            http_json(
+                "GET",
+                _api_url(args.api_base, "/api/publishers/upload-jobs?limit=10"),
+            )
         )
         if job_id:
-            endpoint["api_job_get"] = redact_report(
-                http_json("GET", _api_url(args.api_base, f"/api/publishers/upload-jobs/{job_id}"))
+            endpoint["api_job_get"] = summarize_upload_job_response(
+                http_json(
+                    "GET",
+                    _api_url(args.api_base, f"/api/publishers/upload-jobs/{job_id}"),
+                )
             )
             endpoint["api_job_cleanup"] = cleanup_api_smoke_job(args, report, job_id)
         else:

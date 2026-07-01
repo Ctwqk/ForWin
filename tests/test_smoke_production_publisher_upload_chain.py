@@ -57,7 +57,16 @@ def test_summarize_upload_job_omits_body_and_sensitive_payload() -> None:
             "chapter_title": "Chapter",
             "body": "body must not be logged",
             "publish": False,
-            "result_payload": {"token": "secret-token", "mode": "draft"},
+            "result_payload": {
+                "token": "secret-token",
+                "mode": "draft",
+                "preflight": {"ok": True, "blocking": [], "warnings": [{"code": "soft"}]},
+                "work_binding": {
+                    "id": "work-1",
+                    "platform": "fanqie",
+                    "raw_payload": {"body": "nested secret body"},
+                },
+            },
             "current_url": "https://fanqienovel.com/main/writer/",
         }
     )
@@ -67,8 +76,11 @@ def test_summarize_upload_job_omits_body_and_sensitive_payload() -> None:
     assert summary["publish"] is False
     assert "body" not in summary
     assert "body must not be logged" not in serialized
+    assert "nested secret body" not in serialized
     assert "secret-token" not in serialized
     assert summary["result_payload"]["mode"] == "draft"
+    assert summary["result_payload"]["preflight"]["warning_count"] == 1
+    assert "raw_payload" not in summary["result_payload"]["work_binding"]
 
 
 def test_safe_upload_payload_forces_non_publishing_flags() -> None:
@@ -199,6 +211,10 @@ def test_endpoint_smoke_checks_safe_surfaces_and_cleans_api_job(monkeypatch) -> 
     assert report["status"] == "degraded"
     assert report["publisher_api"]["platforms"]["ok"] is False
     assert report["endpoint_smoke"]["api_job"]["job_id"] == "job-1"
+    assert report["endpoint_smoke"]["api_job_get"]["job_id"] == "job-1"
+    assert report["endpoint_smoke"]["api_job_list"]["count"] == 1
+    assert report["endpoint_smoke"]["api_job_list"]["jobs"][0]["job_id"] == "job-1"
+    assert "result_payload" not in report["endpoint_smoke"]["api_job_list"]["jobs"][0]
     assert report["endpoint_smoke"]["api_job_cleanup"]["deleted"] is True
     assert any(
         item["kind"] == "publisher_login_required" and item["platform"] == "qidian"

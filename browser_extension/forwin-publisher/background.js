@@ -1,6 +1,6 @@
 import { createBackendClient } from './lib/backend-client.js';
 import { BRIDGE_CHANNEL, PLATFORM_AGENT_CHANNEL } from './lib/channels.js';
-import { PublisherExtensionController } from './lib/controller.js?v=0.1.54';
+import { PublisherExtensionController } from './lib/controller.js?v=0.1.55';
 import { verifyFanqieDraftWithRetries } from './lib/fanqie-draft-verifier.js';
 import { findLoginQrFrameTargets } from './lib/login-qr-frames.js';
 import { getPlatformAdapter } from './lib/platforms.js';
@@ -572,6 +572,15 @@ async function notifyLoginQrWithThrottle(payload) {
   const platform = String(payload?.platform || '').trim();
   const currentUrl = String(payload?.current_url || '');
   const nowMs = Date.now();
+  const settings = await getSettings();
+  if (settings.loginQrNotificationsEnabled !== true) {
+    return {
+      ok: true,
+      dispatched: false,
+      disabled: true,
+      message: 'login QR notifications disabled by extension settings',
+    };
+  }
   if (await getLoginQrNotificationsDisabled(platform)) {
     return {
       ok: true,

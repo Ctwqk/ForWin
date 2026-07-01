@@ -124,8 +124,10 @@ default. If an operator explicitly asks for temporary scan-login forwarding,
 set `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true` and prefer
 `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` on `forwin-app-swarm` only; remove
 both settings again after the login window. Do not put Discord webhook env on
-browser or worker services. Ordinary publisher heartbeat checks must only report
-`login-required`; they must not capture QR images. The publisher extension only
+browser or worker services. The publisher extension's login QR notification
+setting is also disabled by default; while it is disabled, the extension must
+not capture a QR image or call `/api/publishers/extension/login-qr`. Ordinary
+publisher heartbeat checks must only report `login-required`. The publisher extension only
 forwards directly extracted, fresh QR images from an active login session;
 full-page screenshots and expired/invalid QR placeholders such as
 "二维码已失效 / 点击刷新" are not sent. When Discord forwarding is explicitly

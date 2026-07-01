@@ -26,6 +26,8 @@ test('background throttles login QR notifications at the backend boundary', asyn
   assert.match(source, /LOGIN_QR_NOTIFICATION_THROTTLE_MS\s*=\s*2\s*\*\s*60_000/);
   assert.match(source, /LOGIN_QR_PLATFORM_THROTTLE_URL\s*=\s*'__platform__'/);
   assert.match(source, /async\s+function\s+notifyLoginQrWithThrottle\s*\(\s*payload\s*\)/);
+  assert.match(source, /settings\.loginQrNotificationsEnabled\s*!==\s*true/);
+  assert.match(source, /login QR notifications disabled by extension settings/);
   assert.match(source, /getLoginQrLastNotifiedAtMs\(platform,\s*currentUrl\)/);
   assert.match(source, /getLoginQrLastNotifiedAtMs\(platform,\s*LOGIN_QR_PLATFORM_THROTTLE_URL\)/);
   assert.match(source, /throttled:\s*true/);

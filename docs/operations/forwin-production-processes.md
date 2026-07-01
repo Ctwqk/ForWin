@@ -222,6 +222,9 @@ real browser login or browser clicking.
   use environment secrets or mounted secret files; do not commit webhook URLs or
   paste them into deployment logs. Remove both the enable flag and webhook env
   again after the login window.
+- Keep the publisher extension's login QR notification setting disabled in the
+  shared production browser profile by default. When disabled, the extension
+  must not capture QR images or call `/api/publishers/extension/login-qr`.
 - Keep QR forwarding disabled until a deployed browser build has verified a
   direct, non-expired QR capture source; screenshots and invalid QR placeholders
   such as "二维码已失效 / 点击刷新" are intentionally rejected.

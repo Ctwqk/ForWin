@@ -23,6 +23,11 @@
         <span>同步平台登录会话到后端。开启后，扩展会把当前平台 cookie 发给 ForWin，用于后端继续执行上传。</span>
       </label>
 
+      <label style="display:flex; gap:10px; align-items:flex-start; margin-top:14px;">
+        <input id="login_qr_notifications_enabled" type="checkbox" style="width:auto; margin-top:4px;">
+        <span>允许把平台登录二维码发送给后端通知通道。生产共享浏览器默认保持关闭。</span>
+      </label>
+
       <div class="actions">
         <button id="save_button">保存设置</button>
       </div>

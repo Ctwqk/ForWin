@@ -35,6 +35,7 @@ async function boot() {
   expectElement('backend_base_url').value = settings.backendBaseUrl;
   expectElement('api_key').value = settings.apiKey;
   expectElement('sync_session_to_backend').checked = settings.syncSessionToBackend;
+  expectElement('login_qr_notifications_enabled').checked = settings.loginQrNotificationsEnabled;
   expectElement('status').textContent = '已读取当前扩展设置。';
   renderPattern(settings);
 }
@@ -44,6 +45,7 @@ expectElement('save_button').addEventListener('click', async () => {
     backendBaseUrl: expectElement('backend_base_url').value,
     apiKey: expectElement('api_key').value,
     syncSessionToBackend: expectElement('sync_session_to_backend').checked,
+    loginQrNotificationsEnabled: expectElement('login_qr_notifications_enabled').checked,
   });
   if (!getBackendOrigin(nextSettings)) {
     expectElement('status').textContent = 'ForWin Backend URL 无效，请填写 http(s)://主机:端口。';

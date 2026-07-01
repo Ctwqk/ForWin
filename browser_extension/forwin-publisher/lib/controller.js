@@ -1155,6 +1155,16 @@ export class PublisherExtensionController {
     session.loginQrNotificationInFlight = true;
     try {
       const settings = await this.deps.getSettings();
+      if (settings.loginQrNotificationsEnabled !== true) {
+        await this.recordLoginQrNotificationEvent({
+          platform: session.platformId,
+          tab_id: session.popupTabId,
+          current_url: currentUrl,
+          phase: 'skipped',
+          reason: 'login-qr-notifications-disabled-by-settings',
+        });
+        return { skipped: true, reason: 'login-qr-notifications-disabled-by-settings' };
+      }
       if (!settings.backendBaseUrl || !settings.apiKey) {
         await this.recordLoginQrNotificationEvent({
           platform: session.platformId,

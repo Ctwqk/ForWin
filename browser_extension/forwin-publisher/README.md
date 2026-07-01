@@ -25,6 +25,7 @@
 4. 打开扩展设置页，填写：
    - `ForWin Backend URL`
    - `Extension API Key`
+   - 保持“允许把平台登录二维码发送给后端通知通道”关闭，除非正在执行一次明确的临时转发窗口
 5. 回到 ForWin 的 `/publishers` 页面，确认扩展已被检测到。
 
 浏览器说明：
@@ -49,6 +50,8 @@ Firefox 临时加载：
   `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true`、
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` 或
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE`，避免登录状态向 Discord 发消息。
+  扩展设置里的二维码通知开关也默认关闭；关闭时扩展不会截图，也不会 POST
+  `/api/publishers/extension/login-qr`。
   只有用户主动打开的登录会话可以触发二维码通知；扩展心跳检测到登录页时只回写
   `login-required`，不会截图或发送 Discord。扩展只应转发直接提取到的新鲜二维码
   图片，发送前会重新提取并短重试等待页面生成，同一登录页的并发通知会去重；整页

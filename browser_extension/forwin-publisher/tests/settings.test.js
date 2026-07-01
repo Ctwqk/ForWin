@@ -11,6 +11,14 @@ test('normalizeSettings trims trailing slash and api key whitespace', () => {
 
   assert.equal(settings.backendBaseUrl, 'http://192.168.31.10:8899');
   assert.equal(settings.apiKey, 'secret-key');
+  assert.equal(settings.syncSessionToBackend, true);
+  assert.equal(settings.loginQrNotificationsEnabled, false);
+});
+
+test('normalizeSettings only enables login QR notifications explicitly', () => {
+  assert.equal(normalizeSettings({ loginQrNotificationsEnabled: true }).loginQrNotificationsEnabled, true);
+  assert.equal(normalizeSettings({ loginQrNotificationsEnabled: 'true' }).loginQrNotificationsEnabled, false);
+  assert.equal(normalizeSettings({}).loginQrNotificationsEnabled, false);
 });
 
 test('getOriginMatchPattern converts backend URL into bridge match pattern', () => {

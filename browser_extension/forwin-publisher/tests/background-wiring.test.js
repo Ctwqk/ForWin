@@ -13,6 +13,19 @@ test('background cache-busts the controller import with the manifest version', a
   assert.match(source, new RegExp(`\\.\\/lib\\/controller\\.js\\?v=${escapedVersion}`));
 });
 
+test('background and controller cache-bust platform imports with the manifest version', async () => {
+  const [backgroundSource, controllerSource, manifestText] = await Promise.all([
+    readFile(new URL('../background.js', import.meta.url), 'utf8'),
+    readFile(new URL('../lib/controller.js', import.meta.url), 'utf8'),
+    readFile(new URL('../manifest.json', import.meta.url), 'utf8'),
+  ]);
+  const manifest = JSON.parse(manifestText);
+  const escapedVersion = String(manifest.version).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  assert.match(backgroundSource, new RegExp(`\\.\\/lib\\/platforms\\.js\\?v=${escapedVersion}`));
+  assert.match(controllerSource, new RegExp(`\\.\\/platforms\\.js\\?v=${escapedVersion}`));
+});
+
 test('background backend adapter wires login QR notifications', async () => {
   const source = await readFile(new URL('../background.js', import.meta.url), 'utf8');
 

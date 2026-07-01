@@ -4,7 +4,7 @@ import {
   getPlatformAdapter,
   getProbeUrl,
   shouldProbeLogin,
-} from './platforms.js';
+} from './platforms.js?v=0.1.57';
 import { uploadExecutionTimeoutMs } from './upload-timeouts.js?v=0.1.23';
 
 const LOGIN_QR_NOTIFICATION_THROTTLE_MS = 2 * 60_000;

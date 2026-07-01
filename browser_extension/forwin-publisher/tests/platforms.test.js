@@ -155,6 +155,40 @@ test('qidian heartbeat does not display connected from unverified auth cookies',
   assert.equal(state.raw_state.page_evidence_required, true);
 });
 
+test('qidian heartbeat keeps a saved connected state when current auth cookies remain', () => {
+  const state = buildHeartbeatState('qidian', [
+    { name: 'AppAuthToken' },
+    { name: 'pubtoken' },
+  ], {
+    connected: true,
+    loginMethod: 'scan',
+    lastError: '',
+  }, null);
+
+  assert.equal(state.connected, true);
+  assert.equal(state.last_error, '');
+  assert.equal(state.raw_state.cookie_signal, true);
+  assert.equal(state.raw_state.saved_connected, true);
+  assert.equal(state.raw_state.page_evidence_required, false);
+});
+
+test('fanqie heartbeat keeps a saved connected state when current writer cookies remain', () => {
+  const state = buildHeartbeatState('fanqie', [
+    { name: 'sessionid' },
+    { name: 'has_biz_token' },
+  ], {
+    connected: true,
+    loginMethod: 'scan',
+    lastError: '',
+  }, null);
+
+  assert.equal(state.connected, true);
+  assert.equal(state.last_error, '');
+  assert.equal(state.raw_state.cookie_signal, true);
+  assert.equal(state.raw_state.saved_connected, true);
+  assert.equal(state.raw_state.page_evidence_required, false);
+});
+
 test('qidian heartbeat does not keep sticky connected=true without current auth cookies', () => {
   const state = buildHeartbeatState('qidian', [], {
     connected: true,

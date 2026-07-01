@@ -141,15 +141,22 @@ function heartbeatPayload(platformId, cookieNames, savedState, cookieSignal, ins
   const savedLoginRequired = ['login-required', 'platform-login-required'].includes(
     savedError.toLowerCase(),
   );
+  const savedConnected = savedState.connected === true && !savedLoginRequired;
   const loggedOutByPage = page.inspected && page.loginVisible && !page.authenticated;
   const loggedOutBySavedError = savedLoginRequired && !page.authenticated;
-  const waitingForPageEvidence = page.provided && !page.inspected && cookieSignal;
+  const trustedSavedConnection = savedConnected && cookieSignal && !loggedOutByPage;
+  const waitingForPageEvidence = (
+    page.provided
+    && !page.inspected
+    && cookieSignal
+    && !trustedSavedConnection
+  );
   const connected = (loggedOutByPage || loggedOutBySavedError)
     ? false
-    : (page.authenticated || (!waitingForPageEvidence && cookieSignal));
+    : (page.authenticated || (trustedSavedConnection || (!waitingForPageEvidence && cookieSignal)));
   const lastError = (loggedOutByPage || loggedOutBySavedError)
     ? 'login-required'
-    : (page.authenticated && savedLoginRequired ? '' : savedError);
+    : ((page.authenticated || trustedSavedConnection) && savedLoginRequired ? '' : savedError);
   return {
     platform: platformId,
     connected,
@@ -158,10 +165,11 @@ function heartbeatPayload(platformId, cookieNames, savedState, cookieSignal, ins
     raw_state: {
       cookie_names: Array.from(cookieNames).sort(),
       cookie_signal: cookieSignal,
+      saved_connected: savedConnected,
       page_inspected: page.inspected,
       page_authenticated: page.authenticated,
       page_login_visible: page.loginVisible,
-      page_evidence_required: page.provided,
+      page_evidence_required: page.provided && !trustedSavedConnection,
       current_url: page.currentUrl,
     },
   };

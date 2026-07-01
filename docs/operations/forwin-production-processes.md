@@ -231,30 +231,22 @@ platform connection state, and MCP generation activity. It writes JSONL and
 returns non-zero if any required sample fails. It does not publish, retry jobs,
 start generation, or mutate ForWin project/task/chapter state.
 
-For an explicit operator login QR handoff, use the one-shot CDP handoff instead
-of service-level Discord webhook env or the old `/publishers` page bridge. The
-webhook comes from the operator shell or an operator-local file, is passed over
-stdin to the production publisher-browser container for this run only, and is
-not stored in backend runtime config, browser profile, or Swarm service
-configuration:
+Routine production login continuity uses backend-synced browser sessions. The
+shared `forwin-publisher-browser-swarm` profile is the production publisher
+browser profile for both Fanqie and Qidian. On startup, the browser service
+qualifies the extension profile, restores the latest backend-synced sessions
+into the same browser context, opens `/publishers`, and waits for extension
+heartbeat. If the production baseline reports `publisher_login_required`, log
+in inside that production publisher browser profile and rerun the baseline
+command. Do not send QR codes to Discord for routine production login expiry.
 
-```bash
-export FORWIN_PUBLISHER_LOGIN_QR_ONE_SHOT_WEBHOOK_URL='https://discord.com/api/webhooks/...'
-python scripts/start_publisher_login_qr_one_shot.py \
-  --platform fanqie \
-  --max-wait-ms 30000
-unset FORWIN_PUBLISHER_LOGIN_QR_ONE_SHOT_WEBHOOK_URL
-```
-
-The default script path finds the running production publisher-browser
-container, connects to Chrome CDP, clears the extension-side login QR
-notification guards, opens the platform login page directly, sends
-`extract-login-qr-image` to the platform agent in the visible frames, and uploads
-one fresh QR image attachment to Discord. It prints only redacted status. Do not
-use it for periodic monitoring, and do not run it from cron. QR extraction
-should come from canvas/data URL or page-visible `img.src`/`currentSrc` image
-responses; default production builds do not fall back to full-page screenshots
-for one-shot delivery.
+Emergency-only legacy QR handoff: not supported for routine production automation.
+The historical one-shot CDP QR handoff must not be scheduled and must not be used by baseline, smoke, supervisor, deploy, or recurring jobs.
+It must not be documented as the normal way to recover publisher login. During a manual
+incident, an operator may inspect the legacy script only after confirming that
+session restore and direct production-browser login cannot complete the login
+handoff. Any such run must keep webhook values out of service env, backend
+runtime config, browser profile, deployment logs, and repository files.
 
 ## Runtime Images
 
@@ -311,27 +303,17 @@ real browser login or browser clicking.
   `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK`,
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`, and
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` keys are ignored by runtime
-  config; do not commit webhook URLs or paste them into deployment logs. For
-  manual QR handoff, use `scripts/start_publisher_login_qr_one_shot.py` with
-  `FORWIN_PUBLISHER_LOGIN_QR_ONE_SHOT_WEBHOOK_URL` only in the operator shell.
+  config; do not commit webhook URLs or paste them into deployment logs.
+- Treat backend-synced session restore plus baseline verification as the
+  routine production login continuity path. If login expires, complete login
+  inside the production publisher browser profile and rerun the baseline.
 - Keep the publisher extension's login QR notification setting disabled in the
-  shared production browser profile by default. The supported operator handoff
-  clears the extension QR-notification guards and uploads the direct CDP
-  extraction itself. When disabled, the extension must not capture QR images or
-  call `/api/publishers/extension/login-qr`. A stale
-  `loginQrNotificationsEnabled=true` profile value does not re-enable QR
+  shared production browser profile by default. When disabled, the extension
+  must not capture QR images or call `/api/publishers/extension/login-qr`. A
+  stale `loginQrNotificationsEnabled=true` profile value does not re-enable QR
   forwarding.
-- Keep QR forwarding disabled until a deployed browser build has verified a
-  direct, non-expired QR capture source; screenshots and invalid QR placeholders
-  such as "二维码已失效 / 点击刷新" are intentionally rejected.
-- Publisher login QR reminders are only allowed for an active operator-requested
-  login session. Ordinary heartbeat checks may record `login-required`, but they
-  must not capture QR images or notify Discord just because a login page is
-  visible. During incident triage, close stale login tabs before starting a fresh
-  operator login session.
-- Qidian/WeChat QR capture should prefer direct image extraction from the login
-  iframe. The extension uses a scripting fallback for cross-frame QR images and
-  rejects full-page screenshots as unsafe login QR payloads. Chrome extensions
-  cannot generally read arbitrary network response bodies, so "response"
-  extraction means fetching a page-visible QR image URL from the page context
-  with credentials, or reading canvas/data URL content directly.
+- Baseline, smoke, supervisor, deploy, and recurring jobs must not call QR
+  notification endpoints, run the one-shot QR handoff, or send login-success
+  confirmations to Discord. Ordinary heartbeat checks may record
+  `login-required`, but they must not capture QR images or notify Discord just
+  because a login page is visible.

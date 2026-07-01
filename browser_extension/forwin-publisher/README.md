@@ -46,28 +46,32 @@ Firefox 临时加载：
 
 - 起点扫码登录
 - 番茄扫码登录
-- 扫码登录二维码的 Discord webhook 转发在共享生产 Swarm 已禁用，后端运行时会忽略
+- Routine production login continuity uses backend-synced browser sessions.
+  共享生产 Swarm 中，`forwin-publisher-browser-swarm` 的持久化 profile 是番茄和
+  起点共用的 production publisher browser profile。浏览器启动时会恢复后端同步的
+  session，打开 `/publishers`，并通过 extension heartbeat 把页面证据回写给后端。
+  使用以下命令验证登录状态：
+
+  ```bash
+  python scripts/check_production_publisher_baseline.py \
+    --api-base http://10.0.0.126:8899 \
+    --mcp-health-url http://10.0.0.126:8896/health \
+    --docker-context swarm-manager-150 \
+    --colima-profile swarmbridged
+  ```
+
+  如果检查返回 `publisher_login_required`，只在 production publisher browser
+  profile 中完成平台登录，然后重跑同一条 baseline 命令。共享生产的 routine
+  登录恢复路径不向 Discord 发送二维码或登录确认。
   `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true`、
-  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` 或
-  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE`，避免登录状态向 Discord 发消息。
-  临时转发必须通过 operator 主动运行
-  `scripts/start_publisher_login_qr_one_shot.py`；webhook 只来自 operator shell
-  或 operator 本地文件，经 CDP stdin 传给生产 publisher-browser，不能写入服务
-  env、后端运行时配置或浏览器 profile。该脚本会清掉扩展侧二维码通知 guard，
-  直接打开平台登录页，通过 platform-agent 从 frame 内提取新鲜二维码图片并向
-  operator webhook 上传一次。扩展设置里的二维码通知开关默认关闭；即使旧 profile
-  里遗留 `loginQrNotificationsEnabled=true`，没有隐藏的
+  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` 和
+  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` 会被后端运行时忽略。扩展设置里的
+  二维码通知开关默认关闭；即使旧 profile 里遗留
+  `loginQrNotificationsEnabled=true`，没有隐藏的
   `loginQrNotificationsAllowed=true` 和未来的
   `loginQrNotificationsAllowedUntilMs` 临时时间窗时，扩展也不会截图或 POST
-  `/api/publishers/extension/login-qr`。
-  只有用户主动打开的登录会话可以触发二维码通知；扩展心跳检测到登录页时只回写
-  `login-required`，不会截图或发送 Discord。扩展只应转发直接提取到的新鲜二维码
-  图片，发送前会重新提取并短重试等待页面生成，同一登录页的并发通知会去重。提取
-  优先使用页面内 canvas/data URL，以及页面可见的 `img.src`/`currentSrc`；
-  当二维码 URL 暴露时，页面代理会用 `fetch(..., { credentials: 'include' })`
-  读取该图片 response 并转成 data URL。Chrome 扩展不能通用读取任意跨域网络
-  response body，所以这条 response 路径是基于页面可见图片 URL 的 best-effort。
-  整页截图、已过期二维码和“二维码已失效 / 点击刷新”占位图会被拦截。
+  `/api/publishers/extension/login-qr`。扩展心跳检测到登录页时只回写
+  `login-required`。
 - 保存草稿 / 直接发布
 - 扩展心跳回写
 

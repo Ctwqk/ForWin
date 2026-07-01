@@ -119,34 +119,36 @@ For publisher-browser work, keep the extension enabled but replace
 `FORWIN_PUBLISHER_EXTENSION_API_KEY` and `FORWIN_PUBLISHER_SESSION_SECRET` with
 long random values before starting the backend.
 
+Routine production login continuity uses backend-synced browser sessions. The
+shared `forwin-publisher-browser-swarm` profile is the production publisher
+browser profile for both Fanqie and Qidian. On startup, the publisher browser
+qualifies the extension profile, restores the latest backend-synced sessions
+into the same browser context, opens `/publishers`, and waits for extension
+heartbeat. Verify the routine path with:
+
+```bash
+python scripts/check_production_publisher_baseline.py \
+  --api-base http://10.0.0.126:8899 \
+  --mcp-health-url http://10.0.0.126:8896/health \
+  --docker-context swarm-manager-150 \
+  --colima-profile swarmbridged
+```
+
+If the verifier reports `publisher_login_required`, complete the login inside
+the production publisher browser profile and rerun the same command. Do not
+send QR codes to Discord for routine production login expiry.
+
 Shared production Swarm keeps Discord publisher login webhooks disabled. The
 legacy `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK`,
 `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`, and
 `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` settings are ignored by runtime
 config and must not be used to route scan-login state to Discord. Do not put
-Discord webhook env on browser or worker services. QR forwarding is only allowed
-through the operator-requested `scripts/start_publisher_login_qr_one_shot.py`
-handoff, which reads a temporary webhook from the operator shell or an
-operator-local file, passes it to the production browser over CDP stdin, directly
-extracts one fresh platform QR image from the platform agent, and uploads that
-image once to Discord. The publisher extension's login QR notification setting
-is disabled by default and this operator handoff clears the hidden notification
-guard before extracting the QR. While notification forwarding is disabled, the
+Discord webhook env on browser or worker services. The publisher extension's
+login QR notification setting is disabled by default; while disabled, the
 extension must not capture a QR image or call
 `/api/publishers/extension/login-qr`. A stale profile value of
 `loginQrNotificationsEnabled=true` is not enough to re-enable QR forwarding.
 Ordinary publisher heartbeat checks must only report `login-required`.
-
-The publisher extension only forwards directly extracted, fresh QR images from
-an active login session. It first tries canvas/data URLs and page-visible
-`img.src`/`currentSrc` values, fetching image responses from the page context
-with credentials when a QR URL is exposed. Chrome extensions cannot generally
-read arbitrary cross-origin network response bodies, so raw response extraction
-is best-effort through those page-visible image URLs. Full-page screenshots and
-expired/invalid QR placeholders such as "二维码已失效 / 点击刷新" are not sent.
-When Discord forwarding is explicitly enabled and a platform moves from
-disconnected to connected, the backend sends one login-success confirmation so
-the operator knows the scan worked.
 
 ### Current production deployment
 
@@ -248,15 +250,12 @@ secret is lost, encrypted sessions cannot be recovered and the publishing
 platform must be logged in again. Protect `.env` backups that contain this
 secret; without it, old encrypted cookies cannot be decrypted.
 
-For shared production Swarm, keep Discord login alerts disabled. The legacy
-publisher login webhook env keys are ignored by runtime config, and browser
-extensions never store a webhook. QR forwarding uses the one-shot operator CDP
-handoff script, which clears extension QR-notification guards, opens the platform
-login page in the production publisher browser, extracts the QR through the
-platform agent, and uploads one attachment to the operator webhook. Automatic
-heartbeats do not capture or send QR-code images. When a platform moves from
-disconnected to connected, heartbeat or backend browser-session sync sends one
-login-success confirmation.
+For shared production Swarm, keep Discord login alerts disabled. Routine
+production login continuity uses backend-synced browser sessions, not QR
+delivery. If encrypted publisher sessions cannot be recovered because the
+session secret changed or expired, log in again inside the production publisher
+browser profile and rerun `python scripts/check_production_publisher_baseline.py`
+with the production arguments shown above.
 
 ### Codex / MCP operator
 

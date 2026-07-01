@@ -52,8 +52,9 @@ Firefox 临时加载：
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE`，避免登录状态向 Discord 发消息。
   扩展设置里的二维码通知开关也默认关闭；即使旧 profile 里遗留
   `loginQrNotificationsEnabled=true`，没有隐藏的
-  `loginQrNotificationsAllowed=true` 时扩展也不会截图或 POST
-  `/api/publishers/extension/login-qr`。
+  `loginQrNotificationsAllowed=true` 和未来的
+  `loginQrNotificationsAllowedUntilMs` 临时时间窗时，扩展也不会截图或
+  POST `/api/publishers/extension/login-qr`。
   只有用户主动打开的登录会话可以触发二维码通知；扩展心跳检测到登录页时只回写
   `login-required`，不会截图或发送 Discord。扩展只应转发直接提取到的新鲜二维码
   图片，发送前会重新提取并短重试等待页面生成，同一登录页的并发通知会去重；整页

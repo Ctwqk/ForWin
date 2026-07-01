@@ -20,6 +20,7 @@ function makeController(overrides = {}) {
       syncSessionToBackend: true,
       loginQrNotificationsEnabled: true,
       loginQrNotificationsAllowed: true,
+      loginQrNotificationsAllowedUntilMs: Number.MAX_SAFE_INTEGER,
     }),
     getExtensionVersion: () => '0.1.3',
     getBrowserInfo: async () => ({ browserName: 'Chrome', browserVersion: '123.0' }),
@@ -338,6 +339,45 @@ test('controller does not send login QR notifications without hidden operator al
       apiKey: 'secret',
       syncSessionToBackend: true,
       loginQrNotificationsEnabled: true,
+    }),
+    captureLoginQrImage: async () => {
+      captureCalls += 1;
+      return {
+        ok: true,
+        imageDataUrl: 'data:image/png;base64,cXI=',
+        source: 'image',
+      };
+    },
+  });
+  const session = {
+    platformId: 'fanqie',
+    popupTabId: 42,
+    lastUrl: 'https://fanqienovel.com/main/writer/login',
+  };
+  const inspection = {
+    currentUrl: 'https://fanqienovel.com/main/writer/login',
+    authenticated: false,
+    loginVisible: true,
+  };
+
+  const result = await controller.maybeNotifyLoginQr(session, inspection);
+
+  assert.equal(result.reason, 'login-qr-notifications-disabled-by-settings');
+  assert.equal(captureCalls, 0);
+  assert.equal(loginQrNotifications.length, 0);
+  assert.equal(loginQrStatusEvents.length, 1);
+  assert.equal(loginQrStatusEvents[0].reason, 'login-qr-notifications-disabled-by-settings');
+});
+
+test('controller does not send login QR notifications with stale hidden operator allowance', async () => {
+  let captureCalls = 0;
+  const { controller, loginQrNotifications, loginQrStatusEvents } = makeController({
+    getSettings: async () => ({
+      backendBaseUrl: 'http://192.168.31.10:8899',
+      apiKey: 'secret',
+      syncSessionToBackend: true,
+      loginQrNotificationsEnabled: true,
+      loginQrNotificationsAllowed: true,
     }),
     captureLoginQrImage: async () => {
       captureCalls += 1;

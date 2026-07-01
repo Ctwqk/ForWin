@@ -21,7 +21,15 @@ test('normalizeSettings only enables login QR notifications explicitly', () => {
     normalizeSettings({
       loginQrNotificationsEnabled: true,
       loginQrNotificationsAllowed: true,
-    }).loginQrNotificationsEnabled,
+    }, { nowMs: 1_000 }).loginQrNotificationsEnabled,
+    false,
+  );
+  assert.equal(
+    normalizeSettings({
+      loginQrNotificationsEnabled: true,
+      loginQrNotificationsAllowed: true,
+      loginQrNotificationsAllowedUntilMs: 2_000,
+    }, { nowMs: 1_000 }).loginQrNotificationsEnabled,
     true,
   );
   assert.equal(normalizeSettings({ loginQrNotificationsEnabled: 'true' }).loginQrNotificationsEnabled, false);

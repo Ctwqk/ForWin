@@ -4,15 +4,23 @@ export const DEFAULT_SETTINGS = {
   syncSessionToBackend: true,
   loginQrNotificationsEnabled: false,
   loginQrNotificationsAllowed: false,
+  loginQrNotificationsAllowedUntilMs: 0,
 };
 
-export function normalizeSettings(input = {}) {
+export function normalizeSettings(input = {}, options = {}) {
   const backendBaseUrl = String(input.backendBaseUrl || '')
     .trim()
     .replace(/\/+$/, '');
   const apiKey = String(input.apiKey || '').trim();
   const syncSessionToBackend = input.syncSessionToBackend !== false;
-  const loginQrNotificationsAllowed = input.loginQrNotificationsAllowed === true;
+  const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const rawAllowedUntilMs = Number(input.loginQrNotificationsAllowedUntilMs || 0);
+  const loginQrNotificationsAllowedUntilMs = Number.isFinite(rawAllowedUntilMs)
+    && rawAllowedUntilMs > 0
+    ? rawAllowedUntilMs
+    : 0;
+  const loginQrNotificationsAllowed = input.loginQrNotificationsAllowed === true
+    && loginQrNotificationsAllowedUntilMs > nowMs;
   const loginQrNotificationsEnabled = input.loginQrNotificationsEnabled === true
     && loginQrNotificationsAllowed;
   return {
@@ -21,6 +29,7 @@ export function normalizeSettings(input = {}) {
     syncSessionToBackend,
     loginQrNotificationsEnabled,
     loginQrNotificationsAllowed,
+    loginQrNotificationsAllowedUntilMs,
   };
 }
 

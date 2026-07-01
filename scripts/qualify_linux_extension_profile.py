@@ -196,6 +196,18 @@ def find_browser(preferred: str) -> str:
     )
 
 
+def qualified_profile_settings(backend_url: str, key: str) -> dict[str, object]:
+    return {
+        "backendBaseUrl": backend_url,
+        "apiKey": key,
+        "syncSessionToBackend": config_value("FORWIN_EXTENSION_SYNC_SESSION_TO_BACKEND", "true").strip().lower()
+        not in {"0", "false", "no"},
+        "loginQrNotificationsEnabled": False,
+        "loginQrNotificationsAllowed": False,
+        "loginQrNotificationsAllowedUntilMs": 0,
+    }
+
+
 def qualify_profile(profile_dir: Path, extension_dir: Path, backend_url: str, key: str) -> None:
     if not key:
         raise SystemExit("FORWIN_PUBLISHER_EXTENSION_API_KEY is required to qualify the profile.")
@@ -226,12 +238,7 @@ def qualify_profile(profile_dir: Path, extension_dir: Path, backend_url: str, ke
     if no_sandbox in {"1", "true", "yes"} or (no_sandbox == "auto" and hasattr(os, "geteuid") and os.geteuid() == 0):
         args.append("--no-sandbox")
 
-    settings = {
-        "backendBaseUrl": backend_url,
-        "apiKey": key,
-        "syncSessionToBackend": config_value("FORWIN_EXTENSION_SYNC_SESSION_TO_BACKEND", "true").strip().lower()
-        not in {"0", "false", "no"},
-    }
+    settings = qualified_profile_settings(backend_url, key)
     preferred_client_id = config_value("FORWIN_PUBLISHER_PREFERRED_CLIENT_ID").strip()
     storage_values: dict[str, object] = {SETTINGS_KEY: settings}
     if preferred_client_id:

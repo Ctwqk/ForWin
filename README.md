@@ -129,8 +129,9 @@ setting is also disabled by default; while it is disabled, the extension must
 not capture a QR image or call `/api/publishers/extension/login-qr`. A stale
 profile value of `loginQrNotificationsEnabled=true` is not enough to re-enable
 QR forwarding; an operator must also set the hidden
-`loginQrNotificationsAllowed=true` guard for the temporary window. Ordinary
-publisher heartbeat checks must only report `login-required`. The publisher extension only
+`loginQrNotificationsAllowed=true` guard and a future
+`loginQrNotificationsAllowedUntilMs` timestamp for the temporary window.
+Ordinary publisher heartbeat checks must only report `login-required`. The publisher extension only
 forwards directly extracted, fresh QR images from an active login session;
 full-page screenshots and expired/invalid QR placeholders such as
 "二维码已失效 / 点击刷新" are not sent. When Discord forwarding is explicitly
@@ -243,7 +244,9 @@ set `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true`, use
 `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` on `forwin-app-swarm`, never the
 raw webhook URL env, and remove both settings after the login window. Do not
 expose webhook env to browser or worker services. The webhook is used
-server-side; browser extensions never store it. Automatic heartbeats do not
+server-side; browser extensions never store it. QR forwarding also requires a
+temporary hidden extension allowance with a future
+`loginQrNotificationsAllowedUntilMs` timestamp. Automatic heartbeats do not
 capture or send QR-code images. When forwarding is explicitly enabled and a
 platform moves from
 disconnected to connected, heartbeat or backend browser-session sync sends one

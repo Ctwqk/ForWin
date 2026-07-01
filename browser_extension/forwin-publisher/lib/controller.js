@@ -14,6 +14,14 @@ function defaultNowMs() {
   return Date.now();
 }
 
+function loginQrNotificationsAllowed(settings, nowMs) {
+  const allowedUntilMs = Number(settings?.loginQrNotificationsAllowedUntilMs || 0);
+  return settings?.loginQrNotificationsEnabled === true
+    && settings?.loginQrNotificationsAllowed === true
+    && Number.isFinite(allowedUntilMs)
+    && allowedUntilMs > nowMs;
+}
+
 function loginQrNotificationsDisabled(result) {
   if (result?.disabled) {
     return true;
@@ -1155,10 +1163,7 @@ export class PublisherExtensionController {
     session.loginQrNotificationInFlight = true;
     try {
       const settings = await this.deps.getSettings();
-      if (
-        settings.loginQrNotificationsEnabled !== true
-        || settings.loginQrNotificationsAllowed !== true
-      ) {
+      if (!loginQrNotificationsAllowed(settings, nowMs)) {
         await this.recordLoginQrNotificationEvent({
           platform: session.platformId,
           tab_id: session.popupTabId,

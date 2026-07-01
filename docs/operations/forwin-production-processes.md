@@ -293,7 +293,8 @@ real browser login or browser clicking.
   must not capture QR images or call `/api/publishers/extension/login-qr`.
   A stale `loginQrNotificationsEnabled=true` profile value does not re-enable
   QR forwarding unless the hidden `loginQrNotificationsAllowed=true` guard is
-  also set for the operator-requested temporary window.
+  also paired with a future `loginQrNotificationsAllowedUntilMs` timestamp for
+  the operator-requested temporary window.
 - Keep QR forwarding disabled until a deployed browser build has verified a
   direct, non-expired QR capture source; screenshots and invalid QR placeholders
   such as "二维码已失效 / 点击刷新" are intentionally rejected.

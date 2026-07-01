@@ -30,6 +30,7 @@ LOGIN_ERROR_PARTS = ("login", "登录", "未登录", "过期", "扫码", "authen
 ATTENTION_REVIEW_DECISIONS = {"CHANGES_REQUESTED"}
 ATTENTION_MERGE_STATES = {"BLOCKED", "DIRTY", "UNKNOWN"}
 TERMINAL_FAILED_STATUSES = {"failed", "error"}
+TERMINAL_SUCCESS_STATUSES = {"completed", "succeeded", "success"}
 
 
 def _short_text(value: Any, *, limit: int = 320) -> str:
@@ -289,9 +290,18 @@ def upload_jobs_snapshot(
         )
         return {"ok": False, "error": response.get("error") or "unexpected upload jobs response", "jobs": []}
     jobs = [_summarize_upload_job(item) for item in payload if isinstance(item, dict)]
+    recovered_upload_keys: set[tuple[str, str, bool]] = set()
     for raw, job in zip([item for item in payload if isinstance(item, dict)], jobs, strict=False):
         status = str(job.get("status") or "").lower()
-        if status in TERMINAL_FAILED_STATUSES:
+        recovery_key = (
+            str(job.get("platform") or ""),
+            str(job.get("task_kind") or "chapter_upload"),
+            bool(raw.get("publish")),
+        )
+        recovered_by_newer_success = bool(recovery_key in recovered_upload_keys)
+        if status in TERMINAL_SUCCESS_STATUSES:
+            recovered_upload_keys.add(recovery_key)
+        if status in TERMINAL_FAILED_STATUSES and not recovered_by_newer_success:
             _append_block(
                 blocked_items,
                 kind="upload_job_failed",
@@ -300,7 +310,7 @@ def upload_jobs_snapshot(
                 job_id=job.get("job_id"),
                 platform=job.get("platform"),
             )
-        if _is_login_error(raw):
+        if _is_login_error(raw) and not recovered_by_newer_success:
             _append_block(
                 blocked_items,
                 kind="publisher_login_required",
@@ -310,7 +320,7 @@ def upload_jobs_snapshot(
                 platform=job.get("platform"),
             )
         intervention = job.get("codex_intervention") if isinstance(job.get("codex_intervention"), dict) else {}
-        if intervention.get("status") in {"request_failed", "required"}:
+        if intervention.get("status") in {"request_failed", "required"} and not recovered_by_newer_success:
             _append_block(
                 blocked_items,
                 kind="codex_intervention_required",
@@ -397,11 +407,19 @@ def classify_generation_tasks(
             "observed_active_generation_task",
             active_task_ids=snapshot.get("active_task_ids", []),
         )
+    latest_project_seen: set[str] = set()
+    recovered_projects: set[str] = set()
     for task in snapshot.get("tasks", []):
         if not isinstance(task, dict):
             continue
         status = str(task.get("status") or "").lower()
-        if status in {"failed", "error"}:
+        project_id = str(task.get("project_id") or "")
+        superseded_by_project_success = bool(project_id and project_id in recovered_projects)
+        if project_id and project_id not in latest_project_seen:
+            latest_project_seen.add(project_id)
+            if status in TERMINAL_SUCCESS_STATUSES:
+                recovered_projects.add(project_id)
+        if status in {"failed", "error"} and not superseded_by_project_success:
             _append_block(
                 blocked_items,
                 kind="generation_task_failed",
@@ -410,7 +428,7 @@ def classify_generation_tasks(
                 task_id=task.get("task_id"),
                 project_id=task.get("project_id"),
             )
-        elif status in {"paused", "needs_review"}:
+        elif status in {"paused", "needs_review"} and not superseded_by_project_success:
             _append_block(
                 blocked_items,
                 kind="generation_task_needs_operator",

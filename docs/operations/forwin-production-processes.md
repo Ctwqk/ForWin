@@ -157,6 +157,9 @@ read-only supervisor on 150 from a source checkout or deployed copy. It checks
 GitHub PRs/issues, publisher upload jobs, MCP generation task state, publisher
 browser login/heartbeat state, and Codex Bridge health. It writes one redacted
 JSON object per run and exits non-zero when follow-up is required.
+Historical upload or generation failures that have already been superseded by
+a newer successful platform/project run remain visible in the JSON report but
+do not count as current blockers.
 
 Manual one-shot run:
 

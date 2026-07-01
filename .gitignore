@@ -14,6 +14,7 @@ build/
 forwin.egg-info/
 .playwright-cli/
 .playwright-mcp/
+.codex-monitor/
 .codex-tmp/
 .worktrees/
 output/

@@ -222,6 +222,77 @@ def test_upload_jobs_snapshot_reads_large_api_responses_without_logging_body() -
     assert "x" * 1000 not in serialized
 
 
+def test_upload_jobs_snapshot_ignores_failed_jobs_superseded_by_success(monkeypatch) -> None:
+    blocked: list[dict] = []
+    actions: list[dict] = []
+
+    def fake_http_json(url: str, *, timeout: float = 15.0, max_bytes: int = 8_000_000):
+        assert url == "http://forwin.example/api/publishers/upload-jobs?limit=5"
+        return {
+            "ok": True,
+            "payload": [
+                {
+                    "job_id": "job-new-success",
+                    "platform": "qidian",
+                    "status": "succeeded",
+                    "book_name": "Bound Book",
+                    "chapter_title": "Smoke 2",
+                    "publish": False,
+                },
+                {
+                    "job_id": "job-old-failed",
+                    "platform": "qidian",
+                    "status": "failed",
+                    "book_name": "Placeholder",
+                    "chapter_title": "Smoke 1",
+                    "publish": False,
+                    "error": "book not found",
+                },
+            ],
+        }
+
+    monkeypatch.setattr(supervisor, "http_json_full", fake_http_json, raising=False)
+    snapshot = supervisor.upload_jobs_snapshot("http://forwin.example", 5, blocked, actions)
+
+    assert snapshot["ok"] is True
+    assert {job["job_id"] for job in snapshot["jobs"]} == {"job-new-success", "job-old-failed"}
+    assert [item["kind"] for item in blocked] == []
+
+
+def test_classify_generation_tasks_ignores_project_tasks_superseded_by_completed() -> None:
+    blocked: list[dict] = []
+    actions: list[dict] = []
+    snapshot = {
+        "ok": True,
+        "has_active_generation_task": False,
+        "tasks": [
+            {
+                "task_id": "task-new-completed",
+                "project_id": "project-1",
+                "status": "completed",
+                "current_chapter": 10,
+            },
+            {
+                "task_id": "task-old-failed",
+                "project_id": "project-1",
+                "status": "failed",
+                "current_chapter": 10,
+            },
+            {
+                "task_id": "task-old-paused",
+                "project_id": "project-1",
+                "status": "paused",
+                "current_chapter": 9,
+            },
+        ],
+    }
+
+    supervisor.classify_generation_tasks(snapshot, blocked, actions)
+
+    assert blocked == []
+    assert {"kind": "checked_generation_tasks"} in actions
+
+
 def test_codex_bridge_disabled_payload_is_classified_as_unhealthy(monkeypatch) -> None:
     monkeypatch.setattr(
         supervisor,

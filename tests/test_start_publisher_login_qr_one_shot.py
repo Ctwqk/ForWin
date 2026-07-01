@@ -41,3 +41,23 @@ def test_redact_sensitive_removes_webhook_and_qr_payloads() -> None:
         "image_data_url": "[redacted]",
         "nested": {"api_key": "[redacted]", "message": "kept"},
     }
+
+
+def test_browser_cdp_script_uses_direct_platform_agent_qr_extraction() -> None:
+    script = one_shot.browser_cdp_script()
+
+    assert "forwin-publisher-platform-agent" in script
+    assert "extract-login-qr-image" in script
+    assert "chrome.webNavigation.getAllFrames" in script
+    assert "multipart/form-data" in script
+    assert "loginQrNotificationsEnabled: false" in script
+    assert "loginQrNotificationsAllowed: false" in script
+    assert "open-login" not in script
+    assert "page-to-extension" not in script
+
+
+def test_login_url_defaults_target_platform_login_pages() -> None:
+    assert one_shot.PLATFORM_LOGIN_URLS == {
+        "fanqie": "https://fanqienovel.com/main/writer/login",
+        "qidian": "https://write.qq.com/portal/login",
+    }

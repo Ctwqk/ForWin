@@ -16,10 +16,11 @@ from urllib.request import Request, urlopen
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SETTINGS_KEY = "forwinPublisherSettings"
 DEFAULT_WEBHOOK_ENV = "FORWIN_PUBLISHER_LOGIN_QR_ONE_SHOT_WEBHOOK_URL"
-DEFAULT_PLATFORM_PAGE_URLS = {
-    "fanqie": "http://forwin-app-swarm:8899/publishers",
-    "qidian": "http://forwin-app-swarm:8899/publishers",
+PLATFORM_LOGIN_URLS = {
+    "fanqie": "https://fanqienovel.com/main/writer/login",
+    "qidian": "https://write.qq.com/portal/login",
 }
+DEFAULT_PLATFORM_PAGE_URLS = PLATFORM_LOGIN_URLS
 SENSITIVE_KEY_PARTS = (
     "api_key",
     "authorization",
@@ -155,15 +156,96 @@ def request_one_shot(
 def browser_cdp_script() -> str:
     return r'''
 from playwright.sync_api import sync_playwright
+import base64
 import json
+import re
+import secrets
 import sys
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 payload = json.loads(sys.stdin.read())
 settings_key = payload["settings_key"]
-allowed_until_ms = int(payload["allowed_until_ms"])
 platform = payload["platform"]
-page_url = payload["page_url"]
-bridge_timeout_ms = int(payload.get("bridge_timeout_ms") or 5000)
+login_url = payload["login_url"]
+webhook_url = payload["webhook_url"]
+max_wait_ms = int(payload.get("max_wait_ms") or 30000)
+discord_content = payload.get("discord_content") or (
+    f"ForWin {platform} publisher login QR "
+    "(one-shot direct production-browser extraction; no screenshot fallback)."
+)
+
+def decode_image_data_url(value):
+    match = re.match(r"^data:(image/[A-Za-z0-9.+-]+);base64,(.+)$", str(value or ""), re.S)
+    if not match:
+        raise RuntimeError("login QR extraction did not return an image data URL")
+    mime_type = match.group(1).lower()
+    try:
+        image_bytes = base64.b64decode(match.group(2), validate=True)
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError("login QR extraction returned invalid base64 image data") from exc
+    if len(image_bytes) < 128:
+        raise RuntimeError("login QR extraction returned an unexpectedly small image")
+    return mime_type, image_bytes
+
+def extension_for_mime_type(mime_type):
+    return {
+        "image/jpeg": "jpg",
+        "image/jpg": "jpg",
+        "image/png": "png",
+        "image/webp": "webp",
+        "image/gif": "gif",
+    }.get(mime_type, "png")
+
+def multipart_body(fields, files):
+    boundary = "----forwin-login-qr-" + secrets.token_hex(12)
+    chunks = []
+    for name, value in fields.items():
+        chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+        chunks.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        chunks.append(str(value).encode("utf-8"))
+        chunks.append(b"\r\n")
+    for name, file_info in files.items():
+        filename, content_type, data = file_info
+        chunks.append(f"--{boundary}\r\n".encode("utf-8"))
+        chunks.append(
+            (
+                f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'
+                f"Content-Type: {content_type}\r\n\r\n"
+            ).encode("utf-8")
+        )
+        chunks.append(data)
+        chunks.append(b"\r\n")
+    chunks.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return boundary, b"".join(chunks)
+
+def post_discord_webhook(*, image_bytes, mime_type):
+    filename = f"{platform}-login-qr.{extension_for_mime_type(mime_type)}"
+    payload_json = json.dumps({"content": discord_content}, ensure_ascii=False)
+    boundary, body = multipart_body(
+        {"payload_json": payload_json},
+        {"files[0]": (filename, mime_type, image_bytes)},
+    )
+    request = Request(
+        webhook_url,
+        data=body,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": "ForWin-operator-login-qr/1.0",
+        },
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            response.read(1024)
+            status = int(getattr(response, "status", 0) or 0)
+    except HTTPError as exc:
+        exc.read(1024)
+        raise RuntimeError(f"Discord webhook upload failed: HTTP {exc.code}") from exc
+    except URLError as exc:
+        reason = getattr(exc, "reason", None)
+        raise RuntimeError(f"Discord webhook upload failed: {reason or exc.__class__.__name__}") from exc
+    return {"ok": 200 <= status < 300, "status": status, "filename": filename}
 
 def first_extension_worker(context):
     for worker in context.service_workers:
@@ -178,105 +260,236 @@ with sync_playwright() as playwright:
             raise RuntimeError("production browser has no CDP contexts")
         context = browser.contexts[0]
         worker = first_extension_worker(context)
-        storage_result = worker.evaluate(
-            """async ({ settingsKey, allowedUntilMs }) => {
+        cdp_result = worker.evaluate(
+            """async ({ settingsKey, platform, loginUrl, maxWaitMs }) => {
+              const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+              const callChrome = (target, method, ...args) => (
+                new Promise((resolve, reject) => {
+                  target[method].call(target, ...args, (result) => {
+                    const error = chrome.runtime.lastError;
+                    if (error) {
+                      reject(new Error(error.message));
+                      return;
+                    }
+                    resolve(result);
+                  });
+                })
+              );
+              const sanitizeUrl = (value) => {
+                try {
+                  const url = new URL(String(value || ''));
+                  return `${url.origin}${url.pathname}`;
+                } catch (_error) {
+                  return '';
+                }
+              };
+              const platformScore = (value) => {
+                const url = String(value || '').toLowerCase();
+                if (!url) {
+                  return 0;
+                }
+                if (platform === 'fanqie') {
+                  if (url.includes('fanqienovel.com')) {
+                    return url.includes('/login') ? 80 : 50;
+                  }
+                  return 0;
+                }
+                if (platform === 'qidian') {
+                  if (url.includes('open.weixin.qq.com')) {
+                    return 100;
+                  }
+                  if (url.includes('write.qq.com') || url.includes('yuewen.com')) {
+                    return url.includes('/login') ? 80 : 50;
+                  }
+                }
+                return 0;
+              };
+              const message = {
+                channel: 'forwin-publisher-platform-agent',
+                action: 'extract-login-qr-image',
+              };
+              const sendExtract = async (tabId, target) => {
+                try {
+                  const response = await callChrome(
+                    chrome.tabs,
+                    'sendMessage',
+                    tabId,
+                    message,
+                    { frameId: target.frameId },
+                  );
+                  if (response?.imageDataUrl && String(response.imageDataUrl).startsWith('data:image/')) {
+                    return {
+                      ok: true,
+                      imageDataUrl: response.imageDataUrl,
+                      source: response.source ? `platform-agent:${response.source}` : 'platform-agent',
+                      frameId: target.frameId,
+                      frameUrl: sanitizeUrl(target.url),
+                      currentUrl: sanitizeUrl(response.currentUrl || target.url),
+                    };
+                  }
+                  return {
+                    ok: false,
+                    error: String(response?.error || 'login-qr-not-found'),
+                    frameId: target.frameId,
+                    frameUrl: sanitizeUrl(target.url),
+                  };
+                } catch (error) {
+                  return {
+                    ok: false,
+                    error: error instanceof Error ? error.message : String(error),
+                    frameId: target.frameId,
+                    frameUrl: sanitizeUrl(target.url),
+                  };
+                }
+              };
+              const getFrameTargets = async (tabId, currentTabUrl) => {
+                let frames = [];
+                try {
+                  frames = await new Promise((resolve, reject) => {
+                    chrome.webNavigation.getAllFrames({ tabId }, (items) => {
+                      const error = chrome.runtime.lastError;
+                      if (error) {
+                        reject(new Error(error.message));
+                        return;
+                      }
+                      resolve(Array.isArray(items) ? items : []);
+                    });
+                  });
+                } catch (_error) {
+                  frames = [];
+                }
+                if (!frames.some((frame) => Number(frame?.frameId) === 0)) {
+                  frames.push({ frameId: 0, url: currentTabUrl || '' });
+                }
+                const seen = new Set();
+                return frames
+                  .map((frame) => ({
+                    frameId: Number(frame?.frameId ?? 0),
+                    url: String(frame?.url || ''),
+                    priority: platformScore(frame?.url) + (Number(frame?.frameId ?? 0) === 0 ? 1 : 5),
+                  }))
+                  .filter((target) => Number.isInteger(target.frameId) && !seen.has(target.frameId) && seen.add(target.frameId))
+                  .sort((left, right) => right.priority - left.priority || left.frameId - right.frameId);
+              };
               const existing = (await chrome.storage.local.get(settingsKey))[settingsKey] || {};
               const next = {
                 ...existing,
-                loginQrNotificationsEnabled: true,
-                loginQrNotificationsAllowed: true,
-                loginQrNotificationsAllowedUntilMs: allowedUntilMs,
+                loginQrNotificationsEnabled: false,
+                loginQrNotificationsAllowed: false,
+                loginQrNotificationsAllowedUntilMs: 0,
               };
               await chrome.storage.local.set({ [settingsKey]: next });
-              return {
+              const storageResult = {
                 hasBackendBaseUrl: Boolean(next.backendBaseUrl),
                 hasApiKey: Boolean(next.apiKey),
                 loginQrNotificationsEnabled: next.loginQrNotificationsEnabled === true,
                 loginQrNotificationsAllowed: next.loginQrNotificationsAllowed === true,
                 loginQrNotificationsAllowedUntilMs: Number(next.loginQrNotificationsAllowedUntilMs || 0),
               };
+              const existingTabs = await callChrome(chrome.tabs, 'query', {});
+              const matchingTabs = existingTabs
+                .filter((tab) => tab?.id && platformScore(tab.url) > 0)
+                .sort((left, right) => platformScore(right.url) - platformScore(left.url));
+              let tab = matchingTabs[0];
+              if (tab?.id) {
+                tab = await callChrome(chrome.tabs, 'update', tab.id, { url: loginUrl, active: true });
+              } else {
+                tab = await callChrome(chrome.tabs, 'create', { url: loginUrl, active: true });
+              }
+              const tabId = Number(tab?.id || 0);
+              if (!tabId) {
+                return { ok: false, settings: storageResult, error: 'login-tab-open-failed' };
+              }
+              const deadline = Date.now() + maxWaitMs;
+              let lastResult = { ok: false, error: 'login-qr-not-found' };
+              while (Date.now() < deadline) {
+                let currentTab = null;
+                try {
+                  currentTab = await callChrome(chrome.tabs, 'get', tabId);
+                } catch (_error) {
+                  currentTab = tab;
+                }
+                const targets = await getFrameTargets(tabId, currentTab?.url || loginUrl);
+                for (const target of targets) {
+                  lastResult = await sendExtract(tabId, target);
+                  if (lastResult?.ok && lastResult.imageDataUrl) {
+                    return {
+                      ...lastResult,
+                      ok: true,
+                      settings: storageResult,
+                      platform,
+                      tabId,
+                      currentUrl: sanitizeUrl(lastResult.currentUrl || currentTab?.url || loginUrl),
+                    };
+                  }
+                }
+                await sleep(1000);
+              }
+              return {
+                ok: false,
+                settings: storageResult,
+                platform,
+                tabId,
+                currentUrl: sanitizeUrl(loginUrl),
+                error: 'login-qr-direct-extraction-failed',
+                lastError: String(lastResult?.error || ''),
+                lastFrameId: Number(lastResult?.frameId ?? -1),
+                lastFrameUrl: sanitizeUrl(lastResult?.frameUrl || ''),
+              };
             }""",
-            {"settingsKey": settings_key, "allowedUntilMs": allowed_until_ms},
+            {
+                "settingsKey": settings_key,
+                "platform": platform,
+                "loginUrl": login_url,
+                "maxWaitMs": max_wait_ms,
+            },
         )
+        storage_result = cdp_result.get("settings") if isinstance(cdp_result, dict) else {}
         if not storage_result.get("hasBackendBaseUrl") or not storage_result.get("hasApiKey"):
             raise RuntimeError("extension settings are missing backendBaseUrl or apiKey")
-
-        page = context.new_page()
-        try:
-            page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(1000)
-            bridge_result = page.evaluate(
-                """async ({ platform, timeoutMs }) => {
-                  const channel = 'forwin-publisher-extension';
-                  const correlationId = globalThis.crypto?.randomUUID
-                    ? globalThis.crypto.randomUUID()
-                    : `forwin-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-                  return await new Promise((resolve) => {
-                    const timer = setTimeout(() => {
-                      window.removeEventListener('message', onMessage);
-                      resolve({ ok: false, error: 'extension bridge timed out' });
-                    }, timeoutMs);
-                    function onMessage(event) {
-                      if (event.source !== window || event.origin !== window.location.origin) {
-                        return;
-                      }
-                      const data = event.data || {};
-                      if (
-                        data.channel === channel
-                        && data.direction === 'extension-to-page'
-                        && data.kind === 'response'
-                        && data.correlationId === correlationId
-                      ) {
-                        clearTimeout(timer);
-                        window.removeEventListener('message', onMessage);
-                        resolve({
-                          ok: Boolean(data.ok),
-                          message: String(data.payload?.message || ''),
-                          error: String(data.error || ''),
-                        });
-                      }
-                    }
-                    window.addEventListener('message', onMessage);
-                    window.postMessage({
-                      channel,
-                      direction: 'page-to-extension',
-                      kind: 'request',
-                      correlationId,
-                      action: 'open-login',
-                      payload: { platform },
-                    }, window.location.origin);
-                  });
-                }""",
-                {"platform": platform, "timeoutMs": bridge_timeout_ms},
-            )
-        finally:
-            page.close()
+        if not isinstance(cdp_result, dict) or not cdp_result.get("ok"):
+            raise RuntimeError(str((cdp_result or {}).get("error") or "login QR direct extraction failed"))
+        image_data_url = str(cdp_result.pop("imageDataUrl", ""))
+        mime_type, image_bytes = decode_image_data_url(image_data_url)
+        discord_result = post_discord_webhook(image_bytes=image_bytes, mime_type=mime_type)
+        output = {
+            "ok": bool(discord_result.get("ok")),
+            "settings": storage_result,
+            "extraction": {
+                "ok": True,
+                "platform": platform,
+                "source": cdp_result.get("source", ""),
+                "tab_id": cdp_result.get("tabId"),
+                "frame_id": cdp_result.get("frameId"),
+                "current_url": cdp_result.get("currentUrl", ""),
+                "frame_url": cdp_result.get("frameUrl", ""),
+                "mime_type": mime_type,
+                "byte_count": len(image_bytes),
+            },
+            "discord": discord_result,
+        }
     finally:
         browser.close()
 
-print(json.dumps({
-    "ok": bool(bridge_result.get("ok")),
-    "settings": storage_result,
-    "bridge": bridge_result,
-}, ensure_ascii=False))
+print(json.dumps(output, ensure_ascii=False))
 '''
 
 
-def enable_extension_and_open_login(
+def send_login_qr_via_cdp(
     *,
     colima_profile: str,
     container: str,
     platform: str,
-    page_url: str,
-    allowed_until_ms: int,
-    bridge_timeout_ms: int = 5000,
+    login_url: str,
+    webhook_url: str,
+    max_wait_ms: int = 30000,
 ) -> dict[str, Any]:
     payload = {
         "settings_key": SETTINGS_KEY,
-        "allowed_until_ms": allowed_until_ms,
         "platform": platform,
-        "page_url": page_url,
-        "bridge_timeout_ms": bridge_timeout_ms,
+        "login_url": login_url,
+        "webhook_url": webhook_url,
+        "max_wait_ms": max_wait_ms,
     }
     proc = run_command(
         [
@@ -294,24 +507,24 @@ def enable_extension_and_open_login(
             browser_cdp_script(),
         ],
         input_text=json.dumps(payload),
-        timeout=75,
+        timeout=max(75, int(max_wait_ms / 1000) + 45),
     )
     if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "CDP login trigger failed").strip()[:800])
+        raise RuntimeError((proc.stderr or proc.stdout or "CDP login QR handoff failed").strip()[:800])
     try:
         parsed: Any = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"CDP login trigger returned non-JSON output: {proc.stdout[:300]}") from exc
+        raise RuntimeError(f"CDP login QR handoff returned non-JSON output: {proc.stdout[:300]}") from exc
     if not isinstance(parsed, dict):
-        raise RuntimeError("CDP login trigger returned non-object JSON")
+        raise RuntimeError("CDP login QR handoff returned non-object JSON")
     return parsed
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Enable a temporary one-shot publisher login QR delivery window and trigger the production browser login flow.",
+        description="Send one fresh publisher login QR from the production browser to an operator Discord webhook.",
     )
-    parser.add_argument("--platform", required=True, choices=sorted(DEFAULT_PLATFORM_PAGE_URLS))
+    parser.add_argument("--platform", required=True, choices=sorted(PLATFORM_LOGIN_URLS))
     parser.add_argument("--api-base", default=os.environ.get("FORWIN_API_BASE", "http://10.0.0.126:8899"))
     parser.add_argument("--ttl-seconds", type=int, default=300)
     parser.add_argument("--max-dispatches", type=int, default=1)
@@ -321,7 +534,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--basic-password-env", default="FORWIN_HTTP_BASIC_PASSWORD")
     parser.add_argument("--colima-profile", default="swarmbridged")
     parser.add_argument("--publisher-browser-container", default="")
-    parser.add_argument("--page-url", default="")
+    parser.add_argument("--login-url", default="")
+    parser.add_argument("--page-url", default="", help=argparse.SUPPRESS)
+    parser.add_argument("--max-wait-ms", type=int, default=30000)
+    parser.add_argument("--enable-backend-one-shot", action="store_true")
     parser.add_argument("--skip-browser-trigger", action="store_true")
     return parser.parse_args(argv)
 
@@ -347,35 +563,38 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     try:
-        backend_result = request_one_shot(
-            api_base=args.api_base,
-            platform=args.platform,
-            webhook_url=webhook_url,
-            ttl_seconds=args.ttl_seconds,
-            max_dispatches=args.max_dispatches,
-            basic_user=read_secret(env_name=args.basic_user_env),
-            basic_password=read_secret(env_name=args.basic_password_env),
-        )
+        backend_result: dict[str, Any] = {"skipped": True}
+        if args.enable_backend_one_shot:
+            backend_result = request_one_shot(
+                api_base=args.api_base,
+                platform=args.platform,
+                webhook_url=webhook_url,
+                ttl_seconds=args.ttl_seconds,
+                max_dispatches=args.max_dispatches,
+                basic_user=read_secret(env_name=args.basic_user_env),
+                basic_password=read_secret(env_name=args.basic_password_env),
+            )
         browser_result: dict[str, Any] = {"skipped": True}
         container = args.publisher_browser_container
         if not args.skip_browser_trigger:
             if not container:
                 container = find_publisher_browser_container(args.colima_profile)
-            browser_result = enable_extension_and_open_login(
+            browser_result = send_login_qr_via_cdp(
                 colima_profile=args.colima_profile,
                 container=container,
                 platform=args.platform,
-                page_url=args.page_url or DEFAULT_PLATFORM_PAGE_URLS[args.platform],
-                allowed_until_ms=int(backend_result.get("allowed_until_ms") or 0),
+                login_url=args.login_url or args.page_url or PLATFORM_LOGIN_URLS[args.platform],
+                webhook_url=webhook_url,
+                max_wait_ms=args.max_wait_ms,
             )
         output = {
-            "ok": bool(backend_result.get("ok")) and bool(browser_result.get("ok", True)),
+            "ok": bool(backend_result.get("ok", True)) and bool(browser_result.get("ok", True)),
             "platform": args.platform,
             "backend": backend_result,
             "browser": browser_result,
             "actions_taken": [
-                "enabled_backend_login_qr_one_shot",
-                *([] if args.skip_browser_trigger else ["enabled_extension_window_and_opened_login"]),
+                *(["enabled_backend_login_qr_one_shot"] if args.enable_backend_one_shot else []),
+                *([] if args.skip_browser_trigger else ["sent_direct_cdp_discord_login_qr"]),
             ],
         }
         print(json.dumps(redact_sensitive(output), ensure_ascii=False, sort_keys=True))

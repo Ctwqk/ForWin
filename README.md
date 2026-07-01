@@ -125,15 +125,16 @@ legacy `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK`,
 `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` settings are ignored by runtime
 config and must not be used to route scan-login state to Discord. Do not put
 Discord webhook env on browser or worker services. QR forwarding is only allowed
-through the operator-requested `POST /api/publishers/login-qr-one-shot`
-endpoint, which accepts a temporary webhook URL in the request body and keeps it
-in memory for a short TTL. The publisher extension's login QR notification
-setting is also disabled by default; while it is disabled, the extension must
-not capture a QR image or call `/api/publishers/extension/login-qr`. A stale
-profile value of `loginQrNotificationsEnabled=true` is not enough to re-enable
-QR forwarding; an operator must also set the hidden
-`loginQrNotificationsAllowed=true` guard and a future
-`loginQrNotificationsAllowedUntilMs` timestamp for the temporary window.
+through the operator-requested `scripts/start_publisher_login_qr_one_shot.py`
+handoff, which reads a temporary webhook from the operator shell or an
+operator-local file, passes it to the production browser over CDP stdin, directly
+extracts one fresh platform QR image from the platform agent, and uploads that
+image once to Discord. The publisher extension's login QR notification setting
+is disabled by default and this operator handoff clears the hidden notification
+guard before extracting the QR. While notification forwarding is disabled, the
+extension must not capture a QR image or call
+`/api/publishers/extension/login-qr`. A stale profile value of
+`loginQrNotificationsEnabled=true` is not enough to re-enable QR forwarding.
 Ordinary publisher heartbeat checks must only report `login-required`.
 
 The publisher extension only forwards directly extracted, fresh QR images from
@@ -249,12 +250,13 @@ secret; without it, old encrypted cookies cannot be decrypted.
 
 For shared production Swarm, keep Discord login alerts disabled. The legacy
 publisher login webhook env keys are ignored by runtime config, and browser
-extensions never store a webhook. QR forwarding uses the one-shot operator API
-plus a temporary hidden extension allowance with a future
-`loginQrNotificationsAllowedUntilMs` timestamp. Automatic heartbeats do not
-capture or send QR-code images. When a platform moves from disconnected to
-connected, heartbeat or backend browser-session sync sends one login-success
-confirmation.
+extensions never store a webhook. QR forwarding uses the one-shot operator CDP
+handoff script, which clears extension QR-notification guards, opens the platform
+login page in the production publisher browser, extracts the QR through the
+platform agent, and uploads one attachment to the operator webhook. Automatic
+heartbeats do not capture or send QR-code images. When a platform moves from
+disconnected to connected, heartbeat or backend browser-session sync sends one
+login-success confirmation.
 
 ### Codex / MCP operator
 

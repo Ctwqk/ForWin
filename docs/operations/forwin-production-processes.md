@@ -231,28 +231,30 @@ platform connection state, and MCP generation activity. It writes JSONL and
 returns non-zero if any required sample fails. It does not publish, retry jobs,
 start generation, or mutate ForWin project/task/chapter state.
 
-For an explicit operator login QR handoff, use a one-shot window instead of
-service-level Discord webhook env. The webhook comes from the operator shell or
-an operator-local file, is passed once to the API request body, and is not
-stored in browser profile or Swarm service configuration:
+For an explicit operator login QR handoff, use the one-shot CDP handoff instead
+of service-level Discord webhook env or the old `/publishers` page bridge. The
+webhook comes from the operator shell or an operator-local file, is passed over
+stdin to the production publisher-browser container for this run only, and is
+not stored in backend runtime config, browser profile, or Swarm service
+configuration:
 
 ```bash
 export FORWIN_PUBLISHER_LOGIN_QR_ONE_SHOT_WEBHOOK_URL='https://discord.com/api/webhooks/...'
 python scripts/start_publisher_login_qr_one_shot.py \
   --platform fanqie \
-  --api-base http://10.0.0.126:8899 \
-  --ttl-seconds 300 \
-  --max-dispatches 1
+  --max-wait-ms 30000
 unset FORWIN_PUBLISHER_LOGIN_QR_ONE_SHOT_WEBHOOK_URL
 ```
 
-The script calls `POST /api/publishers/login-qr-one-shot`, writes the hidden
-temporary allowance into the running production publisher-browser extension via
-Chrome CDP, then triggers the `/publishers` page's normal `open-login` bridge.
-It prints only redacted status. Do not use it for periodic monitoring, and do
-not run it from cron. QR extraction should come from canvas/data URL or
-page-visible `img.src`/`currentSrc` image responses; default production builds
-do not fall back to full-page screenshots for one-shot delivery.
+The default script path finds the running production publisher-browser
+container, connects to Chrome CDP, clears the extension-side login QR
+notification guards, opens the platform login page directly, sends
+`extract-login-qr-image` to the platform agent in the visible frames, and uploads
+one fresh QR image attachment to Discord. It prints only redacted status. Do not
+use it for periodic monitoring, and do not run it from cron. QR extraction
+should come from canvas/data URL or page-visible `img.src`/`currentSrc` image
+responses; default production builds do not fall back to full-page screenshots
+for one-shot delivery.
 
 ## Runtime Images
 
@@ -313,12 +315,12 @@ real browser login or browser clicking.
   manual QR handoff, use `scripts/start_publisher_login_qr_one_shot.py` with
   `FORWIN_PUBLISHER_LOGIN_QR_ONE_SHOT_WEBHOOK_URL` only in the operator shell.
 - Keep the publisher extension's login QR notification setting disabled in the
-  shared production browser profile by default. When disabled, the extension
-  must not capture QR images or call `/api/publishers/extension/login-qr`.
-  A stale `loginQrNotificationsEnabled=true` profile value does not re-enable
-  QR forwarding unless the hidden `loginQrNotificationsAllowed=true` guard is
-  also paired with a future `loginQrNotificationsAllowedUntilMs` timestamp for
-  the operator-requested temporary window.
+  shared production browser profile by default. The supported operator handoff
+  clears the extension QR-notification guards and uploads the direct CDP
+  extraction itself. When disabled, the extension must not capture QR images or
+  call `/api/publishers/extension/login-qr`. A stale
+  `loginQrNotificationsEnabled=true` profile value does not re-enable QR
+  forwarding.
 - Keep QR forwarding disabled until a deployed browser build has verified a
   direct, non-expired QR capture source; screenshots and invalid QR placeholders
   such as "二维码已失效 / 点击刷新" are intentionally rejected.

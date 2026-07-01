@@ -50,11 +50,14 @@ Firefox 临时加载：
   `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true`、
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` 或
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE`，避免登录状态向 Discord 发消息。
-  临时转发必须通过 operator 主动调用
-  `POST /api/publishers/login-qr-one-shot` 打开短 TTL 窗口；webhook 只放在
-  这次请求体里，不能写入服务 env 或浏览器 profile。扩展设置里的二维码通知
-  开关也默认关闭；即使旧 profile 里遗留 `loginQrNotificationsEnabled=true`，
-  没有隐藏的 `loginQrNotificationsAllowed=true` 和未来的
+  临时转发必须通过 operator 主动运行
+  `scripts/start_publisher_login_qr_one_shot.py`；webhook 只来自 operator shell
+  或 operator 本地文件，经 CDP stdin 传给生产 publisher-browser，不能写入服务
+  env、后端运行时配置或浏览器 profile。该脚本会清掉扩展侧二维码通知 guard，
+  直接打开平台登录页，通过 platform-agent 从 frame 内提取新鲜二维码图片并向
+  operator webhook 上传一次。扩展设置里的二维码通知开关默认关闭；即使旧 profile
+  里遗留 `loginQrNotificationsEnabled=true`，没有隐藏的
+  `loginQrNotificationsAllowed=true` 和未来的
   `loginQrNotificationsAllowedUntilMs` 临时时间窗时，扩展也不会截图或 POST
   `/api/publishers/extension/login-qr`。
   只有用户主动打开的登录会话可以触发二维码通知；扩展心跳检测到登录页时只回写

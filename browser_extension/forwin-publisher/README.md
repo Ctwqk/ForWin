@@ -46,11 +46,11 @@ Firefox 临时加载：
 
 - 起点扫码登录
 - 番茄扫码登录
-- 扫码登录二维码的 Discord webhook 转发在共享生产 Swarm 已禁用，后端运行时会忽略
-  `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true`、
+- 扫码登录二维码和登录成功消息的 Discord webhook 转发默认关闭；需要时只在
+  `forwin-app-swarm` 上设置
+  `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true`，并提供
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` 或
-  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE`，避免登录状态向 Discord 发消息。
-  扩展设置里的二维码通知开关也默认关闭；即使旧 profile 里遗留
+  `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE`。扩展设置里的二维码通知开关也默认关闭；即使旧 profile 里遗留
   `loginQrNotificationsEnabled=true`，没有隐藏的
   `loginQrNotificationsAllowed=true` 和未来的
   `loginQrNotificationsAllowedUntilMs` 临时时间窗时，扩展也不会截图或

@@ -281,3 +281,71 @@ def test_upload_smoke_polls_until_terminal_and_redacts(monkeypatch) -> None:
     serialized = json.dumps(report, ensure_ascii=False)
     assert "secret body" not in serialized
     assert "secret-token" not in serialized
+
+
+def test_project_upload_smoke_requires_explicit_project_and_chapter() -> None:
+    report = {"blocked_items": [], "actions_taken": []}
+
+    smoke.run_project_upload_smoke(args(run_project_upload_smoke=True), report)
+
+    assert report["project_chapter_path"]["ok"] is False
+    assert report["blocked_items"][0]["kind"] == "project_chapter_not_specified"
+
+
+def test_project_upload_smoke_posts_safe_project_payload(monkeypatch) -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def fake_http_json(method, url, *, payload=None, headers=None, timeout=10.0):
+        calls.append((method, url, payload))
+        if method == "GET" and url.endswith("/api/projects/project-1/chapters/7"):
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {
+                    "chapter_number": 7,
+                    "title": "Chapter 7",
+                    "status": "accepted",
+                },
+            }
+        if method == "POST" and url.endswith("/api/projects/project-1/publishers/upload-jobs"):
+            assert payload["chapter_number"] == 7
+            assert payload["publish"] is False
+            assert payload["create_if_missing"] is False
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {
+                    "job_id": "job-project",
+                    "platform": "qidian",
+                    "status": "pending",
+                    "publish": False,
+                },
+            }
+        if method == "GET" and url.endswith("/api/publishers/upload-jobs/job-project"):
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {
+                    "job_id": "job-project",
+                    "platform": "qidian",
+                    "status": "succeeded",
+                    "publish": False,
+                },
+            }
+        raise AssertionError(url)
+
+    monkeypatch.setattr(smoke, "http_json", fake_http_json)
+    report = {"blocked_items": [], "actions_taken": []}
+
+    smoke.run_project_upload_smoke(
+        args(
+            run_project_upload_smoke=True,
+            project_id="project-1",
+            chapter_number=7,
+            project_platform="qidian",
+        ),
+        report,
+    )
+
+    assert report["project_chapter_path"]["ok"] is True
+    assert report["project_chapter_path"]["job"]["job_id"] == "job-project"

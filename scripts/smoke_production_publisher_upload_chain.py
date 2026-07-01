@@ -381,6 +381,112 @@ def run_upload_smoke(args: Any, report: dict[str, Any]) -> None:
             )
 
 
+def run_project_upload_smoke(args: Any, report: dict[str, Any]) -> None:
+    if not bool(getattr(args, "run_project_upload_smoke", False)):
+        report["project_chapter_path"] = {"ok": True, "skipped": True}
+        return
+
+    project_id = str(getattr(args, "project_id", "") or "").strip()
+    chapter_number = int(getattr(args, "chapter_number", 0) or 0)
+    if not project_id or chapter_number <= 0:
+        report["project_chapter_path"] = {"ok": False, "error": "project/chapter not specified"}
+        append_block(
+            report,
+            kind="project_chapter_not_specified",
+            severity="operator",
+            message="Project upload smoke requires explicit project_id and positive chapter_number.",
+        )
+        return
+
+    chapter = http_json(
+        "GET",
+        _api_url(args.api_base, f"/api/projects/{project_id}/chapters/{chapter_number}"),
+    )
+    chapter_payload = chapter.get("payload") if isinstance(chapter.get("payload"), dict) else {}
+    path_report: dict[str, Any] = {
+        "ok": False,
+        "project_id": project_id,
+        "chapter_number": chapter_number,
+        "chapter": {
+            "ok": bool(chapter.get("ok")),
+            "status": chapter.get("status"),
+            "title": short_text(chapter_payload.get("title")),
+            "chapter_status": chapter_payload.get("status") or "",
+            "char_count": int(chapter_payload.get("char_count") or 0),
+        },
+    }
+    report["project_chapter_path"] = path_report
+    if not chapter.get("ok"):
+        append_block(
+            report,
+            kind="project_chapter_unavailable",
+            severity="operator",
+            message=f"Project chapter {project_id}#{chapter_number} could not be read.",
+            project_id=project_id,
+            chapter_number=chapter_number,
+        )
+        return
+
+    platform = str(
+        getattr(args, "project_platform", "")
+        or getattr(args, "endpoint_platform", "")
+        or "fanqie"
+    )
+    payload = {
+        "platform": platform,
+        "chapter_number": chapter_number,
+        "book_name": getattr(args, "book_name", "ForWin Smoke Test"),
+        "publish": False,
+        "create_if_missing": False,
+        "cover_generation_enabled": False,
+        "cover_confirmation_required": False,
+        "cover_candidate_count": 1,
+        "auto_cover_upload_enabled": False,
+        "publisher_compliance_required": False,
+    }
+    created = http_json(
+        "POST",
+        _api_url(args.api_base, f"/api/projects/{project_id}/publishers/upload-jobs"),
+        payload=payload,
+    )
+    created_payload = created.get("payload") if isinstance(created.get("payload"), dict) else {}
+    job_id = str(created_payload.get("job_id") or "")
+    path_report["created"] = summarize_upload_job(created_payload) if job_id else redact_report(created)
+    if not created.get("ok") or not job_id:
+        append_block(
+            report,
+            kind="project_upload_job_create_failed",
+            severity="failed",
+            message=f"Project upload smoke job could not be created for {project_id}#{chapter_number}.",
+            project_id=project_id,
+            chapter_number=chapter_number,
+        )
+        return
+
+    result = poll_upload_job(args, job_id, initial_job=created_payload)
+    path_report["job"] = redact_report(result)
+    path_report["ok"] = result.get("terminal_state") == "succeeded"
+    append_action(
+        report,
+        "ran_project_upload_smoke",
+        project_id=project_id,
+        chapter_number=chapter_number,
+        platform=platform,
+        job_id=job_id,
+        terminal_state=result.get("terminal_state"),
+    )
+    if result.get("terminal_state") == "timeout":
+        append_block(
+            report,
+            kind="project_upload_job_timeout",
+            severity="operator",
+            message=f"Project upload smoke job {job_id} timed out.",
+            project_id=project_id,
+            chapter_number=chapter_number,
+            job_id=job_id,
+        )
+
+
 def run_endpoint_smoke(args: Any, report: dict[str, Any]) -> None:
     expected = list(getattr(args, "expect_platform_connected", []) or [])
     report["publisher_api"] = {}
@@ -523,5 +629,6 @@ def build_report(args: Any) -> dict[str, Any]:
     }
     run_endpoint_smoke(args, report)
     run_upload_smoke(args, report)
+    run_project_upload_smoke(args, report)
     report["status"] = _rollup_status(report)
     return redact_report(report)

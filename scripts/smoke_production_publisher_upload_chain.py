@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timezone
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -255,6 +256,131 @@ def cleanup_api_smoke_job(args: Any, report: dict[str, Any], job_id: str) -> dic
     return cleanup
 
 
+def platform_connected(report: dict[str, Any], platform: str) -> bool:
+    for item in report.get("platforms", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("platform_id") == platform:
+            return bool(item.get("connected"))
+    return False
+
+
+def poll_upload_job(
+    args: Any,
+    job_id: str,
+    *,
+    initial_job: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + max(float(getattr(args, "poll_seconds", 120.0) or 0.0), 0.0)
+    interval = max(float(getattr(args, "poll_interval_seconds", 5.0) or 0.0), 0.01)
+    states: list[str] = []
+    last_job = initial_job or {}
+    if initial_job:
+        status = str(initial_job.get("status") or "")
+        if status:
+            states.append(status)
+        if status in TERMINAL_UPLOAD_STATUSES:
+            return {
+                **summarize_upload_job(initial_job),
+                "states": states,
+                "terminal_state": status,
+            }
+
+    while True:
+        response = http_json(
+            "GET",
+            _api_url(args.api_base, f"/api/publishers/upload-jobs/{job_id}"),
+        )
+        payload = response.get("payload") if isinstance(response.get("payload"), dict) else {}
+        if payload:
+            last_job = payload
+        status = str(payload.get("status") or "")
+        if status:
+            states.append(status)
+        if status in TERMINAL_UPLOAD_STATUSES:
+            return {
+                **summarize_upload_job(payload),
+                "states": states,
+                "terminal_state": status,
+            }
+        if time.monotonic() >= deadline:
+            terminate = http_json(
+                "POST",
+                _api_url(args.api_base, f"/api/publishers/upload-jobs/{job_id}/terminate"),
+            )
+            return {
+                **summarize_upload_job(last_job),
+                "job_id": job_id,
+                "states": states,
+                "terminal_state": "timeout",
+                "terminate": redact_report(terminate),
+            }
+        time.sleep(interval)
+
+
+def _upload_platforms(args: Any) -> list[str]:
+    explicit = list(getattr(args, "upload_platform", []) or [])
+    if explicit:
+        return explicit
+    return list(getattr(args, "expect_platform_connected", []) or [])
+
+
+def run_upload_smoke(args: Any, report: dict[str, Any]) -> None:
+    report["upload_jobs"] = []
+    if not bool(getattr(args, "run_upload_smoke", False)):
+        return
+
+    for platform in _upload_platforms(args):
+        if not platform_connected(report, platform):
+            append_block(
+                report,
+                kind="publisher_login_required",
+                severity="human",
+                message=f"{platform} publisher login is not connected.",
+                platform=platform,
+            )
+            continue
+        created = http_json(
+            "POST",
+            _api_url(args.api_base, "/api/publishers/upload-jobs"),
+            payload=safe_upload_payload(
+                platform=platform,
+                book_name=getattr(args, "book_name", "ForWin Smoke Test"),
+                chapter_title=getattr(args, "chapter_title", "ForWin smoke chapter"),
+                body=getattr(args, "body", "This is a safe smoke chapter body."),
+            ),
+        )
+        payload = created.get("payload") if isinstance(created.get("payload"), dict) else {}
+        job_id = str(payload.get("job_id") or "")
+        if not created.get("ok") or not job_id:
+            append_block(
+                report,
+                kind="upload_job_create_failed",
+                severity="failed",
+                message=f"{platform} upload smoke job could not be created.",
+                platform=platform,
+            )
+            continue
+        result = poll_upload_job(args, job_id, initial_job=payload)
+        report["upload_jobs"].append(redact_report(result))
+        append_action(
+            report,
+            "ran_upload_smoke",
+            platform=platform,
+            job_id=job_id,
+            terminal_state=result.get("terminal_state"),
+        )
+        if result.get("terminal_state") == "timeout":
+            append_block(
+                report,
+                kind="upload_job_timeout",
+                severity="operator",
+                message=f"{platform} upload smoke job timed out before terminal state.",
+                platform=platform,
+                job_id=job_id,
+            )
+
+
 def run_endpoint_smoke(args: Any, report: dict[str, Any]) -> None:
     expected = list(getattr(args, "expect_platform_connected", []) or [])
     report["publisher_api"] = {}
@@ -396,5 +522,6 @@ def build_report(args: Any) -> dict[str, Any]:
         "blocked_items": [],
     }
     run_endpoint_smoke(args, report)
+    run_upload_smoke(args, report)
     report["status"] = _rollup_status(report)
     return redact_report(report)

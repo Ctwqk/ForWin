@@ -206,3 +206,78 @@ def test_endpoint_smoke_checks_safe_surfaces_and_cleans_api_job(monkeypatch) -> 
     )
     assert any(item["kind"] == "extension_key_missing" for item in report["blocked_items"])
     assert ("POST", "http://forwin.example/api/publishers/upload-jobs") in calls
+
+
+def test_upload_smoke_skips_create_when_platform_not_connected(monkeypatch) -> None:
+    monkeypatch.setattr(
+        smoke,
+        "http_json",
+        lambda method, url, **kwargs: {"ok": True, "status": 200, "payload": []},
+    )
+    report = {
+        "platforms": [{"platform_id": "fanqie", "connected": False}],
+        "blocked_items": [],
+        "actions_taken": [],
+    }
+
+    smoke.run_upload_smoke(args(run_upload_smoke=True, upload_platform=["fanqie"]), report)
+
+    assert report["upload_jobs"] == []
+    assert report["blocked_items"][0]["kind"] == "publisher_login_required"
+    assert report["blocked_items"][0]["platform"] == "fanqie"
+
+
+def test_upload_smoke_polls_until_terminal_and_redacts(monkeypatch) -> None:
+    responses = [
+        {
+            "ok": True,
+            "status": 200,
+            "payload": {
+                "job_id": "job-2",
+                "platform": "fanqie",
+                "status": "pending",
+                "publish": False,
+                "body": "secret body",
+            },
+        },
+        {
+            "ok": True,
+            "status": 200,
+            "payload": {
+                "job_id": "job-2",
+                "platform": "fanqie",
+                "status": "running",
+                "publish": False,
+                "body": "secret body",
+            },
+        },
+        {
+            "ok": True,
+            "status": 200,
+            "payload": {
+                "job_id": "job-2",
+                "platform": "fanqie",
+                "status": "succeeded",
+                "publish": False,
+                "result_payload": {"mode": "draft", "token": "secret-token"},
+            },
+        },
+    ]
+
+    def fake_http_json(method, url, *, payload=None, headers=None, timeout=10.0):
+        return responses.pop(0)
+
+    monkeypatch.setattr(smoke, "http_json", fake_http_json)
+    report = {
+        "platforms": [{"platform_id": "fanqie", "connected": True}],
+        "blocked_items": [],
+        "actions_taken": [],
+    }
+
+    smoke.run_upload_smoke(args(run_upload_smoke=True, upload_platform=["fanqie"]), report)
+
+    assert report["upload_jobs"][0]["job_id"] == "job-2"
+    assert report["upload_jobs"][0]["terminal_state"] == "succeeded"
+    serialized = json.dumps(report, ensure_ascii=False)
+    assert "secret body" not in serialized
+    assert "secret-token" not in serialized

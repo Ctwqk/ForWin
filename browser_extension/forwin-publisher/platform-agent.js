@@ -588,12 +588,15 @@
     }
 
     if (url.includes('fanqienovel.com')) {
-      const loginVisible = includesAny(text, [
-        '登录',
+      const loginVisible = url.includes('/main/writer/login') || includesAny(text, [
+        '登录/注册',
         '扫码登录',
         '验证码登录',
         '手机验证码',
         '抖音登录',
+        '手机号登录',
+        '密码登录',
+        '立即登录',
       ]);
       const authenticated = !loginVisible && includesAny(text, [
         '工作台',

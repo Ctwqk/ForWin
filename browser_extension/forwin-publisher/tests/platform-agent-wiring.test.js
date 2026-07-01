@@ -61,3 +61,13 @@ test('platform agent does not authenticate qidian loginOut authorh5 pages', asyn
   assert.match(source, /authorh5\/loginOut/);
   assert.match(source, /authenticated\s*=\s*!qidianLoginOut/);
 });
+
+test('platform agent does not treat generic Fanqie dashboard login text as login visible', async () => {
+  const source = await readFile(new URL('../platform-agent.js', import.meta.url), 'utf8');
+  const fanqieInspectBlock = source.match(/if \(url\.includes\('fanqienovel\.com'\)\) \{[\s\S]*?return \{[\s\S]*?platform: 'fanqie'[\s\S]*?\};\n    \}/)?.[0] || '';
+
+  assert.ok(fanqieInspectBlock);
+  assert.doesNotMatch(fanqieInspectBlock, /['"]登录['"]/);
+  assert.match(fanqieInspectBlock, /\/main\/writer\/login/);
+  assert.match(fanqieInspectBlock, /登录\/注册/);
+});

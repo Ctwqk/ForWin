@@ -349,3 +349,29 @@ def test_project_upload_smoke_posts_safe_project_payload(monkeypatch) -> None:
 
     assert report["project_chapter_path"]["ok"] is True
     assert report["project_chapter_path"]["job"]["job_id"] == "job-project"
+
+
+def test_main_prints_redacted_json_and_returns_degraded(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        smoke,
+        "build_report",
+        lambda parsed: {
+            "status": "degraded",
+            "blocked_items": [{"kind": "publisher_login_required", "platform": "fanqie"}],
+            "secret": "must-redact",
+        },
+    )
+
+    code = smoke.main(
+        [
+            "--api-base",
+            "http://forwin.example",
+            "--expect-platform-connected",
+            "fanqie",
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert code == 1
+    assert '"status": "degraded"' in output
+    assert "must-redact" not in output

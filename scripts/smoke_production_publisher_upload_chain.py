@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -632,3 +634,54 @@ def build_report(args: Any) -> dict[str, Any]:
     run_project_upload_smoke(args, report)
     report["status"] = _rollup_status(report)
     return redact_report(report)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run a redacted ForWin production publisher upload-chain smoke.",
+    )
+    parser.add_argument("--api-base", default="http://127.0.0.1:8899")
+    parser.add_argument(
+        "--expect-platform-connected",
+        action="append",
+        default=[],
+        help="Platform id expected to be connected, such as fanqie or qidian.",
+    )
+    parser.add_argument(
+        "--extension-key-env",
+        default="FORWIN_PUBLISHER_EXTENSION_API_KEY",
+        help="Environment variable name containing the extension API key.",
+    )
+    parser.add_argument("--endpoint-platform", default="fanqie")
+    parser.add_argument("--book-name", default="ForWin Smoke Test")
+    parser.add_argument("--chapter-title", default="ForWin smoke chapter")
+    parser.add_argument(
+        "--body",
+        default="This is a safe non-publishing ForWin smoke chapter.",
+    )
+    parser.add_argument("--create-api-smoke-job", action="store_true")
+    parser.add_argument("--run-upload-smoke", action="store_true")
+    parser.add_argument("--upload-platform", action="append", default=[])
+    parser.add_argument("--poll-seconds", type=float, default=120.0)
+    parser.add_argument("--poll-interval-seconds", type=float, default=5.0)
+    parser.add_argument("--run-project-upload-smoke", action="store_true")
+    parser.add_argument("--project-id", default="")
+    parser.add_argument("--chapter-number", type=int, default=0)
+    parser.add_argument("--project-platform", default="fanqie")
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    report = redact_report(build_report(args))
+    print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    status = str(report.get("status") or "failed")
+    if status == "ok":
+        return 0
+    if status == "degraded":
+        return 1
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

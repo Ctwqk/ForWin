@@ -74,6 +74,50 @@ Interpretation:
 The verifier is read-only for ForWin business state. It must not create books,
 upload chapters, publish content, or record secrets.
 
+For a publisher upload-chain smoke after the baseline verifier, run the
+endpoint smoke first. This command may create one `publish=false` API smoke job
+and then terminate/delete it; it must not publish content:
+
+```bash
+python scripts/smoke_production_publisher_upload_chain.py \
+  --api-base http://10.0.0.126:8899 \
+  --expect-platform-connected fanqie \
+  --expect-platform-connected qidian \
+  --endpoint-platform fanqie \
+  --create-api-smoke-job
+```
+
+After both platforms are connected in the production publisher browser, run the
+browser-claimed `publish=false` smoke:
+
+```bash
+python scripts/smoke_production_publisher_upload_chain.py \
+  --api-base http://10.0.0.126:8899 \
+  --expect-platform-connected fanqie \
+  --expect-platform-connected qidian \
+  --endpoint-platform fanqie \
+  --create-api-smoke-job \
+  --run-upload-smoke \
+  --upload-platform fanqie \
+  --upload-platform qidian
+```
+
+To include the key-protected extension heartbeat-status surface, set
+`FORWIN_PUBLISHER_EXTENSION_API_KEY` in the shell through the local secret
+manager or an existing deployment secret file, then pass only the environment
+variable name:
+
+```bash
+python scripts/smoke_production_publisher_upload_chain.py \
+  --api-base http://10.0.0.126:8899 \
+  --extension-key-env FORWIN_PUBLISHER_EXTENSION_API_KEY \
+  --expect-platform-connected fanqie \
+  --expect-platform-connected qidian
+```
+
+The extension key value must never be committed, pasted into logs, printed in
+reports, or sent to Discord.
+
 For recurring two-hour Codex/operator intervention checks, install the
 read-only supervisor on 150 from a source checkout or deployed copy. It checks
 GitHub PRs/issues, publisher upload jobs, MCP generation task state, publisher

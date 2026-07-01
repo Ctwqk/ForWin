@@ -126,7 +126,10 @@ set `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true` and prefer
 both settings again after the login window. Do not put Discord webhook env on
 browser or worker services. The publisher extension's login QR notification
 setting is also disabled by default; while it is disabled, the extension must
-not capture a QR image or call `/api/publishers/extension/login-qr`. Ordinary
+not capture a QR image or call `/api/publishers/extension/login-qr`. A stale
+profile value of `loginQrNotificationsEnabled=true` is not enough to re-enable
+QR forwarding; an operator must also set the hidden
+`loginQrNotificationsAllowed=true` guard for the temporary window. Ordinary
 publisher heartbeat checks must only report `login-required`. The publisher extension only
 forwards directly extracted, fresh QR images from an active login session;
 full-page screenshots and expired/invalid QR placeholders such as

@@ -1155,7 +1155,10 @@ export class PublisherExtensionController {
     session.loginQrNotificationInFlight = true;
     try {
       const settings = await this.deps.getSettings();
-      if (settings.loginQrNotificationsEnabled !== true) {
+      if (
+        settings.loginQrNotificationsEnabled !== true
+        || settings.loginQrNotificationsAllowed !== true
+      ) {
         await this.recordLoginQrNotificationEvent({
           platform: session.platformId,
           tab_id: session.popupTabId,

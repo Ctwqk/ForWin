@@ -3,6 +3,7 @@ export const DEFAULT_SETTINGS = {
   apiKey: '',
   syncSessionToBackend: true,
   loginQrNotificationsEnabled: false,
+  loginQrNotificationsAllowed: false,
 };
 
 export function normalizeSettings(input = {}) {
@@ -11,12 +12,15 @@ export function normalizeSettings(input = {}) {
     .replace(/\/+$/, '');
   const apiKey = String(input.apiKey || '').trim();
   const syncSessionToBackend = input.syncSessionToBackend !== false;
-  const loginQrNotificationsEnabled = input.loginQrNotificationsEnabled === true;
+  const loginQrNotificationsAllowed = input.loginQrNotificationsAllowed === true;
+  const loginQrNotificationsEnabled = input.loginQrNotificationsEnabled === true
+    && loginQrNotificationsAllowed;
   return {
     backendBaseUrl,
     apiKey,
     syncSessionToBackend,
     loginQrNotificationsEnabled,
+    loginQrNotificationsAllowed,
   };
 }
 

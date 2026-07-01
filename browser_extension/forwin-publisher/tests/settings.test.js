@@ -16,7 +16,14 @@ test('normalizeSettings trims trailing slash and api key whitespace', () => {
 });
 
 test('normalizeSettings only enables login QR notifications explicitly', () => {
-  assert.equal(normalizeSettings({ loginQrNotificationsEnabled: true }).loginQrNotificationsEnabled, true);
+  assert.equal(normalizeSettings({ loginQrNotificationsEnabled: true }).loginQrNotificationsEnabled, false);
+  assert.equal(
+    normalizeSettings({
+      loginQrNotificationsEnabled: true,
+      loginQrNotificationsAllowed: true,
+    }).loginQrNotificationsEnabled,
+    true,
+  );
   assert.equal(normalizeSettings({ loginQrNotificationsEnabled: 'true' }).loginQrNotificationsEnabled, false);
   assert.equal(normalizeSettings({}).loginQrNotificationsEnabled, false);
 });

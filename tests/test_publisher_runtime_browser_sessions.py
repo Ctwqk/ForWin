@@ -339,6 +339,37 @@ def test_fanqie_session_sync_requires_authenticated_page_evidence() -> None:
         engine.dispose()
 
 
+def test_fanqie_session_sync_preserves_saved_connected_cookie_state() -> None:
+    engine, runtime = _runtime(
+        "publisher-runtime-browser-fanqie-saved-connected",
+        preferred_client_id="client-1",
+    )
+    try:
+        payload = runtime.browser_sessions.record_browser_session(
+            client_id="client-1",
+            platform="fanqie",
+            cookies=FANQIE_COOKIES,
+            raw_state={
+                "connected": True,
+                "cookie_signal": True,
+                "saved_connected": True,
+                "page_evidence_required": False,
+                "page_inspected": False,
+                "page_authenticated": False,
+                "page_login_visible": False,
+                "last_error": "",
+            },
+        )
+
+        assert payload.get("skipped") is not True
+        items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
+        assert items["fanqie"]["connected"] is True
+        assert items["fanqie"]["preferred_client_state"]["connected"] is True
+        assert items["fanqie"]["last_error"] == ""
+    finally:
+        engine.dispose()
+
+
 def test_browser_session_plaintext_read_does_not_upgrade_storage() -> None:
     engine, plaintext_runtime = _runtime("publisher-runtime-browser-plaintext")
     try:

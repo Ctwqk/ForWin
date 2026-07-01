@@ -326,6 +326,14 @@ class BrowserSessionService:
                     and cookie_signal
                     and not page_authenticated
                 )
+                saved_connected_cookie_state = bool(
+                    payload_value(evidence_payload, "connected")
+                    and payload_value(evidence_payload, "saved_connected")
+                    and cookie_connected
+                    and cookie_signal
+                    and not login_evidence
+                    and not unverified_cookie_signal
+                )
                 state = session.get(PublisherConnectionState, platform)
                 was_connected = bool(state.connected) if state is not None else False
                 existing_payload: dict[str, Any] = {}
@@ -344,9 +352,11 @@ class BrowserSessionService:
                     platform == "fanqie"
                     and normalized
                     and not page_authenticated
+                    and not saved_connected_cookie_state
                 )
                 reject_session_sync = bool(
                     not page_authenticated
+                    and not saved_connected_cookie_state
                     and (
                         login_evidence
                         or existing_login_evidence
@@ -429,7 +439,7 @@ class BrowserSessionService:
                 stored.synced_at = now
                 stored.last_error = ""
                 connected = bool(
-                    (cookie_signal or page_authenticated)
+                    (cookie_signal or page_authenticated or saved_connected_cookie_state)
                     and not login_evidence
                     and not unverified_cookie_signal
                 )

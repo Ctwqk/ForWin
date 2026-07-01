@@ -370,6 +370,73 @@ def test_fanqie_session_sync_preserves_saved_connected_cookie_state() -> None:
         engine.dispose()
 
 
+def test_fanqie_session_sync_preserves_restored_cookie_state() -> None:
+    engine, runtime = _runtime(
+        "publisher-runtime-browser-fanqie-restored-session",
+        preferred_client_id="client-1",
+    )
+    try:
+        runtime.browser_sessions.record_browser_session(
+            client_id="client-1",
+            platform="fanqie",
+            cookies=FANQIE_COOKIES,
+            raw_state={
+                "connected": True,
+                "cookie_signal": True,
+                "page_evidence_required": False,
+                "page_inspected": True,
+                "page_authenticated": True,
+                "page_login_visible": False,
+                "current_url": "https://fanqienovel.com/main/writer/",
+                "last_error": "",
+            },
+        )
+        runtime.connection_state.heartbeat(
+            client_id="client-1",
+            extension_version="0.1.0",
+            browser_name="Chrome",
+            browser_version="123.0",
+            backend_base_url="http://forwin-app-swarm:8899",
+            platforms=[
+                {
+                    "platform": "fanqie",
+                    "connected": False,
+                    "cookie_signal": True,
+                    "page_evidence_required": True,
+                    "page_inspected": False,
+                    "page_authenticated": False,
+                    "page_login_visible": False,
+                    "current_url": "",
+                    "last_error": "login-required",
+                }
+            ],
+        )
+
+        payload = runtime.browser_sessions.record_browser_session(
+            client_id="client-1",
+            platform="fanqie",
+            cookies=FANQIE_COOKIES,
+            raw_state={
+                "connected": False,
+                "cookie_signal": True,
+                "page_evidence_required": True,
+                "page_inspected": False,
+                "page_authenticated": False,
+                "page_login_visible": False,
+                "current_url": "",
+                "last_error": "",
+            },
+        )
+
+        assert payload.get("skipped") is not True
+        items = {item["platform_id"]: item for item in runtime.connection_state.list_platforms()}
+        assert items["fanqie"]["connected"] is True
+        assert items["fanqie"]["preferred_client_state"]["connected"] is True
+        assert items["fanqie"]["preferred_client_state"]["last_error"] == ""
+    finally:
+        engine.dispose()
+
+
 def test_browser_session_plaintext_read_does_not_upgrade_storage() -> None:
     engine, plaintext_runtime = _runtime("publisher-runtime-browser-plaintext")
     try:

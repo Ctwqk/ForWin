@@ -61,6 +61,29 @@ def status_payload_unverified_cookie_signal(payload: dict[str, Any] | None) -> b
     )
 
 
+def status_payload_page_login_evidence(platform_id: str, payload: dict[str, Any]) -> bool:
+    current_url = str(
+        payload_value(payload, "current_url")
+        or payload_value(payload, "url")
+        or ""
+    ).strip()
+    if bool(payload_value(payload, "page_login_visible")):
+        return True
+    if (
+        platform_id == "qidian"
+        and "write.qq.com" in current_url
+        and "/portal/login" in current_url
+    ):
+        return True
+    if (
+        platform_id == "fanqie"
+        and "fanqienovel.com" in current_url
+        and "/main/writer/login" in current_url
+    ):
+        return True
+    return False
+
+
 def is_retryable_db_error(exc: OperationalError) -> bool:
     orig = getattr(exc, "orig", None)
     sqlstate = str(
@@ -348,15 +371,48 @@ class BrowserSessionService:
                     platform,
                     existing_payload,
                 )
+                existing_page_login_evidence = status_payload_page_login_evidence(
+                    platform,
+                    existing_payload,
+                )
+                entry = session.get(
+                    PublisherBrowserSessionEntry,
+                    {"client_id": client_id, "platform_id": platform},
+                )
+                stored = session.get(PublisherBrowserSession, platform)
+                existing_session = entry
+                if (
+                    existing_session is None
+                    and stored is not None
+                    and stored.extension_client_id == client_id
+                ):
+                    existing_session = stored
+                restored_connected_cookie_state = bool(
+                    platform == "fanqie"
+                    and existing_session is not None
+                    and cookie_connected
+                    and cookie_signal
+                    and not page_authenticated
+                    and not login_evidence
+                    and not existing_page_login_evidence
+                    and self.codec.is_browser_session_connected(
+                        platform,
+                        existing_session.cookies_json,
+                        existing_session.last_error,
+                    )
+                )
+                trusted_cookie_state = bool(
+                    saved_connected_cookie_state or restored_connected_cookie_state
+                )
                 fanqie_requires_authenticated_page = bool(
                     platform == "fanqie"
                     and normalized
                     and not page_authenticated
-                    and not saved_connected_cookie_state
+                    and not trusted_cookie_state
                 )
                 reject_session_sync = bool(
                     not page_authenticated
-                    and not saved_connected_cookie_state
+                    and not trusted_cookie_state
                     and (
                         login_evidence
                         or existing_login_evidence
@@ -414,10 +470,6 @@ class BrowserSessionService:
                         "cookie_count": len(normalized),
                         "login_success_platforms": [],
                     }
-                entry = session.get(
-                    PublisherBrowserSessionEntry,
-                    {"client_id": client_id, "platform_id": platform},
-                )
                 if entry is None:
                     entry = PublisherBrowserSessionEntry(
                         client_id=client_id,
@@ -429,7 +481,6 @@ class BrowserSessionService:
                 entry.synced_at = now
                 entry.last_error = ""
 
-                stored = session.get(PublisherBrowserSession, platform)
                 if stored is None:
                     stored = PublisherBrowserSession(platform_id=platform)
                     session.add(stored)
@@ -439,9 +490,9 @@ class BrowserSessionService:
                 stored.synced_at = now
                 stored.last_error = ""
                 connected = bool(
-                    (cookie_signal or page_authenticated or saved_connected_cookie_state)
+                    (cookie_signal or page_authenticated or trusted_cookie_state)
                     and not login_evidence
-                    and not unverified_cookie_signal
+                    and (not unverified_cookie_signal or trusted_cookie_state)
                 )
 
                 preserve_authenticated_heartbeat = bool(
@@ -473,6 +524,12 @@ class BrowserSessionService:
                         **evidence_payload,
                         "cookie_signal": cookie_signal,
                     }
+                    if trusted_cookie_state:
+                        state_payload["page_evidence_required"] = False
+                        state_payload["trusted_cookie_state"] = True
+                        state_payload["restored_connected_session"] = (
+                            restored_connected_cookie_state
+                        )
                     state.status_json = json.dumps(state_payload, ensure_ascii=False)
                     state.last_heartbeat_at = now
                     self.connection_state.upsert_extension_platform_state(

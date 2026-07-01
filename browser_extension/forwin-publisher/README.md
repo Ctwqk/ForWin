@@ -46,7 +46,7 @@ Firefox 临时加载：
 
 - 起点扫码登录
 - 番茄扫码登录
-- 扫码登录二维码可通过后端转发到 Discord webhook，但共享生产 Swarm 默认不配置
+- 扫码登录二维码的 Discord webhook 转发在共享生产 Swarm 已禁用，后端运行时会忽略
   `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true`、
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL` 或
   `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE`，避免登录状态向 Discord 发消息。

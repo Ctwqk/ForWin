@@ -357,15 +357,8 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         "publisher_session_encryption_required": _env_bool(
             env, "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED", False
         ),
-        "publisher_login_discord_webhook_enabled": _env_bool(
-            env, "FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK", False
-        ),
-        "publisher_login_discord_webhook_url": (
-            _env_str(env, "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL")
-            or _env_secret_file(env, "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE")
-        )
-        if _env_bool(env, "FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK", False)
-        else "",
+        "publisher_login_discord_webhook_enabled": False,
+        "publisher_login_discord_webhook_url": "",
         "publisher_preferred_client_id": _env_str(
             env,
             "FORWIN_PUBLISHER_PREFERRED_CLIENT_ID", ""

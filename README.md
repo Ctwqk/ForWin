@@ -119,14 +119,15 @@ For publisher-browser work, keep the extension enabled but replace
 `FORWIN_PUBLISHER_EXTENSION_API_KEY` and `FORWIN_PUBLISHER_SESSION_SECRET` with
 long random values before starting the backend.
 
-Shared production Swarm keeps Discord publisher login webhooks disabled by
-default. If an operator explicitly asks for temporary scan-login forwarding,
-set `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true` and prefer
-`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` on `forwin-app-swarm` only; remove
-both settings again after the login window. Do not put Discord webhook env on
-browser or worker services. The publisher extension's login QR notification
-setting is also disabled by default; while it is disabled, the extension must
-not capture a QR image or call `/api/publishers/extension/login-qr`. A stale
+Shared production Swarm keeps Discord publisher login webhooks disabled. The
+legacy `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK`,
+`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL`, and
+`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` settings are ignored by runtime
+config and must not be used to route scan-login state to Discord. Do not put
+Discord webhook env on browser or worker services. The publisher extension's
+login QR notification setting is also disabled by default; while it is disabled,
+the extension must not capture a QR image or call
+`/api/publishers/extension/login-qr`. A stale
 profile value of `loginQrNotificationsEnabled=true` is not enough to re-enable
 QR forwarding; an operator must also set the hidden
 `loginQrNotificationsAllowed=true` guard and a future
@@ -238,16 +239,11 @@ secret is lost, encrypted sessions cannot be recovered and the publishing
 platform must be logged in again. Protect `.env` backups that contain this
 secret; without it, old encrypted cookies cannot be decrypted.
 
-For shared production Swarm, keep Discord login alerts disabled unless an
-operator explicitly opens a temporary scan-login forwarding window. If enabled,
-set `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true`, use
-`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` on `forwin-app-swarm`, never the
-raw webhook URL env, and remove both settings after the login window. Do not
-expose webhook env to browser or worker services. The webhook is used
-server-side; browser extensions never store it. QR forwarding also requires a
-temporary hidden extension allowance with a future
-`loginQrNotificationsAllowedUntilMs` timestamp. Automatic heartbeats do not
-capture or send QR-code images. When forwarding is explicitly enabled and a
+For shared production Swarm, keep Discord login alerts disabled. The legacy
+publisher login webhook env keys are ignored by runtime config, and browser
+extensions never store a webhook. QR forwarding also requires a temporary hidden
+extension allowance with a future `loginQrNotificationsAllowedUntilMs`
+timestamp. Automatic heartbeats do not capture or send QR-code images. When a
 platform moves from
 disconnected to connected, heartbeat or backend browser-session sync sends one
 login-success confirmation.

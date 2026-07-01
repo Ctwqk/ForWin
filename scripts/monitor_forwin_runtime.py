@@ -248,11 +248,7 @@ def discord_login_webhook_env_snapshot(
             }:
                 item = {"service": service_name, "env": name}
                 configured.append(item)
-                if not (
-                    service_name == "forwin-app-swarm"
-                    and name == "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE"
-                ):
-                    violations.append(item)
+                violations.append(item)
     return {
         "ok": not violations and not errors,
         "source": f"docker-context:{docker_context}",

@@ -185,7 +185,7 @@ def test_discord_login_webhook_env_snapshot_passes_when_unset(monkeypatch) -> No
     assert len(calls) == 2
 
 
-def test_discord_login_webhook_env_snapshot_allows_app_secret_file(monkeypatch) -> None:
+def test_discord_login_webhook_env_snapshot_fails_for_app_secret_file(monkeypatch) -> None:
     def fake_run_command(args, **kwargs):
         service_name = next((arg for arg in args if str(arg).startswith("forwin-")), "")
         if service_name == "forwin-app-swarm":
@@ -203,14 +203,19 @@ def test_discord_login_webhook_env_snapshot_allows_app_secret_file(monkeypatch) 
         docker_context="swarm-manager-150",
     )
 
-    assert snapshot["ok"] is True
+    assert snapshot["ok"] is False
     assert snapshot["configured"] == [
         {
             "service": "forwin-app-swarm",
             "env": "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE",
         }
     ]
-    assert snapshot["violations"] == []
+    assert snapshot["violations"] == [
+        {
+            "service": "forwin-app-swarm",
+            "env": "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE",
+        }
+    ]
     assert snapshot["errors"] == []
 
 

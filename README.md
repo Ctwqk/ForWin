@@ -119,16 +119,17 @@ For publisher-browser work, keep the extension enabled but replace
 `FORWIN_PUBLISHER_EXTENSION_API_KEY` and `FORWIN_PUBLISHER_SESSION_SECRET` with
 long random values before starting the backend.
 
-If you want login QR codes forwarded to Discord when an operator explicitly asks
-for publisher scan-login, prefer `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE`
-on trusted deployments. The production Swarm deployment may set that file env
-only on `forwin-app-swarm`; do not put Discord webhook env on browser or worker
-services. Ordinary publisher heartbeat checks must only report `login-required`;
-they must not capture QR images. The publisher extension only forwards directly
-extracted, fresh QR images from an active login session; full-page screenshots
-and expired/invalid QR placeholders such as "二维码已失效 / 点击刷新" are not sent.
-When a platform moves from disconnected to connected, the backend sends one
-Discord login-success confirmation so the operator knows the scan worked.
+Shared production Swarm keeps Discord publisher login webhooks disabled by
+default. If an operator explicitly asks for temporary scan-login forwarding,
+prefer `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` on `forwin-app-swarm` only
+and remove it again after the login window. Do not put Discord webhook env on
+browser or worker services. Ordinary publisher heartbeat checks must only report
+`login-required`; they must not capture QR images. The publisher extension only
+forwards directly extracted, fresh QR images from an active login session;
+full-page screenshots and expired/invalid QR placeholders such as
+"二维码已失效 / 点击刷新" are not sent. When Discord forwarding is enabled and a
+platform moves from disconnected to connected, the backend sends one
+login-success confirmation so the operator knows the scan worked.
 
 ### Current production deployment
 
@@ -230,14 +231,15 @@ secret is lost, encrypted sessions cannot be recovered and the publishing
 platform must be logged in again. Protect `.env` backups that contain this
 secret; without it, old encrypted cookies cannot be decrypted.
 
-For shared production Swarm, use
-`FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` on `forwin-app-swarm` when
-Discord login alerts are enabled. Do not set webhook URL env in production, and
-do not expose webhook env to browser or worker services. The webhook is used
-server-side; browser extensions never store the Discord webhook. Automatic
-heartbeats do not capture or send QR-code images. Once a platform moves from
+For shared production Swarm, keep Discord login alerts disabled unless an
+operator explicitly opens a temporary scan-login forwarding window. If enabled,
+use `FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE` on `forwin-app-swarm`, never
+the raw webhook URL env, and remove it after the login window. Do not expose
+webhook env to browser or worker services. The webhook is used server-side;
+browser extensions never store it. Automatic heartbeats do not capture or send
+QR-code images. When forwarding is enabled and a platform moves from
 disconnected to connected, heartbeat or backend browser-session sync sends one
-Discord login-success confirmation so the operator knows the scan worked.
+login-success confirmation.
 
 ### Codex / MCP operator
 

@@ -1929,6 +1929,77 @@ test('controller heartbeat does not send login QR notification when known login 
   assert.equal(loginQrStatusEvents[0].reason, 'heartbeat-login-page-without-active-login-session');
 });
 
+test('controller records local login-required state when heartbeat sees a login page', async () => {
+  const platformStateWrites = [];
+  const { controller } = makeController({
+    inspectPlatformState: async (platformId) => (
+      platformId === 'qidian'
+        ? {
+          ok: true,
+          tabId: 456,
+          currentUrl: 'https://write.qq.com/portal/login',
+          platform: 'qidian',
+          authenticated: false,
+          loginVisible: false,
+        }
+        : null
+    ),
+    setPlatformState: async (platformId, state) => {
+      platformStateWrites.push({ platformId, state });
+    },
+    getPlatformState: async () => ({}),
+    getCookies: async (platformId) => (
+      platformId === 'qidian'
+        ? [{ name: 'AppAuthToken' }, { name: 'pubtoken' }]
+        : []
+    ),
+  });
+
+  await controller.sendHeartbeat();
+
+  assert.deepEqual(platformStateWrites, [
+    {
+      platformId: 'qidian',
+      state: {
+        connected: false,
+        loginMethod: 'scan',
+        lastError: 'login-required',
+      },
+    },
+  ]);
+});
+
+test('controller skips platform probe when local state already says login is required', async () => {
+  let probeCalls = 0;
+  const { controller } = makeController({
+    inspectPlatformState: async () => null,
+    ensurePlatformProbeInspection: async () => {
+      probeCalls += 1;
+      return {
+        ok: true,
+        currentUrl: 'https://write.qq.com/portal/login',
+        platform: 'qidian',
+        authenticated: false,
+        loginVisible: true,
+      };
+    },
+    getPlatformState: async (platformId) => (
+      platformId === 'qidian'
+        ? { connected: false, loginMethod: 'scan', lastError: 'login-required' }
+        : {}
+    ),
+    getCookies: async (platformId) => (
+      platformId === 'qidian'
+        ? [{ name: 'AppAuthToken' }, { name: 'pubtoken' }]
+        : []
+    ),
+  });
+
+  await controller.sendHeartbeat();
+
+  assert.equal(probeCalls, 0);
+});
+
 test('controller records skipped login QR notification status for plain heartbeat login page', async () => {
   const { controller, loginQrStatusEvents } = makeController({
     inspectPlatformState: async (platformId) => (

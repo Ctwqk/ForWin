@@ -63,9 +63,8 @@ python scripts/check_production_publisher_baseline.py \
 Interpretation:
 
 - `ok`: six ForWin Swarm services are healthy, app/MCP health checks pass, the
-  Discord publisher login webhook env is absent or limited to the app service's
-  mounted secret file, and Fanqie/Qidian are connected by both API and browser
-  page evidence.
+  Discord publisher login webhook env is absent, and Fanqie/Qidian are
+  connected by both API and browser page evidence.
 - `degraded`: runtime is up, but a platform needs human login or page/API state
   has not converged. Follow `blocked_items[*].human_action` and rerun the same
   command.
@@ -217,8 +216,11 @@ real browser login or browser clicking.
   operator network.
 - Keep Basic Auth enabled when exposing the API beyond localhost.
 - Keep publisher extension API keys and session secrets separate from Basic Auth.
-- Keep Discord login QR webhooks in environment secrets or mounted secret files;
-  do not commit webhook URLs or paste them into deployment logs.
+- Keep Discord login QR webhooks disabled in shared production unless an
+  operator explicitly opens a temporary scan-login forwarding window. When a
+  window is open, use environment secrets or mounted secret files; do not commit
+  webhook URLs or paste them into deployment logs. Remove the webhook env again
+  after the login window.
 - Keep QR forwarding disabled until a deployed browser build has verified a
   direct, non-expired QR capture source; screenshots and invalid QR placeholders
   such as "二维码已失效 / 点击刷新" are intentionally rejected.

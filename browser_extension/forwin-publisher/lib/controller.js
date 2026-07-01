@@ -41,6 +41,12 @@ function hasRecoverableQidianDraftUrl(platformId, url) {
   return /^\d{6,}$/.test(ccid) && ccid !== '-1';
 }
 
+function isLoginRequiredError(value) {
+  return ['login-required', 'platform-login-required'].includes(
+    String(value || '').trim().toLowerCase(),
+  );
+}
+
 export class PublisherExtensionController {
   constructor(deps) {
     this.deps = deps;
@@ -845,6 +851,9 @@ export class PublisherExtensionController {
     if (!provisionalState.raw_state?.cookie_signal) {
       return inspection;
     }
+    if (isLoginRequiredError(savedState.lastError) && !inspection?.authenticated) {
+      return inspection;
+    }
     const loggedOutByInspectedLoginPage = Boolean(
       provisionalState.raw_state?.page_login_visible
       && !provisionalState.raw_state?.page_authenticated,
@@ -897,6 +906,17 @@ export class PublisherExtensionController {
         probeCookieSignal: true,
       });
       const heartbeatState = buildHeartbeatState(platformId, cookies, savedState, inspection);
+      if (
+        isLoginRequiredError(heartbeatState.last_error)
+        && !isLoginRequiredError(savedState.lastError)
+        && typeof this.deps.setPlatformState === 'function'
+      ) {
+        await this.deps.setPlatformState(platformId, {
+          connected: false,
+          loginMethod: heartbeatState.login_method || savedState.loginMethod || 'scan',
+          lastError: heartbeatState.last_error,
+        });
+      }
       await this.recordHeartbeatPlatformState({
         platform: platformId,
         inspection_ok: Boolean(inspection?.ok),

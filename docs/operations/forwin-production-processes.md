@@ -218,9 +218,10 @@ real browser login or browser clicking.
 - Keep publisher extension API keys and session secrets separate from Basic Auth.
 - Keep Discord login QR webhooks disabled in shared production unless an
   operator explicitly opens a temporary scan-login forwarding window. When a
-  window is open, use environment secrets or mounted secret files; do not commit
-  webhook URLs or paste them into deployment logs. Remove the webhook env again
-  after the login window.
+  window is open, set `FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true` and
+  use environment secrets or mounted secret files; do not commit webhook URLs or
+  paste them into deployment logs. Remove both the enable flag and webhook env
+  again after the login window.
 - Keep QR forwarding disabled until a deployed browser build has verified a
   direct, non-expired QR capture source; screenshots and invalid QR placeholders
   such as "二维码已失效 / 点击刷新" are intentionally rejected.

@@ -48,6 +48,7 @@ CONFIG_ENV_KEYS = {
     "FORWIN_EMBEDDING_MODEL",
     "FORWIN_ENABLED_SKILL_GROUPS",
     "FORWIN_ENV_FILE",
+    "FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK",
     "FORWIN_HARD_FLOOR_GATE_ENABLED",
     "FORWIN_HTTP_BASIC_EXEMPT_PATHS",
     "FORWIN_HTTP_BASIC_PASSWORD",
@@ -298,7 +299,7 @@ def test_publisher_extension_legacy_alias_still_works(
     assert config.publisher_extension_api_key == "legacy-extension-key"
 
 
-def test_publisher_login_discord_webhook_env_is_loaded(
+def test_publisher_login_discord_webhook_env_is_disabled_by_default(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _set_env_file(
@@ -309,11 +310,31 @@ def test_publisher_login_discord_webhook_env_is_loaded(
 
     config = Config.from_env()
 
+    assert config.publisher_login_discord_webhook_enabled is False
+    assert config.publisher_login_discord_webhook_url == ""
+    assert config.publisher.login_discord_webhook_url == ""
+
+
+def test_publisher_login_discord_webhook_env_is_loaded_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _set_env_file(
+        monkeypatch,
+        tmp_path,
+        [
+            "FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true",
+            "FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_URL=https://discord.invalid/api/webhooks/test",
+        ],
+    )
+
+    config = Config.from_env()
+
+    assert config.publisher_login_discord_webhook_enabled is True
     assert config.publisher_login_discord_webhook_url == "https://discord.invalid/api/webhooks/test"
     assert config.publisher.login_discord_webhook_url == "https://discord.invalid/api/webhooks/test"
 
 
-def test_publisher_login_discord_webhook_file_is_loaded(
+def test_publisher_login_discord_webhook_file_is_loaded_when_enabled(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     secret_path = tmp_path / "discord-webhook.secret"
@@ -321,7 +342,10 @@ def test_publisher_login_discord_webhook_file_is_loaded(
     _set_env_file(
         monkeypatch,
         tmp_path,
-        [f"FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE={secret_path}"],
+        [
+            "FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK=true",
+            f"FORWIN_PUBLISHER_LOGIN_DISCORD_WEBHOOK_FILE={secret_path}",
+        ],
     )
 
     config = Config.from_env()

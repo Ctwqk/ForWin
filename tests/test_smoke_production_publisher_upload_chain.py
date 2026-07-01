@@ -85,3 +85,124 @@ def test_safe_upload_payload_forces_non_publishing_flags() -> None:
     assert payload["cover_generation_enabled"] is False
     assert payload["auto_cover_upload_enabled"] is False
     assert payload["publisher_compliance_required"] is False
+
+
+def test_endpoint_smoke_checks_safe_surfaces_and_cleans_api_job(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http_json(method, url, *, payload=None, headers=None, timeout=10.0):
+        calls.append((method, url))
+        if url.endswith("/api/publishers/platforms"):
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": [
+                    {
+                        "platform_id": "fanqie",
+                        "connected": True,
+                        "preferred_client_state": {"connected": True},
+                    },
+                    {
+                        "platform_id": "qidian",
+                        "connected": False,
+                        "preferred_client_state": {"connected": False},
+                    },
+                ],
+            }
+        if url.endswith("/api/publishers/browser-sessions/fanqie"):
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {
+                    "platform": "fanqie",
+                    "cookie_names": ["sessionid"],
+                    "connected": True,
+                },
+            }
+        if url.endswith("/api/publishers/browser-sessions/qidian"):
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {
+                    "platform": "qidian",
+                    "cookie_names": [],
+                    "connected": False,
+                },
+            }
+        if url.endswith("/api/publishers/preflight"):
+            assert payload["platform"] == "fanqie"
+            assert "publish" not in payload
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {"ok": True, "blocking": [], "warnings": []},
+            }
+        if url.endswith("/api/publishers/work-bindings"):
+            return {"ok": True, "status": 200, "payload": []}
+        if url.endswith("/api/publishers/chapter-bindings"):
+            return {"ok": True, "status": 200, "payload": []}
+        if url.endswith("/api/publishers/upload-jobs") and method == "POST":
+            assert payload["publish"] is False
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {
+                    "job_id": "job-1",
+                    "platform": "fanqie",
+                    "status": "pending",
+                    "publish": False,
+                },
+            }
+        if url.endswith("/api/publishers/upload-jobs?limit=10"):
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": [
+                    {
+                        "job_id": "job-1",
+                        "platform": "fanqie",
+                        "status": "pending",
+                        "publish": False,
+                    }
+                ],
+            }
+        if url.endswith("/api/publishers/upload-jobs/job-1") and method == "GET":
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {
+                    "job_id": "job-1",
+                    "platform": "fanqie",
+                    "status": "pending",
+                    "publish": False,
+                },
+            }
+        if url.endswith("/api/publishers/upload-jobs/job-1/terminate"):
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {"ok": True, "status": "cancelled"},
+            }
+        if url.endswith("/api/publishers/upload-jobs/job-1") and method == "DELETE":
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {"ok": True, "status": "deleted"},
+            }
+        raise AssertionError(url)
+
+    monkeypatch.setattr(smoke, "http_json", fake_http_json)
+    monkeypatch.delenv("FORWIN_PUBLISHER_EXTENSION_API_KEY", raising=False)
+
+    report = smoke.build_report(args(create_api_smoke_job=True))
+
+    assert report["status"] == "degraded"
+    assert report["publisher_api"]["platforms"]["ok"] is False
+    assert report["endpoint_smoke"]["api_job"]["job_id"] == "job-1"
+    assert report["endpoint_smoke"]["api_job_cleanup"]["deleted"] is True
+    assert any(
+        item["kind"] == "publisher_login_required" and item["platform"] == "qidian"
+        for item in report["blocked_items"]
+    )
+    assert any(item["kind"] == "extension_key_missing" for item in report["blocked_items"])
+    assert ("POST", "http://forwin.example/api/publishers/upload-jobs") in calls

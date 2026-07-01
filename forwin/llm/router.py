@@ -9,12 +9,26 @@ from forwin.model_adapter import ModelCapabilities, adapter_capabilities
 CODEX_ALLOWED_FAMILIES = {
     "genesis",
     "writer",
+    "review",
     "reviewer",
     "repair",
     "phase4",
     "world_model",
 }
 CODEX_EXCLUDED_FAMILIES = {"chapter_plan_materialization"}
+CODEX_PRIMARY_FAMILIES = {"genesis", "review", "reviewer", "phase4", "world_model"}
+CODEX_PRIMARY_WRITER_STAGES = {
+    "state_event_extraction",
+    "thread_time_extraction",
+    "lore_timeline_extraction",
+    "scene_breakdown",
+}
+ORDINARY_PRIMARY_WRITER_STAGES = {
+    "chapter_draft",
+    "scene_generation",
+    "scene_stitch",
+    "chapter_rewrite",
+}
 
 
 @dataclass(frozen=True)
@@ -25,6 +39,7 @@ class LLMCallIntent:
     output_schema: dict[str, Any] | None = None
     codex_allowed: bool = True
     permission_profile: str = "prompt_only_readonly"
+    codex_model: str = ""
 
 
 @dataclass(frozen=True)
@@ -42,10 +57,12 @@ class LLMCallRouter:
         ordinary_adapter,
         codex_client=None,
         codex_enabled: bool = False,
+        codex_default_model: str = "",
     ) -> None:
         self.ordinary_adapter = ordinary_adapter
         self.codex_client = codex_client
         self.codex_enabled = bool(codex_enabled and codex_client is not None)
+        self.codex_default_model = str(codex_default_model or "").strip()
         self._fallback_events: list[dict[str, str]] = []
         self.last_call_result: LLMCallResult | None = None
 
@@ -67,9 +84,10 @@ class LLMCallRouter:
     ) -> LLMCallResult:
         resolved_intent = intent or LLMCallIntent(codex_allowed=False)
         fallback_used = False
-        if self._should_use_codex(resolved_intent):
+        codex_policy = self._codex_policy(resolved_intent)
+        if codex_policy == "codex_primary":
             try:
-                content = self.codex_client.chat(messages, intent=resolved_intent, **kwargs)
+                content = self._chat_with_codex(messages, intent=resolved_intent, **kwargs)
                 result = LLMCallResult(
                     content=content,
                     backend="codex_bridge",
@@ -97,8 +115,40 @@ class LLMCallRouter:
         ordinary_kwargs.setdefault("task_family", resolved_intent.task_family)
         ordinary_kwargs.setdefault("stage_key", resolved_intent.stage_key)
         ordinary_kwargs.setdefault("output_schema", resolved_intent.output_schema)
+        try:
+            ordinary_content = self.ordinary_adapter.chat(messages, **ordinary_kwargs)
+        except Exception as ordinary_exc:  # noqa: BLE001
+            if codex_policy != "ordinary_primary":
+                raise
+            ordinary_reason = str(ordinary_exc)
+            try:
+                content = self._chat_with_codex(messages, intent=resolved_intent, **kwargs)
+            except Exception:
+                raise ordinary_exc
+            self._fallback_events.append(
+                {
+                    "from_backend": "ordinary",
+                    "to_backend": "codex_bridge",
+                    "task_family": resolved_intent.task_family,
+                    "stage_key": resolved_intent.stage_key,
+                    "reason": ordinary_reason,
+                }
+            )
+            result = LLMCallResult(
+                content=content,
+                backend="codex_bridge",
+                fallback_used=True,
+                trace={
+                    "backend": "codex_bridge",
+                    "task_family": resolved_intent.task_family,
+                    "stage_key": resolved_intent.stage_key,
+                    "permission_profile": resolved_intent.permission_profile,
+                },
+            )
+            self.last_call_result = result
+            return result
         result = LLMCallResult(
-            content=self.ordinary_adapter.chat(messages, **ordinary_kwargs),
+            content=ordinary_content,
             backend="ordinary",
             fallback_used=fallback_used,
             trace={
@@ -111,13 +161,48 @@ class LLMCallRouter:
         self.last_call_result = result
         return result
 
+    def _chat_with_codex(
+        self,
+        messages: list[dict],
+        *,
+        intent: LLMCallIntent,
+        **kwargs: Any,
+    ) -> str:
+        codex_kwargs = dict(kwargs)
+        model = str(intent.codex_model or self.codex_default_model or "").strip()
+        if model:
+            codex_kwargs.setdefault("model", model)
+        return self.codex_client.chat(messages, intent=intent, **codex_kwargs)
+
     def _should_use_codex(self, intent: LLMCallIntent) -> bool:
-        family = str(intent.task_family or "").strip()
+        return self._codex_policy(intent) == "codex_primary"
+
+    def _codex_policy(self, intent: LLMCallIntent) -> str:
+        family = str(intent.task_family or "").strip().lower()
+        stage = str(intent.stage_key or "").strip().lower()
         if not self.codex_enabled or not intent.codex_allowed:
-            return False
+            return "ordinary_only"
         if not family or family in CODEX_EXCLUDED_FAMILIES:
-            return False
-        return family in CODEX_ALLOWED_FAMILIES
+            return "ordinary_only"
+        if family not in CODEX_ALLOWED_FAMILIES:
+            return "ordinary_only"
+        if str(intent.codex_model or "").strip():
+            return "codex_primary"
+        if family in CODEX_PRIMARY_FAMILIES:
+            return "codex_primary"
+        if family == "writer":
+            if stage in CODEX_PRIMARY_WRITER_STAGES or any(
+                token in stage for token in ("state_event", "thread_time", "lore_timeline")
+            ):
+                return "codex_primary"
+            if stage in ORDINARY_PRIMARY_WRITER_STAGES or any(
+                token in stage for token in ("chapter_rewrite", "repair")
+            ):
+                return "ordinary_primary"
+            return "ordinary_primary"
+        if family == "repair":
+            return "ordinary_primary"
+        return "codex_primary"
 
     def drain_model_fallback_events(self) -> list[dict[str, str]]:
         events = list(self._fallback_events)
@@ -174,7 +259,14 @@ class RoutedModelAdapter:
         preferred_provider_kind: str = "",
         preferred_model: str = "",
     ) -> str:
-        deterministic_route_requested = bool(preferred_provider_kind or preferred_model)
+        preferred_kind = str(preferred_provider_kind or "").strip().lower()
+        preferred_model_text = str(preferred_model or "").strip()
+        deterministic_route_requested = bool(preferred_kind or preferred_model_text)
+        preferred_codex_requested = (
+            preferred_kind in {"codex", "codex_bridge", "spark"}
+            or "codex" in preferred_model_text.lower()
+            or "gpt-5.3" in preferred_model_text.lower()
+        )
         content = self.router.chat(
             messages,
             intent=LLMCallIntent(
@@ -182,8 +274,9 @@ class RoutedModelAdapter:
                 stage_key=stage_key,
                 latency_class=latency_class,
                 output_schema=output_schema,
-                codex_allowed=bool(codex_allowed and not deterministic_route_requested),
+                codex_allowed=bool(codex_allowed and (not deterministic_route_requested or preferred_codex_requested)),
                 permission_profile=permission_profile,
+                codex_model=preferred_model_text if preferred_codex_requested else "",
             ),
             temperature=temperature,
             max_tokens=max_tokens,

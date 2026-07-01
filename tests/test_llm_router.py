@@ -34,6 +34,12 @@ class OrdinaryAdapter:
         pass
 
 
+class FailingOrdinaryAdapter(OrdinaryAdapter):
+    def chat(self, messages, **kwargs) -> str:
+        self.calls.append({"messages": messages, "kwargs": kwargs})
+        raise RuntimeError("ordinary unavailable")
+
+
 class FakeCodexClient:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
@@ -124,13 +130,96 @@ class LLMRouterTests(unittest.TestCase):
         ordinary_result = adapter.chat([{"role": "user", "content": "no intent"}])
         codex_result = adapter.chat(
             [{"role": "user", "content": "with intent"}],
-            task_family="writer",
-            stage_key="chapter_draft",
+            task_family="reviewer",
+            stage_key="chapter_review",
         )
 
         self.assertEqual(ordinary_result, '{"source":"ordinary"}')
         self.assertEqual(codex_result, '{"source":"codex"}')
         self.assertEqual(len(codex.calls), 1)
+
+    def test_writer_prose_uses_ordinary_before_codex_fallback(self) -> None:
+        ordinary = OrdinaryAdapter()
+        codex = FakeCodexClient()
+        adapter = RoutedModelAdapter(LLMCallRouter(ordinary_adapter=ordinary, codex_client=codex, codex_enabled=True))
+
+        result = adapter.chat(
+            [{"role": "user", "content": "write chapter"}],
+            task_family="writer",
+            stage_key="chapter_draft",
+        )
+
+        self.assertEqual(result, '{"source":"ordinary"}')
+        self.assertEqual(len(ordinary.calls), 1)
+        self.assertEqual(len(codex.calls), 0)
+
+    def test_writer_prose_falls_back_to_codex_when_ordinary_fails(self) -> None:
+        ordinary = FailingOrdinaryAdapter()
+        codex = FakeCodexClient()
+        adapter = RoutedModelAdapter(
+            LLMCallRouter(
+                ordinary_adapter=ordinary,
+                codex_client=codex,
+                codex_enabled=True,
+                codex_default_model="gpt-5.3-codex-spark",
+            )
+        )
+
+        result = adapter.chat(
+            [{"role": "user", "content": "write chapter"}],
+            task_family="writer",
+            stage_key="chapter_draft",
+        )
+
+        self.assertEqual(result, '{"source":"codex"}')
+        self.assertEqual(adapter.last_call_result.backend, "codex_bridge")
+        self.assertTrue(adapter.last_call_result.fallback_used)
+        self.assertEqual(codex.calls[0]["kwargs"]["model"], "gpt-5.3-codex-spark")
+        event = adapter.drain_model_fallback_events()[0]
+        self.assertEqual(event["from_backend"], "ordinary")
+        self.assertEqual(event["to_backend"], "codex_bridge")
+
+    def test_codex_primary_tasks_use_configured_codex_model(self) -> None:
+        ordinary = OrdinaryAdapter()
+        codex = FakeCodexClient()
+        router = LLMCallRouter(
+            ordinary_adapter=ordinary,
+            codex_client=codex,
+            codex_enabled=True,
+            codex_default_model="gpt-5.3-codex-spark",
+        )
+
+        result = router.chat(
+            [{"role": "user", "content": "review"}],
+            intent=LLMCallIntent(task_family="reviewer", stage_key="chapter_review"),
+        )
+
+        self.assertEqual(result, '{"source":"codex"}')
+        self.assertEqual(codex.calls[0]["kwargs"]["model"], "gpt-5.3-codex-spark")
+
+    def test_preferred_codex_model_keeps_bridge_enabled_for_repair(self) -> None:
+        ordinary = OrdinaryAdapter()
+        codex = FakeCodexClient()
+        adapter = RoutedModelAdapter(
+            LLMCallRouter(
+                ordinary_adapter=ordinary,
+                codex_client=codex,
+                codex_enabled=True,
+                codex_default_model="gpt-5.3-codex-spark",
+            )
+        )
+
+        result = adapter.chat(
+            [{"role": "user", "content": "rewrite"}],
+            task_family="writer",
+            stage_key="chapter_rewrite",
+            preferred_provider_kind="spark",
+            preferred_model="gpt-5.3-codex-spark",
+        )
+
+        self.assertEqual(result, '{"source":"codex"}')
+        self.assertEqual(len(ordinary.calls), 0)
+        self.assertEqual(codex.calls[0]["kwargs"]["model"], "gpt-5.3-codex-spark")
 
     def test_config_exposes_codex_bridge_defaults(self) -> None:
         config = Config(database_url=postgres_test_url())

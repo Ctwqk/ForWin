@@ -35,6 +35,7 @@ class CodexBridgeClient:
         max_tokens: int = 16384,
         response_format: dict | None = None,
         timeout_seconds: float | None = None,
+        model: str = "",
         **_: object,
     ) -> str:
         raw_output_schema = intent.output_schema
@@ -59,6 +60,7 @@ class CodexBridgeClient:
                 "output_schema": output_schema,
                 "timeout_seconds": timeout_seconds or self.timeout_seconds,
                 "permission_profile": intent.permission_profile,
+                "model": str(model or "").strip(),
             },
         )
         response.raise_for_status()

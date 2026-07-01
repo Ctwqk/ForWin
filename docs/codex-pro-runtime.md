@@ -34,6 +34,7 @@ Configure the ForWin container with:
 FORWIN_CODEX_ENABLED=true
 FORWIN_CODEX_BRIDGE_URL=http://host.docker.internal:8897
 FORWIN_CODEX_BRIDGE_TOKEN=change-me
+FORWIN_CODEX_DEFAULT_MODEL=gpt-5.3-codex-spark
 FORWIN_CODEX_MAX_CONCURRENT=1
 FORWIN_CODEX_SYNC_TIMEOUT_SECONDS=90
 FORWIN_CODEX_JOB_TIMEOUT_SECONDS=900
@@ -44,8 +45,10 @@ FORWIN_CODEX_JOB_TIMEOUT_SECONDS=900
 Routing policy:
 
 - `chapter_plan_materialization` always uses the ordinary OpenAI-compatible adapter.
-- `genesis`, `writer`, `reviewer`, `repair`, `phase4`, and `world_model` prefer Codex when enabled.
-- Bridge failures fall back to the ordinary adapter and record model fallback metadata.
+- `genesis`, `reviewer`, `review`, `phase4`, `world_model`, writer state extraction, thread-time extraction, lore-timeline extraction, and scene breakdown use Codex first, then ordinary fallback.
+- Writer prose stages such as `chapter_draft`, `scene_generation`, `scene_stitch`, `chapter_rewrite`, and `repair` use ordinary first, then Codex fallback if the ordinary chain fails.
+- A stage that explicitly prefers `spark`, `codex`, `codex_bridge`, or a `gpt-5.3` / `codex` model keeps Codex enabled and sends that model to the bridge.
+- Each bridge or ordinary fallback records model fallback metadata.
 
 ## Governed Writes
 

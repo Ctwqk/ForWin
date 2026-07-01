@@ -16,6 +16,7 @@ DEFAULT_MOONSHOT_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_MOONSHOT_MODEL = "kimi-k2.5"
 DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
+DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
 DEFAULT_QDRANT_URL = "http://127.0.0.1:6335"
 DEFAULT_HTTP_BASIC_EXEMPT_PATHS = (
     "/health",
@@ -84,6 +85,7 @@ class FormBlockingPolicy(BaseModel):
 class CodexConfig(BaseModel):
     enabled: bool = False
     bridge_url: str = "http://host.docker.internal:8897"
+    default_model: str = DEFAULT_CODEX_MODEL
     max_concurrent: int = 1
 
 try:
@@ -604,6 +606,11 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
             env, "FORWIN_CODEX_BRIDGE_URL", "http://host.docker.internal:8897"
         ),
         "codex_bridge_token": _env_str(env, "FORWIN_CODEX_BRIDGE_TOKEN"),
+        "codex_default_model": _env_str(
+            env,
+            "FORWIN_CODEX_DEFAULT_MODEL",
+            _env_str(env, "FORWIN_CODEX_MODEL", DEFAULT_CODEX_MODEL),
+        ),
         "codex_max_concurrent": _env_int(env, "FORWIN_CODEX_MAX_CONCURRENT", 1),
         "codex_sync_timeout_seconds": _env_float(
             env, "FORWIN_CODEX_SYNC_TIMEOUT_SECONDS", 90.0
@@ -819,6 +826,7 @@ class _ConfigFields:
     codex_enabled: bool = False
     codex_bridge_url: str = "http://host.docker.internal:8897"
     codex_bridge_token: str = ""
+    codex_default_model: str = DEFAULT_CODEX_MODEL
     codex_max_concurrent: int = 1
     codex_sync_timeout_seconds: float = 90.0
     codex_job_timeout_seconds: float = 900.0
@@ -981,5 +989,6 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
         return CodexConfig(
             enabled=self.codex_enabled,
             bridge_url=self.codex_bridge_url,
+            default_model=self.codex_default_model,
             max_concurrent=self.codex_max_concurrent,
         )

@@ -154,6 +154,7 @@ def test_env_file_populates_storage_runtime_generation_and_codex(
             "LLM_RETRY_ATTEMPTS=5",
             "MAX_SCENE_COUNT=7",
             "FORWIN_CODEX_ENABLED=on",
+            "FORWIN_CODEX_DEFAULT_MODEL=gpt-5.3-codex-spark",
         ],
     )
 
@@ -170,6 +171,7 @@ def test_env_file_populates_storage_runtime_generation_and_codex(
     assert config.llm_retry_attempts == 5
     assert config.max_scene_count == 7
     assert config.codex_enabled is True
+    assert config.codex_default_model == "gpt-5.3-codex-spark"
 
 
 def test_real_environment_overrides_env_file(

@@ -327,7 +327,7 @@ Implementation requirements:
 - `http_json` uses `urllib.request.Request`, encodes JSON payloads as UTF-8, parses JSON responses, and returns `{"ok": bool, "status": int, "payload": ...}`.
 - `build_report` starts with `checked_at`, `phase="publisher_upload_chain_smoke"`, `status="ok"`, `actions_taken=[]`, and `blocked_items=[]`.
 - `run_endpoint_smoke` always checks platforms, public browser-session summaries for expected platforms, preflight, work bindings, and chapter bindings.
-- If the extension key env var is absent, add a blocked item with `kind="extension_key_missing"` and do not call heartbeat-status.
+- If the extension key env var is absent, skip heartbeat-status by default without adding a blocked item. Add `kind="extension_key_missing"` only when `--require-extension-key` is set.
 - If `args.create_api_smoke_job` is true, create one `publish=false` job for `args.endpoint_platform`, list jobs, get the created job, terminate it, and delete it.
 - `build_report` sets `status="degraded"` when any blocked item has severity `human` or `operator`; it sets `status="failed"` when endpoint HTTP shape is unavailable.
 
@@ -589,14 +589,16 @@ Add `parse_args(argv=None)` and `main(argv=None)`:
   - `--api-base http://127.0.0.1:8899`
   - `--expect-platform-connected` append list
   - `--extension-key-env FORWIN_PUBLISHER_EXTENSION_API_KEY`
+  - `--require-extension-key`
   - `--endpoint-platform fanqie`
   - `--book-name "ForWin Smoke Test"`
-  - `--chapter-title "ForWin smoke chapter"`
+  - default browser upload smoke resolves existing platform work bindings when `--book-name` is left unchanged
+  - `--chapter-title "ForWin smoke chapter"` with a generated UTC timestamp suffix when left at default
   - `--body "This is a safe non-publishing ForWin smoke chapter."`
   - `--create-api-smoke-job`
   - `--run-upload-smoke`
   - `--upload-platform` append list
-  - `--poll-seconds 120`
+  - `--poll-seconds 600`
   - `--poll-interval-seconds 5`
   - `--run-project-upload-smoke`
   - `--project-id ""`
@@ -632,12 +634,13 @@ python scripts/smoke_production_publisher_upload_chain.py \
   --upload-platform qidian
 ```
 
-If checking the extension heartbeat-status surface, first set `FORWIN_PUBLISHER_EXTENSION_API_KEY` in the shell through the local secret manager or an existing deployment secret file, then pass only the env var name:
+If checking the extension heartbeat-status surface as a required gate, first set `FORWIN_PUBLISHER_EXTENSION_API_KEY` in the shell through the local secret manager or an existing deployment secret file, then pass only the env var name plus `--require-extension-key`:
 
 ```bash
 python scripts/smoke_production_publisher_upload_chain.py \
   --api-base http://10.0.0.126:8899 \
   --extension-key-env FORWIN_PUBLISHER_EXTENSION_API_KEY \
+  --require-extension-key \
   --expect-platform-connected fanqie \
   --expect-platform-connected qidian
 ```
@@ -745,11 +748,10 @@ python scripts/smoke_production_publisher_upload_chain.py \
   --run-upload-smoke \
   --upload-platform fanqie \
   --upload-platform qidian \
-  --poll-seconds 180 \
   --poll-interval-seconds 5
 ```
 
-Expected: each platform either reaches terminal upload job state with `publish=false`, or emits a blocked item such as `publisher_login_required`, `quota_unconfirmed`, `publisher_test_work_missing`, or `upload_job_timeout`.
+Expected: each platform either reaches terminal upload job state with `publish=false`, or emits a blocked item such as `publisher_login_required`, `upload_smoke_binding_missing`, `quota_unconfirmed`, `publisher_test_work_missing`, or `upload_job_timeout`.
 
 - [ ] **Step 6: Commit any production-run fixes**
 

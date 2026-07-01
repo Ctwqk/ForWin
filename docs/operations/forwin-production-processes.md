@@ -124,15 +124,27 @@ python scripts/smoke_production_publisher_upload_chain.py \
   --upload-platform qidian
 ```
 
-To include the key-protected extension heartbeat-status surface, set
-`FORWIN_PUBLISHER_EXTENSION_API_KEY` in the shell through the local secret
-manager or an existing deployment secret file, then pass only the environment
-variable name:
+When `--book-name` is left at its default placeholder, the browser-claimed
+smoke resolves each platform's existing work binding and uses that real bound
+book. If no binding exists, it reports `upload_smoke_binding_missing` instead
+of creating a misleading failed upload job. The default upload poll window is
+600 seconds so a claimed browser job has time to finish the platform draft flow.
+The default chapter title is suffixed with a UTC timestamp so recurring runs do
+not reuse the same draft title. Use `--no-bound-work-binding` only when
+intentionally testing a literal `--book-name`.
+
+The key-protected extension heartbeat-status surface is optional by default. If
+`FORWIN_PUBLISHER_EXTENSION_API_KEY` is not set, the smoke reports the check as
+skipped and does not fail the upload-chain automation. To make that surface
+mandatory, set the key in the shell through the local secret manager or an
+existing deployment secret file, then pass only the environment variable name
+plus `--require-extension-key`:
 
 ```bash
 python scripts/smoke_production_publisher_upload_chain.py \
   --api-base http://10.0.0.126:8899 \
   --extension-key-env FORWIN_PUBLISHER_EXTENSION_API_KEY \
+  --require-extension-key \
   --expect-platform-connected fanqie \
   --expect-platform-connected qidian
 ```

@@ -24,10 +24,18 @@ SENSITIVE_KEY_PARTS = (
     "webhook",
 )
 TERMINAL_UPLOAD_STATUSES = {"succeeded", "failed", "cancelled"}
+DEFAULT_SMOKE_BOOK_NAME = "ForWin Smoke Test"
+DEFAULT_SMOKE_CHAPTER_TITLE = "ForWin smoke chapter"
+DEFAULT_UPLOAD_POLL_SECONDS = 600.0
 
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def default_smoke_chapter_title() -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{DEFAULT_SMOKE_CHAPTER_TITLE} {stamp}"
 
 
 def redact_report(value: Any) -> Any:
@@ -206,9 +214,11 @@ def safe_upload_payload(
     book_name: str,
     chapter_title: str,
     body: str,
+    project_id: str = "",
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "platform": platform,
+        "project_id": str(project_id or "").strip(),
         "book_name": book_name,
         "chapter_title": chapter_title,
         "body": body,
@@ -220,6 +230,9 @@ def safe_upload_payload(
         "auto_cover_upload_enabled": False,
         "publisher_compliance_required": False,
     }
+    if not payload["project_id"]:
+        payload.pop("project_id")
+    return payload
 
 
 def _api_url(api_base: str, path: str) -> str:
@@ -338,22 +351,25 @@ def summarize_browser_session(platform: str, payload: Any) -> dict[str, Any]:
 
 def extension_headers_from_env(args: Any, report: dict[str, Any]) -> dict[str, str] | None:
     env_name = str(getattr(args, "extension_key_env", "") or "").strip()
+    required = bool(getattr(args, "require_extension_key", False))
     if not env_name:
-        append_block(
-            report,
-            kind="extension_key_missing",
-            severity="operator",
-            message="Extension heartbeat-status check requires an env var name.",
-        )
+        if required:
+            append_block(
+                report,
+                kind="extension_key_missing",
+                severity="operator",
+                message="Extension heartbeat-status check requires an env var name.",
+            )
         return None
     key = os.environ.get(env_name)
     if not key:
-        append_block(
-            report,
-            kind="extension_key_missing",
-            severity="operator",
-            message=f"Extension heartbeat-status skipped because {env_name} is not set.",
-        )
+        if required:
+            append_block(
+                report,
+                kind="extension_key_missing",
+                severity="operator",
+                message=f"Extension heartbeat-status skipped because {env_name} is not set.",
+            )
         return None
     return {"X-Forwin-Extension-Key": key}
 
@@ -457,6 +473,42 @@ def _upload_platforms(args: Any) -> list[str]:
     return list(getattr(args, "expect_platform_connected", []) or [])
 
 
+def _should_use_bound_work_binding(args: Any) -> bool:
+    if bool(getattr(args, "no_bound_work_binding", False)):
+        return False
+    return str(getattr(args, "book_name", DEFAULT_SMOKE_BOOK_NAME) or "").strip() == DEFAULT_SMOKE_BOOK_NAME
+
+
+def _resolve_upload_smoke_binding(args: Any, report: dict[str, Any], platform: str) -> dict[str, Any]:
+    if not _should_use_bound_work_binding(args):
+        return {}
+    response = http_json(
+        "GET",
+        _api_url(args.api_base, f"/api/publishers/work-bindings?{urlencode({'platform': platform})}"),
+    )
+    bindings = [
+        item
+        for item in _payload_list(response)
+        if isinstance(item, dict)
+        and str(item.get("platform") or "") == platform
+        and str(item.get("book_name") or "").strip()
+    ]
+    if bindings:
+        return bindings[0]
+    append_block(
+        report,
+        kind="upload_smoke_binding_missing",
+        severity="operator",
+        message=(
+            f"{platform} upload smoke needs an existing work binding when --book-name is left "
+            "at its default placeholder."
+        ),
+        platform=platform,
+        status=response.get("status"),
+    )
+    return {}
+
+
 def run_upload_smoke(args: Any, report: dict[str, Any]) -> None:
     report["upload_jobs"] = []
     if not bool(getattr(args, "run_upload_smoke", False)):
@@ -472,13 +524,17 @@ def run_upload_smoke(args: Any, report: dict[str, Any]) -> None:
                 platform=platform,
             )
             continue
+        binding = _resolve_upload_smoke_binding(args, report, platform)
+        if _should_use_bound_work_binding(args) and not binding:
+            continue
         created = http_json(
             "POST",
             _api_url(args.api_base, "/api/publishers/upload-jobs"),
             payload=safe_upload_payload(
                 platform=platform,
-                book_name=getattr(args, "book_name", "ForWin Smoke Test"),
-                chapter_title=getattr(args, "chapter_title", "ForWin smoke chapter"),
+                project_id=str(binding.get("project_id") or ""),
+                book_name=str(binding.get("book_name") or getattr(args, "book_name", DEFAULT_SMOKE_BOOK_NAME)),
+                chapter_title=getattr(args, "chapter_title", DEFAULT_SMOKE_CHAPTER_TITLE),
                 body=getattr(args, "body", "This is a safe smoke chapter body."),
             ),
         )
@@ -501,6 +557,7 @@ def run_upload_smoke(args: Any, report: dict[str, Any]) -> None:
             platform=platform,
             job_id=job_id,
             terminal_state=result.get("terminal_state"),
+            work_binding_id=str(binding.get("id") or ""),
         )
         if result.get("terminal_state") == "timeout":
             append_block(
@@ -567,7 +624,7 @@ def run_project_upload_smoke(args: Any, report: dict[str, Any]) -> None:
     payload = {
         "platform": platform,
         "chapter_number": chapter_number,
-        "book_name": getattr(args, "book_name", "ForWin Smoke Test"),
+        "book_name": getattr(args, "book_name", DEFAULT_SMOKE_BOOK_NAME),
         "publish": False,
         "create_if_missing": False,
         "cover_generation_enabled": False,
@@ -685,8 +742,8 @@ def run_endpoint_smoke(args: Any, report: dict[str, Any]) -> None:
 
     preflight_payload = {
         "platform": getattr(args, "endpoint_platform", "fanqie"),
-        "book_name": getattr(args, "book_name", "ForWin Smoke Test"),
-        "chapter_title": getattr(args, "chapter_title", "ForWin smoke chapter"),
+        "book_name": getattr(args, "book_name", DEFAULT_SMOKE_BOOK_NAME),
+        "chapter_title": getattr(args, "chapter_title", DEFAULT_SMOKE_CHAPTER_TITLE),
         "body": getattr(args, "body", "This is a safe smoke chapter body."),
         "create_if_missing": False,
     }
@@ -716,8 +773,8 @@ def run_endpoint_smoke(args: Any, report: dict[str, Any]) -> None:
             _api_url(args.api_base, "/api/publishers/upload-jobs"),
             payload=safe_upload_payload(
                 platform=getattr(args, "endpoint_platform", "fanqie"),
-                book_name=getattr(args, "book_name", "ForWin Smoke Test"),
-                chapter_title=getattr(args, "chapter_title", "ForWin smoke chapter"),
+                book_name=getattr(args, "book_name", DEFAULT_SMOKE_BOOK_NAME),
+                chapter_title=getattr(args, "chapter_title", DEFAULT_SMOKE_CHAPTER_TITLE),
                 body=getattr(args, "body", "This is a safe smoke chapter body."),
             ),
         )
@@ -787,9 +844,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="FORWIN_PUBLISHER_EXTENSION_API_KEY",
         help="Environment variable name containing the extension API key.",
     )
+    parser.add_argument(
+        "--require-extension-key",
+        action="store_true",
+        help="Fail the smoke when the extension heartbeat-status key is not available.",
+    )
     parser.add_argument("--endpoint-platform", default="fanqie")
-    parser.add_argument("--book-name", default="ForWin Smoke Test")
-    parser.add_argument("--chapter-title", default="ForWin smoke chapter")
+    parser.add_argument("--book-name", default=DEFAULT_SMOKE_BOOK_NAME)
+    parser.add_argument(
+        "--no-bound-work-binding",
+        action="store_true",
+        help="Use --book-name literally instead of resolving the platform's existing work binding.",
+    )
+    parser.add_argument("--chapter-title", default=DEFAULT_SMOKE_CHAPTER_TITLE)
     parser.add_argument(
         "--body",
         default="This is a safe non-publishing ForWin smoke chapter.",
@@ -797,13 +864,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--create-api-smoke-job", action="store_true")
     parser.add_argument("--run-upload-smoke", action="store_true")
     parser.add_argument("--upload-platform", action="append", default=[])
-    parser.add_argument("--poll-seconds", type=float, default=120.0)
+    parser.add_argument("--poll-seconds", type=float, default=DEFAULT_UPLOAD_POLL_SECONDS)
     parser.add_argument("--poll-interval-seconds", type=float, default=5.0)
     parser.add_argument("--run-project-upload-smoke", action="store_true")
     parser.add_argument("--project-id", default="")
     parser.add_argument("--chapter-number", type=int, default=0)
     parser.add_argument("--project-platform", default="fanqie")
-    return parser.parse_args(argv)
+    parsed = parser.parse_args(argv)
+    if parsed.chapter_title == DEFAULT_SMOKE_CHAPTER_TITLE:
+        parsed.chapter_title = default_smoke_chapter_title()
+    return parsed
 
 
 def main(argv: list[str] | None = None) -> int:

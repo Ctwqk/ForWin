@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 import scripts.smoke_production_publisher_upload_chain as smoke
@@ -21,6 +22,7 @@ def args(**overrides):
         "run_project_upload_smoke": False,
         "project_id": "",
         "chapter_number": 0,
+        "require_extension_key": False,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -116,8 +118,8 @@ def test_endpoint_smoke_checks_safe_surfaces_and_cleans_api_job(monkeypatch) -> 
                     },
                     {
                         "platform_id": "qidian",
-                        "connected": False,
-                        "preferred_client_state": {"connected": False},
+                        "connected": True,
+                        "preferred_client_state": {"connected": True},
                     },
                 ],
             }
@@ -208,20 +210,53 @@ def test_endpoint_smoke_checks_safe_surfaces_and_cleans_api_job(monkeypatch) -> 
 
     report = smoke.build_report(args(create_api_smoke_job=True))
 
-    assert report["status"] == "degraded"
-    assert report["publisher_api"]["platforms"]["ok"] is False
+    assert report["status"] == "ok"
+    assert report["publisher_api"]["platforms"]["ok"] is True
     assert report["endpoint_smoke"]["api_job"]["job_id"] == "job-1"
     assert report["endpoint_smoke"]["api_job_get"]["job_id"] == "job-1"
     assert report["endpoint_smoke"]["api_job_list"]["count"] == 1
     assert report["endpoint_smoke"]["api_job_list"]["jobs"][0]["job_id"] == "job-1"
     assert "result_payload" not in report["endpoint_smoke"]["api_job_list"]["jobs"][0]
     assert report["endpoint_smoke"]["api_job_cleanup"]["deleted"] is True
-    assert any(
-        item["kind"] == "publisher_login_required" and item["platform"] == "qidian"
-        for item in report["blocked_items"]
-    )
-    assert any(item["kind"] == "extension_key_missing" for item in report["blocked_items"])
+    assert report["publisher_api"]["heartbeat_status"] == {"ok": False, "skipped": True}
+    assert not any(item["kind"] == "extension_key_missing" for item in report["blocked_items"])
     assert ("POST", "http://forwin.example/api/publishers/upload-jobs") in calls
+
+
+def test_endpoint_smoke_can_require_extension_key(monkeypatch) -> None:
+    def fake_http_json(method, url, *, payload=None, headers=None, timeout=10.0):
+        if url.endswith("/api/publishers/platforms"):
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": [
+                    {
+                        "platform_id": "fanqie",
+                        "connected": True,
+                        "preferred_client_state": {"connected": True},
+                    }
+                ],
+            }
+        if url.endswith("/api/publishers/browser-sessions/fanqie"):
+            return {"ok": True, "status": 200, "payload": {"platform": "fanqie", "connected": True}}
+        if url.endswith("/api/publishers/preflight"):
+            return {"ok": True, "status": 200, "payload": {"ok": True, "blocking": [], "warnings": []}}
+        if url.endswith("/api/publishers/work-bindings"):
+            return {"ok": True, "status": 200, "payload": []}
+        if url.endswith("/api/publishers/chapter-bindings"):
+            return {"ok": True, "status": 200, "payload": []}
+        raise AssertionError(url)
+
+    monkeypatch.setattr(smoke, "http_json", fake_http_json)
+    monkeypatch.delenv("FORWIN_PUBLISHER_EXTENSION_API_KEY", raising=False)
+
+    report = smoke.build_report(
+        args(expect_platform_connected=["fanqie"], require_extension_key=True)
+    )
+
+    assert report["status"] == "degraded"
+    assert report["publisher_api"]["heartbeat_status"] == {"ok": False, "skipped": True}
+    assert any(item["kind"] == "extension_key_missing" for item in report["blocked_items"])
 
 
 def test_endpoint_smoke_checks_heartbeat_for_reported_extension_client(monkeypatch) -> None:
@@ -289,7 +324,10 @@ def test_upload_smoke_skips_create_when_platform_not_connected(monkeypatch) -> N
         "actions_taken": [],
     }
 
-    smoke.run_upload_smoke(args(run_upload_smoke=True, upload_platform=["fanqie"]), report)
+    smoke.run_upload_smoke(
+        args(run_upload_smoke=True, upload_platform=["fanqie"], book_name="Bound Smoke Book"),
+        report,
+    )
 
     assert report["upload_jobs"] == []
     assert report["blocked_items"][0]["kind"] == "publisher_login_required"
@@ -343,13 +381,123 @@ def test_upload_smoke_polls_until_terminal_and_redacts(monkeypatch) -> None:
         "actions_taken": [],
     }
 
-    smoke.run_upload_smoke(args(run_upload_smoke=True, upload_platform=["fanqie"]), report)
+    smoke.run_upload_smoke(
+        args(run_upload_smoke=True, upload_platform=["fanqie"], book_name="Bound Smoke Book"),
+        report,
+    )
 
     assert report["upload_jobs"][0]["job_id"] == "job-2"
     assert report["upload_jobs"][0]["terminal_state"] == "succeeded"
     serialized = json.dumps(report, ensure_ascii=False)
     assert "secret body" not in serialized
     assert "secret-token" not in serialized
+
+
+def test_upload_smoke_uses_existing_work_binding_when_book_name_is_default(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http_json(method, url, *, payload=None, headers=None, timeout=10.0):
+        calls.append((method, url))
+        if url.endswith("/api/publishers/work-bindings?platform=qidian"):
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": [
+                    {
+                        "id": "binding-1",
+                        "project_id": "project-1",
+                        "platform": "qidian",
+                        "book_name": "寒港夜汐",
+                        "remote_book_id": "book-remote-1",
+                    }
+                ],
+            }
+        if url.endswith("/api/publishers/upload-jobs") and method == "POST":
+            assert payload["project_id"] == "project-1"
+            assert payload["book_name"] == "寒港夜汐"
+            assert payload["publish"] is False
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {
+                    "job_id": "job-bound",
+                    "project_id": "project-1",
+                    "platform": "qidian",
+                    "book_name": "寒港夜汐",
+                    "status": "pending",
+                    "publish": False,
+                },
+            }
+        if url.endswith("/api/publishers/upload-jobs/job-bound") and method == "GET":
+            return {
+                "ok": True,
+                "status": 200,
+                "payload": {
+                    "job_id": "job-bound",
+                    "project_id": "project-1",
+                    "platform": "qidian",
+                    "book_name": "寒港夜汐",
+                    "status": "succeeded",
+                    "publish": False,
+                },
+            }
+        raise AssertionError(url)
+
+    monkeypatch.setattr(smoke, "http_json", fake_http_json)
+    report = {
+        "platforms": [{"platform_id": "qidian", "connected": True}],
+        "blocked_items": [],
+        "actions_taken": [],
+    }
+
+    smoke.run_upload_smoke(args(run_upload_smoke=True, upload_platform=["qidian"]), report)
+
+    assert report["upload_jobs"][0]["job_id"] == "job-bound"
+    assert report["upload_jobs"][0]["book_name"] == "寒港夜汐"
+    assert report["actions_taken"][0]["work_binding_id"] == "binding-1"
+    assert ("GET", "http://forwin.example/api/publishers/work-bindings?platform=qidian") in calls
+
+
+def test_upload_smoke_skips_default_book_when_no_work_binding_exists(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def fake_http_json(method, url, *, payload=None, headers=None, timeout=10.0):
+        calls.append((method, url))
+        if url.endswith("/api/publishers/work-bindings?platform=fanqie"):
+            return {"ok": True, "status": 200, "payload": []}
+        raise AssertionError(f"unexpected call: {method} {url}")
+
+    monkeypatch.setattr(smoke, "http_json", fake_http_json)
+    report = {
+        "platforms": [{"platform_id": "fanqie", "connected": True}],
+        "blocked_items": [],
+        "actions_taken": [],
+    }
+
+    smoke.run_upload_smoke(args(run_upload_smoke=True, upload_platform=["fanqie"]), report)
+
+    assert report["upload_jobs"] == []
+    assert report["blocked_items"][0]["kind"] == "upload_smoke_binding_missing"
+    assert report["blocked_items"][0]["platform"] == "fanqie"
+    assert ("GET", "http://forwin.example/api/publishers/work-bindings?platform=fanqie") in calls
+
+
+def test_parse_args_defaults_allow_browser_upload_jobs_to_finish() -> None:
+    parsed = smoke.parse_args([])
+
+    assert parsed.poll_seconds == 600.0
+
+
+def test_parse_args_generates_unique_default_chapter_title() -> None:
+    parsed = smoke.parse_args([])
+
+    assert re.fullmatch(r"ForWin smoke chapter \d{8}T\d{6}Z", parsed.chapter_title)
+
+
+def test_parse_args_preserves_explicit_chapter_title() -> None:
+    parsed = smoke.parse_args(["--chapter-title", "Manual Smoke Chapter"])
+
+    assert parsed.chapter_title == "Manual Smoke Chapter"
 
 
 def test_project_upload_smoke_requires_explicit_project_and_chapter() -> None:

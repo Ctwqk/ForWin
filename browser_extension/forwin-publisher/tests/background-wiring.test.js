@@ -184,6 +184,7 @@ test('background opens a dashboard probe tab for cookie-backed heartbeat verific
   assert.match(source, /!\s*isPlatformLoginUrl\(platformId,\s*String\(tab\?\.url\s*\|\|\s*''\)\)/);
   assert.match(source, /extensionApi\.tabs,\s*'create',\s*\{\s*url:\s*adapter\.dashboardUrl,\s*active:\s*false/s);
   assert.match(source, /inspectPlatformState\(platformId\)/);
+  assert.match(source, /inspection\?\.ok\s*&&\s*\(inspection\.authenticated\s*\|\|\s*inspection\.loginVisible\)/);
   assert.match(source, /ensurePlatformProbeInspection,/);
 });
 

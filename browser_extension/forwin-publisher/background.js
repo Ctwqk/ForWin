@@ -1986,7 +1986,7 @@ async function ensurePlatformProbeInspection(platformId) {
   const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     const inspection = await inspectPlatformState(platformId);
-    if (inspection?.ok) {
+    if (inspection?.ok && (inspection.authenticated || inspection.loginVisible)) {
       return inspection;
     }
     if (probeTabId) {

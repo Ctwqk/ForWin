@@ -866,7 +866,10 @@ export class PublisherExtensionController {
       provisionalState.raw_state?.page_login_visible
       && !provisionalState.raw_state?.page_authenticated,
     );
-    if (inspection?.ok && !loggedOutByInspectedLoginPage) {
+    const hasConclusivePageEvidence = Boolean(
+      inspection?.authenticated || inspection?.loginVisible,
+    );
+    if (inspection?.ok && hasConclusivePageEvidence && !loggedOutByInspectedLoginPage) {
       return inspection;
     }
 

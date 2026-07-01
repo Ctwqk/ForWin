@@ -2377,6 +2377,68 @@ test('controller heartbeat probes dashboard when cookie signal has no platform t
   assert.equal(qidian.raw_state.current_url, 'https://write.qq.com/portal/dashboard');
 });
 
+test('controller heartbeat probes Fanqie dashboard when inspection is inconclusive', async () => {
+  const payloads = [];
+  const probes = [];
+  const { controller } = makeController({
+    backend: {
+      heartbeat: async (payload) => {
+        payloads.push(payload);
+        return { ok: true };
+      },
+      syncBrowserSession: async () => ({ ok: true, cookie_count: 0 }),
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+    },
+    inspectPlatformState: async (platformId) => (
+      platformId === 'fanqie'
+        ? {
+            ok: true,
+            tabId: 91,
+            currentUrl: 'https://fanqienovel.com/main/writer/',
+            platform: 'fanqie',
+            authenticated: false,
+            loginVisible: false,
+            summary: '',
+          }
+        : null
+    ),
+    ensurePlatformProbeInspection: async (platformId) => {
+      probes.push(platformId);
+      if (platformId !== 'fanqie') {
+        return null;
+      }
+      return {
+        ok: true,
+        tabId: 92,
+        currentUrl: 'https://fanqienovel.com/main/writer/',
+        platform: 'fanqie',
+        authenticated: true,
+        loginVisible: false,
+        summary: '作家专区 工作台 作品管理',
+      };
+    },
+    getPlatformState: async () => ({}),
+    getCookies: async (platformId) => (
+      platformId === 'fanqie'
+        ? [{ name: 'sessionid' }, { name: 'has_biz_token' }]
+        : []
+    ),
+  });
+
+  await controller.sendHeartbeat();
+
+  assert.deepEqual(probes, ['fanqie']);
+  const fanqie = payloads[0].platforms.find((item) => item.platform === 'fanqie');
+  assert.equal(fanqie.connected, true);
+  assert.equal(fanqie.raw_state.cookie_signal, true);
+  assert.equal(fanqie.raw_state.page_authenticated, true);
+  assert.equal(fanqie.raw_state.current_url, 'https://fanqienovel.com/main/writer/');
+});
+
 test('controller heartbeat probes dashboard when platform inspection is not ok', async () => {
   const payloads = [];
   const probes = [];
@@ -2509,6 +2571,68 @@ test('controller session sync uses dashboard probe before syncing cookie session
   assert.deepEqual(probes, ['qidian']);
   assert.equal(payloads.length, 1);
   assert.equal(payloads[0].platform, 'qidian');
+  assert.equal(payloads[0].raw_state.connected, true);
+  assert.equal(payloads[0].raw_state.cookie_signal, true);
+  assert.equal(payloads[0].raw_state.page_authenticated, true);
+});
+
+test('controller session sync probes Fanqie before syncing inconclusive cookie session', async () => {
+  const payloads = [];
+  const probes = [];
+  const { controller } = makeController({
+    backend: {
+      heartbeat: async () => ({ ok: true }),
+      syncBrowserSession: async (payload) => {
+        payloads.push(payload);
+        return { ok: true, cookie_count: 2 };
+      },
+      claimNextUploadJob: async () => ({ found: false, job: null }),
+      getUploadJob: async () => {
+        throw new Error('unused');
+      },
+      updateUploadJobResult: async () => ({ ok: true }),
+    },
+    inspectPlatformState: async (platformId) => (
+      platformId === 'fanqie'
+        ? {
+            ok: true,
+            tabId: 91,
+            currentUrl: 'https://fanqienovel.com/main/writer/',
+            platform: 'fanqie',
+            authenticated: false,
+            loginVisible: false,
+            summary: '',
+          }
+        : null
+    ),
+    ensurePlatformProbeInspection: async (platformId) => {
+      probes.push(platformId);
+      if (platformId !== 'fanqie') {
+        return null;
+      }
+      return {
+        ok: true,
+        tabId: 92,
+        currentUrl: 'https://fanqienovel.com/main/writer/',
+        platform: 'fanqie',
+        authenticated: true,
+        loginVisible: false,
+        summary: '作家专区 工作台 作品管理',
+      };
+    },
+    getPlatformState: async () => ({}),
+    getCookies: async (platformId) => (
+      platformId === 'fanqie'
+        ? [{ name: 'sessionid' }, { name: 'has_biz_token' }]
+        : []
+    ),
+  });
+
+  await controller.syncConnectedSessionsToBackend();
+
+  assert.deepEqual(probes, ['fanqie']);
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].platform, 'fanqie');
   assert.equal(payloads[0].raw_state.connected, true);
   assert.equal(payloads[0].raw_state.cookie_signal, true);
   assert.equal(payloads[0].raw_state.page_authenticated, true);

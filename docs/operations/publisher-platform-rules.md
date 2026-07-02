@@ -163,7 +163,7 @@ The 2026-07-02 read-only quota probe for this evidence set returned:
 - `blocked_items`: none
 - Fanqie: 6/6 probed pages loaded, 17 quota/rule signals,
   `publish_quota_confirmed=true`, no visible current account blocker
-- Qidian: 13/13 probed pages/endpoints/resources loaded, 26 or more
+- Qidian: 13/13 probed pages/endpoints/resources loaded, 25 or more
   quota/current-state/source-map/update-guidance/version-note signals depending
   on dynamic page text,
   `publish_quota_confirmed=false`, no visible current account blocker

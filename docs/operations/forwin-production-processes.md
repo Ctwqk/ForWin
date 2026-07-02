@@ -192,7 +192,11 @@ python scripts/supervise_forwin_interventions.py \
 The supervisor is intentionally read-only. It must not publish content, bypass
 publisher login, replay cookies, mutate project/task/chapter state, or resolve
 MFA/captcha/risk-control prompts. Login expiry is reported as a blocked item
-for a human operator.
+for a human operator. GitHub checks prefer the `gh` CLI when it is available
+and fall back to unauthenticated GitHub REST reads for public PR/issue metadata
+when `gh` is not installed. Set `GH_TOKEN` or `GITHUB_TOKEN` only if private-repo
+rate limits or permissions require it; do not write those tokens to logs or
+docs.
 
 Example user-level systemd service on 150:
 

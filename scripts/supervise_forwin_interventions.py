@@ -4,13 +4,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import warnings
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +78,105 @@ def _gh_json(args: list[str]) -> dict[str, Any]:
     return {"ok": True, "items": payload}
 
 
+def _github_rest_json(path: str, query: dict[str, Any]) -> dict[str, Any]:
+    api_base = str(os.environ.get("FORWIN_GITHUB_API_BASE") or "https://api.github.com").rstrip("/")
+    encoded_query = urlencode({key: value for key, value in query.items() if value not in (None, "")})
+    url = f"{api_base}/{path.lstrip('/')}"
+    if encoded_query:
+        url = f"{url}?{encoded_query}"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "forwin-intervention-supervisor",
+    }
+    token = str(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = Request(url, headers=headers)
+    try:
+        with urlopen(request, timeout=20) as response:
+            status = int(getattr(response, "status", 0) or 0)
+            body = response.read(4_000_000)
+    except HTTPError as exc:
+        return {"ok": False, "status": exc.code, "error": f"GitHub REST returned HTTP {exc.code}"}
+    except URLError as exc:
+        return {"ok": False, "error": _short_text(str(exc))}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"{exc.__class__.__name__}: {_short_text(exc)}"}
+    try:
+        payload = json.loads(body.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError as exc:
+        return {"ok": False, "status": status, "error": f"GitHub REST returned invalid JSON: {exc}"}
+    return {"ok": 200 <= status < 300, "status": status, "payload": payload}
+
+
+def _validated_repo_path(repo: str) -> str:
+    value = str(repo or "").strip().strip("/")
+    parts = value.split("/")
+    if len(parts) != 2 or not all(parts):
+        raise ValueError("github repo must be in owner/name form")
+    return "/".join(parts)
+
+
+def github_rest_pr_items(repo: str, limit: int) -> dict[str, Any]:
+    try:
+        repo_path = _validated_repo_path(repo)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    response = _github_rest_json(
+        f"repos/{repo_path}/pulls",
+        {"state": "open", "per_page": max(1, min(int(limit or 20), 100))},
+    )
+    payload = response.get("payload")
+    if not response.get("ok") or not isinstance(payload, list):
+        return {"ok": False, "error": response.get("error") or "GitHub REST PR response was not a list"}
+    items = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        items.append(
+            {
+                "number": item.get("number"),
+                "title": item.get("title") or "",
+                "url": item.get("html_url") or item.get("url") or "",
+                "isDraft": bool(item.get("draft")),
+                "reviewDecision": "",
+                "mergeStateStatus": "",
+                "updatedAt": item.get("updated_at") or "",
+                "statusCheckRollup": [],
+            }
+        )
+    return {"ok": True, "items": items, "source": "github_rest"}
+
+
+def github_rest_issue_items(repo: str, limit: int) -> dict[str, Any]:
+    try:
+        repo_path = _validated_repo_path(repo)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    response = _github_rest_json(
+        f"repos/{repo_path}/issues",
+        {"state": "open", "per_page": max(1, min(int(limit or 20), 100))},
+    )
+    payload = response.get("payload")
+    if not response.get("ok") or not isinstance(payload, list):
+        return {"ok": False, "error": response.get("error") or "GitHub REST issue response was not a list"}
+    items = []
+    for item in payload:
+        if not isinstance(item, dict) or isinstance(item.get("pull_request"), dict):
+            continue
+        items.append(
+            {
+                "number": item.get("number"),
+                "title": item.get("title") or "",
+                "url": item.get("html_url") or item.get("url") or "",
+                "labels": item.get("labels") if isinstance(item.get("labels"), list) else [],
+                "assignees": item.get("assignees") if isinstance(item.get("assignees"), list) else [],
+                "updatedAt": item.get("updated_at") or "",
+            }
+        )
+    return {"ok": True, "items": items, "source": "github_rest"}
+
+
 def http_json_full(url: str, *, timeout: float = 15.0, max_bytes: int = 8_000_000) -> dict[str, Any]:
     try:
         with urlopen(url, timeout=timeout) as response:
@@ -138,13 +238,16 @@ def github_prs_snapshot(
         ]
     )
     if not result.get("ok"):
-        _append_block(
-            blocked_items,
-            kind="github_prs_unavailable",
-            severity="warning",
-            message=str(result.get("error") or "GitHub PR check failed"),
-        )
-        return {"ok": False, "error": result.get("error"), "prs": []}
+        cli_error = result.get("error")
+        result = github_rest_pr_items(repo, limit)
+        if not result.get("ok"):
+            _append_block(
+                blocked_items,
+                kind="github_prs_unavailable",
+                severity="warning",
+                message=str(result.get("error") or cli_error or "GitHub PR check failed"),
+            )
+            return {"ok": False, "error": result.get("error") or cli_error, "prs": []}
     prs: list[dict[str, Any]] = []
     for item in result.get("items", []):
         if not isinstance(item, dict):
@@ -207,13 +310,16 @@ def github_issues_snapshot(
         ]
     )
     if not result.get("ok"):
-        _append_block(
-            blocked_items,
-            kind="github_issues_unavailable",
-            severity="warning",
-            message=str(result.get("error") or "GitHub issue check failed"),
-        )
-        return {"ok": False, "error": result.get("error"), "issues": []}
+        cli_error = result.get("error")
+        result = github_rest_issue_items(repo, limit)
+        if not result.get("ok"):
+            _append_block(
+                blocked_items,
+                kind="github_issues_unavailable",
+                severity="warning",
+                message=str(result.get("error") or cli_error or "GitHub issue check failed"),
+            )
+            return {"ok": False, "error": result.get("error") or cli_error, "issues": []}
     issues: list[dict[str, Any]] = []
     for item in result.get("items", []):
         if not isinstance(item, dict):

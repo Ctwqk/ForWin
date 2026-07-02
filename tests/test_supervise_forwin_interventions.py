@@ -143,7 +143,7 @@ def test_build_report_includes_required_fields_and_summarizes_sensitive_payloads
     assert "cookie" not in serialized
 
 
-def test_github_cli_failure_is_reported_as_blocked_without_crashing(monkeypatch) -> None:
+def test_github_cli_failure_falls_back_to_github_rest(monkeypatch) -> None:
     def fake_http_json(url: str, *, timeout: float = 5.0):
         if url.endswith("/api/publishers/upload-jobs?limit=5"):
             return {"ok": True, "payload": []}
@@ -156,6 +156,86 @@ def test_github_cli_failure_is_reported_as_blocked_without_crashing(monkeypatch)
     monkeypatch.setattr(supervisor, "http_json", fake_http_json)
     monkeypatch.setattr(supervisor, "http_json_full", fake_http_json, raising=False)
     monkeypatch.setattr(supervisor, "run_command", lambda args, **kwargs: {"ok": False, "error": "gh not found"})
+    monkeypatch.setattr(
+        supervisor,
+        "github_rest_pr_items",
+        lambda repo, limit: {
+            "ok": True,
+            "items": [
+                {
+                    "number": 17,
+                    "title": "Fallback PR",
+                    "url": "https://github.example/pr/17",
+                    "isDraft": False,
+                    "reviewDecision": "",
+                    "mergeStateStatus": "",
+                    "updatedAt": "2026-07-02T04:00:00Z",
+                    "statusCheckRollup": [],
+                }
+            ],
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "github_rest_issue_items",
+        lambda repo, limit: {
+            "ok": True,
+            "items": [
+                {
+                    "number": 23,
+                    "title": "Fallback issue",
+                    "url": "https://github.example/issues/23",
+                    "labels": [{"name": "codex"}],
+                    "assignees": [{"login": "magi1"}],
+                    "updatedAt": "2026-07-02T04:01:00Z",
+                }
+            ],
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "generation_tasks_snapshot",
+        lambda mcp_url: {"ok": True, "has_active_generation_task": False, "tasks": []},
+    )
+
+    report = supervisor.build_report(make_args(github_repo="Ctwqk/ForWin"))
+
+    assert report["github_prs_checked"]["ok"] is True
+    assert report["github_prs_checked"]["prs"][0]["number"] == 17
+    assert report["issues_checked"]["ok"] is True
+    assert report["issues_checked"]["issues"][0]["number"] == 23
+    assert {"github_prs_unavailable", "github_issues_unavailable"}.isdisjoint(
+        {item["kind"] for item in report["blocked_items"]}
+    )
+
+
+def test_github_cli_and_rest_failure_is_reported_as_blocked_without_crashing(monkeypatch) -> None:
+    def fake_http_json(url: str, *, timeout: float = 5.0):
+        if url.endswith("/api/publishers/upload-jobs?limit=5"):
+            return {"ok": True, "payload": []}
+        if url.endswith("/api/publishers/platforms"):
+            return {"ok": True, "payload": []}
+        if url.endswith("/api/settings/codex/health"):
+            return {"ok": True, "payload": {"enabled": True, "healthy": True, "status": "ok"}}
+        raise AssertionError(url)
+
+    monkeypatch.setattr(supervisor, "http_json", fake_http_json)
+    monkeypatch.setattr(supervisor, "http_json_full", fake_http_json, raising=False)
+    monkeypatch.setattr(supervisor, "run_command", lambda args, **kwargs: {"ok": False, "error": "gh not found"})
+    monkeypatch.setattr(
+        supervisor,
+        "github_rest_pr_items",
+        lambda repo, limit: {"ok": False, "error": "REST unavailable"},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "github_rest_issue_items",
+        lambda repo, limit: {"ok": False, "error": "REST unavailable"},
+        raising=False,
+    )
     monkeypatch.setattr(
         supervisor,
         "generation_tasks_snapshot",

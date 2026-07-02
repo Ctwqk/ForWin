@@ -45,6 +45,100 @@ def test_extract_limit_signals_keeps_platform_rule_thresholds_as_rules() -> None
     assert all(len(item["snippet"]) <= quotas.MAX_SNIPPET_CHARS for item in signals)
 
 
+def test_default_pages_include_fanqie_official_longform_rules() -> None:
+    fanqie_pages = {item["page_key"]: item["url"] for item in quotas.DEFAULT_PAGES["fanqie"]}
+
+    assert (
+        fanqie_pages["official_longform_publish_rules"]
+        == "https://fanqienovel.com/writer/zone/article/7639950766869839897"
+    )
+
+
+def test_default_pages_include_qidian_readonly_account_endpoints() -> None:
+    qidian_pages = {item["page_key"]: item["url"] for item in quotas.DEFAULT_PAGES["qidian"]}
+
+    assert (
+        qidian_pages["account_can_create_work_endpoint"]
+        == "https://write.qq.com/ccauthorweb/novel/iscancreatenovel"
+    )
+    assert (
+        qidian_pages["day_words_calendar_endpoint"]
+        == "https://write.qq.com/ccauthorweb/daywords/getMonthDayWords"
+    )
+
+
+def test_extract_limit_signals_adds_fanqie_longform_image_table_rules() -> None:
+    signals = quotas.extract_limit_signals(
+        platform="fanqie",
+        page_key="official_longform_publish_rules",
+        url="https://fanqienovel.com/writer/zone/article/7639950766869839897?secret=hidden",
+        title="长篇网文发文规则（第二版）上线通知",
+        text="""
+        一、规则详情
+        二、规则解读
+        1. 可创建长篇作品数：可以新创建的长篇作品数量
+        2. 可更新长篇作品数：可以发布新章节的长篇作品数量
+        3. 可提交发布字数：可以新增提交发布（含修改）的字数额度
+        """,
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    assert by_category["fanqie_longform_create_quota"]["limits"] == {
+        "daily_create_longform_works": 1,
+        "monthly_create_longform_works": 3,
+    }
+    assert by_category["fanqie_longform_update_work_quota"]["limits"] == {
+        "lv0_lv1_daily_update_longform_works": 1,
+        "lv2_lv3_daily_update_longform_works": 3,
+        "lv4_plus_daily_update_longform_works": 5,
+    }
+    assert by_category["fanqie_longform_word_quota"]["limits"] == {
+        "lv0_lv1_daily_submitted_words_lt": 10000,
+        "lv2_lv3_daily_submitted_words_lt": 20000,
+        "lv4_plus_daily_submitted_words_lt": 50000,
+        "lv0_lv1_monthly_submitted_words_lt": 250000,
+        "lv2_lv3_monthly_submitted_words_lt": 500000,
+        "lv4_plus_monthly_submitted_words_lt": 1000000,
+    }
+    assert by_category["fanqie_longform_word_quota"]["quota_confirmed"] is True
+    assert by_category["fanqie_longform_word_quota"]["source_evidence"] == "official_article_image_table"
+    assert "secret=hidden" not in json.dumps(signals, ensure_ascii=False)
+
+
+def test_extract_limit_signals_keeps_qidian_account_endpoint_as_current_state() -> None:
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="account_can_create_work_endpoint",
+        url="https://write.qq.com/ccauthorweb/novel/iscancreatenovel",
+        title="",
+        text='{"returnCode":2000,"returnMsg":"成功","result":true,"info":"成功"}',
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    assert by_category["current_account_create_available"]["severity"] == "info"
+    assert by_category["current_account_create_available"]["current_value"] is True
+    assert by_category["current_account_create_available"]["quota_confirmed"] is False
+
+
+def test_extract_limit_signals_does_not_treat_qidian_day_words_as_quota() -> None:
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="day_words_calendar_endpoint",
+        url="https://write.qq.com/ccauthorweb/daywords/getMonthDayWords",
+        title="",
+        text="""
+        {"returnCode":2000,"returnMsg":"月历","result":{"listMonthInfo":[
+        {"dayWordsShowTxt":"当日发布 0 字","date":"2026-07-02","pubChapters":0}
+        ]}}
+        """,
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    assert "numeric_publish_frequency_quota" not in by_category
+    assert by_category["current_publish_counter"]["severity"] == "info"
+    assert by_category["current_publish_counter"]["quota_confirmed"] is False
+
+
 def test_summarize_probe_marks_publish_true_unverified_without_numeric_frequency_quota() -> None:
     report = quotas.summarize_probe(
         checked_at="2026-07-02T05:30:00Z",
@@ -69,6 +163,75 @@ def test_summarize_probe_marks_publish_true_unverified_without_numeric_frequency
     assert report["publish_true_gate"]["allowed"] is False
     assert report["publish_true_gate"]["reason"] == "numeric_publish_frequency_quota_unconfirmed"
     assert report["platforms"]["qidian"]["visible_account_blockers"] == []
+
+
+def test_summarize_probe_requires_quota_confirmation_for_each_expected_platform() -> None:
+    fanqie_signals = quotas.extract_limit_signals(
+        platform="fanqie",
+        page_key="official_longform_publish_rules",
+        url="https://fanqienovel.com/writer/zone/article/7639950766869839897",
+        title="长篇网文发文规则（第二版）上线通知",
+        text="可创建长篇作品数 可更新长篇作品数 可提交发布字数",
+    )
+    qidian_signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_chapter_word_faq",
+        url="https://write.qq.com/ask/qfoycqb",
+        title="章节字数说明",
+        text="章节内容不能为空，单章章节字数不超过20000，但建议单章章节字数控制在2000-6000字内。",
+    )
+
+    report = quotas.summarize_probe(
+        checked_at="2026-07-02T05:30:00Z",
+        pages=[
+            {
+                "platform": "fanqie",
+                "page_key": "official_longform_publish_rules",
+                "ok": True,
+                "signals": fanqie_signals,
+            },
+            {
+                "platform": "qidian",
+                "page_key": "official_chapter_word_faq",
+                "ok": True,
+                "signals": qidian_signals,
+            },
+        ],
+        expected_platforms=["fanqie", "qidian"],
+    )
+
+    assert report["platforms"]["fanqie"]["publish_quota_confirmed"] is True
+    assert report["platforms"]["qidian"]["publish_quota_confirmed"] is False
+    assert report["publish_true_gate"]["allowed"] is False
+    assert report["publish_true_gate"]["unconfirmed_platforms"] == ["qidian"]
+    assert report["status"] == "quota_incomplete"
+
+
+def test_summarize_probe_allows_single_platform_when_its_quota_is_confirmed() -> None:
+    fanqie_signals = quotas.extract_limit_signals(
+        platform="fanqie",
+        page_key="official_longform_publish_rules",
+        url="https://fanqienovel.com/writer/zone/article/7639950766869839897",
+        title="长篇网文发文规则（第二版）上线通知",
+        text="可创建长篇作品数 可更新长篇作品数 可提交发布字数",
+    )
+
+    report = quotas.summarize_probe(
+        checked_at="2026-07-02T05:30:00Z",
+        pages=[
+            {
+                "platform": "fanqie",
+                "page_key": "official_longform_publish_rules",
+                "ok": True,
+                "signals": fanqie_signals,
+            },
+        ],
+        expected_platforms=["fanqie"],
+    )
+
+    assert report["status"] == "quota_confirmed"
+    assert report["publish_true_gate"]["allowed"] is True
+    assert report["publish_true_gate"]["confirmed_platforms"] == ["fanqie"]
 
 
 def test_build_report_redacts_browser_page_text(monkeypatch: pytest.MonkeyPatch) -> None:

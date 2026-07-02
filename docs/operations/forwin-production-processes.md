@@ -170,9 +170,16 @@ must treat that document as the publish gate. In short:
 - If the probe returns `blocked`, do not publish; resolve the visible platform
   risk/control signal first.
 - If the probe returns `quota_incomplete`, do not describe the run as
-  quota-confirmed. Stop at `publish=false` unless a separately
+  quota-confirmed. Check `publish_true_gate.confirmed_platforms` and
+  `publish_true_gate.unconfirmed_platforms` to see which platform is still
+  missing quota evidence. Stop at `publish=false` unless a separately
   operator-directed exception is being run under the conservative ceiling of one
   publish attempt per platform.
+- As of the 2026-07-02 probe, Fanqie longform daily/monthly creation,
+  daily updated-work, and daily/monthly submitted-word quotas are confirmed from
+  the official second-edition longform publishing-rules article. Qidian still has
+  only current-state endpoint evidence (`iscancreatenovel=true` and day-words
+  counters), not a stable daily/hourly publish quota.
 - Do not continue through captcha, MFA, risk control, account abnormality,
   missing permission, review rejection, or signing/contract prompts.
 

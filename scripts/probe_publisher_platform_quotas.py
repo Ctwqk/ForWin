@@ -22,6 +22,13 @@ from scripts.monitor_forwin_runtime import redact_sensitive, utc_now  # noqa: E4
 
 
 MAX_SNIPPET_CHARS = 96
+FANQIE_LONGFORM_RULE_ARTICLE_URL = "https://fanqienovel.com/writer/zone/article/7639950766869839897"
+PUBLISH_QUOTA_SIGNAL_CATEGORIES = {
+    "numeric_publish_frequency_quota",
+    "fanqie_longform_create_quota",
+    "fanqie_longform_update_work_quota",
+    "fanqie_longform_word_quota",
+}
 
 
 @dataclass(frozen=True)
@@ -81,8 +88,17 @@ SIGNAL_RULES: tuple[SignalRule, ...] = (
 )
 
 NUMERIC_PUBLISH_FREQUENCY_PATTERN = re.compile(
-    r"(每日|每天|每小时|小时内|当日|今日).{0,24}(发布|发表|发文|更新|章节).{0,24}"
-    r"([0-9０-９]+|一|二|两|三|四|五|六|七|八|九|十)",
+    r"("
+    r"(每日|每天|每小时|小时内|当日|今日|单日|单月)"
+    r".{0,36}(上限|限|仅限|最多|不超过|不得超过|可提交|可创建|可更新|额度)"
+    r".{0,36}(发布|发表|发文|更新|章节|作品|字数)"
+    r".{0,36}([0-9０-９]+|一|二|两|三|四|五|六|七|八|九|十)"
+    r"|"
+    r"(每日|每天|每小时|小时内|当日|今日|单日|单月)"
+    r".{0,36}(发布|发表|发文|更新|章节|作品|字数)"
+    r".{0,36}(上限|限|仅限|最多|不超过|不得超过|额度)"
+    r".{0,36}([0-9０-９]+|一|二|两|三|四|五|六|七|八|九|十)"
+    r")",
 )
 
 
@@ -101,6 +117,10 @@ DEFAULT_PAGES: dict[str, list[dict[str, str]]] = {
             "url": "https://fanqienovel.com/docs/8231/90699",
         },
         {
+            "page_key": "official_longform_publish_rules",
+            "url": FANQIE_LONGFORM_RULE_ARTICLE_URL,
+        },
+        {
             "page_key": "official_changelog",
             "url": "https://fanqienovel.com/writer/zone/change-log",
         },
@@ -117,6 +137,14 @@ DEFAULT_PAGES: dict[str, list[dict[str, str]]] = {
         {
             "page_key": "create_work",
             "url": "https://write.qq.com/portal/dashboard/create-novel?from=S5",
+        },
+        {
+            "page_key": "account_can_create_work_endpoint",
+            "url": "https://write.qq.com/ccauthorweb/novel/iscancreatenovel",
+        },
+        {
+            "page_key": "day_words_calendar_endpoint",
+            "url": "https://write.qq.com/ccauthorweb/daywords/getMonthDayWords",
         },
         {
             "page_key": "official_new_book_faq",
@@ -161,6 +189,132 @@ def snippet_around(text: str, keyword: str) -> str:
 
 def _contains_keyword(text: str, keyword: str) -> bool:
     return keyword in text
+
+
+def _fanqie_longform_static_rule_signals(
+    *,
+    platform: str,
+    page_key: str,
+    url: str,
+    title: str,
+    text: str,
+) -> list[dict[str, Any]]:
+    if platform != "fanqie" or page_key != "official_longform_publish_rules":
+        return []
+    normalized = normalize_space(f"{title} {text}")
+    if "长篇网文发文规则" not in normalized and "可提交发布字数" not in normalized:
+        return []
+    source_url = sanitize_url(url or FANQIE_LONGFORM_RULE_ARTICLE_URL)
+    base = {
+        "platform": platform,
+        "page_key": page_key,
+        "source_url": source_url,
+        "title": normalize_space(title)[:120],
+        "severity": "rule",
+        "source_evidence": "official_article_image_table",
+        "quota_confirmed": True,
+    }
+    return [
+        {
+            **base,
+            "category": "fanqie_longform_create_quota",
+            "matched_keyword": "长篇网文发文规则: 可创建长篇作品数",
+            "snippet": "单账号单日可创建长篇作品数仅限1本，单月上限3本。",
+            "limits": {
+                "daily_create_longform_works": 1,
+                "monthly_create_longform_works": 3,
+            },
+        },
+        {
+            **base,
+            "category": "fanqie_longform_update_work_quota",
+            "matched_keyword": "长篇网文发文规则: 可更新长篇作品数",
+            "snippet": "单日可更新长篇作品数按作者等级分层: Lv.0/Lv.1限1本，Lv.2/Lv.3上限3本，Lv.4及以上上限5本。",
+            "limits": {
+                "lv0_lv1_daily_update_longform_works": 1,
+                "lv2_lv3_daily_update_longform_works": 3,
+                "lv4_plus_daily_update_longform_works": 5,
+            },
+        },
+        {
+            **base,
+            "category": "fanqie_longform_word_quota",
+            "matched_keyword": "长篇网文发文规则: 可提交发布字数",
+            "snippet": "可提交发布字数按作者等级分层: 单日<1万/<2万/<5万，单月<25万/<50万/<100万。",
+            "limits": {
+                "lv0_lv1_daily_submitted_words_lt": 10000,
+                "lv2_lv3_daily_submitted_words_lt": 20000,
+                "lv4_plus_daily_submitted_words_lt": 50000,
+                "lv0_lv1_monthly_submitted_words_lt": 250000,
+                "lv2_lv3_monthly_submitted_words_lt": 500000,
+                "lv4_plus_monthly_submitted_words_lt": 1000000,
+            },
+        },
+    ]
+
+
+def _qidian_endpoint_state_signals(
+    *,
+    platform: str,
+    page_key: str,
+    url: str,
+    title: str,
+    text: str,
+) -> list[dict[str, Any]]:
+    if platform != "qidian":
+        return []
+    source_url = sanitize_url(url)
+    base = {
+        "platform": platform,
+        "page_key": page_key,
+        "source_url": source_url,
+        "title": normalize_space(title)[:120],
+        "severity": "info",
+        "quota_confirmed": False,
+    }
+    payload: Any = None
+    stripped = str(text or "").strip()
+    if stripped:
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            payload = None
+
+    if page_key == "account_can_create_work_endpoint":
+        current_value = None
+        if isinstance(payload, dict) and isinstance(payload.get("result"), bool):
+            current_value = bool(payload["result"])
+        elif re.search(r'"result"\s*:\s*true', stripped, re.I):
+            current_value = True
+        elif re.search(r'"result"\s*:\s*false', stripped, re.I):
+            current_value = False
+        if current_value is None:
+            return []
+        return [
+            {
+                **base,
+                "category": "current_account_create_available",
+                "severity": "info" if current_value else "blocker",
+                "matched_keyword": f"iscancreatenovel={str(current_value).lower()}",
+                "snippet": "Qidian current account create-work endpoint returned available=true."
+                if current_value
+                else "Qidian current account create-work endpoint returned available=false.",
+                "current_value": current_value,
+            }
+        ]
+
+    if page_key == "day_words_calendar_endpoint" and (
+        "dayWordsShowTxt" in stripped or "当日发布" in stripped or "pubChapters" in stripped
+    ):
+        return [
+            {
+                **base,
+                "category": "current_publish_counter",
+                "matched_keyword": "dayWordsShowTxt",
+                "snippet": snippet_around(stripped, "当日发布" if "当日发布" in stripped else "dayWordsShowTxt"),
+            }
+        ]
+    return []
 
 
 def extract_limit_signals(
@@ -211,6 +365,24 @@ def extract_limit_signals(
                 "snippet": snippet_around(normalized, match.group(0)),
             }
         )
+    signals.extend(
+        _fanqie_longform_static_rule_signals(
+            platform=platform,
+            page_key=page_key,
+            url=url,
+            title=title,
+            text=text,
+        )
+    )
+    signals.extend(
+        _qidian_endpoint_state_signals(
+            platform=platform,
+            page_key=page_key,
+            url=url,
+            title=title,
+            text=text,
+        )
+    )
     return signals
 
 
@@ -219,7 +391,8 @@ def _visible_account_blockers(signals: list[dict[str, Any]]) -> list[dict[str, A
         item
         for item in signals
         if item.get("severity") == "blocker"
-        and str(item.get("page_key") or "") in {"dashboard", "create_work"}
+        and str(item.get("page_key") or "")
+        in {"dashboard", "create_work", "account_can_create_work_endpoint"}
     ]
 
 
@@ -231,7 +404,6 @@ def summarize_probe(
 ) -> dict[str, Any]:
     platforms: dict[str, dict[str, Any]] = {}
     all_blockers: list[dict[str, Any]] = []
-    numeric_publish_quota_confirmed = False
 
     for platform in expected_platforms:
         platforms[platform] = {
@@ -239,6 +411,7 @@ def summarize_probe(
             "ok_page_count": 0,
             "signal_count": 0,
             "categories": [],
+            "publish_quota_confirmed": False,
             "visible_account_blockers": [],
         }
 
@@ -250,6 +423,7 @@ def summarize_probe(
                 "ok_page_count": 0,
                 "signal_count": 0,
                 "categories": [],
+                "publish_quota_confirmed": False,
                 "visible_account_blockers": [],
             }
         entry = platforms[platform]
@@ -263,12 +437,19 @@ def summarize_probe(
             category = str(signal.get("category") or "")
             if category:
                 categories.add(category)
-            if category == "numeric_publish_frequency_quota":
-                numeric_publish_quota_confirmed = True
+            if category in PUBLISH_QUOTA_SIGNAL_CATEGORIES or signal.get("quota_confirmed"):
+                entry["publish_quota_confirmed"] = True
         entry["categories"] = sorted(categories)
         blockers = _visible_account_blockers(signals)
         entry["visible_account_blockers"].extend(blockers)
         all_blockers.extend(blockers)
+
+    confirmed_platforms = [
+        platform for platform in expected_platforms if platforms.get(platform, {}).get("publish_quota_confirmed")
+    ]
+    unconfirmed_platforms = [
+        platform for platform in expected_platforms if not platforms.get(platform, {}).get("publish_quota_confirmed")
+    ]
 
     if all_blockers:
         status = "blocked"
@@ -276,13 +457,17 @@ def summarize_probe(
             "allowed": False,
             "reason": "visible_account_blocker",
             "blocker_count": len(all_blockers),
+            "confirmed_platforms": confirmed_platforms,
+            "unconfirmed_platforms": unconfirmed_platforms,
         }
-    elif numeric_publish_quota_confirmed:
+    elif not unconfirmed_platforms:
         status = "quota_confirmed"
         publish_true_gate = {
             "allowed": True,
             "reason": "numeric_publish_frequency_quota_confirmed",
             "blocker_count": 0,
+            "confirmed_platforms": confirmed_platforms,
+            "unconfirmed_platforms": [],
         }
     else:
         status = "quota_incomplete"
@@ -290,6 +475,8 @@ def summarize_probe(
             "allowed": False,
             "reason": "numeric_publish_frequency_quota_unconfirmed",
             "blocker_count": 0,
+            "confirmed_platforms": confirmed_platforms,
+            "unconfirmed_platforms": unconfirmed_platforms,
         }
 
     return redact_sensitive(

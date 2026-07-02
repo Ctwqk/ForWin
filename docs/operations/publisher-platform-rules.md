@@ -19,6 +19,8 @@ Official or platform-owned sources checked:
 - Fanqie writer changelog: `https://fanqienovel.com/writer/zone/change-log`
 - Qidian writer publish flow FAQ: `https://write.qq.com/ask/qfokgyc`
 - Qidian chapter length FAQ: `https://write.qq.com/ask/qfoycqb`
+- Qidian daily update FAQ: `https://write.qq.com/ask/qjdwzhv`
+- Qidian full-attendance FAQ: `https://write.qq.com/ask/qjdbpvx`
 - Qidian work information notice: `https://write.qq.com/portal/content/27817262201325501?feedType=2&lcid=74671304322038861`
 - Qidian mobile signing guide: `https://write.qq.com/portal/content?caid=14626181805826801&feedType=2&lcid=35546823090990148`
 - Qidian writer version notes: `https://write.qq.com/portal/version`
@@ -50,6 +52,8 @@ Official or platform-owned sources checked:
 | Fanqie | Uncontracted works can be visible after real-name verification; uncontracted works can be deleted/hidden from work management in the backend guide/changelog. | Test works should remain marked and minimal; deletion/hide is possible for unsigned works but not an automation cleanup step unless explicitly requested. |
 | Qidian | Standard novel new-book review requires the first body-volume chapter to reach at least 1000 words. | Do not use sub-1000-word public publish tests on Qidian. |
 | Qidian | A chapter cannot be empty; a single chapter must not exceed 20000 words, with 2000-6000 words recommended. | ForWin generated chapters around 3000-4500 Chinese chars are inside the recommended range. |
+| Qidian | Official daily-update FAQ says not all Qidian writers must update every day; update cadence can be arranged by the writer, while rankings and incentives can still depend on update frequency. | Treat daily cadence as an operational/recommendation factor, not a confirmed hard public publish quota. |
+| Qidian | Official full-attendance FAQ describes VIP daily 4000-word updating as a full-attendance incentive condition, and says authors should check current official announcements because welfare rules can change. | Do not use the 4000-word full-attendance condition to open the generic `publish=true` quota gate. |
 | Qidian | The logged-in editor frontend gates batch chapter import by file count: one batch imports at most 10 files, and the batch-import entry checks today's uploaded file count and blocks at 50 files for the day. | Treat Qidian file-import upload automation as capped at 10 files per batch and 50 imported files per natural day. This is a batch import/file quota, not proof of a daily public publish quota. |
 | Qidian | Work information format: book title within 15 Chinese characters, reader-facing note within 32 characters, intro 5-500 characters, and content must avoid sensitive or infringing text. | `create_if_missing=true` needs a short title, valid intro, and safe metadata. |
 | Qidian | Online signing can be invited by editors after new-book review; authors may apply after 100k words for male-channel Qidian/Chuangshi first sites and 50k words for listed female-channel sites. | Current short ForWin production tests are not signing-ready. |
@@ -75,7 +79,7 @@ stable numeric quota for:
   and natural-month longform quotas
 
 The 2026-07-02 production read-only quota probe opened six Fanqie pages and
-nine Qidian pages/endpoints/resources through the shared logged-in publisher browser. It
+eleven Qidian pages/endpoints/resources through the shared logged-in publisher browser. It
 saw no visible account blockers on the current dashboard, create-work pages, or
 Qidian create-availability endpoint:
 
@@ -105,8 +109,14 @@ Qidian create-availability endpoint:
   files and daily batch-import file count <50. The current bound work's
   read-only upload-count endpoint returned 0 files used today during the
   manual follow-up check.
+- Qidian official daily-update FAQ says daily updating is not mandatory for all
+  Qidian writers, and that update frequency can be arranged by the writer.
+- Qidian official full-attendance FAQ describes VIP daily 4000-word updating as
+  a full-attendance incentive condition, not a generic public publish-frequency
+  quota.
 - Qidian official/help pages confirmed word, intro, review, signing, and deletion
-  rules, but did not expose a stable daily/hourly publish quota.
+  rules plus update-cadence guidance, but did not expose a stable daily/hourly
+  publish quota.
 
 Because Qidian hard quotas and several draft/risk-control quotas were not
 confirmed, ForWin production policy keeps the quota objective open and uses
@@ -129,14 +139,14 @@ The July 2026 production longform smoke uploaded one generated chapter to each
 platform with `publish=false`, `create_if_missing=false`, and existing safe work
 bindings. Both upload jobs succeeded as drafts.
 
-The latest read-only quota probe was run at `2026-07-02T06:36:11Z` and returned:
+The latest read-only quota probe was run at `2026-07-02T06:53:30Z` and returned:
 
 - `status`: `quota_incomplete`
 - `blocked_items`: none
 - Fanqie: 6/6 probed pages loaded, 17 quota/rule signals,
   `publish_quota_confirmed=true`, no visible current account blocker
-- Qidian: 9/9 probed pages/endpoints/resources loaded, 11-12 quota/current-state/source-map signals
-  depending on dynamic page text,
+- Qidian: 11/11 probed pages/endpoints/resources loaded, 17
+  quota/current-state/source-map/update-guidance signals,
   `publish_quota_confirmed=false`, no visible current account blocker
 - `publish_true_gate.allowed`: `false` because
   `numeric_publish_frequency_quota_unconfirmed`

@@ -73,6 +73,8 @@ def test_default_pages_include_qidian_readonly_account_endpoints() -> None:
         qidian_pages["editor_frontend_source_map"]
         == "https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js.map"
     )
+    assert qidian_pages["official_daily_update_faq"] == "https://write.qq.com/ask/qjdwzhv"
+    assert qidian_pages["official_full_attendance_faq"] == "https://write.qq.com/ask/qjdbpvx"
 
 
 def test_extract_limit_signals_adds_fanqie_longform_image_table_rules() -> None:
@@ -145,6 +147,88 @@ def test_extract_limit_signals_does_not_treat_qidian_day_words_as_quota() -> Non
     assert "numeric_publish_frequency_quota" not in by_category
     assert by_category["current_publish_counter"]["severity"] == "info"
     assert by_category["current_publish_counter"]["quota_confirmed"] is False
+
+
+def test_extract_limit_signals_adds_qidian_daily_update_guidance_without_quota_confirmation() -> None:
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_daily_update_faq",
+        url="https://write.qq.com/ask/qjdwzhv?secret=hidden",
+        title="起点作家必须每天都要更新吗",
+        text="""
+        嗯，其实并不是所有起点作家都必须每天更新的。这要看具体的情况和作家的个人安排。
+        许多作家会根据自己的创作进度来安排更新，可能一周更新几章，或者更长时间更新一次。
+        当然，起点作为一个大平台，对于更新也有一定的要求和激励机制。
+        """,
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    assert by_category["qidian_daily_update_guidance"]["severity"] == "info"
+    assert by_category["qidian_daily_update_guidance"]["quota_confirmed"] is False
+    assert by_category["qidian_daily_update_guidance"]["source_evidence"] == "official_ask_daily_update_faq"
+    assert "numeric_publish_frequency_quota" not in by_category
+    assert "secret=hidden" not in json.dumps(signals, ensure_ascii=False)
+
+
+def test_extract_limit_signals_marks_qidian_full_attendance_as_incentive_not_publish_quota() -> None:
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_full_attendance_faq",
+        url="https://write.qq.com/ask/qjdbpvx",
+        title="起点中文网全勤奖规则2023",
+        text="""
+        全勤奖规则变化
+        上架后的前三个月：无论作品订阅成绩如何，只要每天更新不低于四千字，作者即可获得保底奖励。
+        全勤奖的获取条件：上架后，VIP章节日更4000字。
+        请注意，这些规则可能会随时间有所变化，建议作者定期查看起点中文网的官方公告。
+        """,
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    assert by_category["qidian_full_attendance_update_incentive"]["severity"] == "rule"
+    assert by_category["qidian_full_attendance_update_incentive"]["quota_confirmed"] is False
+    assert by_category["qidian_full_attendance_update_incentive"]["source_evidence"] == "official_ask_full_attendance_faq"
+    assert "numeric_publish_frequency_quota" not in by_category
+
+
+def test_summarize_probe_does_not_treat_qidian_update_guidance_as_publish_quota() -> None:
+    daily_update_signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_daily_update_faq",
+        url="https://write.qq.com/ask/qjdwzhv",
+        title="起点作家必须每天都要更新吗",
+        text="并不是所有起点作家都必须每天更新，更新频率是作家自己可以根据实际情况来决定的。",
+    )
+    full_attendance_signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_full_attendance_faq",
+        url="https://write.qq.com/ask/qjdbpvx",
+        title="起点中文网全勤奖规则2023",
+        text="全勤奖的获取条件：上架后，VIP章节日更4000字。",
+    )
+
+    report = quotas.summarize_probe(
+        checked_at="2026-07-02T07:00:00Z",
+        pages=[
+            {
+                "platform": "qidian",
+                "page_key": "official_daily_update_faq",
+                "ok": True,
+                "signals": daily_update_signals,
+            },
+            {
+                "platform": "qidian",
+                "page_key": "official_full_attendance_faq",
+                "ok": True,
+                "signals": full_attendance_signals,
+            },
+        ],
+        expected_platforms=["qidian"],
+    )
+
+    assert report["platforms"]["qidian"]["publish_quota_confirmed"] is False
+    assert report["publish_true_gate"]["allowed"] is False
+    assert report["status"] == "quota_incomplete"
 
 
 def test_extract_limit_signals_adds_qidian_batch_import_quota_from_editor_static() -> None:

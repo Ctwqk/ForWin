@@ -168,6 +168,14 @@ DEFAULT_PAGES: dict[str, list[dict[str, str]]] = {
             "url": "https://write.qq.com/ask/qfoycqb",
         },
         {
+            "page_key": "official_daily_update_faq",
+            "url": "https://write.qq.com/ask/qjdwzhv",
+        },
+        {
+            "page_key": "official_full_attendance_faq",
+            "url": "https://write.qq.com/ask/qjdbpvx",
+        },
+        {
             "page_key": "official_version_notes",
             "url": "https://write.qq.com/portal/version",
         },
@@ -461,6 +469,62 @@ def _qidian_editor_frontend_source_map_signals(
     ]
 
 
+def _qidian_update_cadence_guidance_signals(
+    *,
+    platform: str,
+    page_key: str,
+    url: str,
+    title: str,
+    text: str,
+) -> list[dict[str, Any]]:
+    if platform != "qidian":
+        return []
+
+    normalized = normalize_space(f"{title} {text}")
+    base = {
+        "platform": platform,
+        "page_key": page_key,
+        "source_url": sanitize_url(url),
+        "title": normalize_space(title)[:120],
+        "quota_confirmed": False,
+    }
+
+    if page_key == "official_daily_update_faq" and (
+        "并不是所有起点作家都必须每天更新" in normalized
+        or ("更新频率" in normalized and "自己可以根据实际情况来决定" in normalized)
+    ):
+        return [
+            {
+                **base,
+                "category": "qidian_daily_update_guidance",
+                "severity": "info",
+                "matched_keyword": "并不是所有起点作家都必须每天更新",
+                "snippet": "官方问答说明并非所有起点作家都必须每天更新；更新频率可按创作进度安排。",
+                "source_evidence": "official_ask_daily_update_faq",
+            }
+        ]
+
+    if page_key == "official_full_attendance_faq" and (
+        "全勤奖" in normalized
+        and ("VIP章节日更4000字" in normalized or "每天更新不低于四千字" in normalized)
+    ):
+        return [
+            {
+                **base,
+                "category": "qidian_full_attendance_update_incentive",
+                "severity": "rule",
+                "matched_keyword": "全勤奖 + VIP章节日更4000字",
+                "snippet": "官方问答把VIP章节日更4000字列为全勤奖获取条件；这是福利/激励门槛，不是公开发布频率额度。",
+                "source_evidence": "official_ask_full_attendance_faq",
+                "limits": {
+                    "vip_daily_update_words_for_full_attendance": 4000,
+                },
+            }
+        ]
+
+    return []
+
+
 def extract_limit_signals(
     *,
     platform: str,
@@ -538,6 +602,15 @@ def extract_limit_signals(
     )
     signals.extend(
         _qidian_editor_frontend_source_map_signals(
+            platform=platform,
+            page_key=page_key,
+            url=url,
+            title=title,
+            text=text,
+        )
+    )
+    signals.extend(
+        _qidian_update_cadence_guidance_signals(
             platform=platform,
             page_key=page_key,
             url=url,

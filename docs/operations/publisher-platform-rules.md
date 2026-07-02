@@ -139,7 +139,7 @@ The July 2026 production longform smoke uploaded one generated chapter to each
 platform with `publish=false`, `create_if_missing=false`, and existing safe work
 bindings. Both upload jobs succeeded as drafts.
 
-The latest read-only quota probe was run at `2026-07-02T07:00:09Z` and returned:
+The latest read-only quota probe was run at `2026-07-02T07:04:06Z` and returned:
 
 - `status`: `quota_incomplete`
 - `blocked_items`: none

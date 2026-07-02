@@ -57,7 +57,8 @@ Official or platform-owned sources checked:
 | Qidian | The logged-in editor frontend gates batch chapter import by file count: one batch imports at most 10 files, and the batch-import entry checks today's uploaded file count and blocks at 50 files for the day. | Treat Qidian file-import upload automation as capped at 10 files per batch and 50 imported files per natural day. This is a batch import/file quota, not proof of a daily public publish quota. |
 | Qidian | Work information format: book title within 15 Chinese characters, reader-facing note within 32 characters, intro 5-500 characters, and content must avoid sensitive or infringing text. | `create_if_missing=true` needs a short title, valid intro, and safe metadata. |
 | Qidian | Online signing can be invited by editors after new-book review; authors may apply after 100k words for male-channel Qidian/Chuangshi first sites and 50k words for listed female-channel sites. | Current short ForWin production tests are not signing-ready. |
-| Qidian | Version notes include draft defaults, timed publish cancellation, signing status display, and a 2-hour interval for chapter unban requests. | Automation must not retry blocked chapter actions aggressively. |
+| Qidian | The editor source map warns that new-book review periods should avoid frequent chapter publishing or chapter edits. | Treat this as a review-risk rule. It is not a stable numeric publish-frequency quota. |
+| Qidian | Version notes include draft defaults, timed publish cancellation, signing status display, and a 2-hour interval for chapter unban requests. | Automation must not retry blocked chapter actions aggressively. The 2-hour rule is for unblock requests, not ordinary chapter publishing. |
 | Qidian | Uncontracted works can be deleted in 作家助手; signed works require editor coordination. | Do not create throwaway signed/contract-affecting artifacts. |
 
 ## Unconfirmed Public Quotas
@@ -114,6 +115,8 @@ Qidian create-availability endpoint:
 - Qidian official full-attendance FAQ describes VIP daily 4000-word updating as
   a full-attendance incentive condition, not a generic public publish-frequency
   quota.
+- Qidian official version notes confirm a 2-hour chapter-unblock-request
+  interval. This is an unblock workflow interval, not a chapter publish quota.
 - Qidian official/help pages confirmed word, intro, review, signing, and deletion
   rules plus update-cadence guidance, but did not expose a stable daily/hourly
   publish quota.
@@ -139,15 +142,14 @@ The July 2026 production longform smoke uploaded one generated chapter to each
 platform with `publish=false`, `create_if_missing=false`, and existing safe work
 bindings. Both upload jobs succeeded as drafts.
 
-The latest read-only quota probe was run at `2026-07-02T07:04:06Z` and returned:
+The latest read-only quota probe was run at `2026-07-02T07:24:27Z` and returned:
 
 - `status`: `quota_incomplete`
 - `blocked_items`: none
 - Fanqie: 6/6 probed pages loaded, 17 quota/rule signals,
   `publish_quota_confirmed=true`, no visible current account blocker
-- Qidian: 11/11 probed pages/endpoints/resources loaded, 15-17
-  quota/current-state/source-map/update-guidance signals depending on dynamic
-  page text,
+- Qidian: 11/11 probed pages/endpoints/resources loaded, 22
+  quota/current-state/source-map/update-guidance/version-note signals,
   `publish_quota_confirmed=false`, no visible current account blocker
 - `publish_true_gate.allowed`: `false` because
   `numeric_publish_frequency_quota_unconfirmed`

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from html import unescape
 import json
 import re
 import subprocess
@@ -10,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from urllib.request import Request, urlopen
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -33,6 +35,13 @@ PUBLISH_QUOTA_SIGNAL_CATEGORIES = {
     "fanqie_longform_create_quota",
     "fanqie_longform_update_work_quota",
     "fanqie_longform_word_quota",
+}
+PUBLIC_STATIC_FALLBACK_PAGES = {
+    ("qidian", "official_new_book_faq"),
+    ("qidian", "official_chapter_word_faq"),
+    ("qidian", "official_daily_update_faq"),
+    ("qidian", "official_full_attendance_faq"),
+    ("qidian", "official_version_notes"),
 }
 
 
@@ -190,6 +199,43 @@ def sanitize_url(url: Any) -> str:
 
 def normalize_space(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def html_to_text(value: str) -> str:
+    without_scripts = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", value, flags=re.IGNORECASE | re.DOTALL)
+    return normalize_space(unescape(re.sub(r"<[^>]+>", " ", without_scripts)))
+
+
+def fetch_public_static_text(url: str) -> str:
+    if not url:
+        return ""
+    request = Request(
+        sanitize_url(url),
+        headers={"User-Agent": "Mozilla/5.0 ForWinQuotaProbe/1.0"},
+    )
+    try:
+        with urlopen(request, timeout=20) as response:  # noqa: S310 - fixed official/public source URLs only.
+            charset = response.headers.get_content_charset() or "utf-8"
+            return html_to_text(response.read().decode(charset, errors="replace"))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def page_text_for_signal_extraction(
+    *,
+    platform: str,
+    page_key: str,
+    url: str,
+    browser_text: str,
+    public_text_fetcher=fetch_public_static_text,
+) -> str:
+    text = str(browser_text or "")
+    if (platform, page_key) not in PUBLIC_STATIC_FALLBACK_PAGES:
+        return text
+    fallback_text = html_to_text(public_text_fetcher(sanitize_url(url)))
+    if not fallback_text:
+        return text
+    return normalize_space(f"{text}\n{fallback_text}")
 
 
 def snippet_around(text: str, keyword: str) -> str:
@@ -469,6 +515,53 @@ def _qidian_editor_frontend_source_map_signals(
     ]
 
 
+def _qidian_source_map_review_warning_signals(
+    *,
+    platform: str,
+    page_key: str,
+    url: str,
+    title: str,
+    text: str,
+) -> list[dict[str, Any]]:
+    if platform != "qidian" or page_key != "editor_frontend_source_map":
+        return []
+    try:
+        payload = json.loads(str(text or ""))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    sources = payload.get("sources")
+    sources_content = payload.get("sourcesContent")
+    if not isinstance(sources, list) or not isinstance(sources_content, list):
+        return []
+
+    for index, source in enumerate(sources):
+        if source != "components/sideTask/task3.js" or index >= len(sources_content):
+            continue
+        content = sources_content[index]
+        if not isinstance(content, str):
+            continue
+        normalized = normalize_space(content)
+        if "新书审核期注意避免频繁发布、修改章节" not in normalized:
+            continue
+        return [
+            {
+                "platform": platform,
+                "page_key": page_key,
+                "source_url": sanitize_url(url),
+                "title": normalize_space(title)[:120],
+                "category": "qidian_new_book_review_frequency_warning",
+                "severity": "rule",
+                "matched_keyword": "新书审核期注意避免频繁发布、修改章节",
+                "snippet": "官方source map提示新书审核期避免频繁发布或修改章节；这是审核风险提示，不是数值发布额度。",
+                "source_evidence": "official_editor_frontend_source_map",
+                "quota_confirmed": False,
+            }
+        ]
+    return []
+
+
 def _qidian_update_cadence_guidance_signals(
     *,
     platform: str,
@@ -523,6 +616,38 @@ def _qidian_update_cadence_guidance_signals(
         ]
 
     return []
+
+
+def _qidian_version_note_interval_signals(
+    *,
+    platform: str,
+    page_key: str,
+    url: str,
+    title: str,
+    text: str,
+) -> list[dict[str, Any]]:
+    if platform != "qidian" or page_key != "official_version_notes":
+        return []
+    normalized = normalize_space(f"{title} {text}")
+    if "章节申请解禁间隔时间调整至2小时" not in normalized:
+        return []
+    return [
+        {
+            "platform": platform,
+            "page_key": page_key,
+            "source_url": sanitize_url(url),
+            "title": normalize_space(title)[:120],
+            "category": "qidian_chapter_unblock_request_interval",
+            "severity": "rule",
+            "matched_keyword": "章节申请解禁间隔时间调整至2小时",
+            "snippet": "官方版本说明确认章节申请解禁间隔时间为2小时；这是解禁申请间隔，不是发布频率额度。",
+            "source_evidence": "official_version_notes",
+            "quota_confirmed": True,
+            "limits": {
+                "chapter_unblock_request_interval_hours": 2,
+            },
+        }
+    ]
 
 
 def extract_limit_signals(
@@ -610,7 +735,25 @@ def extract_limit_signals(
         )
     )
     signals.extend(
+        _qidian_source_map_review_warning_signals(
+            platform=platform,
+            page_key=page_key,
+            url=url,
+            title=title,
+            text=text,
+        )
+    )
+    signals.extend(
         _qidian_update_cadence_guidance_signals(
+            platform=platform,
+            page_key=page_key,
+            url=url,
+            title=title,
+            text=text,
+        )
+    )
+    signals.extend(
+        _qidian_version_note_interval_signals(
             platform=platform,
             page_key=page_key,
             url=url,
@@ -886,19 +1029,28 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     for page in browser.get("pages", []) if isinstance(browser.get("pages"), list) else []:
         if not isinstance(page, dict):
             continue
+        platform = str(page.get("platform") or "")
+        page_key = str(page.get("page_key") or "")
+        url = str(page.get("url") or page.get("requested_url") or "")
+        text = page_text_for_signal_extraction(
+            platform=platform,
+            page_key=page_key,
+            url=url,
+            browser_text=str(page.get("text") or ""),
+        )
         signals = extract_limit_signals(
-            platform=str(page.get("platform") or ""),
-            page_key=str(page.get("page_key") or ""),
-            url=str(page.get("url") or page.get("requested_url") or ""),
+            platform=platform,
+            page_key=page_key,
+            url=url,
             title=str(page.get("title") or ""),
-            text=str(page.get("text") or ""),
+            text=text,
         )
         pages.append(
             {
-                "platform": page.get("platform") or "",
-                "page_key": page.get("page_key") or "",
+                "platform": platform,
+                "page_key": page_key,
                 "ok": bool(page.get("ok")),
-                "url": sanitize_url(page.get("url") or page.get("requested_url") or ""),
+                "url": sanitize_url(url),
                 "title": normalize_space(page.get("title"))[:120],
                 "navigation_error": page.get("navigation_error") or "",
                 "error": page.get("error") or "",

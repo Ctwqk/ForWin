@@ -182,10 +182,13 @@ must treat that document as the publish gate. In short:
   current-state endpoint evidence (`iscancreatenovel=true` and day-words
   counters). Qidian's official editor source map also confirms that
   `getLastFourChapterPublishTime` is used for timed-publish common-time
-  shortcuts, not a publish-frequency quota. Qidian official update-cadence FAQs
-  distinguish non-mandatory daily updating and full-attendance incentive
-  requirements from hard publish-frequency quotas. Qidian still does not expose
-  a stable daily/hourly public publish quota.
+  shortcuts, not a publish-frequency quota, and warns that new-book review
+  periods should avoid frequent chapter publishing or edits. Qidian official
+  update-cadence FAQs distinguish non-mandatory daily updating and
+  full-attendance incentive requirements from hard publish-frequency quotas.
+  Qidian version notes confirm a 2-hour chapter-unblock-request interval, which
+  is not ordinary publish-frequency quota evidence. Qidian still does not
+  expose a stable daily/hourly public publish quota.
 - Do not continue through captcha, MFA, risk control, account abnormality,
   missing permission, review rejection, or signing/contract prompts.
 

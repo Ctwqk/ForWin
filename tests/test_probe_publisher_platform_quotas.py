@@ -77,6 +77,56 @@ def test_default_pages_include_qidian_readonly_account_endpoints() -> None:
     assert qidian_pages["official_full_attendance_faq"] == "https://write.qq.com/ask/qjdbpvx"
 
 
+def test_page_text_for_signal_extraction_adds_public_static_qidian_version_notes() -> None:
+    calls: list[str] = []
+
+    def fetcher(url: str) -> str:
+        calls.append(url)
+        return """
+        <html><body>
+        <h2>作家助手桌面端V1.18.0</h2>
+        <p>2023-12-22</p>
+        <p>1.码字统计新增发布日历功能；2.章节申请解禁间隔时间调整至2小时；</p>
+        </body></html>
+        """
+
+    text = quotas.page_text_for_signal_extraction(
+        platform="qidian",
+        page_key="official_version_notes",
+        url="https://write.qq.com/portal/version?ticket=secret",
+        browser_text="作家助手桌面端V1.18.0\n2023-12-22\n展开",
+        public_text_fetcher=fetcher,
+    )
+
+    assert calls == ["https://write.qq.com/portal/version"]
+    assert "章节申请解禁间隔时间调整至2小时" in text
+    assert "<p>" not in text
+    assert "secret" not in calls[0]
+
+
+def test_page_text_for_signal_extraction_adds_public_static_qidian_daily_update_faq() -> None:
+    def fetcher(url: str) -> str:
+        assert url == "https://write.qq.com/ask/qjdwzhv"
+        return "<main>其实并不是所有起点作家都必须每天更新的。更新频率是作家自己可以根据实际情况来决定的。</main>"
+
+    text = quotas.page_text_for_signal_extraction(
+        platform="qidian",
+        page_key="official_daily_update_faq",
+        url="https://write.qq.com/ask/qjdwzhv?ticket=secret",
+        browser_text="- 作家专区",
+        public_text_fetcher=fetcher,
+    )
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_daily_update_faq",
+        url="https://write.qq.com/ask/qjdwzhv",
+        title="- 作家专区",
+        text=text,
+    )
+
+    assert any(item["category"] == "qidian_daily_update_guidance" for item in signals)
+
+
 def test_extract_limit_signals_adds_fanqie_longform_image_table_rules() -> None:
     signals = quotas.extract_limit_signals(
         platform="fanqie",
@@ -302,6 +352,100 @@ def test_extract_limit_signals_adds_qidian_publish_path_source_map_evidence() ->
         == "official_editor_frontend_source_map"
     )
     assert "secret=hidden" not in json.dumps(signals, ensure_ascii=False)
+
+
+def test_extract_limit_signals_adds_qidian_new_book_review_frequency_warning_from_source_map() -> None:
+    source_map = {
+        "sources": [
+            "components/sideTask/task3.js",
+        ],
+        "sourcesContent": [
+            """
+            <p className="task-dialog-p">10:00-20:00进审，预计5小时内完成审核；20:00-次日10:00进审，预计次日14:00前完成审核。审核通过后，读者可进行阅读</p>
+            <p style={{color: '#EA3447'}}>新书审核期注意避免频繁发布、修改章节，防止审核暂不处理</p>
+            """,
+        ],
+    }
+
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="editor_frontend_source_map",
+        url="https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js.map",
+        title="",
+        text=json.dumps(source_map, ensure_ascii=False),
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    assert by_category["qidian_new_book_review_frequency_warning"]["severity"] == "rule"
+    assert by_category["qidian_new_book_review_frequency_warning"]["quota_confirmed"] is False
+    assert (
+        by_category["qidian_new_book_review_frequency_warning"]["source_evidence"]
+        == "official_editor_frontend_source_map"
+    )
+
+
+def test_extract_limit_signals_adds_qidian_unblock_request_interval_from_version_notes() -> None:
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_version_notes",
+        url="https://write.qq.com/portal/version",
+        title="版本说明-阅文作家专区",
+        text="2023-12-22 1.码字统计新增发布日历功能；2.章节申请解禁间隔时间调整至2小时；",
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    assert by_category["qidian_chapter_unblock_request_interval"]["severity"] == "rule"
+    assert by_category["qidian_chapter_unblock_request_interval"]["quota_confirmed"] is True
+    assert by_category["qidian_chapter_unblock_request_interval"]["limits"] == {
+        "chapter_unblock_request_interval_hours": 2,
+    }
+    assert "numeric_publish_frequency_quota" not in by_category
+
+
+def test_summarize_probe_does_not_treat_qidian_review_warning_or_unblock_interval_as_publish_quota() -> None:
+    warning_signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="editor_frontend_source_map",
+        url="https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js.map",
+        title="",
+        text=json.dumps(
+            {
+                "sources": ["components/sideTask/task3.js"],
+                "sourcesContent": ["新书审核期注意避免频繁发布、修改章节，防止审核暂不处理"],
+            },
+            ensure_ascii=False,
+        ),
+    )
+    unblock_signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_version_notes",
+        url="https://write.qq.com/portal/version",
+        title="版本说明-阅文作家专区",
+        text="章节申请解禁间隔时间调整至2小时",
+    )
+
+    report = quotas.summarize_probe(
+        checked_at="2026-07-02T07:20:00Z",
+        pages=[
+            {
+                "platform": "qidian",
+                "page_key": "editor_frontend_source_map",
+                "ok": True,
+                "signals": warning_signals,
+            },
+            {
+                "platform": "qidian",
+                "page_key": "official_version_notes",
+                "ok": True,
+                "signals": unblock_signals,
+            },
+        ],
+        expected_platforms=["qidian"],
+    )
+
+    assert report["platforms"]["qidian"]["publish_quota_confirmed"] is False
+    assert report["publish_true_gate"]["allowed"] is False
+    assert report["status"] == "quota_incomplete"
 
 
 def test_summarize_probe_does_not_treat_qidian_source_map_evidence_as_publish_quota() -> None:

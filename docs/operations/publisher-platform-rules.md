@@ -28,6 +28,8 @@ Official or platform-owned sources checked:
   `/ccauthorweb/Chapter/getLastFourChapterPublishTime?CBID=...`
 - Qidian editor frontend static bundle:
   `https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js`
+- Qidian editor frontend source map:
+  `https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js.map`
 - Production read-only browser quota probe:
   `python scripts/probe_publisher_platform_quotas.py`
 
@@ -73,7 +75,7 @@ stable numeric quota for:
   and natural-month longform quotas
 
 The 2026-07-02 production read-only quota probe opened six Fanqie pages and
-seven Qidian pages/endpoints through the shared logged-in publisher browser. It
+nine Qidian pages/endpoints/resources through the shared logged-in publisher browser. It
 saw no visible account blockers on the current dashboard, create-work pages, or
 Qidian create-availability endpoint:
 
@@ -91,6 +93,11 @@ Qidian create-availability endpoint:
 - Qidian editor frontend exposes a recent-publish-time endpoint
   (`getLastFourChapterPublishTime?CBID=...`); for the current bound work it
   returned "no latest published chapter", not a publish-frequency quota.
+- Qidian editor source map confirms the frontend publish path:
+  `publishChapter` posts publish or timed-publish requests, while
+  `getLastFourChapterPublishTime` is used to render timed-publish "common time"
+  shortcuts. This source-map evidence does not expose a stable numeric
+  daily/hourly public publish quota.
 - Qidian editor frontend validates chapter body length at 1-20000 words and
   warns that new-book review periods should avoid frequent publishing or chapter
   edits, but it does not expose a stable numeric daily/hourly publish limit.
@@ -122,13 +129,13 @@ The July 2026 production longform smoke uploaded one generated chapter to each
 platform with `publish=false`, `create_if_missing=false`, and existing safe work
 bindings. Both upload jobs succeeded as drafts.
 
-The latest read-only quota probe was run at `2026-07-02T06:08:47Z` and returned:
+The latest read-only quota probe was run at `2026-07-02T06:24:11Z` and returned:
 
 - `status`: `quota_incomplete`
 - `blocked_items`: none
 - Fanqie: 6/6 probed pages loaded, 17 quota/rule signals,
   `publish_quota_confirmed=true`, no visible current account blocker
-- Qidian: 8/8 probed pages/endpoints loaded, 8 quota/current-state signals,
+- Qidian: 9/9 probed pages/endpoints/resources loaded, 12 quota/current-state/source-map signals,
   `publish_quota_confirmed=false`, no visible current account blocker
 - `publish_true_gate.allowed`: `false` because
   `numeric_publish_frequency_quota_unconfirmed`

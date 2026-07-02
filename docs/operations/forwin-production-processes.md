@@ -180,8 +180,10 @@ must treat that document as the publish gate. In short:
   the official second-edition longform publishing-rules article. Qidian confirms
   editor batch-import file limits (10 files per batch and 50 files per day) plus
   current-state endpoint evidence (`iscancreatenovel=true` and day-words
-  counters), but still does not expose a stable daily/hourly public publish
-  quota.
+  counters). Qidian's official editor source map also confirms that
+  `getLastFourChapterPublishTime` is used for timed-publish common-time
+  shortcuts, not a publish-frequency quota. Qidian still does not expose a
+  stable daily/hourly public publish quota.
 - Do not continue through captcha, MFA, risk control, account abnormality,
   missing permission, review rejection, or signing/contract prompts.
 

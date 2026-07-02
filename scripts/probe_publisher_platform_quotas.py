@@ -25,6 +25,7 @@ MAX_SNIPPET_CHARS = 96
 DEFAULT_BROWSER_TEXT_LIMIT = 12000
 BROWSER_TEXT_LIMIT_BY_PAGE_KEY = {
     "editor_frontend_static": 450000,
+    "editor_frontend_source_map": 1_000_000,
 }
 FANQIE_LONGFORM_RULE_ARTICLE_URL = "https://fanqienovel.com/writer/zone/article/7639950766869839897"
 PUBLISH_QUOTA_SIGNAL_CATEGORIES = {
@@ -153,6 +154,10 @@ DEFAULT_PAGES: dict[str, list[dict[str, str]]] = {
         {
             "page_key": "editor_frontend_static",
             "url": "https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js",
+        },
+        {
+            "page_key": "editor_frontend_source_map",
+            "url": "https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js.map",
         },
         {
             "page_key": "official_new_book_faq",
@@ -382,6 +387,80 @@ def _qidian_editor_frontend_static_signals(
     ]
 
 
+def _qidian_editor_frontend_source_map_signals(
+    *,
+    platform: str,
+    page_key: str,
+    url: str,
+    title: str,
+    text: str,
+) -> list[dict[str, Any]]:
+    if platform != "qidian" or page_key != "editor_frontend_source_map":
+        return []
+    try:
+        payload = json.loads(str(text or ""))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    sources = payload.get("sources")
+    sources_content = payload.get("sourcesContent")
+    if not isinstance(sources, list) or not isinstance(sources_content, list):
+        return []
+
+    contents_by_source: dict[str, str] = {}
+    for index, source in enumerate(sources):
+        if not isinstance(source, str) or index >= len(sources_content):
+            continue
+        content = sources_content[index]
+        if isinstance(content, str):
+            contents_by_source[source] = content
+
+    publish_dialog = contents_by_source.get("components/publishDialog/index.js", "")
+    publish_api = contents_by_source.get("api/publishChapter.js", "")
+    last_four_api = contents_by_source.get("api/getLastFourPublishTime.js", "")
+    publish_path_text = normalize_space(" ".join([publish_dialog, publish_api, last_four_api]))
+    if not publish_path_text:
+        return []
+
+    has_publish_endpoint = "/Chapter/publishChapter" in publish_api
+    has_publish_status = "status: isSchedule ? 5 : 2" in publish_api
+    has_last_four_schedule_shortcut = (
+        "getLastFourPublishTime(window._CBID)" in publish_dialog
+        and "recentPublishTimes" in publish_dialog
+        and "常设时间" in publish_dialog
+        and "getLastFourChapterPublishTime" in last_four_api
+    )
+    if not (has_publish_endpoint and has_publish_status and has_last_four_schedule_shortcut):
+        return []
+
+    if NUMERIC_PUBLISH_FREQUENCY_PATTERN.search(publish_path_text):
+        return []
+
+    return [
+        {
+            "platform": platform,
+            "page_key": page_key,
+            "source_url": sanitize_url(url),
+            "title": normalize_space(title)[:120],
+            "category": "qidian_publish_frontend_path_observed",
+            "severity": "info",
+            "matched_keyword": "publishChapter + getLastFourChapterPublishTime",
+            "snippet": (
+                "官方source map显示publishChapter提交发布/定时发布请求；"
+                "getLastFourChapterPublishTime用于定时发布常设时间，未暴露数值发布频率额度。"
+            )[:MAX_SNIPPET_CHARS],
+            "source_evidence": "official_editor_frontend_source_map",
+            "quota_confirmed": False,
+            "inspected_sources": [
+                "components/publishDialog/index.js",
+                "api/publishChapter.js",
+                "api/getLastFourPublishTime.js",
+            ],
+        }
+    ]
+
+
 def extract_limit_signals(
     *,
     platform: str,
@@ -450,6 +529,15 @@ def extract_limit_signals(
     )
     signals.extend(
         _qidian_editor_frontend_static_signals(
+            platform=platform,
+            page_key=page_key,
+            url=url,
+            title=title,
+            text=text,
+        )
+    )
+    signals.extend(
+        _qidian_editor_frontend_source_map_signals(
             platform=platform,
             page_key=page_key,
             url=url,

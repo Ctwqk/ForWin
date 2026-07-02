@@ -69,6 +69,10 @@ def test_default_pages_include_qidian_readonly_account_endpoints() -> None:
         qidian_pages["editor_frontend_static"]
         == "https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js"
     )
+    assert (
+        qidian_pages["editor_frontend_source_map"]
+        == "https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js.map"
+    )
 
 
 def test_extract_limit_signals_adds_fanqie_longform_image_table_rules() -> None:
@@ -165,6 +169,96 @@ def test_extract_limit_signals_adds_qidian_batch_import_quota_from_editor_static
     }
     assert by_category["qidian_batch_import_file_quota"]["source_evidence"] == "official_editor_frontend_static"
     assert "v=secret" not in json.dumps(signals, ensure_ascii=False)
+
+
+def test_extract_limit_signals_adds_qidian_publish_path_source_map_evidence() -> None:
+    source_map = {
+        "sources": [
+            "components/publishDialog/index.js",
+            "api/publishChapter.js",
+            "api/getLastFourPublishTime.js",
+        ],
+        "sourcesContent": [
+            """
+            getLastFourPublishTime(window._CBID).then(res => {
+              this.setState({ recentPublishTimes: res })
+            })
+            <label className='psl-title pst-title'>常设时间</label>
+            if (targetChapterType === 1 && inViewChapter.actualwords < 1000) {
+              $.lightTip.error('无法发布，VIP章节字数必须大于等于1000字。')
+            }
+            """,
+            """
+            return fetch.post("/Chapter/publishChapter", qs.stringify({
+              status: isSchedule ? 5 : 2,
+              chapterword: words,
+            }))
+            """,
+            """
+            export default function getDraftChapters(CBID) {
+              return fetch.get(`/Chapter/getLastFourChapterPublishTime?CBID=${CBID}`)
+            }
+            """,
+        ],
+    }
+
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="editor_frontend_source_map",
+        url="https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js.map?secret=hidden",
+        title="",
+        text=json.dumps(source_map, ensure_ascii=False),
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    assert by_category["qidian_publish_frontend_path_observed"]["severity"] == "info"
+    assert by_category["qidian_publish_frontend_path_observed"]["quota_confirmed"] is False
+    assert (
+        by_category["qidian_publish_frontend_path_observed"]["source_evidence"]
+        == "official_editor_frontend_source_map"
+    )
+    assert "secret=hidden" not in json.dumps(signals, ensure_ascii=False)
+
+
+def test_summarize_probe_does_not_treat_qidian_source_map_evidence_as_publish_quota() -> None:
+    source_map_signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="editor_frontend_source_map",
+        url="https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js.map",
+        title="",
+        text=json.dumps(
+            {
+                "sources": [
+                    "components/publishDialog/index.js",
+                    "api/publishChapter.js",
+                    "api/getLastFourPublishTime.js",
+                ],
+                "sourcesContent": [
+                    "getLastFourPublishTime(window._CBID) recentPublishTimes 常设时间",
+                    'fetch.post("/Chapter/publishChapter", qs.stringify({status: isSchedule ? 5 : 2, chapterword: words}))',
+                    "getLastFourChapterPublishTime",
+                ],
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    report = quotas.summarize_probe(
+        checked_at="2026-07-02T06:30:00Z",
+        pages=[
+            {
+                "platform": "qidian",
+                "page_key": "editor_frontend_source_map",
+                "ok": True,
+                "signals": source_map_signals,
+            }
+        ],
+        expected_platforms=["qidian"],
+    )
+
+    assert report["platforms"]["qidian"]["publish_quota_confirmed"] is False
+    assert report["publish_true_gate"]["allowed"] is False
+    assert report["status"] == "quota_incomplete"
 
 
 def test_summarize_probe_does_not_treat_qidian_batch_import_quota_as_publish_quota() -> None:
@@ -401,3 +495,4 @@ def test_browser_quota_pages_snapshot_uses_larger_text_limit_for_qidian_static(
     by_key = {item["page_key"]: item for item in page_specs}
     assert by_key["dashboard"]["text_limit"] == quotas.DEFAULT_BROWSER_TEXT_LIMIT
     assert by_key["editor_frontend_static"]["text_limit"] > 300_000
+    assert by_key["editor_frontend_source_map"]["text_limit"] > 800_000

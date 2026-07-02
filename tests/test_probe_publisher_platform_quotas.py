@@ -75,6 +75,11 @@ def test_default_pages_include_qidian_readonly_account_endpoints() -> None:
     )
     assert qidian_pages["official_daily_update_faq"] == "https://write.qq.com/ask/qjdwzhv"
     assert qidian_pages["official_full_attendance_faq"] == "https://write.qq.com/ask/qjdbpvx"
+    assert qidian_pages["official_direct_publish_faq"] == "https://write.qq.com/ask/qqbosdy"
+    assert (
+        qidian_pages["official_update_strategy_article"]
+        == "https://write.qq.com/portal/content/20483235608067701?feedType=1&lcid="
+    )
 
 
 def test_page_text_for_signal_extraction_adds_public_static_qidian_version_notes() -> None:
@@ -125,6 +130,26 @@ def test_page_text_for_signal_extraction_adds_public_static_qidian_daily_update_
     )
 
     assert any(item["category"] == "qidian_daily_update_guidance" for item in signals)
+
+
+def test_page_text_for_signal_extraction_preserves_safe_qidian_content_query() -> None:
+    calls: list[str] = []
+
+    def fetcher(url: str) -> str:
+        calls.append(url)
+        return "<main>每天更新的章节数，以三到四章为宜。如果做不到，那至少保持两更。</main>"
+
+    text = quotas.page_text_for_signal_extraction(
+        platform="qidian",
+        page_key="official_update_strategy_article",
+        url="https://write.qq.com/portal/content/20483235608067701?feedType=1&lcid=&secret=hidden",
+        browser_text="- 阅文作家专区",
+        public_text_fetcher=fetcher,
+    )
+
+    assert calls == ["https://write.qq.com/portal/content/20483235608067701?feedType=1&lcid="]
+    assert "至少保持两更" in text
+    assert "secret" not in calls[0]
 
 
 def test_extract_limit_signals_adds_fanqie_longform_image_table_rules() -> None:
@@ -216,6 +241,56 @@ def test_extract_limit_signals_adds_qidian_daily_update_guidance_without_quota_c
     assert by_category["qidian_daily_update_guidance"]["severity"] == "info"
     assert by_category["qidian_daily_update_guidance"]["quota_confirmed"] is False
     assert by_category["qidian_daily_update_guidance"]["source_evidence"] == "official_ask_daily_update_faq"
+    assert "numeric_publish_frequency_quota" not in by_category
+    assert "secret=hidden" not in json.dumps(signals, ensure_ascii=False)
+
+
+def test_extract_limit_signals_adds_qidian_new_book_two_chapter_cadence_without_hard_quota() -> None:
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_direct_publish_faq",
+        url="https://write.qq.com/ask/qqbosdy?secret=hidden",
+        title="起点直接发书",
+        text="""
+        起点可以直接发书，每天更新2章，直至3万字左右，看是否能接到站短。
+        一般新书第一天有1 - 5个流量，第二天流量会增加。
+        """,
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    cadence = by_category["qidian_new_book_two_chapter_cadence"]
+    assert cadence["severity"] == "rule"
+    assert cadence["quota_confirmed"] is False
+    assert cadence["source_evidence"] == "official_ask_direct_publish_faq"
+    assert cadence["limits"] == {
+        "recommended_new_book_daily_chapters": 2,
+        "recommended_until_words_approx": 30000,
+    }
+    assert "numeric_publish_frequency_quota" not in by_category
+    assert "secret=hidden" not in json.dumps(signals, ensure_ascii=False)
+
+
+def test_extract_limit_signals_adds_qidian_update_strategy_cadence_without_hard_quota() -> None:
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_update_strategy_article",
+        url="https://write.qq.com/portal/content/20483235608067701?secret=hidden",
+        title="更新是立足之本吗？",
+        text="""
+        每天更新的章节数，以三到四章为宜。如果做不到，那至少保持两更。
+        如果一天更新多章，不要同时更新出去，而是均匀地间隔开时间。
+        """,
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    cadence = by_category["qidian_update_strategy_cadence"]
+    assert cadence["severity"] == "info"
+    assert cadence["quota_confirmed"] is False
+    assert cadence["source_evidence"] == "official_update_strategy_article"
+    assert cadence["limits"] == {
+        "recommended_daily_chapters_min": 2,
+        "recommended_daily_chapters_max": 4,
+    }
     assert "numeric_publish_frequency_quota" not in by_category
     assert "secret=hidden" not in json.dumps(signals, ensure_ascii=False)
 

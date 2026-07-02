@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +40,9 @@ PUBLIC_STATIC_FALLBACK_PAGES = {
     ("qidian", "official_new_book_faq"),
     ("qidian", "official_chapter_word_faq"),
     ("qidian", "official_daily_update_faq"),
+    ("qidian", "official_direct_publish_faq"),
     ("qidian", "official_full_attendance_faq"),
+    ("qidian", "official_update_strategy_article"),
     ("qidian", "official_version_notes"),
 }
 
@@ -181,8 +183,16 @@ DEFAULT_PAGES: dict[str, list[dict[str, str]]] = {
             "url": "https://write.qq.com/ask/qjdwzhv",
         },
         {
+            "page_key": "official_direct_publish_faq",
+            "url": "https://write.qq.com/ask/qqbosdy",
+        },
+        {
             "page_key": "official_full_attendance_faq",
             "url": "https://write.qq.com/ask/qjdbpvx",
+        },
+        {
+            "page_key": "official_update_strategy_article",
+            "url": "https://write.qq.com/portal/content/20483235608067701?feedType=1&lcid=",
         },
         {
             "page_key": "official_version_notes",
@@ -195,6 +205,18 @@ DEFAULT_PAGES: dict[str, list[dict[str, str]]] = {
 def sanitize_url(url: Any) -> str:
     parsed = urlsplit(str(url or ""))
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
+
+def public_static_fetch_url(url: Any) -> str:
+    parsed = urlsplit(str(url or ""))
+    if parsed.netloc == "write.qq.com" and parsed.path.startswith("/portal/content/"):
+        query_items = [
+            (key, value)
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if key in {"feedType", "lcid"}
+        ]
+        return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query_items), ""))
+    return sanitize_url(url)
 
 
 def normalize_space(value: Any) -> str:
@@ -210,7 +232,7 @@ def fetch_public_static_text(url: str) -> str:
     if not url:
         return ""
     request = Request(
-        sanitize_url(url),
+        public_static_fetch_url(url),
         headers={"User-Agent": "Mozilla/5.0 ForWinQuotaProbe/1.0"},
     )
     try:
@@ -232,7 +254,7 @@ def page_text_for_signal_extraction(
     text = str(browser_text or "")
     if (platform, page_key) not in PUBLIC_STATIC_FALLBACK_PAGES:
         return text
-    fallback_text = html_to_text(public_text_fetcher(sanitize_url(url)))
+    fallback_text = html_to_text(public_text_fetcher(public_static_fetch_url(url)))
     if not fallback_text:
         return text
     return normalize_space(f"{text}\n{fallback_text}")
@@ -594,6 +616,46 @@ def _qidian_update_cadence_guidance_signals(
                 "matched_keyword": "并不是所有起点作家都必须每天更新",
                 "snippet": "官方问答说明并非所有起点作家都必须每天更新；更新频率可按创作进度安排。",
                 "source_evidence": "official_ask_daily_update_faq",
+            }
+        ]
+
+    if page_key == "official_direct_publish_faq" and (
+        "起点可以直接发书" in normalized
+        and ("每天更新2章" in normalized or "每天更新两章" in normalized)
+        and "3万字" in normalized
+    ):
+        return [
+            {
+                **base,
+                "category": "qidian_new_book_two_chapter_cadence",
+                "severity": "rule",
+                "matched_keyword": "起点可以直接发书，每天更新2章，直至3万字左右",
+                "snippet": "官方问答给出起点新书直接发书后的保守节奏: 每天更新2章，直至约3万字观察站短。",
+                "source_evidence": "official_ask_direct_publish_faq",
+                "limits": {
+                    "recommended_new_book_daily_chapters": 2,
+                    "recommended_until_words_approx": 30000,
+                },
+            }
+        ]
+
+    if page_key == "official_update_strategy_article" and (
+        "每天更新的章节数" in normalized
+        and "三到四章" in normalized
+        and "至少保持两更" in normalized
+    ):
+        return [
+            {
+                **base,
+                "category": "qidian_update_strategy_cadence",
+                "severity": "info",
+                "matched_keyword": "每天更新的章节数，以三到四章为宜；至少保持两更",
+                "snippet": "官方创作学堂文章建议日更章节数以3到4章为宜，做不到则至少保持两更，并均匀间隔更新时间。",
+                "source_evidence": "official_update_strategy_article",
+                "limits": {
+                    "recommended_daily_chapters_min": 2,
+                    "recommended_daily_chapters_max": 4,
+                },
             }
         ]
 

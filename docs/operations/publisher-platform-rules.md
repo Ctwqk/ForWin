@@ -20,7 +20,10 @@ Official or platform-owned sources checked:
 - Qidian writer publish flow FAQ: `https://write.qq.com/ask/qfokgyc`
 - Qidian chapter length FAQ: `https://write.qq.com/ask/qfoycqb`
 - Qidian daily update FAQ: `https://write.qq.com/ask/qjdwzhv`
+- Qidian direct-publish FAQ: `https://write.qq.com/ask/qqbosdy`
 - Qidian full-attendance FAQ: `https://write.qq.com/ask/qjdbpvx`
+- Qidian update strategy article:
+  `https://write.qq.com/portal/content/20483235608067701?feedType=1&lcid=`
 - Qidian work information notice: `https://write.qq.com/portal/content/27817262201325501?feedType=2&lcid=74671304322038861`
 - Qidian mobile signing guide: `https://write.qq.com/portal/content?caid=14626181805826801&feedType=2&lcid=35546823090990148`
 - Qidian writer version notes: `https://write.qq.com/portal/version`
@@ -53,6 +56,8 @@ Official or platform-owned sources checked:
 | Qidian | Standard novel new-book review requires the first body-volume chapter to reach at least 1000 words. | Do not use sub-1000-word public publish tests on Qidian. |
 | Qidian | A chapter cannot be empty; a single chapter must not exceed 20000 words, with 2000-6000 words recommended. | ForWin generated chapters around 3000-4500 Chinese chars are inside the recommended range. |
 | Qidian | Official daily-update FAQ says not all Qidian writers must update every day; update cadence can be arranged by the writer, while rankings and incentives can still depend on update frequency. | Treat daily cadence as an operational/recommendation factor, not a confirmed hard public publish quota. |
+| Qidian | Official direct-publish FAQ says Qidian can directly publish books and gives a new-book cadence of 2 chapters per day until roughly 30k words while watching for a signing message. | Treat 2 chapters/day as a conservative new-book cadence for planning, not as a hard maximum quota. ForWin should remain at one controlled `publish=true` experiment unless a human operator explicitly selects a broader run. |
+| Qidian | Official update strategy guidance recommends 3-4 updated chapters per day when possible, at least 2 updates when not, and spacing multiple updates rather than posting them at the same time. | This supports the conservative two-chapter daily cadence but still does not prove a hard daily/hourly platform limit. |
 | Qidian | Official full-attendance FAQ describes VIP daily 4000-word updating as a full-attendance incentive condition, and says authors should check current official announcements because welfare rules can change. | Do not use the 4000-word full-attendance condition to open the generic `publish=true` quota gate. |
 | Qidian | The logged-in editor frontend gates batch chapter import by file count: one batch imports at most 10 files, and the batch-import entry checks today's uploaded file count and blocks at 50 files for the day. | Treat Qidian file-import upload automation as capped at 10 files per batch and 50 imported files per natural day. This is a batch import/file quota, not proof of a daily public publish quota. |
 | Qidian | Work information format: book title within 15 Chinese characters, reader-facing note within 32 characters, intro 5-500 characters, and content must avoid sensitive or infringing text. | `create_if_missing=true` needs a short title, valid intro, and safe metadata. |
@@ -70,7 +75,7 @@ submitted-word quotas. The table is rendered visually on the official page, so
 `source_evidence=official_article_image_table`.
 
 No official public page or logged-in read-only probe found on 2026-07-02 gave a
-stable numeric quota for:
+stable hard numeric maximum quota for:
 
 - Qidian new-book creation count per account
 - Qidian chapter publish count per day or per hour
@@ -80,7 +85,7 @@ stable numeric quota for:
   and natural-month longform quotas
 
 The 2026-07-02 production read-only quota probe opened six Fanqie pages and
-eleven Qidian pages/endpoints/resources through the shared logged-in publisher browser. It
+thirteen Qidian pages/endpoints/resources through the shared logged-in publisher browser. It
 saw no visible account blockers on the current dashboard, create-work pages, or
 Qidian create-availability endpoint:
 
@@ -112,6 +117,13 @@ Qidian create-availability endpoint:
   manual follow-up check.
 - Qidian official daily-update FAQ says daily updating is not mandatory for all
   Qidian writers, and that update frequency can be arranged by the writer.
+- Qidian official direct-publish FAQ gives a concrete new-book cadence of
+  2 chapters per day until roughly 30k words, but phrases it as update cadence
+  while waiting for signing signals rather than as a hard maximum platform
+  quota.
+- Qidian official update strategy article recommends 3-4 chapters per day when
+  possible, at least 2 updates otherwise, and spacing multiple updates through
+  the day. This is writer guidance, not a daily/hourly hard platform limit.
 - Qidian official full-attendance FAQ describes VIP daily 4000-word updating as
   a full-attendance incentive condition, not a generic public publish-frequency
   quota.
@@ -130,6 +142,9 @@ notice confirms otherwise:
 - no batch `publish=true`
 - no more than one `publish=true` chapter per platform per operator-approved
   production experiment
+- for Qidian, never exceed the conservative 2-chapter-per-natural-day new-book
+  cadence from official guidance unless a current account page, editor notice,
+  or human operator explicitly confirms a broader allowance
 - no `publish=true` without a passing publisher compliance review
 - no `publish=true` if platform pages show risk control, captcha, MFA, missing
   permission, account abnormality, audit rejection, or login instability
@@ -148,9 +163,8 @@ The 2026-07-02 read-only quota probe for this evidence set returned:
 - `blocked_items`: none
 - Fanqie: 6/6 probed pages loaded, 17 quota/rule signals,
   `publish_quota_confirmed=true`, no visible current account blocker
-- Qidian: 11/11 probed pages/endpoints/resources loaded, 22 or more
-  quota/current-state/source-map/update-guidance/version-note signals depending
-  on dynamic page text,
+- Qidian: 13/13 probed pages/endpoints/resources loaded, 27
+  quota/current-state/source-map/update-guidance/version-note signals,
   `publish_quota_confirmed=false`, no visible current account blocker
 - `publish_true_gate.allowed`: `false` because
   `numeric_publish_frequency_quota_unconfirmed`

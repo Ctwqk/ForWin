@@ -172,9 +172,10 @@ must treat that document as the publish gate. In short:
 - If the probe returns `quota_incomplete`, do not describe the run as
   quota-confirmed. Check `publish_true_gate.confirmed_platforms` and
   `publish_true_gate.unconfirmed_platforms` to see which platform is still
-  missing quota evidence. Stop at `publish=false` unless a separately
-  operator-directed exception is being run under the conservative ceiling of one
-  publish attempt per platform.
+  missing hard quota evidence. Then check
+  `single_chapter_publish_true_gate.allowed`. If it is false, stop at
+  `publish=false`. If it is true, an operator-directed exception may run under
+  the conservative ceiling of one publish attempt per selected platform.
 - As of the 2026-07-02 probe, Fanqie longform daily/monthly creation,
   daily updated-work, and daily/monthly submitted-word quotas are confirmed from
   the official second-edition longform publishing-rules article. Qidian confirms
@@ -186,6 +187,10 @@ must treat that document as the publish gate. In short:
   periods should avoid frequent chapter publishing or edits. Qidian official
   update-cadence FAQs distinguish non-mandatory daily updating and
   full-attendance incentive requirements from hard publish-frequency quotas.
+  Qidian official direct-publish, manuscript-reserve, and update-strategy
+  guidance support a conservative new-book cadence of 2 updates per day and a
+  one-chapter publish experiment, but still do not expose a stable daily/hourly
+  hard publish maximum.
   Qidian version notes confirm a 2-hour chapter-unblock-request interval, which
   is not ordinary publish-frequency quota evidence. Qidian still does not
   expose a stable daily/hourly public publish quota.

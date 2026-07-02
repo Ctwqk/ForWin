@@ -80,6 +80,14 @@ def test_default_pages_include_qidian_readonly_account_endpoints() -> None:
         qidian_pages["official_update_strategy_article"]
         == "https://write.qq.com/portal/content/20483235608067701?feedType=1&lcid="
     )
+    assert (
+        qidian_pages["official_manuscript_reserve_article"]
+        == "https://write.qq.com/portal/content/20731268901906701?feedType=1&lcid="
+    )
+    assert (
+        qidian_pages["official_submission_posture_article"]
+        == "https://write.qq.com/portal/content/20368305408917301?feedType=1&lcid="
+    )
 
 
 def test_page_text_for_signal_extraction_adds_public_static_qidian_version_notes() -> None:
@@ -290,6 +298,54 @@ def test_extract_limit_signals_adds_qidian_update_strategy_cadence_without_hard_
     assert cadence["limits"] == {
         "recommended_daily_chapters_min": 2,
         "recommended_daily_chapters_max": 4,
+    }
+    assert "numeric_publish_frequency_quota" not in by_category
+    assert "secret=hidden" not in json.dumps(signals, ensure_ascii=False)
+
+
+def test_extract_limit_signals_adds_qidian_manuscript_reserve_two_update_cadence() -> None:
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_manuscript_reserve_article",
+        url="https://write.qq.com/portal/content/20731268901906701?secret=hidden",
+        title="存稿三万，我能发书了吗？",
+        text="""
+        如果速度低于一定程度，比如连每天两更都做不到，这对于作品成绩的影响当然是巨大的，尤其对于新书来说。
+        所以需要一定的存稿，来保证新书期的一天两更，直到上架之后一段时间，再逐步减少。
+        """,
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    cadence = by_category["qidian_new_book_two_update_reserve_cadence"]
+    assert cadence["severity"] == "info"
+    assert cadence["quota_confirmed"] is False
+    assert cadence["source_evidence"] == "official_manuscript_reserve_article"
+    assert cadence["limits"] == {"recommended_new_book_daily_updates": 2}
+    assert "numeric_publish_frequency_quota" not in by_category
+    assert "secret=hidden" not in json.dumps(signals, ensure_ascii=False)
+
+
+def test_extract_limit_signals_adds_qidian_stage_word_cadence_without_hard_quota() -> None:
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_submission_posture_article",
+        url="https://write.qq.com/portal/content/20368305408917301?secret=hidden",
+        title="正确的投稿姿势",
+        text="""
+        更新字数，未签约之前，建议日更不少于一千，签约之后，建议日更不少于两千。
+        上架之后，日更不少于四千。
+        """,
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    cadence = by_category["qidian_stage_daily_word_cadence"]
+    assert cadence["severity"] == "info"
+    assert cadence["quota_confirmed"] is False
+    assert cadence["source_evidence"] == "official_submission_posture_article"
+    assert cadence["limits"] == {
+        "recommended_unsigned_daily_words_min": 1000,
+        "recommended_signed_daily_words_min": 2000,
+        "recommended_vip_daily_words_min": 4000,
     }
     assert "numeric_publish_frequency_quota" not in by_category
     assert "secret=hidden" not in json.dumps(signals, ensure_ascii=False)
@@ -657,6 +713,51 @@ def test_summarize_probe_requires_quota_confirmation_for_each_expected_platform(
     assert report["publish_true_gate"]["allowed"] is False
     assert report["publish_true_gate"]["unconfirmed_platforms"] == ["qidian"]
     assert report["status"] == "quota_incomplete"
+
+
+def test_summarize_probe_allows_single_chapter_gate_with_qidian_conservative_cadence() -> None:
+    fanqie_signals = quotas.extract_limit_signals(
+        platform="fanqie",
+        page_key="official_longform_publish_rules",
+        url="https://fanqienovel.com/writer/zone/article/7639950766869839897",
+        title="长篇网文发文规则（第二版）上线通知",
+        text="可创建长篇作品数 可更新长篇作品数 可提交发布字数",
+    )
+    qidian_signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="official_direct_publish_faq",
+        url="https://write.qq.com/ask/qqbosdy",
+        title="起点直接发书",
+        text="起点可以直接发书，每天更新2章，直至3万字左右，看是否能接到站短。",
+    )
+
+    report = quotas.summarize_probe(
+        checked_at="2026-07-02T08:30:00Z",
+        pages=[
+            {
+                "platform": "fanqie",
+                "page_key": "official_longform_publish_rules",
+                "ok": True,
+                "signals": fanqie_signals,
+            },
+            {
+                "platform": "qidian",
+                "page_key": "official_direct_publish_faq",
+                "ok": True,
+                "signals": qidian_signals,
+            },
+        ],
+        expected_platforms=["fanqie", "qidian"],
+    )
+
+    assert report["status"] == "quota_incomplete"
+    assert report["publish_true_gate"]["allowed"] is False
+    assert report["platforms"]["qidian"]["conservative_publish_cadence_confirmed"] is True
+    assert report["single_chapter_publish_true_gate"]["allowed"] is True
+    assert report["single_chapter_publish_true_gate"]["reason"] == "hard_quota_or_conservative_cadence_confirmed"
+    assert report["single_chapter_publish_true_gate"]["conservative_platforms"] == ["qidian"]
+    assert report["single_chapter_publish_true_gate"]["hard_quota_platforms"] == ["fanqie"]
+    assert report["single_chapter_publish_true_gate"]["max_chapters_per_platform"] == 1
 
 
 def test_summarize_probe_allows_single_platform_when_its_quota_is_confirmed() -> None:

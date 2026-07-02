@@ -36,12 +36,20 @@ PUBLISH_QUOTA_SIGNAL_CATEGORIES = {
     "fanqie_longform_update_work_quota",
     "fanqie_longform_word_quota",
 }
+CONSERVATIVE_PUBLISH_CADENCE_SIGNAL_CATEGORIES = {
+    "qidian_new_book_two_chapter_cadence",
+    "qidian_new_book_two_update_reserve_cadence",
+    "qidian_update_strategy_cadence",
+    "qidian_stage_daily_word_cadence",
+}
 PUBLIC_STATIC_FALLBACK_PAGES = {
     ("qidian", "official_new_book_faq"),
     ("qidian", "official_chapter_word_faq"),
     ("qidian", "official_daily_update_faq"),
     ("qidian", "official_direct_publish_faq"),
     ("qidian", "official_full_attendance_faq"),
+    ("qidian", "official_manuscript_reserve_article"),
+    ("qidian", "official_submission_posture_article"),
     ("qidian", "official_update_strategy_article"),
     ("qidian", "official_version_notes"),
 }
@@ -193,6 +201,14 @@ DEFAULT_PAGES: dict[str, list[dict[str, str]]] = {
         {
             "page_key": "official_update_strategy_article",
             "url": "https://write.qq.com/portal/content/20483235608067701?feedType=1&lcid=",
+        },
+        {
+            "page_key": "official_manuscript_reserve_article",
+            "url": "https://write.qq.com/portal/content/20731268901906701?feedType=1&lcid=",
+        },
+        {
+            "page_key": "official_submission_posture_article",
+            "url": "https://write.qq.com/portal/content/20368305408917301?feedType=1&lcid=",
         },
         {
             "page_key": "official_version_notes",
@@ -659,6 +675,46 @@ def _qidian_update_cadence_guidance_signals(
             }
         ]
 
+    if page_key == "official_manuscript_reserve_article" and (
+        "新书期的一天两更" in normalized or ("新书" in normalized and "每天两更" in normalized)
+    ):
+        return [
+            {
+                **base,
+                "category": "qidian_new_book_two_update_reserve_cadence",
+                "severity": "info",
+                "matched_keyword": "保证新书期的一天两更",
+                "snippet": "官方创作学堂文章建议保留存稿以保证新书期一天两更，直到上架后一段时间再逐步减少。",
+                "source_evidence": "official_manuscript_reserve_article",
+                "limits": {
+                    "recommended_new_book_daily_updates": 2,
+                },
+            }
+        ]
+
+    if page_key == "official_submission_posture_article" and (
+        "未签约之前" in normalized
+        and "建议日更不少于一千" in normalized
+        and "签约之后" in normalized
+        and "建议日更不少于两千" in normalized
+        and "日更不少于四千" in normalized
+    ):
+        return [
+            {
+                **base,
+                "category": "qidian_stage_daily_word_cadence",
+                "severity": "info",
+                "matched_keyword": "未签约日更不少于一千，签约后不少于两千，上架后不少于四千",
+                "snippet": "官方投稿指导按作品阶段给出日更字数建议: 未签约不少于1000，签约后不少于2000，上架后不少于4000。",
+                "source_evidence": "official_submission_posture_article",
+                "limits": {
+                    "recommended_unsigned_daily_words_min": 1000,
+                    "recommended_signed_daily_words_min": 2000,
+                    "recommended_vip_daily_words_min": 4000,
+                },
+            }
+        ]
+
     if page_key == "official_full_attendance_faq" and (
         "全勤奖" in normalized
         and ("VIP章节日更4000字" in normalized or "每天更新不低于四千字" in normalized)
@@ -852,6 +908,7 @@ def summarize_probe(
             "signal_count": 0,
             "categories": [],
             "publish_quota_confirmed": False,
+            "conservative_publish_cadence_confirmed": False,
             "visible_account_blockers": [],
         }
 
@@ -864,6 +921,7 @@ def summarize_probe(
                 "signal_count": 0,
                 "categories": [],
                 "publish_quota_confirmed": False,
+                "conservative_publish_cadence_confirmed": False,
                 "visible_account_blockers": [],
             }
         entry = platforms[platform]
@@ -879,6 +937,8 @@ def summarize_probe(
                 categories.add(category)
             if category in PUBLISH_QUOTA_SIGNAL_CATEGORIES:
                 entry["publish_quota_confirmed"] = True
+            if category in CONSERVATIVE_PUBLISH_CADENCE_SIGNAL_CATEGORIES:
+                entry["conservative_publish_cadence_confirmed"] = True
         entry["categories"] = sorted(categories)
         blockers = _visible_account_blockers(signals)
         entry["visible_account_blockers"].extend(blockers)
@@ -890,6 +950,19 @@ def summarize_probe(
     unconfirmed_platforms = [
         platform for platform in expected_platforms if not platforms.get(platform, {}).get("publish_quota_confirmed")
     ]
+    conservative_platforms = [
+        platform
+        for platform in expected_platforms
+        if not platforms.get(platform, {}).get("publish_quota_confirmed")
+        and platforms.get(platform, {}).get("conservative_publish_cadence_confirmed")
+    ]
+    single_chapter_unconfirmed_platforms = [
+        platform
+        for platform in expected_platforms
+        if not platforms.get(platform, {}).get("publish_quota_confirmed")
+        and not platforms.get(platform, {}).get("conservative_publish_cadence_confirmed")
+    ]
+    single_chapter_allowed = not all_blockers and not single_chapter_unconfirmed_platforms
 
     if all_blockers:
         status = "blocked"
@@ -900,6 +973,15 @@ def summarize_probe(
             "confirmed_platforms": confirmed_platforms,
             "unconfirmed_platforms": unconfirmed_platforms,
         }
+        single_chapter_publish_true_gate = {
+            "allowed": False,
+            "reason": "visible_account_blocker",
+            "blocker_count": len(all_blockers),
+            "hard_quota_platforms": confirmed_platforms,
+            "conservative_platforms": conservative_platforms,
+            "unconfirmed_platforms": single_chapter_unconfirmed_platforms,
+            "max_chapters_per_platform": 1,
+        }
     elif not unconfirmed_platforms:
         status = "quota_confirmed"
         publish_true_gate = {
@@ -908,6 +990,15 @@ def summarize_probe(
             "blocker_count": 0,
             "confirmed_platforms": confirmed_platforms,
             "unconfirmed_platforms": [],
+        }
+        single_chapter_publish_true_gate = {
+            "allowed": True,
+            "reason": "hard_quota_or_conservative_cadence_confirmed",
+            "blocker_count": 0,
+            "hard_quota_platforms": confirmed_platforms,
+            "conservative_platforms": [],
+            "unconfirmed_platforms": [],
+            "max_chapters_per_platform": 1,
         }
     else:
         status = "quota_incomplete"
@@ -918,6 +1009,19 @@ def summarize_probe(
             "confirmed_platforms": confirmed_platforms,
             "unconfirmed_platforms": unconfirmed_platforms,
         }
+        single_chapter_publish_true_gate = {
+            "allowed": single_chapter_allowed,
+            "reason": (
+                "hard_quota_or_conservative_cadence_confirmed"
+                if single_chapter_allowed
+                else "numeric_publish_frequency_quota_unconfirmed"
+            ),
+            "blocker_count": 0,
+            "hard_quota_platforms": confirmed_platforms,
+            "conservative_platforms": conservative_platforms,
+            "unconfirmed_platforms": single_chapter_unconfirmed_platforms,
+            "max_chapters_per_platform": 1,
+        }
 
     return redact_sensitive(
         {
@@ -925,6 +1029,7 @@ def summarize_probe(
             "checked_at": checked_at,
             "platforms": platforms,
             "publish_true_gate": publish_true_gate,
+            "single_chapter_publish_true_gate": single_chapter_publish_true_gate,
             "blocked_items": [
                 {
                     "kind": "publisher_quota_or_risk_signal",

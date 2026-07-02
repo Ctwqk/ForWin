@@ -24,6 +24,10 @@ Official or platform-owned sources checked:
 - Qidian full-attendance FAQ: `https://write.qq.com/ask/qjdbpvx`
 - Qidian update strategy article:
   `https://write.qq.com/portal/content/20483235608067701?feedType=1&lcid=`
+- Qidian manuscript reserve article:
+  `https://write.qq.com/portal/content/20731268901906701?feedType=1&lcid=`
+- Qidian submission posture article:
+  `https://write.qq.com/portal/content/20368305408917301?feedType=1&lcid=`
 - Qidian work information notice: `https://write.qq.com/portal/content/27817262201325501?feedType=2&lcid=74671304322038861`
 - Qidian mobile signing guide: `https://write.qq.com/portal/content?caid=14626181805826801&feedType=2&lcid=35546823090990148`
 - Qidian writer version notes: `https://write.qq.com/portal/version`
@@ -58,6 +62,8 @@ Official or platform-owned sources checked:
 | Qidian | Official daily-update FAQ says not all Qidian writers must update every day; update cadence can be arranged by the writer, while rankings and incentives can still depend on update frequency. | Treat daily cadence as an operational/recommendation factor, not a confirmed hard public publish quota. |
 | Qidian | Official direct-publish FAQ says Qidian can directly publish books and gives a new-book cadence of 2 chapters per day until roughly 30k words while watching for a signing message. | Treat 2 chapters/day as a conservative new-book cadence for planning, not as a hard maximum quota. ForWin should remain at one controlled `publish=true` experiment unless a human operator explicitly selects a broader run. |
 | Qidian | Official update strategy guidance recommends 3-4 updated chapters per day when possible, at least 2 updates when not, and spacing multiple updates rather than posting them at the same time. | This supports the conservative two-chapter daily cadence but still does not prove a hard daily/hourly platform limit. |
+| Qidian | Official manuscript-reserve guidance says authors should keep enough reserve稿 to guarantee new-book-period daily two updates until after launch, then gradually reduce if needed. | This reinforces the conservative 2 updates/day Qidian planning ceiling for a new-book style run. |
+| Qidian | Official submission guidance gives stage-based daily word cadence: before signing at least 1000 words/day, after signing at least 2000 words/day, and after launch at least 4000 words/day. | This is word-cadence guidance, not a hard hourly/daily publish maximum. Keep generated public test chapters inside the known 1-20000 chapter word limit and avoid batch publish. |
 | Qidian | Official full-attendance FAQ describes VIP daily 4000-word updating as a full-attendance incentive condition, and says authors should check current official announcements because welfare rules can change. | Do not use the 4000-word full-attendance condition to open the generic `publish=true` quota gate. |
 | Qidian | The logged-in editor frontend gates batch chapter import by file count: one batch imports at most 10 files, and the batch-import entry checks today's uploaded file count and blocks at 50 files for the day. | Treat Qidian file-import upload automation as capped at 10 files per batch and 50 imported files per natural day. This is a batch import/file quota, not proof of a daily public publish quota. |
 | Qidian | Work information format: book title within 15 Chinese characters, reader-facing note within 32 characters, intro 5-500 characters, and content must avoid sensitive or infringing text. | `create_if_missing=true` needs a short title, valid intro, and safe metadata. |
@@ -85,7 +91,7 @@ stable hard numeric maximum quota for:
   and natural-month longform quotas
 
 The 2026-07-02 production read-only quota probe opened six Fanqie pages and
-thirteen Qidian pages/endpoints/resources through the shared logged-in publisher browser. It
+fifteen Qidian pages/endpoints/resources through the shared logged-in publisher browser. It
 saw no visible account blockers on the current dashboard, create-work pages, or
 Qidian create-availability endpoint:
 
@@ -124,6 +130,11 @@ Qidian create-availability endpoint:
 - Qidian official update strategy article recommends 3-4 chapters per day when
   possible, at least 2 updates otherwise, and spacing multiple updates through
   the day. This is writer guidance, not a daily/hourly hard platform limit.
+- Qidian official manuscript-reserve guidance says to guarantee new-book-period
+  daily two updates until after launch, then reduce gradually if needed.
+- Qidian official submission guidance gives daily word-cadence suggestions by
+  stage: unsigned at least 1000 words/day, signed at least 2000 words/day, and
+  launched/VIP at least 4000 words/day.
 - Qidian official full-attendance FAQ describes VIP daily 4000-word updating as
   a full-attendance incentive condition, not a generic public publish-frequency
   quota.
@@ -163,12 +174,17 @@ The 2026-07-02 read-only quota probe for this evidence set returned:
 - `blocked_items`: none
 - Fanqie: 6/6 probed pages loaded, 17 quota/rule signals,
   `publish_quota_confirmed=true`, no visible current account blocker
-- Qidian: 13/13 probed pages/endpoints/resources loaded, 25 or more
+- Qidian: 15 probed pages/endpoints/resources, 31 or more
   quota/current-state/source-map/update-guidance/version-note signals depending
   on dynamic page text,
   `publish_quota_confirmed=false`, no visible current account blocker
 - `publish_true_gate.allowed`: `false` because
   `numeric_publish_frequency_quota_unconfirmed`
+- `single_chapter_publish_true_gate.allowed`: `true` when the same probe sees
+  Fanqie hard quota evidence, Qidian conservative cadence evidence, and no
+  visible account blockers. This gate is only for one manually selected chapter
+  per platform; it is not a batch-publishing allowance and not a claim that
+  Qidian hard quota is public.
 - `publish_true_gate.confirmed_platforms`: `["fanqie"]`
 - `publish_true_gate.unconfirmed_platforms`: `["qidian"]`
 
@@ -209,3 +225,11 @@ does surface signing, the process is:
   review, and the result will be verified from the platform page
 
 If any item is not true, stop at `publish=false` draft upload or API preflight.
+
+When `publish_true_gate.allowed=false` but
+`single_chapter_publish_true_gate.allowed=true`, ForWin may run exactly one
+operator-directed `publish=true` experiment per selected platform if all other
+items above are true. For Qidian this relies on official conservative cadence
+guidance, so the experiment must stay at one chapter, use an existing binding,
+avoid `create_if_missing=true`, and verify the post-click state from the
+platform page.

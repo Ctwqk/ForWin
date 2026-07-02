@@ -22,6 +22,10 @@ Official or platform-owned sources checked:
 - Qidian work information notice: `https://write.qq.com/portal/content/27817262201325501?feedType=2&lcid=74671304322038861`
 - Qidian mobile signing guide: `https://write.qq.com/portal/content?caid=14626181805826801&feedType=2&lcid=35546823090990148`
 - Qidian writer version notes: `https://write.qq.com/portal/version`
+- Qidian logged-in editor frontend and read-only endpoints observed through the
+  production publisher browser, including `/ccauthorweb/novel/iscancreatenovel`,
+  `/ccauthorweb/daywords/getMonthDayWords`, and
+  `/ccauthorweb/Chapter/getLastFourChapterPublishTime?CBID=...`
 - Production read-only browser quota probe:
   `python scripts/probe_publisher_platform_quotas.py`
 
@@ -81,6 +85,12 @@ Qidian create-availability endpoint:
   `true`; this is current state, not a quota ceiling.
 - Qidian day-words calendar returned current publish counters such as daily
   published words and chapter counts; this is current state, not a quota ceiling.
+- Qidian editor frontend exposes a recent-publish-time endpoint
+  (`getLastFourChapterPublishTime?CBID=...`); for the current bound work it
+  returned "no latest published chapter", not a publish-frequency quota.
+- Qidian editor frontend validates chapter body length at 1-20000 words and
+  warns that new-book review periods should avoid frequent publishing or chapter
+  edits, but it does not expose a stable numeric daily/hourly publish limit.
 - Qidian official/help pages confirmed word, intro, review, signing, and deletion
   rules, but did not expose a stable daily/hourly publish quota.
 

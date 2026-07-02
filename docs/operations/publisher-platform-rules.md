@@ -129,13 +129,14 @@ The July 2026 production longform smoke uploaded one generated chapter to each
 platform with `publish=false`, `create_if_missing=false`, and existing safe work
 bindings. Both upload jobs succeeded as drafts.
 
-The latest read-only quota probe was run at `2026-07-02T06:31:48Z` and returned:
+The latest read-only quota probe was run at `2026-07-02T06:36:11Z` and returned:
 
 - `status`: `quota_incomplete`
 - `blocked_items`: none
 - Fanqie: 6/6 probed pages loaded, 17 quota/rule signals,
   `publish_quota_confirmed=true`, no visible current account blocker
-- Qidian: 9/9 probed pages/endpoints/resources loaded, 11 quota/current-state/source-map signals,
+- Qidian: 9/9 probed pages/endpoints/resources loaded, 11-12 quota/current-state/source-map signals
+  depending on dynamic page text,
   `publish_quota_confirmed=false`, no visible current account blocker
 - `publish_true_gate.allowed`: `false` because
   `numeric_publish_frequency_quota_unconfirmed`

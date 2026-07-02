@@ -26,6 +26,8 @@ Official or platform-owned sources checked:
   production publisher browser, including `/ccauthorweb/novel/iscancreatenovel`,
   `/ccauthorweb/daywords/getMonthDayWords`, and
   `/ccauthorweb/Chapter/getLastFourChapterPublishTime?CBID=...`
+- Qidian editor frontend static bundle:
+  `https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js`
 - Production read-only browser quota probe:
   `python scripts/probe_publisher_platform_quotas.py`
 
@@ -46,6 +48,7 @@ Official or platform-owned sources checked:
 | Fanqie | Uncontracted works can be visible after real-name verification; uncontracted works can be deleted/hidden from work management in the backend guide/changelog. | Test works should remain marked and minimal; deletion/hide is possible for unsigned works but not an automation cleanup step unless explicitly requested. |
 | Qidian | Standard novel new-book review requires the first body-volume chapter to reach at least 1000 words. | Do not use sub-1000-word public publish tests on Qidian. |
 | Qidian | A chapter cannot be empty; a single chapter must not exceed 20000 words, with 2000-6000 words recommended. | ForWin generated chapters around 3000-4500 Chinese chars are inside the recommended range. |
+| Qidian | The logged-in editor frontend gates batch chapter import by file count: one batch imports at most 10 files, and the batch-import entry checks today's uploaded file count and blocks at 50 files for the day. | Treat Qidian file-import upload automation as capped at 10 files per batch and 50 imported files per natural day. This is a batch import/file quota, not proof of a daily public publish quota. |
 | Qidian | Work information format: book title within 15 Chinese characters, reader-facing note within 32 characters, intro 5-500 characters, and content must avoid sensitive or infringing text. | `create_if_missing=true` needs a short title, valid intro, and safe metadata. |
 | Qidian | Online signing can be invited by editors after new-book review; authors may apply after 100k words for male-channel Qidian/Chuangshi first sites and 50k words for listed female-channel sites. | Current short ForWin production tests are not signing-ready. |
 | Qidian | Version notes include draft defaults, timed publish cancellation, signing status display, and a 2-hour interval for chapter unban requests. | Automation must not retry blocked chapter actions aggressively. |
@@ -91,6 +94,10 @@ Qidian create-availability endpoint:
 - Qidian editor frontend validates chapter body length at 1-20000 words and
   warns that new-book review periods should avoid frequent publishing or chapter
   edits, but it does not expose a stable numeric daily/hourly publish limit.
+- Qidian editor frontend confirms batch import/file limits: single batch <=10
+  files and daily batch-import file count <50. The current bound work's
+  read-only upload-count endpoint returned 0 files used today during the
+  manual follow-up check.
 - Qidian official/help pages confirmed word, intro, review, signing, and deletion
   rules, but did not expose a stable daily/hourly publish quota.
 
@@ -115,13 +122,13 @@ The July 2026 production longform smoke uploaded one generated chapter to each
 platform with `publish=false`, `create_if_missing=false`, and existing safe work
 bindings. Both upload jobs succeeded as drafts.
 
-The latest read-only quota probe was run at `2026-07-02T05:29:58Z` and returned:
+The latest read-only quota probe was run at `2026-07-02T06:08:47Z` and returned:
 
 - `status`: `quota_incomplete`
 - `blocked_items`: none
 - Fanqie: 6/6 probed pages loaded, 17 quota/rule signals,
   `publish_quota_confirmed=true`, no visible current account blocker
-- Qidian: 7/7 probed pages/endpoints loaded, 6 quota/current-state signals,
+- Qidian: 8/8 probed pages/endpoints loaded, 8 quota/current-state signals,
   `publish_quota_confirmed=false`, no visible current account blocker
 - `publish_true_gate.allowed`: `false` because
   `numeric_publish_frequency_quota_unconfirmed`

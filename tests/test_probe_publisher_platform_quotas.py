@@ -65,6 +65,10 @@ def test_default_pages_include_qidian_readonly_account_endpoints() -> None:
         qidian_pages["day_words_calendar_endpoint"]
         == "https://write.qq.com/ccauthorweb/daywords/getMonthDayWords"
     )
+    assert (
+        qidian_pages["editor_frontend_static"]
+        == "https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js"
+    )
 
 
 def test_extract_limit_signals_adds_fanqie_longform_image_table_rules() -> None:
@@ -137,6 +141,57 @@ def test_extract_limit_signals_does_not_treat_qidian_day_words_as_quota() -> Non
     assert "numeric_publish_frequency_quota" not in by_category
     assert by_category["current_publish_counter"]["severity"] == "info"
     assert by_category["current_publish_counter"]["quota_confirmed"] is False
+
+
+def test_extract_limit_signals_adds_qidian_batch_import_quota_from_editor_static() -> None:
+    signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="editor_frontend_static",
+        url="https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js?v=secret",
+        title="",
+        text="""
+        A.get("/ccauthorweb/bookchapterimport/getuploadnumoftheday?CBID=".concat(t))
+          .then(function(e){e<50?a.props.onClick():window.$.lightTip.error("今日上传已达到50个文件上限，请明日再批量上传")});
+        t>10&&(t=10,window.$.lightTip.error("单次最多上传10个文件，可分批再上传剩余文件"));
+        """,
+    )
+
+    by_category = {item["category"]: item for item in signals}
+    assert by_category["qidian_batch_import_file_quota"]["severity"] == "rule"
+    assert by_category["qidian_batch_import_file_quota"]["quota_confirmed"] is True
+    assert by_category["qidian_batch_import_file_quota"]["limits"] == {
+        "daily_batch_import_files": 50,
+        "single_batch_import_files": 10,
+    }
+    assert by_category["qidian_batch_import_file_quota"]["source_evidence"] == "official_editor_frontend_static"
+    assert "v=secret" not in json.dumps(signals, ensure_ascii=False)
+
+
+def test_summarize_probe_does_not_treat_qidian_batch_import_quota_as_publish_quota() -> None:
+    qidian_signals = quotas.extract_limit_signals(
+        platform="qidian",
+        page_key="editor_frontend_static",
+        url="https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js",
+        title="",
+        text='getuploadnumoftheday e<50 "今日上传已达到50个文件上限" "单次最多上传10个文件"',
+    )
+
+    report = quotas.summarize_probe(
+        checked_at="2026-07-02T06:10:00Z",
+        pages=[
+            {
+                "platform": "qidian",
+                "page_key": "editor_frontend_static",
+                "ok": True,
+                "signals": qidian_signals,
+            }
+        ],
+        expected_platforms=["qidian"],
+    )
+
+    assert report["platforms"]["qidian"]["publish_quota_confirmed"] is False
+    assert report["status"] == "quota_incomplete"
+    assert report["publish_true_gate"]["allowed"] is False
 
 
 def test_summarize_probe_marks_publish_true_unverified_without_numeric_frequency_quota() -> None:
@@ -320,3 +375,29 @@ def test_browser_quota_pages_snapshot_sends_page_specs_to_container(
     assert page_specs[0]["platform"] == "qidian"
     assert page_specs[0]["url"] == "https://write.qq.com/portal/dashboard"
     assert "container-1" in captured["args"]
+
+
+def test_browser_quota_pages_snapshot_uses_larger_text_limit_for_qidian_static(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_command_with_input(args, *, timeout: float, input_text: str):
+        captured["input_text"] = input_text
+        return {"ok": True, "stdout": json.dumps({"ok": True, "pages": []})}
+
+    monkeypatch.setattr(quotas, "run_command_with_input", fake_run_command_with_input)
+
+    quotas.browser_quota_pages_snapshot(
+        SimpleNamespace(
+            skip_browser=False,
+            publisher_browser_container="container-1",
+            colima_profile="swarmbridged",
+            expected_platform=["qidian"],
+        )
+    )
+
+    page_specs = json.loads(str(captured["input_text"]))
+    by_key = {item["page_key"]: item for item in page_specs}
+    assert by_key["dashboard"]["text_limit"] == quotas.DEFAULT_BROWSER_TEXT_LIMIT
+    assert by_key["editor_frontend_static"]["text_limit"] > 300_000

@@ -22,6 +22,10 @@ from scripts.monitor_forwin_runtime import redact_sensitive, utc_now  # noqa: E4
 
 
 MAX_SNIPPET_CHARS = 96
+DEFAULT_BROWSER_TEXT_LIMIT = 12000
+BROWSER_TEXT_LIMIT_BY_PAGE_KEY = {
+    "editor_frontend_static": 450000,
+}
 FANQIE_LONGFORM_RULE_ARTICLE_URL = "https://fanqienovel.com/writer/zone/article/7639950766869839897"
 PUBLISH_QUOTA_SIGNAL_CATEGORIES = {
     "numeric_publish_frequency_quota",
@@ -145,6 +149,10 @@ DEFAULT_PAGES: dict[str, list[dict[str, str]]] = {
         {
             "page_key": "day_words_calendar_endpoint",
             "url": "https://write.qq.com/ccauthorweb/daywords/getMonthDayWords",
+        },
+        {
+            "page_key": "editor_frontend_static",
+            "url": "https://write.qq.com/portal/public/editor/static/js/main.49f0b475.chunk.js",
         },
         {
             "page_key": "official_new_book_faq",
@@ -317,6 +325,63 @@ def _qidian_endpoint_state_signals(
     return []
 
 
+def _contains_literal_or_js_escape(text: str, phrase: str) -> bool:
+    return phrase in text or phrase.encode("unicode_escape").decode("ascii") in text
+
+
+def _qidian_editor_frontend_static_signals(
+    *,
+    platform: str,
+    page_key: str,
+    url: str,
+    title: str,
+    text: str,
+) -> list[dict[str, Any]]:
+    if platform != "qidian" or page_key != "editor_frontend_static":
+        return []
+    normalized = normalize_space(text)
+    has_daily_batch_limit = "getuploadnumoftheday" in normalized and (
+        "e<50" in normalized
+        or "<50" in normalized
+        or _contains_literal_or_js_escape(normalized, "今日上传已达到50个文件上限")
+    )
+    has_single_batch_limit = (
+        "t>10" in normalized
+        or ">10" in normalized
+        or _contains_literal_or_js_escape(normalized, "单次最多上传10个文件")
+    )
+    if not has_daily_batch_limit and not has_single_batch_limit:
+        return []
+
+    limits: dict[str, int] = {}
+    snippets: list[str] = []
+    matched_parts: list[str] = []
+    if has_daily_batch_limit:
+        limits["daily_batch_import_files"] = 50
+        matched_parts.append("bookchapterimport/getuploadnumoftheday<50")
+        snippets.append("批量导入入口按账号/作品读取今日上传文件数；达到50个文件时提示次日再批量上传。")
+    if has_single_batch_limit:
+        limits["single_batch_import_files"] = 10
+        matched_parts.append("single_batch_import_files<=10")
+        snippets.append("批量导入单次最多处理10个文件，剩余文件需分批上传。")
+
+    return [
+        {
+            "platform": platform,
+            "page_key": page_key,
+            "source_url": sanitize_url(url),
+            "title": normalize_space(title)[:120],
+            "category": "qidian_batch_import_file_quota",
+            "severity": "rule",
+            "matched_keyword": "; ".join(matched_parts),
+            "snippet": " ".join(snippets)[:MAX_SNIPPET_CHARS],
+            "limits": limits,
+            "source_evidence": "official_editor_frontend_static",
+            "quota_confirmed": True,
+        }
+    ]
+
+
 def extract_limit_signals(
     *,
     platform: str,
@@ -383,6 +448,15 @@ def extract_limit_signals(
             text=text,
         )
     )
+    signals.extend(
+        _qidian_editor_frontend_static_signals(
+            platform=platform,
+            page_key=page_key,
+            url=url,
+            title=title,
+            text=text,
+        )
+    )
     return signals
 
 
@@ -437,7 +511,7 @@ def summarize_probe(
             category = str(signal.get("category") or "")
             if category:
                 categories.add(category)
-            if category in PUBLISH_QUOTA_SIGNAL_CATEGORIES or signal.get("quota_confirmed"):
+            if category in PUBLISH_QUOTA_SIGNAL_CATEGORIES:
                 entry["publish_quota_confirmed"] = True
         entry["categories"] = sorted(categories)
         blockers = _visible_account_blockers(signals)
@@ -537,7 +611,8 @@ with sync_playwright() as p:
                     page.wait_for_timeout(1500)
                 result["url"] = page.url
                 result["title"] = page.title()
-                result["text"] = page.locator("body").inner_text(timeout=6000)[:12000]
+                text_limit = int(item.get("text_limit") or 12000)
+                result["text"] = page.locator("body").inner_text(timeout=6000)[:text_limit]
                 result["ok"] = bool(result["text"] or result["title"] or result["url"])
             except Exception as exc:  # noqa: BLE001
                 result["error"] = f"{type(exc).__name__}: {str(exc)[:240]}"
@@ -594,7 +669,14 @@ def browser_quota_pages_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         return {"ok": False, "error": "publisher browser container id is not configured", "pages": []}
     platforms = list(getattr(args, "expected_platform", []) or ["fanqie", "qidian"])
     page_specs = [
-        {"platform": platform, **page}
+        {
+            "platform": platform,
+            **page,
+            "text_limit": BROWSER_TEXT_LIMIT_BY_PAGE_KEY.get(
+                page.get("page_key", ""),
+                DEFAULT_BROWSER_TEXT_LIMIT,
+            ),
+        }
         for platform in platforms
         for page in DEFAULT_PAGES.get(platform, [])
     ]

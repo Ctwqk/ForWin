@@ -20,6 +20,8 @@ Official or platform-owned sources checked:
 - Qidian work information notice: `https://write.qq.com/portal/content/27817262201325501?feedType=2&lcid=74671304322038861`
 - Qidian mobile signing guide: `https://write.qq.com/portal/content?caid=14626181805826801&feedType=2&lcid=35546823090990148`
 - Qidian writer version notes: `https://write.qq.com/portal/version`
+- Production read-only browser quota probe:
+  `python scripts/probe_publisher_platform_quotas.py`
 
 ## Confirmed Rules
 
@@ -42,17 +44,29 @@ Official or platform-owned sources checked:
 
 ## Unconfirmed Public Quotas
 
-No official public page found on 2026-07-02 gave a stable daily/hourly numeric
-quota for:
+No official public page or logged-in read-only probe found on 2026-07-02 gave a
+stable daily/hourly numeric quota for:
 
 - new-book creation count per account
 - chapter publish count per day or per hour
 - draft count per book or account
 - maximum number of publish attempts before risk control
 
-Because those hard quotas were not publicly confirmed, ForWin production policy
-uses conservative internal ceilings until a current account page or platform
-staff notice confirms otherwise:
+The 2026-07-02 production read-only quota probe opened five Fanqie pages and five
+Qidian pages through the shared logged-in publisher browser. It saw no visible
+account blockers on the current dashboard or create-work pages:
+
+- Fanqie dashboard and create-work pages were accessible; the create-work page
+  showed the expected intro counter and review rules, but no current
+  "daily-create-limit" banner.
+- Qidian dashboard and create-work pages were accessible; no current
+  create-frequency or publish-frequency blocker was visible.
+- Official/help pages confirmed word, intro, review, signing, and deletion
+  rules, but did not expose a stable daily/hourly publish quota.
+
+Because those hard quotas were not confirmed, ForWin production policy keeps the
+quota objective open and uses conservative internal ceilings until a current
+account page or platform staff notice confirms otherwise:
 
 - no automated `create_if_missing=true` in routine production smoke
 - no batch `publish=true`
@@ -61,12 +75,25 @@ staff notice confirms otherwise:
 - no `publish=true` without a passing publisher compliance review
 - no `publish=true` if platform pages show risk control, captcha, MFA, missing
   permission, account abnormality, audit rejection, or login instability
+- do not claim quota-confirmed `publish=true` while
+  `scripts/probe_publisher_platform_quotas.py` reports `quota_incomplete`
 
 ## Current Account State
 
 The July 2026 production longform smoke uploaded one generated chapter to each
 platform with `publish=false`, `create_if_missing=false`, and existing safe work
 bindings. Both upload jobs succeeded as drafts.
+
+The latest read-only quota probe was run at `2026-07-02T05:05:39Z` and returned:
+
+- `status`: `quota_incomplete`
+- `blocked_items`: none
+- Fanqie: 5/5 probed pages loaded, 12 quota/rule signals, no visible current
+  account blocker
+- Qidian: 5/5 probed pages loaded, 6 quota/rule signals, no visible current
+  account blocker
+- `publish_true_gate.allowed`: `false` because
+  `numeric_publish_frequency_quota_unconfirmed`
 
 Audit-sync observations from the same run:
 
@@ -97,10 +124,11 @@ does surface signing, the process is:
 - platform-specific word and metadata rules above are satisfied
 - publisher compliance reviewer exists and passes
 - no active generation or upload job is already running for the same project
+- `scripts/probe_publisher_platform_quotas.py` is run in the same production
+  publisher browser session and does not report visible account blockers
 - the operator has selected the exact project, platform, work binding, chapter,
   and body source
 - the expected post-click state is either published or submitted for platform
   review, and the result will be verified from the platform page
 
 If any item is not true, stop at `publish=false` draft upload or API preflight.
-

@@ -161,9 +161,18 @@ must treat that document as the publish gate. In short:
 - `publish=true` must be single-platform and single-chapter.
 - `publish=true` must require a passing publisher compliance reviewer result.
 - `publish=true` must not run as a batch and must not create a new book.
-- If public or logged-in platform pages do not expose a stable daily/hourly
-  quota, use the conservative ForWin ceiling of one publish attempt per
-  platform per operator-directed experiment.
+- Before any `publish=true` attempt, run the read-only quota probe:
+
+  ```bash
+  python scripts/probe_publisher_platform_quotas.py
+  ```
+
+- If the probe returns `blocked`, do not publish; resolve the visible platform
+  risk/control signal first.
+- If the probe returns `quota_incomplete`, do not describe the run as
+  quota-confirmed. Stop at `publish=false` unless a separately
+  operator-directed exception is being run under the conservative ceiling of one
+  publish attempt per platform.
 - Do not continue through captcha, MFA, risk control, account abnormality,
   missing permission, review rejection, or signing/contract prompts.
 

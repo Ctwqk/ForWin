@@ -106,6 +106,22 @@ def test_publisher_compliance_failure_blocks_when_required() -> None:
     assert any(item["field"] == "publisher_compliance" for item in result["blocking"])
 
 
+def test_publisher_compliance_missing_blocks_when_required() -> None:
+    result = _preflight().check_upload_readiness(
+        platform_id="qidian",
+        book_name="测试书",
+        chapter_title="第一章",
+        body="正文",
+        create_if_missing=False,
+        book_meta={},
+        publisher_compliance_required=True,
+    )
+
+    assert result["ok"] is False
+    assert result["requires_reviewer"] is True
+    assert any(item["code"] == "missing_review" for item in result["blocking"])
+
+
 def test_publisher_compliance_warning_does_not_block_when_allowed() -> None:
     result = _preflight().check_upload_readiness(
         platform_id="qidian",

@@ -355,6 +355,7 @@ class PublisherPreflightResponse(BaseModel):
     warnings: list[dict[str, Any]] = Field(default_factory=list)
     platform_meta: dict[str, Any] = Field(default_factory=dict)
     requires_reviewer: bool = False
+    publisher_compliance: dict[str, Any] = Field(default_factory=dict)
 
 
 class PublisherLoginQrOneShotRequest(BaseModel):

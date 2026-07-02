@@ -10,6 +10,9 @@ from sqlalchemy import select, update
 from forwin.governance import DecisionEventType
 from forwin.models.project import Project
 from forwin.models.publisher import PublisherConnectionState, PublisherUploadJob
+from forwin.protocol.context import ChapterContextPack
+from forwin.protocol.writer import WriterOutput
+from forwin.reviewer.publisher_compliance import PublisherComplianceReviewer
 from .audit import PublisherAuditService, terminal_upload_event_type
 from .browser_sessions import isoformat, utc_now
 from .connection_state import ExtensionConnectionService
@@ -192,6 +195,27 @@ def _build_codex_intervention_payload(
     }
 
 
+def _publisher_compliance_payload(verdict: Any) -> dict[str, Any]:
+    issues = []
+    for issue in getattr(verdict, "issues", []) or []:
+        issues.append(
+            {
+                "rule_name": str(getattr(issue, "rule_name", "") or ""),
+                "severity": str(getattr(issue, "severity", "") or ""),
+                "description": str(getattr(issue, "description", "") or ""),
+                "reviewer": str(getattr(issue, "reviewer", "") or ""),
+                "issue_type": str(getattr(issue, "issue_type", "") or ""),
+                "blocking": bool(getattr(issue, "blocking", False)),
+            }
+        )
+    return {
+        "verdict": str(getattr(verdict, "verdict", "") or ""),
+        "issues": issues,
+        "recommended_action": str(getattr(verdict, "recommended_action", "") or ""),
+        "review_summary": str(getattr(verdict, "review_summary", "") or ""),
+    }
+
+
 class UploadJobService:
     def __init__(
         self,
@@ -205,6 +229,7 @@ class UploadJobService:
         bindings=None,
         cover_service=None,
         codex_intervention_handler: CodexInterventionHandler | None = None,
+        publisher_compliance_reviewer=None,
     ) -> None:
         self.session_factory = session_factory
         self.platform_catalog = platform_catalog
@@ -215,6 +240,45 @@ class UploadJobService:
         self.bindings = bindings
         self.cover_service = cover_service
         self.codex_intervention_handler = codex_intervention_handler
+        self.publisher_compliance_reviewer = (
+            publisher_compliance_reviewer or PublisherComplianceReviewer()
+        )
+
+    def review_publisher_compliance(
+        self,
+        *,
+        project_id: str,
+        platform: str,
+        book_name: str,
+        chapter_title: str,
+        body: str,
+        book_meta: dict[str, Any],
+    ) -> dict[str, Any]:
+        context = ChapterContextPack(
+            project_id=str(project_id or ""),
+            project_title=str(book_name or ""),
+            premise="",
+            genre="",
+            setting_summary="",
+            chapter_number=0,
+            chapter_plan_title=str(chapter_title or ""),
+            chapter_plan_one_line="",
+            chapter_goals=[],
+        )
+        writer_output = WriterOutput(
+            project_id=str(project_id or ""),
+            chapter_number=0,
+            title=str(chapter_title or ""),
+            body=str(body or ""),
+            char_count=len(str(body or "")),
+            end_of_chapter_summary="",
+            generation_meta={
+                "publisher_platform": str(platform or ""),
+                "publisher_intro": str(book_meta.get("intro") or ""),
+            },
+        )
+        verdict = self.publisher_compliance_reviewer.review(context, writer_output)
+        return _publisher_compliance_payload(verdict)
 
     def request_codex_intervention(self, intervention: dict[str, Any]) -> None:
         handler = self.codex_intervention_handler
@@ -278,6 +342,18 @@ class UploadJobService:
             if self.platform_metadata_catalog is not None
             else {}
         )
+        latest_publisher_compliance = (
+            self.review_publisher_compliance(
+                project_id=project_id,
+                platform=platform,
+                book_name=book_name,
+                chapter_title=chapter_title,
+                body=body,
+                book_meta=normalized_book_meta,
+            )
+            if publisher_compliance_required
+            else None
+        )
         preflight = (
             self.preflight.check_upload_readiness(
                 platform_id=platform,
@@ -287,6 +363,7 @@ class UploadJobService:
                 create_if_missing=create_if_missing,
                 book_meta=normalized_book_meta,
                 publisher_compliance_required=publisher_compliance_required,
+                latest_publisher_compliance=latest_publisher_compliance,
             )
             if self.preflight is not None
             else {"ok": True, "blocking": [], "warnings": [], "platform_meta": platform_meta}
@@ -513,6 +590,19 @@ class UploadJobService:
                             body=body,
                             create_if_missing=create_if_missing,
                             book_meta=normalized_book_meta,
+                            publisher_compliance_required=publisher_compliance_required,
+                            latest_publisher_compliance=(
+                                self.review_publisher_compliance(
+                                    project_id=resolved_project_id,
+                                    platform=platform,
+                                    book_name=book_name,
+                                    chapter_title=chapter_title,
+                                    body=body,
+                                    book_meta=normalized_book_meta,
+                                )
+                                if publisher_compliance_required
+                                else None
+                            ),
                         )
                         if self.preflight is not None
                         else {

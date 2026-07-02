@@ -116,8 +116,10 @@ class PublisherPreflightService:
                 )
 
         requires_reviewer = False
+        compliance_payload: dict[str, Any] = {}
         if publisher_compliance_required:
             compliance = latest_publisher_compliance if isinstance(latest_publisher_compliance, dict) else {}
+            compliance_payload = compliance
             verdict = _clean(compliance.get("verdict")).lower()
             issues = compliance.get("issues")
             issue_rows = [item for item in issues if isinstance(item, dict)] if isinstance(issues, list) else []
@@ -125,7 +127,7 @@ class PublisherPreflightService:
             has_warning = any(_clean(item.get("severity")).lower() == "warning" for item in issue_rows)
             if not compliance:
                 requires_reviewer = True
-                warnings.append(
+                blocking.append(
                     _issue(
                         "missing_review",
                         "publisher_compliance",
@@ -155,4 +157,5 @@ class PublisherPreflightService:
             "warnings": warnings,
             "platform_meta": platform_meta,
             "requires_reviewer": requires_reviewer,
+            "publisher_compliance": compliance_payload,
         }

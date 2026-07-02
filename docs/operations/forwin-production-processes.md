@@ -152,6 +152,21 @@ python scripts/smoke_production_publisher_upload_chain.py \
 The extension key value must never be committed, pasted into logs, printed in
 reports, or sent to Discord.
 
+Public platform publish rules and quota findings are tracked in
+`docs/operations/publisher-platform-rules.md`. Routine production automation
+must treat that document as the publish gate. In short:
+
+- `publish=false`, `create_if_missing=false`, and an existing work binding are
+  the default smoke path.
+- `publish=true` must be single-platform and single-chapter.
+- `publish=true` must require a passing publisher compliance reviewer result.
+- `publish=true` must not run as a batch and must not create a new book.
+- If public or logged-in platform pages do not expose a stable daily/hourly
+  quota, use the conservative ForWin ceiling of one publish attempt per
+  platform per operator-directed experiment.
+- Do not continue through captcha, MFA, risk control, account abnormality,
+  missing permission, review rejection, or signing/contract prompts.
+
 For recurring two-hour Codex/operator intervention checks, install the
 read-only supervisor on 150 from a source checkout or deployed copy. It checks
 GitHub PRs/issues, publisher upload jobs, MCP generation task state, publisher

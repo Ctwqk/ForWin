@@ -2319,6 +2319,95 @@ class SubWorldControlTests(unittest.TestCase):
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
         self.assertEqual(unknown, [])
 
+    def test_recent_summary_codename_with_context_label_normalizes_to_allowed_name(self) -> None:
+        with TemporaryDirectory() as tmp:
+            engine = get_engine(postgres_test_url("recent-summary-codename-context-label"))
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="书", premise="p", genre="g")
+                arc = updater.create_arc_plan(project.id, "弧线")
+                chapter7 = updater.create_chapter_plan(
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=7,
+                    title="第七章",
+                    one_line="锚点追踪",
+                    goals=["推进"],
+                    experience_plan=ChapterExperiencePlan(entity_admission_rule="strict_named_character"),
+                )
+                chapter7.status = "accepted"
+                session.add(
+                    ChapterDraft(
+                        chapter_plan_id=chapter7.id,
+                        version=1,
+                        body_text="陆明遭遇猎锚者X的远程信号追踪。" * 40,
+                        summary="猎锚者X已把追踪目标转向锚点持有者。",
+                        char_count=1200,
+                    )
+                )
+                updater.create_chapter_plan(
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=8,
+                    title="第八章",
+                    one_line="碎片拼图",
+                    goals=["推进"],
+                    experience_plan=ChapterExperiencePlan(entity_admission_rule="strict_named_character"),
+                )
+                allowed = updater.create_entity(project.id, "character", "陆明", "主角", chapter=0)
+                global_core = updater.create_subworld(
+                    project_id=project.id,
+                    origin_arc_id=arc.id,
+                    parent_subworld_id=None,
+                    name="global_core",
+                    purpose="核心角色",
+                    scope="global_core",
+                    metadata={},
+                )
+                updater.create_roster_item(
+                    project_id=project.id,
+                    subworld_id=global_core.id,
+                    entity_id=allowed.id,
+                    display_name="陆明",
+                    description="允许角色",
+                    is_core=True,
+                    status="seeded_named",
+                )
+                updater.update_chapter_experience_plan(
+                    project.id,
+                    8,
+                    ChapterExperiencePlan(
+                        active_subworld_ids=[global_core.id],
+                        entity_admission_rule="strict_named_character",
+                    ),
+                )
+                session.flush()
+
+                repo = StateRepository(session)
+                allowed_names = repo.get_allowed_entity_names(project.id, 8)
+                verdict = ContinuityChecker(repo).check(
+                    project.id,
+                    WriterOutput(
+                        chapter_number=8,
+                        title="第八章",
+                        body="猎锚者X的远程信号压力逼近，陆明被迫转移。" * 80,
+                        end_of_chapter_summary="猎锚者X继续远程施压。",
+                        entity_mentions=[
+                            EntityMention(entity_name="猎锚者X（远程信号压力）", entity_kind="character", is_named=True),
+                            EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
+                        ],
+                    ),
+                )
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertIn("猎锚者X", allowed_names)
+        unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
+        self.assertEqual(unknown, [])
+
     def test_rearc_creates_new_subworlds_via_director_delta(self) -> None:
         class FakeDirector:
             def plan_subworld_delta(self, **kwargs):

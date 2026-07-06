@@ -57,3 +57,36 @@ Target: 100 chapters
 - Regression test: added `test_recent_accepted_summary_codename_character_is_subworld_allowed`.
 - Verification: focused subworld tests passed (`12 passed`), related suite passed (`237 passed, 28 subtests passed`), full suite passed (`1768 passed, 3 skipped, 36 subtests passed`).
 - Issues: code fix ready for deploy; generation remains paused at chapter 6 until deployed and retried.
+
+### 2026-07-06 12:13:01 PDT
+
+- State: fix deployed and chapter 6 retry restarted.
+- Commit: `436aa51ee711308f7df057039ad086c284135dc3`.
+- Deploy evidence: `/Users/magi1/ForWin-swarm/.deploy-sync-source-commit` matches `436aa51ee711308f7df057039ad086c284135dc3`; app health `8899=/health ok`, MCP health `8896=/health ok`; 6 swarm services are `1/1` on `deploy-436aa51ee711`.
+- Generation action: `chapter_review_retry(continue_generation=true)` restarted chapter 6 through task `dfd3924c0c19`.
+- Issues: watch chapter 6 for recurrence of `猎锚者X` subworld admission after deploy.
+
+### 2026-07-06 12:19:43 PDT
+
+- State: retry task `dfd3924c0c19` running.
+- Task stage: `writing_chapter`; current chapter: 7.
+- Progress: task completed chapter 6; project has 6 generated chapters and 5 accepted chapters at the preceding project snapshot, with chapter 6 moving through `applying_canon` and then into the task completed list.
+- Result: the `猎锚者X` subworld admission gate did not recur after deploy.
+- Issues: none blocking; continue monitoring chapters 7-18 and the eventual continuation toward chapter 100.
+
+### 2026-07-06 12:34:02 PDT
+
+- State: task `dfd3924c0c19` stopped at review gate on chapter 8.
+- Progress: 7 accepted / 100 target; completed chapters in task: 6-7; chapter 8 status `needs_review`.
+- Root cause: subworld admission recognized `猎锚者X` from recent accepted summaries, but the reviewer issue carried the same known character with a runtime context label: `猎锚者X（远程信号压力）`. The label was not normalized away, so the known recurring character was treated as a new unplanned stateful named entity.
+- Code fix: added a narrow parenthetical context label normalization for `远程信号压力`.
+- Regression test: added `test_recent_summary_codename_with_context_label_normalizes_to_allowed_name`; it failed before the fix with `['猎锚者X（远程信号压力）']` and passes after the fix.
+- Verification so far: subworld-related regression suite passed (`98 passed, 28 subtests passed`).
+- Issues: fix ready for full test and deploy; generation remains paused at chapter 8 until deployed and retried.
+
+### 2026-07-06 14:29:26 PDT
+
+- State: chapter 8 contextual codename-label fix is fully verified locally.
+- Environment note: full-suite verification initially exposed infrastructure issues rather than code regressions: stale `forwin_test_%` PostgreSQL databases exhausted WAL space, and the local Colima-hosted Qdrant disk was full. Cleaned stale test databases, restored the PostgreSQL tunnel, pruned unused local Docker images/build cache, and verified Qdrant writes before rerunning.
+- Verification: full test suite passed: `1769 passed, 3 skipped, 82 warnings, 36 subtests passed in 2862.29s (0:47:42)`.
+- Issues: ready to commit, push, deploy through the 150 sync path, then retry chapter 8 with generation continuation enabled.

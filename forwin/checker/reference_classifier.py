@@ -182,6 +182,15 @@ STATUS_LABEL_SUFFIXES = {
     "未知",
     "匿名",
 }
+PARENTHETICAL_REFERENCE_LABELS = {
+    "提及",
+    "无名",
+    "记录",
+    "旁白",
+    "幕后",
+    "间接",
+    "远程信号压力",
+}
 
 
 def has_malformed_parenthetical_annotation(name: str) -> bool:
@@ -204,7 +213,7 @@ def normalize_character_reference(name: str) -> str:
         prefix, suffix = text.rsplit(opener, 1)
         suffix = suffix[: -len(closer)].strip()
         prefix = prefix.strip()
-        if suffix in {"提及", "无名", "记录", "旁白", "幕后", "间接"} and prefix:
+        if suffix in PARENTHETICAL_REFERENCE_LABELS and prefix:
             text = prefix
         elif prefix and looks_like_generic_character_reference(prefix):
             text = prefix

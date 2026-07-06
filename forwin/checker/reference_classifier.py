@@ -190,6 +190,7 @@ PARENTHETICAL_REFERENCE_LABELS = {
     "幕后",
     "间接",
     "远程信号压力",
+    "远程声音",
 }
 
 

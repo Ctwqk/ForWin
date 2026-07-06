@@ -2400,6 +2400,19 @@ class SubWorldControlTests(unittest.TestCase):
                         ],
                     ),
                 )
+                verdict_voice = ContinuityChecker(repo).check(
+                    project.id,
+                    WriterOutput(
+                        chapter_number=8,
+                        title="第八章",
+                        body="猎锚者X的远程声音突然切入，陆明被迫转移。" * 80,
+                        end_of_chapter_summary="猎锚者X通过远程声音继续施压。",
+                        entity_mentions=[
+                            EntityMention(entity_name="猎锚者X（远程声音）", entity_kind="character", is_named=True),
+                            EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
+                        ],
+                    ),
+                )
             finally:
                 session.close()
                 engine.dispose()
@@ -2407,6 +2420,10 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertIn("猎锚者X", allowed_names)
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
         self.assertEqual(unknown, [])
+        unknown_voice = [
+            issue.entity_names[0] for issue in verdict_voice.issues if issue.rule_name == "sub_world_unknown_named_entity"
+        ]
+        self.assertEqual(unknown_voice, [])
 
     def test_recent_summary_network_handler_alias_is_subworld_allowed(self) -> None:
         with TemporaryDirectory() as tmp:

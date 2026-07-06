@@ -120,3 +120,41 @@ Target: 100 chapters
 - State: chapter 8 `灰鹞` network-handler alias fix is fully verified locally.
 - Verification: full test suite passed: `1770 passed, 3 skipped, 82 warnings, 36 subtests passed in 2724.66s (0:45:24)`.
 - Issues: ready to commit, push, deploy through the 150 sync path, then retry chapter 8 with generation continuation enabled.
+
+### 2026-07-06 15:38:33 PDT
+
+- State: chapter 8 `灰鹞` network-handler alias fix deployed.
+- Commit: `9e34af26bcbf04d8efe59c095b0a5cac70afb287`.
+- Deploy evidence: `/Users/magi1/ForWin-swarm/.deploy-sync-source-commit` matches `9e34af26bcbf04d8efe59c095b0a5cac70afb287`; app health `8899=/health ok`, MCP health `8896=/health ok`; 6 swarm services are `1/1` on `deploy-9e34af26bcbf`.
+- Issues: ready to retry chapter 8.
+
+### 2026-07-06 15:39:02 PDT
+
+- State: chapter 8 retry started after deploy.
+- Generation action: `chapter_review_retry(continue_generation=true)` reset chapter 8 to `planned` and started task `70b31d41bf43`.
+- Task scope: requested chapters 8-18.
+- Issues: watch chapter 8 for recurrence of `灰鹞` subworld admission.
+
+### 2026-07-06 15:50:57 PDT
+
+- State: retry task `70b31d41bf43` running.
+- Task stage: `writing_chapter`; current chapter: 9.
+- Progress: task completed chapter 8; project has 8 accepted chapters and no pending review gate.
+- Result: the `灰鹞` subworld admission gate did not recur after deploy.
+- Issues: none blocking; continue monitoring chapters 9-18 and the eventual continuation toward chapter 100.
+
+### 2026-07-06 16:05:55 PDT
+
+- State: task `70b31d41bf43` stopped at review gate on chapter 9.
+- Progress: 8 accepted / 100 target; chapter 9 status `needs_review`.
+- Root cause: the previous contextual codename normalization covered `猎锚者X（远程信号压力）`, but chapter 9 used the same known character with a new non-canonical runtime label: `猎锚者X（远程声音）`. The bracketed label was not stripped before subworld admission matching, so the known recurring character was treated as a new unplanned named entity.
+- Code fix: added `远程声音` to the narrow parenthetical reference-label normalization list.
+- Regression test: extended `test_recent_summary_codename_with_context_label_normalizes_to_allowed_name`; it failed before the fix with `['猎锚者X（远程声音）']` and passes after the fix.
+- Verification so far: subworld-related regression suite passed (`99 passed, 28 subtests passed`).
+- Issues: fix ready for full test and deploy; generation remains paused at chapter 9 until deployed and retried.
+
+### 2026-07-06 16:55:22 PDT
+
+- State: chapter 9 `猎锚者X（远程声音）` contextual codename-label fix is fully verified locally.
+- Verification: full test suite passed: `1770 passed, 3 skipped, 82 warnings, 36 subtests passed in 2835.82s (0:47:15)`.
+- Issues: ready to commit, push, deploy through the 150 sync path, then retry chapter 9 with generation continuation enabled.

@@ -38,3 +38,22 @@ def test_publisher_browser_uses_browser_image_target() -> None:
     browser_build = compose["services"]["publisher-browser"]["build"]
     assert browser_build["context"] == "."
     assert browser_build["target"] == "publisher-browser-runtime"
+
+
+def test_publisher_browser_session_restore_is_opt_in() -> None:
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    service_start = compose.index("  publisher-browser:")
+    next_service = compose.index("\n  minio:", service_start)
+    service_block = compose[service_start:next_service]
+
+    assert (
+        "FORWIN_EXTENSION_RESTORE_BACKEND_SESSIONS="
+        "${FORWIN_EXTENSION_RESTORE_BACKEND_SESSIONS:-false}"
+    ) in service_block
+
+
+def test_publisher_browser_launcher_gates_session_restore() -> None:
+    launcher = Path("scripts/launch_linux_extension_browser.sh").read_text(encoding="utf-8")
+
+    assert 'RESTORE_BACKEND_SESSIONS="${FORWIN_EXTENSION_RESTORE_BACKEND_SESSIONS:-false}"' in launcher
+    assert 'is_truthy "$RESTORE_BACKEND_SESSIONS"' in launcher

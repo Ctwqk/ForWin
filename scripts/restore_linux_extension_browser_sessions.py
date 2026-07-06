@@ -141,6 +141,15 @@ def to_browser_cookie(cookie: dict) -> dict | None:
     return payload
 
 
+def restore_cookies_to_running_browser(cdp_url: str, cookies_to_add: list[dict]) -> None:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.connect_over_cdp(cdp_url)
+        if not browser.contexts:
+            raise RuntimeError("no browser context available over CDP")
+        context = browser.contexts[0]
+        context.add_cookies(cookies_to_add)
+
+
 def main() -> int:
     args = parse_args()
     sessions = load_latest_sessions(args.database_url)
@@ -157,15 +166,7 @@ def main() -> int:
         return 0
 
     wait_for_cdp(args.cdp_url, args.wait_seconds)
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.connect_over_cdp(args.cdp_url)
-        try:
-            if not browser.contexts:
-                raise RuntimeError("no browser context available over CDP")
-            context = browser.contexts[0]
-            context.add_cookies(cookies_to_add)
-        finally:
-            browser.close()
+    restore_cookies_to_running_browser(args.cdp_url, cookies_to_add)
 
     summary = {
         platform: len(sessions.get(platform, []))

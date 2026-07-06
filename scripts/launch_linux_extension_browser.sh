@@ -23,6 +23,7 @@ HEARTBEAT_WAIT_SECONDS="${FORWIN_EXTENSION_STARTUP_HEARTBEAT_TIMEOUT_SECONDS:-75
 AUTO_RESET_PROFILE_ON_HEARTBEAT_FAILURE="${FORWIN_EXTENSION_AUTO_RESET_PROFILE_ON_HEARTBEAT_FAILURE:-true}"
 RUNTIME_MONITOR_INTERVAL_SECONDS="${FORWIN_PUBLISHER_HEARTBEAT_MONITOR_INTERVAL_SECONDS:-30}"
 RUNTIME_MONITOR_FAILURES="${FORWIN_PUBLISHER_HEARTBEAT_MONITOR_FAILURES:-2}"
+RESTORE_BACKEND_SESSIONS="${FORWIN_EXTENSION_RESTORE_BACKEND_SESSIONS:-false}"
 RUN_DISPLAY=""
 USE_XVFB_RUN=false
 
@@ -366,6 +367,7 @@ Launching Linux extension test browser
   Extension:     $EXTENSION_DIR
   Backend URL:   $BACKEND_URL
   Qualified:     $REQUIRE_QUALIFIED_PROFILE
+  Restore sync:  $RESTORE_BACKEND_SESSIONS
   Display mode:  $([[ "$USE_XVFB_RUN" == "true" ]] && printf 'managed Xvfb starting at :%s' "$XVFB_SERVER_NUM" || printf 'external %s' "$RUN_DISPLAY")
 
 This profile persists extension settings, cookies, and login state for server-side smoke tests.
@@ -390,7 +392,7 @@ while (( launch_attempt <= max_launch_attempts )); do
   "$CHROME_BIN" "${CHROME_ARGS[@]}" &
   CHROME_PID=$!
 
-  if [[ -n "$REMOTE_DEBUGGING_PORT" ]] && [[ -f "$SESSION_RESTORE_SCRIPT" ]]; then
+  if is_truthy "$RESTORE_BACKEND_SESSIONS" && [[ -n "$REMOTE_DEBUGGING_PORT" ]] && [[ -f "$SESSION_RESTORE_SCRIPT" ]]; then
     if ! "$PYTHON_BIN" "$SESSION_RESTORE_SCRIPT" --cdp-url "http://127.0.0.1:$REMOTE_DEBUGGING_PORT"; then
       echo "Warning: failed to restore backend browser sessions into the Linux extension browser." >&2
     fi

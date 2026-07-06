@@ -15,6 +15,7 @@ from forwin.checker.rules import ContinuityChecker
 from forwin.context.assembler import assemble_context
 from forwin.director.arc_director import ArcDirector
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.draft import ChapterDraft
 from forwin.models.genesis import BookGenesisRevision
 from forwin.map.models import MapRegionRow
 from forwin.models.phase import BandExperiencePlan
@@ -2226,6 +2227,95 @@ class SubWorldControlTests(unittest.TestCase):
                 engine.dispose()
 
         self.assertIn("周砚", allowed_names)
+        unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
+        self.assertEqual(unknown, [])
+
+    def test_recent_accepted_summary_codename_character_is_subworld_allowed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            engine = get_engine(postgres_test_url("recent-summary-codename"))
+            init_db(engine)
+            session = get_session_factory(engine)()
+            try:
+                updater = StateUpdater(session)
+                project = updater.create_project(title="书", premise="p", genre="g")
+                arc = updater.create_arc_plan(project.id, "弧线")
+                chapter5 = updater.create_chapter_plan(
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=5,
+                    title="第五章",
+                    one_line="外部追踪者出现",
+                    goals=["推进"],
+                    experience_plan=ChapterExperiencePlan(entity_admission_rule="strict_named_character"),
+                )
+                chapter5.status = "accepted"
+                session.add(
+                    ChapterDraft(
+                        chapter_plan_id=chapter5.id,
+                        version=1,
+                        body_text="陆明发现董事会派出猎锚者X追踪锚点持有者。" * 40,
+                        summary="陆明得知猎锚者X已受董事会委托追踪锚点持有者，目标坐标与下一站重叠。",
+                        char_count=1200,
+                    )
+                )
+                updater.create_chapter_plan(
+                    project_id=project.id,
+                    arc_plan_id=arc.id,
+                    chapter_number=6,
+                    title="第六章",
+                    one_line="双重追踪",
+                    goals=["推进"],
+                    experience_plan=ChapterExperiencePlan(entity_admission_rule="strict_named_character"),
+                )
+                allowed = updater.create_entity(project.id, "character", "陆明", "主角", chapter=0)
+                global_core = updater.create_subworld(
+                    project_id=project.id,
+                    origin_arc_id=arc.id,
+                    parent_subworld_id=None,
+                    name="global_core",
+                    purpose="核心角色",
+                    scope="global_core",
+                    metadata={},
+                )
+                updater.create_roster_item(
+                    project_id=project.id,
+                    subworld_id=global_core.id,
+                    entity_id=allowed.id,
+                    display_name="陆明",
+                    description="允许角色",
+                    is_core=True,
+                    status="seeded_named",
+                )
+                updater.update_chapter_experience_plan(
+                    project.id,
+                    6,
+                    ChapterExperiencePlan(
+                        active_subworld_ids=[global_core.id],
+                        entity_admission_rule="strict_named_character",
+                    ),
+                )
+                session.flush()
+
+                repo = StateRepository(session)
+                allowed_names = repo.get_allowed_entity_names(project.id, 6)
+                verdict = ContinuityChecker(repo).check(
+                    project.id,
+                    WriterOutput(
+                        chapter_number=6,
+                        title="第六章",
+                        body="猎锚者X在地下档案库与陆明交换锚点条件。" * 80,
+                        end_of_chapter_summary="猎锚者X提出临时合作。",
+                        entity_mentions=[
+                            EntityMention(entity_name="猎锚者X", entity_kind="character", is_named=True),
+                            EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
+                        ],
+                    ),
+                )
+            finally:
+                session.close()
+                engine.dispose()
+
+        self.assertIn("猎锚者X", allowed_names)
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
         self.assertEqual(unknown, [])
 

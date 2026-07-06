@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Optional
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from forwin.audience_metrics import derive_audience_trends
+from forwin.canon_names import extract_candidate_character_names
+from forwin.checker.reference_classifier import candidate_character_name
 from forwin.governance import (
     DecisionEventInfo,
     NarrativeConstraintInfo,
@@ -73,6 +76,11 @@ from forwin.state.query_helpers import (
 )
 
 logger = logging.getLogger(__name__)
+
+_SUMMARY_CODENAME_CHARACTER_RE = re.compile(
+    r"(?:猎锚者|追踪者|调查员|审查官|审计官|执行者|清理人|观察员|守门人|代理人|中介人|架构师|工程师|特勤|特工)"
+    r"[A-Za-z][A-Za-z0-9_-]{0,5}"
+)
 
 _READER_FEEDBACK_LEVEL_ORDER = {
     "noise": 0,
@@ -154,6 +162,18 @@ def _keyword_feedback_summary(comment_count: int, dominant_sentiment: str) -> st
     else:
         summary_parts.append("暂无明确结构化信号")
     return "，".join(summary_parts) + "。"
+
+
+def _extract_summary_character_names(text: str) -> set[str]:
+    content = str(text or "")
+    if not content.strip():
+        return set()
+    names = set(extract_candidate_character_names(content))
+    for match in _SUMMARY_CODENAME_CHARACTER_RE.finditer(content):
+        candidate = candidate_character_name(match.group(0))
+        if candidate:
+            names.add(candidate)
+    return {name for name in names if 1 < len(name) <= 12}
 
 
 class _AudienceHintData:
@@ -729,6 +749,7 @@ class StateRepository:
                 if str(item.entity_name or "").strip()
             )
         names.update(self._world_pressure_character_names(project_id, chapter_number))
+        names.update(self._recent_accepted_summary_character_names(project_id, chapter_number))
         return names
 
     def get_allowed_entity_snapshots(
@@ -788,6 +809,38 @@ class StateRepository:
             matched = [name for name in candidates if name and name in pressure_text]
             if matched:
                 names.update(name for name in candidates if name)
+        return names
+
+    def _recent_accepted_summary_character_names(
+        self,
+        project_id: str,
+        chapter_number: int,
+        *,
+        window_chapters: int = 2,
+    ) -> set[str]:
+        current = int(chapter_number or 0)
+        if current <= 1:
+            return set()
+        start_chapter = max(1, current - max(1, int(window_chapters or 1)))
+        rows = self.session.execute(
+            select(ChapterPlan.chapter_number, ChapterPlan.one_line, ChapterDraft.summary)
+            .join(ChapterDraft, ChapterDraft.chapter_plan_id == ChapterPlan.id)
+            .where(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.status == "accepted",
+                ChapterPlan.chapter_number >= start_chapter,
+                ChapterPlan.chapter_number < current,
+            )
+            .order_by(ChapterPlan.chapter_number.desc(), ChapterDraft.version.desc())
+        ).all()
+        names: set[str] = set()
+        seen_chapters: set[int] = set()
+        for previous_chapter, one_line, summary in rows:
+            chapter_key = int(previous_chapter or 0)
+            if chapter_key in seen_chapters:
+                continue
+            seen_chapters.add(chapter_key)
+            names.update(_extract_summary_character_names(f"{one_line or ''}\n{summary or ''}"))
         return names
 
     def get_active_subworld_summary(

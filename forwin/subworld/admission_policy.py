@@ -55,6 +55,16 @@ class SubworldAdmissionPolicy:
         if not entity_name:
             return _manual("", entity_kind, "missing-entity-name", evidence_refs)
 
+        if _looks_like_noncast_remains_reference(entity_name):
+            return SubworldAdmissionDecision(
+                action="genericize_background_reference",
+                entity_name=entity_name,
+                entity_kind=entity_kind,
+                reason="non-cast remains reference should not enter subworld canon",
+                evidence_refs=evidence_refs,
+                replacement="遗体",
+            )
+
         if _is_existing_entity(entity_name, existing_entities) or issue_kind == "subworld_admission_missing_canon_entity":
             return SubworldAdmissionDecision(
                 action="register_entity",
@@ -160,6 +170,16 @@ def _looks_like_safe_background_reference(entity_name: str, writer_output: Write
     if 2 <= len(entity_name) <= 3 and entity_name[0] in {"老", "小", "阿"}:
         return True
     return bool(is_plausible_person_name(entity_name) and _has_background_title_window(text, entity_name))
+
+
+def _looks_like_noncast_remains_reference(entity_name: str) -> bool:
+    text = str(entity_name or "").strip()
+    if not text:
+        return False
+    return text in {"尸体", "遗体", "躯体", "死者", "遇难者", "遗骸"} or any(
+        text.endswith(suffix)
+        for suffix in ("尸体", "遗体", "躯体", "死者", "遇难者", "遗骸")
+    )
 
 
 def _has_background_title_window(body: str, entity_name: str) -> bool:

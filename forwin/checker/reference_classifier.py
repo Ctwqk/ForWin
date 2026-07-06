@@ -38,6 +38,12 @@ GENERIC_CHARACTER_REFERENCES = {
     "部下",
     "同伙",
     "随从",
+    "尸体",
+    "遗体",
+    "躯体",
+    "死者",
+    "遇难者",
+    "遗骸",
 }
 GENERIC_CHARACTER_ROLE_SUFFIXES = (
     "手下",
@@ -63,6 +69,12 @@ GENERIC_CHARACTER_ROLE_SUFFIXES = (
     "主管",
     "残影",
     "调度员",
+    "尸体",
+    "遗体",
+    "躯体",
+    "死者",
+    "遇难者",
+    "遗骸",
 )
 POSSESSIVE_GENERIC_ROLE_SUFFIXES = (
     "手下",

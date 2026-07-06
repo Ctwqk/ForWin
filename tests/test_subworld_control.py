@@ -232,6 +232,10 @@ class SubWorldControlTests(unittest.TestCase):
             "许晏/馆员",
             "许晏与馆员",
             "许晏（馆员人格）",
+            "尸体",
+            "馆员尸体",
+            "冷藏躯体",
+            "旧港遇难者",
         ]
         for name in non_candidates:
             with self.subTest(name=name):
@@ -289,6 +293,52 @@ class SubWorldControlTests(unittest.TestCase):
                     EntityMention(entity_name="若槐宗邦", entity_kind="character", is_named=True),
                     EntityMention(entity_name="未知人物", entity_kind="character", is_named=True),
                     EntityMention(entity_name="灰鸦/L-7", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
+                ],
+            ),
+        )
+
+        unknown = [
+            issue.entity_names[0]
+            for issue in verdict.issues
+            if issue.rule_name == "sub_world_unknown_named_entity"
+        ]
+        self.assertEqual(unknown, ["灰鸦"])
+
+    def test_subworld_admission_ignores_corpse_and_remains_references(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"许澄", "老锚"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=89,
+                title="冷却层密室",
+                body=(
+                    "许澄跟随老锚进入冷却层密室。"
+                    "尸体在平台上，馆员尸体的瞳孔倒映坐标，冷藏躯体旁留有旧港遇难者记录。"
+                    "灰鸦仍未获准进入本章。"
+                )
+                * 30,
+                end_of_chapter_summary="许澄与老锚提取坐标。",
+                entity_mentions=[
+                    EntityMention(entity_name="许澄", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="老锚", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="尸体", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="馆员尸体", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="冷藏躯体", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="旧港遇难者", entity_kind="character", is_named=True),
                     EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
                 ],
             ),

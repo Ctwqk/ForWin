@@ -92,6 +92,44 @@ def test_policy_genericizes_background_reference() -> None:
     assert decision.replacement in {"馆员", "集团高管"}
 
 
+def test_policy_genericizes_non_cast_corpse_reference_even_with_state_events() -> None:
+    decision = SubworldAdmissionPolicy().classify(
+        issue=_issue("尸体"),
+        writer_output=WriterOutput(
+            chapter_number=89,
+            title="冷却层密室",
+            body="尸体在冷却层密室，许澄从瞳孔反光里提取坐标。",
+            end_of_chapter_summary="许澄提取坐标。",
+            entity_mentions=[
+                EntityMention(
+                    entity_name="尸体",
+                    entity_kind="character",
+                    is_named=True,
+                    is_on_stage=True,
+                    evidence_refs=["body:尸体"],
+                )
+            ],
+            new_events=[
+                EventCandidate(
+                    summary="许澄提取坐标",
+                    significance="major",
+                    involved_entity_names=["许澄", "尸体"],
+                    roles=["protagonist", "evidence"],
+                )
+            ],
+        ),
+        chapter_goals=[],
+        chapter_task_contract=[],
+        chapter_experience_plan=ChapterExperiencePlan(),
+        existing_entities=[],
+        book_state_snapshot={},
+    )
+
+    assert decision.action == "genericize_background_reference"
+    assert decision.entity_name == "尸体"
+    assert decision.replacement == "遗体"
+
+
 def test_policy_returns_manual_action_for_ambiguous_unplanned_story_entity() -> None:
     decision = SubworldAdmissionPolicy().classify(
         issue=_issue("沈墨"),

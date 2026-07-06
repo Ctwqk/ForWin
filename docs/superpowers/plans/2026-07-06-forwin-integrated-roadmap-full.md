@@ -123,9 +123,9 @@ target, and complete 100-chapter real-machine verification.
 - [x] Run focused tests for Tasks 1-6.
 - [x] Run `.venv/bin/pytest tests -q`.
 - [x] Confirm no active generation task with `task_active_generation_check`.
-- [ ] Commit and push from `/Users/magi1/ForWin-source-github`.
-- [ ] Deploy through:
+- [x] Commit and push from `/Users/magi1/ForWin-source-github`.
+- [x] Deploy through:
   `ssh 10.0.0.150 '/home/taiwei/deploy-github-sync/bin/deploy-github-sync.sh --apply --project forwin'`
-- [ ] Verify local deployment health for `10.0.0.126`.
-- [ ] Use ForWin MCP tools to run or inspect a 100-chapter project and confirm
+- [x] Verify local deployment health for `10.0.0.126`.
+- [x] Use ForWin MCP tools to run or inspect a 100-chapter project and confirm
   chapters 1-100 accepted, no pending review blockers, and no active generation.

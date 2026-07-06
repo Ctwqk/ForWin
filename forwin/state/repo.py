@@ -81,6 +81,21 @@ _SUMMARY_CODENAME_CHARACTER_RE = re.compile(
     r"(?:猎锚者|追踪者|调查员|审查官|审计官|执行者|清理人|观察员|守门人|代理人|中介人|架构师|工程师|特勤|特工)"
     r"[A-Za-z][A-Za-z0-9_-]{0,5}"
 )
+_SUMMARY_NETWORK_HANDLER_ALIAS_RE = re.compile(
+    r"(?:^|[，,。；;、\s]|遭遇|接触|联系|找到|通过|经由|来自|与|和|向|从|由|对)"
+    r"(?P<alias>[\u4e00-\u9fff]{2,4})网络(?:中介人|联络人|联系人|代理人)(?P<name>[\u4e00-\u9fff]{2,4})"
+)
+_SUMMARY_NON_HANDLER_ALIASES = {
+    "官方",
+    "外部",
+    "内部",
+    "地下",
+    "黑市",
+    "档案",
+    "记忆",
+    "潮汐",
+    "董事",
+}
 
 _READER_FEEDBACK_LEVEL_ORDER = {
     "noise": 0,
@@ -171,6 +186,13 @@ def _extract_summary_character_names(text: str) -> set[str]:
     names = set(extract_candidate_character_names(content))
     for match in _SUMMARY_CODENAME_CHARACTER_RE.finditer(content):
         candidate = candidate_character_name(match.group(0))
+        if candidate:
+            names.add(candidate)
+    for match in _SUMMARY_NETWORK_HANDLER_ALIAS_RE.finditer(content):
+        raw_alias = str(match.group("alias") or "").strip()
+        if raw_alias in _SUMMARY_NON_HANDLER_ALIASES:
+            continue
+        candidate = candidate_character_name(raw_alias)
         if candidate:
             names.add(candidate)
     return {name for name in names if 1 < len(name) <= 12}
@@ -816,7 +838,7 @@ class StateRepository:
         project_id: str,
         chapter_number: int,
         *,
-        window_chapters: int = 2,
+        window_chapters: int = 3,
     ) -> set[str]:
         current = int(chapter_number or 0)
         if current <= 1:

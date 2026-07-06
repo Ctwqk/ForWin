@@ -90,3 +90,33 @@ Target: 100 chapters
 - Environment note: full-suite verification initially exposed infrastructure issues rather than code regressions: stale `forwin_test_%` PostgreSQL databases exhausted WAL space, and the local Colima-hosted Qdrant disk was full. Cleaned stale test databases, restored the PostgreSQL tunnel, pruned unused local Docker images/build cache, and verified Qdrant writes before rerunning.
 - Verification: full test suite passed: `1769 passed, 3 skipped, 82 warnings, 36 subtests passed in 2862.29s (0:47:42)`.
 - Issues: ready to commit, push, deploy through the 150 sync path, then retry chapter 8 with generation continuation enabled.
+
+### 2026-07-06 14:33:37 PDT
+
+- State: chapter 8 contextual codename-label fix deployed.
+- Commit: `48ca1899f71c22fb62c91ecb3c099b2dd30acb9c`.
+- Deploy evidence: `/Users/magi1/ForWin-swarm/.deploy-sync-source-commit` matches `48ca1899f71c22fb62c91ecb3c099b2dd30acb9c`; app health `8899=/health ok`, MCP health `8896=/health ok`; 6 swarm services are `1/1` on `deploy-48ca1899f71c`.
+- Issues: ready to retry chapter 8.
+
+### 2026-07-06 14:34:04 PDT
+
+- State: chapter 8 retry started after deploy.
+- Generation action: `chapter_review_retry(continue_generation=true)` reset chapter 8 to `planned` and started task `d4b1822268c0`.
+- Task scope: requested chapters 8-18.
+- Issues: watch chapter 8 for recurrence of contextual codename subworld admission.
+
+### 2026-07-06 14:46:31 PDT
+
+- State: task `d4b1822268c0` stopped at review gate on chapter 8.
+- Progress: 7 accepted / 100 target; chapter 8 status `needs_review`; the previous `猎锚者X（远程信号压力）` issue did not recur.
+- Root cause: the regenerated chapter used `灰鹞` as an on-stage named character. The allowed-name bridge only looked back two accepted chapters and only extracted explicit names/codename forms, while the relevant accepted context was chapter 5's `灰鹞网络中介人陈昭宁`, three chapters back.
+- Code fix: expanded the recent accepted summary bridge to a three-chapter window and added narrow extraction for network handler aliases such as `灰鹞网络中介人陈昭宁`.
+- Regression test: added `test_recent_summary_network_handler_alias_is_subworld_allowed`; it failed before the fix with allowed names missing `灰鹞` and passes after the fix.
+- Verification so far: subworld-related regression suite passed (`99 passed, 28 subtests passed`).
+- Issues: fix ready for full test and deploy; generation remains paused at chapter 8 until deployed and retried.
+
+### 2026-07-06 15:34:12 PDT
+
+- State: chapter 8 `灰鹞` network-handler alias fix is fully verified locally.
+- Verification: full test suite passed: `1770 passed, 3 skipped, 82 warnings, 36 subtests passed in 2724.66s (0:45:24)`.
+- Issues: ready to commit, push, deploy through the 150 sync path, then retry chapter 8 with generation continuation enabled.

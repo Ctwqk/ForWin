@@ -12,7 +12,7 @@ def build_final_acceptance_rules(gate: FinalAcceptanceGate | None = None) -> lis
             rule_id="final_acceptance_gate",
             source_dispatcher="FinalAcceptanceGate",
             priority=300,
-            matches=lambda input: input.review.repair_verification is not None,
+            matches=lambda input: True,
             decide=lambda input: _decision_from_final_gate(resolved_gate, input),
         )
     ]

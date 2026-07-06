@@ -7,6 +7,8 @@ from forwin.review_engine.rules.final_acceptance import build_final_acceptance_r
 from forwin.review_engine.rules.repair_v2 import decide_repair_v2
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.reviser.local_rewrite_executor import LocalRewriteExecutor
+from forwin.orchestrator_loop_core.repair_budget import repair_word_budget_patch
+from forwin.orchestrator_loop_core.subworld_admission_repair import _apply_subworld_admission_repair_patch
 
 REVIEW_REPAIR_PHASE = "review_repair"
 CANON_REPAIR_PHASE = "canon_repair"
@@ -367,6 +369,7 @@ def _run_repair_loop_for_phase(
             "local_repair",
             "chapter_patch",
             "band_patch",
+            "subworld_admission_patch",
         }
         if not repair_can_run_locally:
             final_decision = AutoDecisionEngine(build_final_acceptance_rules()).decide(repair_v2_input)
@@ -452,6 +455,7 @@ def _run_repair_loop_for_phase(
             project_id=project_id,
             chapter_plan=chapter_plan,
             context=current_context,
+            current_output=current_output,
             repair_scope=repair_scope,
             repair_instruction=repair_instruction,
         )
@@ -536,6 +540,27 @@ def _run_repair_loop_for_phase(
                     issue_kind,
                     local_result.mode,
                 )
+
+        if bool(design_patch.get("subworld_admission_patch_skip_writer")):
+            rewrite_payload = current_output.model_dump(mode="python")
+            replacements = design_patch.get("subworld_admission_replacements")
+            if isinstance(replacements, dict) and replacements:
+                rewrite_payload = self._replace_canon_name_strings(
+                    rewrite_payload,
+                    {str(key): str(value) for key, value in replacements.items()},
+                )
+                rewrite_payload["char_count"] = len(str(rewrite_payload.get("body") or ""))
+                generation_meta = dict(rewrite_payload.get("generation_meta") or {})
+                generation_meta["subworld_admission_autofix"] = {
+                    **(
+                        generation_meta.get("subworld_admission_autofix")
+                        if isinstance(generation_meta.get("subworld_admission_autofix"), dict)
+                        else {}
+                    ),
+                    **{str(key): str(value) for key, value in replacements.items()},
+                }
+                rewrite_payload["generation_meta"] = generation_meta
+            rewritten_output = WriterOutput.model_validate(rewrite_payload)
 
         self._emit_progress(
             "stage_changed",
@@ -835,6 +860,7 @@ def _default_repair_instruction(
     context,
     review: ReviewVerdict,
 ) -> RepairInstruction:
+    budget_patch = repair_word_budget_patch(context)
     return RepairInstruction(
         repair_scope=repair_scope,  # type: ignore[arg-type]
         failure_type="mixed",
@@ -844,7 +870,7 @@ def _default_repair_instruction(
             context.chapter_plan_one_line,
             *(context.chapter_goals[:2]),
         ],
-        design_patch={},
+        design_patch=budget_patch,
         evidence_refs=[ref for issue in review.issues for ref in issue.evidence_refs],
     )
 
@@ -856,6 +882,7 @@ def _apply_repair_patch(
     project_id: str,
     chapter_plan: ChapterPlan,
     context,
+    current_output: WriterOutput,
     repair_scope: str,
     repair_instruction: RepairInstruction,
 ) -> tuple[dict[str, object], Any, dict[str, object], dict[str, object], str]:
@@ -864,6 +891,21 @@ def _apply_repair_patch(
     arc_structure = repo.get_latest_arc_structure_draft(project_id)
     patch = dict(repair_instruction.design_patch)
     patch["repair_scope"] = repair_scope
+
+    if repair_scope == "subworld":
+        return _apply_subworld_admission_repair_patch(
+            self,
+            session=session,
+            repo=repo,
+            project_id=project_id,
+            chapter_plan=chapter_plan,
+            context=context,
+            current_output=current_output,
+            current_plan=current_plan,
+            band_schedule=band_schedule,
+            patch=patch,
+            repair_instruction=repair_instruction,
+        )
 
     if repair_scope == "draft":
         updated_plan = current_plan.model_copy(

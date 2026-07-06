@@ -51,3 +51,13 @@ def test_severe_mismatch_ignores_same_outcome_payload_difference() -> None:
 
     assert comparison.shadow_mismatch is True
     assert severe_shadow_mismatch(comparison) is False
+
+
+def test_subworld_admission_patch_is_fate_changing_for_shadow_comparison() -> None:
+    comparison = compare_shadow_decisions(
+        live=_decision("chapter_patch"),
+        shadow=_decision("subworld_admission_patch"),
+    )
+
+    assert comparison.shadow_mismatch is True
+    assert severe_shadow_mismatch(comparison) is True

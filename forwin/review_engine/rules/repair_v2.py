@@ -11,7 +11,7 @@ _SCOPE_TO_OUTCOME: dict[IssueScope, DecisionOutcome] = {
     "band_plan": "band_patch",
     "arc_plan": "arc_patch",
     "book_plan": "book_patch",
-    "subworld": "chapter_patch",
+    "subworld": "subworld_admission_patch",
     "active_rules": "chapter_patch",
     "operator": "manual_review",
 }

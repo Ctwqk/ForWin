@@ -17,6 +17,7 @@ DecisionOutcome = Literal[
     "band_patch",
     "arc_patch",
     "book_patch",
+    "subworld_admission_patch",
     "commit_with_obligation",
     "manual_review",
     "system_block",

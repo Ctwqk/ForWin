@@ -86,6 +86,27 @@ def test_operator_issue_routes_to_manual_review_without_retry() -> None:
     assert decision.sub_action["max_attempts_for_scope"] == 0
 
 
+def test_missing_canon_entity_routes_to_subworld_admission_patch() -> None:
+    decision = decide_repair_v2(_input_with_issue("subworld_admission_missing_canon_entity"))
+
+    assert decision.outcome == "subworld_admission_patch"
+    assert decision.sub_action["scope"] == "subworld"
+
+
+def test_unauthorized_new_entity_routes_to_subworld_admission_patch() -> None:
+    decision = decide_repair_v2(_input_with_issue("subworld_admission_unauthorized_new_entity"))
+
+    assert decision.outcome == "subworld_admission_patch"
+    assert decision.sub_action["scope"] == "subworld"
+
+
+def test_legacy_unknown_named_entity_routes_to_subworld_admission_patch() -> None:
+    decision = decide_repair_v2(_input_with_issue("sub_world_unknown_named_entity"))
+
+    assert decision.outcome == "subworld_admission_patch"
+    assert decision.sub_action["scope"] == "subworld"
+
+
 def test_draft_issue_stays_draft_until_two_draft_attempts_are_spent() -> None:
     first_retry = _input_with_issue("body_truncated")
     second_retry = replace(_input_with_issue("body_truncated"), prior_scope_history=["draft"])

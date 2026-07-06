@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from scripts.qualify_linux_extension_profile import profile_extension_is_active, qualified_profile_settings
+from scripts.qualify_linux_extension_profile import find_browser, profile_extension_is_active, qualified_profile_settings
 
 
 def _write_profile_fixture(tmp_path, *, marker: dict[str, object], preferences: dict[str, object]) -> None:
@@ -54,6 +54,30 @@ def test_qualified_profile_settings_disables_login_qr_notifications(monkeypatch)
     assert settings["loginQrNotificationsEnabled"] is False
     assert settings["loginQrNotificationsAllowed"] is False
     assert settings["loginQrNotificationsAllowedUntilMs"] == 0
+
+
+def test_find_browser_prefers_playwright_chromium_over_system_chromium(monkeypatch):
+    monkeypatch.setattr("scripts.qualify_linux_extension_profile.shutil.which", lambda name: "/usr/bin/chromium" if name == "chromium" else None)
+    monkeypatch.setattr(
+        "scripts.qualify_linux_extension_profile.glob.glob",
+        lambda pattern: ["/root/.cache/ms-playwright/chromium-1228/chrome-linux/chrome"]
+        if "ms-playwright" in pattern
+        else [],
+    )
+
+    assert find_browser("") == "/root/.cache/ms-playwright/chromium-1228/chrome-linux/chrome"
+
+
+def test_find_browser_keeps_explicit_preferred_browser_first(tmp_path, monkeypatch):
+    preferred = tmp_path / "chrome"
+    preferred.write_text("", encoding="utf-8")
+    monkeypatch.setattr("scripts.qualify_linux_extension_profile.shutil.which", lambda _name: "")
+    monkeypatch.setattr(
+        "scripts.qualify_linux_extension_profile.glob.glob",
+        lambda _pattern: ["/root/.cache/ms-playwright/chromium-1228/chrome-linux/chrome"],
+    )
+
+    assert find_browser(str(preferred)) == str(preferred)
 
 
 def test_profile_extension_is_active_rejects_disabled_extension(tmp_path):

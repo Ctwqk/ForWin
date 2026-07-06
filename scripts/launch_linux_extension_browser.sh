@@ -32,12 +32,6 @@ find_chrome() {
     command -v "$PREFERRED_BROWSER"
     return 0
   fi
-  for candidate in chromium chromium-browser google-chrome; do
-    if command -v "$candidate" >/dev/null 2>&1; then
-      command -v "$candidate"
-      return 0
-    fi
-  done
   for candidate in \
     /ms-playwright/chromium-*/chrome-linux64/chrome \
     /ms-playwright/chromium-*/chrome-linux/chrome \
@@ -47,6 +41,12 @@ find_chrome() {
     "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux/chrome; do
     if [[ -x "$candidate" ]]; then
       printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  for candidate in chromium chromium-browser google-chrome; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
       return 0
     fi
   done

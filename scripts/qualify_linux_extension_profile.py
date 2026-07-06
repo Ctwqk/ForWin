@@ -165,30 +165,39 @@ def profile_is_qualified(profile_dir: Path, extension_dir: Path, backend_url: st
     return True, "profile is qualified"
 
 
+PLAYWRIGHT_BROWSER_PATTERNS = (
+    "/ms-playwright/chromium-*/chrome-linux64/chrome",
+    "/ms-playwright/chromium-*/chrome-linux/chrome",
+    "/root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome",
+    "/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
+    str(Path.home() / ".cache" / "ms-playwright" / "chromium-*" / "chrome-linux64" / "chrome"),
+    str(Path.home() / ".cache" / "ms-playwright" / "chromium-*" / "chrome-linux" / "chrome"),
+)
+
+
+def find_playwright_browser() -> str:
+    matches: list[str] = []
+    for pattern in PLAYWRIGHT_BROWSER_PATTERNS:
+        matches.extend(glob.glob(pattern))
+    if matches:
+        return sorted(matches)[-1]
+    return ""
+
+
 def find_browser(preferred: str) -> str:
     if preferred:
         preferred_path = shutil.which(preferred) or preferred
         if Path(preferred_path).exists():
             return preferred_path
 
+    playwright_browser = find_playwright_browser()
+    if playwright_browser:
+        return playwright_browser
+
     for candidate in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable"):
         found = shutil.which(candidate)
         if found:
             return found
-
-    patterns = (
-        "/ms-playwright/chromium-*/chrome-linux64/chrome",
-        "/ms-playwright/chromium-*/chrome-linux/chrome",
-        "/root/.cache/ms-playwright/chromium-*/chrome-linux64/chrome",
-        "/root/.cache/ms-playwright/chromium-*/chrome-linux/chrome",
-        str(Path.home() / ".cache" / "ms-playwright" / "chromium-*" / "chrome-linux64" / "chrome"),
-        str(Path.home() / ".cache" / "ms-playwright" / "chromium-*" / "chrome-linux" / "chrome"),
-    )
-    matches: list[str] = []
-    for pattern in patterns:
-        matches.extend(glob.glob(pattern))
-    if matches:
-        return sorted(matches)[-1]
 
     raise SystemExit(
         "chrome/chromium not found. Install chromium, set FORWIN_EXTENSION_TEST_BROWSER, "

@@ -36,6 +36,38 @@ def _input_with_issue(issue_kind: str, *, severity: str = "error") -> DecisionIn
     )
 
 
+def _input_with_rule_and_issue_type(
+    *,
+    rule_name: str,
+    issue_type: str,
+    severity: str = "error",
+) -> DecisionInput:
+    return DecisionInput(
+        project_id="project-1",
+        chapter_number=8,
+        review=ReviewVerdict(
+            verdict="fail",
+            issues=[
+                ContinuityIssue(
+                    rule_name=rule_name,
+                    issue_type=issue_type,
+                    severity=severity,
+                    description=issue_type,
+                    evidence_refs=[f"issue:{issue_type}"],
+                )
+            ],
+        ),
+        signals=[],
+        open_obligations=[],
+        operation_mode="blackbox",
+        attempts_completed=0,
+        prior_scope_history=[],
+        budget=None,
+        target_total_chapters=20,
+        plan_layer_health=PlanLayerHealth(),
+    )
+
+
 def test_draft_level_issue_routes_to_local_repair() -> None:
     decision = decide_repair_v2(_input_with_issue("placeholder_leakage"))
 
@@ -102,6 +134,18 @@ def test_unauthorized_new_entity_routes_to_subworld_admission_patch() -> None:
 
 def test_legacy_unknown_named_entity_routes_to_subworld_admission_patch() -> None:
     decision = decide_repair_v2(_input_with_issue("sub_world_unknown_named_entity"))
+
+    assert decision.outcome == "subworld_admission_patch"
+    assert decision.sub_action["scope"] == "subworld"
+
+
+def test_generic_subworld_admission_issue_type_routes_to_subworld_patch() -> None:
+    decision = decide_repair_v2(
+        _input_with_rule_and_issue_type(
+            rule_name="sub_world_unknown_named_entity",
+            issue_type="subworld_admission",
+        )
+    )
 
     assert decision.outcome == "subworld_admission_patch"
     assert decision.sub_action["scope"] == "subworld"

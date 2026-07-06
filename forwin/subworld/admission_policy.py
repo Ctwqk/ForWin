@@ -65,6 +65,17 @@ class SubworldAdmissionPolicy:
                 replacement="遗体",
             )
 
+        role_or_status_replacement = _generic_role_or_status_replacement(entity_name)
+        if role_or_status_replacement:
+            return SubworldAdmissionDecision(
+                action="genericize_background_reference",
+                entity_name=entity_name,
+                entity_kind=entity_kind,
+                reason="role or status label should not enter subworld canon",
+                evidence_refs=evidence_refs,
+                replacement=role_or_status_replacement,
+            )
+
         if _is_existing_entity(entity_name, existing_entities) or issue_kind == "subworld_admission_missing_canon_entity":
             return SubworldAdmissionDecision(
                 action="register_entity",
@@ -180,6 +191,42 @@ def _looks_like_noncast_remains_reference(entity_name: str) -> bool:
         text.endswith(suffix)
         for suffix in ("尸体", "遗体", "躯体", "死者", "遇难者", "遗骸")
     )
+
+
+def _generic_role_or_status_replacement(entity_name: str) -> str:
+    text = str(entity_name or "").strip()
+    if not text:
+        return ""
+    if _looks_like_status_label_reference(text):
+        return "状态记录"
+    if text.endswith("买家") or "权限买家" in text:
+        return "匿名买家"
+    if text.endswith("卖家") or "权限卖家" in text:
+        return "匿名卖家"
+    if text.endswith("权限者") or text.endswith("持有者"):
+        return "权限记录"
+    return ""
+
+
+def _looks_like_status_label_reference(entity_name: str) -> bool:
+    text = str(entity_name or "").strip()
+    if not text:
+        return False
+    if not re.fullmatch(r"[\u4e00-\u9fff]{1,8}(?:[-_－—][\u4e00-\u9fff]{1,8})+", text):
+        return False
+    suffix = re.split(r"[-_－—]", text)[-1]
+    return suffix in {
+        "活跃",
+        "已故",
+        "在线",
+        "离线",
+        "冻结",
+        "失效",
+        "待审",
+        "复核中",
+        "未知",
+        "匿名",
+    }
 
 
 def _has_background_title_window(body: str, entity_name: str) -> bool:

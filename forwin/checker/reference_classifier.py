@@ -33,6 +33,14 @@ GENERIC_CHARACTER_REFERENCES = {
     "神秘人物",
     "匿名人物",
     "无名人物",
+    "匿名买家",
+    "匿名卖家",
+    "权限买家",
+    "权限卖家",
+    "权限者",
+    "买家",
+    "卖家",
+    "持有者",
     "手下",
     "下属",
     "部下",
@@ -67,6 +75,12 @@ GENERIC_CHARACTER_ROLE_SUFFIXES = (
     "巡检员",
     "员工",
     "主管",
+    "买家",
+    "卖家",
+    "权限买家",
+    "权限卖家",
+    "权限者",
+    "持有者",
     "残影",
     "调度员",
     "尸体",
@@ -151,10 +165,23 @@ TECHNICAL_ID_RE = re.compile(
     r"(?:[-_][A-Za-zＡ-Ｚａ-ｚ0-9０-９γΩαβ]+)+$"
 )
 NUMBERED_PLOT_ENTITY_RE = re.compile(
-    r"^(?:第)?[0-9０-９]{1,4}(?:号|份|枚)(?:分割体|密钥|碎片|样本|载体|节点)$"
+    r"^(?:第)?[0-9０-９]{1,4}(?:号|份|枚)(?:分割体|密钥|碎片|样本|载体|节点|密钥持有者|碎片持有者)$"
 )
 COMPOUND_IDENTITY_RE = re.compile(r"^[\u4e00-\u9fff·]{2,6}(?:/|与)[\u4e00-\u9fff·]{2,6}$")
 COMPOUND_PERSONA_PAREN_RE = re.compile(r"^[\u4e00-\u9fff·]{2,6}[（(][\u4e00-\u9fff·]{2,8}人格[）)]$")
+STATUS_LABEL_RE = re.compile(r"^[\u4e00-\u9fff]{1,8}(?:[-_－—][\u4e00-\u9fff]{1,8})+$")
+STATUS_LABEL_SUFFIXES = {
+    "活跃",
+    "已故",
+    "在线",
+    "离线",
+    "冻结",
+    "失效",
+    "待审",
+    "复核中",
+    "未知",
+    "匿名",
+}
 
 
 def has_malformed_parenthetical_annotation(name: str) -> bool:
@@ -238,6 +265,14 @@ def looks_like_compound_identity(name: str) -> bool:
     return bool(COMPOUND_IDENTITY_RE.fullmatch(text) or COMPOUND_PERSONA_PAREN_RE.fullmatch(text))
 
 
+def looks_like_status_label_reference(name: str) -> bool:
+    text = str(name or "").strip()
+    if not text or not STATUS_LABEL_RE.fullmatch(text):
+        return False
+    tail = re.split(r"[-_－—]", text)[-1]
+    return tail in STATUS_LABEL_SUFFIXES
+
+
 def looks_like_generic_character_reference(name: str) -> bool:
     text = str(name or "").strip()
     if not text:
@@ -249,6 +284,8 @@ def looks_like_generic_character_reference(name: str) -> bool:
     if looks_like_technical_identifier(text):
         return True
     if looks_like_compound_identity(text):
+        return True
+    if looks_like_status_label_reference(text):
         return True
     if "的" in text:
         _prefix, suffix = text.rsplit("的", 1)

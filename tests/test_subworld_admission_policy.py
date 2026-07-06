@@ -130,6 +130,48 @@ def test_policy_genericizes_non_cast_corpse_reference_even_with_state_events() -
     assert decision.replacement == "遗体"
 
 
+def test_policy_genericizes_role_and_status_labels_even_with_state_events() -> None:
+    for entity_name, replacement in [
+        ("Ω级权限买家", "匿名买家"),
+        ("馆员-活跃", "状态记录"),
+    ]:
+        decision = SubworldAdmissionPolicy().classify(
+            issue=_issue(entity_name),
+            writer_output=WriterOutput(
+                chapter_number=98,
+                title="黑市账本",
+                body=f"账本里出现{entity_name}，许澄将它标记为异常交易线索。",
+                end_of_chapter_summary=f"许澄记录{entity_name}。",
+                entity_mentions=[
+                    EntityMention(
+                        entity_name=entity_name,
+                        entity_kind="character",
+                        is_named=True,
+                        is_on_stage=True,
+                        evidence_refs=[f"body:{entity_name}"],
+                    )
+                ],
+                new_events=[
+                    EventCandidate(
+                        summary="许澄记录异常交易线索",
+                        significance="major",
+                        involved_entity_names=["许澄", entity_name],
+                        roles=["protagonist", "record_label"],
+                    )
+                ],
+            ),
+            chapter_goals=[],
+            chapter_task_contract=[],
+            chapter_experience_plan=ChapterExperiencePlan(),
+            existing_entities=[],
+            book_state_snapshot={},
+        )
+
+        assert decision.action == "genericize_background_reference"
+        assert decision.entity_name == entity_name
+        assert decision.replacement == replacement
+
+
 def test_policy_returns_manual_action_for_ambiguous_unplanned_story_entity() -> None:
     decision = SubworldAdmissionPolicy().classify(
         issue=_issue("沈墨"),

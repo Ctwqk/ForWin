@@ -236,6 +236,9 @@ class SubWorldControlTests(unittest.TestCase):
             "馆员尸体",
             "冷藏躯体",
             "旧港遇难者",
+            "Ω级权限买家",
+            "馆员-活跃",
+            "002号密钥持有者",
         ]
         for name in non_candidates:
             with self.subTest(name=name):

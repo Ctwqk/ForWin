@@ -2,6 +2,16 @@
 
 Use the `forwin` MCP server for project, Genesis, task, and chapter truth whenever it is configured. Do not inspect the SQLite database or send ad hoc `curl` requests for those workflows when an equivalent `forwin` MCP tool exists.
 
+## Codex Coding Workspace
+
+- Treat GitHub `Ctwqk/ForWin` on `master` as the source-of-truth code branch.
+- On this Mac, make code, test, commit, and push changes from `/Users/magi1/ForWin-source-github`.
+- Treat `/Users/magi1/ForWin-swarm` as a production deploy output copied by the 150 deploy sync. It is useful for inspecting the currently deployed copy and `.deploy-sync-*` markers, but it is not a long-lived coding workspace.
+- If a Codex thread starts in `/Users/magi1/ForWin-swarm` and the task requires code or documentation edits, switch to `/Users/magi1/ForWin-source-github` before editing.
+- After changes are committed and pushed, deploy ForWin through the 150 sync path:
+  `ssh 10.0.0.150 '/home/taiwei/deploy-github-sync/bin/deploy-github-sync.sh --apply --project forwin'`.
+- If an emergency edit is ever made in the deploy output, immediately compare it against `/Users/magi1/ForWin-source-github` and backport the tracked source changes before considering the work complete.
+
 ## Workflow Rules
 
 - `project_create` creates a Genesis-backed project. It does not create a writing-ready project.

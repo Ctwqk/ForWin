@@ -2,7 +2,7 @@
   "mcpServers": {
     "forwin": {
       "type": "http",
-      "url": "http://127.0.0.1:8896/mcp"
+      "url": "http://10.0.0.150:8896/mcp"
     }
   }
 }

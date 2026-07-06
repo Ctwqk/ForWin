@@ -1,6 +1,6 @@
 # ForWin Design Status
 
-更新时间：2026-05-06
+更新时间：2026-07-06
 
 状态：active-current。本文档给当前保留的设计文档标注阅读顺序和权威等级。
 
@@ -26,6 +26,7 @@
 | `writing_flow_state_machine.md` | active-current | 当前写作任务状态机。 |
 | `V4.6_knowledge_system.md` | active-current | BookState DB Canon -> Obsidian -> LLM KB 权威关系。 |
 | `pulp_profile_upgrade_plan.md` | active-current | Pulp quality profile 当前实现计划；implementation tracked by `docs/superpowers/specs/2026-05-18-pulp-profile-upgrade-design.md` and `docs/superpowers/plans/2026-05-19-pulp-profile-upgrade.md`. |
+| `trope_library_pulp_v1.md` | active-current | Pulp 爽点库当前 runtime seed；运行时扩展到 50+ template，并携带 genre/audience/platform/payoff metadata。 |
 
 ## 维护文档
 
@@ -69,6 +70,17 @@
 - 中文否定识别目前使用轻量前缀窗口和规则 registry，能挡住明显的“不要/避免/禁止 X”误判，但不是完整句法 scope 分析。
 - 质量闭环已开始从 review-time 反应式扫描前移到 plan-time patch；遗留 reviewer signal 仍会保留兜底提示，但必须避免重复注入同一约束。
 - Prompt 回归测试固定 deterministic fixture 和 revision hash，不替代真实 LLM A/B 评估。
+
+## 2026-07 Integrated Roadmap Status
+
+`docs/superpowers/specs/2026-07-06-forwin-integrated-roadmap-full-design.md` and `docs/superpowers/plans/2026-07-06-forwin-integrated-roadmap-full.md` track the integrated runtime work now reflected in code:
+
+- Retrieval: LAN embedding gateway defaults plus accepted-chapter memory re-embedding script.
+- Pulp runtime: lightweight BookState fallback deltas for degraded world extraction.
+- Arc planning: `ArcActivationReviewPack` and decision-event audit before continuation materialization.
+- Canon / repair: `pulp_fatal` gate mode, expanded fatal signals, P0 hard obligation blocking, hard blocker detection for auto-review retry.
+- Experience layer: runtime-expanded 50+ pulp trope registry, template repetition cooldown, and prompt-visible execution constraints.
+- Operator UI: generation queue health summaries, review / repair queues, retry and soft-accept controls, and proposal-backed repair actions.
 
 ## 历史实施计划
 

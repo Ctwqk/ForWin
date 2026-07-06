@@ -35,6 +35,40 @@ def test_task_center_drawer_controls_and_bulk_delete(page, browser_test_base_url
     assert backend.captured_payloads("/api/tasks/bulk-delete")[-1]["items"]
 
 
+def test_task_drawer_operator_review_queue_actions(page, browser_test_base_url: str) -> None:
+    backend = MockForWinBackend()
+    goto_home(page, browser_test_base_url, backend)
+
+    switch_home_tab(page, "task")
+    page.get_by_role("button", name="查看详情").first.click()
+
+    drawer = page.locator("#drawer_body")
+    expect(drawer).to_contain_text("Stop Reason Distribution")
+    expect(drawer).to_contain_text("Auto-continue Chain Health")
+    expect(drawer).to_contain_text("needs-review queue")
+    expect(drawer).to_contain_text("repair-exhausted queue")
+
+    drawer.get_by_role("button", name="Retry Review").first.click()
+    page.locator("#governance_action_modal_reason").fill("operator retries soft review blocker")
+    page.locator("#governance_action_modal_submit").click()
+    expect(page.locator("#global_status")).to_contain_text("review retried")
+    retry_payload = backend.captured_payloads("/api/projects/project-1/chapters/2/review/retry")[-1]
+    assert retry_payload["continue_generation"] is False
+    assert retry_payload["reason"] == "operator retries soft review blocker"
+
+    drawer.get_by_role("button", name="Register Entity").first.click()
+    page.locator("#governance_action_modal_reason").fill("register named entity from review")
+    page.locator("#governance_action_field_entity_name").fill("许潮")
+    page.locator("#governance_action_field_subworld_id").fill("fog-port")
+    page.locator("#governance_action_field_role_hint").fill("harbor witness")
+    page.locator("#governance_action_modal_submit").click()
+    expect(page.locator("#global_status")).to_contain_text("SubworldEntityRegistrationProposal")
+    proposal_payload = backend.captured_payloads("/api/projects/project-1/proposals")[-1]
+    assert proposal_payload["proposal_type"] == "SubworldEntityRegistrationProposal"
+    assert proposal_payload["proposed_patch"]["action"] == "register_entity"
+    assert proposal_payload["proposed_patch"]["entity_name"] == "许潮"
+
+
 def test_upload_task_modal_payload_combinations(page, browser_test_base_url: str) -> None:
     backend = MockForWinBackend()
     goto_home(page, browser_test_base_url, backend)

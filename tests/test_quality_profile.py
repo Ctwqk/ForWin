@@ -65,7 +65,7 @@ def test_pulp_profile_derives_low_cost_defaults(
     assert config.review_interval_chapters == 0
     assert config.experience_review_enabled is False
     assert config.lint_review_enabled is True
-    assert config.canon_quality_gate == "fatal_only"
+    assert config.canon_quality_gate == "pulp_fatal"
     assert config.freeze_failed_candidates is False
     assert config.review_fail_max_rewrites == 0
     assert config.auto_band_checkpoint is False

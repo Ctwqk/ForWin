@@ -552,6 +552,138 @@
       });
     }
 
+    async function executeRetryReview(projectId, chapterNumber, continueGeneration = false, reason = '', allowAccepted = false) {
+      try {
+        const data = await requestJson(`/api/projects/${projectId}/chapters/${chapterNumber}/review/retry`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            continue_generation: Boolean(continueGeneration),
+            reason: String(reason || '').trim(),
+            allow_accepted: Boolean(allowAccepted),
+          }),
+        });
+        setGlobalStatus(data.message || `第${chapterNumber}章已重置为 planned。`, 'Review 重试');
+        await loadTaskCenter();
+        await loadBooks();
+        if (data.task_id) {
+          await openTaskDrawer('generation', data.task_id);
+        } else if (currentDrawerTask?.project_id === projectId) {
+          await openTaskDrawer(currentDrawerTask.task_kind, currentDrawerTask.task_id);
+        }
+      } catch (error) {
+        setGlobalStatus(error.message || String(error), 'Review 重试失败');
+      }
+    }
+
+    function retryReview(projectId, chapterNumber, continueGeneration = false, allowAccepted = false) {
+      openGovernanceActionModal({
+        title: continueGeneration ? `Retry 并继续 · 第${chapterNumber}章` : `Retry Review · 第${chapterNumber}章`,
+        description: '把当前章节重置为 planned 并记录 retry reason。后续生成只会选择 planned / failed 章节。',
+        confirmLabel: continueGeneration ? 'Retry 并继续' : 'Retry Review',
+        errorTitle: 'Review 重试失败',
+        onSubmit: ({ reason }) => executeRetryReview(projectId, chapterNumber, continueGeneration, reason, allowAccepted),
+      });
+    }
+
+    async function createOperatorProposal(projectId, payload) {
+      const created = await requestJson(`/api/projects/${projectId}/proposals`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      setGlobalStatus(`已创建 proposal：${created.proposal_type || created.id || 'operator action'}`, 'Operator Action');
+      await loadBooks();
+      if (currentDrawerTask?.project_id === projectId) {
+        await openTaskDrawer(currentDrawerTask.task_kind, currentDrawerTask.task_id);
+      }
+      return created;
+    }
+
+    function registerSubworldEntityFromReview(projectId, chapterNumber) {
+      openGovernanceActionModal({
+        title: `Register Subworld Entity · 第${chapterNumber}章`,
+        description: '创建一个可审计 proposal，用于把 review 中的未准入实体登记到 subworld/canon 入口。',
+        confirmLabel: 'Register Entity Proposal',
+        fields: [
+          { name: 'entity_name', label: 'Entity Name' },
+          { name: 'subworld_id', label: 'Subworld ID' },
+          { name: 'role_hint', label: 'Role Hint' },
+        ],
+        errorTitle: '创建实体 proposal 失败',
+        onSubmit: ({ reason, entity_name, subworld_id, role_hint }) => createOperatorProposal(projectId, {
+          source: 'operator_home',
+          proposal_type: 'SubworldEntityRegistrationProposal',
+          reason,
+          human_notes: `chapter=${chapterNumber}`,
+          created_by: 'operator_home',
+          proposed_patch: {
+            action: 'register_entity',
+            chapter_number: chapterNumber,
+            entity_name,
+            subworld_id,
+            role_hint,
+          },
+        }),
+      });
+    }
+
+    function genericizeBackgroundReferenceFromReview(projectId, chapterNumber) {
+      openGovernanceActionModal({
+        title: `Genericize Background Reference · 第${chapterNumber}章`,
+        description: '创建一个可审计 proposal，用于把未计划的背景姓名改写为泛称，避免污染 canon。',
+        confirmLabel: 'Genericize Proposal',
+        fields: [
+          { name: 'source_reference', label: 'Source Reference' },
+          { name: 'replacement', label: 'Replacement', value: '背景人物' },
+        ],
+        errorTitle: '创建 genericize proposal 失败',
+        onSubmit: ({ reason, source_reference, replacement }) => createOperatorProposal(projectId, {
+          source: 'operator_home',
+          proposal_type: 'GenericizeBackgroundReferenceProposal',
+          reason,
+          human_notes: `chapter=${chapterNumber}`,
+          created_by: 'operator_home',
+          proposed_patch: {
+            action: 'genericize_background_reference',
+            chapter_number: chapterNumber,
+            source_reference,
+            replacement,
+          },
+        }),
+      });
+    }
+
+    function createObligationFromReview(projectId, chapterNumber) {
+      openGovernanceActionModal({
+        title: `Create Obligation · 第${chapterNumber}章`,
+        description: '创建一个叙事义务 proposal，供后续计划/BookState 处理。',
+        confirmLabel: 'Create Obligation Proposal',
+        fields: [
+          { name: 'summary', label: 'Summary', type: 'textarea', rows: 4 },
+          { name: 'priority', label: 'Priority', type: 'select', options: ['P0', 'P1', 'P2'], value: 'P1' },
+          { name: 'deadline_chapter', label: 'Deadline Chapter', type: 'number', min: chapterNumber, value: chapterNumber + 2 },
+          { name: 'payoff_test', label: 'Payoff Test', type: 'textarea', rows: 4 },
+        ],
+        errorTitle: '创建 obligation proposal 失败',
+        onSubmit: ({ reason, summary, priority, deadline_chapter, payoff_test }) => createOperatorProposal(projectId, {
+          source: 'operator_home',
+          proposal_type: 'NarrativeObligationProposal',
+          reason,
+          human_notes: `chapter=${chapterNumber}`,
+          created_by: 'operator_home',
+          proposed_patch: {
+            action: 'create_obligation',
+            origin_chapter_number: chapterNumber,
+            summary,
+            priority,
+            deadline_chapter,
+            payoff_test,
+          },
+        }),
+      });
+    }
+
     function uniqueChapterNumbers(...groups) {
       const numbers = new Set();
       groups.forEach((values) => {
@@ -784,17 +916,71 @@
       parent.appendChild(row);
     }
 
+    function addReasonCount(counts, reason) {
+      const key = String(reason || '').trim();
+      if (!key) return;
+      counts[key] = (counts[key] || 0) + 1;
+    }
+
+    function stopReasonDistribution(item, project, guidance) {
+      const control = item.generation_control || {};
+      const counts = {};
+      addReasonCount(counts, control.blocking_reason?.code);
+      addReasonCount(counts, project?.blocking_reason?.code);
+      if (guidance.reviewChapters.length) addReasonCount(counts, 'pending_review_blocker');
+      if (guidance.failedChapters.length) addReasonCount(counts, 'failed_chapters_blocker');
+      if (item.status === 'needs_review') addReasonCount(counts, 'needs_review_status');
+      if (item.status === 'failed' || item.status === 'partial_failed') addReasonCount(counts, item.status);
+      if (item.pause_requested) addReasonCount(counts, 'pause_requested');
+      if (!Object.keys(counts).length) addReasonCount(counts, 'none');
+      return counts;
+    }
+
+    function autoContinueChainHealth(item, guidance) {
+      const control = item.generation_control || {};
+      if (guidance.isActive) return 'running';
+      if (guidance.reviewChapters.length) return 'stopped: needs_review';
+      if (guidance.failedChapters.length) return control.can_resume ? 'recoverable: failed chapters' : 'blocked: failed chapters';
+      if (control.can_resume) return 'ready_to_continue';
+      if (item.status === 'completed') return 'complete';
+      return item.status || 'idle';
+    }
+
+    function renderOperatorQueueHealth(item, project, guidance) {
+      const box = createNode('div', '', 'operator-queue-health');
+      const stopReasons = stopReasonDistribution(item, project, guidance);
+      const reasonText = Object.entries(stopReasons)
+        .map(([reason, count]) => `${reason}(${count})`)
+        .join(' / ');
+      const repairExhaustedCount = guidance.reviewChapters.filter((chapter) => (
+        Number(chapter.repair_attempt_count || 0) > 0
+        || String(chapter.acceptance_mode || '').includes('force_accept')
+        || String(chapter.canon_risk_level || '').trim()
+      )).length;
+      box.appendChild(createNode('div', `Stop Reason Distribution：${reasonText}`, 'meta-line'));
+      box.appendChild(createNode('div', `Auto-continue Chain Health：${autoContinueChainHealth(item, guidance)}`, 'meta-line'));
+      box.appendChild(createNode('div', `needs-review queue：${guidance.reviewChapters.length} · repair-exhausted queue：${repairExhaustedCount}`, 'meta-line'));
+      return box;
+    }
+
     function renderGenerationQueue(item, project, chapters, guidance) {
       const queue = createNode('div', '', 'operator-queue');
       const control = item.generation_control || {};
       const reviewItems = guidance.reviewChapters.slice(0, 4);
       const failedItems = guidance.failedChapters.slice(0, 4);
 
+      queue.appendChild(renderOperatorQueueHealth(item, project, guidance));
+
       reviewItems.forEach((chapter) => {
         const row = createNode('div', '', 'queue-item warn');
         const main = createNode('div', '', 'queue-main');
         main.appendChild(createNode('strong', `第${chapter.chapter_number}章 · 待人工检查`));
-        main.appendChild(createNode('span', chapter.title ? `《${chapter.title}》` : 'Review checkpoint 已阻塞继续生成。'));
+        const reviewLabels = [
+          chapter.title ? `《${chapter.title}》` : 'Review checkpoint 已阻塞继续生成。',
+          Number(chapter.repair_attempt_count || 0) > 0 ? `repair attempts=${chapter.repair_attempt_count}` : '',
+          chapter.canon_risk_level ? `canon risk=${chapter.canon_risk_level}` : '',
+        ].filter(Boolean).join(' · ');
+        main.appendChild(createNode('span', reviewLabels));
         row.appendChild(main);
         const actions = createNode('div', '', 'queue-actions');
         const canReview = Boolean(item.project_id && chapter.chapter_number && chapter.has_review);
@@ -807,9 +993,24 @@
         const acceptButton = createButton('接受', () => approveReview(item.project_id, chapter.chapter_number, false), 'secondary');
         acceptButton.disabled = !canReview;
         actions.appendChild(acceptButton);
+        const softAcceptButton = createButton('Accept Soft', () => approveReview(item.project_id, chapter.chapter_number, false), 'secondary');
+        softAcceptButton.disabled = !canReview;
+        actions.appendChild(softAcceptButton);
+        const retryButton = createButton('Retry Review', () => retryReview(item.project_id, chapter.chapter_number, false), 'secondary');
+        retryButton.disabled = !canReview;
+        actions.appendChild(retryButton);
         const continueButton = createButton('接受并继续', () => approveReview(item.project_id, chapter.chapter_number, true), 'primary');
         continueButton.disabled = !canReview;
         actions.appendChild(continueButton);
+        const registerButton = createButton('Register Entity', () => registerSubworldEntityFromReview(item.project_id, chapter.chapter_number), 'ghost');
+        registerButton.disabled = !canReview;
+        actions.appendChild(registerButton);
+        const genericizeButton = createButton('Genericize Reference', () => genericizeBackgroundReferenceFromReview(item.project_id, chapter.chapter_number), 'ghost');
+        genericizeButton.disabled = !canReview;
+        actions.appendChild(genericizeButton);
+        const obligationButton = createButton('Create Obligation', () => createObligationFromReview(item.project_id, chapter.chapter_number), 'ghost');
+        obligationButton.disabled = !canReview;
+        actions.appendChild(obligationButton);
         row.appendChild(actions);
         queue.appendChild(row);
       });

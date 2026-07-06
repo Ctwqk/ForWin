@@ -3,7 +3,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .trope_library import TropeTemplate, validate_trope_template_payload
+from .trope_library import (
+    TropeTemplate,
+    expand_trope_template_payload,
+    validate_trope_template_payload,
+)
 
 
 _TEMPLATE_HEADING_RE = re.compile(r"^##\s+([A-Za-z0-9_-]+)\s+·\s+(.+?)\s*$")
@@ -24,7 +28,13 @@ _LIST_FIELD_BY_HEADING = {
     "review_signals": "review_signals",
 }
 
-_COMMA_LIST_FIELDS = {"genre_fit", "risk_flags", "recommended_hook_types"}
+_COMMA_LIST_FIELDS = {
+    "audience_fit",
+    "genre_fit",
+    "platform_fit",
+    "risk_flags",
+    "recommended_hook_types",
+}
 
 
 def _split_csv(value: str) -> list[str]:
@@ -119,4 +129,10 @@ def load_trope_templates_from_md(path: str | Path) -> tuple[TropeTemplate, ...]:
     templates, errors = validate_trope_template_payload(payloads)
     if errors:
         raise ValueError("; ".join(errors))
-    return tuple(templates)
+    expanded_payloads = expand_trope_template_payload(
+        [template.model_dump(mode="python") for template in templates]
+    )
+    expanded_templates, expanded_errors = validate_trope_template_payload(expanded_payloads)
+    if expanded_errors:
+        raise ValueError("; ".join(expanded_errors))
+    return tuple(expanded_templates)

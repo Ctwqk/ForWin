@@ -16,7 +16,7 @@ def test_loads_pulp_markdown_library_templates() -> None:
     templates = load_trope_templates_from_md(PULP_LIBRARY_PATH)
     template_by_id = {item.template_id: item for item in templates}
 
-    assert len(templates) >= 8
+    assert len(templates) >= 50
     power_level_up = template_by_id["power-level-up"]
     assert power_level_up.category == "power"
     assert power_level_up.subcategory == "升级"
@@ -28,6 +28,10 @@ def test_loads_pulp_markdown_library_templates() -> None:
     assert "三层反应" in power_level_up.aftermath
     assert power_level_up.anti_patterns
     assert power_level_up.review_signals
+    assert "fanqie" in power_level_up.platform_fit
+    assert power_level_up.audience_fit
+    assert all(template.genre_fit for template in templates)
+    assert all(template.payoff_shape or template.visible_payoff for template in templates)
 
 
 def test_configured_bad_override_path_fails_visibly(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,7 +62,7 @@ def test_markdown_override_summary_has_no_json_validation_error(monkeypatch: pyt
     assert summary.source == str(PULP_LIBRARY_PATH)
     assert summary.validation_errors == []
     assert summary.total_count == len(templates)
-    assert summary.total_count >= 8
+    assert summary.total_count >= 50
 
     trope_library.load_trope_template_library.cache_clear()
 
@@ -118,7 +122,9 @@ def test_markdown_override_summary_reports_effective_cached_library(
     assert summary.source == str(library_path)
     assert summary.validation_errors == []
     assert summary.total_count == len(templates)
-    assert summary.category_counts == {"power": 1, "social": 1, "justice": 1, "mystery": 1, "emotion": 1}
+    assert summary.total_count >= 50
+    for category in ("power", "social", "justice", "mystery", "emotion"):
+        assert summary.category_counts[category] >= 1
 
     trope_library.load_trope_template_library.cache_clear()
 

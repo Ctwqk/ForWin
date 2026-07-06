@@ -15,6 +15,32 @@ AUTO_REVIEW_RETRY_SOURCES = {
     "auto_continue_review_retry",
     "review_approve_auto_retry",
 }
+_HARD_AUTO_RETRY_REVIEWERS = {
+    "canon_quality",
+    "active_rule",
+    "active_rules",
+    "subworld",
+    "subworld_admission",
+}
+_HARD_AUTO_RETRY_ISSUE_TYPES = {
+    "dead_character_resurrection",
+    "already_dead_character_resurrected",
+    "character_resurrection",
+    "level_rollback",
+    "power_level_rollback",
+    "duplicate_artifact",
+    "duplicate_resource",
+    "duplicate_artifact_resource",
+    "faction_relation_reversal",
+    "protagonist_resource_debt_mismatch",
+    "location_teleport",
+    "impossible_location_teleport",
+    "subworld_admission_missing_canon_entity",
+    "subworld_admission_unauthorized_new_entity",
+    "sub_world_unknown_named_entity",
+    "active_rule_missing",
+    "active_rule_violation",
+}
 
 
 def chapter_numbers(raw_values: Any) -> list[int]:
@@ -36,9 +62,37 @@ def eligible_for_auto_review_retry(
     chapter_number = int(getattr(plan, "chapter_number", 0) or 0)
     if int(getattr(plan, "repair_attempt_count", 0) or 0) > 0:
         return False
+    if _has_hard_auto_retry_blocker(plan):
+        return False
     if chapter_number in (system_block_chapters or set()):
         return True
     return str(getattr(plan, "canon_risk_level", "") or "") == "high"
+
+
+def _has_hard_auto_retry_blocker(plan: ChapterPlan) -> bool:
+    raw = str(getattr(plan, "residual_review_issues_json", "") or "[]")
+    try:
+        issues = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if not isinstance(issues, list):
+        return False
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        reviewer = str(issue.get("reviewer") or issue.get("source_layer") or "").strip()
+        issue_type = str(
+            issue.get("issue_type")
+            or issue.get("rule_name")
+            or issue.get("type")
+            or issue.get("kind")
+            or ""
+        ).strip()
+        if reviewer in _HARD_AUTO_RETRY_REVIEWERS:
+            return True
+        if issue_type in _HARD_AUTO_RETRY_ISSUE_TYPES:
+            return True
+    return False
 
 
 def prior_auto_review_retry_count(

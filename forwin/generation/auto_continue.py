@@ -215,6 +215,8 @@ class GenerationAutoContinueController:
             return "pending_review_blocker"
         status = str(getattr(result, "status", "") or "").strip()
         if status and status != "completed":
+            if status == "no_rule_matched":
+                return "manual_review_required_blocker"
             return f"{status}_blocker"
         return ""
 

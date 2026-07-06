@@ -5,8 +5,11 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from forwin.book_genesis_core.arc_activation_review import build_arc_activation_review_pack
+from forwin.governance import DecisionEventInfo, DecisionEventType
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.observability.payloads import audit_payload
 from forwin.state.updater import StateUpdater
 
 
@@ -72,11 +75,42 @@ class GenesisChapterMaterializer:
         chapter_start = int(arc_payload.get("chapter_start", 1) or 1)
         chapter_end = int(arc_payload.get("chapter_end", chapter_start) or chapter_start)
         chapter_count = max(1, int(arc_payload.get("chapter_count", chapter_end - chapter_start + 1) or 1))
+        arc_activation_review_pack = build_arc_activation_review_pack(
+            session,
+            project_id=project.id,
+            arc_number=arc_number,
+            chapter_start=chapter_start,
+        )
+        review_pack_payload = arc_activation_review_pack.to_prompt_payload()
+        updater.save_decision_event(
+            DecisionEventInfo(
+                project_id=project.id,
+                scope="project",
+                event_family="runtime_observation",
+                event_type=DecisionEventType.ARC_ACTIVATION_REVIEW_PACK_BUILT,
+                actor_type="system",
+                summary=f"Arc {arc_number} activation review pack 已构建。",
+                payload=audit_payload(
+                    stage="arc_activation_review_pack",
+                    status="succeeded",
+                    arc_number=arc_number,
+                    chapter_start=chapter_start,
+                    accepted_summary_count=len(review_pack_payload.get("accepted_chapter_summaries", [])),
+                    open_obligation_count=len(review_pack_payload.get("open_obligations", [])),
+                    book_state_fact_count=len(review_pack_payload.get("book_state_facts", [])),
+                    review_pack=review_pack_payload,
+                ),
+                related_object_type="arc_plan_version",
+                related_object_id=arc_row.id,
+                parent_event_id=decision_event_id,
+            )
+        )
         planned, trace_payload = self.owner._plan_arc_chapters(
             project=project,
             pack=pack,
             arc_payload=arc_payload,
             chapter_count=chapter_count,
+            arc_activation_review_pack=review_pack_payload,
         )
         if str(decision_event_id or "").strip():
             trace_payload = self.owner._prepare_trace_payload_for_save(trace_payload, project_id=project.id)
@@ -109,7 +143,7 @@ class GenesisChapterMaterializer:
         for index in range(chapter_count):
             number = chapter_start + index
             item = planned[index] if index < len(planned) else {}
-            updater.create_chapter_plan(
+            plan_row = updater.create_chapter_plan(
                 project_id=project.id,
                 arc_plan_id=arc_row.id,
                 chapter_number=number,
@@ -122,6 +156,9 @@ class GenesisChapterMaterializer:
                 ][:3]
                 or ["推进主线冲突", "兑现当前阶段承诺"],
             )
+            if str(item.get("planning_status") or "").strip() == "degraded":
+                plan_row.status = "needs_review"
+                session.add(plan_row)
         session.flush()
         if ensure_arc_map:
             self.owner._ensure_arc_map_expansion(
@@ -134,4 +171,3 @@ class GenesisChapterMaterializer:
                 parent_event_id=decision_event_id,
             )
         return arc_row
-

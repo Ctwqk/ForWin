@@ -150,6 +150,7 @@ class DecisionEventType:
     MAP_EXPANSION_STARTED = "map_expansion_started"
     MAP_EXPANSION_SUCCEEDED = "map_expansion_succeeded"
     MAP_EXPANSION_FAILED = "map_expansion_failed"
+    ARC_ACTIVATION_REVIEW_PACK_BUILT = "arc_activation_review_pack_built"
     MAP_MOVEMENT_REVIEW_ISSUE = "map_movement_review_issue"
     WORLD_MODEL_COMPILE_STARTED = "world_model_compile_started"
     WORLD_MODEL_COMPILE_SUCCEEDED = "world_model_compile_succeeded"
@@ -288,6 +289,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.MAP_EXPANSION_STARTED,
     DecisionEventType.MAP_EXPANSION_SUCCEEDED,
     DecisionEventType.MAP_EXPANSION_FAILED,
+    DecisionEventType.ARC_ACTIVATION_REVIEW_PACK_BUILT,
     DecisionEventType.MAP_MOVEMENT_REVIEW_ISSUE,
     DecisionEventType.WORLD_MODEL_COMPILE_STARTED,
     DecisionEventType.WORLD_MODEL_COMPILE_SUCCEEDED,

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from forwin.book_state.extraction_contract import BookStateExtractionRequest
+from forwin.book_state.repository import BookStateRepository
+from forwin.book_state.review_gate_ext import BookStateDirectCommitService
 from forwin.canon_quality.gate import evaluate_canon_admission, normalize_gate_mode
 from forwin.canon_quality.signals import CanonQualitySignal
 from forwin.extractor.book_state_graph_delta import (
@@ -20,8 +23,13 @@ from forwin.protocol.book_state import (
 )
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
+from forwin.protocol.world_v4 import ApprovedWorldChangeSet, ExtractedWorldChangeSet
 from forwin.protocol.writer import WriterOutput
 from forwin.reviewer.hub import HistoricalReviewHub
+from forwin.world_v4_review_gate.types import V4ReviewGateVerdict
+from tests.postgres import postgres_test_url
+from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models import Project
 
 
 class DummyChecker:
@@ -605,6 +613,98 @@ def test_world_layer_filter_preserves_summary_only_world_delta() -> None:
     assert filtered[0].id == "delta-summary-only"
     assert filtered[0].metadata["legacy_summary_only"] is True
     assert filtered[0].metadata["filtered_patch_counts"] == {}
+
+
+def test_deferred_single_writer_empty_extraction_creates_light_world_fact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class EmptyWorldDeltaExtractor:
+        def extract(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return ExtractedWorldChangeSet(project_id="project-1", chapter_number=1)
+
+    class PassingV4ReviewGate:
+        def review(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+            return V4ReviewGateVerdict(
+                passed=True,
+                approved_changes=ApprovedWorldChangeSet(
+                    project_id="project-1",
+                    chapter_number=1,
+                ),
+                issues=[],
+            )
+
+    monkeypatch.setattr(
+        "forwin.extractor.book_state_graph_delta.WorldDeltaExtractor",
+        EmptyWorldDeltaExtractor,
+    )
+    monkeypatch.setattr(
+        "forwin.extractor.book_state_graph_delta.V4ReviewGate",
+        PassingV4ReviewGate,
+    )
+
+    extraction = BookStateGraphDeltaExtractor(layers={"world"}).extract(
+        BookStateExtractionRequest(
+            project_id="project-1",
+            chapter_number=1,
+            writer_output=WriterOutput(
+                project_id="project-1",
+                chapter_number=1,
+                title="第一章",
+                body="林夜收下玄铁令，决定进入问心阁。",
+                char_count=18,
+                end_of_chapter_summary="林夜获得玄铁令并进入问心阁。",
+                generation_meta={"structured_extraction": "deferred", "mode": "single"},
+            ),
+        )
+    )
+
+    assert extraction.accepted is True
+    assert extraction.changes is not None
+    assert len(extraction.changes.graph_deltas) == 1
+    delta = extraction.changes.graph_deltas[0]
+    assert delta.operation == "pulp_light_chapter_fact"
+    assert delta.fact_patches[0].op == "create"
+    assert "林夜获得玄铁令" in delta.fact_patches[0].proposition
+    assert delta.metadata["extraction_path"] == "pulp_light_structured_fallback"
+
+
+def test_light_world_fact_delta_commits_to_book_state() -> None:
+    engine = get_engine(postgres_test_url("pulp_light_world_fact_commit"))
+    init_db(engine)
+    Session = get_session_factory(engine)
+    try:
+        with Session.begin() as session:
+            project = Project(title="Pulp light", premise="前提", genre="玄幻")
+            session.add(project)
+            session.flush()
+            project_id = project.id
+            changes = BookStateGraphDeltaExtractor(layers={"world"}).extract(
+                BookStateExtractionRequest(
+                    project_id=project_id,
+                    chapter_number=1,
+                    writer_output=WriterOutput(
+                        project_id=project_id,
+                        chapter_number=1,
+                        title="第一章",
+                        body="林夜收下玄铁令，决定进入问心阁。",
+                        char_count=18,
+                        end_of_chapter_summary="林夜获得玄铁令并进入问心阁。",
+                        generation_meta={"structured_extraction": "deferred", "mode": "single"},
+                    ),
+                )
+            ).changes
+            assert changes is not None
+            result = BookStateDirectCommitService(session).commit(changes)
+            assert result.committed is True
+
+            repo = BookStateRepository(session)
+            nodes = repo.list_world_nodes(project_id, as_of_chapter=1)
+            facts = repo.list_fact_nodes(project_id, as_of_chapter=1)
+
+        assert [node.node_type for node in nodes] == ["event"]
+        assert any("林夜获得玄铁令" in fact.proposition for fact in facts)
+    finally:
+        engine.dispose()
 
 
 def test_layer_filter_is_idempotent_and_preserves_filtered_counts() -> None:

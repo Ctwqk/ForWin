@@ -18,6 +18,9 @@ DEFAULT_DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-chat"
 DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
 DEFAULT_QDRANT_URL = "http://127.0.0.1:6335"
+DEFAULT_EMBEDDING_GATEWAY_URL = "http://10.0.0.150:8080"
+DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+DEFAULT_EMBEDDING_DIMS = 384
 DEFAULT_HTTP_BASIC_EXEMPT_PATHS = (
     "/health",
     "/api/extension/",
@@ -301,19 +304,19 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         "llm_kb_qdrant_collection": _env_str(
             env, "FORWIN_LLM_KB_QDRANT_COLLECTION", "llm_kb_vectors"
         ),
-        "embedding_backend": _env_str(env, "FORWIN_EMBEDDING_BACKEND", "hash"),
+        "embedding_backend": _env_str(env, "FORWIN_EMBEDDING_BACKEND", "gateway"),
         "embedding_base_url": _env_str(
             env,
             "FORWIN_EMBEDDING_BASE_URL",
-            _env_str(env, "MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL),
+            DEFAULT_EMBEDDING_GATEWAY_URL,
         ),
         "embedding_api_key": _env_str(
             env,
             "FORWIN_EMBEDDING_API_KEY",
-            _env_str(env, "MINIMAX_API_KEY"),
+            "",
         ),
-        "embedding_model": _env_str(env, "FORWIN_EMBEDDING_MODEL"),
-        "embedding_dims": _env_int(env, "FORWIN_EMBEDDING_DIMS", 64),
+        "embedding_model": _env_str(env, "FORWIN_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
+        "embedding_dims": _env_int(env, "FORWIN_EMBEDDING_DIMS", DEFAULT_EMBEDDING_DIMS),
         "runtime_settings_path": _env_str(
             env,
             "FORWIN_RUNTIME_SETTINGS_PATH", "data/runtime_settings.json"
@@ -627,7 +630,7 @@ PULP_OVERRIDES: dict[str, object] = {
     "review_interval_chapters": 0,
     "experience_review_enabled": False,
     "lint_review_enabled": True,
-    "canon_quality_gate": "fatal_only",
+    "canon_quality_gate": "pulp_fatal",
     "freeze_failed_candidates": False,
     "review_fail_max_rewrites": 0,
     "auto_band_checkpoint": False,
@@ -690,11 +693,11 @@ class _ConfigFields:
     qdrant_url: str = DEFAULT_QDRANT_URL
     qdrant_collection: str = "chapter_memories"
     llm_kb_qdrant_collection: str = "llm_kb_vectors"
-    embedding_backend: str = "hash"
-    embedding_base_url: str = DEFAULT_MINIMAX_BASE_URL
+    embedding_backend: str = "gateway"
+    embedding_base_url: str = DEFAULT_EMBEDDING_GATEWAY_URL
     embedding_api_key: str = ""
-    embedding_model: str = ""
-    embedding_dims: int = 64
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    embedding_dims: int = DEFAULT_EMBEDDING_DIMS
     runtime_settings_path: str = "data/runtime_settings.json"
     observability_enabled: bool = True
     observability_performance_enabled: bool = True

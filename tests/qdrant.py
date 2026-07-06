@@ -67,6 +67,14 @@ class FakeQdrantClient:
             },
         )
 
+    def get_collection(self, collection_name: str):
+        collection = self.collections[collection_name]
+        return SimpleNamespace(
+            config=SimpleNamespace(
+                params=SimpleNamespace(vectors=collection.get("vectors_config"))
+            )
+        )
+
     def upsert(self, *, collection_name: str, points: list[Any]) -> None:
         self.upsert_calls += 1
         self.upserted_point_count += len(points)

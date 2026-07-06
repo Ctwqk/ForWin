@@ -7,7 +7,7 @@ from forwin.narrative_obligations.types import NarrativeObligation, NarrativePla
 from .signals import CanonAdmissionGateResult, CanonQualitySignal
 
 
-GateMode = Literal["off", "shadow", "fatal_only", "strict"]
+GateMode = Literal["off", "shadow", "fatal_only", "pulp_fatal", "serial_fatal", "strict"]
 
 _FATAL_ONLY_SIGNAL_TYPES = {
     "character_dead_alive",
@@ -22,33 +22,62 @@ _FATAL_ONLY_SIGNAL_TYPES = {
     "form_invariant_drift",
     "form_final_chapter_unresolved",
 }
+_EXPANDED_FATAL_SIGNAL_TYPES = _FATAL_ONLY_SIGNAL_TYPES | {
+    "dead_character_resurrection",
+    "already_dead_character_resurrected",
+    "character_resurrection",
+    "level_rollback",
+    "power_level_rollback",
+    "duplicate_artifact",
+    "duplicate_resource",
+    "duplicate_artifact_resource",
+    "faction_relation_reversal",
+    "protagonist_resource_debt_mismatch",
+    "location_teleport",
+    "impossible_location_teleport",
+}
+_FATAL_PROFILE_MODES = {"fatal_only", "pulp_fatal", "serial_fatal"}
 
 
 def normalize_gate_mode(value: str | None, *, default: GateMode = "strict") -> GateMode:
     normalized = str(value or default).strip().lower()
-    if normalized in {"off", "shadow", "fatal_only", "strict"}:
+    if normalized in {"off", "shadow", "fatal_only", "pulp_fatal", "serial_fatal", "strict"}:
         return normalized  # type: ignore[return-value]
     return default
 
 
-def _fatal_only_blocking(signals: list[CanonQualitySignal]) -> list[CanonQualitySignal]:
+def _fatal_signal_types_for_mode(mode: str) -> set[str]:
+    if mode in {"pulp_fatal", "serial_fatal"}:
+        return set(_EXPANDED_FATAL_SIGNAL_TYPES)
+    return set(_FATAL_ONLY_SIGNAL_TYPES)
+
+
+def _fatal_only_blocking(
+    signals: list[CanonQualitySignal],
+    *,
+    fatal_signal_types: set[str],
+) -> list[CanonQualitySignal]:
     return [
         signal
         for signal in signals
         if signal.status == "open"
         and signal.severity == "error"
-        and str(signal.signal_type) in _FATAL_ONLY_SIGNAL_TYPES
+        and str(signal.signal_type) in fatal_signal_types
         and bool(signal.evidence_refs)
     ]
 
 
-def _fatal_only_residual_refs(signals: list[CanonQualitySignal]) -> list[str]:
+def _fatal_only_residual_refs(
+    signals: list[CanonQualitySignal],
+    *,
+    fatal_signal_types: set[str],
+) -> list[str]:
     return [
         signal.signal_id
         for signal in signals
         if signal.status == "open"
         and signal.severity == "error"
-        and str(signal.signal_type) in _FATAL_ONLY_SIGNAL_TYPES
+        and str(signal.signal_type) in fatal_signal_types
         and not signal.evidence_refs
     ]
 
@@ -91,6 +120,7 @@ def evaluate_canon_admission(
     require_evidence_for_block: bool = True,
 ) -> CanonAdmissionGateResult:
     resolved_mode = normalize_gate_mode(mode)
+    fatal_signal_types = _fatal_signal_types_for_mode(resolved_mode)
     quality_signals = list(signals or [])
     active_obligations = list(obligations or [])
     available_patches = list(plan_patches or [])
@@ -104,8 +134,14 @@ def evaluate_canon_admission(
         for signal in quality_signals
         if signal.status == "open" and signal.severity == "warning"
     ]
-    fatal_blocking = _fatal_only_blocking(quality_signals)
-    fatal_residual_refs = _fatal_only_residual_refs(quality_signals)
+    fatal_blocking = _fatal_only_blocking(
+        quality_signals,
+        fatal_signal_types=fatal_signal_types,
+    )
+    fatal_residual_refs = _fatal_only_residual_refs(
+        quality_signals,
+        fatal_signal_types=fatal_signal_types,
+    )
     deterministic_refs = [signal.signal_id for signal in blocking]
     form_blocking_refs = _form_blocking_refs(
         analyzer_results=analyzer_results or [],
@@ -116,7 +152,7 @@ def evaluate_canon_admission(
         analyzer_results=analyzer_results or [],
         min_blocking_confidence=float(min_blocking_confidence or 0.8),
         require_evidence_for_block=bool(require_evidence_for_block),
-        allowed_signal_types=_FATAL_ONLY_SIGNAL_TYPES,
+        allowed_signal_types=fatal_signal_types,
     )
     llm_issue_refs = form_blocking_refs
     residual_issue_refs: list[str] = []
@@ -127,6 +163,7 @@ def evaluate_canon_admission(
         current_chapter=int(chapter_number or 0),
         over_budget=over_budget,
         is_final_chapter=is_final_chapter,
+        p0_only=resolved_mode in {"pulp_fatal", "serial_fatal"},
     )
     review_failed = _review_verdict_to_gate_verdict(review_verdict) == "fail"
     blocking_reasons = sorted(
@@ -167,7 +204,7 @@ def evaluate_canon_admission(
             f"warnings={len(warnings)}, open_obligations={open_terminal_obligation_count}, "
             f"narrative_obligations={len(active_obligations)}"
         )
-    elif resolved_mode == "fatal_only":
+    elif resolved_mode in _FATAL_PROFILE_MODES:
         llm_issue_refs = fatal_form_blocking_refs
         residual_issue_refs = fatal_residual_refs
         commit_allowed = (
@@ -191,7 +228,7 @@ def evaluate_canon_admission(
         deterministic_refs = [signal.signal_id for signal in fatal_blocking]
         required_repair_scope = _required_repair_scope_for_signals(fatal_blocking)
         summary = (
-            f"canon quality gate fatal_only: commit_allowed={commit_allowed}, "
+            f"canon quality gate {resolved_mode}: commit_allowed={commit_allowed}, "
             f"fatal_blocking={len(fatal_blocking)}, form_blocking={len(fatal_form_blocking_refs)}, "
             f"warnings={len(warnings)}, residual={len(fatal_residual_refs)}, "
             f"open_obligations={open_terminal_obligation_count}, "
@@ -325,6 +362,7 @@ def _obligation_blocking_reasons(
     current_chapter: int,
     over_budget: bool,
     is_final_chapter: bool,
+    p0_only: bool = False,
 ) -> list[str]:
     reasons: list[str] = []
     if over_budget:
@@ -333,6 +371,8 @@ def _obligation_blocking_reasons(
     for obligation in obligations:
         obligation_id = obligation.id or "unknown"
         if obligation.status in {"resolved", "waived"}:
+            continue
+        if p0_only and obligation.priority != "P0" and obligation.hardness != "hard_blocker":
             continue
         if obligation.status == "expired":
             reasons.append(f"expired_obligation:{obligation_id}")

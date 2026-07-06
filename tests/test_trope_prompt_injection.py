@@ -64,6 +64,7 @@ def test_experience_overlay_injects_selected_trope_instructions(
 
     assert section is not None
     assert "本章爽点指令" in section
+    assert "执行约束" in section
     assert "升级" in section
     assert "欲望建立：先写清陆明当前权限不足" in section
     assert "阻力加压：反派和环境同时压迫" in section

@@ -35,18 +35,22 @@ class RemoteTextEmbedder(TextEmbedder):
     def __init__(
         self,
         *,
-        api_key: str,
+        api_key: str = "",
         base_url: str,
         model: str,
         dims: int,
+        client: httpx.Client | None = None,
     ) -> None:
-        self.api_key = api_key
+        self.api_key = str(api_key or "")
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.dims = max(8, int(dims))
-        self.client = httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
+        self.client = client or httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         response = self.client.post(
             f"{self.base_url}/embeddings",
             json={
@@ -54,10 +58,7 @@ class RemoteTextEmbedder(TextEmbedder):
                 "input": texts,
                 "dimensions": self.dims,
             },
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
         response.raise_for_status()
         data = response.json()
@@ -66,6 +67,57 @@ class RemoteTextEmbedder(TextEmbedder):
         if len(embeddings) != len(texts):
             raise ValueError("embedding response size mismatch")
         return embeddings
+
+
+class GatewayTextEmbedder(TextEmbedder):
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        dims: int = 384,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.client = client or httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
+        detected_dims = self._detect_dims()
+        requested_dims = int(dims or 0)
+        self.dims = requested_dims if requested_dims > 0 else detected_dims
+        if self.dims <= 0:
+            raise ValueError("embedding gateway dimension could not be detected")
+        if detected_dims > 0 and detected_dims != self.dims:
+            logger.warning(
+                "Embedding gateway dimension %s differs from configured dimension %s.",
+                detected_dims,
+                self.dims,
+            )
+
+    def _detect_dims(self) -> int:
+        try:
+            response = self.client.get(f"{self.base_url}/metadata")
+            response.raise_for_status()
+            payload = response.json()
+            return int(payload.get("dimension") or 0)
+        except Exception:
+            logger.warning("Embedding gateway metadata unavailable.", exc_info=True)
+            return 0
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        response = self.client.post(
+            f"{self.base_url}/embed",
+            json={"texts": texts},
+            headers={"Content-Type": "application/json"},
+        )
+        response.raise_for_status()
+        payload = response.json()
+        vectors = [list(vector or []) for vector in payload.get("vectors") or []]
+        if len(vectors) != len(texts):
+            raise ValueError("embedding gateway response size mismatch")
+        mismatched = [len(vector) for vector in vectors if len(vector) != self.dims]
+        if mismatched:
+            raise ValueError(
+                f"embedding gateway dimension mismatch: expected {self.dims}, got {mismatched[0]}"
+            )
+        return vectors
 
 
 def _tokenize(text: str) -> list[str]:
@@ -118,6 +170,17 @@ def _qdrant_models() -> Any:
     return rest
 
 
+def _vector_size_from_config(vectors_config: Any) -> int | None:
+    if hasattr(vectors_config, "size"):
+        try:
+            return int(vectors_config.size)
+        except (TypeError, ValueError):
+            return None
+    if isinstance(vectors_config, dict) and len(vectors_config) == 1:
+        return _vector_size_from_config(next(iter(vectors_config.values())))
+    return None
+
+
 class ChapterMemoryIndex:
     def upsert_chapter(
         self,
@@ -152,17 +215,59 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
     ) -> None:
         self._rest = qdrant_models or _qdrant_models()
         self.client = client or _create_qdrant_client(url)
-        self.collection_name = collection_name
         self.embedder = embedder or HashTextEmbedder()
+        self.collection_name = self._resolve_collection_name(collection_name)
         collections = {item.name for item in self.client.get_collections().collections}
-        if collection_name not in collections:
+        if self.collection_name not in collections:
             self.client.create_collection(
-                collection_name=collection_name,
+                collection_name=self.collection_name,
                 vectors_config=self._rest.VectorParams(
                     size=self.embedder.dims,
                     distance=self._rest.Distance.COSINE,
                 ),
             )
+
+    def _resolve_collection_name(self, collection_name: str) -> str:
+        collections = {item.name for item in self.client.get_collections().collections}
+        if collection_name not in collections:
+            return collection_name
+        existing_size = self._collection_vector_size(collection_name)
+        if existing_size in {None, self.embedder.dims}:
+            return collection_name
+        candidate = f"{collection_name}_{self.embedder.dims}d"
+        logger.warning(
+            "Qdrant collection %s has vector size %s, expected %s; using %s instead.",
+            collection_name,
+            existing_size,
+            self.embedder.dims,
+            candidate,
+        )
+        if candidate not in collections:
+            return candidate
+        candidate_size = self._collection_vector_size(candidate)
+        if candidate_size in {None, self.embedder.dims}:
+            return candidate
+        raise ValueError(
+            f"Qdrant collection {candidate!r} has vector size {candidate_size}, "
+            f"expected {self.embedder.dims}."
+        )
+
+    def _collection_vector_size(self, collection_name: str) -> int | None:
+        try:
+            collection = self.client.get_collection(collection_name)
+        except Exception:
+            logger.warning(
+                "Could not inspect Qdrant collection %s vector size.",
+                collection_name,
+                exc_info=True,
+            )
+            return None
+        vectors_config = getattr(
+            getattr(getattr(collection, "config", None), "params", None),
+            "vectors",
+            None,
+        )
+        return _vector_size_from_config(vectors_config)
 
     def upsert_chapter(
         self,
@@ -236,23 +341,37 @@ def create_memory_index(
     embedding_api_key: str = "",
     embedding_model: str = "",
     embedding_dims: int = 64,
+    embedding_http_client: httpx.Client | None = None,
     qdrant_client: Any | None = None,
     qdrant_models: Any | None = None,
 ) -> ChapterMemoryIndex:
     normalized = (backend or "qdrant").strip().lower()
     embedding_kind = (embedding_backend or "hash").strip().lower()
-    if (
+    if embedding_kind in {"gateway", "embedding_gateway", "local_gateway"} and embedding_base_url:
+        try:
+            embedder: TextEmbedder = GatewayTextEmbedder(
+                base_url=embedding_base_url,
+                dims=embedding_dims,
+                client=embedding_http_client,
+            )
+        except Exception:
+            logger.warning(
+                "Embedding gateway unavailable, falling back to hash embedder.",
+                exc_info=True,
+            )
+            embedder = HashTextEmbedder(dims=embedding_dims)
+    elif (
         embedding_kind in {"remote", "api", "openai"}
         and embedding_model
-        and embedding_api_key
         and embedding_base_url
     ):
         try:
-            embedder: TextEmbedder = RemoteTextEmbedder(
+            embedder = RemoteTextEmbedder(
                 api_key=embedding_api_key,
                 base_url=embedding_base_url,
                 model=embedding_model,
                 dims=embedding_dims,
+                client=embedding_http_client,
             )
         except Exception:
             logger.warning(

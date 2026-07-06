@@ -555,6 +555,14 @@
       display:grid;
       gap:10px;
     }
+    .operator-queue-health {
+      display:grid;
+      gap:4px;
+      padding:10px 12px;
+      border-radius:12px;
+      border:1px solid rgba(31,91,84,.18);
+      background:rgba(31,91,84,.06);
+    }
     .queue-item {
       display:grid;
       grid-template-columns:minmax(0, 1fr) auto;

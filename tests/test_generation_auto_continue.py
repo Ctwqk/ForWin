@@ -419,3 +419,76 @@ def test_controller_auto_retries_system_block_review_once() -> None:
         assert retry_events
     finally:
         engine.dispose()
+
+
+def test_controller_does_not_auto_retry_hard_canon_review_blocker() -> None:
+    engine, Session = _session_factory("auto-continue-hard-canon-blocker")
+    calls: list[dict[str, object]] = []
+    try:
+        with Session.begin() as session:
+            project = _project(session)
+            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=2)
+            _chapter(session, project_id=project.id, arc_id="arc-1", number=1, status="accepted")
+            _chapter(session, project_id=project.id, arc_id="arc-1", number=2, status="needs_review")
+            plan = session.get(ChapterPlan, "plan-2")
+            assert plan is not None
+            plan.canon_risk_level = "high"
+            plan.residual_review_issues_json = json.dumps(
+                [
+                    {
+                        "reviewer": "canon_quality",
+                        "issue_type": "duplicate_artifact_resource",
+                    }
+                ]
+            )
+            session.add(plan)
+
+        controller = GenerationAutoContinueController(
+            session_factory=Session,
+            create_continue_generation_task=lambda **kwargs: calls.append(kwargs) or "task-auto-retry",
+        )
+        decision = controller.after_task_completion(
+            ResultStub(project_id="project-auto", completed_chapters=[1], paused_chapters=[2]),
+            parent_task_id="task-prev",
+            run_until_chapter=2,
+            max_chapters=None,
+            auto_continue=True,
+        )
+
+        with Session() as session:
+            plan = session.get(ChapterPlan, "plan-2")
+            assert plan is not None
+
+        assert decision.decision == "stop"
+        assert decision.reason == "pending_review_blocker"
+        assert calls == []
+        assert plan.status == "needs_review"
+    finally:
+        engine.dispose()
+
+
+def test_controller_never_emits_no_rule_matched_as_stop_reason() -> None:
+    engine, Session = _session_factory("auto-continue-no-rule-matched")
+    try:
+        with Session.begin() as session:
+            project = _project(session)
+            _arc(session, project_id=project.id, arc_id="arc-1", number=1, status="active", start=1, end=2)
+            _chapter(session, project_id=project.id, arc_id="arc-1", number=1, status="accepted")
+
+        controller = GenerationAutoContinueController(
+            session_factory=Session,
+            create_continue_generation_task=lambda **kwargs: "task-should-not-run",
+        )
+        decision = controller.after_task_completion(
+            ResultStub(project_id="project-auto", status="no_rule_matched"),
+            parent_task_id="task-prev",
+            run_until_chapter=2,
+            max_chapters=None,
+            auto_continue=True,
+        )
+
+        assert decision.decision == "stop"
+        assert decision.reason == "manual_review_required_blocker"
+        assert "no_rule_matched" not in decision.reason
+    finally:
+        engine.dispose()

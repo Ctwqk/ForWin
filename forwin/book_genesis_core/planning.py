@@ -48,7 +48,9 @@ def _plan_arc_chapters(
     pack: dict[str, Any],
     arc_payload: dict[str, Any],
     chapter_count: int,
+    arc_activation_review_pack: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    review_pack_payload = arc_activation_review_pack or {}
     fallback = [
         {
             "title": f"第{index}章",
@@ -67,7 +69,8 @@ def _plan_arc_chapters(
                 f"BookBrief：{_json_dump(pack.get('book_brief') or {})}\n"
                 f"WorldBible：{_json_dump(_pack_stage_payload(pack, 'world').get('world_bible') or {})}\n"
                 f"StoryEngine：{_json_dump(_pack_stage_payload(pack, 'story_engine') or {})}\n"
-                f"当前 Arc：{_json_dump(arc_payload)}"
+                f"当前 Arc：{_json_dump(arc_payload)}\n"
+                f"ArcActivationReviewPack：{_json_dump(review_pack_payload)}"
             ),
         },
     ]
@@ -75,9 +78,29 @@ def _plan_arc_chapters(
         messages=messages,
         fallback={"chapters": fallback},
         stage_key=f"launch_arc_{int(arc_payload.get('arc_number', 1) or 1)}",
-        max_tokens=1200,
+        max_tokens=max(1800, int(getattr(self, "max_tokens", 1800) or 1800)),
     )
+    if isinstance(trace_payload, dict):
+        input_snapshot = trace_payload.get("input_snapshot")
+        if not isinstance(input_snapshot, dict):
+            input_snapshot = {}
+        trace_payload["input_snapshot"] = {
+            **input_snapshot,
+            "arc_activation_review_pack": review_pack_payload,
+        }
+        output_summary = trace_payload.get("output_summary")
+        if not isinstance(output_summary, dict):
+            output_summary = {}
+        if str(output_summary.get("mode") or "").strip() == "fallback":
+            trace_payload["arc_planning_status"] = "degraded"
+            trace_payload["fallback_used"] = True
+            trace_payload["output_summary"] = {
+                **output_summary,
+                "planning_status": "degraded",
+                "manual_review_required": True,
+            }
     chapters = payload.get("chapters") if isinstance(payload, dict) else []
+    planning_status = str(trace_payload.get("arc_planning_status") or "").strip()
     normalized: list[dict[str, Any]] = []
     for index in range(1, chapter_count + 1):
         source = chapters[index - 1] if index - 1 < len(chapters) and isinstance(chapters[index - 1], dict) else {}
@@ -91,6 +114,7 @@ def _plan_arc_chapters(
                 "title": str(source.get("title", "")).strip() or fallback[index - 1]["title"],
                 "one_line": str(source.get("one_line", "")).strip() or fallback[index - 1]["one_line"],
                 "goals": goals or fallback[index - 1]["goals"],
+                "planning_status": planning_status,
             }
         )
     return normalized, trace_payload

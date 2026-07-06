@@ -42,6 +42,21 @@ def _chapters() -> list[ChapterPlan]:
     ]
 
 
+def _chapter_band(count: int) -> list[ChapterPlan]:
+    return [
+        ChapterPlan(
+            id=f"chapter-{number}",
+            project_id="project-1",
+            arc_plan_id="arc-1",
+            chapter_number=number,
+            title=f"第{number}章",
+            one_line=f"推进第{number}章",
+            goals_json='["推进"]',
+        )
+        for number in range(1, count + 1)
+    ]
+
+
 def _arc_experience(*, macro_payoffs: list[MacroPayoff] | None = None) -> ArcExperienceBundle:
     return ArcExperienceBundle(
         reader_promise=ReaderPromise(genre_promise="玄幻", core_pleasures=["翻盘"]),
@@ -111,6 +126,67 @@ def test_selector_avoids_duplicate_template_ids_when_unused_templates_exist(
     template_ids = [item.template_id for item in schedule.scheduled_rewards]
     assert template_ids.count("power-level-up") == 1
     assert len(template_ids) == len(set(template_ids))
+
+
+def test_selector_avoids_third_sub_trope_use_in_twenty_chapter_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FORWIN_TROPE_TEMPLATE_PATH", PULP_LIBRARY_PATH)
+
+    schedule = BandExperienceScheduler().derive_band_delight_schedule(
+        band_id="band:21:24",
+        chapter_start=21,
+        chapter_end=24,
+        structure=_structure(),
+        arc_experience=_arc_experience(
+            macro_payoffs=[
+                MacroPayoff(
+                    payoff_id="power-payoff",
+                    category="power",
+                    template_id="power-level-up",
+                )
+            ]
+        ),
+        active_band=_chapter_band(4),
+        calibration=AudienceCalibrationProfile(
+            recent_template_ids=[
+                "social-face-slap",
+                "mystery-new-clue",
+                "power-hidden-card",
+                "power-level-up",
+                "emotion-protect",
+                "justice-recover-loss",
+                "power-level-up",
+            ],
+            recent_trope_categories=[],
+        ),
+        cost_ceiling=3,
+    )
+
+    selected = [item.template_id for item in schedule.scheduled_rewards]
+    assert "power-level-up" not in selected
+
+
+def test_boost_reward_density_does_not_duplicate_mid_power_reward() -> None:
+    schedule = BandExperienceScheduler().derive_band_delight_schedule(
+        band_id="band:1:4",
+        chapter_start=1,
+        chapter_end=4,
+        structure=_structure(),
+        arc_experience=_arc_experience(),
+        active_band=_chapter_band(4),
+        calibration=AudienceCalibrationProfile(boost_reward_density=True),
+        cost_ceiling=3,
+    )
+
+    mid_power_rewards = [
+        item
+        for item in schedule.scheduled_rewards
+        if item.chapter_hint == 2
+        and item.category == "power"
+        and item.intent == "micro_progress_power"
+    ]
+    assert len(mid_power_rewards) == 1
 
 
 def test_band_plan_service_passes_trope_cost_ceiling_to_scheduler() -> None:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from hashlib import sha1
+
 from forwin.book_state.adapter import BookStateDeltaAdapter
 from forwin.book_state.extraction_contract import (
     BookStateExtractionIssue,
     BookStateExtractionRequest,
     BookStateExtractionResult,
 )
-from forwin.protocol.book_state import GraphDelta
+from forwin.protocol.book_state import FactPatch, GraphDelta, GraphDeltaType, NodePatch
 from forwin.extractor.world_v4 import WorldDeltaExtractor
 from forwin.world_v4_review_gate import V4ReviewGate
 
@@ -200,6 +202,18 @@ class BookStateGraphDeltaExtractor:
             for delta in changes.graph_deltas
         ]
         graph_deltas = _filter_graph_delta_layers(graph_deltas, self.layers)
+        if not graph_deltas and "world" in self.layers and _needs_light_structured_fallback(writer_output):
+            graph_deltas = [
+                _light_structured_fallback_delta(
+                    project_id=request.project_id,
+                    chapter_number=request.chapter_number,
+                    writer_output=writer_output,
+                    review_verdict_id=(
+                        request.review_verdict_id
+                        or f"book_state_direct_extract_{request.project_id}_{request.chapter_number}"
+                    ),
+                )
+            ]
         changes = changes.model_copy(update={"graph_deltas": graph_deltas})
         return BookStateExtractionResult(
             project_id=request.project_id,
@@ -213,6 +227,102 @@ class BookStateGraphDeltaExtractor:
                 "graph_delta_count": len(graph_deltas),
             },
         )
+
+
+def _needs_light_structured_fallback(writer_output) -> bool:  # noqa: ANN001
+    meta = dict(getattr(writer_output, "generation_meta", {}) or {})
+    status = str(meta.get("structured_extraction", "") or "").strip()
+    mode = str(meta.get("mode", "") or "").strip()
+    return status in {"deferred", "skipped", "degraded", "partial_degraded"} or mode == "single"
+
+
+def _light_structured_fallback_delta(
+    *,
+    project_id: str,
+    chapter_number: int,
+    writer_output,
+    review_verdict_id: str,
+) -> GraphDelta:
+    summary = (
+        str(getattr(writer_output, "end_of_chapter_summary", "") or "").strip()
+        or _first_sentence(str(getattr(writer_output, "body", "") or ""))
+        or str(getattr(writer_output, "title", "") or f"第{chapter_number}章").strip()
+    )
+    title = str(getattr(writer_output, "title", "") or f"第{chapter_number}章").strip()
+    digest = sha1(f"{project_id}:{chapter_number}:{summary}".encode("utf-8")).hexdigest()[:12]
+    event_id = f"event_ch{chapter_number}_{digest}"
+    fact_id = f"fact_ch{chapter_number}_{digest}"
+    source_ref = f"chapter:{chapter_number}"
+    return GraphDelta(
+        id=f"delta_pulp_light_ch{chapter_number}_{digest}",
+        project_id=project_id,
+        chapter_number=chapter_number,
+        delta_type=GraphDeltaType.WORLD_STATE,
+        operation="pulp_light_chapter_fact",
+        target_type="chapter_event",
+        target_id=event_id,
+        source_type="writer_output",
+        source_id=source_ref,
+        world_line_id="main",
+        summary=summary,
+        node_patches=[
+            NodePatch(
+                node_id=event_id,
+                node_type="event",
+                op="create",
+                new_value={
+                    "project_id": project_id,
+                    "name": title,
+                    "summary": summary,
+                    "status": "occurred",
+                    "importance": 3,
+                    "tags": ["chapter_event", "pulp_light"],
+                    "created_at_chapter": chapter_number,
+                    "valid_from_chapter": chapter_number,
+                    "source_refs": [source_ref],
+                    "metadata": {"extraction_path": "pulp_light_structured_fallback"},
+                },
+                reason="Accepted single-call chapter had deferred structured extraction.",
+            )
+        ],
+        fact_patches=[
+            FactPatch(
+                fact_id=fact_id,
+                op="create",
+                proposition=summary,
+                truth_value="true",
+                related_refs=[event_id],
+                new_value={
+                    "project_id": project_id,
+                    "fact_type": "chapter_summary",
+                    "created_at_chapter": chapter_number,
+                    "source_refs": [source_ref],
+                    "related_node_refs": [event_id],
+                },
+                reason="Light BookState fact for accepted deferred structured extraction.",
+            )
+        ],
+        evidence_refs=[source_ref],
+        review_verdict_id=review_verdict_id,
+        metadata={
+            "extraction_path": "pulp_light_structured_fallback",
+            "compatibility_source": "empty_world_v4_extractor",
+            "structured_extraction": str(
+                dict(getattr(writer_output, "generation_meta", {}) or {}).get("structured_extraction", "")
+            ),
+        },
+    )
+
+
+def _first_sentence(text: str) -> str:
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return ""
+    for delimiter in ("。", "！", "？", ".", "!", "?"):
+        index = normalized.find(delimiter)
+        if index >= 0:
+            return normalized[: index + 1]
+    return normalized[:120]
 
 
 __all__ = ["BookStateGraphDeltaExtractor"]

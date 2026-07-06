@@ -8,7 +8,14 @@ from alembic.config import Config as AlembicConfig
 
 from forwin.api_runtime import build_runtime_config, copy_config
 from forwin.api_schemas import GenerateRequest
-from forwin.config import Config, DEFAULT_DATABASE_URL, DEFAULT_MINIMAX_BASE_URL
+from forwin.config import (
+    Config,
+    DEFAULT_DATABASE_URL,
+    DEFAULT_EMBEDDING_DIMS,
+    DEFAULT_EMBEDDING_GATEWAY_URL,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_MINIMAX_BASE_URL,
+)
 from tests.postgres import postgres_test_url
 
 
@@ -210,6 +217,19 @@ def test_alembic_env_uses_forwin_database_url_when_ini_has_no_url(
 def test_default_minimax_base_url_uses_configured_cn_openai_endpoint() -> None:
     assert DEFAULT_MINIMAX_BASE_URL == "https://api.minimaxi.com/v1"
     assert Config().minimax_base_url == "https://api.minimaxi.com/v1"
+
+
+def test_default_embedding_backend_uses_production_gateway(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _set_env_file(monkeypatch, tmp_path, [])
+
+    config = Config.from_env()
+
+    assert config.embedding_backend == "gateway"
+    assert config.embedding_base_url == DEFAULT_EMBEDDING_GATEWAY_URL
+    assert config.embedding_model == DEFAULT_EMBEDDING_MODEL
+    assert config.embedding_dims == DEFAULT_EMBEDDING_DIMS
 
 
 def test_default_scene_call_timeout_matches_default_llm_timeout(

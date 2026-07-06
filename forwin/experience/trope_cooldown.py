@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import json
 from typing import Any
 
@@ -14,6 +15,8 @@ from forwin.protocol.trope_library import TropeTemplate
 class TropeCooldownPolicy(BaseModel):
     template_band_gap: int = Field(default=3, ge=0, le=20)
     category_band_gap: int = Field(default=1, ge=0, le=20)
+    repetition_window: int = Field(default=20, ge=1, le=100)
+    max_template_uses_in_window: int = Field(default=2, ge=1, le=20)
 
 
 def _normalize_usage_stage(value: str | None) -> str:
@@ -30,17 +33,40 @@ def select_available_templates(
 ) -> list[TropeTemplate]:
     blocked_templates = set(recent_template_ids[: policy.template_band_gap])
     blocked_categories = set(recent_categories[: policy.category_band_gap])
+    overused_templates = overused_template_ids(recent_template_ids, policy=policy)
     available = [
         template
         for template in templates
         if template.template_id not in blocked_templates
+        and template.template_id not in overused_templates
         and str(template.category) not in blocked_categories
     ]
     return (
         available
-        or [template for template in templates if template.template_id not in blocked_templates]
-        or list(templates)
+        or [
+            template
+            for template in templates
+            if template.template_id not in blocked_templates
+            and template.template_id not in overused_templates
+        ]
+        or [template for template in templates if template.template_id not in overused_templates]
+        or []
     )
+
+
+def overused_template_ids(
+    recent_template_ids: list[str],
+    *,
+    policy: TropeCooldownPolicy,
+) -> set[str]:
+    window = [
+        str(template_id).strip()
+        for template_id in recent_template_ids[: policy.repetition_window]
+        if str(template_id).strip()
+    ]
+    counts = Counter(window)
+    threshold = max(1, int(policy.max_template_uses_in_window or 2))
+    return {template_id for template_id, count in counts.items() if count >= threshold}
 
 
 def recent_trope_usage(

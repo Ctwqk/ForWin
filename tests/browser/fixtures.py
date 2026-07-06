@@ -523,13 +523,18 @@ class MockForWinBackend:
             _, chapter_number = chapter_detail.groups()
             json_reply(route, sample_chapter(int(chapter_number), body=True))
             return
-        review = re.fullmatch(r"/api/projects/([^/]+)/chapters/(\d+)/review(?:/(approve))?", path)
+        review = re.fullmatch(r"/api/projects/([^/]+)/chapters/(\d+)/review(?:/(approve|retry))?", path)
         if review:
             project_id, chapter_number, action = review.groups()
             if action == "approve" and method == "POST":
                 payload = read_json(route)
                 self.capture(route, payload)
                 json_reply(route, {"message": "review approved", "task_id": payload.get("continue_generation") and "task-continue" or ""})
+                return
+            if action == "retry" and method == "POST":
+                payload = read_json(route)
+                self.capture(route, payload)
+                json_reply(route, {"message": "review retried", "task_id": payload.get("continue_generation") and "task-retry" or ""})
                 return
             json_reply(route, sample_review(project_id, int(chapter_number)))
             return

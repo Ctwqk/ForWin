@@ -1,7 +1,7 @@
 # Trope Library V1 · Pulp Seed
 
 更新时间：2026-05-18  
-状态：seed-content；待 `pulp_profile_upgrade_plan.md` Phase 5 MD loader 与 schema 扩展落地后即可加载  
+状态：runtime-seed；MD 内容可直接加载，运行时会自动补齐 fanqie/pulp 默认元数据并扩展到不少于 50 条可用模板。
 加载方式：`FORWIN_TROPE_TEMPLATE_PATH=Design-docs/trope_library_pulp_v1.md`
 
 ## 总则：四段式
@@ -32,6 +32,8 @@
 | `cost_weight` | 实施成本（影响 selector 偏好） | `1`=单章兑现/便宜，`2`=需要一点铺垫，`3`=多章 setup/贵 |
 | `best_window` | 何时用 | 逗号分隔标签：`band_early / band_mid / band_late / after_humiliation / after_low / public_scene / private_scene` |
 | `genre_fit` | 适配题材 | 逗号分隔：`玄幻 / 都市 / 神豪 / 末世 / 种田 / 职场 / 宫斗 / 年代 / 萌宝` |
+| `audience_fit` | 读者与市场层 | 逗号分隔；缺省由 runtime 补为下沉 / 番茄 / 移动免费阅读取向 |
+| `platform_fit` | 平台适配 | 逗号分隔；缺省包含 `fanqie / webnovel_cn / mobile_free` |
 
 接下来 H3 段落顺序必须为：`欲望建立 / 阻力加压 / 爽点兑现 / 余波钩子 / anti_patterns / review_signals`。
 
@@ -463,10 +465,10 @@ selector 跑通后再扩，按市场需求优先级：
 - emotion: `emotion-guilt` 愧疚, `emotion-bond-warm` 亲情/爱情升温, `emotion-misunderstanding` 误会加深
 - power 高成本：`power-desperate-flip` 绝境翻盘
 
-目标 V2 扩到 22 条，V3 扩到 60 条（基本覆盖下沉市场常见套路），最终 V4 扩到 188 条对齐 `FULL_LIBRARY_EXPECTED_COUNT`。
+运行时 V1 会把本 seed 扩展到 50+ 条，覆盖下沉市场常见 power / social / justice / mystery / emotion 套路；人工维护目标仍是 V3 扩到 60 条手写模板，最终 V4 扩到 188 条对齐 `FULL_LIBRARY_EXPECTED_COUNT`。
 
 # 加载与回归
 
-- `forwin/protocol/trope_md_loader.py` 是配套 loader（见 `pulp_profile_upgrade_plan.md` Phase 5.2）
+- `forwin/protocol/trope_md_loader.py` 是配套 loader；loader 会先校验手写模板，再调用 runtime 扩展器补齐最低可用库规模
 - 改动本文件不要破坏 H2 / H3 结构和属性列表格式，否则 loader 会跳过该 trope
-- CI 增加 `tests/test_trope_md_loader_on_seed.py` 跑本文件全量解析，断言 8 条全部加载成功且每条 4 段完整
+- CI 增加 `tests/test_trope_md_loader.py` 跑本文件全量解析，断言 50+ 条加载成功且每条具有 genre / audience / platform / payoff 元数据

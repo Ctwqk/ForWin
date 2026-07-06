@@ -145,7 +145,10 @@ def _selected_trope_instruction_lines(template_ids: list[str]) -> list[str]:
     from forwin.protocol.trope_library import trope_template_index
 
     template_by_id = trope_template_index()
-    lines = ["  · 本章爽点指令："]
+    lines = [
+        "  · 本章爽点指令：",
+        "    · 执行约束：必须按欲望建立、阻力加压、爽点兑现、余波钩子落成动作链，不能只贴关键词。",
+    ]
     emitted_count = 0
     for template_id in template_ids:
         if emitted_count >= 2:
@@ -173,7 +176,7 @@ def _selected_trope_instruction_lines(template_ids: list[str]) -> list[str]:
         if anti_patterns:
             lines.append(f"      · 禁止：{'；'.join(anti_patterns)}")
 
-    if len(lines) == 1:
+    if emitted_count <= 0:
         return []
     return lines
 

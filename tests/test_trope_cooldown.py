@@ -43,6 +43,30 @@ def test_select_available_templates_filters_recent_template_and_category() -> No
     assert [item.template_id for item in selected] == ["power-b"]
 
 
+def test_select_available_templates_avoids_third_use_in_twenty_chapter_window() -> None:
+    templates = [
+        _template("power-a", "power"),
+        _template("power-b", "power"),
+    ]
+    selected = select_available_templates(
+        templates,
+        recent_template_ids=[
+            "power-c",
+            "power-d",
+            "power-e",
+            "power-a",
+            "power-f",
+            "power-g",
+            "power-a",
+            "power-h",
+        ],
+        recent_categories=[],
+        policy=TropeCooldownPolicy(template_band_gap=3, category_band_gap=0),
+    )
+
+    assert [item.template_id for item in selected] == ["power-b"]
+
+
 def test_trope_usage_records_roundtrip_recent_usage() -> None:
     engine = get_engine(postgres_test_url("trope-usage-records"))
     init_db(engine)

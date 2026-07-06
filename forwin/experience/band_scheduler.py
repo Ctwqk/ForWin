@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from forwin.experience.service import AudienceCalibrationProfile
-from forwin.experience.trope_cooldown import TropeCooldownPolicy, select_available_templates
+from forwin.experience.trope_cooldown import (
+    TropeCooldownPolicy,
+    overused_template_ids,
+    select_available_templates,
+)
 from forwin.experience.types import ArcExperienceBundle
 from forwin.models.project import ChapterPlan
 from forwin.planning.arc_structure_service import ArcStructureDraftData
@@ -45,6 +49,10 @@ class BandExperienceScheduler:
         cooldown_policy = TropeCooldownPolicy()
         recent_template_ids = list(getattr(calibration, "recent_template_ids", []) or [])
         recent_categories = list(getattr(calibration, "recent_trope_categories", []) or [])
+        overused_templates = overused_template_ids(
+            recent_template_ids,
+            policy=cooldown_policy,
+        )
         blocked_template_ids = {
             str(item).strip()
             for item in (getattr(calibration, "progression_blocked_template_ids", []) or [])
@@ -77,6 +85,7 @@ class BandExperienceScheduler:
                 and macro.template_id
                 and macro.template_id not in used_template_ids
                 and macro.template_id not in blocked_template_ids
+                and macro.template_id not in overused_templates
                 and category not in blocked_categories
             ):
                 used_template_ids.add(macro.template_id)
@@ -92,6 +101,7 @@ class BandExperienceScheduler:
                     template,
                     blocked_template_ids=blocked_template_ids,
                     blocked_categories=blocked_categories,
+                    overused_template_ids=overused_templates,
                 )
             ]
             under_ceiling = select_available_templates(
@@ -108,6 +118,7 @@ class BandExperienceScheduler:
                     template,
                     blocked_template_ids=blocked_template_ids,
                     blocked_categories=blocked_categories,
+                    overused_template_ids=overused_templates,
                 )
             ]
             library_templates = _sorted_templates(load_trope_template_library())
@@ -119,10 +130,11 @@ class BandExperienceScheduler:
                     template,
                     blocked_template_ids=blocked_template_ids,
                     blocked_categories=blocked_categories,
+                    overused_template_ids=overused_templates,
                 )
             ]
 
-            for candidates in (under_ceiling, fallback_same_category, fallback_library, library_templates):
+            for candidates in (under_ceiling, fallback_same_category, fallback_library):
                 if candidates:
                     selected = candidates[0].template_id
                     if selected:
@@ -138,7 +150,12 @@ class BandExperienceScheduler:
         if calibration.boost_reward_density and band_length >= 3:
             blueprint.insert(1, ("power", "mid" if band_length >= 4 else "late", "micro_progress_power"))
         pleasures_text = " ".join(reader_promise.core_pleasures)
-        if band_length >= 3:
+        if band_length >= 3 and not _blueprint_contains(
+            blueprint,
+            category="power",
+            slot="mid",
+            intent="micro_progress_power",
+        ):
             blueprint.insert(1, ("power", "mid", "micro_progress_power"))
         if any(item.category == "justice" for item in payoff_map.macro_payoffs):
             blueprint.append(("justice", "late", "justice_snap"))
@@ -302,7 +319,25 @@ def _template_allowed(
     *,
     blocked_template_ids: set[str],
     blocked_categories: set[str],
+    overused_template_ids: set[str],
 ) -> bool:
     template_id = str(getattr(template, "template_id", "") or "").strip()
     category = str(getattr(template, "category", "") or "").strip()
-    return template_id not in blocked_template_ids and category not in blocked_categories
+    return (
+        template_id not in blocked_template_ids
+        and template_id not in overused_template_ids
+        and category not in blocked_categories
+    )
+
+
+def _blueprint_contains(
+    blueprint: list[tuple[str, str, str]],
+    *,
+    category: str,
+    slot: str,
+    intent: str,
+) -> bool:
+    return any(
+        item_category == category and item_slot == slot and item_intent == intent
+        for item_category, item_slot, item_intent in blueprint
+    )

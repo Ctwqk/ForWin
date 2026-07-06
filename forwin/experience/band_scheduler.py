@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 from forwin.experience.service import AudienceCalibrationProfile
-from forwin.experience.trope_cooldown import (
-    TropeCooldownPolicy,
-    overused_template_ids,
-    select_available_templates,
-)
+from forwin.experience.trope_cooldown import TropeCooldownPolicy
+from forwin.experience.trope_selector import TropeSelectionContext, TropeSelector
 from forwin.experience.types import ArcExperienceBundle
 from forwin.models.project import ChapterPlan
 from forwin.planning.arc_structure_service import ArcStructureDraftData
@@ -49,10 +46,6 @@ class BandExperienceScheduler:
         cooldown_policy = TropeCooldownPolicy()
         recent_template_ids = list(getattr(calibration, "recent_template_ids", []) or [])
         recent_categories = list(getattr(calibration, "recent_trope_categories", []) or [])
-        overused_templates = overused_template_ids(
-            recent_template_ids,
-            policy=cooldown_policy,
-        )
         blocked_template_ids = {
             str(item).strip()
             for item in (getattr(calibration, "progression_blocked_template_ids", []) or [])
@@ -68,6 +61,8 @@ class BandExperienceScheduler:
             for item in (getattr(calibration, "avoid_trope_categories", []) or [])
             if str(item).strip()
         )
+        trope_selector = TropeSelector()
+        shared_library_templates = _sorted_templates(load_trope_template_library())
 
         def chapter_for(slot: str) -> int:
             if slot == "early":
@@ -80,66 +75,26 @@ class BandExperienceScheduler:
 
         def template_for(category: str) -> str:
             macro = macro_by_category.get(category)
-            if (
-                macro is not None
-                and macro.template_id
-                and macro.template_id not in used_template_ids
-                and macro.template_id not in blocked_template_ids
-                and macro.template_id not in overused_templates
-                and category not in blocked_categories
-            ):
-                used_template_ids.add(macro.template_id)
-                return macro.template_id
-
-            category_templates = _sorted_templates(trope_templates_by_category(category))
-            under_ceiling = [
-                template
-                for template in category_templates
-                if template.template_id not in used_template_ids
-                and template.cost_weight <= normalized_cost_ceiling
-                and _template_allowed(
-                    template,
+            selected = trope_selector.select_template(
+                category_templates=_sorted_templates(trope_templates_by_category(category)),
+                library_templates=shared_library_templates,
+                preferred_template_id=str(getattr(macro, "template_id", "") or "") if macro is not None else "",
+                context=TropeSelectionContext(
+                    category=category,
+                    genre=str(reader_promise.genre_promise or ""),
+                    platform="fanqie",
+                    cost_ceiling=normalized_cost_ceiling,
+                    recent_template_ids=recent_template_ids,
+                    recent_categories=recent_categories,
                     blocked_template_ids=blocked_template_ids,
                     blocked_categories=blocked_categories,
-                    overused_template_ids=overused_templates,
-                )
-            ]
-            under_ceiling = select_available_templates(
-                under_ceiling,
-                recent_template_ids=recent_template_ids,
-                recent_categories=recent_categories,
-                policy=cooldown_policy,
+                    used_template_ids=used_template_ids,
+                    policy=cooldown_policy,
+                ),
             )
-            fallback_same_category = [
-                template
-                for template in category_templates
-                if template.template_id not in used_template_ids
-                and _template_allowed(
-                    template,
-                    blocked_template_ids=blocked_template_ids,
-                    blocked_categories=blocked_categories,
-                    overused_template_ids=overused_templates,
-                )
-            ]
-            library_templates = _sorted_templates(load_trope_template_library())
-            fallback_library = [
-                template
-                for template in library_templates
-                if template.template_id not in used_template_ids
-                and _template_allowed(
-                    template,
-                    blocked_template_ids=blocked_template_ids,
-                    blocked_categories=blocked_categories,
-                    overused_template_ids=overused_templates,
-                )
-            ]
-
-            for candidates in (under_ceiling, fallback_same_category, fallback_library):
-                if candidates:
-                    selected = candidates[0].template_id
-                    if selected:
-                        used_template_ids.add(selected)
-                    return selected
+            if selected is not None and selected.template_id:
+                used_template_ids.add(selected.template_id)
+                return selected.template_id
             return ""
 
         blueprint: list[tuple[str, str, str]] = [
@@ -311,22 +266,6 @@ def _sorted_templates(templates: object) -> list:
     return sorted(
         list(templates or []),
         key=lambda template: (int(getattr(template, "cost_weight", 2) or 0), str(template.template_id)),
-    )
-
-
-def _template_allowed(
-    template,
-    *,
-    blocked_template_ids: set[str],
-    blocked_categories: set[str],
-    overused_template_ids: set[str],
-) -> bool:
-    template_id = str(getattr(template, "template_id", "") or "").strip()
-    category = str(getattr(template, "category", "") or "").strip()
-    return (
-        template_id not in blocked_template_ids
-        and template_id not in overused_template_ids
-        and category not in blocked_categories
     )
 
 

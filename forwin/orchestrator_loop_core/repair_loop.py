@@ -8,6 +8,7 @@ from forwin.review_engine.rules.repair_v2 import decide_repair_v2
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.reviser.local_rewrite_executor import LocalRewriteExecutor
 from forwin.orchestrator_loop_core.repair_budget import repair_word_budget_patch
+from forwin.orchestrator_loop_core.repair_budget_events import record_repair_body_budget_event
 from forwin.orchestrator_loop_core.subworld_admission_repair import _apply_subworld_admission_repair_patch
 
 REVIEW_REPAIR_PHASE = "review_repair"
@@ -809,6 +810,13 @@ def _run_repair_loop_for_phase(
             },
             parent_event_id=str(repair_started_event.id or ""),
         )
+        record_repair_body_budget_event(
+            self, updater=updater, project_id=project_id,
+            chapter_number=chapter_plan.chapter_number, attempt_no=attempt_no,
+            repair_scope=repair_scope, current_output=current_output,
+            rewritten_output=rewritten_output, design_patch=design_patch, attempt_row=attempt_row,
+            parent_event_id=str(repair_result_event.id or ""),
+        )
         current_review_event = self._record_decision_event(
             updater=updater,
             project_id=project_id,
@@ -845,6 +853,7 @@ def _run_repair_loop_for_phase(
         current_writer_trace_id = rewritten_writer_trace_id
         if rewritten_review.verdict != "fail":
             return rewritten_output, rewritten_review, False
+
 
 @staticmethod
 def _review_meta_json(review: ReviewVerdict) -> str:

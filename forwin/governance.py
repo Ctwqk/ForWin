@@ -112,6 +112,9 @@ class DecisionEventType:
     REPAIR_STARTED = "repair_started"
     REPAIR_FAILED = "repair_failed"
     REPAIR_SUCCEEDED = "repair_succeeded"
+    REPAIR_BODY_OVER_BUDGET = "repair_body_over_budget"
+    REPAIR_COMPRESSION_APPLIED = "repair_compression_applied"
+    REPAIR_NEEDS_HUMAN_COMPRESSION = "repair_needs_human_compression"
     REVIEW_APPROVED = "review_approved"
     FORCED_ACCEPT_APPLIED = "forced_accept_applied"
 
@@ -254,6 +257,9 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.REPAIR_STARTED,
     DecisionEventType.REPAIR_FAILED,
     DecisionEventType.REPAIR_SUCCEEDED,
+    DecisionEventType.REPAIR_BODY_OVER_BUDGET,
+    DecisionEventType.REPAIR_COMPRESSION_APPLIED,
+    DecisionEventType.REPAIR_NEEDS_HUMAN_COMPRESSION,
     DecisionEventType.REVIEW_APPROVED,
     DecisionEventType.FORCED_ACCEPT_APPLIED,
     DecisionEventType.BAND_CHECKPOINT_CREATED,

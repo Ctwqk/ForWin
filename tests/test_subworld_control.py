@@ -606,6 +606,47 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual(unknown, [])
         self.assertFalse(ContinuityChecker._looks_like_named_character("周砚的手下"))
 
+    def test_subworld_admission_allows_known_codename_with_numbered_identity_suffix(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"陆明", "影巡X"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=34,
+                title="第34章",
+                body="影巡X/载体-001在门口摘下面罩，陆明确认对方仍是那个追踪他的影巡X。" * 40,
+                end_of_chapter_summary="陆明确认影巡X带有载体编号。",
+                entity_mentions=[
+                    EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="影巡X/载体-001", entity_kind="character", is_named=True),
+                ],
+                scene_outputs=[
+                    {
+                        "scene_no": 1,
+                        "scene_objective": "身份揭示",
+                        "text": "影巡X/载体-001挡在门口。",
+                        "involved_entities": ["陆明", "影巡X/载体-001"],
+                    }
+                ],
+            ),
+        )
+
+        unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
+        self.assertEqual(unknown, [])
+        self.assertEqual(ContinuityChecker._candidate_character_name("影巡X/载体-001"), "影巡X")
+
     def test_subworld_admission_ignores_relational_residual_projection(self) -> None:
         class FakeRepo:
             def get_active_entities(self, _project_id: str) -> list[object]:

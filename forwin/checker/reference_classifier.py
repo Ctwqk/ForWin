@@ -164,6 +164,9 @@ TECHNICAL_ID_RE = re.compile(
     r"[A-Za-zＡ-Ｚａ-ｚ0-9０-９]+"
     r"(?:[-_][A-Za-zＡ-Ｚａ-ｚ0-9０-９γΩαβ]+)+$"
 )
+ROLE_NUMBERED_ID_RE = re.compile(
+    r"^[\u4e00-\u9fff]{1,8}[-_－—][A-Za-zＡ-Ｚａ-ｚ0-9０-９γΩαβ]{1,8}$"
+)
 NUMBERED_PLOT_ENTITY_RE = re.compile(
     r"^(?:第)?[0-9０-９]{1,4}(?:号|份|枚)(?:分割体|密钥|碎片|样本|载体|节点|密钥持有者|碎片持有者)$"
 )
@@ -228,11 +231,28 @@ def normalize_mixed_technical_alias(name: str) -> str:
         if separator not in text:
             continue
         left, right = (part.strip() for part in text.split(separator, 1))
-        if looks_like_technical_identifier(right) and is_plain_chinese_person_name(left):
+        if looks_like_technical_identifier(right) and (
+            is_plain_chinese_person_name(left) or looks_like_named_alias_base(left)
+        ):
             return left
-        if looks_like_technical_identifier(left) and is_plain_chinese_person_name(right):
+        if looks_like_technical_identifier(left) and (
+            is_plain_chinese_person_name(right) or looks_like_named_alias_base(right)
+        ):
             return right
     return text
+
+
+def looks_like_named_alias_base(name: str) -> bool:
+    text = str(name or "").strip()
+    return (
+        2 <= len(text) <= 12
+        and "/" not in text
+        and "／" not in text
+        and any("\u4e00" <= ch <= "\u9fff" for ch in text)
+        and not looks_like_technical_identifier(text)
+        and not looks_like_generic_character_reference(text)
+        and not looks_like_non_character_reference(text)
+    )
 
 
 def strip_role_prefix_from_person_name(name: str) -> str:
@@ -262,7 +282,7 @@ def looks_like_technical_identifier(name: str) -> bool:
     text = str(name or "").strip()
     if not text:
         return False
-    return bool(TECHNICAL_ID_RE.fullmatch(text))
+    return bool(TECHNICAL_ID_RE.fullmatch(text) or ROLE_NUMBERED_ID_RE.fullmatch(text))
 
 
 def looks_like_numbered_plot_entity(name: str) -> bool:

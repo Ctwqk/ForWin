@@ -219,6 +219,7 @@ class SubWorldControlTests(unittest.TestCase):
                     "馆员陈潮白记录QT-7741与L7-09同时失联。"
                     "第004号分割体和第40份密钥都指向VT-7-19-γ。"
                     "许晏/馆员的双重身份被写入XU-CH-1997-0847。"
+                    "基金会代理人只通过公文口吻施压。"
                     "灰鸦仍未获准进入本章。"
                 )
                 * 30,
@@ -240,6 +241,7 @@ class SubWorldControlTests(unittest.TestCase):
                     EntityMention(entity_name="许晏/馆员", entity_kind="character", is_named=True),
                     EntityMention(entity_name="许晏与馆员", entity_kind="character", is_named=True),
                     EntityMention(entity_name="许晏（馆员人格）", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="基金会代理人", entity_kind="character", is_named=True),
                     EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
                 ],
             ),
@@ -277,6 +279,7 @@ class SubWorldControlTests(unittest.TestCase):
             "Ω级权限买家",
             "馆员-活跃",
             "002号密钥持有者",
+            "基金会代理人",
         ]
         for name in non_candidates:
             with self.subTest(name=name):

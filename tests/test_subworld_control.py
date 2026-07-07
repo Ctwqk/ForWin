@@ -282,6 +282,7 @@ class SubWorldControlTests(unittest.TestCase):
             "基金会代理人",
             "镜像审计员MA-001",
             "女孩（第十枚锚点持有者）",
+            "MA-001/馆员",
         ]
         for name in non_candidates:
             with self.subTest(name=name):

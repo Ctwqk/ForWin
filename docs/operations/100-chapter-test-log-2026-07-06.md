@@ -320,3 +320,18 @@ Target: 100 chapters
 - Diagnosis: the previous fix ignored `paused_chapters` that were already in `completed_chapters`, but `RunResult.status` still returned `paused` because the safe checkpoint set `paused=True`.
 - Code fix: `GenerationAutoContinueController._terminal_block_reason` now treats `paused=True`/`status=paused` as safe when every paused marker is already completed, while preserving real user pauses and unresolved review blockers.
 - Verification: new regression test for safe paused status passed, the full auto-continue test module passed, and MCP/guard continuation tests passed before commit.
+
+### 2026-07-06 21:02:45 PDT
+
+- State: commit `959a2e3` deployed through the 150 sync path after freeing Docker build/cache space on 10.0.0.126.
+- Deploy marker: `/Users/magi1/ForWin-swarm/.deploy-sync-source-commit` is `959a2e3ff8e1c0ed8cb8c706a029a46eb62c9dd3`.
+- Health: `scripts/check_codex_operator_ready.py` passed API health, MCP health, plugin MCP config, swarm service, MCP registration, and Python environment checks.
+- Swarm: `forwin-app-swarm`, `forwin-mcp-swarm`, `forwin-generation-worker-swarm`, `forwin-publisher-worker-swarm`, `forwin-outbox-worker-swarm`, and `forwin-publisher-browser-swarm` are all `1/1` on `deploy-959a2e3ff8e1`.
+
+### 2026-07-06 21:03:31 PDT
+
+- State: continuation after `959a2e3` started task `338226700881`; chapter 18 failed before draft generation.
+- Failure: future plan audit blocked on `obligation_pre_write_required:18` plus `plan_patch_validation_failed:patch_scope_below_obligation_minimum:4081ecb36bde48c6889d374800e666c6:chapter<arc`.
+- Diagnosis: the failing obligation was `must_resolve_now=true` and needed immediate writer/reviewer injection into chapter 18, but `PlanPatchValidator` treated that immediate `obligation_pre_write` patch like a lower-scope deferral and rejected it against the arc-level minimum scope.
+- Code fix: `PlanPatchValidator` now preserves minimum-scope enforcement for ordinary plan patches, while allowing immediate `obligation_pre_write` patches only when the source obligation is explicitly `must_resolve_now`.
+- Verification: the new regression test first failed with the same `chapter<arc` error, then passed after the fix; full plan patch validator tests, future plan auditor/loop-closure tests, and auto-continue tests passed.

@@ -233,6 +233,61 @@ def test_plan_patch_validator_rejects_chapter_patch_for_band_obligation() -> Non
     assert "patch_scope_below_obligation_minimum:obl-band:chapter<band" in result.errors
 
 
+def test_plan_patch_validator_allows_pre_write_patch_for_immediate_arc_obligation() -> None:
+    obligation = _obligation().model_copy(
+        update={
+            "id": "obl-arc-now",
+            "obligation_type": "structural_arc_continuity",
+            "deadline_chapter": 18,
+            "payoff_test": "第18章必须明确退休工程师身份。",
+            "must_resolve_now": True,
+            "metadata": {"minimum_scope": "arc"},
+        }
+    )
+    patch = NarrativePlanPatch(
+        id="patch-prewrite",
+        project_id="project-1",
+        patch_type="obligation_pre_write",
+        target_scope="chapter",
+        target_plan_id="plan-18",
+        affected_chapters=[18],
+        source_obligation_ids=["obl-arc-now"],
+        new_contract={
+            "obligations_to_resolve": ["obl-arc-now"],
+            "payoff_test": obligation.payoff_test,
+            "must_resolve_now": True,
+        },
+        writer_context_injections=[
+            {
+                "type": "narrative_obligation",
+                "obligation_id": "obl-arc-now",
+                "payoff_test": obligation.payoff_test,
+                "must_resolve_now": True,
+            }
+        ],
+        reviewer_context_injections=[
+            {
+                "type": "narrative_obligation",
+                "obligation_id": "obl-arc-now",
+                "payoff_test": obligation.payoff_test,
+                "must_resolve_now": True,
+            }
+        ],
+        expected_resolution_tests=[obligation.payoff_test],
+    )
+
+    result = PlanPatchValidator().validate(
+        patch=patch,
+        obligations=[obligation],
+        current_chapter=17,
+        target_total_chapters=100,
+        minimum_scope_by_obligation={"obl-arc-now": "arc"},
+    )
+
+    assert result.passed is True
+    assert result.errors == []
+
+
 def test_plan_patch_validator_rejects_p1_band_carry_forward() -> None:
     obligation = _obligation().model_copy(
         update={

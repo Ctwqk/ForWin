@@ -100,7 +100,11 @@ class PlanPatchValidator:
                 or (obligation.metadata.get("minimum_scope") if isinstance(obligation.metadata, dict) else "")
                 or ""
             ).strip()
-            if minimum_scope and _scope_rank(patch.target_scope) < _scope_rank(minimum_scope):
+            if (
+                minimum_scope
+                and _scope_rank(patch.target_scope) < _scope_rank(minimum_scope)
+                and not _is_immediate_pre_write_patch(patch=patch, obligation=obligation)
+            ):
                 errors.append(
                     f"patch_scope_below_obligation_minimum:{obligation.id}:{patch.target_scope}<{minimum_scope}"
                 )
@@ -132,6 +136,15 @@ def _scope_rank(scope: str) -> int:
         "book": 4,
         "manual": 5,
     }.get(str(scope or "").strip().lower(), 0)
+
+
+def _is_immediate_pre_write_patch(*, patch: NarrativePlanPatch, obligation: NarrativeObligation) -> bool:
+    return (
+        patch.patch_type == "obligation_pre_write"
+        and bool(obligation.must_resolve_now)
+        and bool(obligation.id)
+        and obligation.id in set(patch.source_obligation_ids)
+    )
 
 
 def _normalize_form_mode(value: str | None) -> str:

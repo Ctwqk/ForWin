@@ -239,6 +239,8 @@ def normalize_mixed_technical_alias(name: str) -> str:
             is_plain_chinese_person_name(right) or looks_like_named_alias_base(right)
         ):
             return right
+        if looks_like_generic_character_reference(left) and looks_like_named_alias_base(right):
+            return right
     return text
 
 

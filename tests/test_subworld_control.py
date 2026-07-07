@@ -309,6 +309,43 @@ class SubWorldControlTests(unittest.TestCase):
         ]
         self.assertEqual(unknown, ["灰鸦"])
 
+    def test_subworld_admission_normalizes_generic_role_slash_known_codename(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"沈岚", "猎迹者X"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=55,
+                title="旧港回收协议",
+                body="沈岚在旧港入口遇到管理员/猎迹者X，对方启动回收协议。" * 60,
+                end_of_chapter_summary="沈岚确认猎迹者X正在执行回收协议。",
+                entity_mentions=[
+                    EntityMention(entity_name="沈岚", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="管理员/猎迹者X", entity_kind="character", is_named=True),
+                ],
+            ),
+        )
+
+        unknown = [
+            issue.entity_names[0]
+            for issue in verdict.issues
+            if issue.rule_name == "sub_world_unknown_named_entity"
+        ]
+        self.assertEqual(unknown, [])
+        self.assertEqual(ContinuityChecker._candidate_character_name("管理员/猎迹者X"), "猎迹者X")
+
     def test_subworld_admission_ignores_corpse_and_remains_references(self) -> None:
         class FakeRepo:
             def get_active_entities(self, _project_id: str) -> list[object]:

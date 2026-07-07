@@ -217,6 +217,7 @@ PARENTHETICAL_REFERENCE_LABELS = {
     "间接",
     "残留影像",
     "远程信号压力",
+    "远程追踪信号",
     "远程声音",
 }
 

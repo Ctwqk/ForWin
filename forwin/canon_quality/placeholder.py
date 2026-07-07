@@ -20,6 +20,15 @@ PROTAGONIST_PLACEHOLDER_ROLES = (
     "主角",
     "主人公",
 )
+_PROTAGONIST_NAME_STOPWORDS = (
+    "必须",
+    "需要",
+    "应该",
+    "可以",
+    "不能",
+    "不要",
+    "仍然",
+)
 
 
 def analyze_placeholder_leakage(
@@ -242,6 +251,10 @@ def extract_expected_protagonist_names(*values: str) -> set[str]:
     for match in re.finditer(r"(?:主角|主人公|主视角)\s*(?:[：:是为]\s*|\s+)([\u4e00-\u9fff]{2,4})", text):
         name = match.group(1).strip()
         if name and name not in PROTAGONIST_PLACEHOLDER_ROLES:
+            names.add(name)
+    for match in re.finditer(r"(?:主角|主人公|主视角)\s*([\u4e00-\u9fff]{2,4})(?=是|为|在|，|,)", text):
+        name = match.group(1).strip()
+        if name and name not in PROTAGONIST_PLACEHOLDER_ROLES and name not in _PROTAGONIST_NAME_STOPWORDS:
             names.add(name)
     for match in re.finditer(r'"name"\s*:\s*"([\u4e00-\u9fff]{2,4})"', text):
         name = match.group(1).strip()

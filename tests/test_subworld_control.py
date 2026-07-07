@@ -1929,6 +1929,21 @@ class SubWorldControlTests(unittest.TestCase):
 
         self.assertIn("陆明", names)
 
+    def test_project_character_names_include_inline_premise_protagonist(self) -> None:
+        class FakeRepo:
+            def get_project(self, _project_id: str) -> object:
+                return SimpleNamespace(
+                    premise="主角林澈是档案署的夜班审计员。",
+                    setting_summary="镜潮港依靠记忆潮汐塔调度城市能源。",
+                )
+
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+        names = WritingOrchestrator._project_character_names(FakeRepo(), "p1")  # type: ignore[arg-type]
+
+        self.assertIn("林澈", names)
+
     def test_subworld_admission_allows_premise_protagonist(self) -> None:
         class FakeRepo:
             def get_project(self, _project_id: str) -> object:
@@ -2316,6 +2331,49 @@ class SubWorldControlTests(unittest.TestCase):
                 engine.dispose()
 
         self.assertIn("猎锚者X", allowed_names)
+        unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
+        self.assertEqual(unknown, [])
+
+    def test_current_plan_obligation_name_is_subworld_allowed(self) -> None:
+        engine = get_engine(postgres_test_url("current-plan-obligation-name"))
+        init_db(engine)
+        session = get_session_factory(engine)()
+        try:
+            updater = StateUpdater(session)
+            project = updater.create_project(title="书", premise="主角林澈是档案审计员。", genre="g")
+            arc = updater.create_arc_plan(project.id, "弧线")
+            updater.create_chapter_plan(
+                project_id=project.id,
+                arc_plan_id=arc.id,
+                chapter_number=18,
+                title="第十八章",
+                one_line="确认退休工程师身份。",
+                goals=[
+                    "偿还叙事义务：明确退休工程师的身份：若为陈昭宁，在draft中直接使用该姓名。"
+                ],
+                experience_plan=ChapterExperiencePlan(entity_admission_rule="strict_named_character"),
+            )
+            session.flush()
+
+            repo = StateRepository(session)
+            allowed_names = repo.get_allowed_entity_names(project.id, 18)
+            verdict = ContinuityChecker(repo).check(
+                project.id,
+                WriterOutput(
+                    chapter_number=18,
+                    title="第十八章",
+                    body="陈昭宁站在B-074工位门口，先确认退路，再交出钥匙。" * 20,
+                    end_of_chapter_summary="陈昭宁确认第18枚锚点位置。",
+                    entity_mentions=[
+                        EntityMention(entity_name="陈昭宁", entity_kind="character", is_named=True),
+                    ],
+                ),
+            )
+        finally:
+            session.close()
+            engine.dispose()
+
+        self.assertIn("陈昭宁", allowed_names)
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
         self.assertEqual(unknown, [])
 

@@ -267,6 +267,8 @@ def extract_candidate_character_names(text: str) -> set[str]:
     patterns = [
         re.compile(r"([\u4e00-\u9fff]{2,4})(?:说|问|答|喊|低声|抬头|转身|点头|摇头)"),
         re.compile(r"(?:叫|名叫|名字是|名为)([\u4e00-\u9fff]{2,4})"),
+        re.compile(r"(?:若为|如果为|如果是|身份为|姓名为|实名为)([\u4e00-\u9fff]{2,4})"),
+        re.compile(r"(?:直接使用|使用)(?:该)?姓名[：:]?([\u4e00-\u9fff]{2,4})"),
         re.compile(r"([\u4e00-\u9fff]{2,4})(?:和|与)([\u4e00-\u9fff]{2,4})"),
         re.compile(r"(?:救出|救下|释放|解救|营救)(?:被[\u4e00-\u9fff]{0,6}的)?([\u4e00-\u9fff]{2,4})"),
         re.compile(r"(?:被关押的|被扣押的|被捕的|被束缚的)([\u4e00-\u9fff]{2,4})"),

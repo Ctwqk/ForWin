@@ -781,6 +781,21 @@ class StateRepository:
                 for item in chapter_experience.chapter_entry_targets
                 if str(item.entity_name or "").strip()
             )
+        chapter_plan = self.get_chapter_plan(project_id, chapter_number)
+        if chapter_plan is not None:
+            names.update(
+                _extract_summary_character_names(
+                    "\n".join(
+                        [
+                            str(chapter_plan.title or ""),
+                            str(chapter_plan.one_line or ""),
+                            str(chapter_plan.goals_json or ""),
+                            str(chapter_plan.task_contract_json or ""),
+                            str(chapter_plan.experience_plan_json or ""),
+                        ]
+                    )
+                )
+            )
         names.update(self._world_pressure_character_names(project_id, chapter_number))
         names.update(self._recent_accepted_summary_character_names(project_id, chapter_number))
         return names

@@ -335,3 +335,18 @@ Target: 100 chapters
 - Diagnosis: the failing obligation was `must_resolve_now=true` and needed immediate writer/reviewer injection into chapter 18, but `PlanPatchValidator` treated that immediate `obligation_pre_write` patch like a lower-scope deferral and rejected it against the arc-level minimum scope.
 - Code fix: `PlanPatchValidator` now preserves minimum-scope enforcement for ordinary plan patches, while allowing immediate `obligation_pre_write` patches only when the source obligation is explicitly `must_resolve_now`.
 - Verification: the new regression test first failed with the same `chapter<arc` error, then passed after the fix; full plan patch validator tests, future plan auditor/loop-closure tests, and auto-continue tests passed.
+
+### 2026-07-06 21:15:43 PDT
+
+- State: commit `b80175f` deployed through the 150 sync path.
+- Deploy marker: `/Users/magi1/ForWin-swarm/.deploy-sync-source-commit` is `b80175f50528ed342b89a1b51c5358c71369e655`.
+- Health: `scripts/check_codex_operator_ready.py` passed after deploy.
+- Swarm: all ForWin services reported `1/1` on `deploy-b80175f50528`.
+
+### 2026-07-06 21:31:54 PDT
+
+- State: chapter 18 crossed the pre-write audit blocker and produced drafts, but two retries (`b3ffb7b287f1`, `7f7420d7260b`) stopped at canon system block.
+- Failure: canon admission reported `obligation_due_unresolved:4081ecb36bde48c6889d374800e666c6` even though the writer planning call included `陈昭宁`.
+- Diagnosis: subworld admission autofix could genericize unprotected planned names into `馆员`; the project premise form `主角林澈是...` was not parsed as a protected protagonist, and names required only by the current chapter plan/obligation such as `陈昭宁` were not included in allowed entity names.
+- Code fix: protagonist extraction now supports inline `主角林澈是...` phrasing, candidate-name extraction recognizes plan language such as `若为陈昭宁`, and `StateRepository.get_allowed_entity_names` includes candidate names from the current chapter plan text.
+- Verification: new regression tests for inline protagonist extraction and current-plan obligation names passed; full `test_subworld_control.py` passed; placeholder/validator/auto-continue related tests passed.

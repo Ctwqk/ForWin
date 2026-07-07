@@ -509,6 +509,78 @@ def test_project_chapter_loop_defers_structured_extraction_degradation() -> None
     )
 
 
+def test_project_chapter_loop_verifies_obligations_before_future_plan_audit(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_verify_obligations_after_acceptance(loop, **kwargs):
+        calls.append("verify_obligations")
+        assert loop.config.review_engine_obligation_verifier_enabled is True
+        assert kwargs["chapter_number"] == 1
+        assert "证据" in kwargs["accepted_text"]
+        return {"resolution": {"resolved_obligation_ids": ["obl-1"]}}
+
+    monkeypatch.setattr(
+        project_chapters,
+        "_verify_obligations_after_acceptance",
+        fake_verify_obligations_after_acceptance,
+        raising=False,
+    )
+
+    class MemoryIndex:
+        def upsert_chapter(self, **kwargs) -> None:
+            return None
+
+    class AcceptedLoop(FakeChapterLoop):
+        def __init__(self) -> None:
+            super().__init__(hard_floor_gate_enabled=False)
+            self.config = SimpleNamespace(
+                hard_floor_gate_enabled=False,
+                operation_mode="blackbox",
+                quality_profile="pulp",
+                review_engine_obligation_verifier_enabled=True,
+                review_interval_chapters=0,
+            )
+            self.retrieval_broker = SimpleNamespace(
+                last_observability_summary={},
+                build_chapter_context=lambda *args, **kwargs: context(),
+                memory_index=MemoryIndex(),
+            )
+
+        def _apply_canon_candidate(self, **kwargs):
+            return None
+
+        def _project_governance(self, project):
+            return SimpleNamespace(auto_band_checkpoint=False)
+
+        def _run_phase3_pass(self, **kwargs) -> None:
+            calls.append("phase3")
+
+        def _audit_future_plans_after_acceptance(self, **kwargs):
+            calls.append("future_plan_audit")
+            return SimpleNamespace(blocking_reasons=[])
+
+        def _compile_world_model_after_acceptance(self, **kwargs) -> bool:
+            calls.append("world_model")
+            return True
+
+        def _record_generation_audit_checkpoint_if_due(self, **kwargs) -> bool:
+            return False
+
+    result = WritingOrchestrator._run_project_chapters(
+        AcceptedLoop(),
+        session=FakeSession(),
+        repo=FakeRepo(),
+        updater=FakeUpdater(),
+        checker=SimpleNamespace(),
+        project_id="project-1",
+        chapter_numbers=[1],
+        requested_chapters=1,
+    )
+
+    assert result.completed_chapters == [1]
+    assert calls[:4] == ["phase3", "verify_obligations", "future_plan_audit", "world_model"]
+
+
 def test_short_chapter_fails() -> None:
     result = run_hard_floor(
         writer_output=writer("太短"),

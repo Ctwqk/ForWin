@@ -6,6 +6,9 @@ from forwin.checker.hard_floor import run_hard_floor
 from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
 from forwin.experience.trope_cooldown import save_accepted_trope_usage_for_chapter
 from forwin.maintenance.deferred import DeferredMaintenanceRecord, record_deferred_maintenance
+from forwin.orchestrator_loop_core.obligation_resolution import (
+    _verify_obligations_after_acceptance,
+)
 from forwin.orchestrator_loop_core.result import RunResult
 from forwin.orchestrator_loop_core.common import *
 from forwin.orchestrator_loop_core.repair_loop import _canon_repair_scope, _canon_repair_scope_can_run
@@ -800,6 +803,13 @@ def _run_project_chapters(
                 session=session,
                 project_id=project_id,
                 chapter_number=chapter_num,
+            )
+            _verify_obligations_after_acceptance(
+                self,
+                session=session,
+                project_id=project_id,
+                chapter_number=chapter_num,
+                accepted_text=writer_output.body,
             )
             future_plan_audit_result = self._audit_future_plans_after_acceptance(
                 session=session,

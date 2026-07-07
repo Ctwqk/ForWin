@@ -468,17 +468,11 @@ def _apply_canon_quality_gate(
         draft_text=str(getattr(writer_output, "body", "") or ""),
         evidence_ref=f"draft:{draft_id}" if draft_id else f"chapter:{chapter_number}:draft",
     )
-    patch_ids = sorted(
-        {
-            patch_id
-            for obligation in gate_obligations
-            for patch_id in obligation.linked_plan_patch_ids
-            if patch_id
-        }
-    )
-    gate_analyzer_results = [
-        item for item in analysis.raw_analyzer_results if isinstance(item, dict)
-    ]
+    patch_ids = sorted({
+        patch_id for obligation in gate_obligations
+        for patch_id in obligation.linked_plan_patch_ids if patch_id
+    })
+    gate_analyzer_results = [item for item in analysis.raw_analyzer_results if isinstance(item, dict)]
     gate_result = evaluate_canon_admission(
         project_id=project_id,
         chapter_number=chapter_number,
@@ -1014,18 +1008,14 @@ def _apply_canon_candidate(
             updater=updater,
             project_id=project_id,
         )
-        filtered_state_changes = self._filter_supported_state_changes(
-            writer_output.state_changes
-        )
+        filtered_state_changes = self._filter_supported_state_changes(writer_output.state_changes)
         filtered_state_changes = self._filter_resolvable_state_changes(
             repo,
             project_id,
             chapter_number,
             filtered_state_changes,
         )
-        updater.apply_state_changes(
-            project_id, chapter_number, filtered_state_changes
-        )
+        updater.apply_state_changes(project_id, chapter_number, filtered_state_changes)
         self._ensure_event_mentioned_non_character_entities(
             repo,
             updater,
@@ -1039,9 +1029,7 @@ def _apply_canon_candidate(
             chapter_number,
             writer_output.new_events,
         )
-        updater.apply_events(
-            project_id, chapter_number, filtered_events
-        )
+        updater.apply_events(project_id, chapter_number, filtered_events)
         updater.apply_thread_beats(
             project_id, chapter_number, writer_output.thread_beats
         )

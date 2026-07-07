@@ -559,7 +559,7 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
         calls.append("draft_verify")
         assert kwargs["obligations"] == [obligation]
         assert kwargs["chapter_number"] == 18
-        assert kwargs["draft_text"] == "林澈明确退休工程师身份为陈昭宁。"
+        assert kwargs["draft_text"] == "Ari confirms the retired engineer is Nox."
         assert kwargs["evidence_ref"] == "draft:d18"
         return ["obl-due"]
 
@@ -626,7 +626,7 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
         updater=object(),
         project_id="p",
         chapter_number=18,
-        writer_output=SimpleNamespace(body="林澈明确退休工程师身份为陈昭宁。"),
+        writer_output=SimpleNamespace(body="Ari confirms the retired engineer is Nox."),
         verdict=SimpleNamespace(verdict="pass"),
     )
 

@@ -190,9 +190,12 @@ TECHNICAL_ID_ROLE_PREFIX_SUFFIXES = (
     "节点",
     "分割体",
 )
+CJK_NUMBER_CHARS = "零〇一二三四五六七八九十百千万两"
 NUMBERED_PLOT_ENTITY_RE = re.compile(
-    r"^(?:第)?[0-9０-９]{1,4}(?:号|份|枚)(?:分割体|密钥|碎片|样本|载体|节点|密钥持有者|碎片持有者)$"
+    rf"^(?:第)?(?:[0-9０-９]{{1,4}}|[{CJK_NUMBER_CHARS}]{{1,8}})(?:号|份|枚)"
+    r"(?:锚点|分割体|密钥|碎片|样本|载体|节点|密钥持有者|碎片持有者)$"
 )
+ANCHOR_ID_RE = re.compile(r"^锚点[0-9０-９]{1,4}$")
 COMPOUND_IDENTITY_RE = re.compile(r"^[\u4e00-\u9fff·]{2,6}(?:/|与)[\u4e00-\u9fff·]{2,6}$")
 COMPOUND_PERSONA_PAREN_RE = re.compile(r"^[\u4e00-\u9fff·]{2,6}[（(][\u4e00-\u9fff·]{2,8}人格[）)]$")
 STATUS_LABEL_RE = re.compile(r"^[\u4e00-\u9fff]{1,8}(?:[-_－—][\u4e00-\u9fff]{1,8})+$")
@@ -358,7 +361,7 @@ def looks_like_prefixed_technical_identifier(name: str) -> bool:
 
 def looks_like_numbered_plot_entity(name: str) -> bool:
     text = str(name or "").strip()
-    return bool(NUMBERED_PLOT_ENTITY_RE.fullmatch(text))
+    return bool(NUMBERED_PLOT_ENTITY_RE.fullmatch(text) or ANCHOR_ID_RE.fullmatch(text))
 
 
 def looks_like_compound_identity(name: str) -> bool:

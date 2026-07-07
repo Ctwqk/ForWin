@@ -442,6 +442,7 @@ class SubWorldControlTests(unittest.TestCase):
                 body=(
                     "沈岚收到老环线调度员留下的L-7坐标。"
                     "馆员陈潮白记录QT-7741与L7-09同时失联。"
+                    "锚点037只是一枚编号锚点。"
                     "第004号分割体和第40份密钥都指向VT-7-19-γ。"
                     "许晏/馆员的双重身份被写入XU-CH-1997-0847。"
                     "基金会代理人只通过公文口吻施压。"
@@ -454,6 +455,7 @@ class SubWorldControlTests(unittest.TestCase):
                     EntityMention(entity_name="老环线调度员", entity_kind="character", is_named=True),
                     EntityMention(entity_name="系统巡检员", entity_kind="character", is_named=True),
                     EntityMention(entity_name="馆员陈潮白", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="锚点037", entity_kind="character", is_named=True),
                     EntityMention(entity_name="003号分割体", entity_kind="character", is_named=True),
                     EntityMention(entity_name="第004号分割体", entity_kind="character", is_named=True),
                     EntityMention(entity_name="第40份密钥", entity_kind="character", is_named=True),
@@ -485,6 +487,7 @@ class SubWorldControlTests(unittest.TestCase):
             "老环线调度员",
             "系统巡检员",
             "第七区溺水者残影",
+            "锚点037",
             "003号分割体",
             "第004号分割体",
             "第40份密钥",

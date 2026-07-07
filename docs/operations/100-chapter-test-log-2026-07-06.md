@@ -158,3 +158,42 @@ Target: 100 chapters
 - State: chapter 9 `猎锚者X（远程声音）` contextual codename-label fix is fully verified locally.
 - Verification: full test suite passed: `1770 passed, 3 skipped, 82 warnings, 36 subtests passed in 2835.82s (0:47:15)`.
 - Issues: ready to commit, push, deploy through the 150 sync path, then retry chapter 9 with generation continuation enabled.
+
+### 2026-07-06 17:03:09 PDT
+
+- State: chapter 9 `猎锚者X（远程声音）` contextual codename-label fix deployed.
+- Commit: `120d14346f4d02690d9e709c29d8062238277fc7`.
+- Deploy note: first deploy attempt failed while exporting `forwin-publisher-browser:deploy-120d14346f4d` because the `colima-swarmbridged` Docker data disk on 10.0.0.126 was 99% full (`/var/lib/containerd` had 759M free). Cleaned unused build cache, stopped containers, and unused images inside that VM; free space increased to about 15G before rerun and was about 8.3G after the successful build.
+- Deploy evidence: `/Users/magi1/ForWin-swarm/.deploy-sync-source-commit` matches `120d14346f4d02690d9e709c29d8062238277fc7`; app health `8899=/health ok`, MCP health `8896=/health ok`; 6 swarm services are `1/1` on `deploy-120d14346f4d`.
+- Issues: ready to retry chapter 9.
+
+### 2026-07-06 17:03:42 PDT
+
+- State: chapter 9 retry started after deploy.
+- Generation action: `chapter_review_retry(continue_generation=true)` reset chapter 9 to `planned` and started task `f89e3be0103e`.
+- Task scope: requested chapters 9-18.
+- Issues: watch chapter 9 for recurrence of `猎锚者X（远程声音）` subworld admission.
+
+### 2026-07-06 17:11:23 PDT
+
+- State: retry task `f89e3be0103e` running.
+- Task stage: `writing_chapter`; current chapter: 10.
+- Progress: task completed chapter 9; project has 9 accepted chapters and no pending review gate.
+- Result: the `猎锚者X（远程声音）` subworld admission gate did not recur after deploy; chapter 9 was accepted with empty residual review issues.
+- Issues: none blocking; continue monitoring chapters 10-18 and the eventual continuation toward chapter 100.
+
+### 2026-07-06 17:20:28 PDT
+
+- State: task `f89e3be0103e` stopped at review gate on chapter 10.
+- Progress: 9 accepted / 100 target; chapter 10 status `needs_review`.
+- Root cause: the previous `灰鹞` bridge handled accepted summaries like `灰鹞网络中介人陈昭宁`, but chapter 10's relevant recent accepted context was chapter 8's `灰鹞网络遭X从内部击穿`. The summary alias extractor did not admit non-handler `X网络...` aliases, so the recurring gray-market actor `灰鹞` was treated as a new unplanned named entity.
+- Code fix: added a narrow recent-summary network-alias extractor for forms like `灰鹞网络遭...`, with the existing non-character alias denylist applied.
+- Regression test: added `test_recent_summary_network_alias_without_handler_is_subworld_allowed`; it failed before the fix with allowed names missing `灰鹞` and passes after the fix.
+- Verification so far: subworld-related regression suite passed (`100 passed, 28 subtests passed`).
+- Issues: fix ready for full test and deploy; generation remains paused at chapter 10 until deployed and retried.
+
+### 2026-07-06 18:23:31 PDT
+
+- State: chapter 10 `灰鹞网络` non-handler alias fix is fully verified locally.
+- Verification: full test suite passed: `1771 passed, 3 skipped, 82 warnings, 36 subtests passed in 2980.40s (0:49:40)`.
+- Issues: ready to commit, push, deploy through the 150 sync path, then retry chapter 10 with generation continuation enabled.

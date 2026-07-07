@@ -85,6 +85,10 @@ _SUMMARY_NETWORK_HANDLER_ALIAS_RE = re.compile(
     r"(?:^|[，,。；;、\s]|遭遇|接触|联系|找到|通过|经由|来自|与|和|向|从|由|对)"
     r"(?P<alias>[\u4e00-\u9fff]{2,4})网络(?:中介人|联络人|联系人|代理人)(?P<name>[\u4e00-\u9fff]{2,4})"
 )
+_SUMMARY_NETWORK_ALIAS_RE = re.compile(
+    r"(?:^|[，,。；;、\s]|遭遇|接触|联系|找到|通过|经由|来自|与|和|向|从|由|对)"
+    r"(?P<alias>[\u4e00-\u9fff]{2,4})网络(?=遭|被|已|把|向|从|给|传|提供|留下|接入|中|的|[，,。；;、\s])"
+)
 _SUMMARY_NON_HANDLER_ALIASES = {
     "官方",
     "外部",
@@ -189,6 +193,13 @@ def _extract_summary_character_names(text: str) -> set[str]:
         if candidate:
             names.add(candidate)
     for match in _SUMMARY_NETWORK_HANDLER_ALIAS_RE.finditer(content):
+        raw_alias = str(match.group("alias") or "").strip()
+        if raw_alias in _SUMMARY_NON_HANDLER_ALIASES:
+            continue
+        candidate = candidate_character_name(raw_alias)
+        if candidate:
+            names.add(candidate)
+    for match in _SUMMARY_NETWORK_ALIAS_RE.finditer(content):
         raw_alias = str(match.group("alias") or "").strip()
         if raw_alias in _SUMMARY_NON_HANDLER_ALIASES:
             continue

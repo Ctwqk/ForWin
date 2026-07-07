@@ -4,6 +4,7 @@ from forwin.book_genesis_core.constants import *
 from forwin.book_genesis_core.helpers import *
 from forwin.book_genesis_core.fallbacks import *
 from forwin.book_genesis_core.names_paths import *
+from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 
 def _refine_support_context(self, *, pack: dict[str, Any], stage_key: str) -> dict[str, Any]:
     if stage_key == "brief":
@@ -51,9 +52,10 @@ def _plan_arc_chapters(
     arc_activation_review_pack: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     review_pack_payload = arc_activation_review_pack or {}
+    chapter_start = int(arc_payload.get("chapter_start", 1) or 1)
     fallback = [
         {
-            "title": f"第{index}章",
+            "title": f"第{chapter_start + index - 1}章",
             "one_line": f"围绕“{arc_payload.get('arc_synopsis', project.premise)[:28]}”推进冲突。",
             "goals": ["推进当前 arc 主线", "制造新线索或新代价"],
         }
@@ -66,6 +68,8 @@ def _plan_arc_chapters(
             "content": (
                 f"请为当前 arc 规划恰好 {chapter_count} 章，只返回 JSON，顶层格式为 "
                 "{\"chapters\": [...]}，每项包含 title、one_line、goals。\n\n"
+                f"章节编号必须使用全书绝对编号：第 {chapter_start} 章到第 {chapter_start + chapter_count - 1} 章，"
+                "不得从第1章重新编号。\n\n"
                 f"BookBrief：{_json_dump(pack.get('book_brief') or {})}\n"
                 f"WorldBible：{_json_dump(_pack_stage_payload(pack, 'world').get('world_bible') or {})}\n"
                 f"StoryEngine：{_json_dump(_pack_stage_payload(pack, 'story_engine') or {})}\n"
@@ -103,7 +107,9 @@ def _plan_arc_chapters(
     planning_status = str(trace_payload.get("arc_planning_status") or "").strip()
     normalized: list[dict[str, Any]] = []
     for index in range(1, chapter_count + 1):
+        chapter_number = chapter_start + index - 1
         source = chapters[index - 1] if index - 1 < len(chapters) and isinstance(chapters[index - 1], dict) else {}
+        raw_title = str(source.get("title", "")).strip() or fallback[index - 1]["title"]
         goals = [
             str(item).strip()
             for item in (source.get("goals") or [])
@@ -111,7 +117,7 @@ def _plan_arc_chapters(
         ][:3]
         normalized.append(
             {
-                "title": str(source.get("title", "")).strip() or fallback[index - 1]["title"],
+                "title": rebase_generic_numeric_chapter_title(raw_title, chapter_number),
                 "one_line": str(source.get("one_line", "")).strip() or fallback[index - 1]["one_line"],
                 "goals": goals or fallback[index - 1]["goals"],
                 "planning_status": planning_status,

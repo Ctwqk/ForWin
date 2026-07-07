@@ -8,6 +8,7 @@ from hashlib import md5
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 from forwin.governance import (
     BandCheckpointDetail,
     DecisionEventInfo,
@@ -212,7 +213,7 @@ class StateUpdater:
             project_id=project_id,
             arc_plan_id=arc_plan_id,
             chapter_number=chapter_number,
-            title=title,
+            title=rebase_generic_numeric_chapter_title(title, chapter_number),
             one_line=one_line,
             goals_json=json.dumps(normalized_goals, ensure_ascii=False),
             experience_plan_json=json.dumps(
@@ -1163,6 +1164,7 @@ class StateUpdater:
                 chapter_number,
             )
             return
+        plan.title = rebase_generic_numeric_chapter_title(plan.title, chapter_number)
         plan.status = status
         if acceptance_mode is not None:
             plan.acceptance_mode = str(acceptance_mode or "")

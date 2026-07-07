@@ -20,6 +20,7 @@ from forwin.protocol.context import (
 from forwin.characters.events import CHARACTER_INTEGRITY_CHECK_FAILED
 from forwin.canon_names import extract_candidate_character_names
 from forwin.canon_quality.rule_profile import CanonGlossary
+from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 from forwin.governance import DecisionEventInfo
 from forwin.observability.context import OperationContext
 from forwin.observability.ports import NullObservability
@@ -119,7 +120,10 @@ class ChapterContextAssembler:
             genesis_map_overview=data.get("genesis_map_overview", ""),
             genesis_story_engine_summary=data.get("genesis_story_engine_summary", ""),
             chapter_number=chapter_plan.chapter_number,
-            chapter_plan_title=chapter_plan.title,
+            chapter_plan_title=rebase_generic_numeric_chapter_title(
+                chapter_plan.title,
+                chapter_plan.chapter_number,
+            ),
             chapter_plan_one_line=chapter_plan.one_line,
             chapter_goals=data.get("goals", []),
             previous_chapter_summaries=data.get("summaries", []),

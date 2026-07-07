@@ -33,3 +33,18 @@ def test_extraction_retry_uses_tail_window(monkeypatch) -> None:
 
     assert result["new_events"][0]["summary"] == "获得赔偿"
     assert any("三十万赔偿" in item for item in seen_bodies[1:])
+
+
+def test_writer_output_rebases_generic_numeric_title_to_context_chapter() -> None:
+    writer = ChapterWriter(llm_client=SimpleNamespace(chat=lambda *args, **kwargs: "{}"))
+
+    output = writer._writer_output_from_dict(
+        SimpleNamespace(project_id="project-1", chapter_number=29),
+        {
+            "title": "第11章",
+            "body": "林夜继续追踪潮门。",
+            "end_of_chapter_summary": "林夜抵达潮门。",
+        },
+    )
+
+    assert output.title == "第29章"

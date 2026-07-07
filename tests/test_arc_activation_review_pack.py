@@ -171,6 +171,37 @@ def test_plan_arc_chapters_injects_arc_activation_review_pack() -> None:
     assert planned[0]["title"] == "第二卷开局"
 
 
+def test_plan_arc_chapters_rebases_generic_numeric_titles_to_absolute_chapters() -> None:
+    class Owner:
+        max_tokens = 2000
+
+        def _call_json_with_trace(self, *, messages, fallback, stage_key, max_tokens):  # noqa: ANN001
+            return {
+                "chapters": [
+                    {"title": "第1章", "one_line": "重启追踪。", "goals": ["推进"]},
+                    {"title": "第2章：潮门", "one_line": "抵达潮门。", "goals": ["抵达"]},
+                    {"title": "债权人的回声", "one_line": "揭示新债权人。", "goals": ["揭示"]},
+                ]
+            }, {"input_snapshot": {}}
+
+    planned, _trace = _plan_arc_chapters(
+        Owner(),
+        project=Project(id="project-1", title="测试", premise="前提", genre="玄幻"),
+        pack={"book_brief": {"title": "测试"}, "world": {}},
+        arc_payload={
+            "arc_number": 3,
+            "arc_synopsis": "第三卷",
+            "chapter_start": 28,
+            "chapter_end": 30,
+            "chapter_count": 3,
+        },
+        chapter_count=3,
+        arc_activation_review_pack={},
+    )
+
+    assert [item["title"] for item in planned] == ["第28章", "第29章：潮门", "债权人的回声"]
+
+
 def test_plan_arc_chapters_marks_deterministic_fallback_as_degraded() -> None:
     class Owner:
         max_tokens = 2000

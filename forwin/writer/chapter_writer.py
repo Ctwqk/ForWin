@@ -6,6 +6,7 @@ import logging
 import re
 from contextlib import contextmanager
 
+from forwin.chapter_titles import rebase_generic_numeric_chapter_title
 from forwin.model_adapter import ModelAdapter
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.scene import SceneContinuation, SceneOutput, ScenePlan
@@ -253,6 +254,7 @@ class ChapterWriter:
             "title",
             context.chapter_plan_title or f"第{context.chapter_number}章",
         )
+        title = rebase_generic_numeric_chapter_title(title, context.chapter_number)
         body = str(draft_data.get("body", "") or "")
         output = WriterOutput(
             project_id=getattr(context, "project_id", ""),
@@ -402,9 +404,13 @@ class ChapterWriter:
                 for scene_plan in scene_plans
             ]
             stitched = self._stitch_scenes(context, scene_outputs, skill_layers=skill_layers)
+            chapter_title = rebase_generic_numeric_chapter_title(
+                stitched.get("title", context.chapter_plan_title or f"第{context.chapter_number}章"),
+                context.chapter_number,
+            )
             extracted = self._extract_structured(
                 context,
-                stitched.get("title", context.chapter_plan_title or f"第{context.chapter_number}章"),
+                chapter_title,
                 stitched.get("body", ""),
             )
 
@@ -521,7 +527,10 @@ class ChapterWriter:
         output = WriterOutput(
             project_id=getattr(context, "project_id", ""),
             chapter_number=context.chapter_number,
-            title=data.get("title", f"第{context.chapter_number}章"),
+            title=rebase_generic_numeric_chapter_title(
+                data.get("title", f"第{context.chapter_number}章"),
+                context.chapter_number,
+            ),
             body=body,
             char_count=len(body),
             end_of_chapter_summary=data.get("end_of_chapter_summary", ""),

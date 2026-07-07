@@ -287,3 +287,36 @@ Target: 100 chapters
 - Generation action: `project_continue_generation(auto_continue=true, run_until_chapter=100)` started task `5a61c41ddd95`.
 - Task scope: requested chapters 16-18 initially, with `run_until_chapter=100`.
 - Issues: monitor chapter 16 onward.
+
+### 2026-07-06 20:37:12 PDT
+
+- State: chapter 16 completed and paused at a safe continuation point.
+- Result: chapter 16 accepted with no repair attempts; residual review issues are empty.
+- Progress: project has 16 accepted chapters and no pending review gate.
+- Diagnosis: task `5a61c41ddd95` reported chapter 16 in both `completed_chapters` and `paused_chapters`; auto-continue treated any paused marker as `pending_review_blocker` even when that chapter was already accepted.
+- Code fix: `GenerationAutoContinueController._terminal_block_reason` now ignores paused markers for chapters already completed by the task.
+- Verification: targeted regression test, full auto-continue test module, and MCP/guard continuation tests passed before commit `6c6218c`.
+
+### 2026-07-06 20:43:44 PDT
+
+- State: commit `6c6218c` deployed through the 150 sync path.
+- Deploy marker: `/Users/magi1/ForWin-swarm/.deploy-sync-source-commit` is `6c6218ce00a2f3bf39d1d9b232e971b85f631677`.
+- Health: `scripts/check_codex_operator_ready.py` passed API health, MCP health, plugin MCP config, swarm service, MCP registration, and Python environment checks.
+- Swarm: `forwin-app-swarm`, `forwin-mcp-swarm`, `forwin-generation-worker-swarm`, `forwin-publisher-worker-swarm`, `forwin-outbox-worker-swarm`, and `forwin-publisher-browser-swarm` are all `1/1` on `deploy-6c6218ce00a2`.
+
+### 2026-07-06 20:44:17 PDT
+
+- State: continuation started after deploying the accepted-paused-marker fix.
+- Preflight: `task_active_generation_check` reported no active generation task.
+- Generation action: `project_continue_generation(auto_continue=true, run_until_chapter=100)` started task `f5b92a58ec0d`.
+- Task scope: requested chapters 17-18 initially, with `run_until_chapter=100`.
+- Issues: monitor whether the task now crosses accepted safe-pause markers without manual continuation.
+
+### 2026-07-06 20:52:05 PDT
+
+- State: chapter 17 completed, then task `f5b92a58ec0d` paused safely instead of auto-continuing.
+- Result: chapter 17 accepted with no repair attempts; residual review issues are empty.
+- Progress: project has 17 accepted chapters and no pending review gate.
+- Diagnosis: the previous fix ignored `paused_chapters` that were already in `completed_chapters`, but `RunResult.status` still returned `paused` because the safe checkpoint set `paused=True`.
+- Code fix: `GenerationAutoContinueController._terminal_block_reason` now treats `paused=True`/`status=paused` as safe when every paused marker is already completed, while preserving real user pauses and unresolved review blockers.
+- Verification: new regression test for safe paused status passed, the full auto-continue test module passed, and MCP/guard continuation tests passed before commit.

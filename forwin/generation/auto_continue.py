@@ -205,8 +205,6 @@ class GenerationAutoContinueController:
         )
 
     def _terminal_block_reason(self, result: Any) -> str:
-        if bool(getattr(result, "paused", False)):
-            return "user_pause_reached"
         if bool(getattr(result, "cancelled", False)):
             return "cancelled"
         if list(getattr(result, "failed_chapters", []) or []):
@@ -215,12 +213,20 @@ class GenerationAutoContinueController:
         completed_chapters = set(
             _chapter_numbers(getattr(result, "completed_chapters", []) or [])
         )
-        if paused_chapters - completed_chapters:
+        unresolved_paused_chapters = paused_chapters - completed_chapters
+        if unresolved_paused_chapters:
             return "pending_review_blocker"
+        safe_completed_pause = bool(paused_chapters) and not unresolved_paused_chapters
+        if bool(getattr(result, "paused", False)) and not safe_completed_pause:
+            return "user_pause_reached"
         status = str(getattr(result, "status", "") or "").strip()
         if status and status != "completed":
+            if safe_completed_pause and status in {"needs_review", "paused"}:
+                return ""
             if status == "no_rule_matched":
                 return "manual_review_required_blocker"
+            if status == "paused":
+                return "user_pause_reached"
             return f"{status}_blocker"
         return ""
 

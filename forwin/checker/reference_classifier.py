@@ -192,6 +192,7 @@ PARENTHETICAL_REFERENCE_LABELS = {
     "旁白",
     "幕后",
     "间接",
+    "残留影像",
     "远程信号压力",
     "远程声音",
 }

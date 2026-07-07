@@ -307,6 +307,44 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual(unknown, ["灰鸦"])
         self.assertEqual(ContinuityChecker._candidate_character_name("蘅照夜（镜像投影）"), "蘅照夜")
 
+    def test_subworld_admission_normalizes_known_character_remote_signal_intervention_annotation(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"蘅照夜"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=61,
+                title="第61章",
+                body="蘅照夜的远程信号介入通讯器，灰鸦仍未获准进入本章。" * 80,
+                end_of_chapter_summary="蘅照夜通过远程信号介入提醒林澈撤离。",
+                entity_mentions=[
+                    EntityMention(entity_name="蘅照夜（远程信号介入）", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
+                ],
+            ),
+        )
+
+        unknown = [
+            issue.entity_names[0]
+            for issue in verdict.issues
+            if issue.rule_name == "sub_world_unknown_named_entity"
+        ]
+        self.assertEqual(unknown, ["灰鸦"])
+        self.assertEqual(ContinuityChecker._candidate_character_name("蘅照夜（远程信号介入）"), "蘅照夜")
+        self.assertEqual(ContinuityChecker._candidate_character_name("苏敏（林若溪）"), "苏敏（林若溪）")
+
     def test_subworld_admission_generalizes_non_cast_reference_filtering(self) -> None:
         class FakeRepo:
             def get_active_entities(self, _project_id: str) -> list[object]:

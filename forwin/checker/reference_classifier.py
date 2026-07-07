@@ -223,6 +223,15 @@ PARENTHETICAL_REFERENCE_LABELS = {
     "远程追踪信号",
     "远程声音",
 }
+PARENTHETICAL_REFERENCE_LABEL_KEYWORDS = (
+    "远程",
+    "信号",
+    "声音",
+    "投影",
+    "影像",
+    "备份",
+    "意识",
+)
 
 
 def has_malformed_parenthetical_annotation(name: str) -> bool:
@@ -237,6 +246,17 @@ def has_malformed_parenthetical_annotation(name: str) -> bool:
     return False
 
 
+def looks_like_parenthetical_reference_label(label: str) -> bool:
+    text = str(label or "").strip()
+    if text in PARENTHETICAL_REFERENCE_LABELS:
+        return True
+    if not (2 <= len(text) <= 18):
+        return False
+    if any(char in text for char in "（）()"):
+        return False
+    return any(keyword in text for keyword in PARENTHETICAL_REFERENCE_LABEL_KEYWORDS)
+
+
 def normalize_character_reference(name: str) -> str:
     text = str(name or "").strip()
     for opener, closer in (("（", "）"), ("(", ")")):
@@ -245,7 +265,7 @@ def normalize_character_reference(name: str) -> str:
         prefix, suffix = text.rsplit(opener, 1)
         suffix = suffix[: -len(closer)].strip()
         prefix = prefix.strip()
-        if suffix in PARENTHETICAL_REFERENCE_LABELS and prefix:
+        if looks_like_parenthetical_reference_label(suffix) and prefix:
             text = prefix
         elif prefix and looks_like_generic_character_reference(prefix):
             text = prefix

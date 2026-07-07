@@ -169,6 +169,19 @@ TECHNICAL_ID_RE = re.compile(
 ROLE_NUMBERED_ID_RE = re.compile(
     r"^[\u4e00-\u9fff]{1,8}[-_－—][A-Za-zＡ-Ｚａ-ｚ0-9０-９γΩαβ]{1,8}$"
 )
+PREFIXED_TECHNICAL_ID_RE = re.compile(
+    r"^(?P<prefix>[\u4e00-\u9fff]{1,10})"
+    r"(?P<identifier>[A-Za-zＡ-Ｚａ-ｚ][A-Za-zＡ-Ｚａ-ｚ0-9０-９]*"
+    r"[-_－—][A-Za-zＡ-Ｚａ-ｚ0-9０-９γΩαβ]{1,8}"
+    r"(?:[-_－—][A-Za-zＡ-Ｚａ-ｚ0-9０-９γΩαβ]{1,8})*)$"
+)
+TECHNICAL_ID_ROLE_PREFIX_SUFFIXES = (
+    "载体",
+    "审计员",
+    "镜像审计员",
+    "节点",
+    "分割体",
+)
 NUMBERED_PLOT_ENTITY_RE = re.compile(
     r"^(?:第)?[0-9０-９]{1,4}(?:号|份|枚)(?:分割体|密钥|碎片|样本|载体|节点|密钥持有者|碎片持有者)$"
 )
@@ -287,7 +300,22 @@ def looks_like_technical_identifier(name: str) -> bool:
     text = str(name or "").strip()
     if not text:
         return False
-    return bool(TECHNICAL_ID_RE.fullmatch(text) or ROLE_NUMBERED_ID_RE.fullmatch(text))
+    return bool(
+        TECHNICAL_ID_RE.fullmatch(text)
+        or ROLE_NUMBERED_ID_RE.fullmatch(text)
+        or looks_like_prefixed_technical_identifier(text)
+    )
+
+
+def looks_like_prefixed_technical_identifier(name: str) -> bool:
+    text = str(name or "").strip()
+    match = PREFIXED_TECHNICAL_ID_RE.fullmatch(text)
+    if not match:
+        return False
+    prefix = match.group("prefix")
+    return looks_like_generic_character_reference(prefix) or any(
+        prefix.endswith(suffix) for suffix in TECHNICAL_ID_ROLE_PREFIX_SUFFIXES
+    )
 
 
 def looks_like_numbered_plot_entity(name: str) -> bool:

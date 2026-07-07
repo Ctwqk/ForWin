@@ -197,3 +197,11 @@ Target: 100 chapters
 - State: chapter 10 `灰鹞网络` non-handler alias fix is fully verified locally.
 - Verification: full test suite passed: `1771 passed, 3 skipped, 82 warnings, 36 subtests passed in 2980.40s (0:49:40)`.
 - Issues: ready to commit, push, deploy through the 150 sync path, then retry chapter 10 with generation continuation enabled.
+
+### 2026-07-06 18:45:08 PDT
+
+- State: chapter 10 `灰鹞网络` non-handler alias fix deployed.
+- Commit: `dab47272a05991699d878295a458e3db3829a4dd`.
+- Deploy evidence: `/Users/magi1/ForWin-swarm/.deploy-sync-source-commit` matches `dab47272a05991699d878295a458e3db3829a4dd`; app health `8899=/health ok`, MCP health `8896=/health ok`; 6 swarm services are `1/1` on `deploy-dab47272a059`.
+- Deploy note: Docker data disk on 10.0.0.126 had about 5.0G free after build/export (`/var/lib/containerd` and `/var/lib/docker` at 87% use).
+- Issues: ready to retry chapter 10.

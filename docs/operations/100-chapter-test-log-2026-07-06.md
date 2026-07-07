@@ -205,3 +205,48 @@ Target: 100 chapters
 - Deploy evidence: `/Users/magi1/ForWin-swarm/.deploy-sync-source-commit` matches `dab47272a05991699d878295a458e3db3829a4dd`; app health `8899=/health ok`, MCP health `8896=/health ok`; 6 swarm services are `1/1` on `deploy-dab47272a059`.
 - Deploy note: Docker data disk on 10.0.0.126 had about 5.0G free after build/export (`/var/lib/containerd` and `/var/lib/docker` at 87% use).
 - Issues: ready to retry chapter 10.
+
+### 2026-07-06 18:50:58 PDT
+
+- State: chapter 10 retry started after deploy.
+- Generation action: `chapter_review_retry(continue_generation=true)` reset chapter 10 to `planned` and started task `44ca3af65b43`.
+- Task scope: requested chapters 10-18.
+- Issues: watch chapter 10 for recurrence of `灰鹞` subworld admission, then continue toward chapter 100.
+
+### 2026-07-06 19:00:00 PDT
+
+- State: retry task `44ca3af65b43` running.
+- Task stage: `writing_chapter`; current chapter: 11.
+- Progress: task completed chapter 10; project has 10 accepted chapters and no pending review gate.
+- Result: the `灰鹞` subworld admission gate did not recur after deploy; chapter 10 was accepted with empty residual review issues.
+- Issues: none blocking; continue monitoring chapters 11-18 and the eventual continuation toward chapter 100.
+
+### 2026-07-06 19:09:01 PDT
+
+- State: retry task `44ca3af65b43` running.
+- Task stage: `writing_chapter`; current chapter: 12.
+- Progress: task completed chapter 11; project has 11 accepted chapters and no pending review gate.
+- Issues: none blocking; continue monitoring chapters 12-18 and the eventual continuation toward chapter 100.
+
+### 2026-07-06 19:19:23 PDT
+
+- State: chapter 12 entered an automatic self-healing retry.
+- Previous task: `44ca3af65b43` paused for review at chapter 12 with `recovery_suggestion=check_artifact`.
+- Auto-retry task: `0d6711ca91da`, `current_stage=writing_chapter`, `current_chapter=12`, `run_until_chapter=100`.
+- Progress: project remains at 11 accepted chapters; active generation is continuing via the auto-retry task.
+- Issues: no manual intervention; monitor whether chapter 12 is accepted and whether the task continues toward chapter 100.
+
+### 2026-07-06 19:28:39 PDT
+
+- State: chapter 12 automatic self-healing retry completed and paused safely.
+- Result: chapter 12 accepted with empty residual review issues.
+- Progress: project has 12 accepted chapters and no pending review gate.
+- Issues: task `0d6711ca91da` ended with `continue_available`; continue generation from chapter 13 after active-task check.
+
+### 2026-07-06 19:30:12 PDT
+
+- State: continuation started after chapter 12 self-healing success.
+- Preflight: `task_active_generation_check` reported no active generation task.
+- Generation action: `project_continue_generation(auto_continue=true, run_until_chapter=100)` started task `844d786f4bc1`.
+- Task scope: requested chapters 13-18 initially, with `run_until_chapter=100`.
+- Issues: monitor chapter 13 onward.

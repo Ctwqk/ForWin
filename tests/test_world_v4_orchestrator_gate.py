@@ -225,6 +225,70 @@ def test_apply_canon_candidate_drops_unregistered_character_state_changes() -> N
         assert unknown_count == 0
 
 
+def test_apply_canon_candidate_drops_fields_unsupported_by_resolved_entity_kind() -> None:
+    with TemporaryDirectory() as tmp:
+        db_path = postgres_test_url("orchestrator-state-filter-resolved-kind")
+        engine = get_engine(db_path)
+        init_db(engine)
+        Session = get_session_factory(engine)
+        orchestrator = WritingOrchestrator(
+            Config(
+                database_url=db_path,
+                artifact_root=str(Path(tmp) / "artifacts"),
+                minimax_api_key="",
+                minimax_model="fake-model",
+                chapter_review_form_mode="off",
+            )
+        )
+        with Session.begin() as session:
+            repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
+            project, _chapter = _setup_project(session)
+            faction = updater.create_entity(
+                project_id=project.id,
+                kind="faction",
+                name="灰鹞网络",
+                description="记忆资产二级市场中介网络",
+                chapter=0,
+            )
+            result = orchestrator._apply_canon_candidate(  # noqa: SLF001
+                session=session,
+                repo=repo,
+                updater=updater,
+                project_id=project.id,
+                chapter_number=23,
+                writer_output=WriterOutput(
+                    project_id=project.id,
+                    chapter_number=23,
+                    title="错配状态候选",
+                    body="灰鹞网络提出新的交易条件。",
+                    end_of_chapter_summary="测试实体类型错配的状态候选过滤。",
+                    state_changes=[
+                        StateChangeCandidate(
+                            entity_name="灰鹞网络",
+                            entity_kind="character",
+                            field="possession_state",
+                            old_value="",
+                            new_value="持有第7枚锚点",
+                            reason="抽取器误把 faction 当成 character",
+                        ),
+                    ],
+                ),
+                verdict=ReviewVerdict(verdict="pass", issues=[]),
+            )
+            faction_id = faction.id
+
+        with Session() as session:
+            state_count = session.scalar(
+                select(func.count())
+                .select_from(EntityState)
+                .where(EntityState.entity_id == faction_id)
+            )
+
+        assert isinstance(result, CanonApplyOutcome)
+        assert not result.blocked
+        assert state_count == 0
+
+
 def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None:
     def fail_compile(self, approved_changes, *, compiler_run_id: str = ""):
         return BookStateCompileResult(

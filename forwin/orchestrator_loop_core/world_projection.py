@@ -440,24 +440,38 @@ def _filter_resolvable_state_changes(
     chapter_number: int,
     changes: list,
 ) -> list:
-    character_names = [
+    entity_names = [
         str(change.entity_name or "").strip()
         for change in changes
-        if str(getattr(change, "entity_kind", "") or "") == "character"
-        and str(change.entity_name or "").strip()
+        if str(change.entity_name or "").strip()
     ]
-    entity_lookup = repo.get_entities_by_names(project_id, character_names)
+    entity_lookup = repo.get_entities_by_names(project_id, entity_names)
     filtered: list = []
     for change in changes:
         entity_name = str(change.entity_name or "").strip()
+        entity = entity_lookup.get(entity_name)
         if str(getattr(change, "entity_kind", "") or "") == "character" and entity_name:
-            if entity_lookup.get(entity_name) is None:
+            if entity is None:
                 logger.warning(
                     "Dropping state change for unknown character %r in chapter %d.",
                     entity_name,
                     chapter_number,
                 )
                 continue
+        if entity is not None:
+            resolved_kind = str(getattr(entity, "kind", "") or "").strip()
+            normalized_field = normalize_state_field(resolved_kind, str(change.field or ""))
+            known_fields = KNOWN_STATE_FIELDS.get(resolved_kind, set())
+            if known_fields and normalized_field not in known_fields:
+                logger.warning(
+                    "Dropping unsupported state change field %r for resolved entity kind %r in chapter %d.",
+                    change.field,
+                    resolved_kind,
+                    chapter_number,
+                )
+                continue
+            if normalized_field and normalized_field != change.field:
+                change = change.model_copy(update={"field": normalized_field})
         filtered.append(change)
     return filtered
 

@@ -534,6 +534,108 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
     ]
 
 
+def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
+    gate = CanonAdmissionGateResult(
+        project_id="p",
+        chapter_number=18,
+        draft_id="d18",
+        review_id="r18",
+        commit_allowed=True,
+        verdict="warn",
+        admission_mode="with_obligation",
+        gate_summary="canon quality gate strict: commit_allowed=True",
+    )
+    captured: dict[str, object] = {}
+    calls: list[str] = []
+    obligation = SimpleNamespace(id="obl-due", linked_plan_patch_ids=["patch-1"])
+
+    monkeypatch.setattr(
+        quality_gates_module,
+        "analyze_writer_output_quality",
+        lambda **_kwargs: SimpleNamespace(signals=[], raw_analyzer_results=[]),
+    )
+
+    def _verify_due_obligations_for_draft(**kwargs):
+        calls.append("draft_verify")
+        assert kwargs["obligations"] == [obligation]
+        assert kwargs["chapter_number"] == 18
+        assert kwargs["draft_text"] == "林澈明确退休工程师身份为陈昭宁。"
+        assert kwargs["evidence_ref"] == "draft:d18"
+        return ["obl-due"]
+
+    def _evaluate_canon_admission(**kwargs):
+        captured.update(kwargs)
+        return gate
+
+    monkeypatch.setattr(
+        quality_gates_module,
+        "verify_due_obligations_for_draft",
+        _verify_due_obligations_for_draft,
+        raising=False,
+    )
+    monkeypatch.setattr(quality_gates_module, "evaluate_canon_admission", _evaluate_canon_admission)
+
+    class _ObligationRepo:
+        def __init__(self, _session) -> None:
+            return None
+
+        def list_active_for_context(self, *_args, **_kwargs):
+            return [obligation]
+
+        def list_planned_for_chapter(self, *_args, **_kwargs):
+            return []
+
+        def list_patches_by_ids(self, _ids):
+            return []
+
+    class _CanonQualityRepo:
+        def __init__(self, _session) -> None:
+            return None
+
+        def save_admission_run(self, gate_result, *, signals) -> None:
+            calls.append("save_admission")
+
+    class _Session:
+        def get(self, _model, _id):
+            return SimpleNamespace(target_total_chapters=100)
+
+    class _Orchestrator:
+        config = SimpleNamespace(
+            canon_quality_gate="strict",
+            chapter_review_form_mode="off",
+            chapter_review_form_min_blocking_confidence=0.8,
+        )
+        llm_client = None
+
+        def _latest_draft_and_review_for_chapter(self, **_kwargs):
+            return SimpleNamespace(id="d18"), SimpleNamespace(id="r18")
+
+        def _prepare_deferred_acceptance_if_needed(self, **_kwargs):
+            return []
+
+        def _record_decision_event(self, **_kwargs) -> None:
+            calls.append("event")
+
+    monkeypatch.setattr(quality_gates_module, "NarrativeObligationRepository", _ObligationRepo)
+    monkeypatch.setattr(quality_gates_module, "CanonQualityRepository", _CanonQualityRepo)
+
+    outcome = quality_gates_module._apply_canon_quality_gate(
+        _Orchestrator(),
+        session=_Session(),
+        repo=object(),
+        updater=object(),
+        project_id="p",
+        chapter_number=18,
+        writer_output=SimpleNamespace(body="林澈明确退休工程师身份为陈昭宁。"),
+        verdict=SimpleNamespace(verdict="pass"),
+    )
+
+    assert isinstance(outcome, CanonQualityGateOutcome)
+    assert outcome.gate_result is gate
+    assert captured["resolved_obligation_ids"] == ["obl-due"]
+    assert calls == ["draft_verify", "save_admission", "event"]
+
+
 def test_apply_canon_candidate_exception_without_freeze_returns_blocked_outcome(
     monkeypatch,
 ):

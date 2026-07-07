@@ -13,6 +13,14 @@ from forwin.narrative_obligations.types import (
 
 
 _CAUSAL_MARKERS = ("因为", "为了", "所以", "原因", "动机", "才会", "承认")
+_DRAFT_PREVERIFY_TYPES = {
+    "motivation_gap",
+    "countdown_explanation",
+    "artifact_count_explanation",
+    "transition_bridge_needed",
+    "identity_ambiguity",
+    "reveal_escalation_needed",
+}
 
 
 class ObligationResolutionVerifier:
@@ -128,6 +136,40 @@ def verify_active_obligations_after_acceptance(
         "warned_obligation_ids": warned_ids,
         "failed_obligation_ids": failed_ids,
     }
+
+
+def verify_due_obligations_for_draft(
+    *,
+    obligations: list[NarrativeObligation],
+    chapter_number: int,
+    draft_text: str,
+    evidence_ref: str = "",
+    verifier: ObligationResolutionVerifier | None = None,
+) -> list[str]:
+    body = str(draft_text or "")
+    if not body:
+        return []
+    current_chapter = int(chapter_number or 0)
+    refs = [str(evidence_ref).strip()] if str(evidence_ref or "").strip() else [f"draft_chapter:{current_chapter}"]
+    checker = verifier or ObligationResolutionVerifier()
+    resolved_ids: list[str] = []
+    for obligation in obligations:
+        obligation_id = str(obligation.id or "").strip()
+        if not obligation_id or obligation.status != "active":
+            continue
+        if int(obligation.deadline_chapter or 0) > current_chapter:
+            continue
+        result = checker.verify(
+            obligation=obligation,
+            chapter_number=current_chapter,
+            chapter_body=body,
+            evidence_refs=refs,
+        )
+        if result.status != "pass":
+            continue
+        if result.matched_markers or obligation.obligation_type in _DRAFT_PREVERIFY_TYPES:
+            resolved_ids.append(obligation_id)
+    return resolved_ids
 
 
 def expire_unresolved_obligations_after_acceptance(

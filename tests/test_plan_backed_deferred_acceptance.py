@@ -150,3 +150,42 @@ def test_canon_admission_blocks_active_obligation_at_deadline_when_unresolved() 
 
     assert result.commit_allowed is False
     assert "obligation_due_unresolved:obl-due" in result.blocking_reasons
+
+
+def test_canon_admission_allows_due_obligation_resolved_by_current_draft() -> None:
+    obligation = NarrativeObligation(
+        id="obl-due",
+        project_id="p1",
+        origin_chapter_number=10,
+        obligation_type="identity_ambiguity",
+        priority="P1",
+        status="active",
+        summary="确认退休工程师身份。",
+        hardness="design_debt",
+        deadline_chapter=12,
+        payoff_test="第12章必须明确退休工程师身份。",
+        linked_plan_patch_ids=["patch-1"],
+    )
+    patch = NarrativePlanPatch(
+        id="patch-1",
+        project_id="p1",
+        target_scope="chapter",
+        affected_chapters=[12],
+        source_obligation_ids=["obl-due"],
+        validation_status="passed",
+        applied=True,
+    )
+
+    result = evaluate_canon_admission(
+        project_id="p1",
+        chapter_number=12,
+        review_verdict="pass",
+        mode="strict",
+        obligations=[obligation],
+        plan_patches=[patch],
+        resolved_obligation_ids=["obl-due"],
+    )
+
+    assert result.commit_allowed is True
+    assert result.admission_mode == "with_obligation"
+    assert "obligation_due_unresolved:obl-due" not in result.blocking_reasons

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import logging
 
+from forwin.canon_quality.obligation_verifier import verify_due_obligations_for_draft
 from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.orchestrator_loop_core.common import *
 from forwin.review_engine.engine import AutoDecisionEngine
@@ -461,6 +462,12 @@ def _apply_canon_quality_gate(
         *obligation_repo.list_active_for_context(project_id, chapter_number=chapter_number),
         *obligation_repo.list_planned_for_chapter(project_id, origin_chapter_number=chapter_number),
     ]
+    draft_resolved_obligation_ids = verify_due_obligations_for_draft(
+        obligations=gate_obligations,
+        chapter_number=chapter_number,
+        draft_text=str(getattr(writer_output, "body", "") or ""),
+        evidence_ref=f"draft:{draft_id}" if draft_id else f"chapter:{chapter_number}:draft",
+    )
     patch_ids = sorted(
         {
             patch_id
@@ -486,6 +493,7 @@ def _apply_canon_quality_gate(
         analyzer_results=gate_analyzer_results,
         min_blocking_confidence=float(getattr(self.config, "chapter_review_form_min_blocking_confidence", 0.8) or 0.8),
         require_evidence_for_block=True,
+        resolved_obligation_ids=draft_resolved_obligation_ids,
     )
     CanonQualityRepository(session).save_admission_run(gate_result, signals=analysis.signals)
     self._record_decision_event(

@@ -118,6 +118,7 @@ def evaluate_canon_admission(
     analyzer_results: list[dict] | None = None,
     min_blocking_confidence: float = 0.8,
     require_evidence_for_block: bool = True,
+    resolved_obligation_ids: list[str] | None = None,
 ) -> CanonAdmissionGateResult:
     resolved_mode = normalize_gate_mode(mode)
     fatal_signal_types = _fatal_signal_types_for_mode(resolved_mode)
@@ -164,6 +165,7 @@ def evaluate_canon_admission(
         over_budget=over_budget,
         is_final_chapter=is_final_chapter,
         p0_only=resolved_mode in {"pulp_fatal", "serial_fatal"},
+        resolved_obligation_ids=resolved_obligation_ids or [],
     )
     review_failed = _review_verdict_to_gate_verdict(review_verdict) == "fail"
     blocking_reasons = sorted(
@@ -363,11 +365,13 @@ def _obligation_blocking_reasons(
     over_budget: bool,
     is_final_chapter: bool,
     p0_only: bool = False,
+    resolved_obligation_ids: list[str] | None = None,
 ) -> list[str]:
     reasons: list[str] = []
     if over_budget:
         reasons.append("obligation_budget_exceeded")
     patches_by_id = {patch.id: patch for patch in plan_patches if patch.id}
+    draft_resolved = {str(item).strip() for item in resolved_obligation_ids or [] if str(item).strip()}
     for obligation in obligations:
         obligation_id = obligation.id or "unknown"
         if obligation.status in {"resolved", "waived"}:
@@ -377,7 +381,7 @@ def _obligation_blocking_reasons(
         if obligation.status == "expired":
             reasons.append(f"expired_obligation:{obligation_id}")
         elif obligation.status == "active":
-            if int(obligation.deadline_chapter or 0) <= int(current_chapter or 0):
+            if int(obligation.deadline_chapter or 0) <= int(current_chapter or 0) and obligation_id not in draft_resolved:
                 reasons.append(f"obligation_due_unresolved:{obligation_id}")
         elif obligation.status != "planned":
             reasons.append(f"obligation_not_planned:{obligation_id}")
@@ -387,7 +391,7 @@ def _obligation_blocking_reasons(
             reasons.append(f"missing_deadline:{obligation_id}")
         if not str(obligation.payoff_test or "").strip():
             reasons.append(f"missing_payoff_test:{obligation_id}")
-        if is_final_chapter and obligation.priority in {"P0", "P1"}:
+        if is_final_chapter and obligation.priority in {"P0", "P1"} and obligation_id not in draft_resolved:
             reasons.append(f"final_obligation_not_cleared:{obligation_id}")
         if not obligation.linked_plan_patch_ids:
             reasons.append(f"missing_plan_patch:{obligation_id}")

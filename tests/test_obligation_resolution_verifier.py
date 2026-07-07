@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.canon_quality import obligation_verifier as obligation_verifier_module
 from forwin.canon_quality.obligation_verifier import (
     ObligationResolutionVerifier,
     verify_active_obligations_after_acceptance,
@@ -79,3 +80,52 @@ def test_verify_active_obligations_after_acceptance_marks_passed_items_resolved(
             assert resolved == []
     finally:
         engine.dispose()
+
+
+def test_verify_due_obligations_for_draft_returns_passed_due_ids_without_persisting() -> None:
+    verify_due_obligations_for_draft = getattr(
+        obligation_verifier_module,
+        "verify_due_obligations_for_draft",
+        None,
+    )
+    assert callable(verify_due_obligations_for_draft)
+    obligation = _obligation(
+        project_id="project-1",
+        payoff_test="第12章必须解释钥匙来源",
+    ).model_copy(update={"id": "obl-due"})
+    resolved_ids = verify_due_obligations_for_draft(
+        obligations=[obligation],
+        chapter_number=12,
+        draft_text="第12章解释了钥匙来源，并给出证据。",
+        evidence_ref="draft:d1",
+    )
+
+    assert resolved_ids == ["obl-due"]
+    assert obligation.status == "active"
+
+
+def test_verify_due_obligations_for_draft_ignores_unknown_type_without_payoff_marker() -> None:
+    verify_due_obligations_for_draft = getattr(
+        obligation_verifier_module,
+        "verify_due_obligations_for_draft",
+        None,
+    )
+    assert callable(verify_due_obligations_for_draft)
+    obligation = _obligation(
+        project_id="project-1",
+        payoff_test="第12章必须揭示钥匙来源",
+    ).model_copy(
+        update={
+            "id": "obl-unknown",
+            "obligation_type": "custom_reader_promise",
+        }
+    )
+
+    resolved_ids = verify_due_obligations_for_draft(
+        obligations=[obligation],
+        chapter_number=12,
+        draft_text="第12章安排新的追逐场景，但没有兑现读者承诺。",
+        evidence_ref="draft:d1",
+    )
+
+    assert resolved_ids == []

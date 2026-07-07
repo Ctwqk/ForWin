@@ -350,3 +350,11 @@ Target: 100 chapters
 - Diagnosis: subworld admission autofix could genericize unprotected planned names into `馆员`; the project premise form `主角林澈是...` was not parsed as a protected protagonist, and names required only by the current chapter plan/obligation such as `陈昭宁` were not included in allowed entity names.
 - Code fix: protagonist extraction now supports inline `主角林澈是...` phrasing, candidate-name extraction recognizes plan language such as `若为陈昭宁`, and `StateRepository.get_allowed_entity_names` includes candidate names from the current chapter plan text.
 - Verification: new regression tests for inline protagonist extraction and current-plan obligation names passed; full `test_subworld_control.py` passed; placeholder/validator/auto-continue related tests passed.
+
+### 2026-07-06 23:07:19 PDT
+
+- State: commit `0ccb935` deployed through the 150 sync path; all ForWin services reported `1/1` on `deploy-0ccb9352c1e6`.
+- Retry: chapter 18 task `8762e9a5cbed` regenerated a draft that explicitly identified the engineer as `陈昭宁`, but canon admission still blocked on `obligation_due_unresolved:4081ecb36bde48c6889d374800e666c6`.
+- Diagnosis: canon admission checked active due obligations before canon write, while the obligation verifier that can mark them resolved only ran after acceptance. This created a deadline deadlock: a chapter had to be accepted before its due obligation could resolve, but the due obligation blocked acceptance.
+- Code fix: canon quality gate now accepts current-draft verified obligation ids; `_apply_canon_quality_gate` pre-verifies due active obligations against the draft text without mutating the ledger, and post-acceptance verification still performs the durable resolved-state write.
+- Verification: new red-green regression tests cover gate-level resolved ids, draft preverification without persistence, and orchestrator wiring; related canon/obligation/auto-continue tests passed (`65 passed, 10 warnings`).

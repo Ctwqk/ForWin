@@ -227,6 +227,7 @@ PARENTHETICAL_REFERENCE_LABEL_KEYWORDS = (
     "远程",
     "信号",
     "声音",
+    "录音",
     "投影",
     "影像",
     "备份",

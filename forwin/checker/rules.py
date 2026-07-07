@@ -403,7 +403,9 @@ class ContinuityChecker:
 
         issues: list[ContinuityIssue] = []
         for name in sorted(candidate_names):
-            if name in allowed_names:
+            if name in allowed_names or self._is_allowed_parenthetical_identity_alias(
+                name, allowed_names
+            ):
                 continue
             issues.append(
                 ContinuityIssue(
@@ -420,6 +422,21 @@ class ContinuityChecker:
                 )
             )
         return issues
+
+    @staticmethod
+    def _is_allowed_parenthetical_identity_alias(name: str, allowed_names: set[str]) -> bool:
+        text = str(name or "").strip()
+        if not text:
+            return False
+        for opener, closer in (("（", "）"), ("(", ")")):
+            if opener not in text or not text.endswith(closer):
+                continue
+            prefix, suffix = text.rsplit(opener, 1)
+            prefix = normalize_character_reference(prefix.strip())
+            suffix = normalize_character_reference(suffix[: -len(closer)].strip())
+            if prefix and suffix and prefix in allowed_names and suffix in allowed_names:
+                return True
+        return False
 
     def _project_protagonist_names(self, project_id: str) -> set[str]:
         get_project = getattr(self.repo, "get_project", None)

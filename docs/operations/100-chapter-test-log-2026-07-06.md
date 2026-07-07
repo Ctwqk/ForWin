@@ -250,3 +250,40 @@ Target: 100 chapters
 - Generation action: `project_continue_generation(auto_continue=true, run_until_chapter=100)` started task `844d786f4bc1`.
 - Task scope: requested chapters 13-18 initially, with `run_until_chapter=100`.
 - Issues: monitor chapter 13 onward.
+
+### 2026-07-06 19:42:21 PDT
+
+- State: chapter 13 completed and generation continued.
+- Progress: project has 13 accepted chapters and no pending review gate.
+- Preflight: `task_active_generation_check` reported no active generation task.
+- Generation action: `project_continue_generation(auto_continue=true, run_until_chapter=100)` started task `9fa2e43dc007`.
+- Task scope: requested chapters 14-18 initially, with `run_until_chapter=100`.
+- Issues: monitor chapter 14 onward.
+
+### 2026-07-06 20:01:23 PDT
+
+- State: task `9fa2e43dc007` is still running and heartbeat is current.
+- Task stage: `repair_review`; current chapter: 14.
+- Progress: project has 13 accepted chapters; chapter 14 remains drafted with empty residual review issues while repair review runs.
+- Operational note: generation-worker logs show active LLM calls and successful responses, so this is an active review/repair flow rather than a safe continuation point.
+- Issues: no manual intervention while `task_active_generation_check` reports active generation.
+
+### 2026-07-06 20:08:59 PDT
+
+- State: chapter 14 completed and generation continued.
+- Result: chapter 14 accepted after one `subworld` repair attempt; residual review issues are empty.
+- Progress: project has 14 accepted chapters and no pending review gate.
+- Preflight: `task_active_generation_check` reported no active generation task.
+- Generation action: `project_continue_generation(auto_continue=true, run_until_chapter=100)` started task `02a6e22c8ee7`.
+- Task scope: requested chapters 15-18 initially, with `run_until_chapter=100`.
+- Issues: monitor chapter 15 onward.
+
+### 2026-07-06 20:21:59 PDT
+
+- State: chapter 15 completed and generation continued.
+- Result: chapter 15 accepted with no repair attempts; residual review issues are empty.
+- Progress: project has 15 accepted chapters and no pending review gate.
+- Preflight: `task_active_generation_check` reported no active generation task.
+- Generation action: `project_continue_generation(auto_continue=true, run_until_chapter=100)` started task `5a61c41ddd95`.
+- Task scope: requested chapters 16-18 initially, with `run_until_chapter=100`.
+- Issues: monitor chapter 16 onward.

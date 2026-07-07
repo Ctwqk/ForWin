@@ -211,7 +211,11 @@ class GenerationAutoContinueController:
             return "cancelled"
         if list(getattr(result, "failed_chapters", []) or []):
             return "failed_chapters_blocker"
-        if list(getattr(result, "paused_chapters", []) or []):
+        paused_chapters = set(_chapter_numbers(getattr(result, "paused_chapters", []) or []))
+        completed_chapters = set(
+            _chapter_numbers(getattr(result, "completed_chapters", []) or [])
+        )
+        if paused_chapters - completed_chapters:
             return "pending_review_blocker"
         status = str(getattr(result, "status", "") or "").strip()
         if status and status != "completed":

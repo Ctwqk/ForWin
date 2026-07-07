@@ -191,6 +191,58 @@ def test_controller_continues_to_future_arc_when_no_blocker() -> None:
         engine.dispose()
 
 
+def test_controller_ignores_paused_marker_for_already_accepted_chapter() -> None:
+    engine, Session = _session_factory("auto-continue-accepted-paused-marker")
+    calls: list[dict[str, object]] = []
+    runtime_config = object()
+    try:
+        with Session.begin() as session:
+            project = _project(session)
+            _arc(
+                session,
+                project_id=project.id,
+                arc_id="arc-1",
+                number=1,
+                status="active",
+                start=1,
+                end=3,
+            )
+            _chapter(session, project_id=project.id, arc_id="arc-1", number=1, status="accepted")
+            _chapter(session, project_id=project.id, arc_id="arc-1", number=2, status="planned")
+            _chapter(session, project_id=project.id, arc_id="arc-1", number=3, status="planned")
+
+        controller = GenerationAutoContinueController(
+            session_factory=Session,
+            create_continue_generation_task=lambda **kwargs: calls.append(kwargs) or "task-next",
+        )
+        decision = controller.after_task_completion(
+            ResultStub(project_id="project-auto", completed_chapters=[1], paused_chapters=[1]),
+            parent_task_id="task-prev",
+            run_until_chapter=3,
+            max_chapters=None,
+            auto_continue=True,
+            runtime_config=runtime_config,
+        )
+
+        assert decision == AutoContinueDecision(
+            decision="continue",
+            reason="chapter_completed_no_blocker",
+            next_task_id="task-next",
+            next_chapter=2,
+            run_until_chapter=3,
+            target_total_chapters=6,
+            requested_chapters=2,
+            workset_reason="active_arc_pending",
+        )
+        assert calls[0]["project_id"] == "project-auto"
+        assert calls[0]["requested_chapters"] == 2
+        assert calls[0]["run_until_chapter"] == 3
+        assert calls[0]["auto_continue"] is True
+        assert calls[0]["runtime_config"] is runtime_config
+    finally:
+        engine.dispose()
+
+
 def test_controller_filters_task_kwargs_for_current_strict_factory_signature() -> None:
     engine, Session = _session_factory("auto-continue-strict-factory")
     calls: list[dict[str, object]] = []

@@ -231,6 +231,7 @@ PARENTHETICAL_REFERENCE_LABEL_KEYWORDS = (
     "投影",
     "影像",
     "备份",
+    "副本",
     "意识",
 )
 

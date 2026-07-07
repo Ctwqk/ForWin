@@ -382,6 +382,43 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertEqual(unknown, ["灰鸦"])
         self.assertEqual(ContinuityChecker._candidate_character_name("沈槐澜（录音）"), "沈槐澜")
 
+    def test_subworld_admission_normalizes_known_character_duplicate_annotation(self) -> None:
+        class FakeRepo:
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_thread_by_name(self, _project_id: str, _name: str) -> object | None:
+                return None
+
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"陈牧野"}
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+        checker = ContinuityChecker(FakeRepo())
+        verdict = checker.check(
+            "p1",
+            WriterOutput(
+                chapter_number=77,
+                title="第77章",
+                body="陈牧野的副本在电梯井里传递导师留下的警告，灰鸦仍未获准进入本章。" * 80,
+                end_of_chapter_summary="陈牧野的副本提醒林澈避开若槐宗邦的契约陷阱。",
+                entity_mentions=[
+                    EntityMention(entity_name="陈牧野（副本）", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
+                ],
+            ),
+        )
+
+        unknown = [
+            issue.entity_names[0]
+            for issue in verdict.issues
+            if issue.rule_name == "sub_world_unknown_named_entity"
+        ]
+        self.assertEqual(unknown, ["灰鸦"])
+        self.assertEqual(ContinuityChecker._candidate_character_name("陈牧野（副本）"), "陈牧野")
+
     def test_subworld_admission_generalizes_non_cast_reference_filtering(self) -> None:
         class FakeRepo:
             def get_active_entities(self, _project_id: str) -> list[object]:

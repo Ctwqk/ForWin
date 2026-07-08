@@ -201,6 +201,19 @@ from forwin.api_core.project_helpers import *
 
 def _active_generation_task_ids(project_id: str = "", *, session=None) -> list[str]:
     normalized_project_id = str(project_id or "").strip()
+
+    def _task_status_is_active(
+        status: str,
+        *,
+        pause_requested: bool = False,
+        cancel_requested: bool = False,
+    ) -> bool:
+        return (
+            not pause_requested
+            and not cancel_requested
+            and not _task_is_terminal(str(status or "").strip())
+        )
+
     if api_state._SessionFactory is None:
         active_ids: list[str] = []
         with api_state._tasks_lock:
@@ -211,7 +224,11 @@ def _active_generation_task_ids(project_id: str = "", *, session=None) -> list[s
                     continue
                 if normalized_project_id and str(task.get("project_id", "")).strip() != normalized_project_id:
                     continue
-                if _task_is_terminal(str(task.get("status", "")).strip()):
+                if not _task_status_is_active(
+                    str(task.get("status", "")).strip(),
+                    pause_requested=bool(task.get("pause_requested")),
+                    cancel_requested=bool(task.get("cancel_requested")),
+                ):
                     continue
                 active_ids.append(task_id)
         return active_ids
@@ -225,7 +242,11 @@ def _active_generation_task_ids(project_id: str = "", *, session=None) -> list[s
             return False
         if normalized_project_id and str(task.get("project_id", "") or "").strip() != normalized_project_id:
             return False
-        return not _task_is_terminal(str(task.get("status", "")).strip())
+        return _task_status_is_active(
+            str(task.get("status", "")).strip(),
+            pause_requested=bool(task.get("pause_requested")),
+            cancel_requested=bool(task.get("cancel_requested")),
+        )
 
     def _query_active_ids(active_session) -> list[str]:
         criteria = [
@@ -235,17 +256,26 @@ def _active_generation_task_ids(project_id: str = "", *, session=None) -> list[s
         if normalized_project_id:
             criteria.append(GenerationTask.project_id == normalized_project_id)
         rows = active_session.execute(
-            select(GenerationTask.id, GenerationTask.status).where(*criteria).order_by(
+            select(
+                GenerationTask.id,
+                GenerationTask.status,
+                GenerationTask.pause_requested,
+                GenerationTask.cancel_requested,
+            ).where(*criteria).order_by(
                 GenerationTask.updated_at.desc(),
                 GenerationTask.id.desc(),
             )
         ).all()
         active_ids: list[str] = []
         db_known_ids: set[str] = set()
-        for task_id, status in rows:
+        for task_id, status, pause_requested, cancel_requested in rows:
             normalized_task_id = str(task_id)
             db_known_ids.add(normalized_task_id)
-            if _task_is_terminal(str(status or "").strip()):
+            if not _task_status_is_active(
+                str(status or "").strip(),
+                pause_requested=bool(pause_requested),
+                cancel_requested=bool(cancel_requested),
+            ):
                 continue
             cached_active = _cached_task_is_active(_cached_generation_task(normalized_task_id))
             if cached_active is False:

@@ -421,6 +421,29 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertFalse(response.safe_to_restart)
         self.assertEqual(response.active_task_ids, ["task-active-check-1"])
 
+    def test_active_generation_check_ignores_pause_requested_queued_task(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                GenerationTask(
+                    id="task-paused-queued-active-check",
+                    project_id="project-paused-queued-active-check",
+                    task_kind="generation",
+                    status="queued",
+                    current_stage="queued",
+                    pause_requested=True,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        response = api_module.active_generation_task_check("project-paused-queued-active-check")
+
+        self.assertFalse(response.has_active_generation_task)
+        self.assertTrue(response.safe_to_restart)
+        self.assertEqual(response.active_task_ids, [])
+
     def test_active_generation_check_finds_old_active_task_beyond_list_limit(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:

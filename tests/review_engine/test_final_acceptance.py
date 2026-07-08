@@ -73,6 +73,37 @@ def test_hard_residual_issue_requires_manual_review() -> None:
     assert decision.sub_action["forceable"] is False
 
 
+def test_nonblocking_legacy_subworld_residual_can_force_accept() -> None:
+    review = ReviewVerdict(
+        verdict="fail",
+        issues=[
+            ContinuityIssue(
+                rule_name="sub_world_unknown_named_entity",
+                issue_type="subworld_admission",
+                severity="error",
+                description="命名角色「周洛」未在当前 chapter 的 subworld 准入名单中。",
+                entity_names=["周洛"],
+                issue_group="director_imbalance",
+                blocking=False,
+            )
+        ],
+        repair_verification=RepairVerification(
+            fixed_all_must_fix=True,
+            preserved_all_must_preserve=True,
+            verifier_mode="rule_only",
+        ),
+    )
+
+    decision = AutoDecisionEngine(build_final_acceptance_rules()).decide(
+        _decision_input(review)
+    )
+
+    assert decision.outcome == "auto_approve"
+    assert decision.reason == "soft-quality-failure-only"
+    assert decision.sub_action["final_gate_decision"] == "force_accept"
+    assert decision.sub_action["forceable"] is True
+
+
 def test_soft_residual_issue_can_force_accept_after_successful_verification() -> None:
     decision = AutoDecisionEngine(build_final_acceptance_rules()).decide(
         _decision_input(_verified_review("director_imbalance"))

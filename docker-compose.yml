@@ -103,6 +103,7 @@ services:
   postgres-test:
     image: postgres:16-alpine
     container_name: forwin-postgres-test
+    shm_size: "1gb"
     environment:
       - POSTGRES_USER=${FORWIN_TEST_POSTGRES_USER:-forwin}
       - POSTGRES_PASSWORD=${FORWIN_TEST_POSTGRES_PASSWORD:-forwin}

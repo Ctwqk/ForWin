@@ -399,6 +399,7 @@ def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
     )
 
     assert forced_accept is True
+    assert _review.verdict == "warn"
     assert review_attempt.forced_accept_applied is True
     assert canon_attempt.forced_accept_applied is False
 

@@ -366,17 +366,19 @@ def _run_repair_loop_for_phase(
         if not repair_can_run_locally:
             final_decision = AutoDecisionEngine(build_final_acceptance_rules()).decide(repair_v2_input)
             final_gate = _final_gate_from_engine_decision(final_decision)
+            force_accept = final_gate.decision == "force_accept"
             current_review = current_review.model_copy(
                 update={
+                    "verdict": "warn" if force_accept else current_review.verdict,
                     "repair_exhausted": True,
                     "final_gate_decision": final_gate,
                     "residual_review_issues": list(current_review.issues),
-                    "forced_accept_applied": final_gate.decision == "force_accept",
+                    "forced_accept_applied": force_accept,
                 }
             )
             current_review_row.review_meta_json = self._review_meta_json(current_review)
             session.add(current_review_row)
-            if final_gate.decision == "force_accept":
+            if force_accept:
                 if phase_attempts:
                     phase_attempts[-1].forced_accept_applied = True
                     session.add(phase_attempts[-1])

@@ -9,6 +9,7 @@ from unittest.mock import patch
 import forwin.api as api_module
 from forwin.config import Config
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.draft import ChapterDraft
 from forwin.models.phase import ProvisionalBandExecution
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
@@ -366,6 +367,17 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
                             status="planned",
                         ),
                     ]
+                )
+                session.flush()
+                session.add(
+                    ChapterDraft(
+                        id="draft-review-block-1",
+                        chapter_plan_id="plan-review-block-1",
+                        version=1,
+                        body_text="待审草稿",
+                        summary="待审",
+                        char_count=4,
+                    )
                 )
                 session.commit()
 

@@ -65,7 +65,6 @@ from forwin.governance import (
 from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis
 from forwin.map.models import MapNodeRow
 from forwin.map.service import build_interconnections_from_genesis_atlas, create_or_update_book_map
-from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.genesis import PromptTrace
 from forwin.models.governance import DecisionEvent
 from forwin.observability.payloads import audit_payload
@@ -91,6 +90,36 @@ _GENERATION_TASK_TERMINAL_STATUSES = {
 
 from .common import *
 from forwin.generation.run_target import resolve_generation_run_target
+
+
+def _reset_orphan_needs_review_plans(
+    session,
+    plans: list[ChapterPlan],
+) -> tuple[list[int], bool]:
+    needs_review_plans = [
+        plan
+        for plan in plans
+        if str(getattr(plan, "status", "") or "") == "needs_review"
+    ]
+    if not needs_review_plans:
+        return [], False
+
+    latest_drafts = load_latest_drafts_by_plan_id(
+        session,
+        [str(plan.id or "") for plan in needs_review_plans],
+    )
+    waiting_review: list[int] = []
+    reset_any = False
+    for plan in needs_review_plans:
+        plan_id = str(plan.id or "")
+        chapter_number = int(getattr(plan, "chapter_number", 0) or 0)
+        if plan_id and plan_id in latest_drafts:
+            waiting_review.append(chapter_number)
+            continue
+        plan.status = "planned"
+        session.add(plan)
+        reset_any = True
+    return waiting_review, reset_any
 
 
 def continue_project_generation(
@@ -148,7 +177,14 @@ def continue_project_generation(
             .where(ChapterPlan.project_id == project_id)
             .order_by(ChapterPlan.chapter_number.asc())
         ).scalars().all()
-        waiting_review = [plan.chapter_number for plan in plans if plan.status == "needs_review"]
+        waiting_review, reset_orphan_review = _reset_orphan_needs_review_plans(session, plans)
+        if reset_orphan_review:
+            session.commit()
+            plans = session.execute(
+                select(ChapterPlan)
+                .where(ChapterPlan.project_id == project_id)
+                .order_by(ChapterPlan.chapter_number.asc())
+            ).scalars().all()
         if waiting_review:
             raise HTTPException(409, f"仍有章节等待 review：{', '.join(str(item) for item in waiting_review)}")
         waiting_acceptance = [plan.chapter_number for plan in plans if plan.status == "drafted"]

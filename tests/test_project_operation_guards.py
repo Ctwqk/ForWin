@@ -1081,6 +1081,80 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertIn("章节等待接受", str(ctx.exception.detail))
         self.assertIn("2", str(ctx.exception.detail))
 
+    def test_continue_generation_resets_orphan_needs_review_placeholders(self) -> None:
+        project = self._create_project(project_id="proj-orphan-review-placeholders", creation_status="writing")
+        with self.session_factory() as session:
+            arc = ArcPlanVersion(
+                id="arc-orphan-review-placeholders",
+                project_id=project.id,
+                arc_synopsis="测试弧线",
+                status="active",
+                arc_number=2,
+                chapter_start=31,
+                chapter_end=33,
+            )
+            session.add(arc)
+            session.flush()
+            for chapter_number in range(1, 31):
+                session.add(
+                    ChapterPlan(
+                        id=f"plan-orphan-review-accepted-{chapter_number}",
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=chapter_number,
+                        title=f"第{chapter_number}章",
+                        status="accepted",
+                    )
+                )
+            for chapter_number in range(31, 34):
+                session.add(
+                    ChapterPlan(
+                        id=f"plan-orphan-review-placeholder-{chapter_number}",
+                        project_id=project.id,
+                        arc_plan_id=arc.id,
+                        chapter_number=chapter_number,
+                        title=f"第{chapter_number}章",
+                        status="needs_review",
+                    )
+                )
+            session.commit()
+
+        captured: dict[str, object] = {}
+
+        def capture_task_creation(**kwargs):
+            captured.update(kwargs)
+            task_id = "task-orphan-review-placeholders"
+            task = api_module._create_task_record(
+                title=str(kwargs.get("title") or ""),
+                subtitle=str(kwargs.get("subtitle") or ""),
+                message=str(kwargs.get("message") or ""),
+                requested_chapters=int(kwargs.get("requested_chapters") or 0),
+            )
+            task["project_id"] = project.id
+            api_module._persist_generation_task(task_id, task)
+            return task_id
+
+        with patch("forwin.api._create_continue_generation_task", new=capture_task_creation):
+            response = api_module.continue_project_generation(
+                project.id,
+                ProjectContinueGenerationRequest(run_until_chapter=33),
+            )
+
+        self.assertEqual(response.task_id, "task-orphan-review-placeholders")
+        self.assertEqual(captured["requested_chapters"], 3)
+        self.assertEqual(captured["max_chapters"], 3)
+        self.assertEqual(captured["run_until_chapter"], 33)
+        with self.session_factory() as session:
+            statuses = {
+                row.chapter_number: row.status
+                for row in session.query(ChapterPlan)
+                .filter(ChapterPlan.project_id == project.id)
+                .filter(ChapterPlan.chapter_number >= 31)
+                .order_by(ChapterPlan.chapter_number.asc())
+                .all()
+            }
+        self.assertEqual(statuses, {31: "planned", 32: "planned", 33: "planned"})
+
     def test_continue_generation_task_requested_chapters_honors_max_chapters(self) -> None:
         project = self._create_project(project_id="proj-continue-sized-task")
         with self.session_factory() as session:

@@ -20,7 +20,7 @@ _SOFT_ISSUE_TYPES = {
 }
 
 
-def _is_force_acceptable_nonblocking_issue(issue) -> bool:
+def is_force_acceptable_nonblocking_issue(issue) -> bool:
     rule_name = str(getattr(issue, "rule_name", "") or "")
     issue_type = str(getattr(issue, "issue_type", "") or "")
     issue_group = str(getattr(issue, "issue_group", "") or "")
@@ -31,6 +31,9 @@ def _is_force_acceptable_nonblocking_issue(issue) -> bool:
         and not bool(getattr(issue, "blocking", False))
         and not str(getattr(issue, "blocking_origin", "") or "").strip()
     )
+
+
+_is_force_acceptable_nonblocking_issue = is_force_acceptable_nonblocking_issue
 
 
 class FinalAcceptanceGate:
@@ -81,7 +84,7 @@ class FinalAcceptanceGate:
                 for issue in review.issues
                 if str(issue.severity or "") == "error"
                 and str(issue.issue_type or "") in _HARD_ISSUE_TYPES
-                and not _is_force_acceptable_nonblocking_issue(issue)
+                and not is_force_acceptable_nonblocking_issue(issue)
             ),
             None,
         )
@@ -101,7 +104,7 @@ class FinalAcceptanceGate:
                 for issue in review.issues
                 if str(issue.severity or "") == "error"
                 and str(issue.issue_type or "") not in _SOFT_ISSUE_TYPES
-                and not _is_force_acceptable_nonblocking_issue(issue)
+                and not is_force_acceptable_nonblocking_issue(issue)
             ),
             None,
         )

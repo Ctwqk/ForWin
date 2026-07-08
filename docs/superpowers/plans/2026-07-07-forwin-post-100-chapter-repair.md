@@ -1,8 +1,41 @@
-# ForWin 100 章实测暴露问题修理计划
+# ForWin Post-100 Chapter Repair Reset Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans`
-> to implement this plan task-by-task. User approval for this plan is
-> pre-granted by the request.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development
+> (recommended) or superpowers:executing-plans to implement this plan
+> task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Replace the post-100-chapter hotfix loop with a destructive
+contract reset: entity registration instead of alias regex patches, readability
+blocking instead of silent reader corruption, connected fatal producers,
+explicit embedding degradation, real pulp BookState extraction, hand-authored
+trope templates, and a no-hotfix 100-chapter validation run.
+
+**Architecture:** Admission becomes registration-backed and durable through
+`Entity` / `EntityAlias`; review receives deterministic readability and fatal
+producer signals; infra and extraction failures fail closed instead of silently
+degrading. Old generation data is not migrated or repaired.
+
+**Tech Stack:** Python 3.12/3.13, SQLAlchemy models and Alembic migrations,
+pytest, Qdrant retrieval, ForWin DecisionEvent observability, ForWin MCP tools
+for runtime project/task/chapter truth.
+
+**Spec:** `docs/superpowers/specs/2026-07-07-forwin-post-100-chapter-repair-design.md`
+
+## Global Constraints
+
+- Do not preserve compatibility with old projects, old tasks, or old generated
+  data.
+- Do not write to production project, task, chapter, or canon tables to clean
+  old data.
+- Use old project data only as frozen fixture input.
+- Do not add book-specific name rules to make the validation book pass.
+- During the final 100-chapter validation run, code hotfix count must be zero.
+- If code must change during validation, mark the run failed, deploy the generic
+  fix, create a new project, and restart validation.
+
+---
+
+# ForWin 100 章实测暴露问题修理计划
 
 日期：2026-07-07
 状态：implementation-ready

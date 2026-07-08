@@ -628,27 +628,25 @@
       });
     }
 
-    function genericizeBackgroundReferenceFromReview(projectId, chapterNumber) {
+    function recordBackgroundEntityDecisionFromReview(projectId, chapterNumber) {
       openGovernanceActionModal({
-        title: `Genericize Background Reference · 第${chapterNumber}章`,
-        description: '创建一个可审计 proposal，用于把未计划的背景姓名改写为泛称，避免污染 canon。',
-        confirmLabel: 'Genericize Proposal',
+        title: `Record Background Entity · 第${chapterNumber}章`,
+        description: '创建一个可审计 proposal，用于记录未计划实体不进入 canon 的背景决策。',
+        confirmLabel: 'Record Decision',
         fields: [
           { name: 'source_reference', label: 'Source Reference' },
-          { name: 'replacement', label: 'Replacement', value: '背景人物' },
         ],
-        errorTitle: '创建 genericize proposal 失败',
-        onSubmit: ({ reason, source_reference, replacement }) => createOperatorProposal(projectId, {
+        errorTitle: '创建 background entity decision 失败',
+        onSubmit: ({ reason, source_reference }) => createOperatorProposal(projectId, {
           source: 'operator_home',
-          proposal_type: 'GenericizeBackgroundReferenceProposal',
+          proposal_type: 'EntityBackgroundDecisionProposal',
           reason,
           human_notes: `chapter=${chapterNumber}`,
           created_by: 'operator_home',
           proposed_patch: {
-            action: 'genericize_background_reference',
+            action: 'record_background_generic_decision',
             chapter_number: chapterNumber,
             source_reference,
-            replacement,
           },
         }),
       });
@@ -1005,9 +1003,9 @@
         const registerButton = createButton('Register Entity', () => registerSubworldEntityFromReview(item.project_id, chapter.chapter_number), 'ghost');
         registerButton.disabled = !canReview;
         actions.appendChild(registerButton);
-        const genericizeButton = createButton('Genericize Reference', () => genericizeBackgroundReferenceFromReview(item.project_id, chapter.chapter_number), 'ghost');
-        genericizeButton.disabled = !canReview;
-        actions.appendChild(genericizeButton);
+        const backgroundDecisionButton = createButton('Background Decision', () => recordBackgroundEntityDecisionFromReview(item.project_id, chapter.chapter_number), 'ghost');
+        backgroundDecisionButton.disabled = !canReview;
+        actions.appendChild(backgroundDecisionButton);
         const obligationButton = createButton('Create Obligation', () => createObligationFromReview(item.project_id, chapter.chapter_number), 'ghost');
         obligationButton.disabled = !canReview;
         actions.appendChild(obligationButton);

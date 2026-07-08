@@ -118,6 +118,7 @@ class CoreDeps:
     active_generation_task_error_cls: type[Exception]
     display_datetime: Callable[[Any], str]
     json_load_object: Callable[[str | None], dict[str, Any]]
+    get_memory_index: Callable[[], Any] = lambda: None
 
 
 @dataclass(frozen=True)
@@ -284,6 +285,7 @@ def register_api_routes(
     get_slow_performance_spans = deps.get_slow_performance_spans
     get_llm_performance_report = deps.get_llm_performance_report
     get_db_performance_report = deps.get_db_performance_report
+    get_memory_index = deps.core.get_memory_index
 
     system_handlers = api_system_routes.build_handlers(
         get_config=get_config,
@@ -304,6 +306,7 @@ def register_api_routes(
         governance_request_payload=governance_request_payload,
         serialize_llm_settings=serialize_llm_settings,
         active_generation_task_error_cls=active_generation_task_error_cls,
+        get_memory_index=get_memory_index,
     )
     task_handlers = api_task_routes.build_handlers(
         deps=api_task_routes.TaskRouteDeps(

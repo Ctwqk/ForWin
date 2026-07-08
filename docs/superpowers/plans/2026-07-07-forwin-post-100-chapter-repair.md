@@ -8,7 +8,7 @@
 contract reset: entity registration instead of alias regex patches, readability
 blocking instead of silent reader corruption, connected fatal producers,
 explicit embedding degradation, real pulp BookState extraction, hand-authored
-trope templates, and a no-hotfix 100-chapter validation run.
+trope templates, and a no-hotfix 200-chapter validation run.
 
 **Architecture:** Admission becomes registration-backed and durable through
 `Entity` / `EntityAlias`; review receives deterministic readability and fatal
@@ -66,7 +66,7 @@ for runtime project/task/chapter truth.
 | 5 | embedding gateway 失败时**静默回退 hash**（64 维伪随机），长程召回失效且无法从运行时确认 | `forwin/retrieval/memory_index.py` fallback 分支只打 warning | Task 4 |
 | 6 | pulp "light extraction" 只写每章 title+summary 一个节点，不提取角色/状态/物品/势力；pulp 档状态失忆实质未修 | `forwin/extractor/book_state_graph_delta.py::_light_structured_fallback_delta` | Task 5 |
 | 7 | trope 库 "≥50 条" 靠 `_BUILTIN_VARIANTS` 程序化生成凑数，手写只有 9 条 | `forwin/protocol/trope_library.py::expand_trope_template_payload` | Task 6 |
-| 8 | "100 章跑通"是人肉热修陪跑出来的，没有"无热修长跑"这一验收概念 | 100 章日志全篇 | Task 7 |
+| 8 | "100 章跑通"是人肉热修陪跑出来的，没有"无热修长跑"这一验收概念；本轮要求提升为 200 章实测 | 100 章日志全篇 + 本轮目标 | Task 7 |
 
 优先级：Task 1、2 是 P0（不修则任何新长跑都会复现污染与打地鼠）；
 Task 3、4 是 P1；Task 5 是 pulp 上线前置；Task 6 是 P2；Task 7 是总验收。
@@ -301,8 +301,8 @@ signal（全部进入 fatal 阻断集合，所有 gate 档位一致阻断）：
 - [ ] Task 1-6 focused 测试全绿；`.venv/bin/pytest tests -q` 全量通过。
 - [ ] 提交、推送、经 150 sync 路径部署；`check_codex_operator_ready.py` 通过，
   `/health` 确认 embedder `gateway/384`。
-- [ ] **新建全新 100 章项目**（禁止复用任何旧项目），
-  `project_start_writing(run_until_chapter=100)`。
+- [ ] **新建全新 200 章项目**（禁止复用任何旧项目），
+  `project_start_writing(run_until_chapter=200)`。
 - [ ] 运行纪律：**运行期间禁止代码热修。** 遇到阻断只允许通过 UI/MCP 的
   官方动作恢复（retry / register entity / create obligation / accept soft）。
   如果必须改代码才能推进，本次 run 判定失败：修完、部署、**重开新项目**再跑。
@@ -316,7 +316,7 @@ signal（全部进入 fatal 阻断集合，所有 gate 档位一致阻断）：
 | 可读性抽查（每 10 章抽 1 章跑 readability analyzer + 人工快读） | 称谓多指代 0；trait/内部 key 泄漏 0；标题编号错误 0；空摘要 0 |
 | 主角真名出现于正文的章节占比 | ≥ 95% |
 | 实体表增长 | 新命名角色全部有 Entity/EntityAlias 记录，无正则热修 |
-| 完成状态 | `project_get`: 100/100 accepted，无 pending review，无 active task |
+| 完成状态 | `project_get`: 200/200 accepted，无 pending review，无 active task |
 
 任何一项不达标 → 记录 stop reason 分布，回到对应 Task 修复，重开新项目重跑。
 不允许用"对这本书加规则"的方式让指标通过。

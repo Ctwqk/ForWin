@@ -32,6 +32,14 @@ def test_loads_pulp_markdown_library_templates() -> None:
     assert power_level_up.audience_fit
     assert all(template.genre_fit for template in templates)
     assert all(template.payoff_shape or template.visible_payoff for template in templates)
+    assert PULP_LIBRARY_PATH.read_text(encoding="utf-8").count("\n## ") >= 50
+
+
+def test_trope_library_no_longer_generates_padding_templates() -> None:
+    source = Path("forwin/protocol/trope_library.py").read_text(encoding="utf-8")
+
+    assert "_BUILTIN_VARIANTS" not in source
+    assert "_generated_template_payload" not in source
 
 
 def test_configured_bad_override_path_fails_visibly(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -122,7 +130,7 @@ def test_markdown_override_summary_reports_effective_cached_library(
     assert summary.source == str(library_path)
     assert summary.validation_errors == []
     assert summary.total_count == len(templates)
-    assert summary.total_count >= 50
+    assert summary.total_count == 5
     for category in ("power", "social", "justice", "mystery", "emotion"):
         assert summary.category_counts[category] >= 1
 

@@ -139,6 +139,12 @@ def _review_and_maybe_rewrite(
             else {}
         ),
     )
+    current_output = self._register_writer_output_entities(
+        session=session,
+        project_id=project_id,
+        chapter_number=chapter_plan.chapter_number,
+        writer_output=current_output,
+    )
     current_review = self._review_current_output(
         repo=repo,
         checker=checker,
@@ -147,21 +153,6 @@ def _review_and_maybe_rewrite(
         writer_output=current_output,
     )
     autofixed_output = self._apply_canon_name_drift_autofix(current_output, current_review)
-    if autofixed_output is not None:
-        current_output = autofixed_output
-        current_review = self._review_current_output(
-            repo=repo,
-            checker=checker,
-            project_id=project_id,
-            context=context,
-            writer_output=current_output,
-        )
-    protected_subworld_names = self._project_character_names(repo, project_id)
-    autofixed_output = self._apply_subworld_admission_autofix(
-        current_output,
-        current_review,
-        protected_names=protected_subworld_names,
-    )
     if autofixed_output is not None:
         current_output = autofixed_output
         current_review = self._review_current_output(
@@ -543,25 +534,7 @@ def _run_repair_loop_for_phase(
                 )
 
         if bool(design_patch.get("subworld_admission_patch_skip_writer")):
-            rewrite_payload = current_output.model_dump(mode="python")
-            replacements = design_patch.get("subworld_admission_replacements")
-            if isinstance(replacements, dict) and replacements:
-                rewrite_payload = self._replace_canon_name_strings(
-                    rewrite_payload,
-                    {str(key): str(value) for key, value in replacements.items()},
-                )
-                rewrite_payload["char_count"] = len(str(rewrite_payload.get("body") or ""))
-                generation_meta = dict(rewrite_payload.get("generation_meta") or {})
-                generation_meta["subworld_admission_autofix"] = {
-                    **(
-                        generation_meta.get("subworld_admission_autofix")
-                        if isinstance(generation_meta.get("subworld_admission_autofix"), dict)
-                        else {}
-                    ),
-                    **{str(key): str(value) for key, value in replacements.items()},
-                }
-                rewrite_payload["generation_meta"] = generation_meta
-            rewritten_output = WriterOutput.model_validate(rewrite_payload)
+            rewritten_output = current_output
 
         self._emit_progress(
             "stage_changed",
@@ -695,6 +668,12 @@ def _run_repair_loop_for_phase(
             project_id=project_id,
             current_chapter=chapter_plan.chapter_number,
         )
+        rewritten_output = self._register_writer_output_entities(
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_plan.chapter_number,
+            writer_output=rewritten_output,
+        )
         rewritten_review = self._review_current_output(
             repo=repo,
             checker=checker,
@@ -705,20 +684,6 @@ def _run_repair_loop_for_phase(
         autofixed_rewritten_output = self._apply_canon_name_drift_autofix(
             rewritten_output,
             rewritten_review,
-        )
-        if autofixed_rewritten_output is not None:
-            rewritten_output = autofixed_rewritten_output
-            rewritten_review = self._review_current_output(
-                repo=repo,
-                checker=checker,
-                project_id=project_id,
-                context=updated_context,
-                writer_output=rewritten_output,
-            )
-        autofixed_rewritten_output = self._apply_subworld_admission_autofix(
-            rewritten_output,
-            rewritten_review,
-            protected_names=self._project_character_names(repo, project_id),
         )
         if autofixed_rewritten_output is not None:
             rewritten_output = autofixed_rewritten_output

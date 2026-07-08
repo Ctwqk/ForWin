@@ -37,8 +37,6 @@ def _apply_subworld_admission_repair_patch(
         **patch_result.design_patch,
         "subworld_admission_patch_skip_writer": not patch_result.requires_writer_rewrite,
     }
-    if patch_result.replacements:
-        design_patch["subworld_admission_replacements"] = dict(patch_result.replacements)
     updated_context = context.model_copy(
         update={"chapter_experience_plan": patch_result.updated_plan}
     )

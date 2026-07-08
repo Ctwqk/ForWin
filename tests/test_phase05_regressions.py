@@ -1077,16 +1077,12 @@ class Phase05RegressionTests(unittest.TestCase):
                 orchestrator.engine.dispose()
 
             self.assertEqual(result.status, "needs_review")
-            self.assertEqual(len(attempts), 2)
-            self.assertEqual(
-                [item.repair_scope for item in attempts],
-                ["subworld", "subworld"],
-            )
+            self.assertEqual(len(attempts), 0)
             review_meta = json.loads(review.review_meta_json)
             self.assertEqual((review_meta.get("final_gate_decision") or {}).get("decision"), "manual_review_required")
             self.assertEqual((review_meta.get("final_gate_decision") or {}).get("canon_risk"), "high")
             self.assertEqual(plan.status, "needs_review")
-            self.assertEqual(plan.repair_attempt_count, 2)
+            self.assertEqual(plan.repair_attempt_count, 0)
             self.assertEqual(plan.canon_risk_level, "high")
             self.assertEqual(apply_calls["count"], 0)
 

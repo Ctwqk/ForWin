@@ -119,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
             embedding_api_key=config.embedding_api_key,
             embedding_model=embedding_model,
             embedding_dims=embedding_dims,
+            embedding_required=config.embedding_required,
         )
     )
     try:
@@ -142,6 +143,29 @@ def main(argv: list[str] | None = None) -> int:
         f"embedding_backend={embedding_backend} "
         f"dry_run={result.dry_run}"
     )
+    if not args.dry_run:
+        actual_dims = _memory_index_vector_dims(memory_index)
+        expected_dims = int(embedding_dims or 0)
+        if expected_dims > 0 and actual_dims > 0 and actual_dims != expected_dims:
+            print(
+                "reembed failed: "
+                f"collection vector dims={actual_dims} expected={expected_dims}"
+            )
+            return 2
+    return 0
+
+
+def _memory_index_vector_dims(memory_index: ChapterMemoryIndex) -> int:
+    collection_size = getattr(memory_index, "collection_vector_size", None)
+    if callable(collection_size):
+        value = collection_size()
+        if value:
+            return int(value)
+    status = getattr(memory_index, "embedding_status", None)
+    if callable(status):
+        payload = status()
+        if isinstance(payload, dict):
+            return int(payload.get("dims") or 0)
     return 0
 
 

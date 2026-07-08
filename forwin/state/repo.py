@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Optional
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from forwin.audience_metrics import derive_audience_trends
-from forwin.canon_names import extract_candidate_character_names
-from forwin.checker.reference_classifier import candidate_character_name
 from forwin.governance import (
     DecisionEventInfo,
     NarrativeConstraintInfo,
@@ -76,30 +73,6 @@ from forwin.state.query_helpers import (
 )
 
 logger = logging.getLogger(__name__)
-
-_SUMMARY_CODENAME_CHARACTER_RE = re.compile(
-    r"(?:猎锚者|追踪者|调查员|审查官|审计官|执行者|清理人|观察员|守门人|代理人|中介人|架构师|工程师|特勤|特工)"
-    r"[A-Za-z][A-Za-z0-9_-]{0,5}"
-)
-_SUMMARY_NETWORK_HANDLER_ALIAS_RE = re.compile(
-    r"(?:^|[，,。；;、\s]|遭遇|接触|联系|找到|通过|经由|来自|与|和|向|从|由|对)"
-    r"(?P<alias>[\u4e00-\u9fff]{2,4})网络(?:中介人|联络人|联系人|代理人)(?P<name>[\u4e00-\u9fff]{2,4})"
-)
-_SUMMARY_NETWORK_ALIAS_RE = re.compile(
-    r"(?:^|[，,。；;、\s]|遭遇|接触|联系|找到|通过|经由|来自|与|和|向|从|由|对)"
-    r"(?P<alias>[\u4e00-\u9fff]{2,4})网络(?=遭|被|已|把|向|从|给|传|提供|留下|接入|中|的|[，,。；;、\s])"
-)
-_SUMMARY_NON_HANDLER_ALIASES = {
-    "官方",
-    "外部",
-    "内部",
-    "地下",
-    "黑市",
-    "档案",
-    "记忆",
-    "潮汐",
-    "董事",
-}
 
 _READER_FEEDBACK_LEVEL_ORDER = {
     "noise": 0,
@@ -181,32 +154,6 @@ def _keyword_feedback_summary(comment_count: int, dominant_sentiment: str) -> st
     else:
         summary_parts.append("暂无明确结构化信号")
     return "，".join(summary_parts) + "。"
-
-
-def _extract_summary_character_names(text: str) -> set[str]:
-    content = str(text or "")
-    if not content.strip():
-        return set()
-    names = set(extract_candidate_character_names(content))
-    for match in _SUMMARY_CODENAME_CHARACTER_RE.finditer(content):
-        candidate = candidate_character_name(match.group(0))
-        if candidate:
-            names.add(candidate)
-    for match in _SUMMARY_NETWORK_HANDLER_ALIAS_RE.finditer(content):
-        raw_alias = str(match.group("alias") or "").strip()
-        if raw_alias in _SUMMARY_NON_HANDLER_ALIASES:
-            continue
-        candidate = candidate_character_name(raw_alias)
-        if candidate:
-            names.add(candidate)
-    for match in _SUMMARY_NETWORK_ALIAS_RE.finditer(content):
-        raw_alias = str(match.group("alias") or "").strip()
-        if raw_alias in _SUMMARY_NON_HANDLER_ALIASES:
-            continue
-        candidate = candidate_character_name(raw_alias)
-        if candidate:
-            names.add(candidate)
-    return {name for name in names if 1 < len(name) <= 12}
 
 
 class _AudienceHintData:
@@ -739,41 +686,34 @@ class StateRepository:
         project_id: str,
         chapter_number: int,
     ) -> set[str]:
-        active_ids = self._active_subworld_ids_for_chapter(project_id, chapter_number)
-        if not active_ids:
-            active_ids = self._fallback_global_core_ids(project_id)
-        roster_items = self.list_roster_items(project_id, active_ids)
-        entity_ids = [
-            str(item.entity_id or "").strip()
-            for item in roster_items
-            if item.entity_kind == "character" and str(item.entity_id or "").strip()
-        ]
         names: set[str] = set()
-        if entity_ids:
-            entities = self.session.execute(
-                select(Entity)
-                .where(
-                    Entity.project_id == project_id,
-                    Entity.id.in_(entity_ids),
-                )
-            ).scalars().all()
-            names.update(
-                str(entity.name or "").strip()
-                for entity in entities
-                if str(entity.name or "").strip()
+        entities = self.session.execute(
+            select(Entity).where(
+                Entity.project_id == project_id,
+                Entity.kind == "character",
+                Entity.is_active == True,  # noqa: E712
             )
-            alias_rows = self.session.execute(
-                select(EntityAlias.alias)
-                .where(
-                    EntityAlias.project_id == project_id,
-                    EntityAlias.entity_id.in_(entity_ids),
-                )
-            ).all()
-            names.update(
-                str(alias or "").strip()
-                for alias, in alias_rows
-                if str(alias or "").strip()
+        ).scalars().all()
+        names.update(
+            str(entity.name or "").strip()
+            for entity in entities
+            if str(entity.name or "").strip()
+        )
+        alias_rows = self.session.execute(
+            select(EntityAlias.alias)
+            .join(Entity, EntityAlias.entity_id == Entity.id)
+            .where(
+                Entity.project_id == project_id,
+                Entity.kind == "character",
+                Entity.is_active == True,  # noqa: E712
+                EntityAlias.project_id == project_id,
             )
+        ).all()
+        names.update(
+            str(alias or "").strip()
+            for alias, in alias_rows
+            if str(alias or "").strip()
+        )
         chapter_experience = self.get_chapter_experience_plan(project_id, chapter_number)
         if chapter_experience is not None:
             names.update(
@@ -781,23 +721,6 @@ class StateRepository:
                 for item in chapter_experience.chapter_entry_targets
                 if str(item.entity_name or "").strip()
             )
-        chapter_plan = self.get_chapter_plan(project_id, chapter_number)
-        if chapter_plan is not None:
-            names.update(
-                _extract_summary_character_names(
-                    "\n".join(
-                        [
-                            str(chapter_plan.title or ""),
-                            str(chapter_plan.one_line or ""),
-                            str(chapter_plan.goals_json or ""),
-                            str(chapter_plan.task_contract_json or ""),
-                            str(chapter_plan.experience_plan_json or ""),
-                        ]
-                    )
-                )
-            )
-        names.update(self._world_pressure_character_names(project_id, chapter_number))
-        names.update(self._recent_accepted_summary_character_names(project_id, chapter_number))
         return names
 
     def get_allowed_entity_snapshots(
@@ -857,38 +780,6 @@ class StateRepository:
             matched = [name for name in candidates if name and name in pressure_text]
             if matched:
                 names.update(name for name in candidates if name)
-        return names
-
-    def _recent_accepted_summary_character_names(
-        self,
-        project_id: str,
-        chapter_number: int,
-        *,
-        window_chapters: int = 3,
-    ) -> set[str]:
-        current = int(chapter_number or 0)
-        if current <= 1:
-            return set()
-        start_chapter = max(1, current - max(1, int(window_chapters or 1)))
-        rows = self.session.execute(
-            select(ChapterPlan.chapter_number, ChapterPlan.one_line, ChapterDraft.summary)
-            .join(ChapterDraft, ChapterDraft.chapter_plan_id == ChapterPlan.id)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.status == "accepted",
-                ChapterPlan.chapter_number >= start_chapter,
-                ChapterPlan.chapter_number < current,
-            )
-            .order_by(ChapterPlan.chapter_number.desc(), ChapterDraft.version.desc())
-        ).all()
-        names: set[str] = set()
-        seen_chapters: set[int] = set()
-        for previous_chapter, one_line, summary in rows:
-            chapter_key = int(previous_chapter or 0)
-            if chapter_key in seen_chapters:
-                continue
-            seen_chapters.add(chapter_key)
-            names.update(_extract_summary_character_names(f"{one_line or ''}\n{summary or ''}"))
         return names
 
     def get_active_subworld_summary(

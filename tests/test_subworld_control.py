@@ -215,7 +215,7 @@ class SubWorldControlTests(unittest.TestCase):
                 chapter_number=50,
                 title="第50章",
                 body="沈槐澜的远程追踪信号沿着渗漏带逼近，灰鸦仍未获准进入本章。" * 80,
-                end_of_chapter_summary="林澈确认沈槐澜的远程信号正在追踪她。",
+                end_of_chapter_summary="陆明确认沈槐澜的远程信号正在追踪她。",
                 entity_mentions=[
                     EntityMention(entity_name="沈槐澜（远程追踪信号）", entity_kind="character", is_named=True),
                     EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
@@ -240,7 +240,7 @@ class SubWorldControlTests(unittest.TestCase):
                 return None
 
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
-                return {"林澈"}
+                return {"陆明"}
 
             def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
                 return {}
@@ -251,11 +251,11 @@ class SubWorldControlTests(unittest.TestCase):
             WriterOutput(
                 chapter_number=53,
                 title="第53章",
-                body="林澈的AI备份在协议层回答，林澈体内含蘅照夜意识的回声继续提醒她，灰鸦仍未获准进入本章。" * 80,
-                end_of_chapter_summary="林澈确认体内协议与AI备份都指向同一身份。",
+                body="陆明的AI备份在协议层回答，陆明体内含蘅照夜意识的回声继续提醒她，灰鸦仍未获准进入本章。" * 80,
+                end_of_chapter_summary="陆明确认体内协议与AI备份都指向同一身份。",
                 entity_mentions=[
-                    EntityMention(entity_name="林澈（AI备份）", entity_kind="character", is_named=True),
-                    EntityMention(entity_name="林澈（体内含蘅照夜意识）", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="陆明（AI备份）", entity_kind="character", is_named=True),
+                    EntityMention(entity_name="陆明（体内含蘅照夜意识）", entity_kind="character", is_named=True),
                     EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
                 ],
             ),
@@ -267,8 +267,8 @@ class SubWorldControlTests(unittest.TestCase):
             if issue.rule_name == "sub_world_unknown_named_entity"
         ]
         self.assertEqual(unknown, ["灰鸦"])
-        self.assertEqual(ContinuityChecker._candidate_character_name("林澈（AI备份）"), "林澈")
-        self.assertEqual(ContinuityChecker._candidate_character_name("林澈（体内含蘅照夜意识）"), "林澈")
+        self.assertEqual(ContinuityChecker._candidate_character_name("陆明（AI备份）"), "陆明")
+        self.assertEqual(ContinuityChecker._candidate_character_name("陆明（体内含蘅照夜意识）"), "陆明")
 
     def test_subworld_admission_normalizes_known_character_projection_annotation(self) -> None:
         class FakeRepo:
@@ -291,7 +291,7 @@ class SubWorldControlTests(unittest.TestCase):
                 chapter_number=58,
                 title="第58章",
                 body="蘅照夜的镜像投影在第零区入口短暂显现，灰鸦仍未获准进入本章。" * 80,
-                end_of_chapter_summary="林澈确认蘅照夜的镜像投影来自第零区。",
+                end_of_chapter_summary="陆明确认蘅照夜的镜像投影来自第零区。",
                 entity_mentions=[
                     EntityMention(entity_name="蘅照夜（镜像投影）", entity_kind="character", is_named=True),
                     EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
@@ -328,7 +328,7 @@ class SubWorldControlTests(unittest.TestCase):
                 chapter_number=61,
                 title="第61章",
                 body="蘅照夜的远程信号介入通讯器，灰鸦仍未获准进入本章。" * 80,
-                end_of_chapter_summary="蘅照夜通过远程信号介入提醒林澈撤离。",
+                end_of_chapter_summary="蘅照夜通过远程信号介入提醒陆明撤离。",
                 entity_mentions=[
                     EntityMention(entity_name="蘅照夜（远程信号介入）", entity_kind="character", is_named=True),
                     EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
@@ -366,7 +366,7 @@ class SubWorldControlTests(unittest.TestCase):
                 chapter_number=67,
                 title="第67章",
                 body="沈槐澜的录音从无名协议中响起，灰鸦仍未获准进入本章。" * 80,
-                end_of_chapter_summary="沈槐澜的录音指示林澈前往安全屋。",
+                end_of_chapter_summary="沈槐澜的录音指示陆明前往安全屋。",
                 entity_mentions=[
                     EntityMention(entity_name="沈槐澜（录音）", entity_kind="character", is_named=True),
                     EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
@@ -403,7 +403,7 @@ class SubWorldControlTests(unittest.TestCase):
                 chapter_number=77,
                 title="第77章",
                 body="陈牧野的副本在电梯井里传递导师留下的警告，灰鸦仍未获准进入本章。" * 80,
-                end_of_chapter_summary="陈牧野的副本提醒林澈避开若槐宗邦的契约陷阱。",
+                end_of_chapter_summary="陈牧野的副本提醒陆明避开若槐宗邦的契约陷阱。",
                 entity_mentions=[
                     EntityMention(entity_name="陈牧野（副本）", entity_kind="character", is_named=True),
                     EntityMention(entity_name="灰鸦", entity_kind="character", is_named=True),
@@ -2198,75 +2198,12 @@ class SubWorldControlTests(unittest.TestCase):
 
         self.assertIsNone(fixed)
 
-    def test_subworld_admission_autofix_genericizes_unknown_named_executives(self) -> None:
-        output = WriterOutput(
-            chapter_number=15,
-            title="韩砚的立场",
-            body=(
-                "首席运营官赵衍坐在长桌远端。财务总监陈维盯着平板。"
-                "赵总要求陈维在午夜前清理旧港档案。"
-            ),
-            end_of_chapter_summary="韩砚发现集团高管启动档案清理。",
-            entity_mentions=[
-                EntityMention(
-                    entity_name="赵衍",
-                    entity_kind="character",
-                    is_named=True,
-                    is_on_stage=True,
-                    evidence_refs=["body:赵衍"],
-                ),
-                EntityMention(
-                    entity_name="陈维",
-                    entity_kind="character",
-                    is_named=True,
-                    is_on_stage=True,
-                    evidence_refs=["body:陈维"],
-                ),
-            ],
-            new_events=[
-                EventCandidate(
-                    summary="赵衍要求陈维清理旧港档案",
-                    significance="major",
-                    involved_entity_names=["韩砚", "赵衍", "陈维"],
-                    roles=["protagonist", "antagonist", "witness"],
-                )
-            ],
-        )
-        review = ReviewVerdict(
-            verdict="fail",
-            issues=[
-                ContinuityIssue(
-                    rule_name="sub_world_unknown_named_entity",
-                    severity="error",
-                    description="命名角色「赵衍」未在当前 chapter 的 subworld 准入名单中。",
-                    entity_names=["赵衍"],
-                    issue_type="subworld_admission",
-                ),
-                ContinuityIssue(
-                    rule_name="sub_world_unknown_named_entity",
-                    severity="error",
-                    description="命名角色「陈维」未在当前 chapter 的 subworld 准入名单中。",
-                    entity_names=["陈维"],
-                    issue_type="subworld_admission",
-                ),
-            ],
-        )
+    def test_subworld_admission_autofix_is_removed_from_orchestrator_boundary(self) -> None:
+        self.assertFalse(hasattr(WritingOrchestrator, "_apply_subworld_admission_autofix"))
 
-        fixed = WritingOrchestrator._apply_subworld_admission_autofix(output, review)
+    def test_subworld_admission_policy_registers_known_canon_characters(self) -> None:
+        from forwin.subworld.admission_policy import SubworldAdmissionPolicy
 
-        assert fixed is not None
-        serialized_content = fixed.model_dump_json(exclude={"generation_meta"})
-        self.assertNotIn("赵衍", serialized_content)
-        self.assertNotIn("赵总", serialized_content)
-        self.assertNotIn("陈维", serialized_content)
-        self.assertIn("集团高管", fixed.body)
-        self.assertEqual(fixed.char_count, len(fixed.body))
-        autofix_meta = fixed.generation_meta["subworld_admission_autofix"]
-        self.assertEqual(autofix_meta["赵衍"], "集团高管")
-        self.assertEqual(autofix_meta["赵总"], "集团高管")
-        self.assertEqual(autofix_meta["陈维"], "集团高管")
-
-    def test_subworld_admission_autofix_does_not_mask_known_canon_characters(self) -> None:
         output = WriterOutput(
             chapter_number=15,
             title="韩砚的立场",
@@ -2282,26 +2219,25 @@ class SubWorldControlTests(unittest.TestCase):
                 )
             ],
         )
-        review = ReviewVerdict(
-            verdict="fail",
-            issues=[
-                ContinuityIssue(
-                    rule_name="sub_world_unknown_named_entity",
-                    severity="error",
-                    description="命名角色「沈崇山」未在当前 chapter 的 subworld 准入名单中。",
-                    entity_names=["沈崇山"],
-                    issue_type="subworld_admission",
-                )
-            ],
+        issue = ContinuityIssue(
+            rule_name="sub_world_unknown_named_entity",
+            severity="error",
+            description="命名角色「沈崇山」未在当前 chapter 的 subworld 准入名单中。",
+            entity_names=["沈崇山"],
+            issue_type="subworld_admission",
         )
 
-        fixed = WritingOrchestrator._apply_subworld_admission_autofix(
-            output,
-            review,
-            protected_names={"沈崇山"},
+        decision = SubworldAdmissionPolicy().classify(
+            issue=issue,
+            writer_output=output,
+            chapter_goals=[],
+            chapter_task_contract=[],
+            chapter_experience_plan=ChapterExperiencePlan(),
+            existing_entities=[SimpleNamespace(name="沈崇山", aliases=[])],
+            book_state_snapshot={},
         )
 
-        self.assertIsNone(fixed)
+        self.assertEqual(decision.action, "register_entity")
 
     def test_project_character_names_include_premise_protagonist(self) -> None:
         class FakeRepo:
@@ -2419,7 +2355,9 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertFalse(ContinuityChecker._looks_like_named_character("核心系统追踪者"))
         self.assertFalse(ContinuityChecker._looks_like_named_character("系统巡检员"))
 
-    def test_subworld_admission_autofix_genericizes_old_surname_nickname(self) -> None:
+    def test_subworld_admission_policy_requires_decision_for_old_surname_nickname(self) -> None:
+        from forwin.subworld.admission_policy import SubworldAdmissionPolicy
+
         output = WriterOutput(
             chapter_number=20,
             title="地下交易",
@@ -2435,29 +2373,26 @@ class SubWorldControlTests(unittest.TestCase):
                 )
             ],
         )
-        review = ReviewVerdict(
-            verdict="fail",
-            issues=[
-                ContinuityIssue(
-                    rule_name="sub_world_unknown_named_entity",
-                    severity="error",
-                    description="命名角色「老孙」未在当前 chapter 的 subworld 准入名单中。",
-                    entity_names=["老孙"],
-                    issue_type="subworld_admission",
-                )
-            ],
+        issue = ContinuityIssue(
+            rule_name="sub_world_unknown_named_entity",
+            severity="error",
+            description="命名角色「老孙」未在当前 chapter 的 subworld 准入名单中。",
+            entity_names=["老孙"],
+            issue_type="subworld_admission",
         )
 
-        fixed = WritingOrchestrator._apply_subworld_admission_autofix(output, review)
+        decision = SubworldAdmissionPolicy().classify(
+            issue=issue,
+            writer_output=output,
+            chapter_goals=[],
+            chapter_task_contract=[],
+            chapter_experience_plan=ChapterExperiencePlan(),
+            existing_entities=[],
+            book_state_snapshot={},
+        )
 
-        self.assertIsNotNone(fixed)
-        assert fixed is not None
-        serialized_content = fixed.model_dump_json(exclude={"generation_meta"})
-        self.assertNotIn("老孙", serialized_content)
-        self.assertNotIn("相关人员", fixed.body)
-        self.assertNotIn("工作人员", fixed.body)
-        self.assertIn("馆员", fixed.body)
-        self.assertEqual(fixed.generation_meta["subworld_admission_autofix"]["老孙"], "馆员")
+        self.assertEqual(decision.action, "manual_review_required")
+        self.assertIn("record_background_generic_decision", decision.manual_actions)
 
     def test_continuity_repair_instruction_preserves_suggested_fix(self) -> None:
         instruction = HistoricalReviewHub._continuity_repair_instruction(
@@ -2634,7 +2569,7 @@ class SubWorldControlTests(unittest.TestCase):
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
         self.assertEqual(unknown, [])
 
-    def test_recent_accepted_summary_codename_character_is_subworld_allowed(self) -> None:
+    def test_recent_accepted_summary_codename_character_is_not_subworld_allowed_without_registration(self) -> None:
         with TemporaryDirectory() as tmp:
             engine = get_engine(postgres_test_url("recent-summary-codename"))
             init_db(engine)
@@ -2719,11 +2654,11 @@ class SubWorldControlTests(unittest.TestCase):
                 session.close()
                 engine.dispose()
 
-        self.assertIn("猎锚者X", allowed_names)
+        self.assertNotIn("猎锚者X", allowed_names)
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
-        self.assertEqual(unknown, [])
+        self.assertEqual(unknown, ["猎锚者X"])
 
-    def test_current_plan_obligation_name_is_subworld_allowed(self) -> None:
+    def test_current_plan_obligation_name_is_not_subworld_allowed_without_entry_target(self) -> None:
         engine = get_engine(postgres_test_url("current-plan-obligation-name"))
         init_db(engine)
         session = get_session_factory(engine)()
@@ -2762,11 +2697,11 @@ class SubWorldControlTests(unittest.TestCase):
             session.close()
             engine.dispose()
 
-        self.assertIn("陶景禾", allowed_names)
+        self.assertNotIn("陶景禾", allowed_names)
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
-        self.assertEqual(unknown, [])
+        self.assertEqual(unknown, ["陶景禾"])
 
-    def test_recent_summary_codename_with_context_label_normalizes_to_allowed_name(self) -> None:
+    def test_recent_summary_codename_with_context_label_is_not_allowed_without_registration(self) -> None:
         with TemporaryDirectory() as tmp:
             engine = get_engine(postgres_test_url("recent-summary-codename-context-label"))
             init_db(engine)
@@ -2864,15 +2799,15 @@ class SubWorldControlTests(unittest.TestCase):
                 session.close()
                 engine.dispose()
 
-        self.assertIn("猎锚者X", allowed_names)
+        self.assertNotIn("猎锚者X", allowed_names)
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
-        self.assertEqual(unknown, [])
+        self.assertTrue(unknown)
         unknown_voice = [
             issue.entity_names[0] for issue in verdict_voice.issues if issue.rule_name == "sub_world_unknown_named_entity"
         ]
-        self.assertEqual(unknown_voice, [])
+        self.assertTrue(unknown_voice)
 
-    def test_recent_summary_network_handler_alias_is_subworld_allowed(self) -> None:
+    def test_recent_summary_network_handler_alias_is_not_subworld_allowed_without_registration(self) -> None:
         with TemporaryDirectory() as tmp:
             engine = get_engine(postgres_test_url("recent-summary-network-alias"))
             init_db(engine)
@@ -2957,11 +2892,11 @@ class SubWorldControlTests(unittest.TestCase):
                 session.close()
                 engine.dispose()
 
-        self.assertIn("灰鹞", allowed_names)
+        self.assertNotIn("灰鹞", allowed_names)
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
-        self.assertEqual(unknown, [])
+        self.assertEqual(unknown, ["灰鹞"])
 
-    def test_recent_summary_network_alias_without_handler_is_subworld_allowed(self) -> None:
+    def test_recent_summary_network_alias_without_handler_is_not_subworld_allowed_without_registration(self) -> None:
         with TemporaryDirectory() as tmp:
             engine = get_engine(postgres_test_url("recent-summary-network-alias-without-handler"))
             init_db(engine)
@@ -3046,9 +2981,9 @@ class SubWorldControlTests(unittest.TestCase):
                 session.close()
                 engine.dispose()
 
-        self.assertIn("灰鹞", allowed_names)
+        self.assertNotIn("灰鹞", allowed_names)
         unknown = [issue.entity_names[0] for issue in verdict.issues if issue.rule_name == "sub_world_unknown_named_entity"]
-        self.assertEqual(unknown, [])
+        self.assertEqual(unknown, ["灰鹞"])
 
     def test_rearc_creates_new_subworlds_via_director_delta(self) -> None:
         class FakeDirector:

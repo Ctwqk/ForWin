@@ -62,7 +62,7 @@ def test_policy_registers_planned_or_stateful_entity() -> None:
     assert decision.evidence_refs == ["body:赵衍"]
 
 
-def test_policy_genericizes_background_reference() -> None:
+def test_policy_requires_registrar_decision_for_background_reference() -> None:
     decision = SubworldAdmissionPolicy().classify(
         issue=_issue("老孙"),
         writer_output=WriterOutput(
@@ -87,12 +87,12 @@ def test_policy_genericizes_background_reference() -> None:
         book_state_snapshot={},
     )
 
-    assert decision.action == "genericize_background_reference"
+    assert decision.action == "manual_review_required"
     assert decision.entity_name == "老孙"
-    assert decision.replacement in {"馆员", "集团高管"}
+    assert "operator choice" in decision.reason
 
 
-def test_policy_genericizes_non_cast_corpse_reference_even_with_state_events() -> None:
+def test_policy_requires_registrar_decision_for_non_cast_corpse_reference() -> None:
     decision = SubworldAdmissionPolicy().classify(
         issue=_issue("尸体"),
         writer_output=WriterOutput(
@@ -125,15 +125,15 @@ def test_policy_genericizes_non_cast_corpse_reference_even_with_state_events() -
         book_state_snapshot={},
     )
 
-    assert decision.action == "genericize_background_reference"
+    assert decision.action == "manual_review_required"
     assert decision.entity_name == "尸体"
-    assert decision.replacement == "遗体"
+    assert "background decision" in decision.reason
 
 
-def test_policy_genericizes_role_and_status_labels_even_with_state_events() -> None:
-    for entity_name, replacement in [
-        ("Ω级权限买家", "匿名买家"),
-        ("馆员-活跃", "状态记录"),
+def test_policy_requires_registrar_decision_for_role_and_status_labels() -> None:
+    for entity_name in [
+        "Ω级权限买家",
+        "馆员-活跃",
     ]:
         decision = SubworldAdmissionPolicy().classify(
             issue=_issue(entity_name),
@@ -167,9 +167,9 @@ def test_policy_genericizes_role_and_status_labels_even_with_state_events() -> N
             book_state_snapshot={},
         )
 
-        assert decision.action == "genericize_background_reference"
+        assert decision.action == "manual_review_required"
         assert decision.entity_name == entity_name
-        assert decision.replacement == replacement
+        assert "background decision" in decision.reason
 
 
 def test_policy_returns_manual_action_for_ambiguous_unplanned_story_entity() -> None:
@@ -186,4 +186,4 @@ def test_policy_returns_manual_action_for_ambiguous_unplanned_story_entity() -> 
     assert decision.action == "manual_review_required"
     assert decision.entity_name == "沈墨"
     assert "register_entity" in decision.manual_actions
-    assert "genericize_background_reference" in decision.manual_actions
+    assert "record_background_generic_decision" in decision.manual_actions

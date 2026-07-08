@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 
 import httpx
+import pytest
 
-from forwin.retrieval.memory_index import GatewayTextEmbedder, create_memory_index
+from forwin.retrieval.memory_index import GatewayTextEmbedder, HashTextEmbedder, create_memory_index
 from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
 
@@ -76,6 +77,48 @@ def test_create_memory_index_supports_gateway_embedder_without_api_key() -> None
         qdrant_client.collections["chapter_memories_gateway"]["vectors_config"].size
         == 3
     )
+
+
+def test_create_memory_index_required_gateway_raises_when_unavailable() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"status": "down"})
+
+    with pytest.raises(RuntimeError, match="Embedding gateway required"):
+        create_memory_index(
+            backend="qdrant",
+            qdrant_url="http://qdrant.test:6333",
+            qdrant_collection="chapter_memories_gateway_required",
+            qdrant_client=FakeQdrantClient(),
+            qdrant_models=FakeQdrantModels,
+            embedding_backend="gateway",
+            embedding_base_url="http://embedding-gateway.test",
+            embedding_dims=64,
+            embedding_required=True,
+            embedding_http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+
+
+def test_create_memory_index_optional_gateway_reports_hash_degradation() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, json={"status": "down"})
+
+    index = create_memory_index(
+        backend="qdrant",
+        qdrant_url="http://qdrant.test:6333",
+        qdrant_collection="chapter_memories_gateway_degraded",
+        qdrant_client=FakeQdrantClient(),
+        qdrant_models=FakeQdrantModels,
+        embedding_backend="gateway",
+        embedding_base_url="http://embedding-gateway.test",
+        embedding_dims=64,
+        embedding_required=False,
+        embedding_http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert isinstance(index.embedder, HashTextEmbedder)
+    assert index.embedding_status()["kind"] == "hash"
+    assert index.embedding_status()["degraded"] is True
+    assert index.embedding_status()["degraded_from"] == "gateway"
 
 
 def test_existing_collection_dimension_mismatch_uses_side_by_side_collection() -> None:

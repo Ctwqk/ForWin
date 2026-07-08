@@ -1,0 +1,14 @@
+{
+  "project_id": "project-readability",
+  "chapter_number": 13,
+  "title": "第13章",
+  "body": "馆员把旧钥匙递给调查组，他说自己会守住门。几段之后，馆员站在冷柜旁，她低声确认遗体编号。trait-loyal-protector 标签仍留在叙述里，馆员又接管了所有行动。",
+  "end_of_chapter_summary": "馆员接手调查并确认遗体编号。",
+  "entity_mentions": [
+    {
+      "entity_name": "馆员",
+      "entity_kind": "character",
+      "is_named": true
+    }
+  ]
+}

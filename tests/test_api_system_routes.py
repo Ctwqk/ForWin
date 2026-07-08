@@ -81,6 +81,56 @@ def _codex_health_handler(config: SimpleNamespace):
     )["get_codex_bridge_status"]
 
 
+def _system_handlers(config: SimpleNamespace, *, memory_index=None):
+    return build_handlers(
+        get_config=lambda: config,
+        get_runtime_settings=lambda: None,
+        get_publisher_manager=lambda: None,
+        get_session=lambda: None,
+        render_home_page=lambda **_kwargs: "",
+        render_publishers_page=lambda **_kwargs: "",
+        build_home_page_settings=lambda **_kwargs: {},
+        build_runtime_config=lambda *_args, **_kwargs: None,
+        copy_config=lambda *_args, **_kwargs: None,
+        create_generation_task=lambda *_args, **_kwargs: "",
+        serialize_task=lambda *_args, **_kwargs: {},
+        get_generation_task_or_404=lambda _task_id: {},
+        project_has_active_generation_task=lambda *_args, **_kwargs: False,
+        generation_task_conflict_message=lambda _project_id: "",
+        resolve_project_governance=lambda *_args, **_kwargs: None,
+        governance_request_payload=lambda _req: {},
+        serialize_llm_settings=lambda *_args, **_kwargs: {},
+        active_generation_task_error_cls=RuntimeError,
+        get_memory_index=lambda: memory_index,
+    )
+
+
+def test_health_reports_current_embedding_backend_status() -> None:
+    class MemoryIndex:
+        def embedding_status(self) -> dict[str, object]:
+            return {
+                "kind": "hash",
+                "dims": 384,
+                "degraded": True,
+                "degraded_from": "gateway",
+            }
+
+    handlers = _system_handlers(
+        SimpleNamespace(embedding_backend="gateway", embedding_dims=384),
+        memory_index=MemoryIndex(),
+    )
+
+    result = handlers["health"]()
+
+    assert result["status"] == "ok"
+    assert result["embedding"] == {
+        "kind": "hash",
+        "dims": 384,
+        "degraded": True,
+        "degraded_from": "gateway",
+    }
+
+
 def test_codex_health_rejects_ok_payload_without_bridge_identity() -> None:
     class WrongServiceClient:
         def __init__(self, **_kwargs) -> None:

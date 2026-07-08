@@ -24,8 +24,6 @@ _HARD_AUTO_RETRY_REVIEWERS = {
 }
 _HARD_AUTO_RETRY_ISSUE_TYPES = {
     "dead_character_resurrection",
-    "already_dead_character_resurrected",
-    "character_resurrection",
     "level_rollback",
     "power_level_rollback",
     "duplicate_artifact",

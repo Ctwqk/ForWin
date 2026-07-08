@@ -11,6 +11,7 @@ from forwin.protocol.review import (
     normalize_repair_scope,
 )
 from forwin.protocol.writer import WriterOutput
+from forwin.canon_quality.continuity_adapter import signals_from_continuity_issues
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.skills import serialize_prompt_layers
 from .context_builder import build_review_context_pack
@@ -93,6 +94,11 @@ class HistoricalReviewHub:
         ) as span:
             continuity = continuity_checker.check(project_id, writer_output)
             span.metric("issue_count", len(getattr(continuity, "issues", []) or []))
+        continuity_quality_signals = signals_from_continuity_issues(
+            project_id=project_id,
+            chapter_number=int(getattr(context, "chapter_number", 0) or 0),
+            issues=list(getattr(continuity, "issues", []) or []),
+        )
         with self.observability.span(
             obs_context,
             "review.lint",
@@ -133,6 +139,11 @@ class HistoricalReviewHub:
                 )
                 deterministic_quality_report = quality.deterministic_quality_report
                 span.metric("signal_count", len(quality.signals))
+        if continuity_quality_signals:
+            deterministic_quality_report = self._merge_quality_report_signals(
+                deterministic_quality_report,
+                continuity_quality_signals,
+            )
         canon_quality_issues = self._canon_quality_issues(deterministic_quality_report)
         quality_verdict = self._merge_verdicts(
             *[
@@ -541,6 +552,36 @@ class HistoricalReviewHub:
                 )
             )
         return issues
+
+    @staticmethod
+    def _merge_quality_report_signals(
+        deterministic_quality_report: dict | None,
+        signals: list[object],
+    ) -> dict:
+        report = dict(deterministic_quality_report or {})
+        blocking = list(report.get("blocking_signals", []) or [])
+        warnings = list(report.get("warning_signals", []) or [])
+        seen_ids = {
+            str(item.get("signal_id") or "")
+            for item in [*blocking, *warnings]
+            if isinstance(item, dict)
+        }
+        for signal in signals:
+            payload = signal.model_dump(mode="json") if hasattr(signal, "model_dump") else {}
+            if not isinstance(payload, dict):
+                continue
+            signal_id = str(payload.get("signal_id") or "")
+            if signal_id and signal_id in seen_ids:
+                continue
+            seen_ids.add(signal_id)
+            if payload.get("severity") == "error":
+                blocking.append(payload)
+            else:
+                warnings.append(payload)
+        report["blocking_signals"] = blocking
+        report["warning_signals"] = warnings
+        report["blocking"] = bool(blocking)
+        return report
 
     @staticmethod
     def _merge_verdicts(*verdicts: str) -> str:

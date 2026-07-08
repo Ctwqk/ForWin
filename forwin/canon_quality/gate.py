@@ -10,22 +10,22 @@ from .signals import CanonAdmissionGateResult, CanonQualitySignal
 GateMode = Literal["off", "shadow", "fatal_only", "pulp_fatal", "serial_fatal", "strict"]
 
 _FATAL_ONLY_SIGNAL_TYPES = {
-    "character_dead_alive",
-    "character_teleport",
     "closed_thread_reopened",
-    "final_dangling",
-    "final_denied",
-    "countdown_inconsistent",
+    "dead_character_resurrection",
+    "impossible_location_teleport",
     "countdown_non_monotonic",
     "terminal_state_active_conflict",
     "form_countdown_inconsistency",
     "form_invariant_drift",
     "form_final_chapter_unresolved",
+    "appellation_referent_conflict",
+    "internal_key_leakage_v2",
+    "protagonist_name_missing",
+    "protagonist_name_diluted",
+    "chapter_title_mismatch",
+    "chapter_summary_empty",
 }
 _EXPANDED_FATAL_SIGNAL_TYPES = _FATAL_ONLY_SIGNAL_TYPES | {
-    "dead_character_resurrection",
-    "already_dead_character_resurrected",
-    "character_resurrection",
     "level_rollback",
     "power_level_rollback",
     "duplicate_artifact",

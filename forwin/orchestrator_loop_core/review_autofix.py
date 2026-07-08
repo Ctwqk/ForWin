@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.naming.entity_registrar import EntityRegistrar, LLMEntityRegistrationClassifier
 from forwin.protocol.writer import WriterOutput
 from forwin.orchestrator_loop_core.common import *
 
@@ -88,6 +89,27 @@ def _review_current_output(
         reviewer_skill_layers=reviewer_skill_layers,
     )
 
+def _register_writer_output_entities(
+    self,
+    *,
+    session: Session,
+    project_id: str,
+    chapter_number: int,
+    writer_output: WriterOutput,
+) -> WriterOutput:
+    llm_client = getattr(self, "llm_client", None)
+    classifier = LLMEntityRegistrationClassifier(llm_client) if llm_client is not None else None
+    result = EntityRegistrar(session=session, classifier=classifier).register_writer_output(
+        project_id=project_id,
+        chapter_number=chapter_number,
+        writer_output=writer_output,
+    )
+    if not result.plan_conflicts:
+        return result.writer_output
+    generation_meta = dict(result.writer_output.generation_meta or {})
+    generation_meta["entity_registration_plan_conflicts"] = list(result.plan_conflicts)
+    return result.writer_output.model_copy(update={"generation_meta": generation_meta})
+
 @staticmethod
 def _apply_canon_name_drift_autofix(
     writer_output: WriterOutput,
@@ -132,62 +154,6 @@ def _apply_canon_name_drift_autofix(
     return WriterOutput.model_validate(payload)
 
 @staticmethod
-def _apply_subworld_admission_autofix(
-    writer_output: WriterOutput,
-    review: ReviewVerdict,
-    *,
-    protected_names: set[str] | None = None,
-) -> WriterOutput | None:
-    replacements: dict[str, str] = {}
-    body = str(writer_output.body or "")
-    protected = {
-        ContinuityChecker._normalize_character_reference(name)
-        for name in (protected_names or set())
-        if str(name or "").strip()
-    }
-    for issue in review.issues:
-        if str(issue.rule_name or "") != "sub_world_unknown_named_entity":
-            continue
-        if str(issue.severity or "") != "error":
-            continue
-        entity_names = list(issue.entity_names or [])
-        if not entity_names:
-            continue
-        observed = str(entity_names[0] or "").strip()
-        normalized_observed = ContinuityChecker._normalize_character_reference(observed)
-        if not observed or not WritingOrchestrator._looks_like_genericizable_unknown_reference(normalized_observed):
-            continue
-        if normalized_observed in protected:
-            continue
-        generic = WritingOrchestrator._generic_subworld_reference(body, observed)
-        replacements[observed] = generic
-        if len(observed) >= 2:
-            replacements[f"{observed[0]}总"] = generic
-        for title in WritingOrchestrator._subworld_role_titles():
-            phrase = f"{title}{observed}"
-            if phrase in body:
-                replacements[phrase] = title
-
-    if not replacements:
-        return None
-
-    payload = WritingOrchestrator._replace_canon_name_strings(
-        writer_output.model_dump(mode="python"),
-        replacements,
-    )
-    payload["char_count"] = len(str(payload.get("body") or ""))
-    generation_meta = dict(payload.get("generation_meta") or {})
-    previous_autofix = generation_meta.get("subworld_admission_autofix")
-    if isinstance(previous_autofix, dict):
-        autofix_meta = {str(key): str(value) for key, value in previous_autofix.items()}
-        autofix_meta.update(replacements)
-    else:
-        autofix_meta = replacements
-    generation_meta["subworld_admission_autofix"] = autofix_meta
-    payload["generation_meta"] = generation_meta
-    return WriterOutput.model_validate(payload)
-
-@staticmethod
 def _apply_placeholder_leakage_autofix(
     writer_output: WriterOutput,
     review: ReviewVerdict,
@@ -202,7 +168,7 @@ def _apply_placeholder_leakage_autofix(
     )
     if not should_replace:
         return None
-    replacement = WritingOrchestrator._placeholder_role_replacement(body)
+    replacement = "具体见证人"
     replacements = {"工作人员": replacement}
     payload = WritingOrchestrator._replace_canon_name_strings(
         writer_output.model_dump(mode="python"),
@@ -219,28 +185,6 @@ def _apply_placeholder_leakage_autofix(
     generation_meta["placeholder_leakage_autofix"] = autofix_meta
     payload["generation_meta"] = generation_meta
     return WriterOutput.model_validate(payload)
-
-@staticmethod
-def _placeholder_role_replacement(body: str) -> str:
-    text = str(body or "")
-    if "旧书摊" in text or "书摊" in text:
-        return "旧书摊主"
-    if "系统维护组" in text or "维护组" in text:
-        return "系统维护员"
-    if "分馆" in text or "地下三层" in text:
-        return "地下分馆管理员"
-    return "具体见证人"
-
-@staticmethod
-def _looks_like_genericizable_unknown_reference(name: str) -> bool:
-    text = ContinuityChecker._normalize_character_reference(name)
-    if not text:
-        return False
-    if is_plausible_person_name(text):
-        return True
-    if 2 <= len(text) <= 3 and text[0] in {"老", "小", "阿"}:
-        return all("\u4e00" <= char <= "\u9fff" for char in text[1:])
-    return False
 
 @staticmethod
 def _project_character_names(repo: StateRepository, project_id: str) -> set[str]:
@@ -269,35 +213,6 @@ def _project_character_names(repo: StateRepository, project_id: str) -> set[str]
             if name:
                 names.add(name)
     return names
-
-@staticmethod
-def _generic_subworld_reference(body: str, observed: str) -> str:
-    if observed in body:
-        index = body.find(observed)
-        marker_window = body[max(0, index - 30) : index + len(observed) + 30]
-    else:
-        marker_window = body
-    if any(marker in marker_window for marker in ("集团", "董事", "会议", "总监", "高管", "部门")):
-        return "集团高管"
-    return "馆员"
-
-@staticmethod
-def _subworld_role_titles() -> tuple[str, ...]:
-    return (
-        "首席运营官",
-        "运营负责人",
-        "财务总监",
-        "财务负责人",
-        "法务部负责人",
-        "法务负责人",
-        "部门总监",
-        "部门负责人",
-        "集团董事",
-        "董事会成员",
-        "安全主管",
-        "安保主管",
-        "项目负责人",
-    )
 
 @staticmethod
 def _replace_canon_name_strings(value: Any, replacements: dict[str, str]) -> Any:
@@ -572,4 +487,4 @@ def _review_has_structural_repair_issue(review: ReviewVerdict) -> bool:
 
 
 
-__all__ = ['_persist_draft_and_review', '_review_current_output', '_apply_canon_name_drift_autofix', '_apply_subworld_admission_autofix', '_apply_placeholder_leakage_autofix', '_placeholder_role_replacement', '_looks_like_genericizable_unknown_reference', '_project_character_names', '_generic_subworld_reference', '_subworld_role_titles', '_replace_canon_name_strings', '_review_event_payload', '_review_issue_payloads', '_record_map_movement_review_issues', '_review_canon_risk', '_load_json_list', '_chapter_plan_snapshot', '_band_plan_snapshot', '_repair_verification_issue', '_review_with_repair_verification', '_repair_policy_requested_scope', '_review_has_structural_repair_issue']
+__all__ = ['_persist_draft_and_review', '_review_current_output', '_register_writer_output_entities', '_apply_canon_name_drift_autofix', '_apply_placeholder_leakage_autofix', '_project_character_names', '_replace_canon_name_strings', '_review_event_payload', '_review_issue_payloads', '_record_map_movement_review_issues', '_review_canon_risk', '_load_json_list', '_chapter_plan_snapshot', '_band_plan_snapshot', '_repair_verification_issue', '_review_with_repair_verification', '_repair_policy_requested_scope', '_review_has_structural_repair_issue']

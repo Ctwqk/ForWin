@@ -172,6 +172,7 @@ class RuntimeContainer:
                 embedding_api_key=config.embedding_api_key,
                 embedding_model=config.embedding_model,
                 embedding_dims=config.embedding_dims,
+                embedding_required=config.embedding_required,
             ),
         )
 

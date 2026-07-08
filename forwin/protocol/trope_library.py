@@ -102,80 +102,6 @@ _CATEGORY_DEFAULTS: dict[str, dict[str, object]] = {
     },
 }
 
-_BUILTIN_VARIANTS: dict[str, tuple[tuple[str, str, int], ...]] = {
-    "power": (
-        ("resource-acquired", "资源入手", 1),
-        ("bottom-card-fight", "底牌破局", 2),
-        ("skill-unlocked", "技能解锁", 1),
-        ("rank-step", "位阶小升", 1),
-        ("tool-awakened", "工具开机", 1),
-        ("authority-opened", "权限打开", 2),
-        ("desperate-flip", "绝境翻盘", 3),
-        ("training-paid", "苦练到账", 2),
-        ("rare-item-claimed", "奇物认主", 2),
-        ("resource-snowball", "收益滚动", 1),
-        ("team-buffed", "队伍增幅", 2),
-        ("forbidden-cost", "禁招有价", 3),
-    ),
-    "social": (
-        ("identity-reveal", "身份曝光", 1),
-        ("authority-endorse", "权威背书", 1),
-        ("crowd-shock", "众人改口", 1),
-        ("seat-change", "席位重排", 2),
-        ("contract-flip", "合同反转", 2),
-        ("ally-public-stand", "盟友站队", 1),
-        ("title-upgrade", "称呼升级", 1),
-        ("rival-silenced", "对手失声", 1),
-        ("gate-opened", "门禁让路", 2),
-        ("choice-held", "选择权到手", 2),
-        ("favor-returned", "人情兑现", 2),
-        ("reputation-reset", "名声翻盘", 3),
-    ),
-    "justice": (
-        ("villain-break", "反派破防", 1),
-        ("public-reckoning", "公开清算", 3),
-        ("recover-loss", "夺回利益", 2),
-        ("evidence-chain", "证据连环", 2),
-        ("protector-cuts", "保护伞切割", 2),
-        ("victim-speaks", "受害者发声", 1),
-        ("rules-bite", "规则反噬", 1),
-        ("debt-collected-live", "当场收账", 1),
-        ("false-charge-cleared", "洗清污名", 2),
-        ("spoils-redistributed", "好处重分", 2),
-        ("villain-exiled", "恶人退场", 3),
-        ("old-case-closed", "旧案结清", 3),
-    ),
-    "mystery": (
-        ("half-reveal", "半揭晓", 1),
-        ("bigger-shadow", "更大黑幕", 1),
-        ("cognition-flip", "认知反转", 2),
-        ("name-found", "名字浮出", 1),
-        ("map-gap", "地图缺口", 1),
-        ("record-unsealed", "档案解封", 2),
-        ("witness-hint", "证人吐口", 1),
-        ("symbol-matched", "符号对上", 1),
-        ("timer-rule", "倒计时规则", 2),
-        ("false-answer", "假答案破裂", 2),
-        ("hidden-route", "暗路显形", 1),
-        ("origin-thread", "起源线头", 3),
-    ),
-    "emotion": (
-        ("protect", "被保护", 1),
-        ("guilt", "愧疚回流", 1),
-        ("bond-warm", "关系升温", 1),
-        ("misunderstanding", "误会加深", 2),
-        ("first-trust", "第一次信任", 1),
-        ("silent-care", "无声照顾", 1),
-        ("promise-kept", "承诺兑现", 2),
-        ("betrayal-sting", "背叛刺痛", 2),
-        ("family-soften", "亲情松动", 1),
-        ("choice-for-other", "为对方选择", 2),
-        ("scar-shared", "伤口共知", 2),
-        ("farewell-hook", "告别留钩", 3),
-    ),
-}
-
-
 class TropeRegistrySummary(BaseModel):
     total_count: int = 0
     category_counts: dict[str, int] = Field(default_factory=dict)
@@ -200,6 +126,7 @@ def expand_trope_template_payload(
     *,
     minimum_count: int = MINIMUM_USABLE_LIBRARY_COUNT,
 ) -> list[dict]:
+    _ = minimum_count
     expanded: list[dict] = []
     seen_ids: set[str] = set()
     category_counts: dict[str, int] = {}
@@ -210,26 +137,6 @@ def expand_trope_template_payload(
             continue
         expanded.append(enriched)
         seen_ids.add(template_id)
-        category = str(enriched.get("category") or "").strip()
-        category_counts[category] = category_counts.get(category, 0) + 1
-
-    per_category_target = max(1, minimum_count // max(1, len(REQUIRED_REWARD_CATEGORIES)))
-    for category in sorted(REQUIRED_REWARD_CATEGORIES):
-        for slug, display_name, cost_weight in _BUILTIN_VARIANTS.get(category, ()):
-            if category_counts.get(category, 0) >= per_category_target and len(expanded) >= minimum_count:
-                break
-            template_id = f"{category}-{slug}"
-            if template_id in seen_ids:
-                continue
-            generated = _generated_template_payload(
-                category=category,
-                template_id=template_id,
-                display_name=display_name,
-                cost_weight=cost_weight,
-            )
-            expanded.append(generated)
-            seen_ids.add(template_id)
-            category_counts[category] = category_counts.get(category, 0) + 1
 
     return expanded
 
@@ -285,32 +192,6 @@ def _enrich_template_payload(item: dict) -> dict:
     return payload
 
 
-def _generated_template_payload(
-    *,
-    category: str,
-    template_id: str,
-    display_name: str,
-    cost_weight: int,
-) -> dict:
-    defaults = _CATEGORY_DEFAULTS.get(category, _CATEGORY_DEFAULTS["mystery"])
-    return _enrich_template_payload(
-        {
-            "template_id": template_id,
-            "display_name": display_name,
-            "category": category,
-            "subcategory": display_name,
-            "market_tier": "sinking" if int(cost_weight or 2) <= 2 else "mainstream",
-            "cost_weight": int(cost_weight or 2),
-            "genre_fit": list(defaults.get("genre_fit", [])),
-            "audience_fit": list(defaults.get("audience_fit", [])),
-            "platform_fit": list(defaults.get("platform_fit", [])),
-            "best_window": "band_early, band_mid" if int(cost_weight or 2) <= 1 else "band_mid, band_late",
-            "recommended_hook_types": ["advantage_reveal", "status_flip", "cliffhanger_question"],
-            "risk_flags": ["repetition"] if int(cost_weight or 2) <= 2 else ["setup_heavy", "repetition"],
-        }
-    )
-
-
 def validate_trope_template_payload(
     payload: object,
     *,
@@ -360,11 +241,12 @@ def load_trope_template_file(path: str | os.PathLike[str], *, require_full: bool
     return templates
 
 
+def _default_markdown_library_path() -> Path:
+    return Path(__file__).resolve().parents[2] / "Design-docs" / "trope_library_pulp_v1.md"
+
+
 @lru_cache(maxsize=1)
 def load_trope_template_library() -> tuple[TropeTemplate, ...]:
-    seed_templates, seed_errors = validate_trope_template_payload(_seed_payload())
-    if seed_errors:
-        raise ValueError("; ".join(seed_errors))
     override_path = os.environ.get("FORWIN_TROPE_TEMPLATE_PATH", "").strip()
     if override_path:
         path = Path(override_path)
@@ -373,6 +255,14 @@ def load_trope_template_library() -> tuple[TropeTemplate, ...]:
 
             return load_trope_templates_from_md(path)
         return load_trope_template_file(path, require_full=True)
+    markdown_path = _default_markdown_library_path()
+    if markdown_path.exists():
+        from .trope_md_loader import load_trope_templates_from_md
+
+        return load_trope_templates_from_md(markdown_path)
+    seed_templates, seed_errors = validate_trope_template_payload(_seed_payload())
+    if seed_errors:
+        raise ValueError("; ".join(seed_errors))
     return seed_templates
 
 
@@ -381,7 +271,8 @@ TROPE_TEMPLATE_LIBRARY = load_trope_template_library()
 
 def trope_registry_summary() -> TropeRegistrySummary:
     override_path = os.environ.get("FORWIN_TROPE_TEMPLATE_PATH", "").strip()
-    source = override_path or "seed"
+    default_markdown_path = _default_markdown_library_path()
+    source = override_path or (str(default_markdown_path) if default_markdown_path.exists() else "seed")
     validation_errors: list[str] = []
     version = "starter"
     try:

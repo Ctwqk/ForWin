@@ -93,7 +93,7 @@ def test_band_plan_service_persists_band_and_chapter_experience_overlay() -> Non
     assert contracts.calls == 1
 
 
-def test_band_plan_service_admits_named_entry_target_from_chapter_goal() -> None:
+def test_band_plan_service_does_not_infer_named_entry_target_from_chapter_goal() -> None:
     engine = get_engine(postgres_test_url("band-plan-service-plan-entry-target"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -154,10 +154,10 @@ def test_band_plan_service_admits_named_entry_target_from_chapter_goal() -> None
 
     chapter_payload = json.loads(chapter_four.experience_plan_json)
     targets = chapter_payload["chapter_entry_targets"]
-    assert any(item["entity_name"] == "灰鸦" for item in targets)
+    assert not any(item["entity_name"] == "灰鸦" for item in targets)
 
 
-def test_band_plan_service_uses_reference_classifier_for_entry_targets() -> None:
+def test_band_plan_service_does_not_use_reference_classifier_for_entry_targets() -> None:
     engine = get_engine(postgres_test_url("band-plan-service-reference-classifier"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -218,7 +218,7 @@ def test_band_plan_service_uses_reference_classifier_for_entry_targets() -> None
 
     chapter_payload = json.loads(chapter_four.experience_plan_json)
     target_names = {item["entity_name"] for item in chapter_payload["chapter_entry_targets"]}
-    assert "陈潮白" in target_names
+    assert "陈潮白" not in target_names
     assert "馆员陈潮白" not in target_names
     assert "003号分割体" not in target_names
     assert "L-7" not in target_names

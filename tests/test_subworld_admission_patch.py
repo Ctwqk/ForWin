@@ -85,7 +85,7 @@ def test_register_patch_adds_chapter_entry_target_without_writer_rewrite() -> No
     assert stored.chapter_entry_targets[0].subworld_id == "global-core"
 
 
-def test_genericize_patch_returns_replacements_for_local_rewrite() -> None:
+def test_background_reference_patch_requires_operator_decision() -> None:
     plan = _chapter_plan()
     plan.goals_json = "[]"
     plan.task_contract_json = "[]"
@@ -116,7 +116,7 @@ def test_genericize_patch_returns_replacements_for_local_rewrite() -> None:
         protected_names=set(),
     )
 
-    assert result.failure_reason == ""
-    assert result.decision.action == "genericize_background_reference"
+    assert result.failure_reason == "unplanned stateful named entity requires operator choice"
+    assert result.decision.action == "manual_review_required"
     assert result.requires_writer_rewrite is False
-    assert result.replacements == {"老孙": "馆员"}
+    assert result.design_patch["subworld_admission_action"] == "manual_review_required"

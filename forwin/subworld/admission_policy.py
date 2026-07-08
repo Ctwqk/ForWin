@@ -5,14 +5,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from forwin.canon_names import is_plausible_person_name
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import ContinuityIssue
 from forwin.protocol.writer import WriterOutput
 
 SubworldAdmissionAction = Literal[
     "register_entity",
-    "genericize_background_reference",
     "manual_review_required",
 ]
 
@@ -30,7 +28,6 @@ class SubworldAdmissionDecision(BaseModel):
     entity_kind: str = "character"
     reason: str = ""
     evidence_refs: list[str] = Field(default_factory=list)
-    replacement: str = ""
     manual_actions: list[str] = Field(default_factory=list)
 
 
@@ -56,24 +53,19 @@ class SubworldAdmissionPolicy:
             return _manual("", entity_kind, "missing-entity-name", evidence_refs)
 
         if _looks_like_noncast_remains_reference(entity_name):
-            return SubworldAdmissionDecision(
-                action="genericize_background_reference",
-                entity_name=entity_name,
-                entity_kind=entity_kind,
-                reason="non-cast remains reference should not enter subworld canon",
-                evidence_refs=evidence_refs,
-                replacement="遗体",
+            return _manual(
+                entity_name,
+                entity_kind,
+                "non-cast remains reference requires entity registrar background decision",
+                evidence_refs,
             )
 
-        role_or_status_replacement = _generic_role_or_status_replacement(entity_name)
-        if role_or_status_replacement:
-            return SubworldAdmissionDecision(
-                action="genericize_background_reference",
-                entity_name=entity_name,
-                entity_kind=entity_kind,
-                reason="role or status label should not enter subworld canon",
-                evidence_refs=evidence_refs,
-                replacement=role_or_status_replacement,
+        if _looks_like_role_or_status_label(entity_name):
+            return _manual(
+                entity_name,
+                entity_kind,
+                "role or status label requires entity registrar background decision",
+                evidence_refs,
             )
 
         if _is_existing_entity(entity_name, existing_entities) or issue_kind == "subworld_admission_missing_canon_entity":
@@ -98,16 +90,6 @@ class SubworldAdmissionPolicy:
                 entity_kind=entity_kind,
                 reason="entity appears in chapter plan or state context",
                 evidence_refs=evidence_refs,
-            )
-
-        if _looks_like_safe_background_reference(entity_name, writer_output):
-            return SubworldAdmissionDecision(
-                action="genericize_background_reference",
-                entity_name=entity_name,
-                entity_kind=entity_kind,
-                reason="unplanned background reference can be generalized without entering canon",
-                evidence_refs=evidence_refs,
-                replacement=_generic_subworld_reference(writer_output.body, entity_name),
             )
 
         return _manual(
@@ -170,19 +152,6 @@ def _mentioned_in_plan(
     return bool(entity_name and entity_name in plan_text)
 
 
-def _looks_like_safe_background_reference(entity_name: str, writer_output: WriterOutput) -> bool:
-    if not entity_name:
-        return False
-    text = str(writer_output.body or "")
-    if writer_output.new_events or writer_output.state_changes or writer_output.thread_beats:
-        return False
-    if "没有留下真名" in text or "未留真名" in text:
-        return True
-    if 2 <= len(entity_name) <= 3 and entity_name[0] in {"老", "小", "阿"}:
-        return True
-    return bool(is_plausible_person_name(entity_name) and _has_background_title_window(text, entity_name))
-
-
 def _looks_like_noncast_remains_reference(entity_name: str) -> bool:
     text = str(entity_name or "").strip()
     if not text:
@@ -193,19 +162,20 @@ def _looks_like_noncast_remains_reference(entity_name: str) -> bool:
     )
 
 
-def _generic_role_or_status_replacement(entity_name: str) -> str:
+def _looks_like_role_or_status_label(entity_name: str) -> bool:
     text = str(entity_name or "").strip()
     if not text:
-        return ""
+        return False
     if _looks_like_status_label_reference(text):
-        return "状态记录"
-    if text.endswith("买家") or "权限买家" in text:
-        return "匿名买家"
-    if text.endswith("卖家") or "权限卖家" in text:
-        return "匿名卖家"
-    if text.endswith("权限者") or text.endswith("持有者"):
-        return "权限记录"
-    return ""
+        return True
+    return bool(
+        text.endswith("买家")
+        or "权限买家" in text
+        or text.endswith("卖家")
+        or "权限卖家" in text
+        or text.endswith("权限者")
+        or text.endswith("持有者")
+    )
 
 
 def _looks_like_status_label_reference(entity_name: str) -> bool:
@@ -229,28 +199,6 @@ def _looks_like_status_label_reference(entity_name: str) -> bool:
     }
 
 
-def _has_background_title_window(body: str, entity_name: str) -> bool:
-    if entity_name not in body:
-        return False
-    index = body.find(entity_name)
-    window = body[max(0, index - 12) : index + len(entity_name) + 12]
-    return any(
-        marker in window
-        for marker in ("馆员", "工作人员", "高管", "总监", "主管", "负责人", "董事", "门口")
-    )
-
-
-def _generic_subworld_reference(body: str, observed: str) -> str:
-    if observed in body:
-        index = body.find(observed)
-        marker_window = body[max(0, index - 30) : index + len(observed) + 30]
-    else:
-        marker_window = body
-    if any(marker in marker_window for marker in ("集团", "董事", "会议", "总监", "高管", "部门")):
-        return "集团高管"
-    return "馆员"
-
-
 def _manual(
     entity_name: str,
     entity_kind: str,
@@ -265,7 +213,7 @@ def _manual(
         evidence_refs=evidence_refs,
         manual_actions=[
             "register_entity",
-            "genericize_background_reference",
+            "record_background_generic_decision",
             "mark_intentional_cameo",
         ],
     )

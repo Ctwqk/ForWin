@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.models import ArcPlanVersion, ChapterDraft, ChapterPlan, Project
 from forwin.models.base import get_engine, get_session_factory, init_db
-from scripts.reembed_memory_index import reembed_project_memories
+from scripts.reembed_memory_index import _memory_index_vector_dims, reembed_project_memories
 from tests.postgres import postgres_test_url
 
 
@@ -12,6 +12,18 @@ class FakeMemoryIndex:
 
     def upsert_chapter(self, **kwargs) -> None:  # noqa: ANN003
         self.upserts.append(dict(kwargs))
+
+
+class FakeDimensionedMemoryIndex(FakeMemoryIndex):
+    def collection_vector_size(self) -> int:
+        return 128
+
+    def embedding_status(self) -> dict[str, object]:
+        return {"kind": "gateway", "dims": 384}
+
+
+def test_reembed_dimension_check_prefers_collection_vector_size() -> None:
+    assert _memory_index_vector_dims(FakeDimensionedMemoryIndex()) == 128
 
 
 def test_reembed_project_memories_indexes_accepted_latest_drafts_only() -> None:

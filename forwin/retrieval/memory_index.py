@@ -24,14 +24,26 @@ class TextEmbedder:
 
 
 class HashTextEmbedder(TextEmbedder):
-    def __init__(self, dims: int = 64) -> None:
+    kind = "hash"
+
+    def __init__(
+        self,
+        dims: int = 64,
+        *,
+        degraded_from: str = "",
+        degradation_reason: str = "",
+    ) -> None:
         self.dims = max(8, int(dims))
+        self.degraded_from = str(degraded_from or "")
+        self.degradation_reason = str(degradation_reason or "")
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [_embed_text(text, dims=self.dims) for text in texts]
 
 
 class RemoteTextEmbedder(TextEmbedder):
+    kind = "remote"
+
     def __init__(
         self,
         *,
@@ -70,6 +82,8 @@ class RemoteTextEmbedder(TextEmbedder):
 
 
 class GatewayTextEmbedder(TextEmbedder):
+    kind = "gateway"
+
     def __init__(
         self,
         *,
@@ -81,6 +95,8 @@ class GatewayTextEmbedder(TextEmbedder):
         self.client = client or httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0))
         detected_dims = self._detect_dims()
         requested_dims = int(dims or 0)
+        if detected_dims <= 0:
+            raise ValueError("embedding gateway metadata unavailable")
         self.dims = requested_dims if requested_dims > 0 else detected_dims
         if self.dims <= 0:
             raise ValueError("embedding gateway dimension could not be detected")
@@ -269,6 +285,12 @@ class QdrantChapterMemoryIndex(ChapterMemoryIndex):
         )
         return _vector_size_from_config(vectors_config)
 
+    def collection_vector_size(self) -> int | None:
+        return self._collection_vector_size(self.collection_name)
+
+    def embedding_status(self) -> dict[str, object]:
+        return embedding_status(self.embedder)
+
     def upsert_chapter(
         self,
         *,
@@ -341,6 +363,7 @@ def create_memory_index(
     embedding_api_key: str = "",
     embedding_model: str = "",
     embedding_dims: int = 64,
+    embedding_required: bool = False,
     embedding_http_client: httpx.Client | None = None,
     qdrant_client: Any | None = None,
     qdrant_models: Any | None = None,
@@ -354,12 +377,18 @@ def create_memory_index(
                 dims=embedding_dims,
                 client=embedding_http_client,
             )
-        except Exception:
-            logger.warning(
-                "Embedding gateway unavailable, falling back to hash embedder.",
+        except Exception as exc:
+            logger.error(
+                "Embedding gateway unavailable.",
                 exc_info=True,
             )
-            embedder = HashTextEmbedder(dims=embedding_dims)
+            if embedding_required:
+                raise RuntimeError("Embedding gateway required but unavailable") from exc
+            embedder = HashTextEmbedder(
+                dims=embedding_dims,
+                degraded_from="gateway",
+                degradation_reason=str(exc),
+            )
     elif (
         embedding_kind in {"remote", "api", "openai"}
         and embedding_model
@@ -373,12 +402,18 @@ def create_memory_index(
                 dims=embedding_dims,
                 client=embedding_http_client,
             )
-        except Exception:
-            logger.warning(
-                "Remote embedder unavailable, falling back to hash embedder.",
+        except Exception as exc:
+            logger.error(
+                "Remote embedder unavailable.",
                 exc_info=True,
             )
-            embedder = HashTextEmbedder(dims=embedding_dims)
+            if embedding_required:
+                raise RuntimeError("Remote embedder required but unavailable") from exc
+            embedder = HashTextEmbedder(
+                dims=embedding_dims,
+                degraded_from="remote",
+                degradation_reason=str(exc),
+            )
     else:
         embedder = HashTextEmbedder(dims=embedding_dims)
     if normalized != "qdrant":
@@ -392,3 +427,15 @@ def create_memory_index(
         client=qdrant_client,
         qdrant_models=qdrant_models,
     )
+
+
+def embedding_status(embedder: TextEmbedder) -> dict[str, object]:
+    kind = str(getattr(embedder, "kind", "") or embedder.__class__.__name__).lower()
+    degraded_from = str(getattr(embedder, "degraded_from", "") or "")
+    return {
+        "kind": kind,
+        "dims": int(getattr(embedder, "dims", 0) or 0),
+        "degraded": bool(degraded_from),
+        "degraded_from": degraded_from,
+        "degradation_reason": str(getattr(embedder, "degradation_reason", "") or ""),
+    }

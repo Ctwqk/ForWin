@@ -44,9 +44,16 @@ def build_handlers(
     governance_request_payload: Callable[[object], dict[str, object]],
     serialize_llm_settings: Callable[..., Any],
     active_generation_task_error_cls: type[Exception],
+    get_memory_index: Callable[[], Any] | None = None,
 ) -> dict[str, Callable[..., Any]]:
     def health():
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "embedding": _embedding_health_payload(
+                config=get_config(),
+                memory_index=(get_memory_index() if get_memory_index is not None else None),
+            ),
+        }
 
     def home_page():
         settings = build_home_page_settings(
@@ -315,3 +322,23 @@ def _load_review_engine_breakdown(get_session: Callable[[], Any]) -> list[dict[s
         close = getattr(session, "close", None)
         if callable(close):
             close()
+
+
+def _embedding_health_payload(*, config: Any, memory_index: Any | None) -> dict[str, object]:
+    if memory_index is not None:
+        status = getattr(memory_index, "embedding_status", None)
+        if callable(status):
+            payload = status()
+            if isinstance(payload, dict):
+                return {
+                    "kind": str(payload.get("kind") or ""),
+                    "dims": int(payload.get("dims") or 0),
+                    "degraded": bool(payload.get("degraded", False)),
+                    "degraded_from": str(payload.get("degraded_from") or ""),
+                }
+    return {
+        "kind": str(getattr(config, "embedding_backend", "") or ""),
+        "dims": int(getattr(config, "embedding_dims", 0) or 0),
+        "degraded": False,
+        "degraded_from": "",
+    }

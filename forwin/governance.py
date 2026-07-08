@@ -174,6 +174,11 @@ class DecisionEventType:
     PERSONALITY_LOADOUT_MANUAL_OVERRIDE = "personality_loadout_manual_override"
     PERSONALITY_ASSIGNMENT_BACKFILL_COMPLETED = "personality_assignment_backfill_completed"
     PERSONALITY_RELATIONSHIP_ENRICHED = "personality_relationship_enriched"
+    ENTITY_REGISTERED = "entity_registered"
+    ENTITY_ALIAS_REGISTERED = "entity_alias_registered"
+    ENTITY_BACKGROUND_GENERIC = "entity_background_generic"
+    ENTITY_PLAN_CONFLICT = "entity_plan_conflict"
+    ENTITY_ALIAS_CONFLICT = "entity_alias_conflict"
     CHARACTER_INTEGRITY_CHECK_FAILED = "character_integrity_check_failed"
     TASK_OPERATION_STARTED = "task_operation_started"
     TASK_OPERATION_SUCCEEDED = "task_operation_succeeded"
@@ -308,6 +313,11 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.BOOK_STATE_COMPILE_SUCCEEDED,
     DecisionEventType.BOOK_STATE_COMPILE_FAILED,
     DecisionEventType.PERSONALITY_LOADOUT_UPDATED,
+    DecisionEventType.ENTITY_REGISTERED,
+    DecisionEventType.ENTITY_ALIAS_REGISTERED,
+    DecisionEventType.ENTITY_BACKGROUND_GENERIC,
+    DecisionEventType.ENTITY_PLAN_CONFLICT,
+    DecisionEventType.ENTITY_ALIAS_CONFLICT,
     DecisionEventType.TASK_OPERATION_STARTED,
     DecisionEventType.TASK_OPERATION_SUCCEEDED,
     DecisionEventType.TASK_OPERATION_FAILED,

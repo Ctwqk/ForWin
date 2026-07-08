@@ -7,7 +7,7 @@ pipeline from a hotfix-driven long-run system into a contract-driven system:
 new names are registered, reader-visible corruption blocks acceptance,
 fatal gates have real producers, infrastructure degradation is explicit, pulp
 BookState extraction records usable facts, trope templates are real content,
-and final validation is a no-hotfix 100-chapter run.
+and final validation is a no-hotfix 200-chapter run.
 
 User approval for detail choices, spec approval, and implementation-plan
 approval is pre-granted for this update.
@@ -172,7 +172,7 @@ Testing is red-green and fixture-driven.
   across accepted chapters.
 - Add trope-loader tests that reject generated template payloads.
 - Run focused tests for each task, then `.venv/bin/pytest tests -q`.
-- Deploy through the 150 sync path and complete a new 100-chapter no-hotfix
+- Deploy through the 150 sync path and complete a new 200-chapter no-hotfix
   validation run.
 
 ## Acceptance Criteria
@@ -188,8 +188,8 @@ Testing is red-green and fixture-driven.
   deploy.
 - Pulp accepted chapters create real entity and BookState growth.
 - The trope library has at least 50 hand-authored templates.
-- A new 100-chapter project completes with zero code hotfixes during the run,
-  no active task, no pending review, and 100/100 accepted chapters.
+- A new 200-chapter project completes with zero code hotfixes during the run,
+  no active task, no pending review, and 200/200 accepted chapters.
 
 ## Implementation Plan
 

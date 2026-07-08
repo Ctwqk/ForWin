@@ -8,6 +8,11 @@ from .culture_name_generator import (
     CultureNameGenerator,
     generate,
 )
+from .entity_registrar import (
+    EntityRegistrar,
+    EntityRegistrationResult,
+    LLMEntityRegistrationClassifier,
+)
 
 __all__ = [
     "CULTURES",
@@ -16,4 +21,7 @@ __all__ = [
     "CultureLexicon",
     "CultureNameGenerator",
     "generate",
+    "EntityRegistrar",
+    "EntityRegistrationResult",
+    "LLMEntityRegistrationClassifier",
 ]

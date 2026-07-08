@@ -53,6 +53,7 @@ CONFIG_ENV_KEYS = {
     "FORWIN_EMBEDDING_BASE_URL",
     "FORWIN_EMBEDDING_DIMS",
     "FORWIN_EMBEDDING_MODEL",
+    "FORWIN_EMBEDDING_REQUIRED",
     "FORWIN_ENABLED_SKILL_GROUPS",
     "FORWIN_ENV_FILE",
     "FORWIN_ENABLE_PUBLISHER_LOGIN_DISCORD_WEBHOOK",
@@ -230,6 +231,7 @@ def test_default_embedding_backend_uses_production_gateway(
     assert config.embedding_base_url == DEFAULT_EMBEDDING_GATEWAY_URL
     assert config.embedding_model == DEFAULT_EMBEDDING_MODEL
     assert config.embedding_dims == DEFAULT_EMBEDDING_DIMS
+    assert config.embedding_required is False
 
 
 def test_default_scene_call_timeout_matches_default_llm_timeout(

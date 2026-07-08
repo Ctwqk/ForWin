@@ -21,7 +21,6 @@ class SubworldAdmissionPatchResult(BaseModel):
     decision: SubworldAdmissionDecision
     design_patch: dict[str, object] = Field(default_factory=dict)
     updated_plan: ChapterExperiencePlan
-    replacements: dict[str, str] = Field(default_factory=dict)
     requires_writer_rewrite: bool = False
     failure_reason: str = ""
 
@@ -51,16 +50,6 @@ def apply_subworld_admission_patch(
         existing_entities=existing_entities,
         book_state_snapshot={},
     )
-    if decision.entity_name in protected_names and decision.action == "genericize_background_reference":
-        decision = SubworldAdmissionDecision(
-            action="manual_review_required",
-            entity_name=decision.entity_name,
-            entity_kind=decision.entity_kind,
-            reason="protected canon entity cannot be genericized",
-            evidence_refs=decision.evidence_refs,
-            manual_actions=["register_entity", "mark_intentional_cameo"],
-        )
-
     if decision.action == "register_entity":
         updated_plan = _plan_with_entry_target(
             current_plan,
@@ -87,20 +76,6 @@ def apply_subworld_admission_patch(
                 "subworld_admission_action": decision.action,
                 "entity_name": decision.entity_name,
                 "entity_kind": decision.entity_kind,
-                "evidence_refs": list(decision.evidence_refs),
-            },
-        )
-
-    if decision.action == "genericize_background_reference":
-        replacement = decision.replacement or "馆员"
-        return SubworldAdmissionPatchResult(
-            decision=decision,
-            updated_plan=current_plan,
-            replacements={decision.entity_name: replacement},
-            design_patch={
-                "subworld_admission_action": decision.action,
-                "entity_name": decision.entity_name,
-                "replacement": replacement,
                 "evidence_refs": list(decision.evidence_refs),
             },
         )

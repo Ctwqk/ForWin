@@ -11,7 +11,6 @@ _SCOPE_TO_OUTCOME: dict[IssueScope, DecisionOutcome] = {
     "band_plan": "band_patch",
     "arc_plan": "arc_patch",
     "book_plan": "book_patch",
-    "subworld": "subworld_admission_patch",
     "active_rules": "chapter_patch",
     "operator": "manual_review",
 }
@@ -22,7 +21,6 @@ MAX_ATTEMPTS_PER_SCOPE: dict[IssueScope, int] = {
     "band_plan": 2,
     "arc_plan": 1,
     "book_plan": 1,
-    "subworld": 2,
     "active_rules": 1,
     "operator": 0,
 }
@@ -106,6 +104,8 @@ def _select_available_scope(
     input: DecisionInput,
     primary_scope: IssueScope,
 ) -> tuple[IssueScope, str]:
+    if primary_scope not in _SCOPE_TO_OUTCOME or primary_scope not in MAX_ATTEMPTS_PER_SCOPE:
+        return "operator", primary_scope
     max_attempts = MAX_ATTEMPTS_PER_SCOPE.get(primary_scope, 1)
     if max_attempts <= 0:
         return primary_scope, ""

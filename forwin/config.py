@@ -317,6 +317,7 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         ),
         "embedding_model": _env_str(env, "FORWIN_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
         "embedding_dims": _env_int(env, "FORWIN_EMBEDDING_DIMS", DEFAULT_EMBEDDING_DIMS),
+        "embedding_required": _env_bool(env, "FORWIN_EMBEDDING_REQUIRED", False),
         "runtime_settings_path": _env_str(
             env,
             "FORWIN_RUNTIME_SETTINGS_PATH", "data/runtime_settings.json"
@@ -698,6 +699,7 @@ class _ConfigFields:
     embedding_api_key: str = ""
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
     embedding_dims: int = DEFAULT_EMBEDDING_DIMS
+    embedding_required: bool = False
     runtime_settings_path: str = "data/runtime_settings.json"
     observability_enabled: bool = True
     observability_performance_enabled: bool = True

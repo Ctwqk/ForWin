@@ -14,6 +14,10 @@ BLOCKED_INTERNAL_STATE_KEYS = (
     "public_countdown",
     "countdown_key",
 )
+BLOCKED_INTERNAL_STATE_KEY_PATTERNS = (
+    re.compile(r"trait-[a-z][a-z0-9-]*"),
+    re.compile(r"<<FORWIN_[A-Z0-9_]+>>"),
+)
 BARE_ROLE_PLACEHOLDERS = ("工作人员",)
 PROTAGONIST_PLACEHOLDER_ROLES = (
     "工作人员",
@@ -60,6 +64,29 @@ def analyze_placeholder_leakage(
                 evidence_refs=[f"body:{start}-{start + len(token)}"],
                 span_start=start,
                 span_end=start + len(token),
+                payload={"draft_id": draft_id, "internal_state_key": token},
+            )
+        )
+        return signals
+    for pattern in BLOCKED_INTERNAL_STATE_KEY_PATTERNS:
+        match = pattern.search(text)
+        if match is None:
+            continue
+        token = match.group(0)
+        subject = f"internal_state_key:{token}"
+        signals.append(
+            CanonQualitySignal(
+                signal_id=make_signal_id(project_id, chapter_number, "internal_state_key_leakage", subject),
+                project_id=project_id,
+                chapter_number=chapter_number,
+                signal_type="internal_state_key_leakage",
+                severity="error",
+                target_scope="body",
+                subject_key=subject,
+                description=f"章节正文泄漏内部状态键「{token}」，不能进入 canon。",
+                evidence_refs=[f"body:{match.start()}-{match.end()}"],
+                span_start=match.start(),
+                span_end=match.end(),
                 payload={"draft_id": draft_id, "internal_state_key": token},
             )
         )

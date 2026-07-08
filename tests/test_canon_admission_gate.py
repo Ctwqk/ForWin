@@ -97,8 +97,6 @@ def test_canon_admission_fatal_only_blocks_form_invariant_drift_with_evidence() 
     "signal_type",
     [
         "dead_character_resurrection",
-        "already_dead_character_resurrected",
-        "character_resurrection",
         "level_rollback",
         "power_level_rollback",
         "duplicate_artifact",

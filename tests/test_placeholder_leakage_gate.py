@@ -48,6 +48,17 @@ def test_internal_countdown_state_key_leakage_blocks_canon() -> None:
     assert signals[0].subject_key == "internal_state_key:memory_reset"
 
 
+def test_internal_state_key_leakage_blocks_trait_skill_ids() -> None:
+    signals = analyze_placeholder_leakage(
+        project_id="p1",
+        chapter_number=3,
+        body="陆明的旁白里残留 trait-loyal-protector。",
+    )
+
+    assert [signal.signal_type for signal in signals] == ["internal_state_key_leakage"]
+    assert signals[0].payload["internal_state_key"] == "trait-loyal-protector"
+
+
 def test_placeholder_only_in_summary_is_warning() -> None:
     signals = analyze_placeholder_leakage(
         project_id="p1",
@@ -149,10 +160,10 @@ def test_placeholder_leakage_autofix_replaces_bare_staff_role_with_stable_alias(
     assert fixed is not None
     assert "工作人员" not in fixed.body
     assert "工作人员" not in fixed.end_of_chapter_summary
-    assert fixed.generation_meta["placeholder_leakage_autofix"] == {"工作人员": "旧书摊主"}
+    assert fixed.generation_meta["placeholder_leakage_autofix"] == {"工作人员": "具体见证人"}
 
 
-def test_subworld_generic_autofix_does_not_introduce_blocked_staff_placeholder() -> None:
-    assert WritingOrchestrator._generic_subworld_reference("普通现场", "陈总") == "馆员"
+def test_subworld_generic_autofix_helper_is_removed_from_orchestrator_boundary() -> None:
+    assert not hasattr(WritingOrchestrator, "_generic_subworld_reference")
     assert ContinuityChecker._looks_like_generic_character_reference("馆员") is True
     assert ContinuityChecker._looks_like_generic_character_reference("档案区旧书摊主") is True

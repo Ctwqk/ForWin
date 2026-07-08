@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import replace
 import logging
 
+from forwin.canon_quality.continuity_adapter import signals_from_continuity_issues
 from forwin.canon_quality.obligation_verifier import verify_due_obligations_for_draft
-from forwin.canon_quality.signals import CanonAdmissionGateResult
+from forwin.orchestrator_loop_core.quality_gate_types import CanonApplyOutcome, CanonQualityGateOutcome
+from forwin.orchestrator_loop_core.quality_signal_utils import dedupe_quality_signals
 from forwin.orchestrator_loop_core.common import *
 from forwin.review_engine.engine import AutoDecisionEngine
 from forwin.review_engine.rules.review_outcome import (
@@ -24,38 +26,6 @@ from forwin.state.updater import StateUpdater
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class CanonQualityGateOutcome:
-    blocked_path: str = ""
-    gate_result: CanonAdmissionGateResult | None = None
-
-    @property
-    def blocked(self) -> bool:
-        return bool(self.blocked_path)
-
-    def __bool__(self) -> bool:
-        return self.blocked
-
-
-@dataclass(frozen=True)
-class CanonApplyOutcome:
-    blocked_path: str = ""
-    block_kind: str = ""
-    canon_gate_result: CanonAdmissionGateResult | None = None
-
-    @property
-    def blocked(self) -> bool:
-        return bool(self.blocked_path or self.block_kind)
-
-    def __bool__(self) -> bool:
-        return self.blocked
-
-    @property
-    def repairable_scope(self) -> str:
-        if self.block_kind != "canon_quality" or self.canon_gate_result is None:
-            return ""
-        return str(self.canon_gate_result.required_repair_scope or "")
-
 _ENGINE_OUTCOME_TO_REVIEW_ACTION = {
     "auto_approve": "commit_clean",
     "local_repair": "local_rewrite",
@@ -68,6 +38,7 @@ _ENGINE_OUTCOME_TO_REVIEW_ACTION = {
     "manual_review": "manual_review",
     "system_block": "block",
 }
+
 
 def _review_action_for_engine_decision(decision: Decision) -> str:
     fallback_action = str(decision.sub_action.get("review_action") or "").strip()
@@ -432,6 +403,15 @@ def _apply_canon_quality_gate(
         llm_client=gate_llm_client,
         return_raw_analyzer_results=True,
     )
+    continuity_signals = signals_from_continuity_issues(
+        project_id=project_id,
+        chapter_number=chapter_number,
+        draft_id=draft_id,
+        issues=list(getattr(verdict, "issues", []) or []),
+    )
+    gate_signals = dedupe_quality_signals([*analysis.signals, *continuity_signals])
+    if continuity_signals:
+        CanonQualityRepository(session).save_signals(continuity_signals)
     project = session.get(Project, project_id)
     target_total_chapters = int(getattr(project, "target_total_chapters", 0) or 0)
     deferred_acceptance_errors = self._prepare_deferred_acceptance_if_needed(
@@ -441,7 +421,7 @@ def _apply_canon_quality_gate(
         draft_id=draft_id,
         review_id=review_id,
         verdict=verdict,
-        signals=analysis.signals,
+        signals=gate_signals,
         target_total_chapters=target_total_chapters,
     )
     if deferred_acceptance_errors:
@@ -479,7 +459,7 @@ def _apply_canon_quality_gate(
         draft_id=draft_id,
         review_id=review_id,
         review_verdict=verdict.verdict,
-        signals=analysis.signals,
+        signals=gate_signals,
         obligations=gate_obligations,
         plan_patches=obligation_repo.list_patches_by_ids(patch_ids),
         mode=gate_mode,
@@ -489,7 +469,7 @@ def _apply_canon_quality_gate(
         require_evidence_for_block=True,
         resolved_obligation_ids=draft_resolved_obligation_ids,
     )
-    CanonQualityRepository(session).save_admission_run(gate_result, signals=analysis.signals)
+    CanonQualityRepository(session).save_admission_run(gate_result, signals=gate_signals)
     self._record_decision_event(
         updater=updater,
         project_id=project_id,

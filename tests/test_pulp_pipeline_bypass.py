@@ -615,20 +615,21 @@ def test_world_layer_filter_preserves_summary_only_world_delta() -> None:
     assert filtered[0].metadata["filtered_patch_counts"] == {}
 
 
-def test_deferred_single_writer_empty_extraction_creates_light_world_fact(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _install_empty_world_delta_path(monkeypatch: pytest.MonkeyPatch) -> None:
     class EmptyWorldDeltaExtractor:
-        def extract(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
-            return ExtractedWorldChangeSet(project_id="project-1", chapter_number=1)
+        def extract(self, writer_output, *_args, **_kwargs):  # noqa: ANN001, ANN002, ANN003
+            return ExtractedWorldChangeSet(
+                project_id=writer_output.project_id,
+                chapter_number=writer_output.chapter_number,
+            )
 
     class PassingV4ReviewGate:
-        def review(self, *_args, **_kwargs):  # noqa: ANN002, ANN003
+        def review(self, extracted, *_args, **_kwargs):  # noqa: ANN001, ANN002, ANN003
             return V4ReviewGateVerdict(
                 passed=True,
                 approved_changes=ApprovedWorldChangeSet(
-                    project_id="project-1",
-                    chapter_number=1,
+                    project_id=extracted.project_id,
+                    chapter_number=extracted.chapter_number,
                 ),
                 issues=[],
             )
@@ -641,6 +642,12 @@ def test_deferred_single_writer_empty_extraction_creates_light_world_fact(
         "forwin.extractor.book_state_graph_delta.V4ReviewGate",
         PassingV4ReviewGate,
     )
+
+
+def test_deferred_single_writer_empty_extraction_creates_light_state_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_empty_world_delta_path(monkeypatch)
 
     extraction = BookStateGraphDeltaExtractor(layers={"world"}).extract(
         BookStateExtractionRequest(
@@ -662,13 +669,51 @@ def test_deferred_single_writer_empty_extraction_creates_light_world_fact(
     assert extraction.changes is not None
     assert len(extraction.changes.graph_deltas) == 1
     delta = extraction.changes.graph_deltas[0]
-    assert delta.operation == "pulp_light_chapter_fact"
+    assert delta.operation == "pulp_light_state_extraction"
+    assert delta.target_type == "chapter_state"
     assert delta.fact_patches[0].op == "create"
+    assert delta.fact_patches[0].new_value["fact_type"] == "key_event"
     assert "林夜获得玄铁令" in delta.fact_patches[0].proposition
-    assert delta.metadata["extraction_path"] == "pulp_light_structured_fallback"
+    node_types = {patch.node_type for patch in delta.node_patches}
+    node_names = {patch.new_value["name"] for patch in delta.node_patches}
+    assert node_types == {"character", "item", "faction"}
+    assert {"林夜", "玄铁令", "问心阁"}.issubset(node_names)
+    assert delta.metadata["extraction_path"] == "pulp_light_state_extraction"
+    assert delta.metadata["characters"] == ["林夜"]
+    assert delta.metadata["possessions"] == ["玄铁令"]
+    assert delta.metadata["factions"] == ["问心阁"]
+    assert "pulp_light_structured_fallback" not in str(delta.model_dump(mode="json"))
 
 
-def test_light_world_fact_delta_commits_to_book_state() -> None:
+def test_deferred_single_writer_empty_light_extraction_blocks_summary_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_empty_world_delta_path(monkeypatch)
+
+    extraction = BookStateGraphDeltaExtractor(layers={"world"}).extract(
+        BookStateExtractionRequest(
+            project_id="project-1",
+            chapter_number=1,
+            writer_output=WriterOutput(
+                project_id="project-1",
+                chapter_number=1,
+                title="第一章",
+                body="这一章主要承接前文氛围，没有命名角色、物品或势力。",
+                char_count=24,
+                end_of_chapter_summary="氛围继续延展。",
+                generation_meta={"structured_extraction": "deferred", "mode": "single"},
+            ),
+        )
+    )
+
+    assert extraction.accepted is False
+    assert extraction.changes is None
+    assert [issue.code for issue in extraction.issues] == ["light_state_extraction_empty"]
+    assert extraction.metadata["extraction_path"] == "pulp_light_state_extraction"
+
+
+def test_light_state_delta_commits_to_book_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_empty_world_delta_path(monkeypatch)
     engine = get_engine(postgres_test_url("pulp_light_world_fact_commit"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -701,7 +746,10 @@ def test_light_world_fact_delta_commits_to_book_state() -> None:
             nodes = repo.list_world_nodes(project_id, as_of_chapter=1)
             facts = repo.list_fact_nodes(project_id, as_of_chapter=1)
 
-        assert [node.node_type for node in nodes] == ["event"]
+        node_names_by_type = {(str(node.node_type), node.name) for node in nodes}
+        assert ("character", "林夜") in node_names_by_type
+        assert ("item", "玄铁令") in node_names_by_type
+        assert ("faction", "问心阁") in node_names_by_type
         assert any("林夜获得玄铁令" in fact.proposition for fact in facts)
     finally:
         engine.dispose()

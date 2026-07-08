@@ -362,6 +362,13 @@ get_slow_performance_spans = _observability_handlers["get_slow_performance_spans
 get_llm_performance_report = _observability_handlers["get_llm_performance_report"]
 get_db_performance_report = _observability_handlers["get_db_performance_report"]
 
+
+def _current_memory_index():
+    orchestrator = api_state._orchestrator
+    services = getattr(orchestrator, "services", None)
+    broker = getattr(services, "retrieval_broker", None)
+    return getattr(broker, "memory_index", None)
+
 globals().update(
     api_route_registry.register_api_routes(
         app,
@@ -379,6 +386,7 @@ globals().update(
                 active_generation_task_error_cls=ActiveGenerationTaskError,
                 display_datetime=_display_datetime,
                 json_load_object=lambda raw: _json_load_object(raw),
+                get_memory_index=_current_memory_index,
             ),
             task=api_route_registry.TaskDeps(
                 create_generation_task=lambda **kwargs: _create_generation_task(**kwargs),

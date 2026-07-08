@@ -981,6 +981,7 @@ def _apply_canon_candidate(
             project_id=project_id,
             chapter_number=chapter_number,
             writer_output=writer_output,
+            verdict=verdict,
         )
         self._ensure_genesis_canon_seed_entities(
             session=session,

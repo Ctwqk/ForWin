@@ -1163,6 +1163,77 @@ class SubWorldControlTests(unittest.TestCase):
             writer_output=output,
         )
 
+    def test_canon_commit_subworld_gate_allows_review_normalized_nonblocking_names(self) -> None:
+        class FakeRepo:
+            def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:
+                return {"陆明"}
+
+            def get_active_threads(self, _project_id: str) -> list[object]:
+                return []
+
+            def get_entities_by_names(self, _project_id: str, _names: list[str]) -> dict[str, object]:
+                return {}
+
+            def get_project(self, _project_id: str) -> object:
+                return SimpleNamespace(premise="主角：陆明。", setting_summary="")
+
+            def get_active_entities(self, _project_id: str) -> list[object]:
+                return []
+
+        output = WriterOutput(
+            chapter_number=1,
+            title="黑雾初巡",
+            body="陆明在雾港旧码头遇见老周，裴临川的名字被反复提及。" * 80,
+            end_of_chapter_summary="陆明遇见老周并听到裴临川的名字。",
+            entity_mentions=[
+                EntityMention(entity_name="陆明", entity_kind="character", is_named=True),
+                EntityMention(
+                    entity_name="老周（提及：裴临川）",
+                    entity_kind="character",
+                    is_named=True,
+                    is_on_stage=True,
+                ),
+                EntityMention(entity_name="裴临川", entity_kind="character", is_named=True),
+            ],
+        )
+        verdict = ReviewVerdict(
+            verdict="warn",
+            issues=[],
+            residual_review_issues=[
+                ContinuityIssue(
+                    rule_name="sub_world_unknown_named_entity",
+                    severity="warning",
+                    description="命名角色「老周」未在当前 chapter 的 subworld 准入名单中。",
+                    entity_names=["老周（提及：裴临川）", "裴临川"],
+                    issue_type="subworld_admission",
+                    issue_group="director_imbalance",
+                    blocking=False,
+                    original_result={
+                        "normalized_from_severity": "error",
+                        "normalization_reason": "nonblocking_subworld_admission",
+                    },
+                )
+            ],
+        )
+
+        orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
+
+        with self.assertRaisesRegex(ValueError, "老周"):
+            orchestrator._validate_subworld_admission(
+                repo=FakeRepo(),
+                project_id="p1",
+                chapter_number=1,
+                writer_output=output,
+            )
+
+        orchestrator._validate_subworld_admission(
+            repo=FakeRepo(),
+            project_id="p1",
+            chapter_number=1,
+            writer_output=output,
+            verdict=verdict,
+        )
+
     def test_canon_commit_subworld_gate_ignores_deceased_record_state_change_names(self) -> None:
         class FakeRepo:
             def get_allowed_entity_names(self, _project_id: str, _chapter_number: int) -> set[str]:

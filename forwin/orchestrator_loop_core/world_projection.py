@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from forwin.reviser.final_acceptance import is_force_acceptable_nonblocking_issue
 from forwin.subworld_manager import SubWorldManager
 from forwin.orchestrator_loop_core.common import *
 
@@ -626,6 +627,24 @@ def _collect_subworld_candidate_names(
                 names.add(entity_name)
     return {name for name in names if len(name) <= 12}
 
+def _nonblocking_review_subworld_names(verdict: ReviewVerdict | None) -> set[str]:
+    if verdict is None:
+        return set()
+    names: set[str] = set()
+    for issue in [*(verdict.issues or []), *(verdict.residual_review_issues or [])]:
+        if not is_force_acceptable_nonblocking_issue(issue):
+            continue
+        for raw_name in getattr(issue, "entity_names", []) or []:
+            raw_text = str(raw_name or "").strip()
+            candidate = ContinuityChecker._candidate_character_name(raw_text)
+            normalized = ContinuityChecker._normalize_character_reference(raw_text)
+            if candidate:
+                names.add(candidate)
+                names.add(ContinuityChecker._normalize_character_reference(candidate))
+            if normalized:
+                names.add(normalized)
+    return names
+
 def _validate_subworld_admission(
     self,
     *,
@@ -633,6 +652,7 @@ def _validate_subworld_admission(
     project_id: str,
     chapter_number: int,
     writer_output: WriterOutput,
+    verdict: ReviewVerdict | None = None,
 ) -> None:
     allowed_names = {
         ContinuityChecker._normalize_character_reference(name)
@@ -653,6 +673,16 @@ def _validate_subworld_admission(
         for name in self._collect_subworld_candidate_names(repo, project_id, writer_output)
         if name not in allowed_names
     )
+    if unknown:
+        accepted_nonblocking_names = _nonblocking_review_subworld_names(verdict)
+        if accepted_nonblocking_names:
+            unknown = [
+                name
+                for name in unknown
+                if name not in accepted_nonblocking_names
+                and ContinuityChecker._normalize_character_reference(name)
+                not in accepted_nonblocking_names
+            ]
     if unknown:
         raise ValueError(
             "Subworld admission rejected chapter "
@@ -748,4 +778,4 @@ def _run_phase3_pass(
 
 
 
-__all__ = ['_prompt_trace_success_summary', '_apply_world_v4_gate', '_filter_resolvable_events', '_ensure_event_mentioned_non_character_entities', '_filter_resolvable_state_changes', '_ensure_genesis_canon_seed_entities', '_collect_subworld_candidate_names', '_validate_subworld_admission', '_run_phase3_pass']
+__all__ = ['_prompt_trace_success_summary', '_apply_world_v4_gate', '_filter_resolvable_events', '_ensure_event_mentioned_non_character_entities', '_filter_resolvable_state_changes', '_ensure_genesis_canon_seed_entities', '_collect_subworld_candidate_names', '_nonblocking_review_subworld_names', '_validate_subworld_admission', '_run_phase3_pass']

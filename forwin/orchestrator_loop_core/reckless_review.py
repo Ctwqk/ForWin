@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import json
 from typing import Any
 
 from forwin.governance import DecisionEventType
@@ -74,4 +76,66 @@ def _delegate_reckless_review(
     return outcome
 
 
-__all__ = ["_delegate_reckless_review"]
+def _delegate_checkpoint_if_reckless(
+    self,
+    *,
+    updater: StateUpdater,
+    governance,
+    checkpoint,
+    gate_kind: str,
+    chapter_number: int = 0,
+) -> bool:
+    try:
+        issues = json.loads(str(getattr(checkpoint, "issues_json", "[]") or "[]"))
+    except (json.JSONDecodeError, TypeError):
+        issues = []
+    if not isinstance(issues, list):
+        issues = []
+    outcome = self._delegate_reckless_review(
+        updater=updater,
+        project_id=str(getattr(checkpoint, "project_id", "") or ""),
+        governance=governance,
+        gate_kind=gate_kind,
+        scope=(
+            "band"
+            if str(getattr(checkpoint, "boundary_kind", "") or "") == "band_end"
+            else "chapter"
+        ),
+        band_id=str(getattr(checkpoint, "band_id", "") or ""),
+        chapter_number=(
+            int(chapter_number or 0)
+            or int(getattr(checkpoint, "boundary_chapter", 0) or 0)
+        ),
+        related_object_type="band_checkpoint",
+        related_object_id=str(getattr(checkpoint, "id", "") or ""),
+        input_snapshot={
+            "checkpoint": {
+                "id": str(getattr(checkpoint, "id", "") or ""),
+                "project_id": str(getattr(checkpoint, "project_id", "") or ""),
+                "arc_id": str(getattr(checkpoint, "arc_id", "") or ""),
+                "band_id": str(getattr(checkpoint, "band_id", "") or ""),
+                "chapter_start": int(getattr(checkpoint, "chapter_start", 0) or 0),
+                "chapter_end": int(getattr(checkpoint, "chapter_end", 0) or 0),
+                "trigger_source": str(getattr(checkpoint, "trigger_source", "") or ""),
+                "boundary_kind": str(getattr(checkpoint, "boundary_kind", "") or ""),
+                "boundary_chapter": int(getattr(checkpoint, "boundary_chapter", 0) or 0),
+                "status": str(getattr(checkpoint, "status", "") or ""),
+                "summary": str(getattr(checkpoint, "summary", "") or ""),
+                "reason": str(getattr(checkpoint, "reason", "") or ""),
+                "issues": issues,
+            },
+            "governance": governance.model_dump(mode="json"),
+        },
+    )
+    if outcome is None or not outcome.approved:
+        return False
+    checkpoint.status = "overridden"
+    checkpoint.reason = outcome.reason
+    checkpoint.related_task_id = self._governance_task_id
+    checkpoint.resolved_at = datetime.now(timezone.utc)
+    updater.session.add(checkpoint)
+    updater.session.flush()
+    return True
+
+
+__all__ = ["_delegate_checkpoint_if_reckless", "_delegate_reckless_review"]

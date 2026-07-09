@@ -39,7 +39,10 @@ from forwin.orchestrator_loop_core.repair_patches import (
     _replace_band_schedule,
     _structure_data_from_row,
 )
-from forwin.orchestrator_loop_core.reckless_review import _delegate_reckless_review
+from forwin.orchestrator_loop_core.reckless_review import (
+    _delegate_checkpoint_if_reckless,
+    _delegate_reckless_review,
+)
 from forwin.orchestrator_loop_core.project_chapters import _run_project_chapters
 from forwin.orchestrator_loop_core.writer_attention import _write_chapter_with_attention_fallback
 from forwin.orchestrator_loop_core.quality_gates import _is_timeout_like, _is_transient_llm_like, _transient_retry_delay, _current_model_identity, _audit_operation_id, _drain_llm_attempt_events, _safe_prompt_trace_attempts, _error_category_from_attempts, _diagnostic_kind_for_failure, _record_failure_prompt_trace, _record_model_fallback_payloads, _apply_canon_quality_gate, _run_obligation_form_gate, _prepare_deferred_acceptance_if_needed, _band_scope_candidates, _band_row_by_id, _latest_draft_and_review_for_chapter, _apply_canon_candidate
@@ -126,6 +129,7 @@ WritingOrchestrator._project_governance = _project_governance
 WritingOrchestrator._record_decision_event = _record_decision_event
 WritingOrchestrator._record_engine_decision_event = _record_engine_decision_event
 WritingOrchestrator._delegate_reckless_review = _delegate_reckless_review
+WritingOrchestrator._delegate_checkpoint_if_reckless = _delegate_checkpoint_if_reckless
 WritingOrchestrator._audit_current_plan_before_write = _audit_current_plan_before_write
 WritingOrchestrator._audit_future_plans_after_acceptance = _audit_future_plans_after_acceptance
 WritingOrchestrator._future_plan_audit_plans = _future_plan_audit_plans

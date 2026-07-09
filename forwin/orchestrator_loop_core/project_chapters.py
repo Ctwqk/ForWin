@@ -6,6 +6,7 @@ from forwin.checker.hard_floor import run_hard_floor
 from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
 from forwin.experience.trope_cooldown import save_accepted_trope_usage_for_chapter
 from forwin.maintenance.deferred import DeferredMaintenanceRecord, record_deferred_maintenance
+from forwin.models.governance import DecisionEvent
 from forwin.orchestrator_loop_core.obligation_resolution import (
     _verify_obligations_after_acceptance,
 )
@@ -197,7 +198,19 @@ def _run_project_chapters(
             chapter_number=chapter_num,
             boundary_kind="chapter_start",
         )
-        if manual_start_checkpoint is not None:
+        manual_start_approved = bool(
+            manual_start_checkpoint is not None
+            and self._delegate_checkpoint_if_reckless(
+                updater=updater,
+                governance=governance,
+                checkpoint=manual_start_checkpoint,
+                gate_kind="manual_checkpoint_chapter_start",
+                chapter_number=chapter_num,
+            )
+        )
+        if manual_start_approved:
+            session.commit()
+        elif manual_start_checkpoint is not None:
             self._record_decision_event(
                 updater=updater,
                 project_id=project_id,
@@ -845,6 +858,45 @@ def _run_project_chapters(
                 future_plan_audit_result=future_plan_audit_result,
                 governance=governance,
             )
+            if generation_audit_pause:
+                audit_event = (
+                    session.query(DecisionEvent)
+                    .filter(
+                        DecisionEvent.project_id == project_id,
+                        DecisionEvent.chapter_number == chapter_num,
+                        DecisionEvent.event_type
+                        == DecisionEventType.GENERATION_AUDIT_CHECKPOINT_REACHED,
+                    )
+                    .order_by(DecisionEvent.created_at.desc(), DecisionEvent.id.desc())
+                    .first()
+                )
+                try:
+                    audit_payload = json.loads(
+                        str(getattr(audit_event, "payload_json", "{}") or "{}")
+                    )
+                except (json.JSONDecodeError, TypeError):
+                    audit_payload = {}
+                audit_outcome = self._delegate_reckless_review(
+                    updater=updater,
+                    project_id=project_id,
+                    governance=governance,
+                    gate_kind="generation_audit_pause",
+                    scope="project",
+                    chapter_number=chapter_num,
+                    related_object_type="decision_event",
+                    related_object_id=str(getattr(audit_event, "id", "") or ""),
+                    parent_event_id=str(getattr(audit_event, "id", "") or ""),
+                    input_snapshot={
+                        "generation_audit": audit_payload,
+                        "chapter_number": chapter_num,
+                        "completed_chapters": [*completed_chapters, chapter_num],
+                        "failed_chapters": failed_chapters,
+                        "paused_chapters": paused_chapters,
+                        "governance": governance.model_dump(mode="json"),
+                    },
+                )
+                if audit_outcome is not None and audit_outcome.approved:
+                    generation_audit_pause = False
             checkpoint_row = None
             checkpoint_pause = False
             checkpoint_warn_pause = False
@@ -910,6 +962,21 @@ def _run_project_chapters(
                     and str(governance.band_warn_action or "") == "pause"
                 ):
                     checkpoint_warn_pause = True
+            should_pause_for_checkpoint = checkpoint_pause or (
+                checkpoint_warn_pause and chapter_num != last_requested_chapter
+            )
+            if (
+                should_pause_for_checkpoint
+                and checkpoint_row is not None
+                and self._delegate_checkpoint_if_reckless(
+                    updater=updater,
+                    governance=governance,
+                    checkpoint=checkpoint_row,
+                    gate_kind="band_checkpoint_pause",
+                    chapter_number=chapter_num,
+                )
+            ):
+                should_pause_for_checkpoint = False
             manual_after_accept = self._manual_boundary_checkpoint(
                 session,
                 project_id=project_id,
@@ -922,10 +989,29 @@ def _run_project_chapters(
                 chapter_number=chapter_num,
                 boundary_kind="band_end",
             )
+            if (
+                manual_after_accept is not None
+                and self._delegate_checkpoint_if_reckless(
+                    updater=updater,
+                    governance=governance,
+                    checkpoint=manual_after_accept,
+                    gate_kind="manual_checkpoint_chapter_accepted",
+                    chapter_number=chapter_num,
+                )
+            ):
+                manual_after_accept = None
+            if (
+                manual_band_end is not None
+                and self._delegate_checkpoint_if_reckless(
+                    updater=updater,
+                    governance=governance,
+                    checkpoint=manual_band_end,
+                    gate_kind="manual_checkpoint_band_end",
+                    chapter_number=chapter_num,
+                )
+            ):
+                manual_band_end = None
             session.commit()
-            should_pause_for_checkpoint = checkpoint_pause or (
-                checkpoint_warn_pause and chapter_num != last_requested_chapter
-            )
             if (
                 should_pause_for_checkpoint
                 or manual_after_accept is not None

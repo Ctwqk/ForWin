@@ -8,19 +8,27 @@ from unittest.mock import patch
 from forwin.config import Config
 from forwin.governance import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
-from forwin.models.governance import DecisionEvent
+from forwin.models.genesis import PromptTrace
+from forwin.models.governance import BandCheckpoint, DecisionEvent
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.planning.future_plan_auditor import FuturePlanAuditRun
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.reckless_review import RECKLESS_REVIEW_MODEL
 from tests.postgres import postgres_test_url
 
 
-def _governance_json(*, interval: int = 2, pause_enabled: bool = True) -> str:
+def _governance_json(
+    *,
+    interval: int = 2,
+    pause_enabled: bool = True,
+    review_delegation_mode: str = "human",
+) -> str:
     return json.dumps(
         {
             "default_operation_mode": "blackbox",
+            "review_delegation_mode": review_delegation_mode,
             "progression_mode": "serial_canon_band_guard",
             "auto_band_checkpoint": True,
             "manual_checkpoints_enabled": True,
@@ -30,6 +38,46 @@ def _governance_json(*, interval: int = 2, pause_enabled: bool = True) -> str:
         },
         ensure_ascii=False,
     )
+
+
+class FakeSparkGateLLM:
+    def __init__(self, decision: str = "approve") -> None:
+        self.decision = decision
+        self.last_call_result = None
+        self._attempts: list[dict[str, object]] = []
+        self.calls: list[dict[str, object]] = []
+
+    def chat(self, messages, **kwargs):
+        content = json.dumps(
+            {
+                "decision": self.decision,
+                "reason": "Spark delegated checkpoint decision.",
+                "risk_level": "medium",
+                "findings": ["checkpoint reviewed"],
+                "evidence": ["checkpoint snapshot"],
+            }
+        )
+        self.calls.append({"messages": messages, **kwargs})
+        self._attempts = [
+            {
+                "model": RECKLESS_REVIEW_MODEL,
+                "http_status": 200,
+                "attempt_no": 1,
+                "_raw_request_payload": {"messages": messages},
+                "_raw_response_text": content,
+            }
+        ]
+        self.last_call_result = SimpleNamespace(
+            backend="ordinary",
+            fallback_used=False,
+            trace={"backend": "ordinary", "model": RECKLESS_REVIEW_MODEL},
+        )
+        return content
+
+    def drain_llm_attempt_events(self):
+        attempts = list(self._attempts)
+        self._attempts.clear()
+        return attempts
 
 
 def _writer_output(project_id: str, chapter_number: int) -> WriterOutput:
@@ -44,7 +92,14 @@ def _writer_output(project_id: str, chapter_number: int) -> WriterOutput:
 
 
 class GenerationAuditCheckpointTests(unittest.TestCase):
-    def _setup_project(self, slug: str, *, chapter_count: int = 3, pause_enabled: bool = True):
+    def _setup_project(
+        self,
+        slug: str,
+        *,
+        chapter_count: int = 3,
+        pause_enabled: bool = True,
+        review_delegation_mode: str = "human",
+    ):
         db_path = postgres_test_url(slug)
         engine = get_engine(db_path)
         init_db(engine)
@@ -60,7 +115,11 @@ class GenerationAuditCheckpointTests(unittest.TestCase):
                     genre="悬疑",
                     setting_summary="",
                     target_total_chapters=chapter_count,
-                    governance_json=_governance_json(interval=2, pause_enabled=pause_enabled),
+                    governance_json=_governance_json(
+                        interval=2,
+                        pause_enabled=pause_enabled,
+                        review_delegation_mode=review_delegation_mode,
+                    ),
                 )
             )
             session.flush()
@@ -254,5 +313,205 @@ class GenerationAuditCheckpointTests(unittest.TestCase):
                 self.assertEqual(payload["next_chapter"], 0)
         finally:
             orchestrator.llm_client.close()
+            orchestrator.engine.dispose()
+            engine.dispose()
+
+    def test_reckless_mode_delegates_generation_audit_pause_and_continues(self) -> None:
+        db_path, engine, session_factory, project_id = self._setup_project(
+            "generation-audit-reckless",
+            chapter_count=3,
+            pause_enabled=True,
+            review_delegation_mode="reckless",
+        )
+        orchestrator = WritingOrchestrator(
+            Config(
+                database_url=db_path,
+                minimax_api_key="",
+                minimax_model="fake-model",
+                review_delegation_mode="reckless",
+                generation_audit_pause_enabled=True,
+            )
+        )
+        original_llm = orchestrator.llm_client
+        fake_llm = FakeSparkGateLLM()
+        orchestrator.llm_client = fake_llm
+        try:
+            result = self._run_with_fast_pipeline(
+                orchestrator,
+                session_factory=session_factory,
+                project_id=project_id,
+                chapter_numbers=[1, 2, 3],
+            )
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(result.completed_chapters, [1, 2, 3])
+            self.assertEqual(len(fake_llm.calls), 1)
+            self.assertIn("generation_audit_pause", fake_llm.calls[0]["messages"][1]["content"])
+            with session_factory() as session:
+                trace = session.query(PromptTrace).filter_by(
+                    project_id=project_id,
+                    trace_scope="reckless_review",
+                ).one()
+                self.assertEqual(trace.stage_key, "reckless_generation_audit_pause")
+        finally:
+            original_llm.close()
+            orchestrator.engine.dispose()
+            engine.dispose()
+
+    def test_reckless_generation_audit_rejection_preserves_pause(self) -> None:
+        db_path, engine, session_factory, project_id = self._setup_project(
+            "generation-audit-reckless-reject",
+            chapter_count=3,
+            pause_enabled=True,
+            review_delegation_mode="reckless",
+        )
+        orchestrator = WritingOrchestrator(
+            Config(
+                database_url=db_path,
+                minimax_api_key="",
+                minimax_model="fake-model",
+                review_delegation_mode="reckless",
+                generation_audit_pause_enabled=True,
+            )
+        )
+        original_llm = orchestrator.llm_client
+        fake_llm = FakeSparkGateLLM(decision="reject")
+        orchestrator.llm_client = fake_llm
+        try:
+            result = self._run_with_fast_pipeline(
+                orchestrator,
+                session_factory=session_factory,
+                project_id=project_id,
+                chapter_numbers=[1, 2, 3],
+            )
+
+            self.assertEqual(result.status, "paused")
+            self.assertEqual(result.completed_chapters, [1, 2])
+            self.assertEqual(result.paused_chapters, [2])
+            self.assertEqual(len(fake_llm.calls), 1)
+        finally:
+            original_llm.close()
+            orchestrator.engine.dispose()
+            engine.dispose()
+
+    def test_reckless_mode_overrides_manual_chapter_start_checkpoint(self) -> None:
+        db_path, engine, session_factory, project_id = self._setup_project(
+            "manual-checkpoint-reckless",
+            chapter_count=1,
+            review_delegation_mode="reckless",
+        )
+        with session_factory() as session:
+            arc_id = session.query(ArcPlanVersion.id).filter_by(project_id=project_id).scalar()
+            checkpoint = BandCheckpoint(
+                id=new_id(),
+                project_id=project_id,
+                arc_id=arc_id,
+                band_id="manual:chapter:1",
+                trigger_source="manual_boundary",
+                boundary_kind="chapter_start",
+                boundary_chapter=1,
+                status="pending",
+                summary="Operator requested chapter-start review.",
+            )
+            session.add(checkpoint)
+            session.commit()
+            checkpoint_id = checkpoint.id
+        orchestrator = WritingOrchestrator(
+            Config(
+                database_url=db_path,
+                minimax_api_key="",
+                minimax_model="fake-model",
+                review_delegation_mode="reckless",
+            )
+        )
+        original_llm = orchestrator.llm_client
+        fake_llm = FakeSparkGateLLM()
+        orchestrator.llm_client = fake_llm
+        try:
+            result = self._run_with_fast_pipeline(
+                orchestrator,
+                session_factory=session_factory,
+                project_id=project_id,
+                chapter_numbers=[1],
+            )
+
+            self.assertEqual(result.status, "completed")
+            with session_factory() as session:
+                checkpoint = session.get(BandCheckpoint, checkpoint_id)
+                self.assertEqual(checkpoint.status, "overridden")
+                self.assertIsNotNone(checkpoint.resolved_at)
+                self.assertIn("Spark delegated", checkpoint.reason)
+        finally:
+            original_llm.close()
+            orchestrator.engine.dispose()
+            engine.dispose()
+
+    def test_reckless_mode_overrides_pausing_band_warning(self) -> None:
+        db_path, engine, session_factory, project_id = self._setup_project(
+            "band-checkpoint-reckless",
+            chapter_count=2,
+            review_delegation_mode="reckless",
+        )
+        orchestrator = WritingOrchestrator(
+            Config(
+                database_url=db_path,
+                minimax_api_key="",
+                minimax_model="fake-model",
+                review_delegation_mode="reckless",
+            )
+        )
+        original_llm = orchestrator.llm_client
+        fake_llm = FakeSparkGateLLM()
+        orchestrator.llm_client = fake_llm
+        checkpoint_ids: list[str] = []
+
+        def fake_band_checkpoint(**kwargs):
+            if int(kwargs["chapter_number"]) != 1:
+                return None
+            session = kwargs["session"]
+            arc_id = session.query(ArcPlanVersion.id).filter_by(project_id=project_id).scalar()
+            row = BandCheckpoint(
+                id=new_id(),
+                project_id=project_id,
+                arc_id=arc_id,
+                band_id="band:1:1",
+                chapter_start=1,
+                chapter_end=1,
+                trigger_source="auto_band_end",
+                boundary_kind="band_end",
+                boundary_chapter=1,
+                status="warn",
+                summary="Warning-only checkpoint.",
+                issues_json=json.dumps(
+                    [{"code": "payoff_warn", "severity": "warning"}]
+                ),
+            )
+            session.add(row)
+            session.flush()
+            checkpoint_ids.append(row.id)
+            return row
+
+        try:
+            with patch.object(
+                orchestrator,
+                "_create_auto_band_checkpoint",
+                side_effect=fake_band_checkpoint,
+            ):
+                result = self._run_with_fast_pipeline(
+                    orchestrator,
+                    session_factory=session_factory,
+                    project_id=project_id,
+                    chapter_numbers=[1, 2],
+                )
+
+            self.assertEqual(result.status, "completed")
+            self.assertEqual(result.completed_chapters, [1, 2])
+            self.assertEqual(len(fake_llm.calls), 1)
+            with session_factory() as session:
+                checkpoint = session.get(BandCheckpoint, checkpoint_ids[0])
+                self.assertEqual(checkpoint.status, "overridden")
+                self.assertIsNotNone(checkpoint.resolved_at)
+        finally:
+            original_llm.close()
             orchestrator.engine.dispose()
             engine.dispose()

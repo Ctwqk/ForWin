@@ -1,0 +1,787 @@
+2026-07-08T05:53:09.945832391Z 2026-07-08 05:53:09,945 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:12.018394811Z 2026-07-08 05:53:12,018 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:14.089286531Z 2026-07-08 05:53:14,088 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:16.187843312Z 2026-07-08 05:53:16,187 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:18.234373562Z 2026-07-08 05:53:18,234 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:20.284877505Z 2026-07-08 05:53:20,284 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:22.339701515Z 2026-07-08 05:53:22,339 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:24.387477974Z 2026-07-08 05:53:24,386 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:26.433279355Z 2026-07-08 05:53:26,433 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:28.484040890Z 2026-07-08 05:53:28,483 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:30.541411250Z 2026-07-08 05:53:30,541 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:32.579791519Z 2026-07-08 05:53:32,579 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:34.642033628Z 2026-07-08 05:53:34,641 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:36.696926892Z 2026-07-08 05:53:36,696 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:38.733169065Z 2026-07-08 05:53:38,733 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:40.792338867Z 2026-07-08 05:53:40,791 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:42.847469210Z 2026-07-08 05:53:42,847 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:44.920804167Z 2026-07-08 05:53:44,920 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:46.969432637Z 2026-07-08 05:53:46,969 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:49.018850414Z 2026-07-08 05:53:49,018 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:51.096855631Z 2026-07-08 05:53:51,096 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:53.152080576Z 2026-07-08 05:53:53,151 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:55.227797309Z 2026-07-08 05:53:55,227 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:57.270087443Z 2026-07-08 05:53:57,269 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:53:59.313462925Z 2026-07-08 05:53:59,313 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:01.367464246Z 2026-07-08 05:54:01,366 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:03.406731945Z 2026-07-08 05:54:03,406 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:05.450029253Z 2026-07-08 05:54:05,449 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:07.491216232Z 2026-07-08 05:54:07,490 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:09.544273595Z 2026-07-08 05:54:09,544 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:11.589475610Z 2026-07-08 05:54:11,589 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:13.634772970Z 2026-07-08 05:54:13,634 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:15.693546221Z 2026-07-08 05:54:15,693 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:17.743586911Z 2026-07-08 05:54:17,743 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:19.785055667Z 2026-07-08 05:54:19,784 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:21.852196063Z 2026-07-08 05:54:21,851 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:23.886774733Z 2026-07-08 05:54:23,886 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:25.938833183Z 2026-07-08 05:54:25,938 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:27.998090044Z 2026-07-08 05:54:27,997 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:30.036049468Z 2026-07-08 05:54:30,035 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:32.090340292Z 2026-07-08 05:54:32,089 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:34.134120132Z 2026-07-08 05:54:34,133 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:36.176072060Z 2026-07-08 05:54:36,175 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:38.227027406Z 2026-07-08 05:54:38,226 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:40.323423711Z 2026-07-08 05:54:40,323 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:42.361216865Z 2026-07-08 05:54:42,360 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:44.429824720Z 2026-07-08 05:54:44,429 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:46.475222506Z 2026-07-08 05:54:46,474 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:48.526758782Z 2026-07-08 05:54:48,526 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:50.582175540Z 2026-07-08 05:54:50,581 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:52.645640836Z 2026-07-08 05:54:52,645 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:54.732870727Z 2026-07-08 05:54:54,732 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:56.773025672Z 2026-07-08 05:54:56,772 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:54:58.815640219Z 2026-07-08 05:54:58,815 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:00.868186602Z 2026-07-08 05:55:00,867 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:02.908372828Z 2026-07-08 05:55:02,907 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:04.948090520Z 2026-07-08 05:55:04,947 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:06.991661778Z 2026-07-08 05:55:06,991 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:09.037622346Z 2026-07-08 05:55:09,037 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:11.084051509Z 2026-07-08 05:55:11,083 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:13.133687694Z 2026-07-08 05:55:13,133 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:15.246016444Z 2026-07-08 05:55:15,245 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:17.290466006Z 2026-07-08 05:55:17,290 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:19.355801110Z 2026-07-08 05:55:19,355 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:21.410690978Z 2026-07-08 05:55:21,410 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:23.455568488Z 2026-07-08 05:55:23,455 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:25.513563804Z 2026-07-08 05:55:25,513 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:27.555582614Z 2026-07-08 05:55:27,555 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:29.608852266Z 2026-07-08 05:55:29,608 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:31.654403567Z 2026-07-08 05:55:31,653 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:33.709899705Z 2026-07-08 05:55:33,709 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:35.757222281Z 2026-07-08 05:55:35,756 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:37.812215270Z 2026-07-08 05:55:37,811 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:39.856769939Z 2026-07-08 05:55:39,856 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:41.904871880Z 2026-07-08 05:55:41,904 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:43.956889595Z 2026-07-08 05:55:43,956 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:46.001070125Z 2026-07-08 05:55:46,000 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:48.040894731Z 2026-07-08 05:55:48,040 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:50.102860427Z 2026-07-08 05:55:50,102 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:52.153385299Z 2026-07-08 05:55:52,152 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:54.203795597Z 2026-07-08 05:55:54,203 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:56.260716011Z 2026-07-08 05:55:56,260 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:55:58.302312587Z 2026-07-08 05:55:58,302 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:00.338721111Z 2026-07-08 05:56:00,338 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:02.390048324Z 2026-07-08 05:56:02,389 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:04.438750995Z 2026-07-08 05:56:04,438 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:06.484443122Z 2026-07-08 05:56:06,483 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:08.529568089Z 2026-07-08 05:56:08,529 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:10.583308139Z 2026-07-08 05:56:10,582 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:12.634010978Z 2026-07-08 05:56:12,633 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:14.682137817Z 2026-07-08 05:56:14,681 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:16.721294965Z 2026-07-08 05:56:16,720 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:18.769564280Z 2026-07-08 05:56:18,769 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:20.828487143Z 2026-07-08 05:56:20,827 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:22.868762197Z 2026-07-08 05:56:22,868 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:24.913831485Z 2026-07-08 05:56:24,913 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:26.963761883Z 2026-07-08 05:56:26,963 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:29.011740741Z 2026-07-08 05:56:29,011 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:31.067057468Z 2026-07-08 05:56:31,066 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:33.113195628Z 2026-07-08 05:56:33,112 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:35.160244342Z 2026-07-08 05:56:35,159 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:37.208652527Z 2026-07-08 05:56:37,208 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:39.251806577Z 2026-07-08 05:56:39,251 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:41.299685444Z 2026-07-08 05:56:41,299 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:43.368572357Z 2026-07-08 05:56:43,368 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:45.414740734Z 2026-07-08 05:56:45,414 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:47.468029981Z 2026-07-08 05:56:47,467 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:49.504885340Z 2026-07-08 05:56:49,504 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:51.546962102Z 2026-07-08 05:56:51,546 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:53.596228483Z 2026-07-08 05:56:53,595 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:55.642654778Z 2026-07-08 05:56:55,642 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:57.687520326Z 2026-07-08 05:56:57,687 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:56:59.782221528Z 2026-07-08 05:56:59,781 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:01.823242411Z 2026-07-08 05:57:01,822 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:03.867947524Z 2026-07-08 05:57:03,867 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:05.901498144Z 2026-07-08 05:57:05,901 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:07.940089208Z 2026-07-08 05:57:07,939 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:09.982630420Z 2026-07-08 05:57:09,982 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:12.055532214Z 2026-07-08 05:57:12,055 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:14.102482918Z 2026-07-08 05:57:14,102 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:16.135127491Z 2026-07-08 05:57:16,135 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:18.187335230Z 2026-07-08 05:57:18,186 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:20.228994603Z 2026-07-08 05:57:20,228 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:22.282603072Z 2026-07-08 05:57:22,282 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:24.323073664Z 2026-07-08 05:57:24,322 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:26.367847406Z 2026-07-08 05:57:26,367 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:28.423191321Z 2026-07-08 05:57:28,422 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:30.465626861Z 2026-07-08 05:57:30,465 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:32.522774840Z 2026-07-08 05:57:32,522 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:34.562071592Z 2026-07-08 05:57:34,561 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:36.614447818Z 2026-07-08 05:57:36,614 forwin.generation.worker_cli DEBUG No claimable generation task worker_id=forwin-generation-worker-swarm message=no_claimable_generation_task
+2026-07-08T05:57:38.737310906Z 2026-07-08 05:57:38,736 forwin.observability.sinks INFO observability_event event_type=generation_worker_claimed project_id=acde0ad10d544995b09e97a6f153f969 task_id=f80f939a4427 chapter=0
+2026-07-08T05:57:43.455752182Z 2026-07-08 05:57:43,455 forwin.runtime.container INFO retention_cleanup_completed performance_spans=0 prompt_traces=0 candidate_drafts=0
+2026-07-08T05:57:43.548010371Z 2026-07-08 05:57:43,547 urllib3.connectionpool DEBUG Starting new HTTP connection (1): 10.0.0.150:19000
+2026-07-08T05:57:43.566071566Z 2026-07-08 05:57:43,566 urllib3.connectionpool DEBUG http://10.0.0.150:19000 "GET /forwin-artifacts?location= HTTP/1.1" 200 0
+2026-07-08T05:57:43.573802637Z 2026-07-08 05:57:43,573 urllib3.connectionpool DEBUG http://10.0.0.150:19000 "HEAD /forwin-artifacts HTTP/1.1" 200 0
+2026-07-08T05:57:43.577234525Z 2026-07-08 05:57:43,577 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=8080 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:57:43.583490550Z 2026-07-08 05:57:43,583 httpcore.connection DEBUG connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb9731e1a660>
+2026-07-08T05:57:43.583533800Z 2026-07-08 05:57:43,583 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'GET']>
+2026-07-08T05:57:43.583611258Z 2026-07-08 05:57:43,583 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:43.583614800Z 2026-07-08 05:57:43,583 httpcore.http11 DEBUG send_request_body.started request=<Request [b'GET']>
+2026-07-08T05:57:43.583659509Z 2026-07-08 05:57:43,583 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:43.583662259Z 2026-07-08 05:57:43,583 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'GET']>
+2026-07-08T05:57:43.604823632Z 2026-07-08 05:57:43,604 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Wed, 08 Jul 2026 05:57:43 GMT'), (b'server', b'uvicorn'), (b'content-length', b'60'), (b'content-type', b'application/json')])
+2026-07-08T05:57:43.605037508Z 2026-07-08 05:57:43,604 httpx INFO HTTP Request: GET http://10.0.0.150:8080/metadata "HTTP/1.1 200 OK"
+2026-07-08T05:57:43.605071758Z 2026-07-08 05:57:43,605 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'GET']>
+2026-07-08T05:57:43.605113133Z 2026-07-08 05:57:43,605 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:43.605129716Z 2026-07-08 05:57:43,605 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:43.605132716Z 2026-07-08 05:57:43,605 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:43.844543682Z 2026-07-08 05:57:43,844 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=16335 local_address=None timeout=5.0 socket_options=None
+2026-07-08T05:57:43.847148567Z 2026-07-08 05:57:43,847 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=16335 local_address=None timeout=5 socket_options=None
+2026-07-08T05:57:43.857726025Z 2026-07-08 05:57:43,857 httpcore.connection DEBUG connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb971a685e50>
+2026-07-08T05:57:43.857766983Z 2026-07-08 05:57:43,857 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'GET']>
+2026-07-08T05:57:43.857875234Z 2026-07-08 05:57:43,857 httpcore.connection DEBUG connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb971a6865d0>
+2026-07-08T05:57:43.857901900Z 2026-07-08 05:57:43,857 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'GET']>
+2026-07-08T05:57:43.858017609Z 2026-07-08 05:57:43,857 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:43.858019943Z 2026-07-08 05:57:43,857 httpcore.http11 DEBUG send_request_body.started request=<Request [b'GET']>
+2026-07-08T05:57:43.858022776Z 2026-07-08 05:57:43,857 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:43.858049359Z 2026-07-08 05:57:43,858 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'GET']>
+2026-07-08T05:57:43.858125401Z 2026-07-08 05:57:43,858 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:43.858127526Z 2026-07-08 05:57:43,858 httpcore.http11 DEBUG send_request_body.started request=<Request [b'GET']>
+2026-07-08T05:57:43.858181360Z 2026-07-08 05:57:43,858 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:43.858183568Z 2026-07-08 05:57:43,858 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'GET']>
+2026-07-08T05:57:43.871061326Z 2026-07-08 05:57:43,870 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'transfer-encoding', b'chunked'), (b'content-encoding', b'gzip'), (b'vary', b'accept-encoding, Origin, Access-Control-Request-Method, Access-Control-Request-Headers'), (b'content-type', b'application/json'), (b'date', b'Wed, 08 Jul 2026 05:57:43 GMT')])
+2026-07-08T05:57:43.871140743Z 2026-07-08 05:57:43,871 httpx INFO HTTP Request: GET http://10.0.0.150:16335 "HTTP/1.1 200 OK"
+2026-07-08T05:57:43.871202410Z 2026-07-08 05:57:43,871 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'GET']>
+2026-07-08T05:57:43.871255827Z 2026-07-08 05:57:43,871 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:43.871281202Z 2026-07-08 05:57:43,871 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:43.871372619Z 2026-07-08 05:57:43,871 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:43.871374494Z 2026-07-08 05:57:43,871 httpcore.connection DEBUG close.started
+2026-07-08T05:57:43.871430453Z 2026-07-08 05:57:43,871 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'transfer-encoding', b'chunked'), (b'content-type', b'application/json'), (b'content-encoding', b'gzip'), (b'vary', b'accept-encoding, Origin, Access-Control-Request-Method, Access-Control-Request-Headers'), (b'date', b'Wed, 08 Jul 2026 05:57:43 GMT')])
+2026-07-08T05:57:43.871484036Z 2026-07-08 05:57:43,871 httpx INFO HTTP Request: GET http://10.0.0.150:16335/collections "HTTP/1.1 200 OK"
+2026-07-08T05:57:43.871532161Z 2026-07-08 05:57:43,871 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'GET']>
+2026-07-08T05:57:43.871583412Z 2026-07-08 05:57:43,871 httpcore.connection DEBUG close.complete
+2026-07-08T05:57:43.871684370Z 2026-07-08 05:57:43,871 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:43.871686412Z 2026-07-08 05:57:43,871 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:43.871687287Z 2026-07-08 05:57:43,871 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:43.872045830Z 2026-07-08 05:57:43,871 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'GET']>
+2026-07-08T05:57:43.872113539Z 2026-07-08 05:57:43,872 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:43.872115914Z 2026-07-08 05:57:43,872 httpcore.http11 DEBUG send_request_body.started request=<Request [b'GET']>
+2026-07-08T05:57:43.872116830Z 2026-07-08 05:57:43,872 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:43.872117539Z 2026-07-08 05:57:43,872 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'GET']>
+2026-07-08T05:57:43.879334150Z 2026-07-08 05:57:43,879 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'transfer-encoding', b'chunked'), (b'content-type', b'application/json'), (b'content-encoding', b'gzip'), (b'vary', b'accept-encoding, Origin, Access-Control-Request-Method, Access-Control-Request-Headers'), (b'date', b'Wed, 08 Jul 2026 05:57:43 GMT')])
+2026-07-08T05:57:43.879384317Z 2026-07-08 05:57:43,879 httpx INFO HTTP Request: GET http://10.0.0.150:16335/collections/chapter_memories "HTTP/1.1 200 OK"
+2026-07-08T05:57:43.879409942Z 2026-07-08 05:57:43,879 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'GET']>
+2026-07-08T05:57:43.879459359Z 2026-07-08 05:57:43,879 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:43.879461109Z 2026-07-08 05:57:43,879 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:43.879470234Z 2026-07-08 05:57:43,879 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:43.879881235Z 2026-07-08 05:57:43,879 forwin.retrieval.memory_index WARNING Qdrant collection chapter_memories has vector size 64, expected 384; using chapter_memories_384d instead.
+2026-07-08T05:57:43.879975902Z 2026-07-08 05:57:43,879 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'GET']>
+2026-07-08T05:57:43.880034069Z 2026-07-08 05:57:43,879 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:43.880035861Z 2026-07-08 05:57:43,880 httpcore.http11 DEBUG send_request_body.started request=<Request [b'GET']>
+2026-07-08T05:57:43.880059986Z 2026-07-08 05:57:43,880 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:43.880061986Z 2026-07-08 05:57:43,880 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'GET']>
+2026-07-08T05:57:43.892311492Z 2026-07-08 05:57:43,892 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'transfer-encoding', b'chunked'), (b'content-type', b'application/json'), (b'content-encoding', b'gzip'), (b'vary', b'accept-encoding, Origin, Access-Control-Request-Method, Access-Control-Request-Headers'), (b'date', b'Wed, 08 Jul 2026 05:57:43 GMT')])
+2026-07-08T05:57:43.892372450Z 2026-07-08 05:57:43,892 httpx INFO HTTP Request: GET http://10.0.0.150:16335/collections/chapter_memories_384d "HTTP/1.1 200 OK"
+2026-07-08T05:57:43.892376783Z 2026-07-08 05:57:43,892 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'GET']>
+2026-07-08T05:57:43.892459159Z 2026-07-08 05:57:43,892 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:43.892460950Z 2026-07-08 05:57:43,892 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:43.892471076Z 2026-07-08 05:57:43,892 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:43.892633159Z 2026-07-08 05:57:43,892 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'GET']>
+2026-07-08T05:57:43.892670035Z 2026-07-08 05:57:43,892 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:43.892671326Z 2026-07-08 05:57:43,892 httpcore.http11 DEBUG send_request_body.started request=<Request [b'GET']>
+2026-07-08T05:57:43.892710493Z 2026-07-08 05:57:43,892 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:43.892713201Z 2026-07-08 05:57:43,892 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'GET']>
+2026-07-08T05:57:43.902453197Z 2026-07-08 05:57:43,902 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'transfer-encoding', b'chunked'), (b'content-type', b'application/json'), (b'content-encoding', b'gzip'), (b'vary', b'accept-encoding, Origin, Access-Control-Request-Method, Access-Control-Request-Headers'), (b'date', b'Wed, 08 Jul 2026 05:57:43 GMT')])
+2026-07-08T05:57:43.902493364Z 2026-07-08 05:57:43,902 httpx INFO HTTP Request: GET http://10.0.0.150:16335/collections "HTTP/1.1 200 OK"
+2026-07-08T05:57:43.902523989Z 2026-07-08 05:57:43,902 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'GET']>
+2026-07-08T05:57:43.902564906Z 2026-07-08 05:57:43,902 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:43.902566781Z 2026-07-08 05:57:43,902 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:43.902592073Z 2026-07-08 05:57:43,902 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:44.196540291Z 2026-07-08 05:57:44,196 forwin.observability.recorder INFO observability_event event_type=task_operation_started project_id=acde0ad10d544995b09e97a6f153f969 task_id=f80f939a4427 chapter=0
+2026-07-08T05:57:44.289323358Z 2026-07-08 05:57:44,289 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=1
+2026-07-08T05:57:44.308412140Z 2026-07-08 05:57:44,308 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=2
+2026-07-08T05:57:44.327702339Z 2026-07-08 05:57:44,327 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=3
+2026-07-08T05:57:44.348088793Z 2026-07-08 05:57:44,347 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=4
+2026-07-08T05:57:44.371012840Z 2026-07-08 05:57:44,370 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=5
+2026-07-08T05:57:44.400724788Z 2026-07-08 05:57:44,400 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=6
+2026-07-08T05:57:44.434583877Z 2026-07-08 05:57:44,434 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=7
+2026-07-08T05:57:44.464379117Z 2026-07-08 05:57:44,464 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=8
+2026-07-08T05:57:44.483830901Z 2026-07-08 05:57:44,483 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=9
+2026-07-08T05:57:44.502677432Z 2026-07-08 05:57:44,502 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=10
+2026-07-08T05:57:44.523167386Z 2026-07-08 05:57:44,522 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=11
+2026-07-08T05:57:44.540954663Z 2026-07-08 05:57:44,540 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=12
+2026-07-08T05:57:44.566234469Z 2026-07-08 05:57:44,565 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=13
+2026-07-08T05:57:44.585726544Z 2026-07-08 05:57:44,585 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=14
+2026-07-08T05:57:44.602259233Z 2026-07-08 05:57:44,601 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=15
+2026-07-08T05:57:44.622766687Z 2026-07-08 05:57:44,622 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=16
+2026-07-08T05:57:44.641394759Z 2026-07-08 05:57:44,641 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=17
+2026-07-08T05:57:44.667321859Z 2026-07-08 05:57:44,666 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=18
+2026-07-08T05:57:44.686854435Z 2026-07-08 05:57:44,686 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=19
+2026-07-08T05:57:44.707893141Z 2026-07-08 05:57:44,707 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=20
+2026-07-08T05:57:44.733913783Z 2026-07-08 05:57:44,733 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=21
+2026-07-08T05:57:44.757546791Z 2026-07-08 05:57:44,757 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=22
+2026-07-08T05:57:44.783456849Z 2026-07-08 05:57:44,783 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=23
+2026-07-08T05:57:44.802379339Z 2026-07-08 05:57:44,802 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=24
+2026-07-08T05:57:44.820124116Z 2026-07-08 05:57:44,819 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=25
+2026-07-08T05:57:44.878488966Z 2026-07-08 05:57:44,878 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=26
+2026-07-08T05:57:44.899129796Z 2026-07-08 05:57:44,898 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=27
+2026-07-08T05:57:44.915527568Z 2026-07-08 05:57:44,915 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=28
+2026-07-08T05:57:44.934052306Z 2026-07-08 05:57:44,933 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=29
+2026-07-08T05:57:44.949911200Z 2026-07-08 05:57:44,949 forwin.orchestrator_loop_core.run_control WARNING Resetting orphan needs_review chapter back to planned for project=acde0ad10d544995b09e97a6f153f969 chapter=30
+2026-07-08T05:57:45.550860939Z 2026-07-08 05:57:45,550 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=8895 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:57:45.557501798Z 2026-07-08 05:57:45,557 httpcore.connection DEBUG connect_tcp.failed exception=ConnectError(ConnectionRefusedError(111, 'Connection refused'))
+2026-07-08T05:57:45.557665132Z 2026-07-08 05:57:45,557 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=kimi-k2.5 messages=2 max_tokens=1800
+2026-07-08T05:57:45.557927633Z 2026-07-08 05:57:45,557 httpcore.connection DEBUG connect_tcp.started host='api.moonshot.cn' port=443 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:57:45.894362182Z 2026-07-08 05:57:45,893 httpcore.connection DEBUG connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb971a69dcd0>
+2026-07-08T05:57:45.894485516Z 2026-07-08 05:57:45,894 httpcore.connection DEBUG start_tls.started ssl_context=<ssl.SSLContext object at 0xeb972c94bd90> server_hostname='api.moonshot.cn' timeout=10.0
+2026-07-08T05:57:46.613055668Z 2026-07-08 05:57:46,612 httpcore.connection DEBUG start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb971a69e3f0>
+2026-07-08T05:57:46.613114169Z 2026-07-08 05:57:46,613 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:46.613421962Z 2026-07-08 05:57:46,613 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:46.613427670Z 2026-07-08 05:57:46,613 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:57:46.613574129Z 2026-07-08 05:57:46,613 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:46.613582879Z 2026-07-08 05:57:46,613 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:47.021133954Z 2026-07-08 05:57:47,020 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:57:46 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Set-Cookie', b'aliyungf_tc=4fb228a7eaccb75795015d0201237e7cba107d7850834ba14f1649542b14d0df; Path=/; HttpOnly'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'f1b5aa5a-7a91-11f1-9c55-8eb457da7677'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:57:47.021961999Z 2026-07-08 05:57:47,021 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:57:47.022111250Z 2026-07-08 05:57:47,021 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:57:47.022404501Z 2026-07-08 05:57:47,022 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:47.022466126Z 2026-07-08 05:57:47,022 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:47.022725627Z 2026-07-08 05:57:47,022 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:47.024040465Z 2026-07-08 05:57:47,023 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:57:49.031767689Z 2026-07-08 05:57:49,031 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=kimi-k2.5 messages=2 max_tokens=1800
+2026-07-08T05:57:49.033903239Z 2026-07-08 05:57:49,033 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:49.034582283Z 2026-07-08 05:57:49,034 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:49.034610575Z 2026-07-08 05:57:49,034 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:57:49.034949952Z 2026-07-08 05:57:49,034 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:49.034964952Z 2026-07-08 05:57:49,034 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:49.452375151Z 2026-07-08 05:57:49,452 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:57:49 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'f3271885-7a91-11f1-9e67-d218258b9108'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:57:49.452463943Z 2026-07-08 05:57:49,452 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:57:49.452492109Z 2026-07-08 05:57:49,452 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:57:49.452509068Z 2026-07-08 05:57:49,452 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:49.452558235Z 2026-07-08 05:57:49,452 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:49.452559651Z 2026-07-08 05:57:49,452 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:49.452815194Z 2026-07-08 05:57:49,452 forwin.director.arc_director WARNING ArcDirector JSON call failed on attempt 1/3: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:57:49.452818694Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:57:49.453052486Z 2026-07-08 05:57:49,453 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=8895 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:57:49.477849416Z 2026-07-08 05:57:49,477 httpcore.connection DEBUG connect_tcp.failed exception=ConnectError(ConnectionRefusedError(111, 'Connection refused'))
+2026-07-08T05:57:49.477998083Z 2026-07-08 05:57:49,477 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=kimi-k2.5 messages=2 max_tokens=1800
+2026-07-08T05:57:49.478330209Z 2026-07-08 05:57:49,478 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:49.478462585Z 2026-07-08 05:57:49,478 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:49.478465252Z 2026-07-08 05:57:49,478 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:57:49.478504252Z 2026-07-08 05:57:49,478 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:49.478506418Z 2026-07-08 05:57:49,478 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:49.881493478Z 2026-07-08 05:57:49,881 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:57:49 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'f36b1082-7a91-11f1-9f31-16f91790909e'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:57:49.882027397Z 2026-07-08 05:57:49,881 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:57:49.882170647Z 2026-07-08 05:57:49,882 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:57:49.882352231Z 2026-07-08 05:57:49,882 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:49.882571066Z 2026-07-08 05:57:49,882 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:49.882586316Z 2026-07-08 05:57:49,882 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:49.883720778Z 2026-07-08 05:57:49,883 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:57:51.887734706Z 2026-07-08 05:57:51,887 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=kimi-k2.5 messages=2 max_tokens=1800
+2026-07-08T05:57:51.889838589Z 2026-07-08 05:57:51,889 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:51.890524217Z 2026-07-08 05:57:51,890 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:51.890556301Z 2026-07-08 05:57:51,890 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:57:51.891125011Z 2026-07-08 05:57:51,890 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:51.891143636Z 2026-07-08 05:57:51,890 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:52.114176750Z 2026-07-08 05:57:52,113 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:57:52 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'f4bfa9a7-7a91-11f1-8cd6-b6e5351f2ad1'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:57:52.114680211Z 2026-07-08 05:57:52,114 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:57:52.114841003Z 2026-07-08 05:57:52,114 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:57:52.115013170Z 2026-07-08 05:57:52,114 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:52.115027754Z 2026-07-08 05:57:52,114 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:52.115190671Z 2026-07-08 05:57:52,115 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:52.116575593Z 2026-07-08 05:57:52,116 forwin.director.arc_director WARNING ArcDirector JSON call failed on attempt 2/3: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:57:52.116604385Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:57:52.117429971Z 2026-07-08 05:57:52,117 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=8895 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:57:52.129635227Z 2026-07-08 05:57:52,129 httpcore.connection DEBUG connect_tcp.failed exception=ConnectError(ConnectionRefusedError(111, 'Connection refused'))
+2026-07-08T05:57:52.130341480Z 2026-07-08 05:57:52,130 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=kimi-k2.5 messages=2 max_tokens=1800
+2026-07-08T05:57:52.131460942Z 2026-07-08 05:57:52,131 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:52.131912486Z 2026-07-08 05:57:52,131 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:52.131924194Z 2026-07-08 05:57:52,131 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:57:52.132213362Z 2026-07-08 05:57:52,132 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:52.132229029Z 2026-07-08 05:57:52,132 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:52.374410301Z 2026-07-08 05:57:52,374 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:57:52 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'f4e7034d-7a91-11f1-a1e6-663a6e45fe03'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:57:52.374901969Z 2026-07-08 05:57:52,374 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:57:52.375036220Z 2026-07-08 05:57:52,374 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:57:52.375097845Z 2026-07-08 05:57:52,375 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:52.375292012Z 2026-07-08 05:57:52,375 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:52.375301929Z 2026-07-08 05:57:52,375 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:52.376362183Z 2026-07-08 05:57:52,376 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:57:54.382967463Z 2026-07-08 05:57:54,382 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=kimi-k2.5 messages=2 max_tokens=1800
+2026-07-08T05:57:54.384884554Z 2026-07-08 05:57:54,384 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:54.385455056Z 2026-07-08 05:57:54,385 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:54.385481681Z 2026-07-08 05:57:54,385 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:57:54.385755433Z 2026-07-08 05:57:54,385 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:54.385766266Z 2026-07-08 05:57:54,385 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:54.627391245Z 2026-07-08 05:57:54,626 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:57:54 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'f63ede6d-7a91-11f1-af8b-c25bc435e93c'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:57:54.627892789Z 2026-07-08 05:57:54,627 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:57:54.628015247Z 2026-07-08 05:57:54,627 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:57:54.628256082Z 2026-07-08 05:57:54,628 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:54.628279748Z 2026-07-08 05:57:54,628 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:54.628384332Z 2026-07-08 05:57:54,628 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:54.629662420Z 2026-07-08 05:57:54,629 forwin.director.arc_director WARNING ArcDirector JSON call failed on attempt 3/3: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:57:54.629687254Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:57:54.630106714Z 2026-07-08 05:57:54,629 forwin.director.arc_director WARNING ArcDirector falling back to deterministic scaffold: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:57:54.630118630Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:57:55.141141571Z 2026-07-08 05:57:55,140 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=8895 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:57:55.148228599Z 2026-07-08 05:57:55,148 httpcore.connection DEBUG connect_tcp.failed exception=ConnectError(ConnectionRefusedError(111, 'Connection refused'))
+2026-07-08T05:57:55.148478600Z 2026-07-08 05:57:55,148 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=kimi-k2.5 messages=2 max_tokens=2400
+2026-07-08T05:57:55.149122436Z 2026-07-08 05:57:55,148 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:55.149351478Z 2026-07-08 05:57:55,149 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:55.149358228Z 2026-07-08 05:57:55,149 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:57:55.149526979Z 2026-07-08 05:57:55,149 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:55.149533646Z 2026-07-08 05:57:55,149 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:55.394369638Z 2026-07-08 05:57:55,393 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:57:55 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'f6b3e358-7a91-11f1-b9db-82d027a2c1b4'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:57:55.394814598Z 2026-07-08 05:57:55,394 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:57:55.394932848Z 2026-07-08 05:57:55,394 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:57:55.395147182Z 2026-07-08 05:57:55,394 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:55.395159807Z 2026-07-08 05:57:55,395 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:55.395294099Z 2026-07-08 05:57:55,395 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:55.395999436Z 2026-07-08 05:57:55,395 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:57:57.396782412Z 2026-07-08 05:57:57,396 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=kimi-k2.5 messages=2 max_tokens=2400
+2026-07-08T05:57:57.398436127Z 2026-07-08 05:57:57,398 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:57.399284797Z 2026-07-08 05:57:57,398 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:57.399302547Z 2026-07-08 05:57:57,399 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:57:57.399636965Z 2026-07-08 05:57:57,399 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:57.399653423Z 2026-07-08 05:57:57,399 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:57.621675869Z 2026-07-08 05:57:57,621 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:57:57 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'f8081e45-7a91-11f1-9c55-8eb457da7677'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:57:57.622134912Z 2026-07-08 05:57:57,621 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:57:57.622234163Z 2026-07-08 05:57:57,622 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:57:57.622482289Z 2026-07-08 05:57:57,622 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:57.622627706Z 2026-07-08 05:57:57,622 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:57.622641914Z 2026-07-08 05:57:57,622 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:57.623918961Z 2026-07-08 05:57:57,623 forwin.writer.llm.adapter WARNING LLM profile fallback: kimi-k2.5 (https://api.moonshot.cn/v1) -> MiniMax-M2.7 (https://api.minimaxi.com/v1) after retries failed: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:57:57.623952419Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:57:57.624092712Z 2026-07-08 05:57:57,623 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=MiniMax-M2.7 messages=2 max_tokens=2048
+2026-07-08T05:57:57.625115382Z 2026-07-08 05:57:57,624 httpcore.connection DEBUG connect_tcp.started host='api.minimaxi.com' port=443 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:57:57.849533754Z 2026-07-08 05:57:57,849 httpcore.connection DEBUG connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb9719ab4dd0>
+2026-07-08T05:57:57.849581546Z 2026-07-08 05:57:57,849 httpcore.connection DEBUG start_tls.started ssl_context=<ssl.SSLContext object at 0xeb972c94bd90> server_hostname='api.minimaxi.com' timeout=10.0
+2026-07-08T05:57:58.292736184Z 2026-07-08 05:57:58,292 httpcore.connection DEBUG start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb971a667570>
+2026-07-08T05:57:58.292793768Z 2026-07-08 05:57:58,292 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:58.293205020Z 2026-07-08 05:57:58,293 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:57:58.293220186Z 2026-07-08 05:57:58,293 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:57:58.293480479Z 2026-07-08 05:57:58,293 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:57:58.293491187Z 2026-07-08 05:57:58,293 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:57:58.681317278Z 2026-07-08 05:57:58,680 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:57:58 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'232'), (b'Connection', b'keep-alive'), (b'Trace-Id', b'069d19e62ec18637d4662c8589978001'), (b'X-Session-Id', b'6fb9d55d2f9debcab02ec0ab3dfa9223'), (b'X-Mm-Request-Id', b'2024653756481675725_1783490278wvnnb5'), (b'Minimax-Request-Id', b'11eb326c66d740494fd7b5ea7b6b2510'), (b'alb_receive_time', b'1783490278.43'), (b'alb_request_id', b'3a057374965721bfb7f9f0dd0f0bad1dd23b9a56')])
+2026-07-08T05:57:58.681759321Z 2026-07-08 05:57:58,681 httpx INFO HTTP Request: POST https://api.minimaxi.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:57:58.681907488Z 2026-07-08 05:57:58,681 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:57:58.682073197Z 2026-07-08 05:57:58,681 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:57:58.682175364Z 2026-07-08 05:57:58,682 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:57:58.682182906Z 2026-07-08 05:57:58,682 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:57:58.683543245Z 2026-07-08 05:57:58,683 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:58:00.686658117Z 2026-07-08 05:58:00,686 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=MiniMax-M2.7 messages=2 max_tokens=2048
+2026-07-08T05:58:00.688642666Z 2026-07-08 05:58:00,688 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:00.689188168Z 2026-07-08 05:58:00,689 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:00.689208043Z 2026-07-08 05:58:00,689 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:00.689411544Z 2026-07-08 05:58:00,689 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:00.689423419Z 2026-07-08 05:58:00,689 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:01.053819711Z 2026-07-08 05:58:01,053 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:00 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'232'), (b'Connection', b'keep-alive'), (b'Trace-Id', b'069d19e8185d360f0a9f5d7aa1aaa6d7'), (b'X-Session-Id', b'6fb9d55d2f9debcab02ec0ab3dfa9223'), (b'X-Mm-Request-Id', b'2024653756481675725_1783490280mkz9g8'), (b'Minimax-Request-Id', b'f47b19bc2fa60923c5874ef4843ba3e2'), (b'alb_receive_time', b'1783490280.821'), (b'alb_request_id', b'5ada7b6b56b7d3ec5d6e7aecf688f2b32cbe015e')])
+2026-07-08T05:58:01.054292422Z 2026-07-08 05:58:01,054 httpx INFO HTTP Request: POST https://api.minimaxi.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:01.054416839Z 2026-07-08 05:58:01,054 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:01.054478381Z 2026-07-08 05:58:01,054 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:01.054643298Z 2026-07-08 05:58:01,054 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:01.054654673Z 2026-07-08 05:58:01,054 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:01.055758511Z 2026-07-08 05:58:01,055 forwin.director.arc_director WARNING ArcDirector JSON call failed on attempt 1/3: Client error '429 Too Many Requests' for url 'https://api.minimaxi.com/v1/chat/completions'
+2026-07-08T05:58:01.055773219Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:01.056656473Z 2026-07-08 05:58:01,056 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=8895 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:58:01.065385923Z 2026-07-08 05:58:01,065 httpcore.connection DEBUG connect_tcp.failed exception=ConnectError(ConnectionRefusedError(111, 'Connection refused'))
+2026-07-08T05:58:01.065938759Z 2026-07-08 05:58:01,065 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=kimi-k2.5 messages=2 max_tokens=2400
+2026-07-08T05:58:01.067167680Z 2026-07-08 05:58:01,066 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:01.067571182Z 2026-07-08 05:58:01,067 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:01.067582515Z 2026-07-08 05:58:01,067 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:01.067738516Z 2026-07-08 05:58:01,067 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:01.067783599Z 2026-07-08 05:58:01,067 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:01.290587883Z 2026-07-08 05:58:01,290 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:01 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'fa37a080-7a91-11f1-a2ba-ce390d9d2ab4'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:01.291116635Z 2026-07-08 05:58:01,290 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:01.291345552Z 2026-07-08 05:58:01,291 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:01.291363136Z 2026-07-08 05:58:01,291 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:01.291533595Z 2026-07-08 05:58:01,291 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:01.291543887Z 2026-07-08 05:58:01,291 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:01.292671016Z 2026-07-08 05:58:01,292 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:58:03.295701230Z 2026-07-08 05:58:03,295 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=kimi-k2.5 messages=2 max_tokens=2400
+2026-07-08T05:58:03.297469987Z 2026-07-08 05:58:03,297 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:03.298003364Z 2026-07-08 05:58:03,297 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:03.298019406Z 2026-07-08 05:58:03,297 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:03.298264115Z 2026-07-08 05:58:03,298 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:03.298325782Z 2026-07-08 05:58:03,298 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:03.601697088Z 2026-07-08 05:58:03,601 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:03 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'fb92ae3c-7a91-11f1-9bcd-8af07f2675cd'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:03.601855297Z 2026-07-08 05:58:03,601 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:03.601907214Z 2026-07-08 05:58:03,601 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:03.601938298Z 2026-07-08 05:58:03,601 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:03.601990506Z 2026-07-08 05:58:03,601 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:03.601998089Z 2026-07-08 05:58:03,601 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:03.602421799Z 2026-07-08 05:58:03,602 forwin.writer.llm.adapter WARNING LLM profile fallback: kimi-k2.5 (https://api.moonshot.cn/v1) -> MiniMax-M2.7 (https://api.minimaxi.com/v1) after retries failed: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:58:03.602429174Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:03.602479216Z 2026-07-08 05:58:03,602 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=MiniMax-M2.7 messages=2 max_tokens=2048
+2026-07-08T05:58:03.603012927Z 2026-07-08 05:58:03,602 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:03.603185261Z 2026-07-08 05:58:03,603 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:03.603222053Z 2026-07-08 05:58:03,603 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:03.603365511Z 2026-07-08 05:58:03,603 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:03.603369511Z 2026-07-08 05:58:03,603 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:04.013084774Z 2026-07-08 05:58:04,012 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:03 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'232'), (b'Connection', b'keep-alive'), (b'Trace-Id', b'069d19ebec9751d9e7e7d619da784d9e'), (b'X-Session-Id', b'6fb9d55d2f9debcab02ec0ab3dfa9223'), (b'X-Mm-Request-Id', b'2024653756481675725_1783490283ycx99n'), (b'Minimax-Request-Id', b'1ad0dec96d35b1e54948d70d7ebfcd16'), (b'alb_receive_time', b'1783490283.736'), (b'alb_request_id', b'b7663cf92822e599543e694795e5036c31ee1909')])
+2026-07-08T05:58:04.013496317Z 2026-07-08 05:58:04,013 httpx INFO HTTP Request: POST https://api.minimaxi.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:04.013626943Z 2026-07-08 05:58:04,013 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:04.013658359Z 2026-07-08 05:58:04,013 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:04.013732860Z 2026-07-08 05:58:04,013 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:04.013737610Z 2026-07-08 05:58:04,013 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:04.014509029Z 2026-07-08 05:58:04,014 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:58:06.015368494Z 2026-07-08 05:58:06,015 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=MiniMax-M2.7 messages=2 max_tokens=2048
+2026-07-08T05:58:06.015693579Z 2026-07-08 05:58:06,015 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:06.015859371Z 2026-07-08 05:58:06,015 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:06.015863288Z 2026-07-08 05:58:06,015 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:06.015949913Z 2026-07-08 05:58:06,015 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:06.015952122Z 2026-07-08 05:58:06,015 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:06.420405157Z 2026-07-08 05:58:06,419 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:06 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'232'), (b'Connection', b'keep-alive'), (b'Trace-Id', b'069d19ee4e37c1f2a07263adf58a08a0'), (b'X-Session-Id', b'6fb9d55d2f9debcab02ec0ab3dfa9223'), (b'X-Mm-Request-Id', b'2024653756481675725_17834902863s1jsb'), (b'Minimax-Request-Id', b'e26399fe0415ed78d66f462d60e6f8ab'), (b'alb_receive_time', b'1783490286.146'), (b'alb_request_id', b'd2d4c7616f68688a3fa23d0aee94f1cf53545d8c')])
+2026-07-08T05:58:06.420817950Z 2026-07-08 05:58:06,420 httpx INFO HTTP Request: POST https://api.minimaxi.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:06.421021910Z 2026-07-08 05:58:06,420 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:06.421055660Z 2026-07-08 05:58:06,420 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:06.421223952Z 2026-07-08 05:58:06,421 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:06.421387453Z 2026-07-08 05:58:06,421 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:06.422437415Z 2026-07-08 05:58:06,422 forwin.director.arc_director WARNING ArcDirector JSON call failed on attempt 2/3: Client error '429 Too Many Requests' for url 'https://api.minimaxi.com/v1/chat/completions'
+2026-07-08T05:58:06.422455707Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:06.423301252Z 2026-07-08 05:58:06,423 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=8895 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:58:06.437561057Z 2026-07-08 05:58:06,437 httpcore.connection DEBUG connect_tcp.failed exception=ConnectError(ConnectionRefusedError(111, 'Connection refused'))
+2026-07-08T05:58:06.438240268Z 2026-07-08 05:58:06,437 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=kimi-k2.5 messages=2 max_tokens=2400
+2026-07-08T05:58:06.439476565Z 2026-07-08 05:58:06,439 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:06.440162609Z 2026-07-08 05:58:06,439 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:06.440190734Z 2026-07-08 05:58:06,439 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:06.440488027Z 2026-07-08 05:58:06,440 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:06.440495111Z 2026-07-08 05:58:06,440 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:06.854460392Z 2026-07-08 05:58:06,854 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:06 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'fd88b6a1-7a91-11f1-acd9-a69a4bbee192'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:06.854601267Z 2026-07-08 05:58:06,854 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:06.854638517Z 2026-07-08 05:58:06,854 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:06.854697601Z 2026-07-08 05:58:06,854 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:06.854705476Z 2026-07-08 05:58:06,854 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:06.854707268Z 2026-07-08 05:58:06,854 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:06.855056227Z 2026-07-08 05:58:06,854 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:58:08.865886991Z 2026-07-08 05:58:08,865 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=kimi-k2.5 messages=2 max_tokens=2400
+2026-07-08T05:58:08.867823373Z 2026-07-08 05:58:08,867 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:08.868406000Z 2026-07-08 05:58:08,868 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:08.868423667Z 2026-07-08 05:58:08,868 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:08.868665460Z 2026-07-08 05:58:08,868 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:08.868673502Z 2026-07-08 05:58:08,868 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:09.283087453Z 2026-07-08 05:58:09,282 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:09 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'fefb1e7a-7a91-11f1-8c9a-d2455a18eb71'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:09.283639705Z 2026-07-08 05:58:09,283 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:09.283906831Z 2026-07-08 05:58:09,283 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:09.283922623Z 2026-07-08 05:58:09,283 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:09.284027123Z 2026-07-08 05:58:09,283 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:09.284139624Z 2026-07-08 05:58:09,284 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:09.285360378Z 2026-07-08 05:58:09,285 forwin.writer.llm.adapter WARNING LLM profile fallback: kimi-k2.5 (https://api.moonshot.cn/v1) -> MiniMax-M2.7 (https://api.minimaxi.com/v1) after retries failed: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:58:09.285376337Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:09.285483712Z 2026-07-08 05:58:09,285 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=MiniMax-M2.7 messages=2 max_tokens=2048
+2026-07-08T05:58:09.286490508Z 2026-07-08 05:58:09,286 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:09.286884009Z 2026-07-08 05:58:09,286 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:09.286894593Z 2026-07-08 05:58:09,286 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:09.287129427Z 2026-07-08 05:58:09,286 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:09.287142719Z 2026-07-08 05:58:09,287 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:09.641202726Z 2026-07-08 05:58:09,641 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:09 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'232'), (b'Connection', b'keep-alive'), (b'Trace-Id', b'069d19f1456d823b6d637c6c58c1c8e6'), (b'X-Session-Id', b'6fb9d55d2f9debcab02ec0ab3dfa9223'), (b'X-Mm-Request-Id', b'2024653756481675725_17834902898kx95k'), (b'Minimax-Request-Id', b'634881858b0e2850349a37c18d2fe5c4'), (b'alb_receive_time', b'1783490289.418'), (b'alb_request_id', b'fe48387a4cc4bd886cd1f953db96f8fd78bf4a6e')])
+2026-07-08T05:58:09.641351227Z 2026-07-08 05:58:09,641 httpx INFO HTTP Request: POST https://api.minimaxi.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:09.641424644Z 2026-07-08 05:58:09,641 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:09.641472769Z 2026-07-08 05:58:09,641 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:09.641478936Z 2026-07-08 05:58:09,641 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:09.641539269Z 2026-07-08 05:58:09,641 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:09.641942271Z 2026-07-08 05:58:09,641 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:58:11.645242098Z 2026-07-08 05:58:11,644 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=MiniMax-M2.7 messages=2 max_tokens=2048
+2026-07-08T05:58:11.646966438Z 2026-07-08 05:58:11,646 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:11.647454565Z 2026-07-08 05:58:11,647 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:11.647464565Z 2026-07-08 05:58:11,647 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:11.647751482Z 2026-07-08 05:58:11,647 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:11.647765107Z 2026-07-08 05:58:11,647 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:12.014332124Z 2026-07-08 05:58:12,013 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:11 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'232'), (b'Connection', b'keep-alive'), (b'Trace-Id', b'069d19f3f25fe7440d08426ed3a01660'), (b'X-Session-Id', b'6fb9d55d2f9debcab02ec0ab3dfa9223'), (b'X-Mm-Request-Id', b'2024653756481675725_1783490291hanamj'), (b'Minimax-Request-Id', b'413041073679883cc228a982607d7f76'), (b'alb_receive_time', b'1783490291.781'), (b'alb_request_id', b'f0312beb5a4adc4b43bfb56a2c5344fe4fa54552')])
+2026-07-08T05:58:12.014732833Z 2026-07-08 05:58:12,014 httpx INFO HTTP Request: POST https://api.minimaxi.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:12.014818584Z 2026-07-08 05:58:12,014 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:12.015114335Z 2026-07-08 05:58:12,014 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:12.015296294Z 2026-07-08 05:58:12,015 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:12.015307669Z 2026-07-08 05:58:12,015 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:12.016495924Z 2026-07-08 05:58:12,016 forwin.director.arc_director WARNING ArcDirector JSON call failed on attempt 3/3: Client error '429 Too Many Requests' for url 'https://api.minimaxi.com/v1/chat/completions'
+2026-07-08T05:58:12.016514507Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:12.016516924Z 2026-07-08 05:58:12,016 forwin.director.arc_director WARNING ArcDirector falling back to deterministic scaffold: Client error '429 Too Many Requests' for url 'https://api.minimaxi.com/v1/chat/completions'
+2026-07-08T05:58:12.016519174Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:13.646723549Z 2026-07-08 05:58:13,646 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=8895 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:58:13.656036044Z 2026-07-08 05:58:13,655 httpcore.connection DEBUG connect_tcp.failed exception=ConnectError(ConnectionRefusedError(111, 'Connection refused'))
+2026-07-08T05:58:13.656711880Z 2026-07-08 05:58:13,656 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=kimi-k2.5 messages=2 max_tokens=1800
+2026-07-08T05:58:13.658050218Z 2026-07-08 05:58:13,657 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:13.658433762Z 2026-07-08 05:58:13,658 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:13.658443303Z 2026-07-08 05:58:13,658 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:13.658629971Z 2026-07-08 05:58:13,658 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:13.658636971Z 2026-07-08 05:58:13,658 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:13.880078379Z 2026-07-08 05:58:13,879 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:13 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'01b8bff4-7a92-11f1-9816-be3a637e2348'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:13.880501339Z 2026-07-08 05:58:13,880 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:13.880651672Z 2026-07-08 05:58:13,880 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:13.880778090Z 2026-07-08 05:58:13,880 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:13.880919882Z 2026-07-08 05:58:13,880 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:13.880932590Z 2026-07-08 05:58:13,880 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:13.882164678Z 2026-07-08 05:58:13,881 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:58:15.892414297Z 2026-07-08 05:58:15,891 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=kimi-k2.5 messages=2 max_tokens=1800
+2026-07-08T05:58:15.895509725Z 2026-07-08 05:58:15,895 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:15.896053811Z 2026-07-08 05:58:15,895 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:15.896071019Z 2026-07-08 05:58:15,895 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:15.896358562Z 2026-07-08 05:58:15,896 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:15.896373020Z 2026-07-08 05:58:15,896 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:16.120703941Z 2026-07-08 05:58:16,120 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:16 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'030e86fd-7a92-11f1-a3d3-725e822ba761'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:16.121089775Z 2026-07-08 05:58:16,120 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:16.121221568Z 2026-07-08 05:58:16,121 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:16.121309568Z 2026-07-08 05:58:16,121 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:16.121363151Z 2026-07-08 05:58:16,121 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:16.121453735Z 2026-07-08 05:58:16,121 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:16.122237197Z 2026-07-08 05:58:16,122 forwin.director.arc_director WARNING ArcDirector JSON call failed on attempt 1/3: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:58:16.122256488Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:16.123016408Z 2026-07-08 05:58:16,122 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=8895 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:58:16.130820313Z 2026-07-08 05:58:16,130 httpcore.connection DEBUG connect_tcp.failed exception=ConnectError(ConnectionRefusedError(111, 'Connection refused'))
+2026-07-08T05:58:16.131150231Z 2026-07-08 05:58:16,131 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=kimi-k2.5 messages=2 max_tokens=1800
+2026-07-08T05:58:16.132915238Z 2026-07-08 05:58:16,132 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:16.133064781Z 2026-07-08 05:58:16,132 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:16.133074822Z 2026-07-08 05:58:16,132 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:16.133077739Z 2026-07-08 05:58:16,132 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:16.133079781Z 2026-07-08 05:58:16,132 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:16.351849804Z 2026-07-08 05:58:16,351 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:16 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'0331e484-7a92-11f1-9584-265318ebc90a'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:16.351868513Z 2026-07-08 05:58:16,351 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:16.351877346Z 2026-07-08 05:58:16,351 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:16.351878554Z 2026-07-08 05:58:16,351 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:16.351879304Z 2026-07-08 05:58:16,351 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:16.351880013Z 2026-07-08 05:58:16,351 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:16.352002971Z 2026-07-08 05:58:16,351 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:58:18.359394379Z 2026-07-08 05:58:18,358 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=kimi-k2.5 messages=2 max_tokens=1800
+2026-07-08T05:58:18.361281761Z 2026-07-08 05:58:18,361 httpcore.connection DEBUG close.started
+2026-07-08T05:58:18.361722554Z 2026-07-08 05:58:18,361 httpcore.connection DEBUG close.complete
+2026-07-08T05:58:18.361740096Z 2026-07-08 05:58:18,361 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:18.362302432Z 2026-07-08 05:58:18,362 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:18.362324307Z 2026-07-08 05:58:18,362 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:18.362550349Z 2026-07-08 05:58:18,362 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:18.362565141Z 2026-07-08 05:58:18,362 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:18.597833063Z 2026-07-08 05:58:18,597 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:18 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'048856c1-7a92-11f1-8e5c-8afd11b01472'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:18.598361607Z 2026-07-08 05:58:18,598 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:18.598422524Z 2026-07-08 05:58:18,598 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:18.598550774Z 2026-07-08 05:58:18,598 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:18.598619191Z 2026-07-08 05:58:18,598 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:18.598627608Z 2026-07-08 05:58:18,598 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:18.599595778Z 2026-07-08 05:58:18,599 forwin.director.arc_director WARNING ArcDirector JSON call failed on attempt 2/3: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:58:18.599607737Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:18.600431698Z 2026-07-08 05:58:18,600 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=8895 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:58:18.611722743Z 2026-07-08 05:58:18,611 httpcore.connection DEBUG connect_tcp.failed exception=ConnectError(ConnectionRefusedError(111, 'Connection refused'))
+2026-07-08T05:58:18.612252703Z 2026-07-08 05:58:18,612 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=kimi-k2.5 messages=2 max_tokens=1800
+2026-07-08T05:58:18.613267499Z 2026-07-08 05:58:18,613 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:18.613581833Z 2026-07-08 05:58:18,613 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:18.613589500Z 2026-07-08 05:58:18,613 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:18.613767334Z 2026-07-08 05:58:18,613 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:18.613773626Z 2026-07-08 05:58:18,613 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:18.834116781Z 2026-07-08 05:58:18,833 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:18 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'04ad2c81-7a92-11f1-a1e6-663a6e45fe03'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:18.834244865Z 2026-07-08 05:58:18,834 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:18.834313490Z 2026-07-08 05:58:18,834 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:18.834317699Z 2026-07-08 05:58:18,834 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:18.834360324Z 2026-07-08 05:58:18,834 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:18.834363699Z 2026-07-08 05:58:18,834 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:18.834655158Z 2026-07-08 05:58:18,834 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:58:20.836150092Z 2026-07-08 05:58:20,835 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=kimi-k2.5 messages=2 max_tokens=1800
+2026-07-08T05:58:20.838028308Z 2026-07-08 05:58:20,837 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:20.838584227Z 2026-07-08 05:58:20,838 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:20.838609685Z 2026-07-08 05:58:20,838 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:20.838993478Z 2026-07-08 05:58:20,838 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:20.839041728Z 2026-07-08 05:58:20,838 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:21.066553121Z 2026-07-08 05:58:21,066 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:20 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'0600ff37-7a92-11f1-9c26-362972d18c25'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:21.067067123Z 2026-07-08 05:58:21,066 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:21.067195499Z 2026-07-08 05:58:21,067 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:21.067254332Z 2026-07-08 05:58:21,067 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:21.067355999Z 2026-07-08 05:58:21,067 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:21.067362708Z 2026-07-08 05:58:21,067 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:21.068359253Z 2026-07-08 05:58:21,068 forwin.director.arc_director WARNING ArcDirector JSON call failed on attempt 3/3: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:58:21.068373545Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:21.068375712Z 2026-07-08 05:58:21,068 forwin.director.arc_director WARNING ArcDirector falling back to deterministic scaffold: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:58:21.068378045Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:24.006126664Z 2026-07-08 05:58:24,005 httpcore.connection DEBUG close.started
+2026-07-08T05:58:24.006188914Z 2026-07-08 05:58:24,006 httpcore.connection DEBUG close.complete
+2026-07-08T05:58:24.006192498Z 2026-07-08 05:58:24,006 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=8080 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:58:24.012646065Z 2026-07-08 05:58:24,012 httpcore.connection DEBUG connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb971a6658c0>
+2026-07-08T05:58:24.012749774Z 2026-07-08 05:58:24,012 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:24.012866191Z 2026-07-08 05:58:24,012 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:24.012917358Z 2026-07-08 05:58:24,012 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:24.013027858Z 2026-07-08 05:58:24,012 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:24.013096025Z 2026-07-08 05:58:24,013 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:24.044686649Z 2026-07-08 05:58:24,044 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'date', b'Wed, 08 Jul 2026 05:58:23 GMT'), (b'server', b'uvicorn'), (b'content-length', b'8130'), (b'content-type', b'application/json')])
+2026-07-08T05:58:24.046032238Z 2026-07-08 05:58:24,045 httpx INFO HTTP Request: POST http://10.0.0.150:8080/embed "HTTP/1.1 200 OK"
+2026-07-08T05:58:24.046037071Z 2026-07-08 05:58:24,045 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:24.046127155Z 2026-07-08 05:58:24,045 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:24.046128155Z 2026-07-08 05:58:24,045 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:24.046129155Z 2026-07-08 05:58:24,045 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:24.046129988Z 2026-07-08 05:58:24,045 httpcore.connection DEBUG close.started
+2026-07-08T05:58:24.046130905Z 2026-07-08 05:58:24,045 httpcore.connection DEBUG close.complete
+2026-07-08T05:58:24.046131738Z 2026-07-08 05:58:24,045 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=16335 local_address=None timeout=5.0 socket_options=None
+2026-07-08T05:58:24.053242516Z 2026-07-08 05:58:24,053 httpcore.connection DEBUG connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb971986fa50>
+2026-07-08T05:58:24.053251183Z 2026-07-08 05:58:24,053 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:24.053252641Z 2026-07-08 05:58:24,053 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:24.053253516Z 2026-07-08 05:58:24,053 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:24.053254474Z 2026-07-08 05:58:24,053 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:24.053255224Z 2026-07-08 05:58:24,053 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:24.086150479Z 2026-07-08 05:58:24,084 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'transfer-encoding', b'chunked'), (b'content-type', b'application/json'), (b'content-encoding', b'gzip'), (b'vary', b'accept-encoding, Origin, Access-Control-Request-Method, Access-Control-Request-Headers'), (b'date', b'Wed, 08 Jul 2026 05:58:23 GMT')])
+2026-07-08T05:58:24.086159895Z 2026-07-08 05:58:24,084 httpx INFO HTTP Request: POST http://10.0.0.150:16335/collections/chapter_memories_384d/points/query "HTTP/1.1 200 OK"
+2026-07-08T05:58:24.086161062Z 2026-07-08 05:58:24,084 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:24.086162062Z 2026-07-08 05:58:24,084 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:24.086162895Z 2026-07-08 05:58:24,084 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:24.086163645Z 2026-07-08 05:58:24,084 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:24.498813017Z 2026-07-08 05:58:24,498 forwin.writer.chapter_writer INFO write_chapter(scene): chapter=1 title_plan='第1章'
+2026-07-08T05:58:24.500989692Z 2026-07-08 05:58:24,500 httpcore.connection DEBUG connect_tcp.started host='10.0.0.150' port=8895 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:58:24.507862678Z 2026-07-08 05:58:24,507 httpcore.connection DEBUG connect_tcp.failed exception=ConnectError(ConnectionRefusedError(111, 'Connection refused'))
+2026-07-08T05:58:24.507999303Z 2026-07-08 05:58:24,507 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=kimi-k2.5 messages=5 max_tokens=1800
+2026-07-08T05:58:24.508339263Z 2026-07-08 05:58:24,508 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:24.508461597Z 2026-07-08 05:58:24,508 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:24.508464722Z 2026-07-08 05:58:24,508 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:24.508532264Z 2026-07-08 05:58:24,508 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:24.508543014Z 2026-07-08 05:58:24,508 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:24.912725394Z 2026-07-08 05:58:24,912 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:24 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'084c2cf6-7a92-11f1-b176-86c5d37cdff6'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:24.913242813Z 2026-07-08 05:58:24,912 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:24.913344896Z 2026-07-08 05:58:24,913 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:24.913544814Z 2026-07-08 05:58:24,913 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:24.913554022Z 2026-07-08 05:58:24,913 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:24.913805815Z 2026-07-08 05:58:24,913 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:24.914651651Z 2026-07-08 05:58:24,914 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:58:26.915088976Z 2026-07-08 05:58:26,914 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=kimi-k2.5 messages=5 max_tokens=1800
+2026-07-08T05:58:26.916573065Z 2026-07-08 05:58:26,915 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:26.916588315Z 2026-07-08 05:58:26,916 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:26.916590482Z 2026-07-08 05:58:26,916 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:26.916603607Z 2026-07-08 05:58:26,916 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:26.916605232Z 2026-07-08 05:58:26,916 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:28.360949708Z 2026-07-08 05:58:28,360 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:28 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'0a5a7079-7a92-11f1-8cd6-b6e5351f2ad1'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:28.361454210Z 2026-07-08 05:58:28,361 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:28.361569293Z 2026-07-08 05:58:28,361 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:28.361781919Z 2026-07-08 05:58:28,361 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:28.361863461Z 2026-07-08 05:58:28,361 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:28.361871211Z 2026-07-08 05:58:28,361 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:28.363416759Z 2026-07-08 05:58:28,363 forwin.writer.llm.adapter WARNING LLM profile fallback: kimi-k2.5 (https://api.moonshot.cn/v1) -> MiniMax-M2.7 (https://api.minimaxi.com/v1) after retries failed: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:58:28.363433676Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:28.363484093Z 2026-07-08 05:58:28,363 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=MiniMax-M2.7 messages=5 max_tokens=1260
+2026-07-08T05:58:28.364455972Z 2026-07-08 05:58:28,364 httpcore.connection DEBUG connect_tcp.started host='api.minimaxi.com' port=443 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:58:28.582025286Z 2026-07-08 05:58:28,581 httpcore.connection DEBUG connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb971986fe50>
+2026-07-08T05:58:28.582077120Z 2026-07-08 05:58:28,581 httpcore.connection DEBUG start_tls.started ssl_context=<ssl.SSLContext object at 0xeb972c94bd90> server_hostname='api.minimaxi.com' timeout=10.0
+2026-07-08T05:58:29.027365248Z 2026-07-08 05:58:29,027 httpcore.connection DEBUG start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb9719973e30>
+2026-07-08T05:58:29.027389331Z 2026-07-08 05:58:29,027 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:29.027665166Z 2026-07-08 05:58:29,027 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:29.027671582Z 2026-07-08 05:58:29,027 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:29.027691791Z 2026-07-08 05:58:29,027 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:29.027731583Z 2026-07-08 05:58:29,027 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:29.407140910Z 2026-07-08 05:58:29,407 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:29 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'232'), (b'Connection', b'keep-alive'), (b'Trace-Id', b'069d1a05a529f9459cc4fed56152c701'), (b'X-Session-Id', b'35e3672a8dd2c8188e4111f5b45ca7b8'), (b'X-Mm-Request-Id', b'2024653756481675725_1783490309diqiqb'), (b'Minimax-Request-Id', b'fbfc679c6eaa84a9234feef644b16ba4'), (b'alb_receive_time', b'1783490309.17'), (b'alb_request_id', b'0b048a6f161fbb800fe5b8e907c20399eaaf2e39')])
+2026-07-08T05:58:29.407245244Z 2026-07-08 05:58:29,407 httpx INFO HTTP Request: POST https://api.minimaxi.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:29.407282744Z 2026-07-08 05:58:29,407 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:29.407323619Z 2026-07-08 05:58:29,407 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:29.407343703Z 2026-07-08 05:58:29,407 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:29.407345494Z 2026-07-08 05:58:29,407 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:29.407675412Z 2026-07-08 05:58:29,407 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:58:31.412662520Z 2026-07-08 05:58:31,412 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=MiniMax-M2.7 messages=5 max_tokens=1260
+2026-07-08T05:58:31.414637902Z 2026-07-08 05:58:31,414 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:31.415319655Z 2026-07-08 05:58:31,415 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:31.415341155Z 2026-07-08 05:58:31,415 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:31.415690365Z 2026-07-08 05:58:31,415 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:31.415779657Z 2026-07-08 05:58:31,415 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:31.828405117Z 2026-07-08 05:58:31,828 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:31 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'232'), (b'Connection', b'keep-alive'), (b'Trace-Id', b'069d1a07f63507369f069e4e0e4c8d67'), (b'X-Session-Id', b'35e3672a8dd2c8188e4111f5b45ca7b8'), (b'X-Mm-Request-Id', b'2024653756481675725_1783490311jrq4m6'), (b'Minimax-Request-Id', b'a79edfc25d340a54affb2fabecd21bcf'), (b'alb_receive_time', b'1783490311.55'), (b'alb_request_id', b'e870e7ed35ffdb807b31f6b8cfdedcbc6f5f568f')])
+2026-07-08T05:58:31.828574951Z 2026-07-08 05:58:31,828 httpx INFO HTTP Request: POST https://api.minimaxi.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:31.828706826Z 2026-07-08 05:58:31,828 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:31.828724951Z 2026-07-08 05:58:31,828 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:31.828809368Z 2026-07-08 05:58:31,828 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:31.828813118Z 2026-07-08 05:58:31,828 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:31.829431746Z 2026-07-08 05:58:31,829 forwin.writer.chapter_writer WARNING ChapterWriter JSON call failed on attempt 1/1: Client error '429 Too Many Requests' for url 'https://api.minimaxi.com/v1/chat/completions'
+2026-07-08T05:58:31.829445996Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:31.829617330Z 2026-07-08 05:58:31,829 forwin.writer.chapter_writer WARNING scene breakdown failed, falling back to heuristic scenes: ChapterWriter JSON generation failed after retries: Client error '429 Too Many Requests' for url 'https://api.minimaxi.com/v1/chat/completions'
+2026-07-08T05:58:31.829621746Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:31.830125373Z 2026-07-08 05:58:31,829 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=kimi-k2.5 messages=5 max_tokens=1800
+2026-07-08T05:58:31.830673917Z 2026-07-08 05:58:31,830 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:31.830881626Z 2026-07-08 05:58:31,830 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:31.830884960Z 2026-07-08 05:58:31,830 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:31.831056377Z 2026-07-08 05:58:31,830 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:31.831064794Z 2026-07-08 05:58:31,830 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:32.435490718Z 2026-07-08 05:58:32,435 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:32 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'0cc7fae9-7a92-11f1-877f-5e9c1d2f00c2'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:32.435903887Z 2026-07-08 05:58:32,435 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:32.436166888Z 2026-07-08 05:58:32,435 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:32.436295805Z 2026-07-08 05:58:32,436 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:32.436311763Z 2026-07-08 05:58:32,436 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:32.436462097Z 2026-07-08 05:58:32,436 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:32.437368268Z 2026-07-08 05:58:32,437 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:58:34.438117826Z 2026-07-08 05:58:34,438 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=kimi-k2.5 messages=5 max_tokens=1800
+2026-07-08T05:58:34.438516036Z 2026-07-08 05:58:34,438 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:34.438658953Z 2026-07-08 05:58:34,438 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:34.438662620Z 2026-07-08 05:58:34,438 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:34.438775204Z 2026-07-08 05:58:34,438 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:34.438780704Z 2026-07-08 05:58:34,438 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:34.837287610Z 2026-07-08 05:58:34,836 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:58:34 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'0e35cc7d-7a92-11f1-a1fa-5641ea53e1c6'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:58:34.837603278Z 2026-07-08 05:58:34,837 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:58:34.837731112Z 2026-07-08 05:58:34,837 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:58:34.837801154Z 2026-07-08 05:58:34,837 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:58:34.837858945Z 2026-07-08 05:58:34,837 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:58:34.837903321Z 2026-07-08 05:58:34,837 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:58:34.838873658Z 2026-07-08 05:58:34,838 forwin.writer.llm.adapter WARNING LLM profile fallback: kimi-k2.5 (https://api.moonshot.cn/v1) -> deepseek-chat (https://api.deepseek.com/v1) after retries failed: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:58:34.838886783Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:58:34.838964325Z 2026-07-08 05:58:34,838 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=deepseek-chat messages=5 max_tokens=1679
+2026-07-08T05:58:34.839921495Z 2026-07-08 05:58:34,839 httpcore.connection DEBUG connect_tcp.started host='api.deepseek.com' port=443 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:58:34.903083453Z 2026-07-08 05:58:34,902 httpcore.connection DEBUG connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb9719700410>
+2026-07-08T05:58:34.903129120Z 2026-07-08 05:58:34,902 httpcore.connection DEBUG start_tls.started ssl_context=<ssl.SSLContext object at 0xeb972c94bd90> server_hostname='api.deepseek.com' timeout=10.0
+2026-07-08T05:58:34.936138667Z 2026-07-08 05:58:34,935 httpcore.connection DEBUG start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb97198ad550>
+2026-07-08T05:58:34.936187375Z 2026-07-08 05:58:34,935 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:34.936587043Z 2026-07-08 05:58:34,936 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:58:34.936600210Z 2026-07-08 05:58:34,936 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:58:34.937070045Z 2026-07-08 05:58:34,936 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:58:34.937096129Z 2026-07-08 05:58:34,936 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:58:35.264829589Z 2026-07-08 05:58:35,264 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'Date', b'Wed, 08 Jul 2026 05:58:35 GMT'), (b'Server', b'elb'), (b'Content-Encoding', b'gzip'), (b'vary', b'origin, access-control-request-method, access-control-request-headers'), (b'access-control-allow-credentials', b'true'), (b'x-ds-trace-id', b'78c2a284aee560d02c292c87988d0f27'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'X-Cache', b'Miss from cloudfront'), (b'Via', b'1.1 e4c1621d1a01ac203cab18901cb7540a.cloudfront.net (CloudFront)'), (b'X-Amz-Cf-Pop', b'SFO53-P1'), (b'X-Amz-Cf-Id', b'zyV32ljduGEnjsePYLAVxB2qWg76zWHCs3k2FpvYGYQIjnW8Xh7X8g==')])
+2026-07-08T05:58:35.265399133Z 2026-07-08 05:58:35,265 httpx INFO HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08T05:58:35.265573175Z 2026-07-08 05:58:35,265 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:59:01.799341434Z 2026-07-08 05:59:01,798 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:59:01.799424601Z 2026-07-08 05:59:01,799 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:59:01.799439726Z 2026-07-08 05:59:01,799 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:59:01.799576769Z 2026-07-08 05:59:01,799 httpcore.connection DEBUG close.started
+2026-07-08T05:59:01.799988104Z 2026-07-08 05:59:01,799 httpcore.connection DEBUG close.complete
+2026-07-08T05:59:01.800010854Z 2026-07-08 05:59:01,799 httpcore.connection DEBUG close.started
+2026-07-08T05:59:01.800168854Z 2026-07-08 05:59:01,800 httpcore.connection DEBUG close.complete
+2026-07-08T05:59:01.801351942Z 2026-07-08 05:59:01,801 forwin.writer.llm.adapter DEBUG LLMClient.chat success: 2780 chars returned in 26.96s
+2026-07-08T05:59:01.803787035Z 2026-07-08 05:59:01,803 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=kimi-k2.5 messages=5 max_tokens=1800
+2026-07-08T05:59:01.804818956Z 2026-07-08 05:59:01,804 httpcore.connection DEBUG connect_tcp.started host='api.moonshot.cn' port=443 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:59:02.199634490Z 2026-07-08 05:59:02,199 httpcore.connection DEBUG connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb97198ae970>
+2026-07-08T05:59:02.199729115Z 2026-07-08 05:59:02,199 httpcore.connection DEBUG start_tls.started ssl_context=<ssl.SSLContext object at 0xeb972c94bd90> server_hostname='api.moonshot.cn' timeout=10.0
+2026-07-08T05:59:02.599485418Z 2026-07-08 05:59:02,599 httpcore.connection DEBUG start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb97196b21a0>
+2026-07-08T05:59:02.599506002Z 2026-07-08 05:59:02,599 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:59:02.599624127Z 2026-07-08 05:59:02,599 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:59:02.599628919Z 2026-07-08 05:59:02,599 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:59:02.599722919Z 2026-07-08 05:59:02,599 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:59:02.599728003Z 2026-07-08 05:59:02,599 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:59:05.192387645Z 2026-07-08 05:59:05,192 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:59:05 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'204ac07d-7a92-11f1-942e-72e62042d062'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:59:05.192696480Z 2026-07-08 05:59:05,192 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:59:05.192842272Z 2026-07-08 05:59:05,192 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:59:05.192907106Z 2026-07-08 05:59:05,192 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:59:05.193004231Z 2026-07-08 05:59:05,192 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:59:05.193017023Z 2026-07-08 05:59:05,192 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:59:05.193953902Z 2026-07-08 05:59:05,193 forwin.writer.llm.adapter WARNING Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T05:59:07.195184982Z 2026-07-08 05:59:07,194 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=2/2 model=kimi-k2.5 messages=5 max_tokens=1800
+2026-07-08T05:59:07.196114069Z 2026-07-08 05:59:07,195 httpcore.connection DEBUG close.started
+2026-07-08T05:59:07.196437028Z 2026-07-08 05:59:07,196 httpcore.connection DEBUG close.complete
+2026-07-08T05:59:07.196446820Z 2026-07-08 05:59:07,196 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:59:07.196693529Z 2026-07-08 05:59:07,196 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:59:07.196698446Z 2026-07-08 05:59:07,196 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:59:07.196842238Z 2026-07-08 05:59:07,196 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:59:07.196848155Z 2026-07-08 05:59:07,196 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:59:08.013742087Z 2026-07-08 05:59:08,013 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 429, b'Too Many Requests', [(b'Date', b'Wed, 08 Jul 2026 05:59:07 GMT'), (b'Content-Type', b'application/json; charset=utf-8'), (b'Content-Length', b'257'), (b'Connection', b'keep-alive'), (b'Msh-Gid', b'enterprise-tier-2'), (b'Msh-Org-Id', b'org-4783af77d82146eb9cdb963ca303699f'), (b'Msh-Project-Id', b'proj-b38ca7c5b03d4098a2e2d407f387adc1'), (b'Msh-Request-Id', b'21f9c38a-7a92-11f1-a1e6-663a6e45fe03'), (b'Msh-Trace-Mode', b'on'), (b'Msh-Uid', b'd79a43tqip65nogbrrkg'), (b'Vary', b'Origin'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains')])
+2026-07-08T05:59:08.013908421Z 2026-07-08 05:59:08,013 httpx INFO HTTP Request: POST https://api.moonshot.cn/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08T05:59:08.013947172Z 2026-07-08 05:59:08,013 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>
+2026-07-08T05:59:08.013996755Z 2026-07-08 05:59:08,013 httpcore.http11 DEBUG receive_response_body.complete
+2026-07-08T05:59:08.014086755Z 2026-07-08 05:59:08,014 httpcore.http11 DEBUG response_closed.started
+2026-07-08T05:59:08.014091839Z 2026-07-08 05:59:08,014 httpcore.http11 DEBUG response_closed.complete
+2026-07-08T05:59:08.014540257Z 2026-07-08 05:59:08,014 forwin.writer.llm.adapter WARNING LLM profile fallback: kimi-k2.5 (https://api.moonshot.cn/v1) -> deepseek-chat (https://api.deepseek.com/v1) after retries failed: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T05:59:08.014544799Z For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
+2026-07-08T05:59:08.014589257Z 2026-07-08 05:59:08,014 forwin.writer.llm.adapter DEBUG LLMClient.chat attempt=1/2 model=deepseek-chat messages=5 max_tokens=1679
+2026-07-08T05:59:08.015166885Z 2026-07-08 05:59:08,015 httpcore.connection DEBUG connect_tcp.started host='api.deepseek.com' port=443 local_address=None timeout=10.0 socket_options=None
+2026-07-08T05:59:08.046686219Z 2026-07-08 05:59:08,046 httpcore.connection DEBUG connect_tcp.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb97196c3650>
+2026-07-08T05:59:08.046696261Z 2026-07-08 05:59:08,046 httpcore.connection DEBUG start_tls.started ssl_context=<ssl.SSLContext object at 0xeb972c94bd90> server_hostname='api.deepseek.com' timeout=10.0
+2026-07-08T05:59:08.071047650Z 2026-07-08 05:59:08,070 httpcore.connection DEBUG start_tls.complete return_value=<httpcore._backends.sync.SyncStream object at 0xeb97196c3710>
+2026-07-08T05:59:08.071091358Z 2026-07-08 05:59:08,071 httpcore.http11 DEBUG send_request_headers.started request=<Request [b'POST']>
+2026-07-08T05:59:08.071346401Z 2026-07-08 05:59:08,071 httpcore.http11 DEBUG send_request_headers.complete
+2026-07-08T05:59:08.071351193Z 2026-07-08 05:59:08,071 httpcore.http11 DEBUG send_request_body.started request=<Request [b'POST']>
+2026-07-08T05:59:08.071425693Z 2026-07-08 05:59:08,071 httpcore.http11 DEBUG send_request_body.complete
+2026-07-08T05:59:08.071446526Z 2026-07-08 05:59:08,071 httpcore.http11 DEBUG receive_response_headers.started request=<Request [b'POST']>
+2026-07-08T05:59:08.393936275Z 2026-07-08 05:59:08,393 httpcore.http11 DEBUG receive_response_headers.complete return_value=(b'HTTP/1.1', 200, b'OK', [(b'Content-Type', b'application/json'), (b'Transfer-Encoding', b'chunked'), (b'Connection', b'keep-alive'), (b'Date', b'Wed, 08 Jul 2026 05:59:08 GMT'), (b'Server', b'elb'), (b'Content-Encoding', b'gzip'), (b'vary', b'origin, access-control-request-method, access-control-request-headers'), (b'access-control-allow-credentials', b'true'), (b'x-ds-trace-id', b'52aff6863e3e1158c706157700661966'), (b'Strict-Transport-Security', b'max-age=31536000; includeSubDomains; preload'), (b'X-Content-Type-Options', b'nosniff'), (b'X-Cache', b'Miss from cloudfront'), (b'Via', b'1.1 a82744d73a9589befe4efdd723d94198.cloudfront.net (CloudFront)'), (b'X-Amz-Cf-Pop', b'SFO53-P4'), (b'X-Amz-Cf-Id', b'1u4jNRJYkh3W3D-jRlhMFoUX0pGQ3CU4DFOFDPPLG37fx8BrC0yCBQ==')])
+2026-07-08T05:59:08.394169275Z 2026-07-08 05:59:08,394 httpx INFO HTTP Request: POST https://api.deepseek.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08T05:59:08.394304401Z 2026-07-08 05:59:08,394 httpcore.http11 DEBUG receive_response_body.started request=<Request [b'POST']>

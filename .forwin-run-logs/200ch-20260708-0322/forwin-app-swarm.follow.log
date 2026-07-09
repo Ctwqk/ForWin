@@ -1,0 +1,25 @@
+2026-07-08T03:22:49.154477168Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:35736 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:22:59.289338493Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:40494 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:23:09.436888649Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:54908 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:23:19.574788655Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:60050 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:23:29.680409515Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:36116 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:23:39.815567441Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:53678 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:23:46.282562500Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:40482 - "POST /api/projects/dc20330914f042e3b8d5300018c43e8c/start-writing HTTP/1.1" 200 OK
+2026-07-08T03:23:46.730776189Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:40730 - "GET /api/projects/dc20330914f042e3b8d5300018c43e8c HTTP/1.1" 200 OK
+2026-07-08T03:23:46.819553899Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:40740 - "GET /api/tasks/90a0536b231f HTTP/1.1" 200 OK
+2026-07-08T03:23:49.956295293Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:40748 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:24:00.094535666Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:38894 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:24:06.911880780Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:56122 - "GET /api/tasks/90a0536b231f HTTP/1.1" 200 OK
+2026-07-08T03:24:10.244615776Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:56124 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:24:20.388383269Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:44048 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:24:30.539802410Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:42248 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:24:40.680870795Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:36626 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:24:48.975528060Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:51922 - "GET /api/tasks/90a0536b231f HTTP/1.1" 200 OK
+2026-07-08T03:24:50.827114563Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:41172 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:25:00.962319253Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:51470 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:25:11.089652648Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:39166 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:25:21.236646183Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:35232 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:25:31.374501238Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | INFO:     10.240.1.4:49010 - "GET /health HTTP/1.1" 200 OK
+2026-07-08T03:23:01.162153300Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | Transient LLM HTTP status 429. Waiting 2.0 s before retry 2/2.
+2026-07-08T03:23:03.412702862Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | LLM profile fallback: kimi-k2.5 (https://api.moonshot.cn/v1) -> MiniMax-M2.7 (https://api.minimaxi.com/v1) after retries failed: Client error '429 Too Many Requests' for url 'https://api.moonshot.cn/v1/chat/completions'
+2026-07-08T03:23:03.412773528Z forwin-app-swarm.1.oxz0kjz2plsz@colima-swarmbridged    | For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429

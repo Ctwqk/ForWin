@@ -7,6 +7,7 @@ from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
 from forwin.experience.trope_cooldown import save_accepted_trope_usage_for_chapter
 from forwin.maintenance.deferred import DeferredMaintenanceRecord, record_deferred_maintenance
 from forwin.models.governance import DecisionEvent
+from forwin.orchestrator_loop_core.chapter_review_gate import handle_chapter_review_gate
 from forwin.orchestrator_loop_core.obligation_resolution import (
     _verify_obligations_after_acceptance,
 )
@@ -470,115 +471,30 @@ def _run_project_chapters(
                     failed_chapters.append(chapter_num)
                     break
 
-            should_apply_canon = (
-                verdict.verdict == "pass"
-                or (self.config.operation_mode == "blackbox" and verdict.verdict == "warn")
-                or force_accept_applied
+            review_gate = handle_chapter_review_gate(
+                self,
+                session=session,
+                updater=updater,
+                project_id=project_id,
+                governance=governance,
+                chapter_plan=chapter_plan,
+                writer_output=writer_output,
+                verdict=verdict,
+                residual_review_issues=residual_review_issues,
+                canon_risk_level=canon_risk_level,
+                repair_attempt_count=repair_attempt_count,
+                force_accept_applied=force_accept_applied,
+                chapter_number=chapter_num,
+                last_requested_chapter=last_requested_chapter,
+                requested_chapters=requested_chapters,
+                completed_chapters=completed_chapters,
+                failed_chapters=failed_chapters,
+                paused_chapters=paused_chapters,
             )
-            review_interval = max(0, int(self.config.review_interval_chapters or 0))
-            review_gate_kind = ""
-            review_gate_reason = ""
-            if self.config.operation_mode == "checkpoint":
-                review_gate_kind = "chapter_operation_checkpoint"
-                review_gate_reason = "checkpoint operation mode requires approval"
-            elif self.config.operation_mode == "copilot" and verdict.verdict != "pass":
-                review_gate_kind = "chapter_copilot_verdict"
-                review_gate_reason = f"copilot verdict is {verdict.verdict}"
-            elif (
-                self.config.operation_mode == "blackbox"
-                and verdict.verdict == "fail"
-                and not force_accept_applied
-            ):
-                review_gate_kind = "chapter_blackbox_failure"
-                review_gate_reason = "blackbox repair exhausted with fail verdict"
-            elif not should_apply_canon:
-                review_gate_kind = "chapter_acceptance_gate"
-                review_gate_reason = f"verdict {verdict.verdict} is not automatically applicable"
-            elif (
-                review_interval
-                and chapter_num % review_interval == 0
-                and chapter_num != last_requested_chapter
-            ):
-                review_gate_kind = "chapter_review_interval"
-                review_gate_reason = f"review interval {review_interval} reached"
-
-            reckless_review_approved = False
-            if review_gate_kind:
-                latest_draft = (
-                    session.query(ChapterDraft)
-                    .filter(ChapterDraft.chapter_plan_id == chapter_plan.id)
-                    .order_by(ChapterDraft.version.desc(), ChapterDraft.id.desc())
-                    .first()
-                )
-                latest_review = None
-                if latest_draft is not None:
-                    latest_review = (
-                        session.query(ChapterReview)
-                        .filter(ChapterReview.draft_id == latest_draft.id)
-                        .order_by(ChapterReview.created_at.desc(), ChapterReview.id.desc())
-                        .first()
-                    )
-                reckless_outcome = self._delegate_reckless_review(
-                    updater=updater,
-                    project_id=project_id,
-                    governance=governance,
-                    gate_kind=review_gate_kind,
-                    scope="chapter",
-                    chapter_number=chapter_num,
-                    related_object_type=(
-                        "chapter_review" if latest_review is not None else "chapter_plan"
-                    ),
-                    related_object_id=(
-                        str(latest_review.id) if latest_review is not None else str(chapter_plan.id)
-                    ),
-                    input_snapshot={
-                        "gate_reason": review_gate_reason,
-                        "chapter_plan": {
-                            "id": str(chapter_plan.id or ""),
-                            "chapter_number": chapter_num,
-                            "title": str(chapter_plan.title or ""),
-                            "one_line": str(chapter_plan.one_line or ""),
-                            "status": str(chapter_plan.status or ""),
-                        },
-                        "draft_id": str(getattr(latest_draft, "id", "") or ""),
-                        "review_id": str(getattr(latest_review, "id", "") or ""),
-                        "writer_output": writer_output.model_dump(mode="json"),
-                        "review_verdict": verdict.model_dump(mode="json"),
-                        "residual_review_issues": residual_review_issues,
-                        "canon_risk_level": canon_risk_level,
-                        "repair_attempt_count": repair_attempt_count,
-                        "force_accept_applied": force_accept_applied,
-                        "operation_mode": self.config.operation_mode,
-                        "review_interval_chapters": review_interval,
-                        "governance": governance.model_dump(mode="json"),
-                    },
-                )
-                reckless_review_approved = bool(
-                    reckless_outcome is not None and reckless_outcome.approved
-                )
-            if review_gate_kind and not reckless_review_approved:
-                updater.mark_chapter_status(
-                    project_id,
-                    chapter_num,
-                    "needs_review",
-                    repair_attempt_count=repair_attempt_count,
-                    residual_review_issues=residual_review_issues,
-                    canon_risk_level=canon_risk_level,
-                )
-                session.commit()
-                paused_chapters.append(chapter_num)
-                self._emit_progress(
-                    "stage_changed",
-                    stage="paused_for_review",
-                    project_id=project_id,
-                    requested_chapters=requested_chapters,
-                    current_chapter=chapter_num,
-                    completed_chapters=completed_chapters,
-                    failed_chapters=failed_chapters,
-                    paused_chapters=paused_chapters,
-                )
+            if review_gate.pause_required:
                 break
-            should_apply_canon = should_apply_canon or reckless_review_approved
+            should_apply_canon = review_gate.should_apply_canon
+            reckless_review_approved = review_gate.reckless_approved
 
             while True:
                 self._emit_progress(

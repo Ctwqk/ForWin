@@ -241,7 +241,7 @@ def test_reckless_review_interval_approval_continues_batch() -> None:
     assert snapshot["trace_count"] == 1
 
 
-def test_reckless_blackbox_fail_approval_reaches_canon_gate() -> None:
+def test_reckless_mode_does_not_duplicate_existing_force_accept() -> None:
     snapshot = _run_reckless_gate(
         "approve",
         operation_mode="blackbox",
@@ -251,5 +251,6 @@ def test_reckless_blackbox_fail_approval_reaches_canon_gate() -> None:
 
     assert snapshot["result"].status == "completed"
     assert snapshot["plan_statuses"] == ["accepted"]
-    assert snapshot["acceptance_modes"] == ["reckless_approved"]
-    assert snapshot["trace_count"] == 1
+    assert snapshot["acceptance_modes"] == ["force_accept_after_repair"]
+    assert snapshot["trace_count"] == 0
+    assert snapshot["llm_calls"] == 0

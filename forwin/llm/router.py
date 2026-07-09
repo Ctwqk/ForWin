@@ -85,6 +85,7 @@ class LLMCallRouter:
         self.codex_default_model = str(codex_default_model or "").strip()
         self._fallback_events: list[dict[str, str]] = []
         self.last_call_result: LLMCallResult | None = None
+        self._last_codex_trace: dict[str, Any] = {}
 
     def chat(
         self,
@@ -104,6 +105,7 @@ class LLMCallRouter:
     ) -> LLMCallResult:
         resolved_intent = intent or LLMCallIntent(codex_allowed=False)
         fallback_used = False
+        failed_codex_trace: dict[str, Any] = {}
         codex_policy = self._codex_policy(resolved_intent)
         if codex_policy == "codex_primary":
             try:
@@ -112,6 +114,7 @@ class LLMCallRouter:
                     content=content,
                     backend="codex_bridge",
                     trace={
+                        **self._last_codex_trace,
                         "backend": "codex_bridge",
                         "task_family": resolved_intent.task_family,
                         "stage_key": resolved_intent.stage_key,
@@ -122,6 +125,7 @@ class LLMCallRouter:
                 return result
             except Exception as exc:  # noqa: BLE001
                 fallback_used = True
+                failed_codex_trace = dict(self._last_codex_trace)
                 self._fallback_events.append(
                     {
                         "from_backend": "codex_bridge",
@@ -159,6 +163,7 @@ class LLMCallRouter:
                 backend="codex_bridge",
                 fallback_used=True,
                 trace={
+                    **self._last_codex_trace,
                     "backend": "codex_bridge",
                     "task_family": resolved_intent.task_family,
                     "stage_key": resolved_intent.stage_key,
@@ -176,6 +181,7 @@ class LLMCallRouter:
                 "task_family": resolved_intent.task_family,
                 "stage_key": resolved_intent.stage_key,
                 "permission_profile": resolved_intent.permission_profile,
+                "failed_codex_trace": failed_codex_trace,
             },
         )
         self.last_call_result = result
@@ -192,7 +198,17 @@ class LLMCallRouter:
         model = str(intent.codex_model or self.codex_default_model or "").strip()
         if model:
             codex_kwargs.setdefault("model", model)
-        return self.codex_client.chat(messages, intent=intent, **codex_kwargs)
+        self._last_codex_trace = {"model": model}
+        try:
+            content = self.codex_client.chat(messages, intent=intent, **codex_kwargs)
+        finally:
+            client_trace = getattr(self.codex_client, "last_call_trace", None)
+            if isinstance(client_trace, dict):
+                self._last_codex_trace = {
+                    **client_trace,
+                    "model": str(client_trace.get("model") or model),
+                }
+        return content
 
     def _should_use_codex(self, intent: LLMCallIntent) -> bool:
         return self._codex_policy(intent) == "codex_primary"

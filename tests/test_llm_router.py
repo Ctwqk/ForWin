@@ -44,11 +44,16 @@ class FakeCodexClient:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
         self.calls: list[dict[str, object]] = []
+        self.last_call_trace: dict[str, object] = {}
 
     def chat(self, messages, *, intent: LLMCallIntent, **kwargs) -> str:
         self.calls.append({"messages": messages, "intent": intent, "kwargs": kwargs})
         if self.fail:
             raise RuntimeError("codex bridge unavailable")
+        self.last_call_trace = {
+            "raw_events": [{"type": "turn.completed", "usage": {"output_tokens": 12}}],
+            "returncode": 0,
+        }
         return '{"source":"codex"}'
 
 
@@ -247,6 +252,24 @@ class LLMRouterTests(unittest.TestCase):
 
         self.assertEqual(result, '{"source":"codex"}')
         self.assertEqual(codex.calls[0]["kwargs"]["model"], "gpt-5.3-codex-spark")
+
+    def test_codex_result_trace_keeps_model_and_raw_bridge_events(self) -> None:
+        router = LLMCallRouter(
+            ordinary_adapter=OrdinaryAdapter(),
+            codex_client=FakeCodexClient(),
+            codex_enabled=True,
+            codex_default_model="gpt-5.3-codex-spark",
+        )
+
+        result = router.chat_with_result(
+            [{"role": "user", "content": "review"}],
+            intent=LLMCallIntent(task_family="review", stage_key="reckless_human_gate"),
+        )
+
+        self.assertEqual(result.backend, "codex_bridge")
+        self.assertEqual(result.trace["model"], "gpt-5.3-codex-spark")
+        self.assertEqual(result.trace["raw_events"][0]["type"], "turn.completed")
+        self.assertEqual(result.trace["returncode"], 0)
 
     def test_preferred_codex_model_keeps_bridge_enabled_for_repair(self) -> None:
         ordinary = OrdinaryAdapter()

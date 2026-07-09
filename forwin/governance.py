@@ -118,6 +118,10 @@ class DecisionEventType:
     REPAIR_NEEDS_HUMAN_COMPRESSION = "repair_needs_human_compression"
     REVIEW_APPROVED = "review_approved"
     FORCED_ACCEPT_APPLIED = "forced_accept_applied"
+    RECKLESS_REVIEW_REQUESTED = "reckless_review_requested"
+    RECKLESS_REVIEW_DECIDED = "reckless_review_decided"
+    RECKLESS_REVIEW_FAILED = "reckless_review_failed"
+    RECKLESS_GATE_OVERRIDDEN = "reckless_gate_overridden"
 
     BAND_CHECKPOINT_CREATED = "band_checkpoint_created"
     BAND_CHECKPOINT_HIT = "band_checkpoint_hit"
@@ -268,6 +272,10 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.REPAIR_NEEDS_HUMAN_COMPRESSION,
     DecisionEventType.REVIEW_APPROVED,
     DecisionEventType.FORCED_ACCEPT_APPLIED,
+    DecisionEventType.RECKLESS_REVIEW_REQUESTED,
+    DecisionEventType.RECKLESS_REVIEW_DECIDED,
+    DecisionEventType.RECKLESS_REVIEW_FAILED,
+    DecisionEventType.RECKLESS_GATE_OVERRIDDEN,
     DecisionEventType.BAND_CHECKPOINT_CREATED,
     DecisionEventType.BAND_CHECKPOINT_HIT,
     DecisionEventType.CHECKPOINT_EVALUATOR_ERROR,

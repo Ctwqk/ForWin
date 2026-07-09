@@ -20,6 +20,7 @@ class CodexBridgeClient:
         self.token = token
         self.timeout_seconds = max(5.0, float(timeout_seconds))
         self.client = httpx.Client(timeout=httpx.Timeout(self.timeout_seconds, connect=min(10.0, self.timeout_seconds)))
+        self.last_call_trace: dict[str, Any] = {}
 
     def health(self) -> dict[str, Any]:
         response = self.client.get(f"{self.bridge_url}/health")
@@ -52,19 +53,31 @@ class CodexBridgeClient:
         headers = {"Content-Type": "application/json"}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        request_payload = {
+            "prompt": prompt,
+            "output_schema": output_schema,
+            "timeout_seconds": timeout_seconds or self.timeout_seconds,
+            "permission_profile": intent.permission_profile,
+            "model": str(model or "").strip(),
+        }
+        self.last_call_trace = {
+            "model": request_payload["model"],
+            "request": request_payload,
+        }
         response = self.client.post(
             f"{self.bridge_url}/v1/codex/chat",
             headers=headers,
-            json={
-                "prompt": prompt,
-                "output_schema": output_schema,
-                "timeout_seconds": timeout_seconds or self.timeout_seconds,
-                "permission_profile": intent.permission_profile,
-                "model": str(model or "").strip(),
-            },
+            json=request_payload,
         )
         response.raise_for_status()
         payload = response.json()
+        self.last_call_trace.update(
+            {
+                "response": payload,
+                "raw_events": list(payload.get("raw_events") or []),
+                "returncode": int(payload.get("returncode") or 0),
+            }
+        )
         if not payload.get("ok", False):
             raise RuntimeError(str(payload.get("error") or "Codex bridge call failed"))
         return str(payload.get("content", "") or "")

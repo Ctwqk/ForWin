@@ -55,7 +55,14 @@ class FakeHttpClient:
 
     def post(self, url: str, *, headers=None, json=None) -> FakeHttpResponse:  # noqa: ANN001
         self.posts.append({"url": url, "headers": headers, "json": json})
-        return FakeHttpResponse({"ok": True, "content": '{"ok":true}'})
+        return FakeHttpResponse(
+            {
+                "ok": True,
+                "content": '{"ok":true}',
+                "raw_events": [{"type": "turn.completed"}],
+                "returncode": 0,
+            }
+        )
 
     def close(self) -> None:
         return None
@@ -213,6 +220,10 @@ class CodexBridgeTests(unittest.TestCase):
         request_json = fake_http.posts[0]["json"]
         self.assertIsInstance(request_json, dict)
         self.assertEqual(request_json["model"], "gpt-5.3-codex-spark")
+        self.assertEqual(client.last_call_trace["model"], "gpt-5.3-codex-spark")
+        self.assertEqual(client.last_call_trace["raw_events"][0]["type"], "turn.completed")
+        self.assertEqual(client.last_call_trace["returncode"], 0)
+        self.assertNotIn("Authorization", json.dumps(client.last_call_trace))
 
     def test_chapter_writer_does_not_invent_generic_output_schema(self) -> None:
         llm = FakeWriterLLM()

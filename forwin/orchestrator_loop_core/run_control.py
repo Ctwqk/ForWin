@@ -75,6 +75,7 @@ def run(
             target_total_chapters=num_chapters,
             governance=new_project_governance(
                 default_operation_mode=self.config.operation_mode,
+                review_delegation_mode=self.config.review_delegation_mode,
                 review_interval_chapters=self.config.review_interval_chapters,
             ).model_copy(
                 update={

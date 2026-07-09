@@ -1,6 +1,12 @@
 from __future__ import annotations
 
 from forwin.config import Config
+from forwin.governance import ProjectGovernanceSettings
+
+
+def test_reckless_review_mode_defaults_to_human() -> None:
+    assert Config().review_delegation_mode == "human"
+    assert ProjectGovernanceSettings().review_delegation_mode == "human"
 
 
 def test_world_v4_projection_flags_are_removed() -> None:

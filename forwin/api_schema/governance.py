@@ -19,6 +19,7 @@ from .project import ProjectAutomationPublishSettings, ProjectAutomationSettings
 
 class ProjectGovernanceUpdateRequest(BaseModel):
     default_operation_mode: str | None = None
+    review_delegation_mode: Literal["human", "reckless"] | None = None
     review_interval_chapters: int | None = None
     progression_mode: str | None = None
     auto_band_checkpoint: bool | None = None

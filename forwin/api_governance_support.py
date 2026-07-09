@@ -97,6 +97,7 @@ def governance_request_payload(req: object) -> dict[str, object]:
     for field in (
         "default_operation_mode",
         "operation_mode",
+        "review_delegation_mode",
         "review_interval_chapters",
         "progression_mode",
         "auto_band_checkpoint",
@@ -125,6 +126,9 @@ def resolve_project_governance(
     fallback_operation_mode = (
         base_config.operation_mode if base_config is not None else "blackbox"
     )
+    fallback_review_delegation_mode = (
+        base_config.review_delegation_mode if base_config is not None else "human"
+    )
     fallback_review_interval = (
         max(0, int(base_config.review_interval_chapters or 0))
         if base_config is not None
@@ -134,6 +138,7 @@ def resolve_project_governance(
     governance = normalize_project_governance(
         raw,
         fallback_operation_mode=fallback_operation_mode,
+        fallback_review_delegation_mode=fallback_review_delegation_mode,
         fallback_review_interval=fallback_review_interval,
     )
     merged = governance.model_dump(mode="json")
@@ -142,6 +147,7 @@ def resolve_project_governance(
     return normalize_project_governance(
         merged,
         fallback_operation_mode=fallback_operation_mode,
+        fallback_review_delegation_mode=fallback_review_delegation_mode,
         fallback_review_interval=fallback_review_interval,
     )
 

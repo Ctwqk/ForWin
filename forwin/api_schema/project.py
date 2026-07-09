@@ -251,6 +251,7 @@ class ProjectContinueGenerationRequest(BaseModel):
     auto_continue: bool | None = None
     run_until_chapter: int | None = Field(default=None, ge=1)
     operation_mode: str | None = None
+    review_delegation_mode: Literal["human", "reckless"] | None = None
     review_interval_chapters: int | None = None
     progression_mode: str | None = None
     auto_band_checkpoint: bool | None = None

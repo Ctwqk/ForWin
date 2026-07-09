@@ -20,6 +20,7 @@ def _project_governance(self, project: Project):
     governance = normalize_project_governance(
         getattr(project, "governance_json", "{}"),
         fallback_operation_mode=self.config.operation_mode,
+        fallback_review_delegation_mode=self.config.review_delegation_mode,
         fallback_review_interval=self.config.review_interval_chapters,
     )
     return governance

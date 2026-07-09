@@ -161,6 +161,7 @@ def continue_project_generation(
         runtime_config = copy_config(
             runtime_config,
             operation_mode=governance.default_operation_mode,
+            review_delegation_mode=governance.review_delegation_mode,
             review_interval_chapters=governance.review_interval_chapters,
             progression_mode=governance.progression_mode,
             auto_band_checkpoint=governance.auto_band_checkpoint,

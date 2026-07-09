@@ -165,6 +165,9 @@ def create_project(
         )
         governance = new_project_governance(
             default_operation_mode="blackbox",
+            review_delegation_mode=(
+                config.review_delegation_mode if config is not None else "human"
+            ),
             review_interval_chapters=config.review_interval_chapters if config is not None else 0,
         )
         updater = StateUpdater(session)

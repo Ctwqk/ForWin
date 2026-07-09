@@ -66,6 +66,7 @@ class ObservabilityConfig(BaseModel):
 
 class GovernanceConfig(BaseModel):
     progression_mode: str = "serial_canon_band_guard"
+    review_delegation_mode: Literal["human", "reckless"] = "human"
     review_interval_chapters: int = 0
     future_constraints_enabled: bool = True
 
@@ -417,6 +418,9 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         "prompt_budget_chars": _env_int(env, "PROMPT_BUDGET_CHARS", 12000),
         "writer_mode": tracked_str("writer_mode", "WRITER_MODE", "scene"),
         "operation_mode": tracked_str("operation_mode", "OPERATION_MODE", "blackbox"),
+        "review_delegation_mode": tracked_str(
+            "review_delegation_mode", "FORWIN_REVIEW_DELEGATION_MODE", "human"
+        ),
         "book_state_layers": tracked_csv("book_state_layers", "FORWIN_BOOK_STATE_LAYERS")
         or ["world", "map", "cognition", "narrative"],
         "hard_floor_gate_enabled": tracked_bool(
@@ -741,6 +745,7 @@ class _ConfigFields:
     prompt_budget_chars: int = 12000
     writer_mode: str = "scene"
     operation_mode: str = "blackbox"
+    review_delegation_mode: Literal["human", "reckless"] = "human"
     book_state_layers: list[str] = ["world", "map", "cognition", "narrative"]
     hard_floor_gate_enabled: bool = False
     context_recency_window_chapters: int = 0
@@ -961,6 +966,7 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
     def governance(self) -> GovernanceConfig:
         return GovernanceConfig(
             progression_mode=self.progression_mode,
+            review_delegation_mode=self.review_delegation_mode,
             review_interval_chapters=self.review_interval_chapters,
             future_constraints_enabled=self.future_constraints_enabled,
         )

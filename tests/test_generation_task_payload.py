@@ -17,6 +17,7 @@ def test_execution_payload_serializes_non_secret_runtime_overrides() -> None:
         minimax_model="model-a",
         quality_profile="pulp",
         operation_mode="blackbox",
+        review_delegation_mode="reckless",
         publisher_session_secret="publisher-secret",
         codex_bridge_token="codex-secret",
     )
@@ -39,6 +40,7 @@ def test_execution_payload_serializes_non_secret_runtime_overrides() -> None:
     assert raw["runtime_overrides"]["minimax_base_url"] == "https://llm.example.test/v1"
     assert raw["runtime_overrides"]["minimax_model"] == "model-a"
     assert raw["runtime_overrides"]["quality_profile"] == "pulp"
+    assert raw["runtime_overrides"]["review_delegation_mode"] == "reckless"
     assert "minimax_api_key" not in json.dumps(raw)
     assert "publisher-secret" not in json.dumps(raw)
     assert "codex-secret" not in json.dumps(raw)
@@ -56,6 +58,7 @@ def test_worker_config_uses_worker_secret_and_payload_generation_settings() -> N
             "minimax_model": "queued-model",
             "quality_profile": "pulp",
             "operation_mode": "blackbox",
+            "review_delegation_mode": "reckless",
         },
         root_event_id="root-1",
     )
@@ -69,5 +72,6 @@ def test_worker_config_uses_worker_secret_and_payload_generation_settings() -> N
     assert config.minimax_api_key == "sk-worker"
     assert config.minimax_model == "queued-model"
     assert config.quality_profile == "pulp"
+    assert config.review_delegation_mode == "reckless"
     assert config.governance_task_id == "task-1"
     assert config.governance_causal_root_id == "root-1"

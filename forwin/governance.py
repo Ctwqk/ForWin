@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 
 ProgressionMode = Literal["serial_canon", "serial_canon_band_guard"]
+ReviewDelegationMode = Literal["human", "reckless"]
 BandWarnAction = Literal["pause", "continue"]
 PlanTaskType = Literal[
     "plot_advance",
@@ -395,6 +396,7 @@ class PlanTaskItem(BaseModel):
 
 class ProjectGovernanceSettings(BaseModel):
     default_operation_mode: str = "blackbox"
+    review_delegation_mode: ReviewDelegationMode = "human"
     review_interval_chapters: int = 0
     progression_mode: ProgressionMode = "serial_canon_band_guard"
     auto_band_checkpoint: bool = True
@@ -493,10 +495,14 @@ class NextBandSummary(BaseModel):
 def new_project_governance(
     *,
     default_operation_mode: str = "blackbox",
+    review_delegation_mode: ReviewDelegationMode = "human",
     review_interval_chapters: int = 0,
 ) -> ProjectGovernanceSettings:
     return ProjectGovernanceSettings(
         default_operation_mode=str(default_operation_mode or "blackbox").strip() or "blackbox",
+        review_delegation_mode=(
+            review_delegation_mode if review_delegation_mode in {"human", "reckless"} else "human"
+        ),
         review_interval_chapters=max(0, int(review_interval_chapters or 0)),
         progression_mode="serial_canon_band_guard",
         auto_band_checkpoint=True,
@@ -512,6 +518,7 @@ def normalize_project_governance(
     raw: str | dict[str, Any] | None,
     *,
     fallback_operation_mode: str = "blackbox",
+    fallback_review_delegation_mode: ReviewDelegationMode = "human",
     fallback_review_interval: int = 0,
 ) -> ProjectGovernanceSettings:
     payload: dict[str, Any]
@@ -525,10 +532,12 @@ def normalize_project_governance(
     if not payload:
         return new_project_governance(
             default_operation_mode=fallback_operation_mode,
+            review_delegation_mode=fallback_review_delegation_mode,
             review_interval_chapters=fallback_review_interval,
         )
     merged = {
         "default_operation_mode": fallback_operation_mode,
+        "review_delegation_mode": fallback_review_delegation_mode,
         "review_interval_chapters": fallback_review_interval,
         **payload,
     }
@@ -536,6 +545,11 @@ def normalize_project_governance(
         str(merged.get("default_operation_mode", fallback_operation_mode) or "blackbox").strip()
         or "blackbox"
     )
+    if str(merged.get("review_delegation_mode") or "").strip() not in {
+        "human",
+        "reckless",
+    }:
+        merged["review_delegation_mode"] = "human"
     try:
         merged["review_interval_chapters"] = max(0, int(merged.get("review_interval_chapters", fallback_review_interval) or 0))
     except (TypeError, ValueError):

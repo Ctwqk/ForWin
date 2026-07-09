@@ -1531,6 +1531,27 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(events.items[0].scope, "project")
         self.assertEqual(events.items[0].reason, "切换到更严格的串行 canon gate")
 
+    def test_update_governance_round_trips_reckless_review_mode(self) -> None:
+        project = self._create_project(project_id="proj-reckless-governance")
+
+        response = api_module.update_project_governance(
+            project.id,
+            ProjectGovernanceUpdateRequest(
+                review_delegation_mode="reckless",
+                reason="delegate human gates to Spark",
+            ),
+        )
+
+        self.assertEqual(response.governance.review_delegation_mode, "reckless")
+        detail = api_module.get_project(project.id)
+        self.assertEqual(detail.governance.review_delegation_mode, "reckless")
+        events = api_module.list_project_decision_events(project.id)
+        self.assertEqual(events.items[0].event_type, "governance_updated")
+        self.assertEqual(
+            events.items[0].payload["governance"]["review_delegation_mode"],
+            "reckless",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

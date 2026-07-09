@@ -453,8 +453,9 @@
       gap:14px;
       position:sticky;
       top:-22px;
+      z-index:2;
       padding:22px 0 12px;
-      background:linear-gradient(180deg, rgba(255,252,247,.98), rgba(255,252,247,.98), rgba(255,252,247,0));
+      background:rgb(255,252,247);
     }
     .drawer-head h3 {
       margin:0 0 8px;

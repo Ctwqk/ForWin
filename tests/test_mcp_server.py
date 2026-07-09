@@ -310,6 +310,7 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
                     "genesis_stage_lock",
                     "project_start_writing",
                     "project_continue_generation",
+                    "project_set_reckless_mode",
                     "project_decision_events",
                     "project_extend_generation",
                     "task_list",
@@ -330,6 +331,46 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
             ),
         )
         self.assertTrue(all("Use this when" in (tool.description or "") for tool in tools))
+
+    def test_project_set_reckless_mode_via_mcp_updates_project_governance(self) -> None:
+        with self.session_factory() as session:
+            updater = StateUpdater(session)
+            project = updater.create_project(
+                title="MCP Reckless Mode",
+                premise="测试 MCP 鲁莽模式开关。",
+                genre="悬疑",
+                target_total_chapters=12,
+                creation_status="writing",
+            )
+            session.commit()
+            project_id = project.id
+
+        enabled = self._load_model(
+            MutationResult,
+            self._call_tool(
+                "project_set_reckless_mode",
+                {
+                    "project_id": project_id,
+                    "enabled": True,
+                    "reason": "delegate review gates to Spark",
+                },
+            ),
+        )
+
+        self.assertIsNotNone(enabled.project)
+        self.assertEqual(enabled.project.review_delegation_mode, "reckless")
+        disabled = self._load_model(
+            MutationResult,
+            self._call_tool(
+                "project_set_reckless_mode",
+                {
+                    "project_id": project_id,
+                    "enabled": False,
+                    "reason": "return review gates to human",
+                },
+            ),
+        )
+        self.assertEqual(disabled.project.review_delegation_mode, "human")
 
     def test_list_tools_return_object_wrappers_for_remote_mcp_clients(self) -> None:
         project_id, _chapter_number = self._create_project_with_draft()

@@ -17,13 +17,20 @@ def test_governance_actions_review_and_chapter_operations(page, browser_test_bas
     switch_home_tab(page, "task")
     page.get_by_role("button", name="查看详情").first.click()
     expect(page.locator("#drawer_body")).to_contain_text("治理设置")
+    reckless_mode = page.get_by_label("鲁莽模式 · Codex 5.3 Spark 审核")
+    expect(reckless_mode).not_to_be_checked()
+    reckless_mode.check()
 
     page.get_by_role("button", name="保存治理设置").click()
     page.locator("#governance_action_modal_submit").click()
     expect(page.locator("#global_status")).to_contain_text("治理动作必须填写 reason")
     _submit_governance_reason(page)
     expect(page.locator("#global_status")).to_contain_text("项目治理设置已保存")
-    assert backend.captured_payloads("/api/projects/project-1/governance", method="PUT")[-1]["reason"]
+    governance_payload = backend.captured_payloads(
+        "/api/projects/project-1/governance", method="PUT"
+    )[-1]
+    assert governance_payload["reason"]
+    assert governance_payload["review_delegation_mode"] == "reckless"
 
     page.get_by_role("button", name="插入 Manual Checkpoint").click()
     _submit_governance_reason(page)

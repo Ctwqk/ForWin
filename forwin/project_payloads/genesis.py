@@ -203,6 +203,10 @@ def _prompt_trace_infos(
                 output_summary=_json_object(row.output_summary_json),
                 decision_event_id=str(row.decision_event_id or ""),
                 parent_trace_id=str(row.parent_trace_id or ""),
+                backend=str(row.backend or ""),
+                codex_job_id=str(row.codex_job_id or ""),
+                permission_profile=str(row.permission_profile or ""),
+                fallback_used=bool(row.fallback_used),
                 created_at=row.created_at.isoformat() if row.created_at else "",
             )
         )

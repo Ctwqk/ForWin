@@ -119,6 +119,7 @@ class ProjectView(BaseModel):
     generated_chapter_count: int = 0
     accepted_chapter_count: int = 0
     needs_review_chapter_count: int = 0
+    review_delegation_mode: str = "human"
     latest_stage: str = ""
     next_gate: str = ""
     genesis_stage_overview: list[StageStateView] = Field(default_factory=list)

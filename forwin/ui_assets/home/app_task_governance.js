@@ -562,6 +562,9 @@
       const badges = createNode('div', '', 'badge-row');
       badges.appendChild(createNode('span', governance.default_operation_mode || 'blackbox', 'badge'));
       badges.appendChild(createNode('span', governance.progression_mode || 'serial_canon_band_guard', 'badge'));
+      if (governance.review_delegation_mode === 'reckless') {
+        badges.appendChild(createNode('span', '鲁莽模式 · Codex 5.3 Spark 审核', 'badge warn'));
+      }
       if (governance.auto_band_checkpoint) badges.appendChild(createNode('span', 'auto band checkpoint', 'badge ok'));
       badges.appendChild(createNode('span', governance.future_constraints_enabled ? 'future constraints 参与判定' : 'future constraints 仅保存/展示', governance.future_constraints_enabled ? 'badge ok' : 'badge warn'));
       card.appendChild(badges);
@@ -624,6 +627,15 @@
       reviewInterval.value = String(governance.review_interval_chapters || 0);
       form.appendChild(createLabeledField('每 N 章人工检查', reviewInterval));
 
+      const recklessMode = document.createElement('input');
+      recklessMode.type = 'checkbox';
+      recklessMode.checked = governance.review_delegation_mode === 'reckless';
+      const recklessModeWrap = document.createElement('label');
+      recklessModeWrap.className = 'checkbox';
+      recklessModeWrap.appendChild(recklessMode);
+      recklessModeWrap.appendChild(document.createTextNode('鲁莽模式 · Codex 5.3 Spark 审核'));
+      form.appendChild(recklessModeWrap);
+
       const autoBandCheckpoint = document.createElement('input');
       autoBandCheckpoint.type = 'checkbox';
       autoBandCheckpoint.checked = Boolean(governance.auto_band_checkpoint);
@@ -657,6 +669,7 @@
       actions.appendChild(createButton('保存治理设置', () => saveProjectGovernanceFromDrawer(item.project_id, {
         default_operation_mode: operationMode.value,
         progression_mode: progressionMode.value,
+        review_delegation_mode: recklessMode.checked ? 'reckless' : 'human',
         review_interval_chapters: normalizeReviewInterval(reviewInterval.value),
         auto_band_checkpoint: autoBandCheckpoint.checked,
         manual_checkpoints_enabled: manualCheckpoint.checked,

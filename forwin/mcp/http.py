@@ -195,6 +195,21 @@ def build_mcp_server(*, api_client: ForWinAPIClient | None = None) -> FastMCP:
         )
 
     @register_write_tool(
+        "project_set_reckless_mode",
+        "Enable or disable project reckless mode so Codex 5.3 Spark handles human review gates with complete traces. Use this when the user explicitly wants autonomous review delegation for a project.",
+    )
+    async def project_set_reckless_mode(
+        project_id: str,
+        enabled: bool,
+        reason: str,
+    ) -> MutationResult:
+        return await client.project_set_reckless_mode(
+            project_id=project_id,
+            enabled=enabled,
+            reason=reason,
+        )
+
+    @register_write_tool(
         "project_extend_generation",
         "Append planned future chapters to an existing writing project before continuing generation. Use this when the user asks to extend the target chapter count; existing planned chapters are allowed, but active, review, drafted, or failed gates must be handled first.",
     )

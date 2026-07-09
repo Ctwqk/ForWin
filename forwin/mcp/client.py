@@ -239,6 +239,32 @@ class ForWinAPIClient:
             task=await self._safe_task_get(task_id, fallback_payload=payload),
         )
 
+    async def project_set_reckless_mode(
+        self,
+        *,
+        project_id: str,
+        enabled: bool,
+        reason: str,
+    ) -> MutationResult:
+        normalized_reason = str(reason or "").strip()
+        if not normalized_reason:
+            raise ValueError("reason is required")
+        payload = await self._request_json(
+            "PUT",
+            f"/api/projects/{project_id}/governance",
+            json={
+                "review_delegation_mode": "reckless" if enabled else "human",
+                "reason": normalized_reason,
+            },
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("Expected project governance payload from ForWin API.")
+        return MutationResult(
+            ok=bool(payload.get("ok", True)),
+            message=str(payload.get("message", "")),
+            project=await self.project_get(project_id),
+        )
+
     async def project_extend_generation(
         self,
         *,
@@ -527,6 +553,9 @@ class ForWinAPIClient:
             raise ValueError(f"Unsupported stage_key: {stage_key}")
 
     def _project_view(self, raw: dict[str, Any]) -> ProjectView:
+        governance = raw.get("governance") or {}
+        if not isinstance(governance, dict):
+            governance = {}
         return ProjectView(
             id=str(raw.get("id", "")),
             title=str(raw.get("title", "")),
@@ -544,6 +573,9 @@ class ForWinAPIClient:
             generated_chapter_count=int(raw.get("generated_chapter_count", 0) or 0),
             accepted_chapter_count=int(raw.get("accepted_chapter_count", 0) or 0),
             needs_review_chapter_count=int(raw.get("needs_review_chapter_count", 0) or 0),
+            review_delegation_mode=str(
+                governance.get("review_delegation_mode", "human") or "human"
+            ),
             latest_stage=str(raw.get("latest_stage", "")),
             next_gate=str(raw.get("next_gate", "")),
             genesis_stage_overview=self._stage_state_list(raw.get("genesis_stage_overview") or []),

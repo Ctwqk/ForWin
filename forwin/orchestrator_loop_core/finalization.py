@@ -65,7 +65,9 @@ def _run_provisional_band_preview(
     chapter_plans: list[ChapterPlan],
     persist_result: bool = True,
 ) -> ProvisionalBandPreview | None:
-    if not chapter_plans or not self.config.minimax_api_key.strip():
+    if not chapter_plans or not str(
+        getattr(self.llm_client, "api_key", "") or ""
+    ).strip():
         return None
     self._emit_progress(
         "stage_changed",

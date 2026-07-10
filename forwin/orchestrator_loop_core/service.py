@@ -53,30 +53,22 @@ from forwin.orchestrator_loop_core.finalization import _flush_background_llm_tra
 class WritingOrchestrator:
     def __init__(
         self,
-        config: InfrastructureConfig | None = None,
+        *,
+        services: RuntimeServices,
         progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
         should_abort: Callable[[], bool] | None = None,
         should_pause: Callable[[], bool] | None = None,
-        *,
-        services: RuntimeServices | None = None,
+        task_id: str = "",
+        root_event_id: str = "",
     ) -> None:
-        if services is None:
-            container_cls = globals().get("RuntimeContainer")
-            if container_cls is None:
-                from forwin.runtime.container import RuntimeContainer as container_cls
-
-            services = container_cls.from_config(
-                config or InfrastructureConfig.from_env()
-            ).services()
         self.services = services
-        self.config = services.config
+        self.infrastructure = services.infrastructure
+        self.policy = services.policy
         self.progress_callback = progress_callback
         self.should_abort = should_abort
         self.should_pause = should_pause
-        self._governance_task_id = str(getattr(self.config, "governance_task_id", "") or "").strip()
-        self._governance_root_event_id = str(
-            getattr(self.config, "governance_causal_root_id", "") or ""
-        ).strip()
+        self._governance_task_id = str(task_id or "").strip()
+        self._governance_root_event_id = str(root_event_id or "").strip()
         self._governance_runtime_project_id = ""
         self._governance_runtime_updater: StateUpdater | None = None
         self._governance_stage_name = ""

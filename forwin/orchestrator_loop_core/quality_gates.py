@@ -97,12 +97,10 @@ def _transient_retry_delay(attempt: int) -> float:
     return min(20.0, 3.0 * (2 ** max(0, attempt - 1)))
 
 def _current_model_identity(self) -> tuple[str, str]:
-    profile_id = ""
-    profile = getattr(self.config, "llm_fallback_profiles", None) or []
-    primary = profile[0] if isinstance(profile, list) and profile else {}
-    if isinstance(primary, dict):
-        profile_id = str(primary.get("id", "")).strip()
-    return profile_id, str(self.config.minimax_model or "").strip()
+    return (
+        str(getattr(self.llm_client, "profile_id", "") or "").strip(),
+        str(getattr(self.llm_client, "model", "") or "").strip(),
+    )
 
 def _audit_operation_id(self) -> str:
     return str(self._governance_task_id or self._governance_root_event_id or "").strip()
@@ -384,13 +382,17 @@ def _apply_canon_quality_gate(
     )
     draft_id = str(getattr(latest_draft, "id", "") or "")
     review_id = str(getattr(latest_review, "id", "") or "")
-    gate_mode = str(getattr(self.config, "canon_quality_gate", "strict") or "strict").strip().lower()
+    gate_mode = (
+        "fatal_only"
+        if self.policy.canon.quality_gate == "pulp_fatal"
+        else "strict"
+    )
     deterministic_gate_mode = gate_mode in {"off", "fatal_only"}
     gate_llm_client = None if deterministic_gate_mode else self.llm_client
     analysis_mode = (
         "off"
         if deterministic_gate_mode
-        else str(getattr(self.config, "chapter_review_form_mode", "primary") or "primary")
+        else "primary"
     )
     analysis = analyze_writer_output_quality(
         session=session,
@@ -465,7 +467,7 @@ def _apply_canon_quality_gate(
         mode=gate_mode,
         is_final_chapter=bool(target_total_chapters and chapter_number >= target_total_chapters),
         analyzer_results=gate_analyzer_results,
-        min_blocking_confidence=float(getattr(self.config, "chapter_review_form_min_blocking_confidence", 0.8) or 0.8),
+        min_blocking_confidence=0.8,
         require_evidence_for_block=True,
         resolved_obligation_ids=draft_resolved_obligation_ids,
     )
@@ -484,7 +486,7 @@ def _apply_canon_quality_gate(
     if gate_result.commit_allowed:
         return CanonQualityGateOutcome(gate_result=gate_result)
     frozen_path = ""
-    if self.config.freeze_failed_candidates:
+    if self.policy.canon.hard_floor:
         frozen_path = self.artifact_store.save_frozen_candidate(
             project_id=project_id,
             chapter_number=chapter_number,
@@ -1043,7 +1045,7 @@ def _apply_canon_candidate(
             chapter_number,
         )
         frozen_path = ""
-        if self.config.freeze_failed_candidates:
+        if self.policy.canon.hard_floor:
             frozen_path = self.artifact_store.save_frozen_candidate(
                 project_id=project_id,
                 chapter_number=chapter_number,

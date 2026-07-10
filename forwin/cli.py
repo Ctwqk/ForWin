@@ -43,14 +43,19 @@ def _get_config(args: argparse.Namespace) -> InfrastructureConfig:
 
 def cmd_generate(args: argparse.Namespace) -> None:
     """Generate chapters from a premise."""
-    from forwin.orchestrator.loop import WritingOrchestrator
+    from forwin.runtime.container import RuntimeContainer
+    from forwin.runtime.policy import RuntimePolicy
 
     config = _get_config(args)
     if not config.minimax_api_key:
         print("错误: 未设置 API Key。请通过 --api-key 或 MINIMAX_API_KEY 环境变量设置。")
         sys.exit(1)
 
-    orchestrator = WritingOrchestrator(config)
+    orchestrator = RuntimeContainer.from_config(
+        config,
+        policy=RuntimePolicy.for_profile("standard"),
+        role="generation_worker",
+    ).build_writing_orchestrator()
     result = orchestrator.run(
         premise=args.premise,
         genre=args.genre,
@@ -223,6 +228,7 @@ def cmd_generation_worker(args: argparse.Namespace) -> None:
     from forwin.generation.worker_cli import default_worker_id, run_generation_worker_loop
     from forwin.models.base import get_engine, get_session_factory, init_db
     from forwin.runtime.container import RuntimeContainer
+    from forwin.runtime.policy import RuntimePolicy
 
     config = _get_config(args)
     engine = get_engine(config.database_url)
@@ -232,7 +238,11 @@ def cmd_generation_worker(args: argparse.Namespace) -> None:
         api_state._config = config
         api_state._engine = engine
         api_state._SessionFactory = Session
-        api_state._runtime_container = RuntimeContainer.from_config(config, role="generation_worker")
+        api_state._runtime_container = RuntimeContainer.from_config(
+            config,
+            policy=RuntimePolicy.for_profile("standard"),
+            role="generation_worker",
+        )
 
         exit_code = run_generation_worker_loop(
             session_factory=Session,
@@ -273,13 +283,18 @@ def cmd_publisher_worker(args: argparse.Namespace) -> None:
     """Run publisher backend-owned jobs such as cover generation."""
     from forwin.models.base import get_engine, get_session_factory, init_db
     from forwin.runtime.container import RuntimeContainer
+    from forwin.runtime.policy import RuntimePolicy
 
     config = _get_config(args)
     engine = get_engine(config.database_url)
     try:
         init_db(engine)
         Session = get_session_factory(engine)
-        runtime = RuntimeContainer.from_config(config, role="publisher_worker").services().publisher_runtime
+        runtime = RuntimeContainer.from_config(
+            config,
+            policy=RuntimePolicy.for_profile("standard"),
+            role="publisher_worker",
+        ).services().publisher_runtime
         run_publisher_worker_loop(
             runtime.backend_jobs,
             limit=args.limit,

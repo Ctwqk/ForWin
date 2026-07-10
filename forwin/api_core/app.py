@@ -48,11 +48,6 @@ from forwin.api_project_payloads import (
 )
 from forwin.api_runtime import (
     build_home_page_settings,
-    build_runtime_config,
-    build_saved_runtime_config,
-    copy_config,
-    run_continue_project_with_config,
-    run_generation_with_config,
 )
 from forwin.api_task_history import augment_task_with_rehearsal_history
 from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
@@ -183,7 +178,7 @@ from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
-from forwin.runtime_settings import RuntimeSettingsStore
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
 
@@ -241,14 +236,22 @@ async def lifespan(app: FastAPI):
     if api_state._runtime_container is None:
         database_url = os.environ.get("FORWIN_DATABASE_URL", api_state._config.database_url)
         api_state._config = api_state._config.model_copy(update={"database_url": database_url})
-        api_state._runtime_container = RuntimeContainer.from_config(api_state._config, role="api")
+        api_state._runtime_container = RuntimeContainer.from_config(
+            api_state._config,
+            policy=RuntimePolicy.for_profile("standard"),
+            role="api",
+        )
         runtime_services = api_state._runtime_container.services()
         api_state._engine = runtime_services.engine
         api_state._SessionFactory = runtime_services.session_factory
     if api_state._SessionFactory is None:
         api_state._SessionFactory = get_session_factory(api_state._engine)
     if api_state._orchestrator is None:
-        api_state._orchestrator = api_state._runtime_container.build_writing_orchestrator() if api_state._runtime_container is not None else WritingOrchestrator(api_state._config)
+        if api_state._runtime_container is None:
+            raise RuntimeError("API runtime container is not initialized")
+        api_state._orchestrator = (
+            api_state._runtime_container.build_writing_orchestrator()
+        )
         with api_state._SessionFactory() as bootstrap_session:
             created_envelopes = api_state._orchestrator.arc_envelope_manager.backfill_missing_resolutions(
                 session=bootstrap_session
@@ -276,28 +279,6 @@ async def lifespan(app: FastAPI):
             codex_intervention_handler=build_codex_intervention_handler(api_state._config),
         )
     api_state._publisher_manager.requeue_interrupted_upload_jobs()
-    if api_state._runtime_settings is None:
-        api_state._runtime_settings = RuntimeSettingsStore(
-            api_state._config.runtime_settings_path,
-            default_api_key=api_state._config.minimax_api_key,
-            default_base_url=api_state._config.minimax_base_url,
-            default_model=api_state._config.minimax_model,
-            default_operation_mode=api_state._config.operation_mode,
-            default_freeze_failed_candidates=api_state._config.freeze_failed_candidates,
-            default_min_chapter_chars=api_state._config.min_chapter_chars,
-            default_review_interval_chapters=api_state._config.review_interval_chapters,
-            default_progression_mode=api_state._config.progression_mode,
-            default_auto_band_checkpoint=api_state._config.auto_band_checkpoint,
-            default_band_warn_action=api_state._config.band_warn_action,
-            default_manual_checkpoints_enabled=api_state._config.manual_checkpoints_enabled,
-            default_future_constraints_enabled=api_state._config.future_constraints_enabled,
-            default_skill_runtime_enabled=api_state._config.skill_runtime_enabled,
-            default_skill_registry_path=api_state._config.skill_registry_path,
-            default_skill_strictness=api_state._config.skill_strictness,
-            default_enabled_skill_groups=api_state._config.enabled_skill_groups,
-            default_disabled_skill_ids=api_state._config.disabled_skill_ids,
-            env_llm_profiles=api_state._config.llm_env_profiles,
-        )
     _start_automation_scheduler()
     logger.info("ForWin API started. DB: %s", api_state._engine.url.render_as_string(hide_password=True))
     try:
@@ -376,8 +357,6 @@ globals().update(
                 get_session=_get_session,
                 render_home_page=render_home_page,
                 build_home_page_settings=build_home_page_settings,
-                build_runtime_config=build_runtime_config,
-                copy_config=copy_config,
                 serialize_llm_settings=lambda payload, *, message: _serialize_llm_settings(payload, message=message),
                 active_generation_task_error_cls=ActiveGenerationTaskError,
                 display_datetime=_display_datetime,

@@ -111,7 +111,7 @@ def _persist_draft_and_review(
         chapter_plan_id=chapter_plan.id,
         writer_output=persisted_output,
         raw_response=artifact_paths["meta_path"],
-        model_name=self.config.minimax_model,
+        model_name=str(getattr(self.llm_client, "model", "") or ""),
     )
     review_row = updater.save_review(draft.id, review)
     repair_attempt_count = session.query(ChapterRewriteAttempt).filter(

@@ -47,10 +47,6 @@ from forwin.api_project_payloads import (
 )
 from forwin.api_runtime import (
     build_home_page_settings,
-    build_runtime_config,
-    build_saved_runtime_config,
-    run_continue_project_with_config,
-    run_generation_with_config,
 )
 from forwin.api_task_history import augment_task_with_rehearsal_history
 from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
@@ -380,7 +376,6 @@ def _make_generation_completion_handler(
     task_id: str,
     root_event_id: str = "",
     prior_handler=None,
-    runtime_config: InfrastructureConfig | None = None,
     auto_continue: bool = False,
     run_until_chapter: int | None = None,
     max_chapters: int | None = None,
@@ -437,7 +432,6 @@ def _make_generation_completion_handler(
                 run_until_chapter=run_until_chapter,
                 max_chapters=max_chapters,
                 auto_continue=auto_continue,
-                runtime_config=runtime_config,
             )
 
     return _handler

@@ -44,12 +44,6 @@ def _coerce_canon_apply_outcome(value: object):
     return CanonApplyOutcome()
 
 
-def _stop_on_chapter_failure_enabled(config: object) -> bool:
-    policy = getattr(config, "long_run_policy", None)
-    value = getattr(policy, "stop_on_chapter_failure", True)
-    return value if isinstance(value, bool) else True
-
-
 def _record_pulp_beat_evaluation(
     self,
     *,
@@ -392,14 +386,14 @@ def _run_project_chapters(
                     current_chapter=chapter_num,
                 )
 
-            if self.config.hard_floor_gate_enabled:
+            if self.policy.canon.hard_floor:
                 hard_floor = run_hard_floor(
                     writer_output=writer_output,
                     context_pack=context,
                     repo=repo,
                     project_id=project_id,
                     chapter_number=chapter_num,
-                    config=self.config,
+                    policy=self.policy,
                 )
                 _record_pulp_beat_evaluation(
                     self,
@@ -413,7 +407,7 @@ def _run_project_chapters(
                     project_id=project_id,
                     chapter_number=chapter_num,
                     hard_floor_result=hard_floor,
-                    config=self.config,
+                    policy=self.policy,
                 )
                 if pulp_policy.fatal:
                     fail_reasons = [*hard_floor.fail_reasons, pulp_policy.reason]
@@ -528,7 +522,7 @@ def _run_project_chapters(
                     else ""
                 )
                 can_run_canon_repair = _canon_repair_scope_can_run(repair_scope)
-                if can_run_canon_repair and self.config.operation_mode == "blackbox":
+                if can_run_canon_repair:
                     (
                         writer_output,
                         verdict,
@@ -699,10 +693,8 @@ def _run_project_chapters(
                     reason=str(exc),
                     payload={"error_class": exc.__class__.__name__, "error_summary": str(exc)},
                 )
-                long_run_policy = getattr(self.config, "long_run_policy", None)
-                should_defer_observation_failure = bool(
-                    getattr(long_run_policy, "defer_observation_failures", False)
-                    or str(getattr(self.config, "quality_profile", "") or "") == "pulp"
+                should_defer_observation_failure = (
+                    self.policy.quality_profile == "pulp"
                 )
                 if not should_defer_observation_failure:
                     raise
@@ -1040,13 +1032,11 @@ def _run_project_chapters(
                     chapter_num,
                 )
                 break
-            if _stop_on_chapter_failure_enabled(self.config):
-                logger.warning(
-                    "Stopping run after chapter %d failure because stop_on_chapter_failure is enabled.",
-                    chapter_num,
-                )
-                break
-            continue
+            logger.warning(
+                "Stopping run after chapter %d failure.",
+                chapter_num,
+            )
+            break
 
         completed_chapters.append(chapter_num)
         self._emit_progress(

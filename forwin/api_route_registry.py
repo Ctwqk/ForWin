@@ -112,8 +112,6 @@ class CoreDeps:
     get_session: Callable[[], Any]
     render_home_page: Callable[..., str]
     build_home_page_settings: Callable[..., dict[str, object]]
-    build_runtime_config: Callable[..., Any]
-    copy_config: Callable[..., Any]
     serialize_llm_settings: Callable[..., Any]
     active_generation_task_error_cls: type[Exception]
     display_datetime: Callable[[Any], str]
@@ -223,8 +221,6 @@ def register_api_routes(
     render_home_page = deps.render_home_page
     render_publishers_page = deps.publisher.render_publishers_page
     build_home_page_settings = deps.build_home_page_settings
-    build_runtime_config = deps.build_runtime_config
-    copy_config = deps.copy_config
     create_generation_task = deps.create_generation_task
     serialize_task = deps.serialize_task
     get_generation_task_or_404 = deps.get_generation_task_or_404
@@ -289,7 +285,6 @@ def register_api_routes(
         render_home_page=render_home_page,
         render_publishers_page=render_publishers_page,
         build_home_page_settings=build_home_page_settings,
-        build_runtime_config=build_runtime_config,
         create_generation_task=create_generation_task,
         serialize_task=serialize_task,
         get_generation_task_or_404=get_generation_task_or_404,

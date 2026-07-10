@@ -208,7 +208,7 @@ def _review_and_maybe_rewrite(
         parent_trace_id=current_writer_trace_id,
         decision_event_id=str(current_review_event.id or ""),
     )
-    if current_review.verdict != "fail" or self.config.operation_mode != "blackbox":
+    if current_review.verdict != "fail":
         return current_output, current_review, False
 
     return self._run_repair_loop_for_phase(
@@ -327,7 +327,7 @@ def _run_repair_loop_for_phase(
             review=current_review,
             signals=[],
             open_obligations=[],
-            operation_mode=self.config.operation_mode,
+            operation_mode="blackbox",
             attempts_completed=len(phase_attempts),
             prior_scope_history=[
                 str(getattr(attempt, "repair_scope", "") or "")
@@ -504,7 +504,7 @@ def _run_repair_loop_for_phase(
 
         rewritten_output = None
         if (
-            bool(getattr(self.config, "review_engine_local_rewrite_enabled", False))
+            self.policy.review.allows_repair_scope("local")
             and repair_v2_decision.outcome == "local_repair"
         ):
             issue_kind = str(repair_v2_decision.sub_action.get("issue_kind") or "")

@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from forwin.governance import DecisionEventType
 from forwin.models.governance import DecisionEvent
+from forwin.runtime.policy import RuntimePolicy
 
 
 class PulpBeatPolicyDecision(BaseModel):
@@ -23,13 +24,13 @@ def evaluate_pulp_beat_policy(
     project_id: str,
     chapter_number: int,
     hard_floor_result: Any,
-    config: Any,
+    policy: RuntimePolicy,
 ) -> PulpBeatPolicyDecision:
-    threshold = _payoff_gap_limit(config)
+    threshold = 2
     current_missing = _visible_payoff_missing(_pulp_beat_payload(hard_floor_result))
     if not current_missing:
         return PulpBeatPolicyDecision(threshold=threshold)
-    if not _policy_enabled(config):
+    if policy.quality_profile != "pulp":
         return PulpBeatPolicyDecision(
             consecutive_missing_payoff=1,
             threshold=threshold,
@@ -48,24 +49,6 @@ def evaluate_pulp_beat_policy(
         consecutive_missing_payoff=consecutive,
         threshold=threshold,
     )
-
-
-def _policy_enabled(config: Any) -> bool:
-    profile = str(getattr(config, "quality_profile", "") or "").strip()
-    if profile == "pulp":
-        return True
-    policy = getattr(config, "long_run_policy", None)
-    mode = str(getattr(policy, "mode", "") or "").strip()
-    return mode in {"factory_batch", "soak_test"}
-
-
-def _payoff_gap_limit(config: Any) -> int:
-    policy = getattr(config, "long_run_policy", None)
-    try:
-        return max(1, int(getattr(policy, "payoff_gap_limit", 2) or 2))
-    except (TypeError, ValueError):
-        return 2
-
 
 def _pulp_beat_payload(hard_floor_result: Any) -> dict[str, Any]:
     metadata = getattr(hard_floor_result, "metadata", {}) or {}

@@ -13,13 +13,13 @@ from forwin.writer.profile import WriterProfile
 @dataclass(slots=True)
 class ProductionSchedulerFactory:
     session_factory: Any
-    config: InfrastructureConfig
+    infrastructure: InfrastructureConfig
     observability: Any = None
 
     def build(self, **callbacks) -> ProductionScheduler:
         return ProductionScheduler(
             session_factory=self.session_factory,
-            config=self.config,
+            config=self.infrastructure,
             observability=self.observability,
             **callbacks,
         )

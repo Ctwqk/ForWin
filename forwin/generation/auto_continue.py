@@ -50,7 +50,6 @@ class GenerationAutoContinueController:
         run_until_chapter: int | None,
         max_chapters: int | None,
         auto_continue: bool,
-        runtime_config: Any = None,
     ) -> AutoContinueDecision:
         project_id = str(getattr(result, "project_id", "") or "").strip()
         if not project_id:
@@ -69,7 +68,6 @@ class GenerationAutoContinueController:
                 terminal_block_reason=terminal_block_reason,
                 run_until_chapter=run_until_chapter,
                 max_chapters=max_chapters,
-                runtime_config=runtime_config,
             )
             if auto_retry_decision is not None:
                 return auto_retry_decision
@@ -174,7 +172,6 @@ class GenerationAutoContinueController:
             self.create_continue_generation_task,
             {
                 "project_id": project_id,
-                "runtime_config": runtime_config,
                 "requested_chapters": workset.requested_chapters,
                 "max_chapters": target.effective_max_chapters,
                 "auto_continue": True,
@@ -273,7 +270,6 @@ class GenerationAutoContinueController:
         terminal_block_reason: str,
         run_until_chapter: int | None,
         max_chapters: int | None,
-        runtime_config: Any = None,
     ) -> AutoContinueDecision | None:
         if terminal_block_reason not in {"pending_review_blocker", "needs_review_blocker"}:
             return None
@@ -366,7 +362,6 @@ class GenerationAutoContinueController:
             self.create_continue_generation_task,
             {
                 "project_id": project_id,
-                "runtime_config": runtime_config,
                 "requested_chapters": workset.requested_chapters,
                 "max_chapters": target.effective_max_chapters,
                 "auto_continue": True,

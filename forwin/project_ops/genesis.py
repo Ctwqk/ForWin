@@ -10,7 +10,6 @@ from typing import Any
 from fastapi import HTTPException
 
 from forwin.api_project_payloads import build_project_detail, build_project_summaries, normalize_project_automation
-from forwin.api_runtime import build_saved_runtime_config, copy_config
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.api_schemas import (
     BookGenesisDetail,
@@ -68,6 +67,7 @@ from forwin.models.genesis import PromptTrace
 from forwin.observability.payloads import audit_payload
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.models.task import GenerationTask
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import normalize_repair_scope
@@ -414,8 +414,6 @@ def start_project_writing(
     run_until_chapter = req.run_until_chapter if req is not None else None
     max_chapters = req.max_chapters if req is not None else None
     runtime_config = saved_runtime_config_or_default()
-    if not runtime_config.minimax_api_key and not bool(getattr(runtime_config, "codex_enabled", False)):
-        raise HTTPException(400, "MINIMAX_API_KEY 未设置。请先配置模型，再启动写作。")
     session = get_session()
     genesis_service = None
     try:
@@ -427,10 +425,19 @@ def start_project_writing(
             raise HTTPException(409, "Genesis 尚未完成锁定，不能启动写作。")
         if project_has_active_generation_task(project_id, session=session):
             raise HTTPException(409, generation_task_conflict_message(project_id))
+        policy_record = ProjectPolicyStore(session).load(project)
+        model_profile = runtime_config.resolve_model_profile(
+            policy_record.policy.model_profile_id
+        )
+        if not model_profile.api_key and not runtime_config.codex_enabled:
+            raise HTTPException(400, "所选模型 profile 未配置 API Key。")
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "Genesis revision 不存在。")
-        genesis_service = build_genesis_service(runtime_config)
+        genesis_service = build_genesis_service(
+            runtime_config,
+            model_profile_id=policy_record.policy.model_profile_id,
+        )
         updater = StateUpdater(session)
         try:
             handoff_result = genesis_service.handoff.start_writing(
@@ -470,7 +477,8 @@ def start_project_writing(
                 create_continue_generation_task,
                 {
                     "project_id": project.id,
-                    "runtime_config": runtime_config,
+                    "runtime_policy": policy_record.policy,
+                    "runtime_policy_version": policy_record.version,
                     "requested_chapters": requested_chapters,
                     "max_chapters": task_max_chapters,
                     "auto_continue": auto_continue,

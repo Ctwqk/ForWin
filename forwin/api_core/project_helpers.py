@@ -48,11 +48,6 @@ from forwin.api_project_payloads import (
 )
 from forwin.api_runtime import (
     build_home_page_settings,
-    build_runtime_config,
-    build_saved_runtime_config,
-    copy_config,
-    run_continue_project_with_config,
-    run_generation_with_config,
 )
 from forwin.api_task_history import augment_task_with_rehearsal_history
 from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
@@ -374,10 +369,7 @@ def _get_generation_task_or_404(task_id: str) -> dict[str, Any]:
 def _saved_runtime_config_or_503() -> InfrastructureConfig:
     if not api_state._config:
         raise HTTPException(503, "服务尚未初始化")
-    return build_saved_runtime_config(
-        base_config=api_state._config,
-        runtime_settings=api_state._runtime_settings,
-    )
+    return api_state._config
 
 
 def _require_reason(reason: str, *, action: str) -> str:

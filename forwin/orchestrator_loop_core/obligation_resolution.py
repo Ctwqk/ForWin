@@ -16,7 +16,7 @@ def _verify_obligations_after_acceptance(
     chapter_number: int,
     accepted_text: str,
 ) -> dict[str, object]:
-    if not bool(getattr(self.config, "review_engine_obligation_verifier_enabled", False)):
+    if not self.policy.review.allows_repair_scope("obligation"):
         return {}
     return {
         "resolution": verify_active_obligations_after_acceptance(

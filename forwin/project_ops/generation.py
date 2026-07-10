@@ -138,7 +138,6 @@ def continue_project_generation(
 ) -> TaskResponse:
     if not config:
         raise HTTPException(503, "服务尚未初始化")
-    runtime_config = config
     session = get_session()
     try:
         project = session.get(Project, project_id)
@@ -234,7 +233,6 @@ def continue_project_generation(
             create_continue_generation_task,
             {
                 "project_id": project_id,
-                "runtime_config": runtime_config,
                 "runtime_policy": policy_record.policy,
                 "runtime_policy_version": policy_record.version,
                 "requested_chapters": workset.requested_chapters,

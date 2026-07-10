@@ -35,13 +35,13 @@ def handle_chapter_review_gate(
     failed_chapters: list[int],
     paused_chapters: list[int],
 ) -> ChapterReviewGateOutcome:
-    operation_mode = str(self.config.operation_mode or "")
+    operation_mode = "blackbox"
     should_apply_canon = (
         verdict.verdict == "pass"
         or (operation_mode == "blackbox" and verdict.verdict == "warn")
         or force_accept_applied
     )
-    review_interval = max(0, int(self.config.review_interval_chapters or 0))
+    review_interval = max(0, int(self.policy.pause.review_interval_chapters))
     gate_kind, gate_reason = _review_gate_details(
         operation_mode=operation_mode,
         verdict=str(verdict.verdict or ""),
@@ -196,7 +196,6 @@ def _delegate_chapter_gate(
             "canon_risk_level": canon_risk_level,
             "repair_attempt_count": repair_attempt_count,
             "force_accept_applied": force_accept_applied,
-            "operation_mode": self.config.operation_mode,
             "review_interval_chapters": review_interval,
             "governance": governance.model_dump(mode="json"),
         },

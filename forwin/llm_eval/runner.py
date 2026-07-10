@@ -11,7 +11,8 @@ import httpx
 
 from forwin.config import InfrastructureConfig
 from forwin.codex_bridge.runner import CodexExecRequest, CodexExecResult, CodexExecRunner
-from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
 from forwin.writer.llm_client import OpenAICompatibleAdapter
 
 from .reporting import render_markdown_summary, summarize_attempts
@@ -473,24 +474,45 @@ class LLMReliabilityRunner:
             "database_url": database_url,
             "artifact_root": str(artifact_root),
         }
-        orchestrator = WritingOrchestrator(
-            InfrastructureConfig(
-                database_url=database_url,
-                artifact_root=str(artifact_root),
-                minimax_api_key=profile.api_key,
-                minimax_base_url=profile.base_url,
-                minimax_model=profile.model,
-                llm_timeout_seconds=profile.timeout_seconds,
-                llm_retry_attempts=1,
-                llm_fallback_profiles=[],
-                review_interval_chapters=0,
-                min_chapter_chars=800,
-                target_chapter_chars=900,
-                max_chapter_chars=1200,
-                writer_mode="single",
-                phase4_use_llm=False,
-            )
+        infrastructure = InfrastructureConfig(
+            database_url=database_url,
+            artifact_root=str(artifact_root),
+            llm_env_profiles=[
+                {
+                    "id": "eval-primary",
+                    "name": profile.name or profile.id,
+                    "api_key": profile.api_key,
+                    "base_url": profile.base_url,
+                    "model": profile.model,
+                }
+            ],
+            llm_timeout_seconds=profile.timeout_seconds,
+            llm_retry_attempts=1,
+            llm_fallback_profiles=[],
         )
+        policy = RuntimePolicy.for_profile(
+            "standard",
+            model_profile_id="eval-primary",
+        ).with_user_settings(
+            min_chars=800,
+            target_chars=900,
+            max_chars=1200,
+            review_interval_chapters=0,
+        )
+        policy = RuntimePolicy.model_validate(
+            {
+                **policy.model_dump(mode="python"),
+                "planning": {
+                    **policy.planning.model_dump(mode="python"),
+                    "use_llm_simulation": False,
+                },
+            }
+        )
+        orchestrator = RuntimeContainer.from_config(
+            infrastructure,
+            policy=policy,
+            role="generation_worker",
+        ).build_writing_orchestrator()
         try:
             result = orchestrator.run(
                 premise="主角在潮雾旧城得到一枚会记录未来声音的罗盘。",

@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from forwin.config import InfrastructureConfig
 from forwin.model_adapter import ModelAdapter
 from forwin.observability.ports import ObservabilityPort
+from forwin.runtime.policy import RuntimePolicy
 from forwin.skills import SkillPromptLayerBuilder, SkillRegistry, SkillRouter
 
 
@@ -21,7 +22,8 @@ class SkillRuntimeBundle:
 
 @dataclass(slots=True)
 class RuntimeServices:
-    config: InfrastructureConfig
+    infrastructure: InfrastructureConfig
+    policy: RuntimePolicy
     engine: Engine
     session_factory: sessionmaker
     llm_client: ModelAdapter

@@ -5,9 +5,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from forwin.config import InfrastructureConfig
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.writer import WriterOutput
+from forwin.runtime.policy import RuntimePolicy
 
 from .hard_floor_dict import ENDING_HOOK_MARKERS, MODEL_ARTIFACT_MARKERS
 from .pulp_beat import verify_pulp_beats
@@ -33,7 +33,7 @@ def run_hard_floor(
     repo,
     project_id: str,
     chapter_number: int,
-    config: InfrastructureConfig,
+    policy: RuntimePolicy,
 ) -> HardFloorResult:
     _ = repo
     fail_reasons: list[str] = []
@@ -42,7 +42,7 @@ def run_hard_floor(
     body = str(writer_output.body or "")
     body_char_count = len(body)
     writer_char_count = int(writer_output.char_count or 0)
-    min_chapter_chars = int(config.min_chapter_chars or 0)
+    min_chapter_chars = int(policy.chapter_length.min_chars)
 
     checks["chapter_length"] = body_char_count >= min_chapter_chars
     if not checks["chapter_length"]:
@@ -76,7 +76,7 @@ def run_hard_floor(
     pulp_beats = verify_pulp_beats(body)
     checks["pulp_visible_payoff"] = pulp_beats.visible_payoff_present
     if (
-        str(getattr(config, "quality_profile", "") or "") == "pulp"
+        policy.quality_profile == "pulp"
         and not pulp_beats.visible_payoff_present
     ):
         warning_reasons.append("pulp_visible_payoff")

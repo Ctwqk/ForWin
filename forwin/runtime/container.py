@@ -54,7 +54,7 @@ _RUNTIME_ROLES: set[str] = {
 
 @dataclass(slots=True)
 class RuntimeContainer:
-    config: InfrastructureConfig
+    infrastructure: InfrastructureConfig
     policy: RuntimePolicy
     role: RuntimeRole = "full"
     _services: RuntimeServices | None = None
@@ -62,31 +62,43 @@ class RuntimeContainer:
     @classmethod
     def from_config(
         cls,
-        config: InfrastructureConfig,
+        infrastructure: InfrastructureConfig,
         *,
         policy: RuntimePolicy,
         role: RuntimeRole = "full",
     ) -> "RuntimeContainer":
         normalized_role = _validate_runtime_role(role)
-        return cls(config=config, policy=policy, role=normalized_role)
+        return cls(
+            infrastructure=infrastructure,
+            policy=policy,
+            role=normalized_role,
+        )
 
     @classmethod
     def for_api(
-        cls, config: InfrastructureConfig, *, policy: RuntimePolicy
+        cls, infrastructure: InfrastructureConfig, *, policy: RuntimePolicy
     ) -> "RuntimeContainer":
-        return cls.from_config(config, policy=policy, role="api")
+        return cls.from_config(infrastructure, policy=policy, role="api")
 
     @classmethod
     def for_generation_worker(
-        cls, config: InfrastructureConfig, *, policy: RuntimePolicy
+        cls, infrastructure: InfrastructureConfig, *, policy: RuntimePolicy
     ) -> "RuntimeContainer":
-        return cls.from_config(config, policy=policy, role="generation_worker")
+        return cls.from_config(
+            infrastructure,
+            policy=policy,
+            role="generation_worker",
+        )
 
     @classmethod
     def for_publisher_worker(
-        cls, config: InfrastructureConfig, *, policy: RuntimePolicy
+        cls, infrastructure: InfrastructureConfig, *, policy: RuntimePolicy
     ) -> "RuntimeContainer":
-        return cls.from_config(config, policy=policy, role="publisher_worker")
+        return cls.from_config(
+            infrastructure,
+            policy=policy,
+            role="publisher_worker",
+        )
 
     def services(self) -> RuntimeServices:
         if self._services is None:
@@ -99,6 +111,8 @@ class RuntimeContainer:
         progress_callback: Callable[[str, dict], None] | None = None,
         should_abort: Callable[[], bool] | None = None,
         should_pause: Callable[[], bool] | None = None,
+        task_id: str = "",
+        root_event_id: str = "",
     ):
         from forwin.orchestrator.loop import WritingOrchestrator
 
@@ -107,6 +121,8 @@ class RuntimeContainer:
             progress_callback=progress_callback,
             should_abort=should_abort,
             should_pause=should_pause,
+            task_id=task_id,
+            root_event_id=root_event_id,
         )
 
     def build_genesis_workspace_service(self):
@@ -116,12 +132,12 @@ class RuntimeContainer:
         return self.services().genesis_handoff_service
 
     def build_book_genesis_service(self):
-        config = self.config
-        llm_client = self._build_llm_client(config)
-        skill_runtime = self._build_skill_runtime(config)
-        artifact_store = self._build_artifact_store(config)
+        infrastructure = self.infrastructure
+        llm_client = self._build_llm_client(infrastructure, self.policy)
+        skill_runtime = self._build_skill_runtime(infrastructure)
+        artifact_store = self._build_artifact_store(infrastructure)
         return self._build_book_genesis_service(
-            config=config,
+            config=infrastructure,
             llm_client=llm_client,
             skill_runtime=skill_runtime,
             artifact_store=artifact_store,
@@ -134,26 +150,28 @@ class RuntimeContainer:
         return self.services().production_scheduler.build(**callbacks)
 
     def _build_services(self) -> RuntimeServices:
-        config = self.config
-        engine = get_engine(config.database_url)
+        infrastructure = self.infrastructure
+        policy = self.policy
+        engine = get_engine(infrastructure.database_url)
         init_db(engine)
         session_factory = get_session_factory(engine)
-        self._run_retention_cleanup(session_factory, config)
+        self._run_retention_cleanup(session_factory, infrastructure)
 
-        llm_client = self._build_llm_client(config)
-        skill_runtime = self._build_skill_runtime(config)
-        artifact_store = self._build_artifact_store(config)
+        model_profile = infrastructure.resolve_model_profile(policy.model_profile_id)
+        llm_client = self._build_llm_client(infrastructure, policy)
+        skill_runtime = self._build_skill_runtime(infrastructure)
+        artifact_store = self._build_artifact_store(infrastructure)
         observability = ObservabilityService(
             session_factory=session_factory,
             artifact_store=artifact_store,
-            config=config,
+            config=infrastructure,
         )
-        if bool(getattr(config, "observability_record_db_spans", False)):
+        if infrastructure.observability_record_db_spans:
             from forwin.observability.sqlalchemy_probe import install_sqlalchemy_query_probe
 
             install_sqlalchemy_query_probe(engine)
         book_genesis = self._build_book_genesis_service(
-            config=config,
+            config=infrastructure,
             llm_client=llm_client,
             skill_runtime=skill_runtime,
             artifact_store=artifact_store,
@@ -162,60 +180,64 @@ class RuntimeContainer:
 
         arc_director = ArcDirector(
             llm_client=llm_client,
-            max_tokens=config.max_tokens,
+            max_tokens=infrastructure.max_tokens,
         )
         subworld_manager = SubWorldManager(director=arc_director)
         retrieval_broker = RetrievalBroker(
-            context_budget_chars=config.context_budget_chars,
-            max_entities=config.retrieval_max_entities,
-            max_threads=config.retrieval_max_threads,
-            max_summaries=config.retrieval_max_summaries,
-            database_url=config.database_url,
-            retrieval_backend=config.retrieval_backend,
-            qdrant_url=config.qdrant_url,
-            qdrant_collection=config.qdrant_collection,
-            llm_kb_qdrant_url=config.qdrant_url,
-            llm_kb_qdrant_collection=config.llm_kb_qdrant_collection,
+            context_budget_chars=infrastructure.context_budget_chars,
+            max_entities=infrastructure.retrieval_max_entities,
+            max_threads=infrastructure.retrieval_max_threads,
+            max_summaries=infrastructure.retrieval_max_summaries,
+            database_url=infrastructure.database_url,
+            retrieval_backend=infrastructure.retrieval_backend,
+            qdrant_url=infrastructure.qdrant_url,
+            qdrant_collection=infrastructure.qdrant_collection,
+            llm_kb_qdrant_url=infrastructure.qdrant_url,
+            llm_kb_qdrant_collection=infrastructure.llm_kb_qdrant_collection,
             memory_index=create_memory_index(
-                backend=config.retrieval_backend,
-                root_dir=config.retrieval_root,
-                qdrant_url=config.qdrant_url,
-                qdrant_collection=config.qdrant_collection,
-                embedding_backend=config.embedding_backend,
-                embedding_base_url=config.embedding_base_url,
-                embedding_api_key=config.embedding_api_key,
-                embedding_model=config.embedding_model,
-                embedding_dims=config.embedding_dims,
-                embedding_required=config.embedding_required,
+                backend=infrastructure.retrieval_backend,
+                root_dir=infrastructure.retrieval_root,
+                qdrant_url=infrastructure.qdrant_url,
+                qdrant_collection=infrastructure.qdrant_collection,
+                embedding_backend=infrastructure.embedding_backend,
+                embedding_base_url=infrastructure.embedding_base_url,
+                embedding_api_key=infrastructure.embedding_api_key,
+                embedding_model=infrastructure.embedding_model,
+                embedding_dims=infrastructure.embedding_dims,
+                embedding_required=infrastructure.embedding_required,
             ),
         )
 
-        writer = build_writer(config, self.policy, llm_client, observability)
+        writer = build_writer(infrastructure, policy, llm_client, observability)
         provisional_writer = build_provisional_writer(
-            config, self.policy, llm_client, observability
+            infrastructure, policy, llm_client, observability
         )
         stage_analyzer = StageAnalyzer()
         pacing_strategist = PacingStrategist(
-            window_size=config.pacing_window_size,
-            stale_thread_window=config.stale_thread_window,
-            min_avg_chars=config.pacing_min_avg_chars,
-            max_avg_chars=config.pacing_max_avg_chars,
-            active_thread_limit=config.phase_active_thread_limit,
+            window_size=3,
+            stale_thread_window=3,
+            min_avg_chars=1600,
+            max_avg_chars=3800,
+            active_thread_limit=infrastructure.phase_active_thread_limit,
         )
         replan_governor = ReplanGovernor(
-            cooldown_chapters=config.replan_cooldown_chapters,
+            cooldown_chapters=3,
             director=arc_director,
             subworld_manager=subworld_manager,
         )
-        llm_available = bool(config.minimax_api_key) or bool(getattr(config, "codex_enabled", False))
-        phase4_llm = llm_client if config.phase4_use_llm and llm_available else None
+        llm_available = bool(model_profile.api_key) or infrastructure.codex_enabled
+        phase4_llm = (
+            llm_client
+            if policy.planning.use_llm_simulation and llm_available
+            else None
+        )
         npc_intent_generator = NPCIntentGenerator(
             llm_client=phase4_llm,
-            active_thread_limit=config.phase_active_thread_limit,
+            active_thread_limit=infrastructure.phase_active_thread_limit,
         )
         world_simulator = WorldSimulator(
             llm_client=phase4_llm,
-            active_thread_limit=config.phase_active_thread_limit,
+            active_thread_limit=infrastructure.phase_active_thread_limit,
         )
         world_contract_service = WorldContractPlanningService()
         experience_planning_service = ExperiencePlanningService()
@@ -223,48 +245,52 @@ class RuntimeContainer:
             subworld_manager=subworld_manager,
             world_contract_service=world_contract_service,
             experience_service=experience_planning_service,
-            trope_cost_ceiling=2 if config.quality_profile == "pulp" else 3,
+            trope_cost_ceiling=2 if policy.quality_profile == "pulp" else 3,
         )
         arc_envelope_manager = ArcEnvelopeManager(
             director=arc_director,
             subworld_manager=subworld_manager,
-            provisional_preview_enabled=config.provisional_preview_enabled,
+            provisional_preview_enabled=policy.planning.provisional_preview,
         )
         arc_envelope_manager.services.band_plan = band_plan_service
         arc_envelope_manager.services.world_contracts = world_contract_service
         arc_envelope_manager.services.experience = experience_planning_service
 
-        hub_llm_enabled = (
-            llm_available
-            and str(config.reviewer_quality_mode or "").strip().lower() != "deterministic"
-        )
+        hub_llm_enabled = llm_available
         review_hub = HistoricalReviewHub(
-            experience_review_enabled=config.experience_review_enabled,
-            lint_review_enabled=config.lint_review_enabled,
-            map_movement_review_enabled=config.map_movement_review_enabled,
-            personality_review_enabled=config.personality_review_enabled,
-            canon_quality_review_in_hub_enabled=config.canon_quality_review_in_hub_enabled,
-            publisher_compliance_review_enabled=True,
+            experience_review_enabled=policy.review.allows_signal("experience"),
+            lint_review_enabled=policy.review.allows_signal("lint"),
+            map_movement_review_enabled=policy.review.allows_signal("map_movement"),
+            personality_review_enabled=policy.review.allows_signal("personality"),
+            canon_quality_review_in_hub_enabled=policy.review.allows_signal(
+                "canon_quality"
+            ),
+            publisher_compliance_review_enabled=policy.review.allows_signal(
+                "publisher"
+            ),
             llm_client=llm_client if hub_llm_enabled else None,
             llm_enabled=hub_llm_enabled,
             observability=observability,
-            chapter_review_form_mode=config.chapter_review_form_mode,
+            chapter_review_form_mode="primary",
         )
         publisher_runtime = PublisherRuntimeService(
             session_factory=session_factory,
-            extension_api_key=config.publisher_extension_api_key,
+            extension_api_key=infrastructure.publisher_extension_api_key,
             heartbeat_stale_seconds=90,
-            preferred_client_id=config.publisher_preferred_client_id,
-            publisher_session_secret=config.publisher_session_secret,
-            publisher_session_encryption_required=config.publisher_session_encryption_required,
-            strict_preferred_client=config.publisher_strict_preferred_client,
+            preferred_client_id=infrastructure.publisher_preferred_client_id,
+            publisher_session_secret=infrastructure.publisher_session_secret,
+            publisher_session_encryption_required=infrastructure.publisher_session_encryption_required,
+            strict_preferred_client=infrastructure.publisher_strict_preferred_client,
             observability=observability,
-            codex_intervention_handler=build_codex_intervention_handler(config),
-            minimax_api_key=config.minimax_api_key,
-            minimax_base_url=config.minimax_base_url,
+            codex_intervention_handler=build_codex_intervention_handler(
+                infrastructure
+            ),
+            minimax_api_key=model_profile.api_key,
+            minimax_base_url=model_profile.base_url,
         )
         return RuntimeServices(
-            config=config,
+            infrastructure=infrastructure,
+            policy=policy,
             engine=engine,
             session_factory=session_factory,
             llm_client=llm_client,
@@ -288,7 +314,7 @@ class RuntimeContainer:
             genesis_handoff_service=book_genesis.handoff,
             production_scheduler=ProductionSchedulerFactory(
                 session_factory=session_factory,
-                config=config,
+                infrastructure=infrastructure,
                 observability=observability,
             ),
             publisher_runtime=publisher_runtime,
@@ -296,8 +322,8 @@ class RuntimeContainer:
                 gates=[
                     *ChapterContextAssembler._default_gates(),
                     RecencyTruncateGate(
-                        window_chapters=config.context_recency_window_chapters,
-                        max_entities=config.retrieval_max_entities,
+                        window_chapters=policy.planning.context_recency_window,
+                        max_entities=infrastructure.retrieval_max_entities,
                     ),
                 ],
                 observability=observability,
@@ -329,18 +355,24 @@ class RuntimeContainer:
             logger.warning("retention_cleanup_failed", exc_info=True)
 
     @staticmethod
-    def _build_llm_client(config: InfrastructureConfig):
+    def _build_llm_client(
+        infrastructure: InfrastructureConfig,
+        policy: RuntimePolicy,
+    ):
+        profile = infrastructure.resolve_model_profile(policy.model_profile_id)
         llm_client = LLMClient(
-            api_key=config.minimax_api_key,
-            base_url=config.minimax_base_url,
-            model=config.minimax_model,
-            timeout_seconds=config.llm_timeout_seconds,
-            retry_attempts=config.llm_retry_attempts,
-            retry_initial_delay_seconds=config.llm_retry_initial_delay_seconds,
-            retry_max_delay_seconds=config.llm_retry_max_delay_seconds,
-            fallback_profiles=config.llm_fallback_profiles,
+            api_key=profile.api_key,
+            base_url=profile.base_url,
+            model=profile.model,
+            timeout_seconds=infrastructure.llm_timeout_seconds,
+            retry_attempts=infrastructure.llm_retry_attempts,
+            retry_initial_delay_seconds=infrastructure.llm_retry_initial_delay_seconds,
+            retry_max_delay_seconds=infrastructure.llm_retry_max_delay_seconds,
+            fallback_profiles=infrastructure.llm_fallback_profiles,
         )
-        return maybe_wrap_with_codex_router(llm_client, config)
+        llm_client.profile_id = profile.id
+        llm_client.profile_name = profile.name
+        return maybe_wrap_with_codex_router(llm_client, infrastructure)
 
     @staticmethod
     def _build_skill_runtime(config: InfrastructureConfig) -> SkillRuntimeBundle:

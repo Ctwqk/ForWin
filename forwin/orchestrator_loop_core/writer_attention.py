@@ -19,7 +19,7 @@ def _write_chapter_with_attention_fallback(
     llm_preferred_provider_kind: str = "",
     llm_preferred_model: str = "",
 ) -> WriterOutput | None:
-    max_attempts = max(1, int(self.config.blackbox_writer_attention_retries))
+    max_attempts = max(1, int(self.policy.writer_attention_retries))
     last_error: Exception | None = None
     last_failure_event_id = ""
     last_failed_attempt = 0
@@ -395,7 +395,7 @@ def _write_chapter_with_attention_fallback(
                 preview_exc,
             )
             last_error = preview_exc
-    if self.config.operation_mode == "blackbox" and self.config.freeze_failed_candidates:
+    if self.policy.canon.hard_floor:
         frozen_path = self.artifact_store.save_frozen_candidate(
             project_id=project_id,
             chapter_number=chapter_number,

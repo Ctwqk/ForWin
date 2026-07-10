@@ -35,7 +35,6 @@ def build_handlers(
     render_home_page: Callable[..., str],
     render_publishers_page: Callable[..., str],
     build_home_page_settings: Callable[..., dict[str, object]],
-    build_runtime_config: Callable[..., Any],
     create_generation_task: Callable[..., str],
     serialize_task: Callable[..., Any],
     get_generation_task_or_404: Callable[[str], dict[str, Any]],
@@ -99,14 +98,6 @@ def build_handlers(
         if not config:
             raise HTTPException(503, "服务尚未初始化")
 
-        runtime_config = build_runtime_config(
-            req,
-            base_config=config,
-            runtime_settings=get_runtime_settings(),
-        )
-        if not runtime_config.minimax_api_key:
-            raise HTTPException(400, "MINIMAX_API_KEY 未设置。请在页面填写 API Key，或通过环境变量配置。")
-
         normalized_project_id = str(req.project_id or "").strip()
         task_title = (req.premise or "").strip()[:36] or "未命名生成任务"
         task_subtitle = f"{req.genre} · {req.num_chapters} 章"
@@ -132,6 +123,10 @@ def build_handlers(
                 task_subtitle = f"书本生成 · {project.genre} · {req.num_chapters} 章"
             finally:
                 session.close()
+
+        model_profile = config.resolve_model_profile(task_policy.model_profile_id)
+        if not model_profile.api_key and not config.codex_enabled:
+            raise HTTPException(400, "所选模型 profile 未配置 API Key。")
 
         try:
             task_id = create_generation_task(

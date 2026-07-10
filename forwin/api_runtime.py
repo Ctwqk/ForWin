@@ -4,8 +4,8 @@ import logging
 import time
 from typing import Any, Callable
 
-from forwin.api_schemas import GenerateRequest
 from forwin.config import InfrastructureConfig, DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
+from forwin.generation.task_payload import GenerationExecutionContext
 from forwin.governance import DecisionEventType
 from forwin.observability import LogRecorder, OperationContext
 from forwin.observability.ports import NullObservability
@@ -38,12 +38,6 @@ _PROGRESS_PAYLOAD_KEYS = (
     "paused_chapters",
     "frozen_artifacts",
 )
-
-
-def copy_config(base_config: InfrastructureConfig, **updates: object) -> InfrastructureConfig:
-    values = base_config.model_dump()
-    values.update(updates)
-    return InfrastructureConfig(**values)
 
 
 def _build_task_progress_changes(
@@ -94,294 +88,28 @@ def build_home_page_settings(
 ) -> dict[str, object]:
     if runtime_settings is not None:
         return runtime_settings.get()
+    policy = RuntimePolicy.for_profile("standard")
     return {
         "api_key": "",
         "base_url": base_config.minimax_base_url if base_config else DEFAULT_MINIMAX_BASE_URL,
         "model": base_config.minimax_model if base_config else DEFAULT_MINIMAX_MODEL,
-        "operation_mode": base_config.operation_mode if base_config else "blackbox",
-        "freeze_failed_candidates": base_config.freeze_failed_candidates if base_config else True,
-        "min_chapter_chars": base_config.min_chapter_chars if base_config else 2500,
-        "review_interval_chapters": base_config.review_interval_chapters if base_config else 0,
-        "progression_mode": base_config.progression_mode if base_config else "serial_canon_band_guard",
-        "auto_band_checkpoint": base_config.auto_band_checkpoint if base_config else True,
-        "band_warn_action": base_config.band_warn_action if base_config else "pause",
-        "manual_checkpoints_enabled": base_config.manual_checkpoints_enabled if base_config else True,
-        "future_constraints_enabled": base_config.future_constraints_enabled if base_config else True,
-        "generation_audit_interval_chapters": base_config.generation_audit_interval_chapters if base_config else 0,
-        "generation_audit_pause_enabled": base_config.generation_audit_pause_enabled if base_config else False,
+        "operation_mode": "blackbox",
+        "freeze_failed_candidates": policy.canon.hard_floor,
+        "min_chapter_chars": policy.chapter_length.min_chars,
+        "review_interval_chapters": policy.pause.review_interval_chapters,
+        "progression_mode": "serial_canon_band_guard",
+        "auto_band_checkpoint": policy.pause.band_checkpoint_action != "continue",
+        "band_warn_action": "pause",
+        "manual_checkpoints_enabled": policy.pause.manual_checkpoints,
+        "future_constraints_enabled": policy.planning.future_constraints,
+        "generation_audit_interval_chapters": policy.pause.generation_audit_interval,
+        "generation_audit_pause_enabled": policy.pause.generation_audit_pauses,
         "skill_runtime_enabled": base_config.skill_runtime_enabled if base_config else True,
         "skill_registry_path": base_config.skill_registry_path if base_config else "forwin_skills",
         "skill_strictness": base_config.skill_strictness if base_config else "normal",
         "enabled_skill_groups": list(base_config.enabled_skill_groups) if base_config else [],
         "disabled_skill_ids": list(base_config.disabled_skill_ids) if base_config else [],
     }
-
-
-def _resolve_profile(
-    stored: dict[str, object],
-    *,
-    requested_profile_id: str = "",
-) -> dict[str, str]:
-    profiles = [
-        item for item in stored.get("profiles", [])
-        if isinstance(item, dict)
-    ]
-    target_id = requested_profile_id.strip() or str(stored.get("default_profile_id", "")).strip()
-    selected = next(
-        (
-            item for item in profiles
-            if str(item.get("id", "")).strip() == target_id
-        ),
-        None,
-    )
-    if selected is None and profiles:
-        selected = profiles[0]
-    if selected is None:
-        selected = {
-            "id": "",
-            "api_key": str(stored.get("api_key", "")).strip(),
-            "base_url": str(stored.get("base_url", "")).strip(),
-            "model": str(stored.get("model", "")).strip(),
-        }
-    return {
-        "id": str(selected.get("id", "")).strip(),
-        "name": str(selected.get("name", "")).strip(),
-        "api_key": str(selected.get("api_key", "")).strip(),
-        "base_url": str(selected.get("base_url", "")).strip(),
-        "model": str(selected.get("model", "")).strip(),
-    }
-
-
-def _runtime_fallback_profiles(
-    stored: dict[str, object],
-    *,
-    primary: dict[str, str],
-) -> list[dict[str, str]]:
-    candidates: list[dict[str, str]] = []
-    if primary.get("api_key") and primary.get("base_url") and primary.get("model"):
-        candidates.append(dict(primary))
-    for item in stored.get("profiles", []):
-        if not isinstance(item, dict):
-            continue
-        profile = {
-            "id": str(item.get("id", "")).strip(),
-            "name": str(item.get("name", "")).strip(),
-            "api_key": str(item.get("api_key", "")).strip(),
-            "base_url": str(item.get("base_url", "")).strip(),
-            "model": str(item.get("model", "")).strip(),
-        }
-        if not profile["api_key"] or not profile["base_url"] or not profile["model"]:
-            continue
-        candidates.append(profile)
-    deduped: list[dict[str, str]] = []
-    seen: set[tuple[str, str, str]] = set()
-    for profile in candidates:
-        key = (profile["api_key"], profile["base_url"].rstrip("/"), profile["model"])
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(profile)
-    return deduped
-
-
-def build_runtime_config(
-    req: GenerateRequest,
-    *,
-    base_config: InfrastructureConfig,
-    runtime_settings: RuntimeSettingsStore | None,
-) -> InfrastructureConfig:
-    stored = runtime_settings.get() if runtime_settings else {}
-    selected = _resolve_profile(
-        stored,
-        requested_profile_id=str(req.model_profile_id or "").strip(),
-    )
-    api_key = (req.api_key or "").strip() or selected.get("api_key") or str(stored.get("api_key", base_config.minimax_api_key))
-    base_url = (req.base_url or "").strip() or selected.get("base_url") or str(stored.get("base_url", base_config.minimax_base_url))
-    model = (req.model or "").strip() or selected.get("model") or str(stored.get("model", base_config.minimax_model))
-    operation_mode = (req.operation_mode or "").strip() or str(
-        stored.get("operation_mode", base_config.operation_mode)
-    )
-    freeze_failed_candidates = (
-        req.freeze_failed_candidates
-        if req.freeze_failed_candidates is not None
-        else bool(stored.get("freeze_failed_candidates", base_config.freeze_failed_candidates))
-    )
-    review_interval_chapters = (
-        req.review_interval_chapters
-        if req.review_interval_chapters is not None
-        else int(stored.get("review_interval_chapters", base_config.review_interval_chapters))
-    )
-    progression_mode = (req.progression_mode or "").strip() or str(
-        stored.get("progression_mode", base_config.progression_mode)
-    )
-    auto_band_checkpoint = (
-        req.auto_band_checkpoint
-        if req.auto_band_checkpoint is not None
-        else bool(stored.get("auto_band_checkpoint", base_config.auto_band_checkpoint))
-    )
-    band_warn_action = (req.band_warn_action or "").strip() or str(
-        stored.get("band_warn_action", base_config.band_warn_action)
-    )
-    manual_checkpoints_enabled = (
-        req.manual_checkpoints_enabled
-        if req.manual_checkpoints_enabled is not None
-        else bool(stored.get("manual_checkpoints_enabled", base_config.manual_checkpoints_enabled))
-    )
-    future_constraints_enabled = (
-        req.future_constraints_enabled
-        if req.future_constraints_enabled is not None
-        else bool(stored.get("future_constraints_enabled", base_config.future_constraints_enabled))
-    )
-    generation_audit_interval_chapters = int(
-        stored.get(
-            "generation_audit_interval_chapters",
-            base_config.generation_audit_interval_chapters,
-        )
-    )
-    generation_audit_pause_enabled = bool(
-        stored.get(
-            "generation_audit_pause_enabled",
-            base_config.generation_audit_pause_enabled,
-        )
-    )
-    min_chapter_chars = max(500, int(
-        req.min_chapter_chars
-        if req.min_chapter_chars is not None
-        else int(stored.get("min_chapter_chars", base_config.min_chapter_chars))
-    ))
-    target_chapter_chars = max(min_chapter_chars, int(base_config.target_chapter_chars))
-    max_chapter_chars = max(target_chapter_chars, int(base_config.max_chapter_chars))
-    return copy_config(
-        base_config,
-        minimax_api_key=api_key,
-        minimax_base_url=base_url,
-        minimax_model=model,
-        operation_mode=operation_mode,
-        freeze_failed_candidates=freeze_failed_candidates,
-        review_interval_chapters=max(0, int(review_interval_chapters)),
-        progression_mode=progression_mode or "serial_canon_band_guard",
-        auto_band_checkpoint=bool(auto_band_checkpoint),
-        band_warn_action=band_warn_action or "pause",
-        manual_checkpoints_enabled=bool(manual_checkpoints_enabled),
-        future_constraints_enabled=bool(future_constraints_enabled),
-        generation_audit_interval_chapters=max(0, int(generation_audit_interval_chapters)),
-        generation_audit_pause_enabled=bool(generation_audit_pause_enabled),
-        skill_runtime_enabled=bool(
-            stored.get("skill_runtime_enabled", base_config.skill_runtime_enabled)
-        ),
-        skill_registry_path=str(
-            stored.get("skill_registry_path", base_config.skill_registry_path)
-        ),
-        skill_strictness=str(
-            stored.get("skill_strictness", base_config.skill_strictness)
-        ),
-        enabled_skill_groups=[
-            str(item).strip()
-            for item in (stored.get("enabled_skill_groups") or base_config.enabled_skill_groups or [])
-            if str(item).strip()
-        ],
-        disabled_skill_ids=[
-            str(item).strip()
-            for item in (stored.get("disabled_skill_ids") or base_config.disabled_skill_ids or [])
-            if str(item).strip()
-        ],
-        llm_fallback_profiles=_runtime_fallback_profiles(
-            stored,
-            primary={
-                "id": selected.get("id", ""),
-                "name": selected.get("name", ""),
-                "api_key": api_key,
-                "base_url": base_url,
-                "model": model,
-            },
-        ),
-        min_chapter_chars=min_chapter_chars,
-        target_chapter_chars=target_chapter_chars,
-        max_chapter_chars=max_chapter_chars,
-    )
-
-
-def build_saved_runtime_config(
-    *,
-    base_config: InfrastructureConfig,
-    runtime_settings: RuntimeSettingsStore | None,
-) -> InfrastructureConfig:
-    stored = runtime_settings.get() if runtime_settings else {}
-    min_chapter_chars = max(500, int(stored.get("min_chapter_chars", base_config.min_chapter_chars)))
-    target_chapter_chars = max(min_chapter_chars, int(base_config.target_chapter_chars))
-    max_chapter_chars = max(target_chapter_chars, int(base_config.max_chapter_chars))
-    return copy_config(
-        base_config,
-        minimax_api_key=str(stored.get("api_key", base_config.minimax_api_key)),
-        minimax_base_url=str(stored.get("base_url", base_config.minimax_base_url)),
-        minimax_model=str(stored.get("model", base_config.minimax_model)),
-        operation_mode=str(stored.get("operation_mode", base_config.operation_mode)),
-        freeze_failed_candidates=bool(
-            stored.get("freeze_failed_candidates", base_config.freeze_failed_candidates)
-        ),
-        review_interval_chapters=max(
-            0,
-            int(stored.get("review_interval_chapters", base_config.review_interval_chapters)),
-        ),
-        progression_mode=str(stored.get("progression_mode", base_config.progression_mode)),
-        auto_band_checkpoint=bool(
-            stored.get("auto_band_checkpoint", base_config.auto_band_checkpoint)
-        ),
-        band_warn_action=str(stored.get("band_warn_action", base_config.band_warn_action)),
-        manual_checkpoints_enabled=bool(
-            stored.get("manual_checkpoints_enabled", base_config.manual_checkpoints_enabled)
-        ),
-        future_constraints_enabled=bool(
-            stored.get("future_constraints_enabled", base_config.future_constraints_enabled)
-        ),
-        generation_audit_interval_chapters=max(
-            0,
-            int(
-                stored.get(
-                    "generation_audit_interval_chapters",
-                    base_config.generation_audit_interval_chapters,
-                )
-            ),
-        ),
-        generation_audit_pause_enabled=bool(
-            stored.get(
-                "generation_audit_pause_enabled",
-                base_config.generation_audit_pause_enabled,
-            )
-        ),
-        skill_runtime_enabled=bool(
-            stored.get("skill_runtime_enabled", base_config.skill_runtime_enabled)
-        ),
-        skill_registry_path=str(
-            stored.get("skill_registry_path", base_config.skill_registry_path)
-        ),
-        skill_strictness=str(
-            stored.get("skill_strictness", base_config.skill_strictness)
-        ),
-        enabled_skill_groups=[
-            str(item).strip()
-            for item in (stored.get("enabled_skill_groups") or base_config.enabled_skill_groups or [])
-            if str(item).strip()
-        ],
-        disabled_skill_ids=[
-            str(item).strip()
-            for item in (stored.get("disabled_skill_ids") or base_config.disabled_skill_ids or [])
-            if str(item).strip()
-        ],
-        llm_fallback_profiles=_runtime_fallback_profiles(
-            stored,
-            primary={
-                "id": str(stored.get("default_profile_id", "")).strip(),
-                "name": "",
-                "api_key": str(stored.get("api_key", base_config.minimax_api_key)),
-                "base_url": str(stored.get("base_url", base_config.minimax_base_url)),
-                "model": str(stored.get("model", base_config.minimax_model)),
-            },
-        ),
-        min_chapter_chars=min_chapter_chars,
-        target_chapter_chars=target_chapter_chars,
-        max_chapter_chars=max_chapter_chars,
-    )
 
 
 def _record_task_observability_event(
@@ -446,28 +174,22 @@ def _task_observability(orchestrator: WritingOrchestrator):
 
 
 def _build_writing_orchestrator_for_task(
-    config: InfrastructureConfig,
+    context: GenerationExecutionContext,
     *,
-    policy: RuntimePolicy,
     progress_callback=None,
     should_abort=None,
     should_pause=None,
 ) -> WritingOrchestrator:
-    if getattr(WritingOrchestrator, "__module__", "") != "forwin.orchestrator.loop":
-        return WritingOrchestrator(
-            config,
-            progress_callback=progress_callback,
-            should_abort=should_abort,
-            should_pause=should_pause,
-        )
     return RuntimeContainer.from_config(
-        config,
-        policy=policy,
+        context.infrastructure,
+        policy=context.policy,
         role="generation_worker",
     ).build_writing_orchestrator(
         progress_callback=progress_callback,
         should_abort=should_abort,
         should_pause=should_pause,
+        task_id=context.task_id,
+        root_event_id=context.root_event_id,
     )
 
 
@@ -608,22 +330,21 @@ def run_orchestrator_task(
             )
 
 
-def run_generation_with_config(
-    task_id: str,
+def run_generation_with_context(
+    context: GenerationExecutionContext,
     premise: str,
     genre: str,
     num_chapters: int,
-    config: InfrastructureConfig,
     update_task: TaskUpdater,
     logger: logging.Logger,
     *,
-    policy: RuntimePolicy,
     project_id: str | None = None,
     should_abort: Callable[[], bool] | None = None,
     should_pause: Callable[[], bool] | None = None,
     completion_handler: Callable[[object], None] | None = None,
     component: str = "api",
 ) -> None:
+    task_id = context.task_id
     normalized_project_id = str(project_id or "").strip()
 
     def _handle_progress(event: str, payload: dict[str, Any]) -> None:
@@ -636,8 +357,7 @@ def run_generation_with_config(
             update_task(task_id, **changes)
 
     orchestrator = _build_writing_orchestrator_for_task(
-        config,
-        policy=policy,
+        context,
         progress_callback=_handle_progress,
         should_abort=should_abort,
         should_pause=should_pause,
@@ -708,14 +428,12 @@ def run_generation_with_config(
     )
 
 
-def run_continue_project_with_config(
-    task_id: str,
+def run_continue_project_with_context(
+    context: GenerationExecutionContext,
     project_id: str,
-    config: InfrastructureConfig,
     update_task: TaskUpdater,
     logger: logging.Logger,
     *,
-    policy: RuntimePolicy,
     should_abort: Callable[[], bool] | None = None,
     should_pause: Callable[[], bool] | None = None,
     max_chapters: int | None = None,
@@ -723,14 +441,14 @@ def run_continue_project_with_config(
     completion_handler: Callable[[object], None] | None = None,
     component: str = "api",
 ) -> None:
+    task_id = context.task_id
     def _handle_progress(event: str, payload: dict[str, Any]) -> None:
         changes = _build_task_progress_changes(event, payload)
         if changes:
             update_task(task_id, **changes)
 
     orchestrator = _build_writing_orchestrator_for_task(
-        config,
-        policy=policy,
+        context,
         progress_callback=_handle_progress,
         should_abort=should_abort,
         should_pause=should_pause,

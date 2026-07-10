@@ -10,7 +10,7 @@ class RuntimeContainerPort(Protocol):
     @classmethod
     def from_config(
         cls,
-        config: InfrastructureConfig,
+        infrastructure: InfrastructureConfig,
         *,
         policy: RuntimePolicy,
         role: str = "full",
@@ -26,5 +26,7 @@ class RuntimeContainerPort(Protocol):
         progress_callback=None,
         should_abort=None,
         should_pause=None,
+        task_id: str = "",
+        root_event_id: str = "",
     ):
         ...

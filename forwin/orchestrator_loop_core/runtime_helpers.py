@@ -12,8 +12,8 @@ def _make_state_helpers(
     updater = StateUpdater(session)
     checker = ContinuityChecker(
         repo,
-        min_chars=self.config.min_chapter_chars,
-        max_chars=self.config.max_chapter_chars,
+        min_chars=self.policy.chapter_length.min_chars,
+        max_chars=self.policy.chapter_length.max_chars,
     )
     return repo, updater, checker
 

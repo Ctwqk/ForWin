@@ -8,7 +8,6 @@ from forwin.review_engine.audit import (
 )
 from forwin.review_engine.types import Decision, DecisionInput
 from forwin.state.repo import StateRepository
-from forwin.runtime.policy_store import ProjectPolicyStore
 
 
 def _positive_int(value: object) -> int:
@@ -18,7 +17,8 @@ def _positive_int(value: object) -> int:
         return 0
 
 def _project_policy(self, session: Session, project: Project):
-    return ProjectPolicyStore(session).load(project).policy
+    _ = session, project
+    return self.policy
 
 def _record_decision_event(
     self,
@@ -143,7 +143,7 @@ def _audit_current_plan_before_write(
         mode="chapter_review_form",
         plan_patch_validation_mode="chapter_review_form",
         llm_client=self.llm_client,
-        min_blocking_confidence=float(getattr(self.config, "chapter_review_form_min_blocking_confidence", 0.8) or 0.8),
+        min_blocking_confidence=0.8,
     ).audit_and_apply(
         session=session,
         project_id=project_id,
@@ -210,7 +210,7 @@ def _audit_future_plans_after_acceptance(
         mode="chapter_review_form",
         plan_patch_validation_mode="chapter_review_form",
         llm_client=self.llm_client,
-        min_blocking_confidence=float(getattr(self.config, "chapter_review_form_min_blocking_confidence", 0.8) or 0.8),
+        min_blocking_confidence=0.8,
     ).audit_and_apply(
         session=session,
         project_id=project_id,

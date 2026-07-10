@@ -32,7 +32,6 @@ from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.canon_names import is_plausible_person_name
 from forwin.checker.rules import ContinuityChecker
-from forwin.config import InfrastructureConfig
 from forwin.context.assembler import _build_canon_quality_context
 from forwin.governance import (
     BandCheckpointDetail,
@@ -103,7 +102,6 @@ from forwin.orchestrator_loop_core.result import ProvisionalGateSnapshot, RunRes
 
 logger = logging.getLogger(__name__)
 
-RuntimeContainer: Any = None
 
 
 def _chapter_plan_prompt_text(plan: ChapterPlan | None) -> str:

@@ -567,7 +567,7 @@ def _new_failed_provisional_gate(
     latest = self._latest_provisional_gate_snapshot(session, project_id)
     if latest is None:
         return None
-    if not bool(getattr(self.config, "provisional_preview_enabled", False)):
+    if not self.policy.planning.provisional_preview:
         return None
     if previous_snapshot is not None and latest.id == previous_snapshot.id:
         return None

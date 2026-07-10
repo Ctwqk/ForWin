@@ -186,7 +186,7 @@ def _default_continue_executor(
     worker_id: str,
     create_continue_generation_task: CreateContinueGenerationTask | None,
 ) -> ExecuteGenerationTask:
-    from forwin.api_runtime import run_continue_project_with_config
+    from forwin.api_runtime import run_continue_project_with_context
 
     def _execute(task: GenerationTask, resume_from_chapter: int) -> None:
         payload = payload_from_json(getattr(task, "execution_payload_json", ""))
@@ -207,13 +207,11 @@ def _default_continue_executor(
             worker_id=worker_id,
             lease_seconds=lease_seconds,
         )
-        run_continue_project_with_config(
-            task.id,
+        run_continue_project_with_context(
+            context,
             str(task.project_id or ""),
-            context.infrastructure,
             update_task,
             logger,
-            policy=context.policy,
             should_abort=_db_task_flag(session_factory, task.id, "cancel_requested"),
             should_pause=_db_task_flag(session_factory, task.id, "pause_requested"),
             max_chapters=int(task.max_chapters or 0) or None,
@@ -240,7 +238,7 @@ def _default_new_executor(
     worker_id: str,
     create_continue_generation_task: CreateContinueGenerationTask | None,
 ) -> ExecuteGenerationTask:
-    from forwin.api_runtime import run_generation_with_config
+    from forwin.api_runtime import run_generation_with_context
 
     def _execute(task: GenerationTask, resume_from_chapter: int) -> None:
         _ = resume_from_chapter
@@ -262,15 +260,13 @@ def _default_new_executor(
             worker_id=worker_id,
             lease_seconds=lease_seconds,
         )
-        run_generation_with_config(
-            task.id,
+        run_generation_with_context(
+            context,
             payload.premise,
             payload.genre,
             int(payload.num_chapters or task.requested_chapters or 0),
-            context.infrastructure,
             update_task,
             logger,
-            policy=context.policy,
             should_abort=_db_task_flag(session_factory, task.id, "cancel_requested"),
             should_pause=_db_task_flag(session_factory, task.id, "pause_requested"),
             completion_handler=completion_handler,
@@ -404,7 +400,6 @@ def _worker_completion_handler(
             run_until_chapter=int(getattr(payload, "run_until_chapter", 0) or 0) or None,
             max_chapters=int(getattr(payload, "max_chapters", 0) or 0) or None,
             auto_continue=bool(getattr(payload, "auto_continue", True)),
-            runtime_config=execution_context.infrastructure,
         )
 
     return _handle

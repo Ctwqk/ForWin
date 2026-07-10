@@ -48,11 +48,6 @@ from forwin.api_project_payloads import (
 )
 from forwin.api_runtime import (
     build_home_page_settings,
-    build_runtime_config,
-    build_saved_runtime_config,
-    copy_config,
-    run_continue_project_with_config,
-    run_generation_with_config,
 )
 from forwin.api_task_history import augment_task_with_rehearsal_history
 from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
@@ -183,6 +178,7 @@ from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
@@ -266,21 +262,10 @@ def _resolve_runtime_profile(requested_profile_id: str = "") -> dict[str, str]:
 
 
 def _saved_runtime_config_or_default(model_profile_id: str = "") -> InfrastructureConfig:
+    _ = model_profile_id
     if not api_state._config:
         return InfrastructureConfig(minimax_api_key="")
-    if model_profile_id:
-        return build_runtime_config(
-            GenerateRequest(
-                premise="Genesis model selection",
-                model_profile_id=model_profile_id,
-            ),
-            base_config=api_state._config,
-            runtime_settings=api_state._runtime_settings,
-        )
-    return build_saved_runtime_config(
-        base_config=api_state._config,
-        runtime_settings=api_state._runtime_settings,
-    )
+    return api_state._config
 
 
 def _build_genesis_service(
@@ -291,7 +276,15 @@ def _build_genesis_service(
     resolved_profile = _resolve_runtime_profile(model_profile_id)
     resolved = runtime_config or _saved_runtime_config_or_default(model_profile_id)
     shared_container = runtime_config is None and not model_profile_id and api_state._runtime_container is not None
-    container = api_state._runtime_container if shared_container else RuntimeContainer.from_config(resolved)
+    policy = RuntimePolicy.for_profile(
+        "standard",
+        model_profile_id=str(model_profile_id or "").strip(),
+    )
+    container = (
+        api_state._runtime_container
+        if shared_container
+        else RuntimeContainer.from_config(resolved, policy=policy, role="api")
+    )
     service = container.services().book_genesis if shared_container else container.build_book_genesis_service()
     setattr(service, "_forwin_runtime_owned", True)
     setattr(service, "_forwin_runtime_container", container if shared_container else None)

@@ -101,12 +101,8 @@ def _apply_world_v4_gate(
         "review": review_pack.model_dump(mode="json"),
         "compiler": compiler_pack.model_dump(mode="json"),
     }
-    default_book_state_layers = ["world", "map", "cognition", "narrative"]
     extractor = BookStateGraphDeltaExtractor(
-        layers=set(
-            getattr(self.config, "book_state_layers", default_book_state_layers)
-            or default_book_state_layers
-        )
+        layers=set(self.policy.canon.book_state_layers)
     )
     extraction = extractor.extract(
         BookStateExtractionRequest(
@@ -120,7 +116,7 @@ def _apply_world_v4_gate(
     gate_verdict = extraction.compatibility_gate_verdict
     if not extraction.accepted or extraction.changes is None:
         frozen_path = ""
-        if self.config.freeze_failed_candidates:
+        if self.policy.canon.hard_floor:
             frozen_path = self.artifact_store.save_frozen_candidate(
                 project_id=project_id,
                 chapter_number=chapter_number,
@@ -190,7 +186,7 @@ def _apply_world_v4_gate(
             ),
         )
         frozen_path = ""
-        if self.config.freeze_failed_candidates:
+        if self.policy.canon.hard_floor:
             frozen_path = self.artifact_store.save_frozen_candidate(
                 project_id=project_id,
                 chapter_number=chapter_number,
@@ -299,7 +295,7 @@ def _apply_world_v4_gate(
     )
     if not book_state_result.committed:
         frozen_path = ""
-        if self.config.freeze_failed_candidates:
+        if self.policy.canon.hard_floor:
             frozen_path = self.artifact_store.save_frozen_candidate(
                 project_id=project_id,
                 chapter_number=chapter_number,
@@ -326,8 +322,8 @@ def _apply_world_v4_gate(
 
     projection_refresh = KnowledgeProjectionRefresher(
         session,
-        qdrant_url=self.config.qdrant_url,
-        qdrant_collection=self.config.llm_kb_qdrant_collection,
+        qdrant_url=self.infrastructure.qdrant_url,
+        qdrant_collection=self.infrastructure.llm_kb_qdrant_collection,
     ).refresh(
         project_id,
         as_of_chapter=chapter_number,
@@ -772,8 +768,8 @@ def _run_phase3_pass(
         session,
         project_id,
         chapter_number,
-        cooldown_chapters=self.config.feedback_cooldown_chapters,
-        comment_to_reader_ratio=self.config.comment_to_reader_ratio,
+        cooldown_chapters=3,
+        comment_to_reader_ratio=80,
     )
 
 

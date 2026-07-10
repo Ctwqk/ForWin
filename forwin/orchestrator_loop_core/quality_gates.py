@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import logging
 
-from forwin.canon import CanonQualityGateOutcome
+from forwin.canon.types import CanonQualityGateOutcome
 from forwin.canon_quality.continuity_adapter import signals_from_continuity_issues
 from forwin.canon_quality.obligation_verifier import verify_due_obligations_for_draft
 from forwin.orchestrator_loop_core.quality_signal_utils import dedupe_quality_signals
@@ -375,7 +375,7 @@ def _apply_canon_quality_gate(
     writer_output: WriterOutput,
     verdict: ReviewVerdict,
 ) -> CanonQualityGateOutcome:
-    latest_draft, latest_review = self._latest_draft_and_review_for_chapter(
+    latest_draft, latest_review = _latest_draft_and_review_for_chapter(
         session=session,
         project_id=project_id,
         chapter_number=chapter_number,
@@ -416,7 +416,8 @@ def _apply_canon_quality_gate(
         CanonQualityRepository(session).save_signals(continuity_signals)
     project = session.get(Project, project_id)
     target_total_chapters = int(getattr(project, "target_total_chapters", 0) or 0)
-    deferred_acceptance_errors = self._prepare_deferred_acceptance_if_needed(
+    deferred_acceptance_errors = _prepare_deferred_acceptance_if_needed(
+        self,
         session=session,
         project_id=project_id,
         chapter_number=chapter_number,
@@ -517,17 +518,6 @@ def _apply_canon_quality_gate(
         blocked_path=frozen_path or "canon-quality-gate-blocked",
         gate_result=gate_result,
     )
-
-def _run_obligation_form_gate(
-    self,
-    *,
-    session: Session,
-    project_id: str,
-    chapter_number: int,
-    writer_output: WriterOutput,
-    obligations: list[NarrativeObligation],
-) -> list[dict[str, Any]]:
-    return []
 
 def _prepare_deferred_acceptance_if_needed(
     self,
@@ -636,7 +626,7 @@ def _prepare_deferred_acceptance_if_needed(
     if existing is not None:
         return []
 
-    bands = self._band_scope_candidates(
+    bands = _band_scope_candidates(
         session=session,
         project_id=project_id,
         current_chapter=chapter_number,
@@ -717,7 +707,7 @@ def _prepare_deferred_acceptance_if_needed(
     )
 
     if scope_decision.action == "defer_with_band_plan_patch":
-        band_row = self._band_row_by_id(
+        band_row = _band_row_by_id(
             session=session,
             project_id=project_id,
             band_id=scope_decision.target_band_id,
@@ -875,4 +865,4 @@ def _latest_draft_and_review_for_chapter(
     ).scalar_one_or_none()
     return latest_draft, latest_review
 
-__all__ = ['CanonQualityGateOutcome', '_is_timeout_like', '_is_transient_llm_like', '_transient_retry_delay', '_current_model_identity', '_audit_operation_id', '_drain_llm_attempt_events', '_safe_prompt_trace_attempts', '_error_category_from_attempts', '_diagnostic_kind_for_failure', '_record_failure_prompt_trace', '_record_model_fallback_payloads', '_apply_canon_quality_gate', '_run_obligation_form_gate', '_prepare_deferred_acceptance_if_needed', '_band_scope_candidates', '_band_row_by_id', '_latest_draft_and_review_for_chapter', 'evaluate_structural_patch_completion_debt']
+__all__ = ['CanonQualityGateOutcome', '_is_timeout_like', '_is_transient_llm_like', '_transient_retry_delay', '_current_model_identity', '_audit_operation_id', '_drain_llm_attempt_events', '_safe_prompt_trace_attempts', '_error_category_from_attempts', '_diagnostic_kind_for_failure', '_record_failure_prompt_trace', '_record_model_fallback_payloads', '_apply_canon_quality_gate', '_prepare_deferred_acceptance_if_needed', '_band_scope_candidates', '_band_row_by_id', '_latest_draft_and_review_for_chapter', 'evaluate_structural_patch_completion_debt']

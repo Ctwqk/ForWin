@@ -76,6 +76,7 @@
 | `orchestrator_loop_core.quality_gate_types` | removed | `forwin.canon.types` | 已删除 | canon outcome 类型归 canon owner；`CanonApplyOutcome` 改名 `CanonAdmissionOutcome`。 |
 | `orchestrator_loop_core.repair_loop` | removed | `forwin.review.repair.RepairService` | 已删除 | 1056 行 live repair 算法迁入 owner；pipeline 只调用 `review_candidate` / `repair_canon_block`。 |
 | `orchestrator_loop_core.__init__` re-export | removed | explicit submodule imports | 已删除 | 包初始化不再反向加载 `common.*` 和完整 `WritingOrchestrator`。 |
+| canon runtime helper injection | removed | `CanonAdmissionService` direct collaborators | 已删除 | 删除 13 条 quality/BookState/projection helper 赋值；orchestrator 拼装降至 89 条并由架构测试锁定。 |
 
 ## 2026-07 V5 Slice 1 Status
 
@@ -103,7 +104,7 @@
 - `FinalAcceptanceGate` 已合入 `FinalResidualPolicy`；协议/API 字段为 `final_residual_decision`，不存在旧 alias。
 - `CanonAdmissionService` 已拥有唯一 candidate -> canon 决策体；`WritingOrchestrator._apply_canon_candidate` 和 outcome coercer 已删除。
 - live repair loop 已迁入 `forwin.review.repair.service`；`WritingOrchestrator` 不再暴露 `_review_and_maybe_rewrite` / `_run_canon_repair_for_block`。
-- 下一步是把 canon/repair 函数族从 `WritingOrchestrator` 属性拼装迁入显式协作对象；Phase C-F 尚未开始。
+- canon/repair 函数族已退出 `WritingOrchestrator` 属性拼装；下一步是 D08 quality analysis 共享缓存，Phase C-F 尚未开始。
 
 ## 已知限制
 

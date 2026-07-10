@@ -248,6 +248,7 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
         "CanonApplyOutcome",
         "_review_and_maybe_rewrite",
         "_run_canon_repair_for_block",
+        "_run_obligation_form_gate",
         "HistoricalReviewHub",
         "FinalAcceptanceGate",
         "final_gate_decision",
@@ -282,6 +283,27 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
     assert "WritingOrchestrator._apply_repair_patch" not in _read(
         "forwin/orchestrator_loop_core/service.py"
     )
+    orchestrator_service = _read("forwin/orchestrator_loop_core/service.py")
+    for removed_assignment in (
+        "WritingOrchestrator._apply_canon_quality_gate",
+        "WritingOrchestrator._commit_book_state_canon",
+        "WritingOrchestrator._validate_subworld_admission",
+        "WritingOrchestrator._ensure_genesis_canon_seed_entities",
+        "WritingOrchestrator._filter_supported_state_changes",
+        "WritingOrchestrator._filter_resolvable_state_changes",
+        "WritingOrchestrator._ensure_event_mentioned_non_character_entities",
+        "WritingOrchestrator._filter_resolvable_events",
+        "WritingOrchestrator._latest_draft_and_review_for_chapter",
+        "WritingOrchestrator._prepare_deferred_acceptance_if_needed",
+        "WritingOrchestrator._band_scope_candidates",
+        "WritingOrchestrator._band_row_by_id",
+        "WritingOrchestrator._collect_subworld_candidate_names",
+    ):
+        assert removed_assignment not in orchestrator_service
+    assert sum(
+        line.startswith("WritingOrchestrator._")
+        for line in orchestrator_service.splitlines()
+    ) <= 89
     assert "WritingOrchestrator" not in _read("forwin/orchestrator_loop_core/__init__.py")
 
 

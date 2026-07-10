@@ -6,8 +6,10 @@ from typing import Any, Protocol
 from sqlalchemy.orm import Session
 
 from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.config import InfrastructureConfig
 from forwin.governance import DecisionEventType
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.orchestrator_loop_core import governance, quality_gates, world_projection
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.policy import RuntimePolicy
@@ -15,7 +17,7 @@ from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.storage.artifacts import ArtifactStore
 
-from .types import CanonAdmissionOutcome, CanonQualityGateOutcome
+from .types import CanonAdmissionOutcome
 
 
 logger = logging.getLogger(__name__)
@@ -23,7 +25,9 @@ logger = logging.getLogger(__name__)
 
 class CanonAdmissionRuntime(Protocol):
     policy: RuntimePolicy
+    infrastructure: InfrastructureConfig
     artifact_store: ArtifactStore
+    llm_client: Any
 
     def _record_decision_event(
         self,
@@ -39,42 +43,9 @@ class CanonAdmissionRuntime(Protocol):
         **kwargs: Any,
     ) -> Any: ...
 
-    def _apply_canon_quality_gate(
-        self,
-        *,
-        session: Session,
-        repo: StateRepository,
-        updater: StateUpdater,
-        project_id: str,
-        chapter_number: int,
-        writer_output: WriterOutput,
-        verdict: ReviewVerdict,
-    ) -> CanonQualityGateOutcome: ...
+    def _record_rule_decision_event(self, **kwargs: Any) -> Any: ...
 
-    def _commit_book_state_canon(
-        self,
-        *,
-        session: Session,
-        repo: StateRepository,
-        updater: StateUpdater,
-        project_id: str,
-        chapter_number: int,
-        writer_output: WriterOutput,
-        verdict: ReviewVerdict,
-    ) -> str | None: ...
-
-    def _validate_subworld_admission(self, **kwargs: Any) -> None: ...
-
-    def _ensure_genesis_canon_seed_entities(self, **kwargs: Any) -> None: ...
-
-    def _filter_supported_state_changes(self, changes: list[Any]) -> list[Any]: ...
-
-    def _filter_resolvable_state_changes(self, *args: Any) -> list[Any]: ...
-
-    def _ensure_event_mentioned_non_character_entities(self, *args: Any) -> None: ...
-
-    def _filter_resolvable_events(self, *args: Any) -> list[Any]: ...
-
+    def _audit_operation_id(self) -> str: ...
 
 class CanonAdmissionService:
     def commit(
@@ -104,7 +75,8 @@ class CanonAdmissionService:
             },
         )
         try:
-            quality_outcome = runtime._apply_canon_quality_gate(
+            quality_outcome = quality_gates._apply_canon_quality_gate(
+                runtime,
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -119,7 +91,8 @@ class CanonAdmissionService:
                     block_kind="canon_quality",
                     canon_gate_result=quality_outcome.gate_result,
                 )
-            book_state_blocked_path = runtime._commit_book_state_canon(
+            book_state_blocked_path = world_projection._commit_book_state_canon(
+                runtime,
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -133,23 +106,23 @@ class CanonAdmissionService:
                     blocked_path=book_state_blocked_path,
                     block_kind="book_state",
                 )
-            runtime._validate_subworld_admission(
+            world_projection._validate_subworld_admission(
                 repo=repo,
                 project_id=project_id,
                 chapter_number=chapter_number,
                 writer_output=writer_output,
                 verdict=verdict,
             )
-            runtime._ensure_genesis_canon_seed_entities(
+            world_projection._ensure_genesis_canon_seed_entities(
                 session=session,
                 repo=repo,
                 updater=updater,
                 project_id=project_id,
             )
-            filtered_state_changes = runtime._filter_supported_state_changes(
+            filtered_state_changes = governance._filter_supported_state_changes(
                 writer_output.state_changes
             )
-            filtered_state_changes = runtime._filter_resolvable_state_changes(
+            filtered_state_changes = world_projection._filter_resolvable_state_changes(
                 repo,
                 project_id,
                 chapter_number,
@@ -160,14 +133,14 @@ class CanonAdmissionService:
                 chapter_number,
                 filtered_state_changes,
             )
-            runtime._ensure_event_mentioned_non_character_entities(
+            world_projection._ensure_event_mentioned_non_character_entities(
                 repo,
                 updater,
                 project_id,
                 chapter_number,
                 writer_output,
             )
-            filtered_events = runtime._filter_resolvable_events(
+            filtered_events = world_projection._filter_resolvable_events(
                 repo,
                 project_id,
                 chapter_number,

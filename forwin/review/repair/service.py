@@ -12,6 +12,7 @@ from forwin.review.repair.local_rewrite_executor import LocalRewriteExecutor
 from forwin.orchestrator_loop_core.repair_budget import repair_word_budget_patch
 from forwin.orchestrator_loop_core.repair_budget_events import record_repair_body_budget_event
 from forwin.orchestrator_loop_core.subworld_admission_repair import _apply_subworld_admission_repair_patch
+from forwin.orchestrator_loop_core.quality_gates import _latest_draft_and_review_for_chapter
 
 if TYPE_CHECKING:
     from forwin.orchestrator_loop_core.service import WritingOrchestrator
@@ -249,7 +250,7 @@ def _repair_canon_block(
     writer_output: WriterOutput,
     gate_result,
 ) -> tuple[WriterOutput, ReviewVerdict, bool]:
-    latest_draft, _latest_review = self._latest_draft_and_review_for_chapter(
+    latest_draft, _latest_review = _latest_draft_and_review_for_chapter(
         session=session,
         project_id=project_id,
         chapter_number=chapter_plan.chapter_number,

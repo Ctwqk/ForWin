@@ -526,13 +526,6 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
         policy = RuntimePolicy.for_profile("standard")
         llm_client = None
 
-        def _latest_draft_and_review_for_chapter(self, **_kwargs):
-            return SimpleNamespace(id="d1"), SimpleNamespace(id="r1")
-
-        def _prepare_deferred_acceptance_if_needed(self, **_kwargs):
-            calls.append("deferred_acceptance")
-            return ["deferred patch failed"]
-
         def _record_decision_event(self, **kwargs) -> None:
             calls.append(f"event:{kwargs['event_type']}")
             return None
@@ -546,6 +539,17 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
         quality_gates_module,
         "CanonQualityRepository",
         _CanonQualityRepo,
+    )
+    monkeypatch.setattr(
+        quality_gates_module,
+        "_latest_draft_and_review_for_chapter",
+        lambda **_kwargs: (SimpleNamespace(id="d1"), SimpleNamespace(id="r1")),
+    )
+    monkeypatch.setattr(
+        quality_gates_module,
+        "_prepare_deferred_acceptance_if_needed",
+        lambda _runtime, **_kwargs: calls.append("deferred_acceptance")
+        or ["deferred patch failed"],
     )
 
     outcome = quality_gates_module._apply_canon_quality_gate(
@@ -638,17 +642,21 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
         policy = RuntimePolicy.for_profile("standard")
         llm_client = None
 
-        def _latest_draft_and_review_for_chapter(self, **_kwargs):
-            return SimpleNamespace(id="d18"), SimpleNamespace(id="r18")
-
-        def _prepare_deferred_acceptance_if_needed(self, **_kwargs):
-            return []
-
         def _record_decision_event(self, **_kwargs) -> None:
             calls.append("event")
 
     monkeypatch.setattr(quality_gates_module, "NarrativeObligationRepository", _ObligationRepo)
     monkeypatch.setattr(quality_gates_module, "CanonQualityRepository", _CanonQualityRepo)
+    monkeypatch.setattr(
+        quality_gates_module,
+        "_latest_draft_and_review_for_chapter",
+        lambda **_kwargs: (SimpleNamespace(id="d18"), SimpleNamespace(id="r18")),
+    )
+    monkeypatch.setattr(
+        quality_gates_module,
+        "_prepare_deferred_acceptance_if_needed",
+        lambda _runtime, **_kwargs: [],
+    )
 
     outcome = quality_gates_module._apply_canon_quality_gate(
         _Orchestrator(),
@@ -700,13 +708,18 @@ def test_canon_admission_exception_freezes_and_returns_blocked_outcome(
         def _record_decision_event(self, **_kwargs) -> None:
             return None
 
-        def _apply_canon_quality_gate(self, **_kwargs):
-            raise RuntimeError("canon apply failed")
+    def _fail_canon_quality_gate(*_args, **_kwargs):
+        raise RuntimeError("canon apply failed")
 
     monkeypatch.setattr(
         canon_admission_module,
         "CandidateDraftRepository",
         _CandidateDraftRepo,
+    )
+    monkeypatch.setattr(
+        quality_gates_module,
+        "_apply_canon_quality_gate",
+        _fail_canon_quality_gate,
     )
     session = _Session()
 
@@ -737,7 +750,7 @@ def test_canon_admission_exception_freezes_and_returns_blocked_outcome(
     assert failed_rows[0]["canon_artifact_path"] == "frozen/canon-update-failed.json"
 
 
-def test_canon_admission_exception_pauses_chapter_instead_of_accepting():
+def test_canon_admission_exception_pauses_chapter_instead_of_accepting(monkeypatch):
     class PassReviewHub:
         def review(self, **_kwargs) -> ReviewVerdict:
             return ReviewVerdict(
@@ -755,10 +768,14 @@ def test_canon_admission_exception_pauses_chapter_instead_of_accepting():
         orchestrator.writer.write_chapter = lambda context: _writer_output(context.chapter_number)
         orchestrator.draft_review = PassReviewHub()
 
-        def fail_canon_quality_gate(**_kwargs):
+        def fail_canon_quality_gate(*_args, **_kwargs):
             raise RuntimeError("canon apply failed")
 
-        orchestrator._apply_canon_quality_gate = fail_canon_quality_gate
+        monkeypatch.setattr(
+            quality_gates_module,
+            "_apply_canon_quality_gate",
+            fail_canon_quality_gate,
+        )
 
         result = orchestrator.run("p", "g", 1)
 

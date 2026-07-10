@@ -3,6 +3,7 @@ from __future__ import annotations
 from forwin.review.decision.rules.final_residual import is_force_acceptable_nonblocking_issue
 from forwin.subworld_manager import SubWorldManager
 from forwin.orchestrator_loop_core.common import *
+from forwin.orchestrator_loop_core.review_autofix import _project_character_names
 
 _EVENT_STUB_ENTITY_KINDS = {"location", "faction", "item", "rule"}
 _EVENT_STUB_KIND_ALIASES = {
@@ -642,7 +643,6 @@ def _nonblocking_review_subworld_names(verdict: ReviewVerdict | None) -> set[str
     return names
 
 def _validate_subworld_admission(
-    self,
     *,
     repo: StateRepository,
     project_id: str,
@@ -660,13 +660,13 @@ def _validate_subworld_admission(
     )
     allowed_names.update(
         ContinuityChecker._normalize_character_reference(name)
-        for name in self._project_character_names(repo, project_id)
+        for name in _project_character_names(repo, project_id)
     )
     if not allowed_names:
         return
     unknown = sorted(
         name
-        for name in self._collect_subworld_candidate_names(repo, project_id, writer_output)
+        for name in _collect_subworld_candidate_names(repo, project_id, writer_output)
         if name not in allowed_names
     )
     if unknown:

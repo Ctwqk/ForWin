@@ -26,6 +26,11 @@ from forwin.models.thread import PlotThreadBeat
 from forwin.orchestrator.phase24 import ArcEnvelopeManager, ArcStructureDraftData
 from forwin.orchestrator.phase3 import ReplanGovernor, StageAssessment
 from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.orchestrator_loop_core.world_projection import (
+    _collect_subworld_candidate_names,
+    _ensure_genesis_canon_seed_entities,
+    _validate_subworld_admission,
+)
 from forwin.protocol import (
     ArcPayoffMap,
     ChapterEntryTarget,
@@ -1113,7 +1118,7 @@ class SubWorldControlTests(unittest.TestCase):
             ],
         )
 
-        names = WritingOrchestrator._collect_subworld_candidate_names(FakeRepo(), "p1", output)
+        names = _collect_subworld_candidate_names(FakeRepo(), "p1", output)
 
         self.assertEqual(names, {"陆明", "许安"})
 
@@ -1154,9 +1159,7 @@ class SubWorldControlTests(unittest.TestCase):
             ],
         )
 
-        orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
-
-        orchestrator._validate_subworld_admission(
+        _validate_subworld_admission(
             repo=FakeRepo(),
             project_id="p1",
             chapter_number=7,
@@ -1216,17 +1219,15 @@ class SubWorldControlTests(unittest.TestCase):
             ],
         )
 
-        orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
-
         with self.assertRaisesRegex(ValueError, "老周"):
-            orchestrator._validate_subworld_admission(
+            _validate_subworld_admission(
                 repo=FakeRepo(),
                 project_id="p1",
                 chapter_number=1,
                 writer_output=output,
             )
 
-        orchestrator._validate_subworld_admission(
+        _validate_subworld_admission(
             repo=FakeRepo(),
             project_id="p1",
             chapter_number=1,
@@ -1259,9 +1260,7 @@ class SubWorldControlTests(unittest.TestCase):
             ],
         )
 
-        orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
-
-        orchestrator._validate_subworld_admission(
+        _validate_subworld_admission(
             repo=FakeRepo(),
             project_id="p1",
             chapter_number=7,
@@ -1297,7 +1296,7 @@ class SubWorldControlTests(unittest.TestCase):
                 session.commit()
 
                 repo = StateRepository(session)
-                WritingOrchestrator._ensure_genesis_canon_seed_entities(
+                _ensure_genesis_canon_seed_entities(
                     session=session,
                     repo=repo,
                     updater=updater,
@@ -2411,9 +2410,7 @@ class SubWorldControlTests(unittest.TestCase):
                 )
             ],
         )
-        orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
-
-        orchestrator._validate_subworld_admission(
+        _validate_subworld_admission(
             repo=FakeRepo(),  # type: ignore[arg-type]
             project_id="p1",
             chapter_number=1,

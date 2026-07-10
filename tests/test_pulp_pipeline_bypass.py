@@ -387,9 +387,6 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
         policy = Policy()
         llm_client = sentinel_llm_client
 
-        def _latest_draft_and_review_for_chapter(self, **kwargs):  # noqa: ANN003
-            return Draft(), Review()
-
     captured: dict[str, object | None] = {}
 
     def fake_analyze_writer_output_quality(**kwargs):  # noqa: ANN003
@@ -401,6 +398,11 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
         quality_gates,
         "analyze_writer_output_quality",
         fake_analyze_writer_output_quality,
+    )
+    monkeypatch.setattr(
+        quality_gates,
+        "_latest_draft_and_review_for_chapter",
+        lambda **_kwargs: (Draft(), Review()),
     )
 
     with pytest.raises(StopAfterAnalysis):

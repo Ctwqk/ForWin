@@ -182,6 +182,7 @@ def replay_single_chapter(
         mode=resolved_mode,
         llm_client=llm_client,
         return_raw_analyzer_results=True,
+        use_cache=False,
     )
 
     counts: dict[str, int] = {}

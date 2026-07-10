@@ -4,7 +4,11 @@ from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.models.canon_quality import CanonQualitySignalRow, CharacterStateTransitionRow
+from forwin.models.canon_quality import (
+    CanonQualitySignalRow,
+    CharacterStateTransitionRow,
+    QualityAnalysisRunRow,
+)
 from forwin.protocol.writer import WriterOutput
 
 
@@ -193,6 +197,7 @@ def test_service_blocks_when_form_llm_unavailable() -> None:
             assert result.blocking is True
             assert result.signals[0].signal_type == "form_llm_unavailable"
             assert result.review_issues[0]["source_mode"] == "chapter_review_form"
+            assert session.query(QualityAnalysisRunRow).count() == 0
     finally:
         engine.dispose()
 

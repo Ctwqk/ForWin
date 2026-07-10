@@ -27,7 +27,7 @@ Genesis / Writer / Review 主链
 - 上下文来源：`BookState + BookMap + Genesis + approved projections`。
 - 运行策略：项目只有一份带版本号的 `RuntimePolicy`，durable generation task 保存不可变 policy snapshot；`InfrastructureConfig` 只负责环境凭据、端点、worker/存储和只读模型目录。
 - 任务入口：API、worker、scheduler、CLI、Genesis handoff、continue 和 auto-continue 统一经过 `GenerationApplicationService`；`RuntimeContainer` 是唯一 orchestrator 装配点。
-- review 主链：`review.DraftReviewService` 聚合章节文本、体验、治理、地图、人格和 lint；`review.repair.RepairService` 是 draft/canon repair 的两个显式入口；`review.decision.FinalResidualPolicy` 只评估 repair 耗尽后的残留，不决定 canon；`CanonAdmissionService` 直接编排 quality、BookState 与 projection helper，不经 `WritingOrchestrator` canon 方法注入；`BookStateReviewGate` 是 GraphDelta 入 canon 前的 deterministic guardrail。
+- review 主链：`review.DraftReviewService` 聚合章节文本、体验、治理、地图、人格和 lint；draft review 与 canon gate 通过 `QualityAnalysisRunRow` 共享 primary quality 分析，cache key 包含正文内容、chapter plan、prior-canon 分析上下文、模式/版本与模型指纹；`review.repair.RepairService` 是 draft/canon repair 的两个显式入口；`review.decision.FinalResidualPolicy` 只评估 repair 耗尽后的残留，不决定 canon；`CanonAdmissionService` 直接编排 quality、BookState 与 projection helper，不经 `WritingOrchestrator` canon 方法注入；`BookStateReviewGate` 是 GraphDelta 入 canon 前的 deterministic guardrail。
 - skill runtime：仅作为 prompt / workflow instruction layer，参与 PromptTrace，不写 canon，不绕过 DecisionEvent 或 BookState gate。
 
 ## Quality Profile

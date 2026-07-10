@@ -13,6 +13,7 @@ from forwin.models.canon_quality import (
     ChapterBodyMetricRow,
     CharacterStateTransitionRow,
     CountdownLedgerRow,
+    QualityAnalysisRunRow,
     RevealRegistryEntryRow,
 )
 from forwin.models.draft import CandidateDraftRecord
@@ -31,6 +32,58 @@ from .signals import (
 class CanonQualityRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
+
+    def find_quality_analysis_run(
+        self,
+        *,
+        project_id: str,
+        chapter_number: int,
+        content_hash: str,
+        plan_fingerprint: str,
+        analysis_mode: str,
+        analyzer_fingerprint: str,
+    ) -> QualityAnalysisRunRow | None:
+        return self.session.execute(
+            select(QualityAnalysisRunRow).where(
+                QualityAnalysisRunRow.project_id == project_id,
+                QualityAnalysisRunRow.chapter_number == int(chapter_number or 0),
+                QualityAnalysisRunRow.content_hash == content_hash,
+                QualityAnalysisRunRow.plan_fingerprint == plan_fingerprint,
+                QualityAnalysisRunRow.analysis_mode == analysis_mode,
+                QualityAnalysisRunRow.analyzer_fingerprint == analyzer_fingerprint,
+            )
+        ).scalar_one_or_none()
+
+    def save_quality_analysis_run(
+        self,
+        *,
+        project_id: str,
+        chapter_number: int,
+        content_hash: str,
+        plan_fingerprint: str,
+        analysis_mode: str,
+        analyzer_fingerprint: str,
+        result: dict[str, Any],
+    ) -> QualityAnalysisRunRow:
+        row = self.find_quality_analysis_run(
+            project_id=project_id,
+            chapter_number=chapter_number,
+            content_hash=content_hash,
+            plan_fingerprint=plan_fingerprint,
+            analysis_mode=analysis_mode,
+            analyzer_fingerprint=analyzer_fingerprint,
+        ) or QualityAnalysisRunRow(
+            project_id=project_id,
+            chapter_number=int(chapter_number or 0),
+            content_hash=content_hash,
+            plan_fingerprint=plan_fingerprint,
+            analysis_mode=analysis_mode,
+            analyzer_fingerprint=analyzer_fingerprint,
+        )
+        row.result_json = _json(result)
+        self.session.add(row)
+        self.session.flush()
+        return row
 
     def save_signals(self, signals: list[CanonQualitySignal]) -> list[CanonQualitySignalRow]:
         rows: list[CanonQualitySignalRow] = []

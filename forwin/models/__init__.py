@@ -9,6 +9,7 @@ from .canon_quality import (
     ChapterBodyMetricRow,
     CharacterStateTransitionRow,
     CountdownLedgerRow,
+    QualityAnalysisRunRow,
     RevealRegistryEntryRow,
     StoryObligationRow,
 )
@@ -165,6 +166,7 @@ __all__ = [
     "ChapterBodyMetricRow",
     "CharacterStateTransitionRow",
     "CountdownLedgerRow",
+    "QualityAnalysisRunRow",
     "RevealRegistryEntryRow",
     "StoryObligationRow",
     "WorldModelSnapshotRow",

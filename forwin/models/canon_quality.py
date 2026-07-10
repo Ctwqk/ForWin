@@ -2,11 +2,44 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
 from .base import Base, new_id
+
+
+class QualityAnalysisRunRow(Base):
+    __tablename__ = "quality_analysis_runs"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "chapter_number",
+            "content_hash",
+            "plan_fingerprint",
+            "analysis_mode",
+            "analyzer_fingerprint",
+            name="uq_quality_analysis_run_cache_key",
+        ),
+        Index(
+            "ix_quality_analysis_runs_project_chapter",
+            "project_id",
+            "chapter_number",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
+    project_id: Mapped[str] = mapped_column(
+        String, ForeignKey("projects.id"), nullable=False
+    )
+    chapter_number: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    content_hash: Mapped[str] = mapped_column(String, nullable=False)
+    plan_fingerprint: Mapped[str] = mapped_column(String, nullable=False)
+    analysis_mode: Mapped[str] = mapped_column(String, nullable=False)
+    analyzer_fingerprint: Mapped[str] = mapped_column(String, nullable=False)
+    result_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
 
 class CanonQualitySignalRow(Base):

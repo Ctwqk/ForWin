@@ -16,7 +16,7 @@
 
 Slice 1 实施提交依次为 `a7f53bb`、`f7790c5`、`61392af`、`6c2eb0f`、`131e697`、`bc85d91`、`3e0c10f`、`a6a75fb`、`589e58a`、`e87e67b`，并由 completion commit 收口。本轮同时删除失效的旧架构测试大套件和无实现支撑的 review-engine cutover 脚本，常量化 chapter review form 主路径，并增加 production/UI/application/container boundary guard；后续 Phase B-F 不因此标记完成。
 
-Phase B 已开始按“直接删除或改为真实 owner”执行：零引用 `forwin/orchestration` ports 和 `_compile_world_model_after_acceptance` 空壳已删除；BookState canon 主路径已改名 `_commit_book_state_canon`；`HistoricalReviewHub` 已替换为 `DraftReviewService`；`FinalAcceptanceGate` 已合并为 `FinalResidualPolicy`；原 `reviewer`、`review_engine`、`reviser` 三个平级包已物理合并为 `forwin.review/{draft_service,decision,repair}`；唯一 candidate -> canon 决策体已迁入 `forwin.canon.CanonAdmissionService`；1056 行 live repair loop 已迁入 `forwin.review.repair.RepairService`，pipeline 只调用两个显式入口；canon/repair 专属 helper 注入已删除，`WritingOrchestrator._*` 拼装由 102 条降至 89 条。下文保留旧名称的段落是审计时基线证据，不代表当前代码仍保留旧入口。
+Phase B 已完成：零引用 `forwin/orchestration` ports 和 `_compile_world_model_after_acceptance` 空壳已删除；BookState canon 主路径已改名 `_commit_book_state_canon`；`HistoricalReviewHub` 已替换为 `DraftReviewService`；`FinalAcceptanceGate` 已合并为 `FinalResidualPolicy`；原 `reviewer`、`review_engine`、`reviser` 三个平级包已物理合并为 `forwin.review/{draft_service,decision,repair}`；唯一 candidate -> canon 决策体已迁入 `forwin.canon.CanonAdmissionService`；1056 行 live repair loop 已迁入 `forwin.review.repair.RepairService`，pipeline 只调用两个显式入口；canon/repair 专属 helper 注入已删除，`WritingOrchestrator._*` 拼装由 102 条降至 89 条；draft review 与 canon gate 通过 `QualityAnalysisRunRow` 共享有效 primary 分析。下文保留旧名称的段落是审计时基线证据，不代表当前代码仍保留旧入口。
 
 ---
 
@@ -231,7 +231,7 @@ WritingOrchestrator (变薄的编排壳)
 | D05 ★ 已完成 | pulp/standard | — | `premium` 空 profile | 直接删除 | policy literal 校验 | 无空 override |
 | D06 ✅ 已完成 | 环境基础设施 + 项目策略 + 任务快照 | `InfrastructureConfig` / `RuntimePolicy` / policy snapshot | `RuntimeSettingsStore`、`governance_json` 设置与 request override | 直接删除，无 patch alias、无 backcompat | store/version/snapshot/catalog | 三段职责，不是四层归一 |
 | D07 ✎ 已完成 | `HistoricalReviewHub` 行为 | `forwin.review.DraftReviewService` | 旧类名、`review_hub` runtime 字段、`reviewer` 旧包 | 破坏性改名并合入单一 review bounded package，不留 alias | review 聚焦测试 + 架构扫描 | 草稿评审只产 evidence/verdict |
-| D08 ✅ | `canon_quality` 分析器 | `QualityAnalysisRun` 缓存 | hub/门重复 LLM 分析 | 按 draft body hash+plan version 缓存 | hub/门同 payload parity；改稿失效缓存 | |
+| D08 ✅ 已完成 | `canon_quality` 分析器 | `QualityAnalysisRunRow` 缓存 | hub/门重复 LLM 分析 | 按 title/body/summary content hash + chapter plan fingerprint + prior-canon context + mode/version/model fingerprint 缓存；replay/dry-run/失败不复用 | hub/门同 payload parity；正文、计划或分析上下文变化失效 | 比初版 body hash 更严格，避免摘要、模型或前序状态变化误命中 |
 | D09 ✅ | `decide_repair_v2` | `RepairService` | `review_engine_repair_v2_enabled`、`review_engine_auto_approve_enabled` **字段本体** | 直接删字段（config 之外零读取）；shadow/parity 测试转 test-only 或删 | repair 路由测试改为 live 断言 | 两个死旗标，零生产风险 |
 | D10 ✎ | arc/book patcher、obligation verifier、local rewrite、commit_with_obligation 等 6 个活旗标 | profile 内部策略位 | 独立 env 暴露 | 默认值随 profile；env 覆盖仅 test | 各 gate 开/关行为测试 | 初版笼统归为"hide"；实测它们是活的门 |
 | D11 ✎ 已完成 | `FinalAcceptanceGate` | `forwin.review.decision.FinalResidualPolicy` | `reviser/final_acceptance.py`、旧 rule/class/字段 | 实现并入 final residual rule；协议/API 使用 `final_residual_decision`，不留 alias | 软过硬拦 7 tests | 仍不越过 canon commit |
@@ -267,7 +267,7 @@ WritingOrchestrator (变薄的编排壳)
 
 ### Phase B — review/repair/final/canon 分层 + orchestrator 立缝（D07-D13,D19,D20 首批）
 
-- **当前进度**：D07、D11、D12、D13、D14、D19 与 RepairService 迁移已完成；canon/repair 专属 helper 注入已清除，`WritingOrchestrator` 拼装降至 89 条。尚未完成 D08 缓存。
+- **当前进度**：已完成。D07-D14、D19 与本阶段 D20 切片均落地；canon/repair 专属 helper 注入已清除，`WritingOrchestrator` 拼装降至 89 条；D08 使用 content/plan/analyzer 三重指纹共享分析且自动失效。
 - **目标**：四层判决语义落地为四个显式 service；`service.py` 猴子补丁开始收敛。
 - **涉及**：`review/{draft_service,decision,repair}`、`orchestrator_loop_core/{review_autofix,repair_loop,quality_gates,world_projection,service}.py`。
 - **不变量**：hard blocker 必拦；force-accept/reckless 不越 canon 门（新增显式不变量测试）；`ChapterReview` 持久化与 UI 队列可读。

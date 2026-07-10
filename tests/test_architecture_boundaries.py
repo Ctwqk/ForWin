@@ -328,6 +328,33 @@ def test_removed_repair_dead_code_stays_removed() -> None:
     assert "use_legacy_fallback" not in _read("forwin/canon_quality/rule_profile.py")
 
 
+def test_quality_analysis_cache_is_shared_and_versioned() -> None:
+    model_source = _read("forwin/models/canon_quality.py")
+    service_source = _read("forwin/canon_quality/service.py")
+    cache_source = _read("forwin/canon_quality/cache.py")
+    assert "class QualityAnalysisRunRow" in model_source
+    assert "uq_quality_analysis_run_cache_key" in model_source
+    assert "content_hash" in cache_source
+    assert "plan_fingerprint" in cache_source
+    assert "analyzer_fingerprint" in cache_source
+    assert '"quality_context": quality_context' in cache_source
+    assert "find_quality_analysis_run" in service_source
+    assert "save_quality_analysis_run" in service_source
+    assert "analyze_writer_output_quality(" in _read("forwin/review/draft_service.py")
+    assert "analyze_writer_output_quality(" in _read(
+        "forwin/orchestrator_loop_core/quality_gates.py"
+    )
+    assert (ROOT / "forwin/migrations/versions/0024_quality_analysis_runs.py").exists()
+    production_cache_bypasses = [
+        path
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+        if "use_cache=False" in path.read_text(encoding="utf-8")
+    ]
+    assert production_cache_bypasses == [
+        ROOT / "forwin/canon_quality/chapter_review_form/replay.py"
+    ]
+
+
 def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
     forbidden_runtime_tokens = {
         "Review" "OutcomeRouter": [

@@ -141,7 +141,7 @@ from forwin.api_schemas import (
     StartWritingResponse,
 )
 from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.generation.auto_continue import GenerationAutoContinueController
 from forwin.generation.task_payload import execution_payload_from_config
 from forwin.governance import (
@@ -382,7 +382,7 @@ def _make_generation_completion_handler(
     task_id: str,
     root_event_id: str = "",
     prior_handler=None,
-    runtime_config: Config | None = None,
+    runtime_config: InfrastructureConfig | None = None,
     auto_continue: bool = False,
     run_until_chapter: int | None = None,
     max_chapters: int | None = None,
@@ -450,7 +450,7 @@ def _create_generation_task(
     premise: str,
     genre: str,
     num_chapters: int,
-    runtime_config: Config,
+    runtime_config: InfrastructureConfig,
     project_id: str = "",
     title: str = "",
     subtitle: str = "",
@@ -503,7 +503,7 @@ def _create_generation_task(
 def _create_continue_generation_task(
     *,
     project_id: str,
-    runtime_config: Config,
+    runtime_config: InfrastructureConfig,
     requested_chapters: int,
     max_chapters: int | None = None,
     auto_continue: bool = True,

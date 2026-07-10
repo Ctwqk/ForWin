@@ -7,7 +7,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.generation.ports import CreateContinueGenerationTask
 from forwin.generation.worker import GenerationWorkerResult, run_one_generation_task
 
@@ -22,7 +22,7 @@ def default_worker_id() -> str:
 def run_generation_worker_loop(
     *,
     session_factory: Callable[[], Any],
-    config: Config,
+    config: InfrastructureConfig,
     worker_id: str = "",
     lease_seconds: int = 300,
     poll_interval: float = 2.0,

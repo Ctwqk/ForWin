@@ -5,7 +5,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin import models as _models  # noqa: F401
 from forwin.models.base import Base
 
@@ -21,7 +21,7 @@ def _database_url() -> str:
     configured = str(config.get_main_option("sqlalchemy.url") or "").strip()
     if configured:
         return configured
-    return Config.from_env().database_url
+    return InfrastructureConfig.from_env().database_url
 
 
 def run_migrations_offline() -> None:

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from forwin.config import (
-    Config,
+    InfrastructureConfig,
     DEFAULT_MINIMAX_BASE_URL,
     DEFAULT_MINIMAX_MODEL,
     DEFAULT_MOONSHOT_BASE_URL,
@@ -88,7 +88,7 @@ def _load_manifest_profiles(path: str) -> list[EvalProfile]:
 
 
 def _load_runtime_profiles(path: str) -> list[EvalProfile]:
-    config = Config.from_env()
+    config = InfrastructureConfig.from_env()
     if not path:
         path = config.runtime_settings_path
     store = RuntimeSettingsStore(path, env_llm_profiles=config.llm_env_profiles)

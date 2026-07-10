@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from typing import Any
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.generation.task_lease import GenerationTaskClaimResult
 from forwin.governance import DecisionEventType
 from forwin.observability import NullObservability, ObservabilityService, OperationContext
@@ -21,7 +21,7 @@ ObservabilityFactory = Callable[..., ObservabilityPort]
 def record_worker_claim(
     *,
     session_factory: Callable[[], Any],
-    config: Config | None,
+    config: InfrastructureConfig | None,
     worker_id: str,
     claim: GenerationTaskClaimResult,
     resume_from_chapter: int,
@@ -60,7 +60,7 @@ def record_worker_claim(
 def record_worker_heartbeat_failed(
     *,
     session_factory: Callable[[], Any],
-    config: Config | None,
+    config: InfrastructureConfig | None,
     task_id: str,
     project_id: str,
     worker_id: str,
@@ -86,7 +86,7 @@ def record_worker_heartbeat_failed(
 def record_worker_execution_failed(
     *,
     session_factory: Callable[[], Any],
-    config: Config | None,
+    config: InfrastructureConfig | None,
     task_id: str,
     project_id: str,
     worker_id: str,
@@ -126,7 +126,7 @@ def record_worker_execution_failed(
 def generation_worker_span(
     *,
     session_factory: Callable[[], Any],
-    config: Config | None,
+    config: InfrastructureConfig | None,
     span_name: str,
     task_id: str,
     project_id: str,
@@ -161,7 +161,7 @@ def generation_worker_span(
 def _record_worker_event(
     *,
     session_factory: Callable[[], Any],
-    config: Config | None,
+    config: InfrastructureConfig | None,
     task_id: str,
     project_id: str,
     worker_id: str,
@@ -242,7 +242,7 @@ def _context(
 def _build_observability(
     *,
     session_factory: Callable[[], Any],
-    config: Config | None,
+    config: InfrastructureConfig | None,
     observability_factory: ObservabilityFactory | None,
 ) -> ObservabilityPort:
     try:

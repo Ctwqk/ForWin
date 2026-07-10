@@ -5,7 +5,7 @@ import logging
 from typing import Callable, Literal
 
 from forwin.book_genesis import BookGenesisService
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.context.assembler import ChapterContextAssembler
 from forwin.context.gates import RecencyTruncateGate
 from forwin.director import ArcDirector
@@ -24,6 +24,7 @@ from forwin.retrieval import RetrievalBroker, create_memory_index
 from forwin.reviewer import HistoricalReviewHub
 from forwin.reviser import RepairVerifier
 from forwin.runtime.factories import ProductionSchedulerFactory, build_provisional_writer, build_writer
+from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.services import RuntimeServices, SkillRuntimeBundle
 from forwin.skills import build_skill_runtime_components
 from forwin.storage import ArtifactStore
@@ -53,26 +54,39 @@ _RUNTIME_ROLES: set[str] = {
 
 @dataclass(slots=True)
 class RuntimeContainer:
-    config: Config
+    config: InfrastructureConfig
+    policy: RuntimePolicy
     role: RuntimeRole = "full"
     _services: RuntimeServices | None = None
 
     @classmethod
-    def from_config(cls, config: Config, *, role: RuntimeRole = "full") -> "RuntimeContainer":
+    def from_config(
+        cls,
+        config: InfrastructureConfig,
+        *,
+        policy: RuntimePolicy,
+        role: RuntimeRole = "full",
+    ) -> "RuntimeContainer":
         normalized_role = _validate_runtime_role(role)
-        return cls(config=config, role=normalized_role)
+        return cls(config=config, policy=policy, role=normalized_role)
 
     @classmethod
-    def for_api(cls, config: Config) -> "RuntimeContainer":
-        return cls.from_config(config, role="api")
+    def for_api(
+        cls, config: InfrastructureConfig, *, policy: RuntimePolicy
+    ) -> "RuntimeContainer":
+        return cls.from_config(config, policy=policy, role="api")
 
     @classmethod
-    def for_generation_worker(cls, config: Config) -> "RuntimeContainer":
-        return cls.from_config(config, role="generation_worker")
+    def for_generation_worker(
+        cls, config: InfrastructureConfig, *, policy: RuntimePolicy
+    ) -> "RuntimeContainer":
+        return cls.from_config(config, policy=policy, role="generation_worker")
 
     @classmethod
-    def for_publisher_worker(cls, config: Config) -> "RuntimeContainer":
-        return cls.from_config(config, role="publisher_worker")
+    def for_publisher_worker(
+        cls, config: InfrastructureConfig, *, policy: RuntimePolicy
+    ) -> "RuntimeContainer":
+        return cls.from_config(config, policy=policy, role="publisher_worker")
 
     def services(self) -> RuntimeServices:
         if self._services is None:
@@ -176,8 +190,10 @@ class RuntimeContainer:
             ),
         )
 
-        writer = build_writer(config, llm_client, observability)
-        provisional_writer = build_provisional_writer(config, llm_client, observability)
+        writer = build_writer(config, self.policy, llm_client, observability)
+        provisional_writer = build_provisional_writer(
+            config, self.policy, llm_client, observability
+        )
         stage_analyzer = StageAnalyzer()
         pacing_strategist = PacingStrategist(
             window_size=config.pacing_window_size,
@@ -295,7 +311,7 @@ class RuntimeContainer:
             ),
         )
 
-    def _run_retention_cleanup(self, session_factory, config: Config) -> None:  # noqa: ANN001
+    def _run_retention_cleanup(self, session_factory, config: InfrastructureConfig) -> None:  # noqa: ANN001
         if not bool(getattr(config, "retention_cleanup_on_startup", True)):
             return
         try:
@@ -313,7 +329,7 @@ class RuntimeContainer:
             logger.warning("retention_cleanup_failed", exc_info=True)
 
     @staticmethod
-    def _build_llm_client(config: Config):
+    def _build_llm_client(config: InfrastructureConfig):
         llm_client = LLMClient(
             api_key=config.minimax_api_key,
             base_url=config.minimax_base_url,
@@ -327,7 +343,7 @@ class RuntimeContainer:
         return maybe_wrap_with_codex_router(llm_client, config)
 
     @staticmethod
-    def _build_skill_runtime(config: Config) -> SkillRuntimeBundle:
+    def _build_skill_runtime(config: InfrastructureConfig) -> SkillRuntimeBundle:
         registry, router, prompt_layer_builder = build_skill_runtime_components(
             root=config.skill_registry_path,
             enabled=config.skill_runtime_enabled,
@@ -344,7 +360,7 @@ class RuntimeContainer:
     @staticmethod
     def _build_book_genesis_service(
         *,
-        config: Config,
+        config: InfrastructureConfig,
         llm_client,
         skill_runtime,
         artifact_store,
@@ -359,7 +375,7 @@ class RuntimeContainer:
         return service
 
     @staticmethod
-    def _build_artifact_store(config: Config) -> ArtifactStore:
+    def _build_artifact_store(config: InfrastructureConfig) -> ArtifactStore:
         return ArtifactStore(
             config.artifact_root,
             backend=config.artifact_backend,

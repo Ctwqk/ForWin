@@ -16,7 +16,7 @@ from forwin.api_schemas import (
     StageDurationAggregate,
     TaskTimelineResponse,
 )
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models.draft import ChapterDraft
 from forwin.models.genesis import PromptTrace
 from forwin.models.governance import DecisionEvent
@@ -337,7 +337,7 @@ def build_handlers(
         normalized_uri = str(uri or "").strip()
         if not normalized_uri:
             raise HTTPException(404, "artifact 不存在")
-        config = get_config() or Config.from_env()
+        config = get_config() or InfrastructureConfig.from_env()
         root = Path(config.artifact_root).resolve()
         path = Path(normalized_uri).expanduser()
         try:

@@ -8,7 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.generation.task_lease import (
     claim_generation_task,
     generation_task_resume_from_chapter,
@@ -47,7 +47,7 @@ def run_one_generation_task(
     *,
     session_factory: Callable[[], Any],
     worker_id: str,
-    config: Config | None = None,
+    config: InfrastructureConfig | None = None,
     lease_seconds: int = 300,
     execute_continue: ExecuteGenerationTask | None = None,
     execute_new: ExecuteGenerationTask | None = None,
@@ -96,7 +96,7 @@ def run_one_generation_task(
         if project_id:
             executor = execute_continue or _default_continue_executor(
                 session_factory=session_factory,
-                config=config or Config.from_env(),
+                config=config or InfrastructureConfig.from_env(),
                 lease_seconds=lease_seconds,
                 worker_id=worker_id,
                 create_continue_generation_task=create_continue_generation_task,
@@ -104,7 +104,7 @@ def run_one_generation_task(
         else:
             executor = execute_new or _default_new_executor(
                 session_factory=session_factory,
-                config=config or Config.from_env(),
+                config=config or InfrastructureConfig.from_env(),
                 lease_seconds=lease_seconds,
                 worker_id=worker_id,
                 create_continue_generation_task=create_continue_generation_task,
@@ -180,7 +180,7 @@ def run_one_generation_task(
 def _default_continue_executor(
     *,
     session_factory: Callable[[], Any],
-    config: Config,
+    config: InfrastructureConfig,
     lease_seconds: int,
     worker_id: str,
     create_continue_generation_task: CreateContinueGenerationTask | None,
@@ -233,7 +233,7 @@ def _default_continue_executor(
 def _default_new_executor(
     *,
     session_factory: Callable[[], Any],
-    config: Config,
+    config: InfrastructureConfig,
     lease_seconds: int,
     worker_id: str,
     create_continue_generation_task: CreateContinueGenerationTask | None,
@@ -311,7 +311,7 @@ def _db_task_updater(
 def _start_periodic_heartbeat(
     *,
     session_factory: Callable[[], Any],
-    config: Config | None,
+    config: InfrastructureConfig | None,
     task_id: str,
     project_id: str,
     worker_id: str,
@@ -381,7 +381,7 @@ def _worker_completion_handler(
     session_factory: Callable[[], Any],
     task_id: str,
     payload,
-    worker_config: Config,
+    worker_config: InfrastructureConfig,
     create_continue_generation_task: CreateContinueGenerationTask | None,
 ) -> Callable[[object], None]:
     from forwin.generation.auto_continue import GenerationAutoContinueController

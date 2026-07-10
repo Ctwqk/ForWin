@@ -142,7 +142,7 @@ from forwin.api_schemas import (
     StartWritingResponse,
 )
 from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.governance import (
     BandCheckpointIssueInfo,
     CONSTRAINT_LEVELS,
@@ -236,7 +236,7 @@ def _shutdown_runtime_state() -> None:
 async def lifespan(app: FastAPI):
 
     if api_state._config is None:
-        api_state._config = Config.from_env()
+        api_state._config = InfrastructureConfig.from_env()
     if str(api_state._config.http_bind or "").strip() in {"0.0.0.0", "::"} and not basic_auth_enabled(api_state._config):
         logger.warning(
             "ForWin is reachable beyond localhost and HTTP Basic Auth is disabled. "

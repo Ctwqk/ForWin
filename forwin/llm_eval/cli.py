@@ -5,7 +5,7 @@ import os
 import uuid
 from pathlib import Path
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 
 from .cases import default_eval_cases
 from .profiles import load_eval_profiles, profile_requires_api_key
@@ -21,7 +21,7 @@ def run_eval_from_args(args) -> int:  # noqa: ANN001
         print("--base-url targets a deployed ForWin instance; pass --allow-production-data explicitly.")
         return 2
 
-    config = Config.from_env()
+    config = InfrastructureConfig.from_env()
     run_id = str(getattr(args, "run_id", "") or "").strip() or f"llm-eval-{uuid.uuid4().hex[:12]}"
     profiles = load_eval_profiles(
         manifest_path=str(getattr(args, "manifest", "") or ""),
@@ -71,7 +71,7 @@ def run_eval_from_args(args) -> int:  # noqa: ANN001
 
 
 def report_eval_from_args(args) -> int:  # noqa: ANN001
-    config = Config.from_env()
+    config = InfrastructureConfig.from_env()
     root = Path(str(getattr(args, "artifact_root", "") or config.artifact_root))
     run_id = str(getattr(args, "run_id", "") or "").strip()
     if not run_id:

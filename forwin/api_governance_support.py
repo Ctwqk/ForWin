@@ -18,7 +18,7 @@ from forwin.api_schemas import (
     NarrativeConstraintInfo,
     ProjectAutomationSettings,
 )
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.governance import (
     BandCheckpointIssueInfo,
     CONSTRAINT_LEVELS,
@@ -121,7 +121,7 @@ def resolve_project_governance(
     project: Project | None,
     *,
     overrides: dict[str, object] | None = None,
-    base_config: Config | None = None,
+    base_config: InfrastructureConfig | None = None,
 ) -> object:
     fallback_operation_mode = (
         base_config.operation_mode if base_config is not None else "blackbox"
@@ -157,7 +157,7 @@ def persist_project_governance(
     project: Project,
     governance,
     *,
-    base_config: Config | None = None,
+    base_config: InfrastructureConfig | None = None,
 ) -> object:
     normalized = resolve_project_governance(project, overrides=governance.model_dump(mode="json"), base_config=base_config)
     project.governance_json = json.dumps(

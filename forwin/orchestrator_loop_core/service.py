@@ -53,7 +53,7 @@ from forwin.orchestrator_loop_core.finalization import _flush_background_llm_tra
 class WritingOrchestrator:
     def __init__(
         self,
-        config: Config | None = None,
+        config: InfrastructureConfig | None = None,
         progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
         should_abort: Callable[[], bool] | None = None,
         should_pause: Callable[[], bool] | None = None,
@@ -65,7 +65,9 @@ class WritingOrchestrator:
             if container_cls is None:
                 from forwin.runtime.container import RuntimeContainer as container_cls
 
-            services = container_cls.from_config(config or Config.from_env()).services()
+            services = container_cls.from_config(
+                config or InfrastructureConfig.from_env()
+            ).services()
         self.services = services
         self.config = services.config
         self.progress_callback = progress_callback

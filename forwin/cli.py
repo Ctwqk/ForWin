@@ -15,12 +15,12 @@ import sys
 import time
 from pathlib import Path
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 
 
-def _get_config(args: argparse.Namespace) -> Config:
-    """Build Config from CLI args + environment."""
-    config = Config.from_env()
+def _get_config(args: argparse.Namespace) -> InfrastructureConfig:
+    """Build InfrastructureConfig from CLI args + environment."""
+    config = InfrastructureConfig.from_env()
     kwargs: dict = {}
     database_url = getattr(args, "database_url", None)
     if database_url:

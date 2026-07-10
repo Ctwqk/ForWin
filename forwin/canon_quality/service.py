@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models import Entity, Project
 from forwin.canon_quality.placeholder import analyze_placeholder_leakage, extract_expected_protagonist_names
 from forwin.canon_quality.readability import analyze_writer_output_readability
@@ -43,7 +43,7 @@ def analyze_writer_output_quality(
     llm_client: object | None = None,
     return_raw_analyzer_results: bool = False,
 ) -> CanonQualityAnalysisResult:
-    config = Config.from_env()
+    config = InfrastructureConfig.from_env()
     resolved_mode = _normalize_form_mode(mode or config.chapter_review_form_mode)
     repo = CanonQualityRepository(session)
     protagonist_names = _load_protagonist_names(session=session, project_id=project_id)

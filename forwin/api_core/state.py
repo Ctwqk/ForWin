@@ -5,13 +5,13 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from forwin.api_task_center_service import TaskCenterService
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime_settings import RuntimeSettingsStore
 
-_config: Config | None = None
+_config: InfrastructureConfig | None = None
 _engine = None
 _SessionFactory = None
 _orchestrator: WritingOrchestrator | None = None

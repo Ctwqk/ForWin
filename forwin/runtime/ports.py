@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
+from forwin.runtime.policy import RuntimePolicy
 
 
 class RuntimeContainerPort(Protocol):
     @classmethod
-    def from_config(cls, config: Config, *, role: str = "full") -> "RuntimeContainerPort":
+    def from_config(
+        cls,
+        config: InfrastructureConfig,
+        *,
+        policy: RuntimePolicy,
+        role: str = "full",
+    ) -> "RuntimeContainerPort":
         ...
 
     def services(self):

@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from forwin.api_runtime import copy_config
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 
 
 ExecutionMode = Literal["initial", "continue"]
@@ -37,7 +37,7 @@ class GenerationTaskExecutionPayload(BaseModel):
     runtime_overrides: dict[str, Any] = Field(default_factory=dict)
 
 
-def runtime_overrides_from_config(config: Config) -> dict[str, Any]:
+def runtime_overrides_from_config(config: InfrastructureConfig) -> dict[str, Any]:
     raw = config.model_dump(mode="json")
     return {
         key: value
@@ -49,7 +49,7 @@ def runtime_overrides_from_config(config: Config) -> dict[str, Any]:
 def execution_payload_from_config(
     *,
     mode: ExecutionMode,
-    runtime_config: Config,
+    runtime_config: InfrastructureConfig,
     root_event_id: str = "",
     premise: str = "",
     genre: str = "",
@@ -90,11 +90,11 @@ def payload_from_json(raw: str | None) -> GenerationTaskExecutionPayload:
 
 
 def build_worker_config_from_payload(
-    base_config: Config,
+    base_config: InfrastructureConfig,
     payload: GenerationTaskExecutionPayload,
     *,
     task_id: str,
-) -> Config:
+) -> InfrastructureConfig:
     overrides = dict(payload.runtime_overrides)
     overrides["governance_task_id"] = str(task_id or "")
     overrides["governance_causal_root_id"] = str(payload.root_event_id or "")

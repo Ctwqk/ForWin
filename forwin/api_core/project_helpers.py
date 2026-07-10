@@ -142,7 +142,7 @@ from forwin.api_schemas import (
     StartWritingResponse,
 )
 from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.governance import (
     BandCheckpointIssueInfo,
     CONSTRAINT_LEVELS,
@@ -375,7 +375,7 @@ def _get_generation_task_or_404(task_id: str) -> dict[str, Any]:
     return task
 
 
-def _saved_runtime_config_or_503() -> Config:
+def _saved_runtime_config_or_503() -> InfrastructureConfig:
     if not api_state._config:
         raise HTTPException(503, "服务尚未初始化")
     return build_saved_runtime_config(
@@ -415,7 +415,7 @@ def _resolve_project_governance(
     project: Project | None,
     *,
     overrides: dict[str, object] | None = None,
-    base_config: Config | None = None,
+    base_config: InfrastructureConfig | None = None,
 ) -> object:
     return api_governance_support.resolve_project_governance(
         project,

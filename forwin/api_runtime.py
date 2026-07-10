@@ -5,7 +5,7 @@ import time
 from typing import Any, Callable
 
 from forwin.api_schemas import GenerateRequest
-from forwin.config import Config, DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
+from forwin.config import InfrastructureConfig, DEFAULT_MINIMAX_BASE_URL, DEFAULT_MINIMAX_MODEL
 from forwin.governance import DecisionEventType
 from forwin.observability import LogRecorder, OperationContext
 from forwin.observability.ports import NullObservability
@@ -39,10 +39,10 @@ _PROGRESS_PAYLOAD_KEYS = (
 )
 
 
-def copy_config(base_config: Config, **updates: object) -> Config:
+def copy_config(base_config: InfrastructureConfig, **updates: object) -> InfrastructureConfig:
     values = base_config.model_dump()
     values.update(updates)
-    return Config(**values)
+    return InfrastructureConfig(**values)
 
 
 def _build_task_progress_changes(
@@ -88,7 +88,7 @@ def _paused_chapters_message(result, *, prefix: str = "") -> str:
 
 def build_home_page_settings(
     *,
-    base_config: Config | None,
+    base_config: InfrastructureConfig | None,
     runtime_settings: RuntimeSettingsStore | None,
 ) -> dict[str, object]:
     if runtime_settings is not None:
@@ -186,9 +186,9 @@ def _runtime_fallback_profiles(
 def build_runtime_config(
     req: GenerateRequest,
     *,
-    base_config: Config,
+    base_config: InfrastructureConfig,
     runtime_settings: RuntimeSettingsStore | None,
-) -> Config:
+) -> InfrastructureConfig:
     stored = runtime_settings.get() if runtime_settings else {}
     selected = _resolve_profile(
         stored,
@@ -302,9 +302,9 @@ def build_runtime_config(
 
 def build_saved_runtime_config(
     *,
-    base_config: Config,
+    base_config: InfrastructureConfig,
     runtime_settings: RuntimeSettingsStore | None,
-) -> Config:
+) -> InfrastructureConfig:
     stored = runtime_settings.get() if runtime_settings else {}
     min_chapter_chars = max(500, int(stored.get("min_chapter_chars", base_config.min_chapter_chars)))
     target_chapter_chars = max(min_chapter_chars, int(base_config.target_chapter_chars))
@@ -445,7 +445,7 @@ def _task_observability(orchestrator: WritingOrchestrator):
 
 
 def _build_writing_orchestrator_for_task(
-    config: Config,
+    config: InfrastructureConfig,
     *,
     progress_callback=None,
     should_abort=None,
@@ -607,7 +607,7 @@ def run_generation_with_config(
     premise: str,
     genre: str,
     num_chapters: int,
-    config: Config,
+    config: InfrastructureConfig,
     update_task: TaskUpdater,
     logger: logging.Logger,
     project_id: str | None = None,
@@ -702,7 +702,7 @@ def run_generation_with_config(
 def run_continue_project_with_config(
     task_id: str,
     project_id: str,
-    config: Config,
+    config: InfrastructureConfig,
     update_task: TaskUpdater,
     logger: logging.Logger,
     should_abort: Callable[[], bool] | None = None,

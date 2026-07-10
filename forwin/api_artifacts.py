@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.storage import ArtifactStore
 
 
-def build_artifact_store(config: Config) -> ArtifactStore:
+def build_artifact_store(config: InfrastructureConfig) -> ArtifactStore:
     return ArtifactStore(
         config.artifact_root,
         backend=config.artifact_backend,

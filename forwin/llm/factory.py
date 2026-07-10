@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 
 from .codex_client import CodexBridgeClient
 from .router import LLMCallRouter, RoutedModelAdapter
 
 
-def maybe_wrap_with_codex_router(ordinary_adapter, config: Config):
+def maybe_wrap_with_codex_router(ordinary_adapter, config: InfrastructureConfig):
     if not bool(getattr(config, "codex_enabled", False)):
         return ordinary_adapter
     bridge_url = str(getattr(config, "codex_bridge_url", "") or "").strip()

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import os
-import warnings
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from forwin.writer.profile import WriterProfile
+
+if TYPE_CHECKING:
+    from forwin.runtime.policy import RuntimePolicy
+
 
 DEFAULT_MINIMAX_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_MINIMAX_MODEL = "MiniMax-M2.7"
@@ -27,11 +29,6 @@ DEFAULT_HTTP_BASIC_EXEMPT_PATHS = (
     "/api/publisher/extension/",
     "/api/publishers/extension/",
 )
-_DEPRECATED_REVIEW_CUTOVER_FIELDS = {
-    "review_engine_live_cutover_enabled",
-    "review_engine_live_cutover_project_allowlist",
-}
-_PROGRESSION_MODES = {"serial_canon", "serial_canon_band_guard"}
 
 
 class LLMConfig(BaseModel):
@@ -64,13 +61,6 @@ class ObservabilityConfig(BaseModel):
     span_sample_rate: float = 1.0
 
 
-class GovernanceConfig(BaseModel):
-    progression_mode: str = "serial_canon_band_guard"
-    review_delegation_mode: Literal["human", "reckless"] = "human"
-    review_interval_chapters: int = 0
-    future_constraints_enabled: bool = True
-
-
 class FormBlockingPolicy(BaseModel):
     character_dead: Literal["error", "warning"] = "error"
     character_wounded: Literal["error", "warning"] = "warning"
@@ -91,6 +81,17 @@ class CodexConfig(BaseModel):
     bridge_url: str = "http://host.docker.internal:8897"
     default_model: str = DEFAULT_CODEX_MODEL
     max_concurrent: int = 1
+
+
+class ModelProfileConfig(BaseModel):
+    model_config = {"frozen": True, "extra": "forbid"}
+
+    id: str
+    name: str
+    api_key: str
+    base_url: str
+    model: str
+
 
 try:
     from pydantic_settings import BaseSettings as _ConfigBaseModel
@@ -135,33 +136,13 @@ def _env_str(env: dict[str, str], key: str, default: str = "") -> str:
     value = env.get(key)
     if value is None:
         return default
-    value = str(value).strip()
-    if value == "":
-        return default
-    return value
-
-
-def _env_secret_file(env: dict[str, str], key: str) -> str:
-    path = _env_str(env, key, "")
-    if not path:
-        return ""
-    try:
-        with open(path, encoding="utf-8") as handle:
-            return handle.read().strip()
-    except OSError as exc:
-        raise ValueError(f"Unable to read {key}: {path}") from exc
-
-
-def _normalize_progression_mode(value: object) -> str:
-    normalized = str(value or "").strip()
-    if normalized in _PROGRESSION_MODES:
-        return normalized
-    return "serial_canon_band_guard"
+    normalized = str(value).strip()
+    return normalized or default
 
 
 def _env_int(env: dict[str, str], key: str, default: int) -> int:
-    value = _env_str(env, key, "")
-    if value == "":
+    value = _env_str(env, key)
+    if not value:
         return default
     try:
         return int(value)
@@ -170,8 +151,8 @@ def _env_int(env: dict[str, str], key: str, default: int) -> int:
 
 
 def _env_float(env: dict[str, str], key: str, default: float) -> float:
-    value = _env_str(env, key, "")
-    if value == "":
+    value = _env_str(env, key)
+    if not value:
         return default
     try:
         return float(value)
@@ -180,8 +161,8 @@ def _env_float(env: dict[str, str], key: str, default: float) -> float:
 
 
 def _env_bool(env: dict[str, str], key: str, default: bool) -> bool:
-    value = _env_str(env, key, "")
-    if value == "":
+    value = _env_str(env, key)
+    if not value:
         return default
     normalized = value.lower()
     if normalized in {"1", "true", "yes", "on"}:
@@ -192,34 +173,12 @@ def _env_bool(env: dict[str, str], key: str, default: bool) -> bool:
 
 
 def _env_csv(env: dict[str, str], key: str) -> list[str]:
-    value = _env_str(env, key, "")
-    return [
-        item.strip()
-        for item in value.split(",")
-        if item.strip()
-    ]
+    return [item.strip() for item in _env_str(env, key).split(",") if item.strip()]
 
 
-def _warn_deprecated_review_cutover_config(explicit_keys: set[str]) -> None:
-    used = sorted(_DEPRECATED_REVIEW_CUTOVER_FIELDS & set(explicit_keys))
-    if not used:
-        return
-    warnings.warn(
-        "review engine is globally live; "
-        "review_engine_live_cutover_enabled and "
-        "review_engine_live_cutover_project_allowlist are deprecated and ignored by runtime routing",
-        DeprecationWarning,
-        stacklevel=3,
-    )
-
-
-def _env_llm_profiles(env: dict[str, str] | None = None) -> list[dict[str, str]]:
-    env = env or _resolved_env()
+def _env_llm_profiles(env: dict[str, str]) -> list[dict[str, str]]:
     profiles: list[dict[str, str]] = []
-    kimi_api_key = (
-        _env_str(env, "KIMI_API_KEY")
-        or _env_str(env, "MOONSHOT_API_KEY")
-    )
+    kimi_api_key = _env_str(env, "KIMI_API_KEY") or _env_str(env, "MOONSHOT_API_KEY")
     if kimi_api_key:
         profiles.append(
             {
@@ -247,47 +206,18 @@ def _env_llm_profiles(env: dict[str, str] | None = None) -> list[dict[str, str]]
                 "name": "DeepSeek (.env)",
                 "api_key": deepseek_api_key,
                 "base_url": _env_str(
-                    env,
-                    "DEEPSEEK_BASE_URL",
-                    DEFAULT_DEEPSEEK_BASE_URL,
+                    env, "DEEPSEEK_BASE_URL", DEFAULT_DEEPSEEK_BASE_URL
                 ),
-                "model": _env_str(
-                    env,
-                    "DEEPSEEK_MODEL",
-                    DEFAULT_DEEPSEEK_MODEL,
-                ),
+                "model": _env_str(env, "DEEPSEEK_MODEL", DEFAULT_DEEPSEEK_MODEL),
             }
         )
     return profiles
 
 
-def _env_values() -> tuple[dict[str, object], set[str]]:
+def _infrastructure_env_values() -> dict[str, object]:
     env = _resolved_env()
-    explicit_keys: set[str] = set()
-
-    def mark(field: str, *env_keys: str) -> None:
-        if any(_env_str(env, key, "") != "" for key in env_keys):
-            explicit_keys.add(field)
-
-    def tracked_str(field: str, key: str, default: str = "") -> str:
-        mark(field, key)
-        return _env_str(env, key, default)
-
-    def tracked_bool(field: str, key: str, default: bool = False) -> bool:
-        mark(field, key)
-        return _env_bool(env, key, default)
-
-    def tracked_int(field: str, key: str, default: int = 0) -> int:
-        mark(field, key)
-        return _env_int(env, key, default)
-
-    def tracked_csv(field: str, key: str) -> list[str]:
-        mark(field, key)
-        return _env_csv(env, key)
-
-    database_url = _env_str(env, "FORWIN_DATABASE_URL") or DEFAULT_DATABASE_URL
-    values: dict[str, object] = {
-        "database_url": database_url,
+    return {
+        "database_url": _env_str(env, "FORWIN_DATABASE_URL", DEFAULT_DATABASE_URL),
         "artifact_root": _env_str(env, "FORWIN_ARTIFACT_ROOT", "data/artifacts"),
         "artifact_backend": _env_str(env, "FORWIN_ARTIFACT_BACKEND", "local"),
         "minio_endpoint": _env_str(env, "FORWIN_MINIO_ENDPOINT"),
@@ -307,22 +237,16 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         ),
         "embedding_backend": _env_str(env, "FORWIN_EMBEDDING_BACKEND", "gateway"),
         "embedding_base_url": _env_str(
-            env,
-            "FORWIN_EMBEDDING_BASE_URL",
-            DEFAULT_EMBEDDING_GATEWAY_URL,
+            env, "FORWIN_EMBEDDING_BASE_URL", DEFAULT_EMBEDDING_GATEWAY_URL
         ),
-        "embedding_api_key": _env_str(
-            env,
-            "FORWIN_EMBEDDING_API_KEY",
-            "",
+        "embedding_api_key": _env_str(env, "FORWIN_EMBEDDING_API_KEY"),
+        "embedding_model": _env_str(
+            env, "FORWIN_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL
         ),
-        "embedding_model": _env_str(env, "FORWIN_EMBEDDING_MODEL", DEFAULT_EMBEDDING_MODEL),
-        "embedding_dims": _env_int(env, "FORWIN_EMBEDDING_DIMS", DEFAULT_EMBEDDING_DIMS),
+        "embedding_dims": _env_int(
+            env, "FORWIN_EMBEDDING_DIMS", DEFAULT_EMBEDDING_DIMS
+        ),
         "embedding_required": _env_bool(env, "FORWIN_EMBEDDING_REQUIRED", False),
-        "runtime_settings_path": _env_str(
-            env,
-            "FORWIN_RUNTIME_SETTINGS_PATH", "data/runtime_settings.json"
-        ),
         "observability_enabled": _env_bool(env, "FORWIN_OBSERVABILITY_ENABLED", True),
         "observability_performance_enabled": _env_bool(
             env, "FORWIN_OBSERVABILITY_PERFORMANCE_ENABLED", True
@@ -356,17 +280,14 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
             "FORWIN_PUBLISHER_EXTENSION_API_KEY",
             _env_str(env, "PUBLISHER_EXTENSION_API_KEY"),
         ),
-        "publisher_session_secret": _env_str(
-            env, "FORWIN_PUBLISHER_SESSION_SECRET"
-        ),
+        "publisher_session_secret": _env_str(env, "FORWIN_PUBLISHER_SESSION_SECRET"),
         "publisher_session_encryption_required": _env_bool(
             env, "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED", False
         ),
         "publisher_login_discord_webhook_enabled": False,
         "publisher_login_discord_webhook_url": "",
         "publisher_preferred_client_id": _env_str(
-            env,
-            "FORWIN_PUBLISHER_PREFERRED_CLIENT_ID", ""
+            env, "FORWIN_PUBLISHER_PREFERRED_CLIENT_ID"
         ),
         "publisher_strict_preferred_client": _env_bool(
             env, "FORWIN_PUBLISHER_STRICT_PREFERRED_CLIENT", False
@@ -387,8 +308,7 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         ),
         "minimax_api_key": _env_str(env, "MINIMAX_API_KEY"),
         "minimax_base_url": _env_str(
-            env,
-            "MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL
+            env, "MINIMAX_BASE_URL", DEFAULT_MINIMAX_BASE_URL
         ),
         "minimax_model": _env_str(env, "MINIMAX_MODEL", DEFAULT_MINIMAX_MODEL),
         "llm_env_profiles": _env_llm_profiles(env),
@@ -403,205 +323,24 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         "scene_call_timeout_seconds": _env_float(
             env, "SCENE_CALL_TIMEOUT_SECONDS", 90.0
         ),
-        "quality_profile": tracked_str(
-            "quality_profile", "FORWIN_QUALITY_PROFILE", "standard"
-        ),
-        "max_chapter_chars": tracked_int(
-            "max_chapter_chars", "MAX_CHAPTER_CHARS", 3200
-        ),
-        "min_chapter_chars": tracked_int(
-            "min_chapter_chars", "MIN_CHAPTER_CHARS", 2500
-        ),
-        "target_chapter_chars": tracked_int(
-            "target_chapter_chars", "TARGET_CHAPTER_CHARS", 2800
-        ),
-        "prompt_budget_chars": _env_int(env, "PROMPT_BUDGET_CHARS", 12000),
-        "writer_mode": tracked_str("writer_mode", "WRITER_MODE", "scene"),
-        "operation_mode": tracked_str("operation_mode", "OPERATION_MODE", "blackbox"),
-        "review_delegation_mode": tracked_str(
-            "review_delegation_mode", "FORWIN_REVIEW_DELEGATION_MODE", "human"
-        ),
-        "book_state_layers": tracked_csv("book_state_layers", "FORWIN_BOOK_STATE_LAYERS")
-        or ["world", "map", "cognition", "narrative"],
-        "hard_floor_gate_enabled": tracked_bool(
-            "hard_floor_gate_enabled", "FORWIN_HARD_FLOOR_GATE_ENABLED", False
-        ),
-        "context_recency_window_chapters": tracked_int(
-            "context_recency_window_chapters",
-            "FORWIN_CONTEXT_RECENCY_WINDOW_CHAPTERS",
-            0,
-        ),
-        "map_movement_review_enabled": tracked_bool(
-            "map_movement_review_enabled", "FORWIN_MAP_MOVEMENT_REVIEW_ENABLED", True
-        ),
-        "personality_review_enabled": tracked_bool(
-            "personality_review_enabled", "FORWIN_PERSONALITY_REVIEW_ENABLED", True
-        ),
-        "canon_quality_review_in_hub_enabled": tracked_bool(
-            "canon_quality_review_in_hub_enabled",
-            "FORWIN_CANON_QUALITY_REVIEW_IN_HUB_ENABLED",
-            True,
-        ),
-        "freeze_failed_candidates": tracked_bool(
-            "freeze_failed_candidates", "FREEZE_FAILED_CANDIDATES", True
-        ),
-        "review_interval_chapters": tracked_int(
-            "review_interval_chapters", "REVIEW_INTERVAL_CHAPTERS", 0
-        ),
-        "progression_mode": _normalize_progression_mode(
-            _env_str(env, "PROGRESSION_MODE", "serial_canon_band_guard")
-        ),
-        "auto_band_checkpoint": tracked_bool(
-            "auto_band_checkpoint", "AUTO_BAND_CHECKPOINT", True
-        ),
-        "band_warn_action": _env_str(env, "BAND_WARN_ACTION", "pause"),
-        "manual_checkpoints_enabled": tracked_bool(
-            "manual_checkpoints_enabled", "MANUAL_CHECKPOINTS_ENABLED", True
-        ),
-        "future_constraints_enabled": tracked_bool(
-            "future_constraints_enabled", "FUTURE_CONSTRAINTS_ENABLED", True
-        ),
-        "generation_audit_interval_chapters": tracked_int(
-            "generation_audit_interval_chapters",
-            "GENERATION_AUDIT_INTERVAL_CHAPTERS",
-            0,
-        ),
-        "generation_audit_pause_enabled": tracked_bool(
-            "generation_audit_pause_enabled", "GENERATION_AUDIT_PAUSE_ENABLED", False
-        ),
-        "provisional_preview_enabled": _env_bool(
-            env, "FORWIN_PROVISIONAL_PREVIEW_ENABLED", False
-        ),
-        "skill_runtime_enabled": _env_bool(
-            env, "FORWIN_SKILL_RUNTIME_ENABLED", True
-        ),
+        "skill_runtime_enabled": _env_bool(env, "FORWIN_SKILL_RUNTIME_ENABLED", True),
         "skill_registry_path": _env_str(
             env, "FORWIN_SKILL_REGISTRY_PATH", "forwin_skills"
         ),
         "skill_strictness": _env_str(env, "FORWIN_SKILL_STRICTNESS", "normal"),
         "enabled_skill_groups": _env_csv(env, "FORWIN_ENABLED_SKILL_GROUPS"),
         "disabled_skill_ids": _env_csv(env, "FORWIN_DISABLED_SKILL_IDS"),
-        "default_scene_count": _env_int(env, "DEFAULT_SCENE_COUNT", 3),
-        "max_scene_count": _env_int(env, "MAX_SCENE_COUNT", 4),
         "context_budget_chars": _env_int(env, "CONTEXT_BUDGET_CHARS", 6000),
         "retrieval_max_entities": _env_int(env, "RETRIEVAL_MAX_ENTITIES", 8),
         "retrieval_max_threads": _env_int(env, "RETRIEVAL_MAX_THREADS", 4),
         "retrieval_max_summaries": _env_int(env, "RETRIEVAL_MAX_SUMMARIES", 3),
-        "pacing_window_size": _env_int(env, "PACING_WINDOW_SIZE", 3),
-        "stale_thread_window": _env_int(env, "STALE_THREAD_WINDOW", 3),
-        "pacing_min_avg_chars": _env_int(env, "PACING_MIN_AVG_CHARS", 1600),
-        "pacing_max_avg_chars": _env_int(env, "PACING_MAX_AVG_CHARS", 3800),
         "phase_active_thread_limit": _env_int(env, "PHASE_ACTIVE_THREAD_LIMIT", 20),
-        "replan_cooldown_chapters": _env_int(env, "REPLAN_COOLDOWN_CHAPTERS", 3),
-        "blackbox_writer_attention_retries": _env_int(
-            env, "BLACKBOX_WRITER_ATTENTION_RETRIES", 3
+        "chapter_review_form_max_llm_retries": _env_int(
+            env, "FORWIN_CHAPTER_REVIEW_FORM_MAX_LLM_RETRIES", 1
         ),
-        "experience_review_enabled": tracked_bool(
-            "experience_review_enabled", "EXPERIENCE_REVIEW_ENABLED", True
+        "chapter_review_form_token_budget_chars": _env_int(
+            env, "FORWIN_CHAPTER_REVIEW_FORM_TOKEN_BUDGET_CHARS", 8000
         ),
-        "lint_review_enabled": tracked_bool(
-            "lint_review_enabled", "LINT_REVIEW_ENABLED", True
-        ),
-        "review_fail_max_rewrites": tracked_int(
-            "review_fail_max_rewrites", "REVIEW_FAIL_MAX_REWRITES", 3
-        ),
-        "review_engine_repair_v2_enabled": tracked_bool(
-            "review_engine_repair_v2_enabled",
-            "FORWIN_REVIEW_ENGINE_REPAIR_V2_ENABLED",
-            False,
-        ),
-        "review_engine_arc_patcher_enabled": tracked_bool(
-            "review_engine_arc_patcher_enabled",
-            "FORWIN_REVIEW_ENGINE_ARC_PATCHER_ENABLED",
-            False,
-        ),
-        "review_engine_book_patcher_enabled": tracked_bool(
-            "review_engine_book_patcher_enabled",
-            "FORWIN_REVIEW_ENGINE_BOOK_PATCHER_ENABLED",
-            False,
-        ),
-        "review_engine_obligation_verifier_enabled": tracked_bool(
-            "review_engine_obligation_verifier_enabled",
-            "FORWIN_REVIEW_ENGINE_OBLIGATION_VERIFIER_ENABLED",
-            False,
-        ),
-        "review_engine_auto_approve_enabled": tracked_bool(
-            "review_engine_auto_approve_enabled",
-            "FORWIN_REVIEW_ENGINE_AUTO_APPROVE_ENABLED",
-            False,
-        ),
-        "review_engine_local_rewrite_enabled": tracked_bool(
-            "review_engine_local_rewrite_enabled",
-            "FORWIN_REVIEW_ENGINE_LOCAL_REWRITE_ENABLED",
-            False,
-        ),
-        "review_engine_commit_with_obligation_enabled": tracked_bool(
-            "review_engine_commit_with_obligation_enabled",
-            "FORWIN_REVIEW_ENGINE_COMMIT_WITH_OBLIGATION_ENABLED",
-            False,
-        ),
-        "review_engine_arc_book_budget_enabled": tracked_bool(
-            "review_engine_arc_book_budget_enabled",
-            "FORWIN_REVIEW_ENGINE_ARC_BOOK_BUDGET_ENABLED",
-            False,
-        ),
-        "review_engine_live_cutover_enabled": tracked_bool(
-            "review_engine_live_cutover_enabled",
-            "FORWIN_REVIEW_ENGINE_LIVE_CUTOVER_ENABLED",
-            False,
-        ),
-        "review_engine_live_cutover_project_allowlist": tracked_csv(
-            "review_engine_live_cutover_project_allowlist",
-            "FORWIN_REVIEW_ENGINE_LIVE_CUTOVER_PROJECT_ALLOWLIST",
-        ),
-        "repair_model_sequence": _env_csv(
-            env,
-            "FORWIN_REPAIR_MODEL_SEQUENCE",
-        )
-        or [
-            "deepseek-reasoner",
-            "deepseek-reasoner",
-            "gpt-5.3-codex-spark",
-        ],
-        "canon_quality_gate": tracked_str(
-            "canon_quality_gate", "FORWIN_CANON_QUALITY_GATE", "strict"
-        ),
-        "chapter_review_form_mode": _env_str(env, "FORWIN_CHAPTER_REVIEW_FORM_MODE", "primary"),
-        "chapter_review_form_min_blocking_confidence": _env_float(
-            env, "FORWIN_CHAPTER_REVIEW_FORM_MIN_BLOCKING_CONFIDENCE", 0.8
-        ),
-        "chapter_review_form_max_llm_retries": _env_int(env, "FORWIN_CHAPTER_REVIEW_FORM_MAX_LLM_RETRIES", 1),
-        "chapter_review_form_token_budget_chars": _env_int(env, "FORWIN_CHAPTER_REVIEW_FORM_TOKEN_BUDGET_CHARS", 8000),
-        "form_blocking_character_dead": _env_str(env, "FORWIN_FORM_BLOCKING_CHARACTER_DEAD", "error"),
-        "form_blocking_character_wounded": _env_str(env, "FORWIN_FORM_BLOCKING_CHARACTER_WOUNDED", "warning"),
-        "form_blocking_character_captured": _env_str(env, "FORWIN_FORM_BLOCKING_CHARACTER_CAPTURED", "error"),
-        "form_blocking_countdown_inconsistent": _env_str(env, "FORWIN_FORM_BLOCKING_COUNTDOWN_INCONSISTENT", "error"),
-        "form_blocking_countdown_reset": _env_str(env, "FORWIN_FORM_BLOCKING_COUNTDOWN_RESET", "warning"),
-        "form_blocking_countdown_advanced": _env_str(env, "FORWIN_FORM_BLOCKING_COUNTDOWN_ADVANCED", "warning"),
-        "form_blocking_obligation_unaddressed": _env_str(env, "FORWIN_FORM_BLOCKING_OBLIGATION_UNADDRESSED", "error"),
-        "form_blocking_obligation_partial": _env_str(env, "FORWIN_FORM_BLOCKING_OBLIGATION_PARTIAL", "warning"),
-        "form_blocking_signal_persisting": _env_str(env, "FORWIN_FORM_BLOCKING_SIGNAL_PERSISTING", "error"),
-        "form_blocking_signal_worsened": _env_str(env, "FORWIN_FORM_BLOCKING_SIGNAL_WORSENED", "error"),
-        "form_blocking_final_dangling": _env_str(env, "FORWIN_FORM_BLOCKING_FINAL_DANGLING", "error"),
-        "form_blocking_final_denied": _env_str(env, "FORWIN_FORM_BLOCKING_FINAL_DENIED", "error"),
-        "reviewer_quality_mode": tracked_str(
-            "reviewer_quality_mode", "FORWIN_REVIEWER_QUALITY_MODE", "hybrid"
-        ),
-        "planning_audit_mode": tracked_str(
-            "planning_audit_mode", "FORWIN_PLANNING_AUDIT_MODE", "hybrid"
-        ),
-        "plan_patch_validation_mode": tracked_str(
-            "plan_patch_validation_mode", "FORWIN_PLAN_PATCH_VALIDATION_MODE", "hybrid"
-        ),
-        "final_gate_mode": tracked_str(
-            "final_gate_mode", "FORWIN_FINAL_GATE_MODE", "hybrid"
-        ),
-        "band_checkpoint_mode": tracked_str(
-            "band_checkpoint_mode", "FORWIN_BAND_CHECKPOINT_MODE", "hybrid"
-        ),
-        "final_completion_gate": _env_str(env, "FORWIN_FINAL_COMPLETION_GATE", "strict"),
-        "style_telemetry_mode": _env_str(env, "FORWIN_STYLE_TELEMETRY_MODE", "warn"),
-        "phase4_use_llm": tracked_bool("phase4_use_llm", "PHASE4_USE_LLM", True),
         "codex_enabled": _env_bool(env, "FORWIN_CODEX_ENABLED", False),
         "codex_bridge_url": _env_str(
             env, "FORWIN_CODEX_BRIDGE_URL", "http://host.docker.internal:8897"
@@ -619,71 +358,15 @@ def _env_values() -> tuple[dict[str, object], set[str]]:
         "codex_job_timeout_seconds": _env_float(
             env, "FORWIN_CODEX_JOB_TIMEOUT_SECONDS", 900.0
         ),
-        "feedback_cooldown_chapters": _env_int(
-            env, "FEEDBACK_COOLDOWN_CHAPTERS", 3
-        ),
-        "comment_to_reader_ratio": _env_int(env, "COMMENT_TO_READER_RATIO", 80),
+        "default_scene_count": _env_int(env, "DEFAULT_SCENE_COUNT", 3),
+        "max_scene_count": _env_int(env, "MAX_SCENE_COUNT", 4),
+        "prompt_budget_chars": _env_int(env, "PROMPT_BUDGET_CHARS", 12000),
         "temperature": _env_float(env, "TEMPERATURE", 0.85),
         "max_tokens": _env_int(env, "MAX_TOKENS", 16384),
     }
-    return values, explicit_keys
 
 
-PULP_OVERRIDES: dict[str, object] = {
-    "writer_mode": "single",
-    "operation_mode": "blackbox",
-    "review_interval_chapters": 0,
-    "experience_review_enabled": False,
-    "lint_review_enabled": True,
-    "canon_quality_gate": "pulp_fatal",
-    "freeze_failed_candidates": False,
-    "review_fail_max_rewrites": 0,
-    "auto_band_checkpoint": False,
-    "manual_checkpoints_enabled": False,
-    "future_constraints_enabled": False,
-    "generation_audit_interval_chapters": 0,
-    "generation_audit_pause_enabled": False,
-    "phase4_use_llm": False,
-    "reviewer_quality_mode": "deterministic",
-    "planning_audit_mode": "off",
-    "plan_patch_validation_mode": "off",
-    "final_gate_mode": "off",
-    "band_checkpoint_mode": "off",
-    "min_chapter_chars": 1800,
-    "target_chapter_chars": 2400,
-    "max_chapter_chars": 3000,
-    "book_state_layers": ["world"],
-    "hard_floor_gate_enabled": True,
-    "context_recency_window_chapters": 50,
-    "map_movement_review_enabled": False,
-    "personality_review_enabled": False,
-    "canon_quality_review_in_hub_enabled": False,
-}
-
-PREMIUM_OVERRIDES: dict[str, object] = {}
-
-
-def apply_quality_profile(config: "Config", *, explicit_keys: set[str]) -> "Config":
-    profile = (
-        str(getattr(config, "quality_profile", "standard") or "standard")
-        .strip()
-        .lower()
-    )
-    if profile == "pulp":
-        overrides = PULP_OVERRIDES
-    elif profile == "premium":
-        overrides = PREMIUM_OVERRIDES
-    else:
-        return config
-    update = {
-        key: deepcopy(value)
-        for key, value in overrides.items()
-        if key not in explicit_keys
-    }
-    return config.model_copy(update=update)
-
-
-class _ConfigFields:
+class _InfrastructureFields:
     database_url: str = DEFAULT_DATABASE_URL
     artifact_root: str = "data/artifacts"
     artifact_backend: str = "local"
@@ -704,7 +387,6 @@ class _ConfigFields:
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
     embedding_dims: int = DEFAULT_EMBEDDING_DIMS
     embedding_required: bool = False
-    runtime_settings_path: str = "data/runtime_settings.json"
     observability_enabled: bool = True
     observability_performance_enabled: bool = True
     observability_span_sample_rate: float = 1.0
@@ -732,100 +414,25 @@ class _ConfigFields:
     minimax_api_key: str = ""
     minimax_base_url: str = DEFAULT_MINIMAX_BASE_URL
     minimax_model: str = DEFAULT_MINIMAX_MODEL
-    llm_env_profiles: list[dict[str, str]] = []
+    llm_env_profiles: list[dict[str, str]] = Field(default_factory=list)
     llm_timeout_seconds: float = 90.0
     llm_retry_attempts: int = 2
     llm_retry_initial_delay_seconds: float = 2.0
     llm_retry_max_delay_seconds: float = 15.0
     scene_call_timeout_seconds: float = 90.0
-    quality_profile: Literal["pulp", "standard", "premium"] = "standard"
-    max_chapter_chars: int = 3200
-    min_chapter_chars: int = 2500
-    target_chapter_chars: int = 2800
-    prompt_budget_chars: int = 12000
-    writer_mode: str = "scene"
-    operation_mode: str = "blackbox"
-    review_delegation_mode: Literal["human", "reckless"] = "human"
-    book_state_layers: list[str] = ["world", "map", "cognition", "narrative"]
-    hard_floor_gate_enabled: bool = False
-    context_recency_window_chapters: int = 0
-    map_movement_review_enabled: bool = True
-    personality_review_enabled: bool = True
-    canon_quality_review_in_hub_enabled: bool = True
-    freeze_failed_candidates: bool = True
-    review_interval_chapters: int = 0
-    progression_mode: str = "serial_canon_band_guard"
-    auto_band_checkpoint: bool = True
-    band_warn_action: str = "pause"
-    manual_checkpoints_enabled: bool = True
-    future_constraints_enabled: bool = True
-    generation_audit_interval_chapters: int = 0
-    generation_audit_pause_enabled: bool = False
-    provisional_preview_enabled: bool = False
+    llm_fallback_profiles: list[dict[str, str]] = Field(default_factory=list)
     skill_runtime_enabled: bool = True
     skill_registry_path: str = "forwin_skills"
     skill_strictness: str = "normal"
-    enabled_skill_groups: list[str] = []
-    disabled_skill_ids: list[str] = []
-    governance_task_id: str = ""
-    governance_causal_root_id: str = ""
-    llm_fallback_profiles: list[dict[str, str]] = []
-    default_scene_count: int = 3
-    max_scene_count: int = 4
+    enabled_skill_groups: list[str] = Field(default_factory=list)
+    disabled_skill_ids: list[str] = Field(default_factory=list)
     context_budget_chars: int = 6000
     retrieval_max_entities: int = 8
     retrieval_max_threads: int = 4
     retrieval_max_summaries: int = 3
-    pacing_window_size: int = 3
-    stale_thread_window: int = 3
-    pacing_min_avg_chars: int = 1600
-    pacing_max_avg_chars: int = 3800
     phase_active_thread_limit: int = 20
-    replan_cooldown_chapters: int = 3
-    blackbox_writer_attention_retries: int = 3
-    experience_review_enabled: bool = True
-    lint_review_enabled: bool = True
-    review_fail_max_rewrites: int = 3
-    review_engine_repair_v2_enabled: bool = False
-    review_engine_arc_patcher_enabled: bool = False
-    review_engine_book_patcher_enabled: bool = False
-    review_engine_obligation_verifier_enabled: bool = False
-    review_engine_auto_approve_enabled: bool = False
-    review_engine_local_rewrite_enabled: bool = False
-    review_engine_commit_with_obligation_enabled: bool = False
-    review_engine_arc_book_budget_enabled: bool = False
-    review_engine_live_cutover_enabled: bool = False
-    review_engine_live_cutover_project_allowlist: list[str] = []
-    repair_model_sequence: list[str] = [
-        "deepseek-reasoner",
-        "deepseek-reasoner",
-        "gpt-5.3-codex-spark",
-    ]
-    canon_quality_gate: str = "strict"
-    chapter_review_form_mode: str = "primary"
-    chapter_review_form_min_blocking_confidence: float = 0.8
     chapter_review_form_max_llm_retries: int = 1
     chapter_review_form_token_budget_chars: int = 8000
-    form_blocking_character_dead: str = "error"
-    form_blocking_character_wounded: str = "warning"
-    form_blocking_character_captured: str = "error"
-    form_blocking_countdown_inconsistent: str = "error"
-    form_blocking_countdown_reset: str = "warning"
-    form_blocking_countdown_advanced: str = "warning"
-    form_blocking_obligation_unaddressed: str = "error"
-    form_blocking_obligation_partial: str = "warning"
-    form_blocking_signal_persisting: str = "error"
-    form_blocking_signal_worsened: str = "error"
-    form_blocking_final_dangling: str = "error"
-    form_blocking_final_denied: str = "error"
-    reviewer_quality_mode: str = "hybrid"
-    planning_audit_mode: str = "hybrid"
-    plan_patch_validation_mode: str = "hybrid"
-    final_gate_mode: str = "hybrid"
-    band_checkpoint_mode: str = "hybrid"
-    final_completion_gate: str = "strict"
-    style_telemetry_mode: str = "warn"
-    phase4_use_llm: bool = True
     codex_enabled: bool = False
     codex_bridge_url: str = "http://host.docker.internal:8897"
     codex_bridge_token: str = ""
@@ -833,21 +440,18 @@ class _ConfigFields:
     codex_max_concurrent: int = 1
     codex_sync_timeout_seconds: float = 90.0
     codex_job_timeout_seconds: float = 900.0
-    feedback_cooldown_chapters: int = 3
-    comment_to_reader_ratio: int = 80
+    default_scene_count: int = 3
+    max_scene_count: int = 4
+    prompt_budget_chars: int = 12000
     temperature: float = 0.85
     max_tokens: int = 16384
 
     @classmethod
-    def from_env(cls) -> "Config":
-        values, explicit_keys = _env_values()
-        config = cls(**values)
-        config = apply_quality_profile(config, explicit_keys=explicit_keys)
-        _warn_deprecated_review_cutover_config(explicit_keys)
-        return config
+    def from_env(cls) -> "InfrastructureConfig":
+        return cls(**_infrastructure_env_values())
 
 
-class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
+class InfrastructureConfig(_InfrastructureFields, _ConfigBaseModel):  # type: ignore[misc]
     if _USES_BASE_SETTINGS:
         model_config = {"env_prefix": "", "extra": "forbid"}
     else:
@@ -855,7 +459,6 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
 
     def __init__(self, **data: object) -> None:
         super().__init__(**data)
-        database_url = str(getattr(self, "database_url", "") or "").strip()
         user = str(self.http_basic_user or "")
         password = str(self.http_basic_password or "")
         if bool(user) != bool(password):
@@ -866,22 +469,19 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
         local_binds = {"", "127.0.0.1", "localhost", "::1"}
         binds_all = bind in {"0.0.0.0", "::"}
         public_bind = bind not in local_binds
-        if binds_all and not bool(self.allow_bind_all_interfaces):
+        if binds_all and not self.allow_bind_all_interfaces:
             raise ValueError(
                 "FORWIN_HTTP_BIND binds all interfaces. Set "
                 "FORWIN_ALLOW_BIND_ALL_INTERFACES=true only if this is intentional."
             )
-        if public_bind and not (user and password) and not bool(self.allow_unauthenticated_lan):
+        if public_bind and not (user and password) and not self.allow_unauthenticated_lan:
             raise ValueError(
                 "FORWIN_HTTP_BIND is not localhost, but Basic Auth is disabled. "
                 "Set FORWIN_HTTP_BASIC_USER/PASSWORD or explicitly set "
                 "FORWIN_ALLOW_UNAUTHENTICATED_LAN=true."
             )
         publisher_secret = str(self.publisher_session_secret or "").strip()
-        placeholder_secret = publisher_secret.lower().startswith(
-            ("change-me", "replace-with", "changeme")
-        )
-        if publisher_secret and placeholder_secret:
+        if publisher_secret.lower().startswith(("change-me", "replace-with", "changeme")):
             raise ValueError(
                 "FORWIN_PUBLISHER_SESSION_SECRET appears to be a placeholder; "
                 "replace it with a real secret."
@@ -895,7 +495,7 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
                 "FORWIN_PUBLISHER_SESSION_SECRET must be set when publisher extension "
                 "profile is enabled."
             )
-        if publisher_profile_enabled and not bool(self.publisher_session_encryption_required):
+        if publisher_profile_enabled and not self.publisher_session_encryption_required:
             raise ValueError(
                 "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED=true must be set when "
                 "publisher extension profile is enabled."
@@ -905,22 +505,35 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
                 "FORWIN_PUBLISHER_SESSION_SECRET must be set when "
                 "FORWIN_PUBLISHER_SESSION_ENCRYPTION_REQUIRED=true"
             )
-        object.__setattr__(
-            self,
-            "progression_mode",
-            _normalize_progression_mode(self.progression_mode),
-        )
 
-    @property
-    def writer(self) -> WriterProfile:
+    def resolve_model_profile(self, profile_id: str) -> ModelProfileConfig:
+        requested = str(profile_id or "").strip()
+        profiles = [
+            ModelProfileConfig.model_validate(item) for item in self.llm_env_profiles
+        ]
+        if not requested:
+            return ModelProfileConfig(
+                id="env-minimax",
+                name="MiniMax (.env)",
+                api_key=self.minimax_api_key,
+                base_url=self.minimax_base_url,
+                model=self.minimax_model,
+            )
+        for profile in profiles:
+            if profile.id == requested:
+                return profile
+        raise ValueError(f"Unknown model profile: {requested}")
+
+    def writer_profile(self, policy: RuntimePolicy) -> WriterProfile:
+        lengths = policy.chapter_length
         return WriterProfile.from_values(
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             default_scene_count=self.default_scene_count,
             max_scene_count=self.max_scene_count,
-            min_chapter_chars=self.min_chapter_chars,
-            target_chapter_chars=self.target_chapter_chars,
-            max_chapter_chars=self.max_chapter_chars,
+            min_chapter_chars=lengths.min_chars,
+            target_chapter_chars=lengths.target_chars,
+            max_chapter_chars=lengths.max_chars,
             prompt_budget_chars=self.prompt_budget_chars,
         )
 
@@ -960,32 +573,6 @@ class Config(_ConfigFields, _ConfigBaseModel):  # type: ignore[misc]
             enabled=self.observability_enabled,
             performance_enabled=self.observability_performance_enabled,
             span_sample_rate=self.observability_span_sample_rate,
-        )
-
-    @property
-    def governance(self) -> GovernanceConfig:
-        return GovernanceConfig(
-            progression_mode=self.progression_mode,
-            review_delegation_mode=self.review_delegation_mode,
-            review_interval_chapters=self.review_interval_chapters,
-            future_constraints_enabled=self.future_constraints_enabled,
-        )
-
-    @property
-    def form_blocking_policy(self) -> FormBlockingPolicy:
-        return FormBlockingPolicy(
-            character_dead=self.form_blocking_character_dead,
-            character_wounded=self.form_blocking_character_wounded,
-            character_captured=self.form_blocking_character_captured,
-            countdown_inconsistent=self.form_blocking_countdown_inconsistent,
-            countdown_reset=self.form_blocking_countdown_reset,
-            countdown_advanced=self.form_blocking_countdown_advanced,
-            obligation_unaddressed=self.form_blocking_obligation_unaddressed,
-            obligation_partial=self.form_blocking_obligation_partial,
-            signal_persisting=self.form_blocking_signal_persisting,
-            signal_worsened=self.form_blocking_signal_worsened,
-            final_dangling=self.form_blocking_final_dangling,
-            final_denied=self.form_blocking_final_denied,
         )
 
     @property

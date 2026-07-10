@@ -142,7 +142,7 @@ from forwin.api_schemas import (
     StartWritingResponse,
 )
 from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.governance import (
     BandCheckpointIssueInfo,
     CONSTRAINT_LEVELS,
@@ -269,9 +269,9 @@ def _resolve_runtime_profile(requested_profile_id: str = "") -> dict[str, str]:
     }
 
 
-def _saved_runtime_config_or_default(model_profile_id: str = "") -> Config:
+def _saved_runtime_config_or_default(model_profile_id: str = "") -> InfrastructureConfig:
     if not api_state._config:
-        return Config(minimax_api_key="")
+        return InfrastructureConfig(minimax_api_key="")
     if model_profile_id:
         return build_runtime_config(
             GenerateRequest(
@@ -288,7 +288,7 @@ def _saved_runtime_config_or_default(model_profile_id: str = "") -> Config:
 
 
 def _build_genesis_service(
-    runtime_config: Config | None = None,
+    runtime_config: InfrastructureConfig | None = None,
     *,
     model_profile_id: str = "",
 ) -> BookGenesisService:

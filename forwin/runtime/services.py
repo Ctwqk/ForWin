@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.model_adapter import ModelAdapter
 from forwin.observability.ports import ObservabilityPort
 from forwin.skills import SkillPromptLayerBuilder, SkillRegistry, SkillRouter
@@ -21,7 +21,7 @@ class SkillRuntimeBundle:
 
 @dataclass(slots=True)
 class RuntimeServices:
-    config: Config
+    config: InfrastructureConfig
     engine: Engine
     session_factory: sessionmaker
     llm_client: ModelAdapter

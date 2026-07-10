@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.writer import WriterOutput
 
@@ -33,7 +33,7 @@ def run_hard_floor(
     repo,
     project_id: str,
     chapter_number: int,
-    config: Config,
+    config: InfrastructureConfig,
 ) -> HardFloorResult:
     _ = repo
     fail_reasons: list[str] = []

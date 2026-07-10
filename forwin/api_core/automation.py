@@ -1,4 +1,5 @@
 """ForWin Web API – FastAPI interface for the novel generation system."""
+
 from __future__ import annotations
 
 import logging
@@ -125,7 +126,11 @@ from forwin.api_schemas import (
     LintSignalInfo,
     StartWritingResponse,
 )
-from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
+from forwin.book_genesis import (
+    BookGenesisService,
+    GENESIS_STAGE_ORDER,
+    StaleGenesisRevisionError,
+)
 from forwin.config import InfrastructureConfig
 from forwin.governance import (
     BandCheckpointIssueInfo,
@@ -144,17 +149,20 @@ from forwin.models.base import Base, get_session_factory
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import Project, ChapterPlan, ArcPlanVersion
 from forwin.models.entity import Entity
-from forwin.models.event import CanonEvent, EventEntityLink
 from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
-from forwin.models.publisher import PublisherCommentSyncJob, PublisherConnectionState, PublisherExtensionClient, PublisherRawComment, PublisherUploadJob
-from forwin.models.thread import PlotThread
+from forwin.models.publisher import (
+    PublisherCommentSyncJob,
+    PublisherConnectionState,
+    PublisherExtensionClient,
+    PublisherRawComment,
+    PublisherUploadJob,
+)
 from forwin.models.task import GenerationTask
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.phase import (
     BandExperiencePlan,
     ChapterRewriteAttempt,
 )
-from forwin.models.timeline import ChapterTimeline, StoryTimePoint
 from forwin.models.phase4 import NPCIntentSnapshot
 import forwin.models.phase  # noqa: F401
 from forwin.protocol.experience import BandDelightSchedule
@@ -180,6 +188,7 @@ from forwin.api_core.runtime import *
 from forwin.api_core.tasks import *
 from forwin.api_core.project_helpers import *
 from forwin.api_core.generation import *
+
 
 def _automation_daily_start_minutes(automation: ProjectAutomationSettings) -> int:
     return api_automation.automation_daily_start_minutes(automation)
@@ -249,7 +258,10 @@ def _automation_scheduler_loop() -> None:
 
 
 def _start_automation_scheduler() -> None:
-    if api_state._automation_scheduler_thread is not None and api_state._automation_scheduler_thread.is_alive():
+    if (
+        api_state._automation_scheduler_thread is not None
+        and api_state._automation_scheduler_thread.is_alive()
+    ):
         return
     api_state._automation_scheduler_stop.clear()
     api_state._automation_scheduler_thread = threading.Thread(
@@ -284,12 +296,16 @@ def _list_generation_tasks(limit: int) -> list[tuple[str, dict[str, Any]]]:
             ][:normalized_limit]
 
     with _get_session() as session:
-        rows = session.execute(
-            select(GenerationTask)
-            .where(GenerationTask.deleted_at.is_(None))
-            .order_by(GenerationTask.updated_at.desc())
-            .limit(normalized_limit)
-        ).scalars().all()
+        rows = (
+            session.execute(
+                select(GenerationTask)
+                .where(GenerationTask.deleted_at.is_(None))
+                .order_by(GenerationTask.updated_at.desc())
+                .limit(normalized_limit)
+            )
+            .scalars()
+            .all()
+        )
         merged: dict[str, dict[str, Any]] = {}
         for row in rows:
             persisted = _generation_task_from_row(row)
@@ -301,19 +317,22 @@ def _list_generation_tasks(limit: int) -> list[tuple[str, dict[str, Any]]]:
                 if visible is not None:
                     merged[row.id] = visible
         with api_state._tasks_lock:
-            cached_items = [(task_id, dict(task)) for task_id, task in api_state._tasks.items()]
+            cached_items = [
+                (task_id, dict(task)) for task_id, task in api_state._tasks.items()
+            ]
         for task_id, cached in cached_items:
             visible = _apply_task_visibility_rules(cached, include_deleted=False)
             if visible is None:
                 continue
             current = merged.get(task_id)
-            merged[task_id] = _prefer_cached_generation_task(current, visible) or visible
+            merged[task_id] = (
+                _prefer_cached_generation_task(current, visible) or visible
+            )
         return sorted(
             merged.items(),
             key=lambda item: _coerce_task_datetime(item[1].get("updated_at")),
             reverse=True,
         )[:normalized_limit]
-
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

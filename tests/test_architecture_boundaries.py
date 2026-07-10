@@ -12,7 +12,6 @@ import forwin.book_state as book_state
 import forwin.map as book_map
 import forwin.review as review
 import forwin.reviewer_v4 as reviewer_v4
-import forwin.world_model as world_model
 from forwin.api_route_registry import (
     ApiRouteDeps,
     CoreDeps,
@@ -38,7 +37,7 @@ def _read(rel_path: str) -> str:
 def test_core_packages_declare_current_architecture_roles() -> None:
     expectations = {
         "forwin/book_state/README.md": "Status: CANON runtime.",
-        "forwin/world_model/README.md": "Status: deprecated projection / wiki / export facade.",
+        "forwin/knowledge_system/README.md": "Status: disposable projection and retrieval domain.",
         "forwin/review/README.md": "Status: DRAFT REVIEW domain.",
         "forwin/reviewer_v4/README.md": "Status: COMPATIBILITY gate.",
         "forwin/map/README.md": "Status: CANON map runtime.",
@@ -47,9 +46,10 @@ def test_core_packages_declare_current_architecture_roles() -> None:
         assert marker in _read(rel_path)
 
     assert "CANON BookState runtime" in inspect.getdoc(book_state)
-    assert "Deprecated world model projection/export facade" in inspect.getdoc(world_model)
     assert "Chapter draft review domain" in inspect.getdoc(review)
-    assert "COMPATIBILITY world_v4 extraction review gate" in inspect.getdoc(reviewer_v4)
+    assert "COMPATIBILITY world_v4 extraction review gate" in inspect.getdoc(
+        reviewer_v4
+    )
     assert "CANON Scheme C BookMap runtime" in inspect.getdoc(book_map)
 
 
@@ -161,7 +161,14 @@ def test_api_route_deps_reject_flat_dependency_kwargs() -> None:
 
     legacy_kwargs = {
         name: noop
-        for group in (CoreDeps, TaskDeps, ProjectDeps, GovernanceDeps, ObservabilityDeps, PublisherDeps)
+        for group in (
+            CoreDeps,
+            TaskDeps,
+            ProjectDeps,
+            GovernanceDeps,
+            ObservabilityDeps,
+            PublisherDeps,
+        )
         for name in group.__annotations__
     }
     legacy_kwargs.update(
@@ -207,14 +214,17 @@ def test_design_status_contains_deprecation_matrix() -> None:
     status_doc = _read("Design-docs/DESIGN_STATUS.md")
 
     assert "兼容 / 弃用矩阵" in status_doc
-    assert "`forwin.reviewer_v4` | deprecated | `forwin.world_v4_review_gate`" in status_doc
+    assert "`forwin.world_model` | removed | `forwin.knowledge_system`" in status_doc
+    assert (
+        "`forwin.reviewer_v4` | deprecated | `forwin.world_v4_review_gate`"
+        in status_doc
+    )
     assert "`forwin.planning.scenario_rehearsal` | deprecated" in status_doc
     assert "v5.0" in status_doc
 
 
 def test_deprecated_legacy_modules_emit_deprecation_warning() -> None:
     for module_name in (
-        "forwin.world_model",
         "forwin.reviewer_v4",
         "forwin.planning.scenario_rehearsal",
     ):
@@ -224,9 +234,67 @@ def test_deprecated_legacy_modules_emit_deprecation_warning() -> None:
 
 
 def test_removed_world_v4_projection_modules_stay_removed() -> None:
+    assert not (ROOT / "forwin/world_model").exists()
     assert not (ROOT / "forwin/api_world_model_v4_routes.py").exists()
     assert not (ROOT / "forwin/world_model_v4").exists()
     assert not (ROOT / "forwin/world_v4_compat").exists()
+
+
+def test_v5_schema_and_accepted_state_have_single_authorities() -> None:
+    versions = sorted(
+        path.name
+        for path in (ROOT / "forwin/migrations/versions").glob("*.py")
+        if path.name != "__init__.py"
+    )
+    assert versions == ["0001_v5_baseline.py"]
+
+    base_source = _read("forwin/models/base.py")
+    for removed in (
+        "POSTGRES_BASELINE_MIGRATIONS",
+        "schema_migrations",
+        "def _upgrade_",
+        "upgrade_db",
+    ):
+        assert removed not in base_source
+    assert "def require_v5_schema(" in base_source
+    assert "def run_migrations(" in base_source
+
+    production_init_callers = [
+        path.relative_to(ROOT).as_posix()
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+        if path != ROOT / "forwin/models/base.py"
+        and "init_db(" in path.read_text(encoding="utf-8")
+    ]
+    assert production_init_callers == []
+
+    for removed_model in ("event.py", "thread.py", "timeline.py"):
+        assert not (ROOT / "forwin/models" / removed_model).exists()
+    entity_source = _read("forwin/models/entity.py")
+    assert "class EntityState" not in entity_source
+    assert "class RelationEdge" not in entity_source
+
+    baseline = _read("forwin/migrations/versions/0001_v5_baseline.py")
+    for removed_table in (
+        "entity_states",
+        "relation_edges",
+        "canon_events",
+        "event_entity_links",
+        "plot_threads",
+        "plot_thread_beats",
+        "story_time_points",
+        "chapter_timelines",
+        "world_model_pages",
+        "world_edit_proposals",
+    ):
+        assert removed_table not in baseline
+    for current_table in (
+        "graph_deltas",
+        "world_nodes",
+        "narrative_nodes",
+        "knowledge_projection_pages",
+        "quality_analysis_runs",
+    ):
+        assert f'op.create_table(\n        "{current_table}"' in baseline
 
 
 def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
@@ -258,9 +326,7 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
     assert "_commit_book_state_canon" in _read(
         "forwin/orchestrator_loop_core/world_projection.py"
     )
-    assert "class DraftReviewService" in _read(
-        "forwin/review/draft_service.py"
-    )
+    assert "class DraftReviewService" in _read("forwin/review/draft_service.py")
     assert "class FinalResidualPolicy" in _read(
         "forwin/review/decision/rules/final_residual.py"
     )
@@ -329,11 +395,16 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
         "WritingOrchestrator._register_writer_output_entities",
     ):
         assert removed_assignment not in orchestrator_service
-    assert sum(
-        line.startswith("WritingOrchestrator._")
-        for line in orchestrator_service.splitlines()
-    ) <= 87
-    assert "WritingOrchestrator" not in _read("forwin/orchestrator_loop_core/__init__.py")
+    assert (
+        sum(
+            line.startswith("WritingOrchestrator._")
+            for line in orchestrator_service.splitlines()
+        )
+        <= 87
+    )
+    assert "WritingOrchestrator" not in _read(
+        "forwin/orchestrator_loop_core/__init__.py"
+    )
 
 
 def test_removed_repair_dead_code_stays_removed() -> None:
@@ -373,7 +444,8 @@ def test_quality_analysis_cache_is_shared_and_versioned() -> None:
     assert "analyze_writer_output_quality(" in _read(
         "forwin/orchestrator_loop_core/quality_gates.py"
     )
-    assert (ROOT / "forwin/migrations/versions/0024_quality_analysis_runs.py").exists()
+    baseline = _read("forwin/migrations/versions/0001_v5_baseline.py")
+    assert '"quality_analysis_runs"' in baseline
     production_cache_bypasses = [
         path
         for path in sorted((ROOT / "forwin").rglob("*.py"))
@@ -398,25 +470,25 @@ def test_genesis_workflow_contains_delegation_only() -> None:
 
 def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
     forbidden_runtime_tokens = {
-        "Review" "OutcomeRouter": [
+        "ReviewOutcomeRouter": [
             "forwin/orchestrator_loop_core/common.py",
             "forwin/orchestrator_loop_core/quality_gates.py",
         ],
-        "Repair" "Policy": [
+        "RepairPolicy": [
             "forwin/runtime/container.py",
             "forwin/runtime/services.py",
             "forwin/orchestrator_loop_core/service.py",
             "forwin/review/repair/service.py",
             "forwin/review/decision/rules/repair.py",
         ],
-        "Obligation" "ScopeRouter": [
+        "ObligationScopeRouter": [
             "forwin/orchestrator_loop_core/quality_gates.py",
             "forwin/review/decision/rules/obligation_scope.py",
         ],
-        "select_" "cutover_pair": [
+        "select_cutover_pair": [
             "forwin/orchestrator_loop_core/quality_gates.py",
         ],
-        "engine_" "live_enabled": [
+        "engine_live_enabled": [
             "forwin/review/repair/service.py",
         ],
     }
@@ -429,7 +501,9 @@ def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
     assert offenders == []
     for removed_package in ("reviser", "review_engine", "reviewer"):
         assert list((ROOT / f"forwin/{removed_package}").rglob("*.py")) == []
-    assert "FinalResidualPolicy" in _read("forwin/review/decision/rules/final_residual.py")
+    assert "FinalResidualPolicy" in _read(
+        "forwin/review/decision/rules/final_residual.py"
+    )
 
 
 def test_removed_generation_modes_and_review_flags_stay_removed() -> None:

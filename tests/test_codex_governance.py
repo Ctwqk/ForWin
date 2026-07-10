@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from forwin.codex_governance import CodexGovernedActionProcessor, CodexGovernedActionRequest
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import Project
-from forwin.models.world_model import WorldEditProposalRow
+from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.state.updater import StateUpdater
 
 
@@ -39,7 +39,7 @@ class CodexGovernanceTests(unittest.TestCase):
             )
             session.commit()
 
-            proposals = session.query(WorldEditProposalRow).filter_by(project_id=project.id).all()
+            proposals = session.query(KnowledgeEditProposalRow).filter_by(project_id=project.id).all()
             self.assertTrue(result.ok)
             self.assertEqual(result.created_object_type, "world_edit_proposal")
             self.assertEqual(len(proposals), 1)
@@ -62,7 +62,7 @@ class CodexGovernanceTests(unittest.TestCase):
                     ),
                 )
 
-            self.assertEqual(session.query(WorldEditProposalRow).count(), 0)
+            self.assertEqual(session.query(KnowledgeEditProposalRow).count(), 0)
 
     def test_prompt_trace_records_codex_metadata_columns(self) -> None:
         with self.session_factory() as session:

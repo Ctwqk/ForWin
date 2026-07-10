@@ -13,9 +13,9 @@ from forwin.api_schemas import (
     WorldEditProposalReviewRequest,
 )
 from forwin.models.project import Project
-from forwin.models.world_model import WorldEditProposalRow
+from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.obsidian.proposal_review import approve_world_edit_proposal
-from forwin.world_model.store import load_json
+from forwin.knowledge_system.store import load_json
 
 
 def build_handlers(
@@ -42,14 +42,23 @@ def build_handlers(
     def list_project_proposals(project_id: str) -> list[WorldEditProposalInfo]:
         with get_session() as session:
             _require_project(session, project_id)
-            rows = session.execute(
-                select(WorldEditProposalRow)
-                .where(WorldEditProposalRow.project_id == project_id)
-                .order_by(WorldEditProposalRow.created_at.desc(), WorldEditProposalRow.id.desc())
-            ).scalars().all()
+            rows = (
+                session.execute(
+                    select(KnowledgeEditProposalRow)
+                    .where(KnowledgeEditProposalRow.project_id == project_id)
+                    .order_by(
+                        KnowledgeEditProposalRow.created_at.desc(),
+                        KnowledgeEditProposalRow.id.desc(),
+                    )
+                )
+                .scalars()
+                .all()
+            )
             return [_proposal_info(row) for row in rows]
 
-    def get_project_proposal(project_id: str, proposal_id: str) -> WorldEditProposalInfo:
+    def get_project_proposal(
+        project_id: str, proposal_id: str
+    ) -> WorldEditProposalInfo:
         with get_session() as session:
             _require_project(session, project_id)
             return _proposal_info(_get_proposal(session, project_id, proposal_id))
@@ -60,14 +69,16 @@ def build_handlers(
     ) -> WorldEditProposalInfo:
         with get_session() as session:
             _require_project(session, project_id)
-            row = WorldEditProposalRow(
+            row = KnowledgeEditProposalRow(
                 project_id=project_id,
                 source=req.source or "world_studio",
                 target_page_key=req.target_page_key,
                 target_node_id=req.target_node_id,
                 target_field=req.target_field,
                 proposal_type=req.proposal_type or "CanonCorrectionProposal",
-                proposed_patch_json=json.dumps(req.proposed_patch or {}, ensure_ascii=False, sort_keys=True),
+                proposed_patch_json=json.dumps(
+                    req.proposed_patch or {}, ensure_ascii=False, sort_keys=True
+                ),
                 reason=req.reason,
                 human_notes=req.human_notes,
                 status="pending",
@@ -100,7 +111,9 @@ def build_handlers(
                     qdrant_models=qdrant_models,
                 )
                 session.commit()
-                return _proposal_info(result.row, projection_refresh=result.projection_refresh)
+                return _proposal_info(
+                    result.row, projection_refresh=result.projection_refresh
+                )
             except Exception:
                 session.rollback()
                 raise
@@ -115,7 +128,9 @@ def build_handlers(
             _require_project(session, project_id)
             row = _get_proposal(session, project_id, proposal_id)
             if row.status not in {"pending", "proposed"}:
-                raise HTTPException(status_code=409, detail=f"proposal already {row.status}")
+                raise HTTPException(
+                    status_code=409, detail=f"proposal already {row.status}"
+                )
             row.status = "rejected"
             row.reviewed_at = datetime.now(UTC)
             row.review_reason = request.reason
@@ -140,15 +155,17 @@ def _require_project(session, project_id: str) -> Project:
     return project
 
 
-def _get_proposal(session, project_id: str, proposal_id: str) -> WorldEditProposalRow:
-    row = session.get(WorldEditProposalRow, proposal_id)
+def _get_proposal(
+    session, project_id: str, proposal_id: str
+) -> KnowledgeEditProposalRow:
+    row = session.get(KnowledgeEditProposalRow, proposal_id)
     if row is None or row.project_id != project_id:
         raise HTTPException(status_code=404, detail="proposal not found")
     return row
 
 
 def _proposal_info(
-    row: WorldEditProposalRow,
+    row: KnowledgeEditProposalRow,
     *,
     projection_refresh: dict[str, Any] | None = None,
 ) -> WorldEditProposalInfo:

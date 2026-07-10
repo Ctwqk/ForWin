@@ -1,51 +1,9 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
-from typing import Iterable
-
-from sqlalchemy import select
-
-from forwin.book_state.repository import BookStateRepository
-from forwin.config import DEFAULT_QDRANT_URL
-from forwin.context.assembler import assemble_context
-from forwin.llm_kb.retriever import LLMKnowledgeBaseRetriever
-from forwin.llm_kb.store import LLMKnowledgeBaseStore
-from forwin.models.world_model import WorldModelConflictRow, WorldModelPageRow
-from forwin.models.world_v4 import (
-    ArcWorldContractRow,
-    BeliefRow,
-    KnowledgeGapRow,
-    ReaderExperienceDeltaRow,
-    WorldDeltaRow,
-    WorldLineRow,
+from forwin.personality import (
+    CharacterPersonalityLibrary,
+    build_active_personality_contexts,
 )
-from forwin.planning.world_contracts import (
-    ArcWorldContract,
-    ChapterWorldDeltaIntent,
-    RevealLadderStep,
-    WorldContractRepository,
-)
-from forwin.protocol.context import (
-    ChapterContextPack,
-    CognitionPack,
-    CompilerPack,
-    EntitySnapshot,
-    PlanningPack,
-    PlotThreadSnapshot,
-    ReaderExperiencePack,
-    RelationSnapshot,
-    RevealPack,
-    ReviewPack,
-    WorldModelRetrievalPack,
-    WritingPack,
-)
-from forwin.protocol.world_model import WorldContextPack
-from forwin.world_model.page_repository import WorldModelPageRepository
-from forwin.world_model.store import load_json
-from forwin.obsidian.frontmatter import parse_sections
-from forwin.personality import CharacterPersonalityLibrary, build_active_personality_contexts
-from forwin.retrieval.memory_index import ChapterMemoryIndex, create_memory_index
 
 
 def _node_context(node) -> dict[str, object]:
@@ -57,7 +15,9 @@ def _node_context(node) -> dict[str, object]:
         "status": node.status,
         "importance": node.importance,
         "source_refs": list(node.source_refs),
-        "state_summary": str(node.state.get("state_summary", "")) if isinstance(node.state, dict) else "",
+        "state_summary": str(node.state.get("state_summary", ""))
+        if isinstance(node.state, dict)
+        else "",
     }
 
 
@@ -116,8 +76,14 @@ def _active_personality_contexts(nodes: list[object]) -> list[dict[str, object]]
     for node in nodes:
         if str(getattr(node, "node_type", "") or "") != "character":
             continue
-        profile = getattr(node, "profile", {}) if isinstance(getattr(node, "profile", {}), dict) else {}
-        loadout = profile.get("personality_loadout") if isinstance(profile, dict) else None
+        profile = (
+            getattr(node, "profile", {})
+            if isinstance(getattr(node, "profile", {}), dict)
+            else {}
+        )
+        loadout = (
+            profile.get("personality_loadout") if isinstance(profile, dict) else None
+        )
         if not loadout:
             continue
         characters.append(
@@ -171,13 +137,13 @@ def _database_url_from_repo(repo) -> str | None:  # noqa: ANN001
 
 
 __all__ = [
-    '_node_context',
-    '_edge_context',
-    '_fact_context',
-    '_map_node_context',
-    '_map_edge_context',
-    '_active_personality_contexts',
-    '_truncate',
-    '_extract_source_digest',
-    '_database_url_from_repo',
+    "_node_context",
+    "_edge_context",
+    "_fact_context",
+    "_map_node_context",
+    "_map_edge_context",
+    "_active_personality_contexts",
+    "_truncate",
+    "_extract_source_digest",
+    "_database_url_from_repo",
 ]

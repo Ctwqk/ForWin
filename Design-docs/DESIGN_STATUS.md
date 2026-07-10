@@ -55,7 +55,7 @@
 
 | 模块 | 状态 | 当前替代 | 删除 / 复核目标 | 说明 |
 |---|---|---|---|---|
-| `forwin.world_model` | deprecated | `forwin.book_state` | v5.0 删除直接业务依赖 | 仅保留 legacy projection / wiki / export 兼容入口，不是 canon；不得重新进入 accepted-chapter runtime。 |
+| `forwin.world_model` | removed | `forwin.knowledge_system` + `forwin.book_state` | 已删除 | live page/proposal/Obsidian/retrieval helper 已迁入 owner；`/world-model/*` 只保留 HTTP 传输契约名。 |
 | `forwin.world_model_v4` | removed | `forwin.book_state` | 已删除 | 旧 compatibility projection/debug bridge 已从生产模块删除。 |
 | `forwin.world_v4_compat` | removed | `forwin.book_state` | 已删除 | 旧 compatibility projection writer 已从生产模块删除。 |
 | `forwin.reviewer_v4` | deprecated | `forwin.world_v4_review_gate` | v5.0 删除 alias 包 | 仅作为旧导入路径 alias；新代码必须导入 `world_v4_review_gate`。 |
@@ -120,15 +120,17 @@
 
 ## 2026-07 V5 Slice 4 Status
 
-状态：implementation-in-progress，未部署，长跑 gate 未执行。
+状态：implementation-complete，未部署，长跑 gate 未执行。
 
 - WriterOutput 的实体准入、状态变化、事件、剧情线 beat 与时间推进统一翻译为 GraphDelta；未知角色/事件引用与 stale old-value 均 fail-closed。
 - `BookStateQuery` 已接管 context、review、checker、autofix、finalization 和 EntityRegistrar 的 accepted-state 读取；`ReviewQuery` 接管已接受摘要与 review notes。
 - Canon 已删除 legacy `apply_state_changes/apply_events/apply_thread_beats/apply_time_advance` 双写；`StateRepository` 对应 accepted-state 查询族及 Genesis legacy entity 预灌已物理删除。
-- `entities/entity_aliases` 暂留作 Canon 后身份唯一性索引；legacy accepted-state 表、deprecated world-model projection facade 与剩余入口壳仍待本 Slice 后续删除。
+- `entities/entity_aliases` 只保留作 Canon 后身份唯一性索引；八张 legacy accepted-state 表及其 ORM 已物理删除。
+- live page/proposal/Obsidian/retrieval helper 已迁入 `knowledge_system` / `obsidian`，`forwin.world_model` facade 与旧 world-model ORM 已物理删除。
+- 项目详情、CLI、phase3/phase4、thread sampling、personality relation enrichment 与兼容 HTTP adapter 均读取 BookState/Knowledge Projection，不再回退旧 accepted-state 表。
 - GraphDelta patch 持久化现在记录并按 sequence 重放，避免 create/append 顺序在数据库 round-trip 后漂移。
 
-验证口径：`compileall` 成功，BookState writer contract/entity admission/architecture 聚焦测试 28 passed，全仓 1554 tests collect 成功且无收集错误。按用户要求不在本任务重复运行全量测试；30/60/100/200 章 gate 均未宣称完成。
+Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手写升级器已删除，唯一 revision 为 `0001_v5_baseline`；生产启动拒绝非 v5 schema，不迁移旧库。验证口径将在本 Slice completion commit 重新记录；30/60/100/200 章 gate 均未宣称完成。
 
 ## 2026-07 Integrated Roadmap Status
 

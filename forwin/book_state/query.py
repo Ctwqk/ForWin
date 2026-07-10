@@ -83,7 +83,12 @@ class BookStateQuery:
             )
         return sorted(
             snapshots,
-            key=lambda item: (-int(item.importance), item.kind, item.name, item.entity_id),
+            key=lambda item: (
+                -int(item.importance),
+                item.kind,
+                item.name,
+                item.entity_id,
+            ),
         )
 
     def entities_by_names(
@@ -94,9 +99,7 @@ class BookStateQuery:
         as_of_chapter: int,
     ) -> dict[str, EntitySnapshot]:
         requested = {
-            str(name or "").strip()
-            for name in names
-            if str(name or "").strip()
+            str(name or "").strip() for name in names if str(name or "").strip()
         }
         mapping: dict[str, EntitySnapshot] = {}
         if not requested:
@@ -161,7 +164,9 @@ class BookStateQuery:
             if str(node.node_type) not in {"plot_thread", "world_line"}:
                 continue
             payload = node.payload if isinstance(node.payload, dict) else {}
-            beats = payload.get("beats") if isinstance(payload.get("beats"), list) else []
+            beats = (
+                payload.get("beats") if isinstance(payload.get("beats"), list) else []
+            )
             beat_descriptions = [
                 str(item.get("description") or "")
                 for item in beats[-3:]
@@ -241,9 +246,10 @@ class BookStateQuery:
             involved_names = [name for name in involved_names if name]
             summary = node.summary or node.description or node.name
             overlap_score = float(len(entity_filter & set(involved_names))) * 3.0
-            thread_score = float(
-                sum(1 for thread_name in thread_filter if thread_name in summary)
-            ) * 2.0
+            thread_score = (
+                float(sum(1 for thread_name in thread_filter if thread_name in summary))
+                * 2.0
+            )
             recency_score = max(
                 0.0,
                 10.0 - float(before_chapter - int(node.created_at_chapter or 0)),
@@ -269,6 +275,19 @@ class BookStateQuery:
             )
         )
         return [event for _, event in ranked[: max(0, int(limit))]]
+
+    def event_count(
+        self,
+        project_id: str,
+        *,
+        as_of_chapter: int,
+    ) -> int:
+        runtime = self.runtime(project_id, as_of_chapter=as_of_chapter)
+        return sum(
+            1
+            for node in runtime.world.nodes_by_id.values()
+            if str(node.node_type) == "event"
+        )
 
     def current_timeline(
         self,

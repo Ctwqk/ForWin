@@ -9,18 +9,17 @@ from typing import Any, Sequence
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.query import BookStateQuery
 from forwin.models import (
     CommentSignalCandidate,
-    Entity,
     NPCIntentSnapshot,
-    PlotThread,
     Project,
     PublisherRawComment,
     WorldSimulationTurn,
     new_id,
 )
-from forwin.orchestrator.thread_sampling import sample_active_threads
-from forwin.state.query_helpers import load_latest_entity_states
+from forwin.orchestrator.thread_sampling import SampledThread, sample_active_threads
+from forwin.protocol.context import EntitySnapshot
 from forwin.utils import parse_llm_json
 from forwin.llm.compat import call_chat_compat
 from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
@@ -28,7 +27,9 @@ from forwin.observability.llm_trace import mark_latest_attempt_parse_failure
 logger = logging.getLogger(__name__)
 
 
-def _read_optional_phase4_llm_timeout_seconds(env: dict[str, str] | None = None) -> float:
+def _read_optional_phase4_llm_timeout_seconds(
+    env: dict[str, str] | None = None,
+) -> float:
     raw = (env or os.environ).get("FORWIN_OPTIONAL_PHASE4_LLM_TIMEOUT_SECONDS", "20")
     try:
         value = float(raw)
@@ -59,10 +60,26 @@ _LEVEL_ORDER = {"noise": 0, "candidate": 1, "watchlist": 2, "confirmed": 3}
 _KEYWORD_RULES: list[tuple[str, str, tuple[str, ...]]] = [
     ("risk", "plot", ("崩", "烂", "弃", "逻辑", "bug", "矛盾", "失望")),
     ("pacing", "arc", ("水", "拖", "慢", "短", "快", "赶", "乱")),
-    ("confusion", "general", ("为什么", "怎么", "是不是", "会不会", "看不懂", "不理解")),
-    ("character_heat", "character", ("喜欢", "精彩", "好看", "帅", "魅力", "上头", "爽", "神", "牛", "期待")),
-    ("relationship_interest", "character", ("cp", "互动", "感情", "在一起", "嗑", "关系线", "修罗场")),
-    ("prediction", "plot", ("我猜", "预测", "盲猜", "应该是", "会不会", "是不是", "估计")),
+    (
+        "confusion",
+        "general",
+        ("为什么", "怎么", "是不是", "会不会", "看不懂", "不理解"),
+    ),
+    (
+        "character_heat",
+        "character",
+        ("喜欢", "精彩", "好看", "帅", "魅力", "上头", "爽", "神", "牛", "期待"),
+    ),
+    (
+        "relationship_interest",
+        "character",
+        ("cp", "互动", "感情", "在一起", "嗑", "关系线", "修罗场"),
+    ),
+    (
+        "prediction",
+        "plot",
+        ("我猜", "预测", "盲猜", "应该是", "会不会", "是不是", "估计"),
+    ),
 ]
 
 
@@ -133,7 +150,11 @@ def classify_signal_level(
         return "watchlist" if unique_users < 2 else "confirmed"
     if unique_users < 2:
         return "noise"
-    if spans_chapters < 2 and signal_type in ("character_heat", "relationship_interest", "prediction"):
+    if spans_chapters < 2 and signal_type in (
+        "character_heat",
+        "relationship_interest",
+        "prediction",
+    ):
         return "noise"
     if unique_users >= 3 and spans_chapters >= 2:
         return "confirmed"
@@ -250,9 +271,15 @@ def _load_highlight_comments(
         row.id: row
         for row in session.execute(
             select(PublisherRawComment).where(PublisherRawComment.id.in_(ordered_ids))
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     }
-    selected = [comment_map[comment_id] for comment_id in ordered_ids if comment_id in comment_map]
+    selected = [
+        comment_map[comment_id]
+        for comment_id in ordered_ids
+        if comment_id in comment_map
+    ]
     return selected or list(fallback_rows[:limit])
 
 
@@ -279,7 +306,9 @@ class CommentAnalyzer:
                 select(CommentSignalCandidate.source_comment_id).where(
                     CommentSignalCandidate.source_comment_id.in_(comment_ids)
                 )
-            ).scalars().all()
+            )
+            .scalars()
+            .all()
         )
         to_analyze = [comment for comment in comments if comment.id not in existing]
         if not to_analyze:
@@ -341,10 +370,10 @@ class CommentAnalyzer:
                     "请分析以下读者评论，提取信号。一条评论可产出多个信号。\n"
                     "signal_type 只能是：confusion / pacing / character_heat / risk / relationship_interest / prediction\n"
                     "返回格式："
-                    "{\"signals\":[{\"comment_index\":0,"
-                    "\"signal_type\":\"...\",\"target_type\":\"...\","
-                    "\"target_name\":\"...\",\"severity\":1,\"confidence\":0.8,"
-                    "\"evidence_span\":\"原文摘录\"}]}\n\n"
+                    '{"signals":[{"comment_index":0,'
+                    '"signal_type":"...","target_type":"...",'
+                    '"target_name":"...","severity":1,"confidence":0.8,'
+                    '"evidence_span":"原文摘录"}]}\n\n'
                     f"评论列表：{json.dumps(comment_payload, ensure_ascii=False)}"
                 ),
             },
@@ -396,7 +425,9 @@ class CommentAnalyzer:
             return None
 
         index_to_comment_id: dict[int, str] = {}
-        valid_comments = [comment for comment in comments if str(comment.body_text or "").strip()]
+        valid_comments = [
+            comment for comment in comments if str(comment.body_text or "").strip()
+        ]
         for index, comment in enumerate(valid_comments):
             index_to_comment_id[index] = comment.id
 
@@ -444,7 +475,9 @@ def load_recent_signals(
     current_chapter: int = 0,
     before_chapter: int | None = None,
 ) -> list[CommentSignalCandidate]:
-    stmt = select(CommentSignalCandidate).where(CommentSignalCandidate.project_id == project_id)
+    stmt = select(CommentSignalCandidate).where(
+        CommentSignalCandidate.project_id == project_id
+    )
 
     end_chapter = 0
     if before_chapter is not None and before_chapter > 0:
@@ -461,7 +494,9 @@ def load_recent_signals(
     return list(
         session.execute(
             stmt.order_by(CommentSignalCandidate.created_at.desc()).limit(200)
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
 
 
@@ -477,7 +512,9 @@ def aggregate_and_level_signals(
         row.id: row
         for row in session.execute(
             select(PublisherRawComment).where(PublisherRawComment.id.in_(comment_ids))
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     }
 
     buckets: dict[str, dict[str, Any]] = {}
@@ -591,14 +628,23 @@ def build_reader_feedback_snapshot(
     if normalized_allowed_titles:
         stmt = stmt.where(
             or_(
-                PublisherRawComment.chapter_title.in_(sorted(normalized_allowed_titles)),
+                PublisherRawComment.chapter_title.in_(
+                    sorted(normalized_allowed_titles)
+                ),
                 PublisherRawComment.chapter_title == "",
             )
         )
 
-    rows = session.execute(
-        stmt.order_by(PublisherRawComment.synced_at.desc(), PublisherRawComment.updated_at.desc()).limit(limit)
-    ).scalars().all()
+    rows = (
+        session.execute(
+            stmt.order_by(
+                PublisherRawComment.synced_at.desc(),
+                PublisherRawComment.updated_at.desc(),
+            ).limit(limit)
+        )
+        .scalars()
+        .all()
+    )
     if not rows:
         return empty_snapshot
 
@@ -624,7 +670,9 @@ def build_reader_feedback_snapshot(
         if signal_rows:
             aggregated_signals = aggregate_and_level_signals(session, signal_rows)
 
-    highlight_rows = _load_highlight_comments(session, rows, signal_rows, limit=min(limit, 4))
+    highlight_rows = _load_highlight_comments(
+        session, rows, signal_rows, limit=min(limit, 4)
+    )
     keyword_dominant = _keyword_dominant_sentiment(highlight_rows or rows)
 
     highlighted_topics: list[str] = []
@@ -632,7 +680,9 @@ def build_reader_feedback_snapshot(
     if aggregated_signals:
         sorted_signals = _sorted_signal_values(aggregated_signals)
         dominant_signal = sorted_signals[0]
-        dominant_sentiment = f"{dominant_signal['signal_type']}:{dominant_signal['level']}"
+        dominant_sentiment = (
+            f"{dominant_signal['signal_type']}:{dominant_signal['level']}"
+        )
         highlighted_topics = [
             f"{_signal_target_label(str(item['target_name']))}:{item['signal_type']}:{item['level']}"
             for item in sorted_signals[:3]
@@ -679,16 +729,11 @@ class NPCIntentGenerator:
         limit: int = 5,
     ) -> list[NPCIntentDraft]:
         project = session.get(Project, project_id)
-        entities = session.execute(
-            select(Entity)
-            .where(
-                Entity.project_id == project_id,
-                Entity.kind == "character",
-                Entity.is_active == True,  # noqa: E712
-            )
-            .order_by(Entity.importance.desc(), Entity.created_at_chapter.asc())
-            .limit(limit)
-        ).scalars().all()
+        entities = BookStateQuery(session).active_entities(
+            project_id,
+            as_of_chapter=max(int(chapter_number), 0),
+            kinds={"character"},
+        )[:limit]
 
         active_threads = sample_active_threads(
             session=session,
@@ -719,16 +764,9 @@ class NPCIntentGenerator:
             return llm_intents
 
         intents: list[NPCIntentDraft] = []
-        latest_states = load_latest_entity_states(session, [entity.id for entity in entities])
         dominant_sentiment = str(feedback.get("dominant_sentiment") or "neutral")
         for index, entity in enumerate(entities):
-            latest_state = latest_states.get(entity.id)
-            state = {}
-            if latest_state is not None:
-                try:
-                    state = json.loads(latest_state.state_json or "{}") or {}
-                except (json.JSONDecodeError, TypeError):
-                    state = {}
+            state = dict(entity.current_state)
             status = str(state.get("status", "normal") or "normal")
             location = str(
                 state.get("location_id", "")
@@ -777,7 +815,7 @@ class NPCIntentGenerator:
             notes = f"重要度{entity.importance}，第{chapter_number + 1}章前生效。"
             intents.append(
                 NPCIntentDraft(
-                    entity_id=entity.id,
+                    entity_id=entity.entity_id,
                     entity_name=entity.name,
                     intent_kind=intent_kind,
                     objective=objective,
@@ -791,8 +829,8 @@ class NPCIntentGenerator:
     def _generate_with_llm(
         self,
         *,
-        entities: list[Entity],
-        active_threads: list[PlotThread],
+        entities: list[EntitySnapshot],
+        active_threads: list[SampledThread],
         chapter_number: int,
         thread_focus: str,
         feedback_summary: str,
@@ -801,7 +839,7 @@ class NPCIntentGenerator:
             return None
         entity_payload = [
             {
-                "entity_id": entity.id,
+                "entity_id": entity.entity_id,
                 "entity_name": entity.name,
                 "importance": entity.importance,
             }
@@ -884,7 +922,7 @@ class NPCIntentGenerator:
             try:
                 intents.append(
                     NPCIntentDraft(
-                        entity_id=entity.id,
+                        entity_id=entity.entity_id,
                         entity_name=entity.name,
                         intent_kind=str(row.get("intent_kind") or "pursue"),
                         objective=str(row.get("objective") or "").strip(),
@@ -925,7 +963,9 @@ class WorldSimulator:
         for thread in active_threads:
             last_beat = latest_beats.get(thread.id)
             reference_chapter = (
-                last_beat.chapter_number if last_beat is not None else thread.opened_at_chapter
+                last_beat.chapter_number
+                if last_beat is not None
+                else thread.opened_at_chapter
             )
             if chapter_number - reference_chapter >= 2:
                 stale_threads.append(thread.name)
@@ -1006,7 +1046,7 @@ class WorldSimulator:
         self,
         *,
         chapter_number: int,
-        active_threads: list[PlotThread],
+        active_threads: list[SampledThread],
         stale_threads: list[str],
         feedback_summary: str,
     ) -> WorldTurnDraft | None:
@@ -1113,7 +1153,10 @@ def _load_reader_feedback(
     return {
         "dominant_sentiment": snapshot["dominant_sentiment"],
         "summary": snapshot["feedback_summary"],
-        "highlights": [str(comment.body_text or "")[:120] for comment in snapshot["recent_comments"]],
+        "highlights": [
+            str(comment.body_text or "")[:120]
+            for comment in snapshot["recent_comments"]
+        ],
         "signals": snapshot["signals"],
     }
 

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from forwin.api_world_model_routes import build_handlers
+from forwin.book_state.repository import BookStateRepository
 from forwin.canon_quality.repository import CanonQualityRepository
 from forwin.canon_quality.signals import CanonQualitySignal
+from forwin.knowledge_system.context import KnowledgeContextQuery
 from forwin.models import Project
-from forwin.models.world_model import WorldModelSnapshotRow
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.world_model.api import list_conflicts
-from forwin.world_model.retriever import WorldModelRetriever
+from forwin.protocol.book_state import WorldNode
 
 
 def test_world_conflicts_include_open_canon_quality_signals() -> None:
@@ -35,7 +36,9 @@ def test_world_conflicts_include_open_canon_quality_signals() -> None:
             )
             session.commit()
 
-        conflicts = list_conflicts(project.id, get_session=session_factory)
+        conflicts = build_handlers(get_session=session_factory)[
+            "list_project_world_model_conflicts"
+        ](project.id)
 
         assert any(conflict.conflict_type == "terminal_state_active_conflict" for conflict in conflicts)
     finally:
@@ -51,14 +54,12 @@ def test_world_context_includes_open_canon_quality_signals() -> None:
             project = Project(title="冲突上下文", premise="测试", genre="悬疑")
             session.add(project)
             session.flush()
-            session.add(
-                WorldModelSnapshotRow(
+            BookStateRepository(session).create_world_node(
+                WorldNode(
+                    id="rule-countdown",
                     project_id=project.id,
-                    as_of_chapter=0,
-                    version=1,
-                    status="live",
-                    snapshot_json="{}",
-                    source_digest="digest",
+                    node_type="rule",
+                    name="倒计时规则",
                 )
             )
             CanonQualityRepository(session).save_signals(
@@ -80,7 +81,7 @@ def test_world_context_includes_open_canon_quality_signals() -> None:
             project_id = project.id
 
         with session_factory() as session:
-            context = WorldModelRetriever(session).build_context(
+            context = KnowledgeContextQuery(session).build(
                 project_id=project_id,
                 chapter_number=6,
             )

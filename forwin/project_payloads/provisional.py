@@ -52,7 +52,6 @@ from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.thread import PlotThread
 from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
@@ -68,7 +67,14 @@ from forwin.world_templates import empty_world_root
 
 
 DisplayDatetime = Callable[[datetime | None], str]
-_GENESIS_STAGE_ORDER = ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap")
+_GENESIS_STAGE_ORDER = (
+    "brief",
+    "world",
+    "map",
+    "story_engine",
+    "book_blueprint",
+    "bootstrap",
+)
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 from .common import (
@@ -117,7 +123,9 @@ def build_provisional_band_detail(
                 ProvisionalChapterLedger.chapter_number.asc(),
                 ProvisionalChapterLedger.created_at.asc(),
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     chapter_numbers = []
     try:
@@ -134,7 +142,9 @@ def build_provisional_band_detail(
         issue_count=latest.issue_count,
         failure_count=latest.failure_count,
         artifact_path=latest.artifact_path,
-        chapter_numbers=[int(item) for item in chapter_numbers if isinstance(item, int)],
+        chapter_numbers=[
+            int(item) for item in chapter_numbers if isinstance(item, int)
+        ],
         created_at=display_datetime(latest.created_at),
         chapters=[
             ProvisionalChapterLedgerInfo(
@@ -161,6 +171,6 @@ def build_provisional_band_detail(
 
 
 __all__ = [
-    'latest_provisional_band_execution',
-    'build_provisional_band_detail',
+    "latest_provisional_band_execution",
+    "build_provisional_band_detail",
 ]

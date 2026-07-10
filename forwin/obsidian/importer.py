@@ -6,10 +6,15 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from forwin.world_model.page_repository import WorldModelPageRepository
-from forwin.world_model.store import WorldModelStore, load_json
+from forwin.knowledge_system.page_repository import KnowledgePageRepository
+from forwin.knowledge_system.store import KnowledgeProjectionStore, load_json
 
-from .frontmatter import EDITABLE_FIELDS, LOCKED_FIELDS, parse_frontmatter, parse_sections
+from .frontmatter import (
+    EDITABLE_FIELDS,
+    LOCKED_FIELDS,
+    parse_frontmatter,
+    parse_sections,
+)
 from .proposal_classifier import classify_proposal
 
 
@@ -30,7 +35,7 @@ class ObsidianImporter:
 
     def __init__(self, session: Session) -> None:
         self.session = session
-        self.store = WorldModelStore(session)
+        self.store = KnowledgeProjectionStore(session)
 
     def import_project(
         self,
@@ -54,7 +59,9 @@ class ObsidianImporter:
                 continue
             if str(frontmatter.get("project_id", project_id)) != project_id:
                 continue
-            created = self._import_page(project_id, root, path, frontmatter, markdown, created_by=created_by)
+            created = self._import_page(
+                project_id, root, path, frontmatter, markdown, created_by=created_by
+            )
             if created:
                 changed_paths.append(str(path.relative_to(root)))
                 proposal_ids.extend(created)
@@ -77,7 +84,11 @@ class ObsidianImporter:
         *,
         created_by: str,
     ) -> list[str]:
-        page_key = str(frontmatter.get("forwin_id") or frontmatter.get("node_id") or path.relative_to(root))
+        page_key = str(
+            frontmatter.get("forwin_id")
+            or frontmatter.get("node_id")
+            or path.relative_to(root)
+        )
         page_type = str(frontmatter.get("node_type", ""))
         node_id = str(frontmatter.get("node_id", ""))
         target_resolution_required = not bool(node_id)
@@ -92,7 +103,9 @@ class ObsidianImporter:
             baseline_value = baseline_sections.get(field_name, "").strip()
             if value == baseline_value:
                 continue
-            proposal_type = classify_proposal(page_type=page_type, target_field=field_name, proposed_text=value)
+            proposal_type = classify_proposal(
+                page_type=page_type, target_field=field_name, proposed_text=value
+            )
             row = self.store.create_proposal(
                 project_id=project_id,
                 source="obsidian",
@@ -108,7 +121,9 @@ class ObsidianImporter:
                     "frontmatter": frontmatter,
                     "target_resolution_required": target_resolution_required,
                 },
-                human_notes=value if field_name in {"Manual Notes", "Human Questions"} else "",
+                human_notes=value
+                if field_name in {"Manual Notes", "Human Questions"}
+                else "",
                 reason=f"Obsidian editable section changed: {field_name}",
                 created_by=created_by,
                 status="needs_resolution" if target_resolution_required else "pending",
@@ -120,7 +135,9 @@ class ObsidianImporter:
             baseline_value = baseline_sections.get(field_name, "").strip()
             if not baseline_value or value == baseline_value:
                 continue
-            proposal_type = classify_proposal(page_type=page_type, target_field=field_name, proposed_text=value)
+            proposal_type = classify_proposal(
+                page_type=page_type, target_field=field_name, proposed_text=value
+            )
             row = self.store.create_proposal(
                 project_id=project_id,
                 source="obsidian",
@@ -145,7 +162,9 @@ class ObsidianImporter:
         return proposal_ids
 
     def _baseline_sections(self, project_id: str, page_key: str) -> dict[str, str]:
-        row = WorldModelPageRepository(self.session).resolve_page_key(project_id, page_key)
+        row = KnowledgePageRepository(self.session).resolve_page_key(
+            project_id, page_key
+        )
         if row is None:
             return {}
         frontmatter = load_json(row.frontmatter_json, {})

@@ -52,7 +52,6 @@ from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.thread import PlotThread
 from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
@@ -68,7 +67,14 @@ from forwin.world_templates import empty_world_root
 
 
 DisplayDatetime = Callable[[datetime | None], str]
-_GENESIS_STAGE_ORDER = ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap")
+_GENESIS_STAGE_ORDER = (
+    "brief",
+    "world",
+    "map",
+    "story_engine",
+    "book_blueprint",
+    "bootstrap",
+)
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 from .common import (
@@ -222,8 +228,16 @@ def _band_checkpoint_detail(row: BandCheckpoint | None) -> BandCheckpointDetail 
         created_at=row.created_at.isoformat() if row.created_at else "",
         updated_at=row.updated_at.isoformat() if row.updated_at else "",
         resolved_at=(
-            (row.resolved_at or (row.updated_at if normalized_status in {"pass", "overridden"} else None)).isoformat()
-            if row.resolved_at or (normalized_status in {"pass", "overridden"} and row.updated_at)
+            (
+                row.resolved_at
+                or (
+                    row.updated_at
+                    if normalized_status in {"pass", "overridden"}
+                    else None
+                )
+            ).isoformat()
+            if row.resolved_at
+            or (normalized_status in {"pass", "overridden"} and row.updated_at)
             else ""
         ),
     )
@@ -291,7 +305,9 @@ def project_arc_snapshot_payload(
             {
                 "active_arc_recommendation": latest_arc_analysis.recommendation,
                 "active_arc_analysis_confidence": latest_arc_analysis.confidence,
-                "active_arc_evidence": _json_list_strings(latest_arc_analysis.evidence_json),
+                "active_arc_evidence": _json_list_strings(
+                    latest_arc_analysis.evidence_json
+                ),
                 "active_arc_expansion_signals": _json_list_strings(
                     latest_arc_analysis.expansion_signals_json
                 ),
@@ -311,7 +327,9 @@ def project_arc_snapshot_payload(
             }
         )
     if latest_scenario_rehearsal is not None:
-        rehearsal_report = _json_object(getattr(latest_scenario_rehearsal, "report_json", "{}"))
+        rehearsal_report = _json_object(
+            getattr(latest_scenario_rehearsal, "report_json", "{}")
+        )
         payload.update(
             {
                 "scenario_rehearsal_band_id": latest_scenario_rehearsal.band_id,
@@ -319,21 +337,33 @@ def project_arc_snapshot_payload(
                 "scenario_rehearsal_risk_count": latest_scenario_rehearsal.risk_count,
                 "scenario_rehearsal_blocker_count": latest_scenario_rehearsal.blocker_count,
                 "scenario_rehearsal_required_patch_count": latest_scenario_rehearsal.required_patch_count,
-                "scenario_rehearsal_resolution_status": str(rehearsal_report.get("resolution_status") or ""),
+                "scenario_rehearsal_resolution_status": str(
+                    rehearsal_report.get("resolution_status") or ""
+                ),
                 "scenario_rehearsal_trigger_reasons": [
                     str(item)
                     for item in (rehearsal_report.get("trigger_reasons") or [])
                     if str(item).strip()
                 ],
-                "scenario_rehearsal_patch_attempt_count": int(rehearsal_report.get("patch_attempt_count") or 0),
-                "scenario_rehearsal_checkpoint_id": str(rehearsal_report.get("checkpoint_id") or ""),
-                "scenario_rehearsal_replan_event_id": str(rehearsal_report.get("replan_event_id") or ""),
+                "scenario_rehearsal_patch_attempt_count": int(
+                    rehearsal_report.get("patch_attempt_count") or 0
+                ),
+                "scenario_rehearsal_checkpoint_id": str(
+                    rehearsal_report.get("checkpoint_id") or ""
+                ),
+                "scenario_rehearsal_replan_event_id": str(
+                    rehearsal_report.get("replan_event_id") or ""
+                ),
             }
         )
     if latest_arc_structure is not None:
         if not payload.get("active_arc_id"):
-            payload["active_arc_id"] = str(getattr(latest_arc_structure, "arc_id", "") or "")
-        payload["active_reader_promise"] = _json_object(latest_arc_structure.reader_promise_json)
+            payload["active_arc_id"] = str(
+                getattr(latest_arc_structure, "arc_id", "") or ""
+            )
+        payload["active_reader_promise"] = _json_object(
+            latest_arc_structure.reader_promise_json
+        )
         arc_payoff_map = _json_object(latest_arc_structure.arc_payoff_map_json)
         payload["active_revelation_layers"] = [
             item
@@ -342,7 +372,9 @@ def project_arc_snapshot_payload(
         ]
     if latest_band_experience is not None:
         if not payload.get("active_arc_id"):
-            payload["active_arc_id"] = str(getattr(latest_band_experience, "arc_id", "") or "")
+            payload["active_arc_id"] = str(
+                getattr(latest_band_experience, "arc_id", "") or ""
+            )
         band_payload = _json_object(latest_band_experience.schedule_json)
         rewards = band_payload.get("scheduled_rewards") or []
         payload["active_band_reward_mix"] = [
@@ -361,15 +393,17 @@ def project_arc_snapshot_payload(
             if isinstance(item, dict)
         ]
         payload["active_band_stall_guard"] = int(
-            band_payload.get("stall_guard_max_gap") or latest_band_experience.stall_guard_max_gap or 0
+            band_payload.get("stall_guard_max_gap")
+            or latest_band_experience.stall_guard_max_gap
+            or 0
         )
     return payload
 
 
 __all__ = [
-    '_latest_band_checkpoint_by_project',
-    '_decision_timeline_by_project',
-    '_narrative_constraints_by_project',
-    '_band_checkpoint_detail',
-    'project_arc_snapshot_payload',
+    "_latest_band_checkpoint_by_project",
+    "_decision_timeline_by_project",
+    "_narrative_constraints_by_project",
+    "_band_checkpoint_detail",
+    "project_arc_snapshot_payload",
 ]

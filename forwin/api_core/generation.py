@@ -1,4 +1,5 @@
 """ForWin Web API – FastAPI interface for the novel generation system."""
+
 from __future__ import annotations
 
 import logging
@@ -123,7 +124,11 @@ from forwin.api_schemas import (
     LintSignalInfo,
     StartWritingResponse,
 )
-from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
+from forwin.book_genesis import (
+    BookGenesisService,
+    GENESIS_STAGE_ORDER,
+    StaleGenesisRevisionError,
+)
 from forwin.application.errors import ProjectNotFound
 from forwin.application.generation import (
     EnqueueGenerationCommand,
@@ -145,17 +150,20 @@ from forwin.models.base import Base, get_session_factory
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import Project, ChapterPlan, ArcPlanVersion
 from forwin.models.entity import Entity
-from forwin.models.event import CanonEvent, EventEntityLink
 from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
-from forwin.models.publisher import PublisherCommentSyncJob, PublisherConnectionState, PublisherExtensionClient, PublisherRawComment, PublisherUploadJob
-from forwin.models.thread import PlotThread
+from forwin.models.publisher import (
+    PublisherCommentSyncJob,
+    PublisherConnectionState,
+    PublisherExtensionClient,
+    PublisherRawComment,
+    PublisherUploadJob,
+)
 from forwin.models.task import GenerationTask
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.phase import (
     BandExperiencePlan,
     ChapterRewriteAttempt,
 )
-from forwin.models.timeline import ChapterTimeline, StoryTimePoint
 from forwin.models.phase4 import NPCIntentSnapshot
 import forwin.models.phase  # noqa: F401
 from forwin.protocol.experience import BandDelightSchedule
@@ -180,6 +188,7 @@ from forwin.api_core.runtime import *
 from forwin.api_core.tasks import *
 from forwin.api_core.project_helpers import *
 
+
 def _active_generation_task_ids(project_id: str = "", *, session=None) -> list[str]:
     normalized_project_id = str(project_id or "").strip()
 
@@ -203,7 +212,10 @@ def _active_generation_task_ids(project_id: str = "", *, session=None) -> list[s
                     continue
                 if str(task.get("task_kind", "generation")) != "generation":
                     continue
-                if normalized_project_id and str(task.get("project_id", "")).strip() != normalized_project_id:
+                if (
+                    normalized_project_id
+                    and str(task.get("project_id", "")).strip() != normalized_project_id
+                ):
                     continue
                 if not _task_status_is_active(
                     str(task.get("status", "")).strip(),
@@ -221,7 +233,10 @@ def _active_generation_task_ids(project_id: str = "", *, session=None) -> list[s
             return False
         if str(task.get("task_kind", "generation")) != "generation":
             return False
-        if normalized_project_id and str(task.get("project_id", "") or "").strip() != normalized_project_id:
+        if (
+            normalized_project_id
+            and str(task.get("project_id", "") or "").strip() != normalized_project_id
+        ):
             return False
         return _task_status_is_active(
             str(task.get("status", "")).strip(),
@@ -242,7 +257,9 @@ def _active_generation_task_ids(project_id: str = "", *, session=None) -> list[s
                 GenerationTask.status,
                 GenerationTask.pause_requested,
                 GenerationTask.cancel_requested,
-            ).where(*criteria).order_by(
+            )
+            .where(*criteria)
+            .order_by(
                 GenerationTask.updated_at.desc(),
                 GenerationTask.id.desc(),
             )
@@ -258,12 +275,16 @@ def _active_generation_task_ids(project_id: str = "", *, session=None) -> list[s
                 cancel_requested=bool(cancel_requested),
             ):
                 continue
-            cached_active = _cached_task_is_active(_cached_generation_task(normalized_task_id))
+            cached_active = _cached_task_is_active(
+                _cached_generation_task(normalized_task_id)
+            )
             if cached_active is False:
                 continue
             active_ids.append(normalized_task_id)
         with api_state._tasks_lock:
-            cached_items = [(task_id, dict(task)) for task_id, task in api_state._tasks.items()]
+            cached_items = [
+                (task_id, dict(task)) for task_id, task in api_state._tasks.items()
+            ]
         for task_id, task in cached_items:
             if task_id in db_known_ids:
                 continue
@@ -293,11 +314,15 @@ def _project_has_active_upload_job(project_id: str, *, session=None) -> bool:
         return False
     if session is not None:
         active_job_id = session.execute(
-            select(PublisherUploadJob.id).where(
+            select(PublisherUploadJob.id)
+            .where(
                 PublisherUploadJob.deleted_at.is_(None),
                 PublisherUploadJob.project_id == normalized_project_id,
-                PublisherUploadJob.status.notin_(tuple(api_state._UPLOAD_TERMINAL_STATUSES)),
-            ).limit(1)
+                PublisherUploadJob.status.notin_(
+                    tuple(api_state._UPLOAD_TERMINAL_STATUSES)
+                ),
+            )
+            .limit(1)
         ).scalar_one_or_none()
         return active_job_id is not None
     with _get_session() as managed_session:
@@ -341,19 +366,24 @@ def _create_generation_task(
     normalized_project_id = str(project_id or "").strip()
     if not normalized_project_id:
         raise ProjectNotFound(normalized_project_id)
-    return _generation_application_service().enqueue(
-        EnqueueGenerationCommand(
-            project_id=normalized_project_id,
-            requested_chapters=int(num_chapters or 0),
-            max_chapters=int(num_chapters or 0),
-            run_until_chapter=int(num_chapters or 0),
-            auto_continue=False,
-            title=title or (premise.strip()[:36] if premise.strip() else "未命名生成任务"),
-            subtitle=subtitle or f"{genre} · {num_chapters} 章",
-            message=f"开始生成 {num_chapters} 章。",
-            root_event_type=DecisionEventType.GENERATION_REQUESTED,
+    return (
+        _generation_application_service()
+        .enqueue(
+            EnqueueGenerationCommand(
+                project_id=normalized_project_id,
+                requested_chapters=int(num_chapters or 0),
+                max_chapters=int(num_chapters or 0),
+                run_until_chapter=int(num_chapters or 0),
+                auto_continue=False,
+                title=title
+                or (premise.strip()[:36] if premise.strip() else "未命名生成任务"),
+                subtitle=subtitle or f"{genre} · {num_chapters} 章",
+                message=f"开始生成 {num_chapters} 章。",
+                root_event_type=DecisionEventType.GENERATION_REQUESTED,
+            )
         )
-    ).task_id
+        .task_id
+    )
 
 
 def _create_continue_generation_task(
@@ -368,19 +398,23 @@ def _create_continue_generation_task(
     message: str = "",
 ) -> str:
     normalized_project_id = str(project_id or "").strip()
-    return _generation_application_service().enqueue(
-        EnqueueGenerationCommand(
-            project_id=normalized_project_id,
-            requested_chapters=int(requested_chapters or 0),
-            max_chapters=int(max_chapters or 0),
-            run_until_chapter=int(run_until_chapter or 0),
-            auto_continue=bool(auto_continue),
-            title=title or f"继续生成 {normalized_project_id}",
-            subtitle=subtitle or f"项目 {normalized_project_id}",
-            message=message or "准备继续后续章节。",
-            root_event_type=DecisionEventType.CONTINUE_REQUESTED,
+    return (
+        _generation_application_service()
+        .enqueue(
+            EnqueueGenerationCommand(
+                project_id=normalized_project_id,
+                requested_chapters=int(requested_chapters or 0),
+                max_chapters=int(max_chapters or 0),
+                run_until_chapter=int(run_until_chapter or 0),
+                auto_continue=bool(auto_continue),
+                title=title or f"继续生成 {normalized_project_id}",
+                subtitle=subtitle or f"项目 {normalized_project_id}",
+                message=message or "准备继续后续章节。",
+                root_event_type=DecisionEventType.CONTINUE_REQUESTED,
+            )
         )
-    ).task_id
+        .task_id
+    )
 
 
 def _generation_application_service() -> GenerationApplicationService:
@@ -396,11 +430,13 @@ def _generation_application_service() -> GenerationApplicationService:
 
 def _maybe_enqueue_auto_publish_jobs(result) -> None:
     project_id = str(getattr(result, "project_id", "") or "").strip()
-    chapter_numbers = sorted({
-        int(item)
-        for item in getattr(result, "completed_chapters", []) or []
-        if str(item).isdigit() or isinstance(item, int)
-    })
+    chapter_numbers = sorted(
+        {
+            int(item)
+            for item in getattr(result, "completed_chapters", []) or []
+            if str(item).isdigit() or isinstance(item, int)
+        }
+    )
     if not project_id or not chapter_numbers or api_state._publisher_manager is None:
         return
 
@@ -417,20 +453,21 @@ def _maybe_enqueue_auto_publish_jobs(result) -> None:
         book_name = str(publish.book_name or "").strip() or project.title
         if not platform or not book_name:
             return
-        plans = session.execute(
-            select(ChapterPlan)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number.in_(chapter_numbers),
+        plans = (
+            session.execute(
+                select(ChapterPlan)
+                .where(
+                    ChapterPlan.project_id == project_id,
+                    ChapterPlan.chapter_number.in_(chapter_numbers),
+                )
+                .order_by(ChapterPlan.chapter_number.asc())
             )
-            .order_by(ChapterPlan.chapter_number.asc())
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if not plans:
             return
-        plan_by_number = {
-            int(plan.chapter_number): plan
-            for plan in plans
-        }
+        plan_by_number = {int(plan.chapter_number): plan for plan in plans}
         draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
         jobs = []
         for chapter_number in chapter_numbers:
@@ -468,8 +505,6 @@ def _maybe_enqueue_auto_publish_jobs(result) -> None:
         logger.exception("Auto publish enqueue failed for project %s", project_id)
     finally:
         session.close()
-
-
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

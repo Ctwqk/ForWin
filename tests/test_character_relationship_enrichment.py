@@ -8,16 +8,19 @@ from forwin.api_book_state_routes import build_handlers
 from forwin.book_state import BookStateRepository
 from forwin.characters.creation import CharacterCreationHelper
 from forwin.characters.models import CharacterCreationRequest
-from forwin.models import DecisionEvent, Project, RelationEdge, new_id
+from forwin.models import DecisionEvent, Project, new_id
 from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.personality.enrichment import RelationshipPersonalityEnricher
 from forwin.personality.library import CharacterPersonalityLibrary
-from forwin.state.updater import StateUpdater
+from forwin.protocol.book_state import WorldEdge
 from tests.postgres import postgres_test_url
 from tests.test_personality_assignment import _library_root
 
 
 def _create_character_pair(session, project_id: str, library_root: Path):
-    helper = CharacterCreationHelper(session, personality_library=CharacterPersonalityLibrary(library_root))
+    helper = CharacterCreationHelper(
+        session, personality_library=CharacterPersonalityLibrary(library_root)
+    )
     source = helper.create_character(
         CharacterCreationRequest(
             project_id=project_id,
@@ -45,6 +48,31 @@ def _loadout_for(session, project_id: str, character_id: str) -> dict:
     raise AssertionError(f"missing character: {character_id}")
 
 
+def _create_relation(
+    session,
+    *,
+    project_id: str,
+    source_id: str,
+    target_id: str,
+    relation_type: str,
+    description: str,
+) -> WorldEdge:
+    edge = WorldEdge(
+        id=new_id(),
+        project_id=project_id,
+        source_id=source_id,
+        target_id=target_id,
+        edge_type="mentor_of" if relation_type == "mentor" else "enemy_of",
+        edge_family="social",
+        metadata={
+            "description": description,
+            "requested_relation_type": relation_type,
+        },
+    )
+    BookStateRepository(session).create_world_edge(edge)
+    return edge
+
+
 def test_rival_relation_enriches_both_sides_and_records_diff(tmp_path: Path) -> None:
     engine = get_engine(postgres_test_url("relationship-enrichment-rival"))
     init_db(engine)
@@ -52,26 +80,37 @@ def test_rival_relation_enriches_both_sides_and_records_diff(tmp_path: Path) -> 
     library_root = _library_root(tmp_path)
 
     with Session.begin() as session:
-        project = Project(title="关系人格", premise="p", genre="玄幻", setting_summary="s")
+        project = Project(
+            title="关系人格", premise="p", genre="玄幻", setting_summary="s"
+        )
         session.add(project)
         session.flush()
         source, target = _create_character_pair(session, project.id, library_root)
 
-        edge = StateUpdater(session).create_relation(
-            project.id,
-            source.character_id,
-            target.character_id,
-            "rival",
+        edge = _create_relation(
+            session,
+            project_id=project.id,
+            source_id=source.character_id,
+            target_id=target.character_id,
+            relation_type="rival",
             description="两人是长期竞争的对手。",
         )
+        RelationshipPersonalityEnricher(
+            session,
+            personality_library=CharacterPersonalityLibrary(library_root),
+        ).enrich_relation(edge)
         source_loadout = _loadout_for(session, project.id, source.character_id)
         target_loadout = _loadout_for(session, project.id, target.character_id)
-        events = session.execute(
-            select(DecisionEvent).where(
-                DecisionEvent.project_id == project.id,
-                DecisionEvent.event_type == "personality_relationship_enriched",
+        events = (
+            session.execute(
+                select(DecisionEvent).where(
+                    DecisionEvent.project_id == project.id,
+                    DecisionEvent.event_type == "personality_relationship_enriched",
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
     assert edge.id
     assert source_loadout["relationship_patterns"] == [
@@ -84,7 +123,9 @@ def test_rival_relation_enriches_both_sides_and_records_diff(tmp_path: Path) -> 
     assert "rel-rival-respect" in (events[0].payload_json or "")
 
 
-def test_relationship_enrichment_preserves_manual_override_and_skips_duplicates(tmp_path: Path) -> None:
+def test_relationship_enrichment_preserves_manual_override_and_skips_duplicates(
+    tmp_path: Path,
+) -> None:
     engine = get_engine(postgres_test_url("relationship-enrichment-manual"))
     init_db(engine)
     Session = get_session_factory(engine)
@@ -100,10 +141,14 @@ def test_relationship_enrichment_preserves_manual_override_and_skips_duplicates(
     }
 
     with Session.begin() as session:
-        project = Project(title="关系人格手动", premise="p", genre="玄幻", setting_summary="s")
+        project = Project(
+            title="关系人格手动", premise="p", genre="玄幻", setting_summary="s"
+        )
         session.add(project)
         session.flush()
-        helper = CharacterCreationHelper(session, personality_library=CharacterPersonalityLibrary(library_root))
+        helper = CharacterCreationHelper(
+            session, personality_library=CharacterPersonalityLibrary(library_root)
+        )
         locked = helper.create_character(
             CharacterCreationRequest(
                 project_id=project.id,
@@ -115,12 +160,28 @@ def test_relationship_enrichment_preserves_manual_override_and_skips_duplicates(
             )
         )
         other = helper.create_character(
-            CharacterCreationRequest(project_id=project.id, source="api_manual", name="被扶持者", description="需要保护。")
+            CharacterCreationRequest(
+                project_id=project.id,
+                source="api_manual",
+                name="被扶持者",
+                description="需要保护。",
+            )
         )
 
-        updater = StateUpdater(session)
-        updater.create_relation(project.id, locked.character_id, other.character_id, "mentor", description="导师扶持并保护对方。")
-        updater.create_relation(project.id, locked.character_id, other.character_id, "mentor", description="导师扶持并保护对方。")
+        edge = _create_relation(
+            session,
+            project_id=project.id,
+            source_id=locked.character_id,
+            target_id=other.character_id,
+            relation_type="mentor",
+            description="导师扶持并保护对方。",
+        )
+        enricher = RelationshipPersonalityEnricher(
+            session,
+            personality_library=CharacterPersonalityLibrary(library_root),
+        )
+        enricher.enrich_relation(edge)
+        enricher.enrich_relation(edge)
         locked_loadout = _loadout_for(session, project.id, locked.character_id)
         other_loadout = _loadout_for(session, project.id, other.character_id)
 
@@ -137,31 +198,36 @@ def test_manual_relationship_enrichment_api_scans_project(tmp_path: Path) -> Non
     library_root = _library_root(tmp_path)
 
     with Session.begin() as session:
-        project = Project(title="关系人格 API", premise="p", genre="玄幻", setting_summary="s")
+        project = Project(
+            title="关系人格 API", premise="p", genre="玄幻", setting_summary="s"
+        )
         session.add(project)
         session.flush()
         source, target = _create_character_pair(session, project.id, library_root)
-        session.add(
-            RelationEdge(
-                id=new_id(),
-                project_id=project.id,
-                source_entity_id=source.character_id,
-                target_entity_id=target.character_id,
-                relation_type="rival",
-                description="长期竞争的对手。",
-                is_active=True,
-            )
+        _create_relation(
+            session,
+            project_id=project.id,
+            source_id=source.character_id,
+            target_id=target.character_id,
+            relation_type="rival",
+            description="长期竞争的对手。",
         )
         project_id = project.id
         source_id = source.character_id
         target_id = target.character_id
 
-    handlers = build_handlers(get_session=Session, personality_library_root=str(library_root))
-    response = handlers["enrich_character_relationships"](project_id, {"reason": "api test"})
+    handlers = build_handlers(
+        get_session=Session, personality_library_root=str(library_root)
+    )
+    response = handlers["enrich_character_relationships"](
+        project_id, {"reason": "api test"}
+    )
 
     with Session() as session:
         source_loadout = _loadout_for(session, project_id, source_id)
 
-    assert response["schema_version"] == "character.relationship_personality_enrichment.v1"
+    assert (
+        response["schema_version"] == "character.relationship_personality_enrichment.v1"
+    )
     assert response["enriched"] == 2
     assert source_loadout["relationship_patterns"][0]["target"] == target_id

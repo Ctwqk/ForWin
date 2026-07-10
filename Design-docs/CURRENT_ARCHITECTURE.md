@@ -61,15 +61,20 @@ WriterOutput / chapter body
 
 ## 兼容层
 
-- `world_model`：legacy wiki/export/projection/read path；不作为新 canon 语义来源。
+- `forwin.world_model`：已物理删除；可重建页面、proposal 与 Obsidian 能力归 `forwin.knowledge_system` / `forwin.obsidian`。
+- `/world-model/*` HTTP 路径：仅保留传输契约名，适配器直接读取 BookState snapshot、Knowledge Projection page 与 CanonQualitySignal，不对应同名领域包或状态库。
 - `world_model_v4`：已删除的旧 compatibility projection / debug-export bridge；不得重新作为 runtime 写入路径引入。
 - `reviewer_v4`：world_v4 extraction compatibility gate；不是 `reviewer` 的新版替代品。
-- legacy `entity_states / relation_edges / CanonEvent / PlotThreadBeat / ChapterTimeline`：已退出 accepted-state 读写路径，等待 v5 baseline 物理删表；`entities / entity_aliases` 只作为 Canon 实体准入提交后的身份唯一性索引。
+- legacy `entity_states / relation_edges / canon_events / event_entity_links / plot_threads / plot_thread_beats / story_time_points / chapter_timelines`：ORM 与表定义均已删除；`entities / entity_aliases` 只作为 Canon 实体准入提交后的身份唯一性索引。
 - legacy provisional：历史预演、审计和 compatibility preview，不默认阻断正式写作。
 
 ## 投影层
 
-`Obsidian Vault`、Karpathy-style `LLM KB`、legacy wiki/export 和 World Studio 视图都必须可从 BookState 或兼容投影重建。它们不是 canon writer。
+`Knowledge Projection`、`Obsidian Vault`、Karpathy-style `LLM KB` 和 World Studio 视图都必须可从 BookState 重建。它们不是 canon writer。
+
+## Schema 基线
+
+生产 schema 只由 Alembic 管理，当前唯一 revision 为 `0001_v5_baseline`。应用启动只校验 v5 revision，不执行 `create_all`、手写 `ALTER TABLE` 或自动升级。`init_db` 仅供 disposable PostgreSQL 测试库按当前 metadata 建表；旧数据库和旧项目不迁移。
 
 ## 地图红线
 

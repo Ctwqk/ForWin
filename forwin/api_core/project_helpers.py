@@ -1,4 +1,5 @@
 """ForWin Web API – FastAPI interface for the novel generation system."""
+
 from __future__ import annotations
 
 import logging
@@ -125,7 +126,11 @@ from forwin.api_schemas import (
     LintSignalInfo,
     StartWritingResponse,
 )
-from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
+from forwin.book_genesis import (
+    BookGenesisService,
+    GENESIS_STAGE_ORDER,
+    StaleGenesisRevisionError,
+)
 from forwin.governance import (
     BandCheckpointIssueInfo,
     CONSTRAINT_LEVELS,
@@ -142,18 +147,20 @@ from forwin.governance import (
 from forwin.models.base import Base, get_session_factory
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import Project, ChapterPlan, ArcPlanVersion
-from forwin.models.entity import Entity
-from forwin.models.event import CanonEvent, EventEntityLink
 from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
-from forwin.models.publisher import PublisherCommentSyncJob, PublisherConnectionState, PublisherExtensionClient, PublisherRawComment, PublisherUploadJob
-from forwin.models.thread import PlotThread
+from forwin.models.publisher import (
+    PublisherCommentSyncJob,
+    PublisherConnectionState,
+    PublisherExtensionClient,
+    PublisherRawComment,
+    PublisherUploadJob,
+)
 from forwin.models.task import GenerationTask
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.phase import (
     BandExperiencePlan,
     ChapterRewriteAttempt,
 )
-from forwin.models.timeline import ChapterTimeline, StoryTimePoint
 from forwin.models.phase4 import NPCIntentSnapshot
 import forwin.models.phase  # noqa: F401
 from forwin.protocol.experience import BandDelightSchedule
@@ -177,66 +184,40 @@ from forwin.api_core import state as api_state
 from forwin.api_core.runtime import *
 from forwin.api_core.tasks import *
 
+
 def _delete_project(session, project_id: str) -> None:
-    chapter_plan_ids = session.execute(
-        select(ChapterPlan.id).where(ChapterPlan.project_id == project_id)
-    ).scalars().all()
-    if chapter_plan_ids:
-        draft_ids = session.execute(
-            select(ChapterDraft.id).where(ChapterDraft.chapter_plan_id.in_(chapter_plan_ids))
-        ).scalars().all()
+    chapter_plan_ids = (
         session.execute(
-            delete(CandidateDraftRecord).where(CandidateDraftRecord.project_id == project_id)
+            select(ChapterPlan.id).where(ChapterPlan.project_id == project_id)
+        )
+        .scalars()
+        .all()
+    )
+    if chapter_plan_ids:
+        draft_ids = (
+            session.execute(
+                select(ChapterDraft.id).where(
+                    ChapterDraft.chapter_plan_id.in_(chapter_plan_ids)
+                )
+            )
+            .scalars()
+            .all()
         )
         session.execute(
-            delete(ChapterRewriteAttempt).where(ChapterRewriteAttempt.project_id == project_id)
+            delete(CandidateDraftRecord).where(
+                CandidateDraftRecord.project_id == project_id
+            )
+        )
+        session.execute(
+            delete(ChapterRewriteAttempt).where(
+                ChapterRewriteAttempt.project_id == project_id
+            )
         )
         if draft_ids:
             session.execute(
                 delete(ChapterReview).where(ChapterReview.draft_id.in_(draft_ids))
             )
-            session.execute(
-                delete(ChapterDraft).where(ChapterDraft.id.in_(draft_ids))
-            )
-
-    thread_ids = session.execute(
-        select(PlotThread.id).where(PlotThread.project_id == project_id)
-    ).scalars().all()
-    if thread_ids:
-        session.execute(
-            delete(Base.metadata.tables["plot_thread_beats"]).where(
-                Base.metadata.tables["plot_thread_beats"].c.thread_id.in_(thread_ids)
-            )
-        )
-
-    entity_ids = session.execute(
-        select(Entity.id).where(Entity.project_id == project_id)
-    ).scalars().all()
-    if entity_ids:
-        session.execute(
-            delete(Base.metadata.tables["entity_states"]).where(
-                Base.metadata.tables["entity_states"].c.entity_id.in_(entity_ids)
-            )
-        )
-
-    event_ids = session.execute(
-        select(CanonEvent.id).where(CanonEvent.project_id == project_id)
-    ).scalars().all()
-    if event_ids:
-        session.execute(
-            delete(EventEntityLink).where(EventEntityLink.event_id.in_(event_ids))
-        )
-
-    time_point_ids = session.execute(
-        select(StoryTimePoint.id).where(StoryTimePoint.project_id == project_id)
-    ).scalars().all()
-    if time_point_ids:
-        session.execute(
-            delete(ChapterTimeline).where(
-                (ChapterTimeline.start_time_id.in_(time_point_ids))
-                | (ChapterTimeline.end_time_id.in_(time_point_ids))
-            )
-        )
+            session.execute(delete(ChapterDraft).where(ChapterDraft.id.in_(draft_ids)))
 
     session.execute(
         delete(NPCIntentSnapshot).where(NPCIntentSnapshot.project_id == project_id)
@@ -256,20 +237,37 @@ def _update_task(task_id: str, **changes: Any) -> None:
         return
     normalized = dict(changes)
     normalized.pop("requested_chapters", None)
-    if task.get("cancel_requested") and normalized.get("status") in {"starting", "running", "needs_review"}:
+    if task.get("cancel_requested") and normalized.get("status") in {
+        "starting",
+        "running",
+        "needs_review",
+    }:
         normalized.pop("status", None)
-    if task.get("cancel_requested") and normalized.get("current_stage") not in {"terminating", "cancelled"}:
+    if task.get("cancel_requested") and normalized.get("current_stage") not in {
+        "terminating",
+        "cancelled",
+    }:
         normalized.pop("current_stage", None)
-    if task.get("pause_requested") and normalized.get("status") in {"queued", "starting", "running"}:
+    if task.get("pause_requested") and normalized.get("status") in {
+        "queued",
+        "starting",
+        "running",
+    }:
         normalized.pop("status", None)
-    if task.get("pause_requested") and normalized.get("current_stage") not in {"paused", "cancelled", "terminating"}:
+    if task.get("pause_requested") and normalized.get("current_stage") not in {
+        "paused",
+        "cancelled",
+        "terminating",
+    }:
         normalized.pop("current_stage", None)
     if "message" in normalized:
         normalized["message"] = str(normalized.get("message") or "")
     if "status" in normalized and normalized["status"] == "terminating":
         normalized["current_stage"] = "terminating"
     elif "status" in normalized:
-        terminal_stage = api_state._GENERATION_TERMINAL_STAGE_BY_STATUS.get(str(normalized["status"]).strip())
+        terminal_stage = api_state._GENERATION_TERMINAL_STAGE_BY_STATUS.get(
+            str(normalized["status"]).strip()
+        )
         if terminal_stage:
             normalized["current_stage"] = terminal_stage
     if "current_chapter" in normalized:
@@ -295,7 +293,10 @@ def _update_task(task_id: str, **changes: Any) -> None:
             _new_stage_history_entry(
                 next_stage,
                 now=now,
-                current_chapter=int(normalized.get("current_chapter", task.get("current_chapter", 0)) or 0),
+                current_chapter=int(
+                    normalized.get("current_chapter", task.get("current_chapter", 0))
+                    or 0
+                ),
                 message=str(normalized.get("message", task.get("message", ""))).strip(),
             )
         )
@@ -306,6 +307,7 @@ def _update_task(task_id: str, **changes: Any) -> None:
     _sync_task_cache(task_id, task)
 
     if api_state._SessionFactory is not None:
+
         def _operation() -> None:
             with _get_session() as session:
                 row = session.get(GenerationTask, task_id)
@@ -316,7 +318,9 @@ def _update_task(task_id: str, **changes: Any) -> None:
                 session.commit()
 
         try:
-            _run_generation_task_db_write(_operation, context=f"update_generation_task:{task_id}")
+            _run_generation_task_db_write(
+                _operation, context=f"update_generation_task:{task_id}"
+            )
         except GenerationTaskPersistenceError as exc:
             if task.get("status") in api_state._GENERATION_TERMINAL_STATUSES:
                 raise
@@ -328,7 +332,10 @@ def _update_task(task_id: str, **changes: Any) -> None:
 def _running_task_lease_seconds(task: dict[str, Any]) -> int:
     heartbeat_at = _coerce_task_datetime(task.get("heartbeat_at"))
     lease_expires_at = _coerce_task_datetime(task.get("lease_expires_at"))
-    if heartbeat_at > datetime.min.replace(tzinfo=timezone.utc) and lease_expires_at > heartbeat_at:
+    if (
+        heartbeat_at > datetime.min.replace(tzinfo=timezone.utc)
+        and lease_expires_at > heartbeat_at
+    ):
         return max(30, int((lease_expires_at - heartbeat_at).total_seconds()))
     return 300
 
@@ -362,7 +369,9 @@ def _require_reason(reason: str, *, action: str) -> str:
     return normalized
 
 
-def _validate_constraint_payload(*, constraint_type: str, level: str, status: str) -> tuple[str, str, str]:
+def _validate_constraint_payload(
+    *, constraint_type: str, level: str, status: str
+) -> tuple[str, str, str]:
     return api_governance_support.validate_constraint_payload(
         constraint_type=constraint_type,
         level=level,
@@ -375,7 +384,9 @@ def _persist_project_automation(
     project: Project,
     automation: ProjectAutomationSettings,
 ) -> ProjectAutomationSettings:
-    return api_governance_support.persist_project_automation(session, project, automation)
+    return api_governance_support.persist_project_automation(
+        session, project, automation
+    )
 
 
 def _log_decision_event(session, **kwargs):
@@ -390,7 +401,9 @@ def _latest_band_checkpoint_row(session, *, project_id: str, band_id: str = ""):
     )
 
 
-def _serialize_band_checkpoint(row: BandCheckpoint, *, session=None) -> BandCheckpointDetail:
+def _serialize_band_checkpoint(
+    row: BandCheckpoint, *, session=None
+) -> BandCheckpointDetail:
     return api_governance_support.serialize_band_checkpoint(row, session=session)
 
 
@@ -414,7 +427,9 @@ def _latest_related_decision_event(session, **kwargs) -> DecisionEvent | None:
     return api_governance_support.latest_related_decision_event(session, **kwargs)
 
 
-def _decision_refs_for_checkpoint(session, row: BandCheckpoint) -> list[DecisionEventInfo]:
+def _decision_refs_for_checkpoint(
+    session, row: BandCheckpoint
+) -> list[DecisionEventInfo]:
     return api_governance_support.decision_refs_for_checkpoint(session, row)
 
 
@@ -458,9 +473,12 @@ def _build_causal_replay(
     )
 
 
-def _build_governance_insights(session, *, project_id: str) -> GovernanceInsightsResponse:
-    return api_governance_support.build_governance_insights(session, project_id=project_id)
-
+def _build_governance_insights(
+    session, *, project_id: str
+) -> GovernanceInsightsResponse:
+    return api_governance_support.build_governance_insights(
+        session, project_id=project_id
+    )
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

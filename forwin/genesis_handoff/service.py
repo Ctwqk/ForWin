@@ -7,7 +7,6 @@ from forwin.governance import DecisionEventInfo, DecisionEventType
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.observability.payloads import event_error_payload
 from forwin.state.updater import StateUpdater
-from forwin.world_model.compiler import WorldModelCompiler
 
 from .arc_materializer import GenesisArcMaterializer
 from .chapter_materializer import GenesisChapterMaterializer
@@ -63,7 +62,9 @@ class GenesisHandoffService:
             decision_id = decision.id
             existing_arc_count = int(
                 session.execute(
-                    select(func.count(ArcPlanVersion.id)).where(ArcPlanVersion.project_id == project.id)
+                    select(func.count(ArcPlanVersion.id)).where(
+                        ArcPlanVersion.project_id == project.id
+                    )
                 ).scalar_one()
                 or 0
             )
@@ -78,7 +79,9 @@ class GenesisHandoffService:
                 raise ValueError("Genesis blueprint 缺少 active arc。")
             existing_chapter_count = int(
                 session.execute(
-                    select(func.count(ChapterPlan.id)).where(ChapterPlan.arc_plan_id == active_arc.id)
+                    select(func.count(ChapterPlan.id)).where(
+                        ChapterPlan.arc_plan_id == active_arc.id
+                    )
                 ).scalar_one()
                 or 0
             )
@@ -93,9 +96,15 @@ class GenesisHandoffService:
             )
             pack = self.owner.load_pack(revision)
             world = pack.get("world") if isinstance(pack.get("world"), dict) else {}
-            world_bible = world.get("world_bible") if isinstance(world.get("world_bible"), dict) else {}
+            world_bible = (
+                world.get("world_bible")
+                if isinstance(world.get("world_bible"), dict)
+                else {}
+            )
             if not str(project.setting_summary or "").strip():
-                project.setting_summary = str(world_bible.get("overview", "") or "").strip()
+                project.setting_summary = str(
+                    world_bible.get("overview", "") or ""
+                ).strip()
             in_map_bootstrap = True
             map_summary = self.map_bootstrap.bootstrap_book_map_from_genesis(
                 session=session,
@@ -106,14 +115,15 @@ class GenesisHandoffService:
                 decision_event_id=decision.id,
             )
             in_map_bootstrap = False
-            WorldModelCompiler(session).bootstrap_from_genesis(project.id)
             revision.status = "locked"
             session.add(revision)
             project.creation_status = "writing"
             session.add(project)
             active_chapter_count = int(
                 session.execute(
-                    select(func.count(ChapterPlan.id)).where(ChapterPlan.arc_plan_id == active_arc.id)
+                    select(func.count(ChapterPlan.id)).where(
+                        ChapterPlan.arc_plan_id == active_arc.id
+                    )
                 ).scalar_one()
                 or 0
             )
@@ -123,7 +133,9 @@ class GenesisHandoffService:
                 active_arc_id=active_arc.id,
                 active_arc_number=int(active_arc.arc_number or 0),
                 created_arc_count=max(0, len(arcs) - existing_arc_count),
-                created_chapter_plan_count=max(0, active_chapter_count - existing_chapter_count),
+                created_chapter_plan_count=max(
+                    0, active_chapter_count - existing_chapter_count
+                ),
                 active_chapter_plan_count=active_chapter_count,
                 map_bootstrap_summary=map_summary,
                 project_status="writing",

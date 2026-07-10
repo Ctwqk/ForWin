@@ -155,12 +155,12 @@ def main(argv: list[str] | None = None) -> int:
         summarize_replay_results,
     )
     from forwin.canon_quality.chapter_review_form.replay_state import ReplayRangeOptions, state_file_path
-    from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.models.base import get_engine, get_session_factory, require_v5_schema
 
     config = InfrastructureConfig.from_env()
     engine = get_engine(config.database_url)
     try:
-        init_db(engine)
+        require_v5_schema(engine)
         session_factory = get_session_factory(engine)
         if args.to_chapter is None:
             with session_factory() as session:

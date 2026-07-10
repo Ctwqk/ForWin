@@ -17,7 +17,7 @@ from forwin.llm_kb.store import LLMKnowledgeBaseStore
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow
-from forwin.models.world_model import WorldEditProposalRow, WorldModelPageRow
+from forwin.models.knowledge import KnowledgeEditProposalRow, KnowledgeProjectionPageRow
 from forwin.obsidian import ObsidianExporter
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
@@ -290,7 +290,7 @@ def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
         assert human_results[0]["canon_status"] == "human_unreviewed"
 
         with Session() as session:
-            proposals = session.query(WorldEditProposalRow).filter_by(project_id=project_id).order_by(WorldEditProposalRow.created_at.asc()).all()
+            proposals = session.query(KnowledgeEditProposalRow).filter_by(project_id=project_id).order_by(KnowledgeEditProposalRow.created_at.asc()).all()
             assert {row.proposal_type for row in proposals} == {"NoteOnlyProposal", "RelationshipCorrectionProposal"}
             approve_id = proposals[0].id
             reject_id = proposals[1].id
@@ -325,7 +325,7 @@ def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
 ]
 ```"""
         with Session.begin() as session:
-            row = WorldEditProposalRow(
+            row = KnowledgeEditProposalRow(
                 project_id=project_id,
                 source="obsidian",
                 target_page_key="03_Actors/Characters/林烬_char_lin.md",
@@ -388,7 +388,7 @@ def test_obsidian_export_records_projection_cache_metadata_and_skips_unchanged_p
             first = ObsidianExporter(session).export_project(project_id, vault_root=vault_root, as_of_chapter=1)
             page_path = vault_root / "03_Actors" / "Characters" / "林烬_char_lin.md"
             first_mtime_ns = page_path.stat().st_mtime_ns
-            row = session.query(WorldModelPageRow).filter_by(project_id=project_id, page_key="character:char_lin").one()
+            row = session.query(KnowledgeProjectionPageRow).filter_by(project_id=project_id, page_key="character:char_lin").one()
             first_revision = row.revision
 
         text = page_path.read_text(encoding="utf-8")
@@ -397,7 +397,7 @@ def test_obsidian_export_records_projection_cache_metadata_and_skips_unchanged_p
 
         with Session.begin() as session:
             second = ObsidianExporter(session).export_project(project_id, vault_root=vault_root, as_of_chapter=1)
-            row = session.query(WorldModelPageRow).filter_by(project_id=project_id, page_key="character:char_lin").one()
+            row = session.query(KnowledgeProjectionPageRow).filter_by(project_id=project_id, page_key="character:char_lin").one()
 
         assert first.exported_count == second.exported_count
         assert row.projection_kind == "obsidian"
@@ -418,12 +418,7 @@ def test_obsidian_export_records_projection_cache_metadata_and_skips_unchanged_p
         engine.dispose()
 
 
-def test_projection_cache_migration_is_registered() -> None:
-    from forwin.models.base import POSTGRES_BASELINE_MIGRATIONS
-
-    migration = Path("forwin/migrations/versions/0006_projection_cache_fields.py")
-    assert migration.exists()
-    text = migration.read_text(encoding="utf-8")
+def test_projection_cache_fields_are_part_of_current_model() -> None:
     for column_name in (
         "projection_kind",
         "projection_version",
@@ -431,8 +426,8 @@ def test_projection_cache_migration_is_registered() -> None:
         "section_digest_json",
         "role_scope",
     ):
-        assert column_name in text
-    assert "projection_cache_fields_v1" in POSTGRES_BASELINE_MIGRATIONS
+        assert hasattr(KnowledgeProjectionPageRow, column_name)
+    assert KnowledgeProjectionPageRow.__tablename__ == "knowledge_projection_pages"
 
 
 def test_projection_api_refresh_status_and_pages(tmp_path: Path) -> None:
@@ -517,7 +512,7 @@ def test_structured_patch_sets_personality_loadout_via_proposal(tmp_path: Path) 
             ensure_ascii=False,
         ) + "\n```"
         with Session.begin() as session:
-            row = WorldEditProposalRow(
+            row = KnowledgeEditProposalRow(
                 project_id=project_id,
                 source="world_studio",
                 target_page_key="character:char_lin",
@@ -572,7 +567,7 @@ def test_structured_patch_old_value_mismatch_blocks_without_forced_accept(tmp_pa
                     summary="旧城线主角。",
                 )
             )
-            row = WorldEditProposalRow(
+            row = KnowledgeEditProposalRow(
                 project_id=project_id,
                 source="obsidian",
                 target_page_key="character:char_lin",
@@ -670,7 +665,7 @@ def test_structured_patch_cognition_ops_commit_through_proposal(tmp_path: Path) 
                     "new_value": {"field:char_lin:summary": "读者误以为林烬已经离城。"},
                 },
             ]
-            row = WorldEditProposalRow(
+            row = KnowledgeEditProposalRow(
                 project_id=project_id,
                 source="world_studio",
                 target_page_key="character:char_lin",
@@ -718,7 +713,7 @@ def test_structured_patch_reader_promise_ops_commit_native_promises(tmp_path: Pa
 
         def add_patch_proposal(patch: list[dict[str, object]], chapter: int) -> str:
             with Session.begin() as session:
-                row = WorldEditProposalRow(
+                row = KnowledgeEditProposalRow(
                     project_id=project_id,
                     source="world_studio",
                     target_page_key="reader_promise:promise_truth",

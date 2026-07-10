@@ -10,7 +10,7 @@ from forwin.book_state import BookStateRepository
 from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.outbox import OutboxEvent
-from forwin.models.world_model import WorldModelPageRow
+from forwin.models.knowledge import KnowledgeProjectionPageRow
 from forwin.outbox.worker import run_one_outbox_event
 from forwin.protocol.book_state import WorldNode
 from tests.postgres import postgres_test_url
@@ -42,9 +42,9 @@ def _create_project_with_node(session) -> str:
 
 def _projection_page_count(session, project_id: str) -> int:
     return session.execute(
-        select(func.count(WorldModelPageRow.id)).where(
-            WorldModelPageRow.project_id == project_id,
-            WorldModelPageRow.projection_kind == "obsidian",
+        select(func.count(KnowledgeProjectionPageRow.id)).where(
+            KnowledgeProjectionPageRow.project_id == project_id,
+            KnowledgeProjectionPageRow.projection_kind == "obsidian",
         )
     ).scalar_one()
 

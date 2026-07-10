@@ -52,7 +52,6 @@ from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.thread import PlotThread
 from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
@@ -68,7 +67,14 @@ from forwin.world_templates import empty_world_root
 
 
 DisplayDatetime = Callable[[datetime | None], str]
-_GENESIS_STAGE_ORDER = ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap")
+_GENESIS_STAGE_ORDER = (
+    "brief",
+    "world",
+    "map",
+    "story_engine",
+    "book_blueprint",
+    "bootstrap",
+)
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 from .common import (
@@ -95,17 +101,23 @@ def _normalize_genesis_pack(raw: str | None) -> BookGenesisPack:
     )
     if isinstance(payload.get("world_bible"), dict):
         raw_world["world_bible"] = _deep_merge_dict(
-            raw_world.get("world_bible") if isinstance(raw_world.get("world_bible"), dict) else {},
+            raw_world.get("world_bible")
+            if isinstance(raw_world.get("world_bible"), dict)
+            else {},
             payload.get("world_bible") or {},
         )
     if isinstance(payload.get("map_atlas"), dict):
         raw_world["map_atlas"] = _deep_merge_dict(
-            raw_world.get("map_atlas") if isinstance(raw_world.get("map_atlas"), dict) else {},
+            raw_world.get("map_atlas")
+            if isinstance(raw_world.get("map_atlas"), dict)
+            else {},
             payload.get("map_atlas") or {},
         )
     if isinstance(payload.get("story_engine"), dict):
         raw_world["story_engine"] = _deep_merge_dict(
-            raw_world.get("story_engine") if isinstance(raw_world.get("story_engine"), dict) else {},
+            raw_world.get("story_engine")
+            if isinstance(raw_world.get("story_engine"), dict)
+            else {},
             payload.get("story_engine") or {},
         )
     raw_stage_states = payload.get("stage_states") if isinstance(payload, dict) else {}
@@ -124,16 +136,24 @@ def _normalize_genesis_pack(raw: str | None) -> BookGenesisPack:
             last_trace_id=str(stage_raw.get("last_trace_id", "") or ""),
         )
     return BookGenesisPack(
-        book_brief=payload.get("book_brief") if isinstance(payload.get("book_brief"), dict) else {},
+        book_brief=payload.get("book_brief")
+        if isinstance(payload.get("book_brief"), dict)
+        else {},
         world=raw_world,
         book_arc_blueprint=(
-            payload.get("book_arc_blueprint") if isinstance(payload.get("book_arc_blueprint"), dict) else {}
+            payload.get("book_arc_blueprint")
+            if isinstance(payload.get("book_arc_blueprint"), dict)
+            else {}
         ),
         subworld_policy=(
-            payload.get("subworld_policy") if isinstance(payload.get("subworld_policy"), dict) else {}
+            payload.get("subworld_policy")
+            if isinstance(payload.get("subworld_policy"), dict)
+            else {}
         ),
         execution_bootstrap=(
-            payload.get("execution_bootstrap") if isinstance(payload.get("execution_bootstrap"), dict) else {}
+            payload.get("execution_bootstrap")
+            if isinstance(payload.get("execution_bootstrap"), dict)
+            else {}
         ),
         stage_states=stage_states,
     )
@@ -156,7 +176,9 @@ def _load_latest_genesis_revision_by_project(
     )
 
 
-def _stage_overview_from_revision(revision: BookGenesisRevision | None) -> list[BookGenesisStageState]:
+def _stage_overview_from_revision(
+    revision: BookGenesisRevision | None,
+) -> list[BookGenesisStageState]:
     if revision is None:
         return []
     pack = _normalize_genesis_pack(revision.pack_json)
@@ -169,7 +191,9 @@ def _can_start_writing(project: Project, revision: BookGenesisRevision | None) -
     if revision is None:
         return False
     pack = _normalize_genesis_pack(revision.pack_json)
-    return all(pack.stage_states[stage_key].locked for stage_key in _GENESIS_STAGE_ORDER)
+    return all(
+        pack.stage_states[stage_key].locked for stage_key in _GENESIS_STAGE_ORDER
+    )
 
 
 def _prompt_trace_infos(
@@ -178,12 +202,16 @@ def _prompt_trace_infos(
     project_id: str,
     limit: int = 40,
 ) -> list[PromptTraceInfo]:
-    rows = session.execute(
-        select(PromptTrace)
-        .where(PromptTrace.project_id == project_id)
-        .order_by(PromptTrace.created_at.desc(), PromptTrace.id.desc())
-        .limit(max(1, int(limit or 40)))
-    ).scalars().all()
+    rows = (
+        session.execute(
+            select(PromptTrace)
+            .where(PromptTrace.project_id == project_id)
+            .order_by(PromptTrace.created_at.desc(), PromptTrace.id.desc())
+            .limit(max(1, int(limit or 40)))
+        )
+        .scalars()
+        .all()
+    )
     payload: list[PromptTraceInfo] = []
     for row in rows:
         payload.append(
@@ -212,9 +240,9 @@ def _prompt_trace_infos(
 
 
 __all__ = [
-    '_normalize_genesis_pack',
-    '_load_latest_genesis_revision_by_project',
-    '_stage_overview_from_revision',
-    '_can_start_writing',
-    '_prompt_trace_infos',
+    "_normalize_genesis_pack",
+    "_load_latest_genesis_revision_by_project",
+    "_stage_overview_from_revision",
+    "_can_start_writing",
+    "_prompt_trace_infos",
 ]

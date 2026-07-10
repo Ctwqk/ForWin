@@ -52,7 +52,6 @@ from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.thread import PlotThread
 from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
@@ -68,7 +67,14 @@ from forwin.world_templates import empty_world_root
 
 
 DisplayDatetime = Callable[[datetime | None], str]
-_GENESIS_STAGE_ORDER = ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap")
+_GENESIS_STAGE_ORDER = (
+    "brief",
+    "world",
+    "map",
+    "story_engine",
+    "book_blueprint",
+    "bootstrap",
+)
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 
@@ -84,7 +90,11 @@ def _deep_merge_dict(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, A
 
 
 def _normalized_project_ids(project_ids: list[str]) -> list[str]:
-    return [str(project_id or "").strip() for project_id in project_ids if str(project_id or "").strip()]
+    return [
+        str(project_id or "").strip()
+        for project_id in project_ids
+        if str(project_id or "").strip()
+    ]
 
 
 def _recent_rows_by_project(
@@ -167,11 +177,11 @@ def _load_json_list(raw: str) -> list[dict[str, Any]]:
 
 
 __all__ = [
-    '_deep_merge_dict',
-    '_normalized_project_ids',
-    '_recent_rows_by_project',
-    '_latest_rows_by_project',
-    '_json_list_strings',
-    '_json_object',
-    '_load_json_list',
+    "_deep_merge_dict",
+    "_normalized_project_ids",
+    "_recent_rows_by_project",
+    "_latest_rows_by_project",
+    "_json_list_strings",
+    "_json_object",
+    "_load_json_list",
 ]

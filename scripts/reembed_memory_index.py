@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from forwin.config import InfrastructureConfig
 from forwin.models import ChapterDraft, ChapterPlan
-from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.base import get_engine, get_session_factory, require_v5_schema
 from forwin.retrieval.memory_index import ChapterMemoryIndex, create_memory_index
 
 
@@ -99,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
 
     config = InfrastructureConfig.from_env()
     engine = get_engine(config.database_url)
-    init_db(engine)
+    require_v5_schema(engine)
     session_factory = get_session_factory(engine)
     collection = args.collection or config.qdrant_collection
     embedding_backend = args.embedding_backend or config.embedding_backend

@@ -225,10 +225,10 @@ def main() -> int:
     if args.database_url:
         os.environ["FORWIN_DATABASE_URL"] = str(args.database_url)
     config = InfrastructureConfig.from_env()
-    from forwin.models.base import get_engine, get_session_factory, init_db
+    from forwin.models.base import get_engine, get_session_factory, require_v5_schema
 
     bootstrap_engine = get_engine(config.database_url)
-    init_db(bootstrap_engine)
+    require_v5_schema(bootstrap_engine)
     bootstrap_session_factory = get_session_factory(bootstrap_engine)
     try:
         with bootstrap_session_factory() as session:

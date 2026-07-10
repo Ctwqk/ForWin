@@ -13,13 +13,16 @@ from .canon_quality import (
     RevealRegistryEntryRow,
     StoryObligationRow,
 )
-from .entity import Entity, EntityAlias, EntityState, RelationEdge
-from .event import CanonEvent, EventEntityLink
+from .entity import Entity, EntityAlias
 from .genesis import BookGenesisRevision, PromptTrace
 from .governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
 from .observability import PerformanceSpan
 from .outbox import OutboxEvent
-from .narrative_obligation import FuturePlanAuditRunRow, NarrativeObligationRow, NarrativePlanPatchRow
+from .narrative_obligation import (
+    FuturePlanAuditRunRow,
+    NarrativeObligationRow,
+    NarrativePlanPatchRow,
+)
 from .phase import (
     ArcEnvelope,
     ArcEnvelopeAnalysis,
@@ -56,16 +59,10 @@ from .publisher import (
 from .project import ArcPlanVersion, ChapterPlan, Project
 from .subworld import SubWorld, SubWorldRosterItem
 from .task import GenerationTask
-from .thread import PlotThread, PlotThreadBeat
-from .timeline import ChapterTimeline, StoryTimePoint
 from forwin.map.models import MapGenerationRunRow, MapRegionEdgeRow, MapRegionRow
-from .world_model import (
-    WorldEditProposalRow,
-    WorldModelCompileRunRow,
-    WorldModelConflictRow,
-    WorldModelLinkRow,
-    WorldModelPageRow,
-    WorldModelSnapshotRow,
+from .knowledge import (
+    KnowledgeEditProposalRow,
+    KnowledgeProjectionPageRow,
 )
 from .world_v4 import (
     ArcWorldContractRow,
@@ -123,11 +120,6 @@ __all__ = [
     # entity
     "Entity",
     "EntityAlias",
-    "EntityState",
-    "RelationEdge",
-    # event
-    "CanonEvent",
-    "EventEntityLink",
     "BookGenesisRevision",
     "PromptTrace",
     "BandCheckpoint",
@@ -150,12 +142,6 @@ __all__ = [
     "WorldProjectionDeltaRow",
     "NPCIntentSnapshot",
     "WorldSimulationTurn",
-    # thread
-    "PlotThread",
-    "PlotThreadBeat",
-    # timeline
-    "StoryTimePoint",
-    "ChapterTimeline",
     # draft
     "ChapterDraft",
     "ChapterReview",
@@ -169,12 +155,8 @@ __all__ = [
     "QualityAnalysisRunRow",
     "RevealRegistryEntryRow",
     "StoryObligationRow",
-    "WorldModelSnapshotRow",
-    "WorldModelPageRow",
-    "WorldModelLinkRow",
-    "WorldEditProposalRow",
-    "WorldModelConflictRow",
-    "WorldModelCompileRunRow",
+    "KnowledgeProjectionPageRow",
+    "KnowledgeEditProposalRow",
     # publisher
     "CommentSignalCandidate",
     "FeedbackActionRecord",

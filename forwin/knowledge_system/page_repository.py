@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.models.world_model import WorldModelPageRow
+from forwin.models.knowledge import KnowledgeProjectionPageRow
 
 
 CANONICAL_DEDUPE_TYPES = {
@@ -33,8 +33,8 @@ class PageIdentity:
     canonical_rank: int
 
 
-class WorldModelPageRepository:
-    """Canonical read/write boundary for WorldModel projection pages."""
+class KnowledgePageRepository:
+    """Canonical selector for disposable knowledge projection pages."""
 
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -45,22 +45,30 @@ class WorldModelPageRepository:
         *,
         page_type: str = "",
         include_superseded: bool = False,
-    ) -> list[WorldModelPageRow]:
+    ) -> list[KnowledgeProjectionPageRow]:
         if not include_superseded:
             self.supersede_duplicate_pages(project_id, page_type=page_type)
-        rows = self._load_rows(project_id, page_type=page_type, include_superseded=include_superseded)
+        rows = self._load_rows(
+            project_id, page_type=page_type, include_superseded=include_superseded
+        )
         if include_superseded:
             return sorted(rows, key=_page_output_key)
         return sorted(_canonical_rows(rows), key=_page_output_key)
 
-    def resolve_page_key(self, project_id: str, page_key: str) -> WorldModelPageRow | None:
+    def resolve_page_key(
+        self, project_id: str, page_key: str
+    ) -> KnowledgeProjectionPageRow | None:
         row = self.session.execute(
-            select(WorldModelPageRow)
+            select(KnowledgeProjectionPageRow)
             .where(
-                WorldModelPageRow.project_id == project_id,
-                WorldModelPageRow.page_key == page_key,
+                KnowledgeProjectionPageRow.project_id == project_id,
+                KnowledgeProjectionPageRow.page_key == page_key,
             )
-            .order_by(WorldModelPageRow.revision.desc(), WorldModelPageRow.updated_at.desc(), WorldModelPageRow.id.desc())
+            .order_by(
+                KnowledgeProjectionPageRow.revision.desc(),
+                KnowledgeProjectionPageRow.updated_at.desc(),
+                KnowledgeProjectionPageRow.id.desc(),
+            )
             .limit(1)
         ).scalar_one_or_none()
         if row is None:
@@ -71,22 +79,26 @@ class WorldModelPageRepository:
                 return target
         if row.status == "canon_live":
             identity = self.identity_for_row(row)
-            chosen = self._canonical_for_identity(row.project_id, identity.logical_identity_key, row.page_type)
+            chosen = self._canonical_for_identity(
+                row.project_id, identity.logical_identity_key, row.page_type
+            )
             if chosen is not None:
                 return chosen
         return row
 
     def prepare_row(
         self,
-        row: WorldModelPageRow,
+        row: KnowledgeProjectionPageRow,
         *,
         frontmatter: dict[str, Any] | None = None,
-    ) -> WorldModelPageRow:
+    ) -> KnowledgeProjectionPageRow:
         identity = self.identity_for_values(
             page_type=row.page_type,
             title=row.title,
             page_key=row.page_key,
-            frontmatter=frontmatter if frontmatter is not None else _load_json(row.frontmatter_json),
+            frontmatter=frontmatter
+            if frontmatter is not None
+            else _load_json(row.frontmatter_json),
             as_of_chapter=row.as_of_chapter,
         )
         row.logical_identity_key = identity.logical_identity_key
@@ -102,8 +114,10 @@ class WorldModelPageRepository:
         identity_key: str = "",
         page_type: str = "",
     ) -> None:
-        rows = self._load_rows(project_id, page_type=page_type, include_superseded=False)
-        groups: dict[tuple[str, str], list[WorldModelPageRow]] = {}
+        rows = self._load_rows(
+            project_id, page_type=page_type, include_superseded=False
+        )
+        groups: dict[tuple[str, str], list[KnowledgeProjectionPageRow]] = {}
         for row in rows:
             identity = self.identity_for_row(row)
             if identity_key and identity.logical_identity_key != identity_key:
@@ -138,7 +152,7 @@ class WorldModelPageRepository:
                 self.session.add(row)
         self.session.flush()
 
-    def identity_for_row(self, row: WorldModelPageRow) -> PageIdentity:
+    def identity_for_row(self, row: KnowledgeProjectionPageRow) -> PageIdentity:
         return _identity_for_row(row)
 
     @staticmethod
@@ -163,9 +177,13 @@ class WorldModelPageRepository:
         elif page_type in CANONICAL_DEDUPE_TYPES and title:
             logical_identity_key = f"{page_type}:name:{_normalize_identity(title)}"
         else:
-            logical_identity_key = f"{page_type}:page:{page_key or _normalize_identity(title)}"
+            logical_identity_key = (
+                f"{page_type}:page:{page_key or _normalize_identity(title)}"
+            )
 
-        source_type, source_id, source_rank = _source_from_frontmatter(page_key, frontmatter)
+        source_type, source_id, source_rank = _source_from_frontmatter(
+            page_key, frontmatter
+        )
         chapter_rank = min(max(int(as_of_chapter or 0), 0), 9999)
         return PageIdentity(
             logical_identity_key=logical_identity_key,
@@ -180,20 +198,22 @@ class WorldModelPageRepository:
         *,
         page_type: str,
         include_superseded: bool,
-    ) -> list[WorldModelPageRow]:
-        stmt = select(WorldModelPageRow).where(WorldModelPageRow.project_id == project_id)
+    ) -> list[KnowledgeProjectionPageRow]:
+        stmt = select(KnowledgeProjectionPageRow).where(
+            KnowledgeProjectionPageRow.project_id == project_id
+        )
         if page_type:
-            stmt = stmt.where(WorldModelPageRow.page_type == page_type)
+            stmt = stmt.where(KnowledgeProjectionPageRow.page_type == page_type)
         if not include_superseded:
-            stmt = stmt.where(WorldModelPageRow.status == "canon_live")
+            stmt = stmt.where(KnowledgeProjectionPageRow.status == "canon_live")
         return list(
             self.session.execute(
                 stmt.order_by(
-                    WorldModelPageRow.page_type.asc(),
-                    WorldModelPageRow.title.asc(),
-                    WorldModelPageRow.as_of_chapter.desc(),
-                    WorldModelPageRow.updated_at.desc(),
-                    WorldModelPageRow.id.desc(),
+                    KnowledgeProjectionPageRow.page_type.asc(),
+                    KnowledgeProjectionPageRow.title.asc(),
+                    KnowledgeProjectionPageRow.as_of_chapter.desc(),
+                    KnowledgeProjectionPageRow.updated_at.desc(),
+                    KnowledgeProjectionPageRow.id.desc(),
                 )
             )
             .scalars()
@@ -205,43 +225,57 @@ class WorldModelPageRepository:
         project_id: str,
         identity_key: str,
         page_type: str,
-    ) -> WorldModelPageRow | None:
+    ) -> KnowledgeProjectionPageRow | None:
         if not identity_key:
             return None
         rows = [
             row
-            for row in self._load_rows(project_id, page_type=page_type, include_superseded=False)
+            for row in self._load_rows(
+                project_id, page_type=page_type, include_superseded=False
+            )
             if self.identity_for_row(row).logical_identity_key == identity_key
         ]
         return _pick_canonical_row(rows) if rows else None
 
-    def _superseding_row(self, row: WorldModelPageRow) -> WorldModelPageRow | None:
+    def _superseding_row(
+        self, row: KnowledgeProjectionPageRow
+    ) -> KnowledgeProjectionPageRow | None:
         target_id = str(getattr(row, "supersedes_page_id", "") or "").strip()
         if target_id:
-            target = self.session.get(WorldModelPageRow, target_id)
+            target = self.session.get(KnowledgeProjectionPageRow, target_id)
             if target is not None and target.status == "canon_live":
                 return target
         identity = self.identity_for_row(row)
-        return self._canonical_for_identity(row.project_id, identity.logical_identity_key, row.page_type)
+        return self._canonical_for_identity(
+            row.project_id, identity.logical_identity_key, row.page_type
+        )
 
 
-def _canonical_rows(rows: list[WorldModelPageRow]) -> list[WorldModelPageRow]:
-    passthrough: list[WorldModelPageRow] = []
-    grouped: dict[tuple[str, str], list[WorldModelPageRow]] = {}
+def _canonical_rows(
+    rows: list[KnowledgeProjectionPageRow],
+) -> list[KnowledgeProjectionPageRow]:
+    passthrough: list[KnowledgeProjectionPageRow] = []
+    grouped: dict[tuple[str, str], list[KnowledgeProjectionPageRow]] = {}
     for row in rows:
         identity = _identity_for_row(row)
         if not identity.logical_identity_key:
             passthrough.append(row)
             continue
-        grouped.setdefault((row.page_type, identity.logical_identity_key), []).append(row)
+        grouped.setdefault((row.page_type, identity.logical_identity_key), []).append(
+            row
+        )
     return [*passthrough, *(_pick_canonical_row(group) for group in grouped.values())]
 
 
-def _pick_canonical_row(rows: list[WorldModelPageRow]) -> WorldModelPageRow:
+def _pick_canonical_row(
+    rows: list[KnowledgeProjectionPageRow],
+) -> KnowledgeProjectionPageRow:
     return max(rows, key=_page_preference_key)
 
 
-def _page_preference_key(row: WorldModelPageRow) -> tuple[int, int, int, str, str]:
+def _page_preference_key(
+    row: KnowledgeProjectionPageRow,
+) -> tuple[int, int, int, str, str]:
     identity = _identity_for_row(row)
     updated = getattr(row, "updated_at", None)
     if isinstance(updated, datetime):
@@ -257,24 +291,26 @@ def _page_preference_key(row: WorldModelPageRow) -> tuple[int, int, int, str, st
     )
 
 
-def _page_output_key(row: WorldModelPageRow) -> tuple[str, str, str]:
+def _page_output_key(row: KnowledgeProjectionPageRow) -> tuple[str, str, str]:
     return (str(row.page_type or ""), str(row.title or ""), str(row.page_key or ""))
 
 
-def _source_from_frontmatter(page_key: str, frontmatter: dict[str, Any]) -> tuple[str, str, int]:
+def _source_from_frontmatter(
+    page_key: str, frontmatter: dict[str, Any]
+) -> tuple[str, str, int]:
     node_id = str(frontmatter.get("node_id") or "").strip()
     if node_id:
         return "book_state_node", node_id, 30000
     forwin_id = str(frontmatter.get("forwin_id") or page_key or "").strip()
     if ":genesis:" in forwin_id or forwin_id.startswith("genesis:"):
         return "genesis", forwin_id, 10000
-    return "world_model_page", forwin_id, 20000
+    return "knowledge_projection_page", forwin_id, 20000
 
 
-def _identity_for_row(row: WorldModelPageRow) -> PageIdentity:
+def _identity_for_row(row: KnowledgeProjectionPageRow) -> PageIdentity:
     frontmatter = _load_json(row.frontmatter_json)
     existing_key = str(getattr(row, "logical_identity_key", "") or "").strip()
-    identity = WorldModelPageRepository.identity_for_values(
+    identity = KnowledgePageRepository.identity_for_values(
         page_type=row.page_type,
         title=row.title,
         page_key=row.page_key,
@@ -284,9 +320,16 @@ def _identity_for_row(row: WorldModelPageRow) -> PageIdentity:
     if existing_key and existing_key == identity.logical_identity_key:
         return PageIdentity(
             logical_identity_key=existing_key,
-            canonical_source_type=str(getattr(row, "canonical_source_type", "") or identity.canonical_source_type),
-            canonical_source_id=str(getattr(row, "canonical_source_id", "") or identity.canonical_source_id),
-            canonical_rank=int(getattr(row, "canonical_rank", 0) or identity.canonical_rank),
+            canonical_source_type=str(
+                getattr(row, "canonical_source_type", "")
+                or identity.canonical_source_type
+            ),
+            canonical_source_id=str(
+                getattr(row, "canonical_source_id", "") or identity.canonical_source_id
+            ),
+            canonical_rank=int(
+                getattr(row, "canonical_rank", 0) or identity.canonical_rank
+            ),
         )
     return identity
 
@@ -302,3 +345,6 @@ def _load_json(raw: str | None) -> dict[str, Any]:
     except (json.JSONDecodeError, TypeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+__all__ = ["KnowledgePageRepository", "PageIdentity"]

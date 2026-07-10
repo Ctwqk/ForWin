@@ -14,7 +14,7 @@ from forwin.director import ArcDirector
 from forwin.experience.service import ExperiencePlanningService
 from forwin.generation.gate_delegation import GateDelegationService, SparkGateDelegate
 from forwin.llm.factory import maybe_wrap_with_codex_router
-from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.base import get_engine, get_session_factory, require_v5_schema
 from forwin.orchestrator.phase24 import ArcEnvelopeManager
 from forwin.orchestrator.phase3 import PacingStrategist, ReplanGovernor, StageAnalyzer
 from forwin.orchestrator.phase4 import NPCIntentGenerator, WorldSimulator
@@ -26,7 +26,11 @@ from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.retrieval import RetrievalBroker, create_memory_index
 from forwin.review import DraftReviewService
 from forwin.review.repair import RepairService, RepairVerifier
-from forwin.runtime.factories import ProductionSchedulerFactory, build_provisional_writer, build_writer
+from forwin.runtime.factories import (
+    ProductionSchedulerFactory,
+    build_provisional_writer,
+    build_writer,
+)
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.services import RuntimeServices, SkillRuntimeBundle
 from forwin.skills import build_skill_runtime_components
@@ -159,7 +163,7 @@ class RuntimeContainer:
         infrastructure = self.infrastructure
         policy = self.policy
         engine = get_engine(infrastructure.database_url)
-        init_db(engine)
+        require_v5_schema(engine)
         session_factory = get_session_factory(engine)
         self._run_retention_cleanup(session_factory, infrastructure)
         generation_application = GenerationApplicationService(
@@ -177,7 +181,9 @@ class RuntimeContainer:
             config=infrastructure,
         )
         if infrastructure.observability_record_db_spans:
-            from forwin.observability.sqlalchemy_probe import install_sqlalchemy_query_probe
+            from forwin.observability.sqlalchemy_probe import (
+                install_sqlalchemy_query_probe,
+            )
 
             install_sqlalchemy_query_probe(engine)
         book_genesis = self._build_book_genesis_service(
@@ -237,9 +243,7 @@ class RuntimeContainer:
         )
         llm_available = bool(model_profile.api_key) or infrastructure.codex_enabled
         phase4_llm = (
-            llm_client
-            if policy.planning.use_llm_simulation and llm_available
-            else None
+            llm_client if policy.planning.use_llm_simulation and llm_available else None
         )
         npc_intent_generator = NPCIntentGenerator(
             llm_client=phase4_llm,
@@ -291,9 +295,7 @@ class RuntimeContainer:
             publisher_session_encryption_required=infrastructure.publisher_session_encryption_required,
             strict_preferred_client=infrastructure.publisher_strict_preferred_client,
             observability=observability,
-            codex_intervention_handler=build_codex_intervention_handler(
-                infrastructure
-            ),
+            codex_intervention_handler=build_codex_intervention_handler(infrastructure),
             minimax_api_key=model_profile.api_key,
             minimax_base_url=model_profile.base_url,
         )
@@ -353,14 +355,21 @@ class RuntimeContainer:
             ),
         )
 
-    def _run_retention_cleanup(self, session_factory, config: InfrastructureConfig) -> None:  # noqa: ANN001
+    def _run_retention_cleanup(
+        self, session_factory, config: InfrastructureConfig
+    ) -> None:  # noqa: ANN001
         if not bool(getattr(config, "retention_cleanup_on_startup", True)):
             return
         try:
-            from forwin.maintenance.retention import RetentionPolicy, run_retention_cleanup
+            from forwin.maintenance.retention import (
+                RetentionPolicy,
+                run_retention_cleanup,
+            )
 
             with session_factory.begin() as session:
-                result = run_retention_cleanup(session, RetentionPolicy.from_config(config))
+                result = run_retention_cleanup(
+                    session, RetentionPolicy.from_config(config)
+                )
             logger.info(
                 "retention_cleanup_completed performance_spans=%s prompt_traces=%s candidate_drafts=%s",
                 result.performance_spans_deleted,

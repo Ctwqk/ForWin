@@ -16,11 +16,11 @@ from forwin.api_schemas import (
     WorldModelImportResponse,
 )
 from forwin.models.project import Project
-from forwin.models.world_model import WorldEditProposalRow
+from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.obsidian import ObsidianExporter, ObsidianImporter
 from forwin.obsidian.proposal_review import approve_world_edit_proposal
 from forwin.retrieval.obsidian_human_index import ObsidianHumanVectorIndex
-from forwin.world_model.store import load_json
+from forwin.knowledge_system.store import load_json
 
 
 def _dt(value) -> str:
@@ -34,7 +34,9 @@ def _require_project(session, project_id: str) -> Project:
     return project
 
 
-def _proposal_info(row: WorldEditProposalRow, *, projection_refresh: dict[str, Any] | None = None) -> WorldEditProposalInfo:
+def _proposal_info(
+    row: KnowledgeEditProposalRow, *, projection_refresh: dict[str, Any] | None = None
+) -> WorldEditProposalInfo:
     return WorldEditProposalInfo(
         id=row.id,
         project_id=row.project_id,
@@ -77,12 +79,18 @@ def build_handlers(
         config = get_config() if get_config is not None else None
         return getattr(config, "llm_kb_qdrant_collection", None)
 
-    def export_obsidian(project_id: str, req: WorldModelExportRequest) -> WorldModelExportResponse:
+    def export_obsidian(
+        project_id: str, req: WorldModelExportRequest
+    ) -> WorldModelExportResponse:
         with get_session() as session:
             _require_project(session, project_id)
-            vault_root = Path(req.vault_root) if str(req.vault_root or "").strip() else None
+            vault_root = (
+                Path(req.vault_root) if str(req.vault_root or "").strip() else None
+            )
             with session.begin_nested():
-                result = ObsidianExporter(session).export_project(project_id, vault_root=vault_root)
+                result = ObsidianExporter(session).export_project(
+                    project_id, vault_root=vault_root
+                )
             session.commit()
             _rebuild_human_index(project_id, Path(result.vault_root))
             return WorldModelExportResponse(
@@ -93,12 +101,18 @@ def build_handlers(
                 message=f"exported BookState-backed Obsidian vault as of chapter {result.as_of_chapter}",
             )
 
-    def import_obsidian(project_id: str, req: WorldModelImportRequest) -> WorldModelImportResponse:
+    def import_obsidian(
+        project_id: str, req: WorldModelImportRequest
+    ) -> WorldModelImportResponse:
         with get_session() as session:
             _require_project(session, project_id)
-            vault_root = Path(req.vault_root) if str(req.vault_root or "").strip() else None
+            vault_root = (
+                Path(req.vault_root) if str(req.vault_root or "").strip() else None
+            )
             with session.begin_nested():
-                result = ObsidianImporter(session).import_project(project_id, vault_root=vault_root)
+                result = ObsidianImporter(session).import_project(
+                    project_id, vault_root=vault_root
+                )
             session.commit()
             _rebuild_human_index(project_id, Path(result.vault_root))
             return WorldModelImportResponse(
@@ -113,11 +127,18 @@ def build_handlers(
     def list_proposals(project_id: str) -> list[WorldEditProposalInfo]:
         with get_session() as session:
             _require_project(session, project_id)
-            rows = session.execute(
-                select(WorldEditProposalRow)
-                .where(WorldEditProposalRow.project_id == project_id)
-                .order_by(WorldEditProposalRow.created_at.desc(), WorldEditProposalRow.id.desc())
-            ).scalars().all()
+            rows = (
+                session.execute(
+                    select(KnowledgeEditProposalRow)
+                    .where(KnowledgeEditProposalRow.project_id == project_id)
+                    .order_by(
+                        KnowledgeEditProposalRow.created_at.desc(),
+                        KnowledgeEditProposalRow.id.desc(),
+                    )
+                )
+                .scalars()
+                .all()
+            )
             return [_proposal_info(row) for row in rows]
 
     def approve_proposal(
@@ -142,7 +163,9 @@ def build_handlers(
                     qdrant_models=qdrant_models,
                 )
                 session.commit()
-                return _proposal_info(result.row, projection_refresh=result.projection_refresh)
+                return _proposal_info(
+                    result.row, projection_refresh=result.projection_refresh
+                )
             except Exception:
                 session.rollback()
                 raise
@@ -155,7 +178,7 @@ def build_handlers(
         request = req or WorldEditProposalReviewRequest(status="rejected", reason="")
         with get_session() as session:
             _require_project(session, project_id)
-            row = session.get(WorldEditProposalRow, proposal_id)
+            row = session.get(KnowledgeEditProposalRow, proposal_id)
             if row is None or row.project_id != project_id:
                 raise HTTPException(status_code=404, detail="proposal not found")
             row.status = "rejected"

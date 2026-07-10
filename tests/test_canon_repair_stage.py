@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 import json
 from types import SimpleNamespace
 
@@ -9,12 +8,15 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from tests.postgres import postgres_test_url
-from forwin.canon import CanonAdmissionService, CanonAdmissionOutcome, CanonQualityGateOutcome
+from forwin.canon import (
+    CanonAdmissionService,
+    CanonAdmissionOutcome,
+    CanonQualityGateOutcome,
+)
 from forwin.canon import admission as canon_admission_module
 from forwin.checker.hard_floor import HardFloorResult
 from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.config import InfrastructureConfig
-from forwin.models import base as base_module
 from forwin.models.base import Base, get_engine, get_session_factory
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.governance import DecisionEvent
@@ -83,52 +85,6 @@ def _build_orchestrator(
     ).build_writing_orchestrator()
 
 
-class _RecordingConnection:
-    def __init__(self) -> None:
-        self.statements: list[str] = []
-        self.params: list[dict[str, object] | None] = []
-
-    def execute(self, statement, params=None):
-        self.statements.append(str(statement))
-        self.params.append(params)
-
-
-class _FakeEngine:
-    def __init__(self, conn: _RecordingConnection) -> None:
-        self.conn = conn
-
-    def begin(self):
-        return self
-
-    def __enter__(self) -> _RecordingConnection:
-        return self.conn
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
-
-
-class _RecordingAlembicOp:
-    def __init__(self) -> None:
-        self.statements: list[str] = []
-        self.add_column_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
-        self.create_index_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
-
-    def add_column(self, *args, **kwargs) -> None:
-        self.add_column_calls.append((args, kwargs))
-
-    def create_index(self, *args, **kwargs) -> None:
-        self.create_index_calls.append((args, kwargs))
-
-    def execute(self, statement) -> None:
-        self.statements.append(str(statement))
-
-
-def _rewrite_attempt_phase_migration():
-    return importlib.import_module(
-        "forwin.migrations.versions.0019_chapter_rewrite_attempt_phase"
-    )
-
-
 def test_rewrite_attempt_phase_fields_are_serialized_in_review_detail():
     Session = _session_factory()
     session = Session()
@@ -193,69 +149,6 @@ def test_rewrite_attempt_phase_fields_are_serialized_in_review_detail():
     assert detail.rewrite_attempts[0].phase_attempt_no == 1
 
 
-def test_runtime_upgrade_helper_backfills_rewrite_attempt_phase_columns():
-    conn = _RecordingConnection()
-
-    base_module._upgrade_chapter_rewrite_attempt_phase(conn)
-
-    statements = "\n".join(conn.statements)
-    assert (
-        "ALTER TABLE chapter_rewrite_attempts "
-        "ADD COLUMN IF NOT EXISTS repair_phase VARCHAR NOT NULL DEFAULT 'review_repair'"
-    ) in statements
-    assert (
-        "ALTER TABLE chapter_rewrite_attempts "
-        "ADD COLUMN IF NOT EXISTS phase_attempt_no INTEGER NOT NULL DEFAULT 0"
-    ) in statements
-    assert "UPDATE chapter_rewrite_attempts" in statements
-    assert "SET phase_attempt_no = attempt_no" in statements
-    assert "WHERE phase_attempt_no = 0" in statements
-    assert (
-        "CREATE INDEX IF NOT EXISTS ix_chapter_rewrite_attempts_project_chapter_phase"
-    ) in statements
-    assert "chapter_rewrite_attempt_phase_v1" in base_module.POSTGRES_BASELINE_MIGRATIONS
-
-
-def test_runtime_postgresql_upgrade_invokes_rewrite_attempt_phase_helper(monkeypatch):
-    called = False
-
-    def _record_call(conn):
-        nonlocal called
-        called = True
-
-    monkeypatch.setattr(base_module, "_upgrade_chapter_rewrite_attempt_phase", _record_call)
-
-    base_module._upgrade_postgresql_database(_FakeEngine(_RecordingConnection()))
-
-    assert called
-
-
-def test_alembic_revision_fits_version_table():
-    migration = _rewrite_attempt_phase_migration()
-
-    assert migration.revision == "0019_rewrite_attempt_phase"
-    assert len(migration.revision) <= 32
-
-
-def test_alembic_upgrade_uses_idempotent_sql_and_backfills_phase_attempt(monkeypatch):
-    migration = _rewrite_attempt_phase_migration()
-    fake_op = _RecordingAlembicOp()
-    monkeypatch.setattr(migration, "op", fake_op)
-
-    migration.upgrade()
-
-    statements = "\n".join(fake_op.statements)
-    assert "ADD COLUMN IF NOT EXISTS repair_phase" in statements
-    assert "ADD COLUMN IF NOT EXISTS phase_attempt_no" in statements
-    assert "CREATE INDEX IF NOT EXISTS ix_chapter_rewrite_attempts_project_chapter_phase" in statements
-    assert (
-        "UPDATE chapter_rewrite_attempts SET phase_attempt_no = attempt_no "
-        "WHERE phase_attempt_no = 0"
-    ) in statements
-    assert fake_op.add_column_calls == []
-    assert fake_op.create_index_calls == []
-
-
 class _Attempt:
     def __init__(self, repair_scope: str, repair_phase: str):
         self.repair_scope = repair_scope
@@ -297,7 +190,9 @@ def _writer_output(chapter_number: int, marker: str = "ok") -> WriterOutput:
     )
 
 
-def _draft_blocking_review(summary: str = "canon repair still blocked") -> ReviewVerdict:
+def _draft_blocking_review(
+    summary: str = "canon repair still blocked",
+) -> ReviewVerdict:
     return ReviewVerdict(
         verdict="fail",
         issues=[
@@ -341,7 +236,12 @@ def test_canon_repair_budget_ignores_prior_review_repair_attempts():
     phase_attempts = _attempts_for_repair_phase(attempts, "canon_repair")
 
     assert phase_attempts == []
-    assert len([attempt for attempt in attempts if attempt.repair_phase == "review_repair"]) == 4
+    assert (
+        len(
+            [attempt for attempt in attempts if attempt.repair_phase == "review_repair"]
+        )
+        == 4
+    )
 
 
 def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
@@ -486,15 +386,19 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
     monkeypatch.setattr(
         quality_gates_module,
         "analyze_writer_output_quality",
-        lambda **_kwargs: calls.append("analysis")
-        or SimpleNamespace(signals=[], raw_analyzer_results=[]),
+        lambda **_kwargs: (
+            calls.append("analysis")
+            or SimpleNamespace(signals=[], raw_analyzer_results=[])
+        ),
     )
 
     def _evaluate_canon_admission(**_kwargs):
         calls.append("admission")
         return gate
 
-    monkeypatch.setattr(quality_gates_module, "evaluate_canon_admission", _evaluate_canon_admission)
+    monkeypatch.setattr(
+        quality_gates_module, "evaluate_canon_admission", _evaluate_canon_admission
+    )
 
     class _ObligationRepo:
         def __init__(self, _session) -> None:
@@ -548,8 +452,9 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
     monkeypatch.setattr(
         quality_gates_module,
         "_prepare_deferred_acceptance_if_needed",
-        lambda _runtime, **_kwargs: calls.append("deferred_acceptance")
-        or ["deferred patch failed"],
+        lambda _runtime, **_kwargs: (
+            calls.append("deferred_acceptance") or ["deferred patch failed"]
+        ),
     )
 
     outcome = quality_gates_module._apply_canon_quality_gate(
@@ -612,7 +517,9 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
         _verify_due_obligations_for_draft,
         raising=False,
     )
-    monkeypatch.setattr(quality_gates_module, "evaluate_canon_admission", _evaluate_canon_admission)
+    monkeypatch.setattr(
+        quality_gates_module, "evaluate_canon_admission", _evaluate_canon_admission
+    )
 
     class _ObligationRepo:
         def __init__(self, _session) -> None:
@@ -645,8 +552,12 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
         def _record_decision_event(self, **_kwargs) -> None:
             calls.append("event")
 
-    monkeypatch.setattr(quality_gates_module, "NarrativeObligationRepository", _ObligationRepo)
-    monkeypatch.setattr(quality_gates_module, "CanonQualityRepository", _CanonQualityRepo)
+    monkeypatch.setattr(
+        quality_gates_module, "NarrativeObligationRepository", _ObligationRepo
+    )
+    monkeypatch.setattr(
+        quality_gates_module, "CanonQualityRepository", _CanonQualityRepo
+    )
     monkeypatch.setattr(
         quality_gates_module,
         "_latest_draft_and_review_for_chapter",
@@ -762,10 +673,12 @@ def test_canon_admission_exception_pauses_chapter_instead_of_accepting(monkeypat
     db_path = postgres_test_url("canon-apply-exception-no-freeze")
     orchestrator = _build_orchestrator(db_path)
     try:
-        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: _one_chapter_arc(
-            "canon apply exception"
+        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: (
+            _one_chapter_arc("canon apply exception")
         )
-        orchestrator.writer.write_chapter = lambda context: _writer_output(context.chapter_number)
+        orchestrator.writer.write_chapter = lambda context: _writer_output(
+            context.chapter_number
+        )
         orchestrator.draft_review = PassReviewHub()
 
         def fail_canon_quality_gate(*_args, **_kwargs):
@@ -911,9 +824,15 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
         engine = get_engine(db_path)
         session = get_session_factory(engine)()
         try:
-            attempts = session.execute(
-                select(ChapterRewriteAttempt).order_by(ChapterRewriteAttempt.attempt_no)
-            ).scalars().all()
+            attempts = (
+                session.execute(
+                    select(ChapterRewriteAttempt).order_by(
+                        ChapterRewriteAttempt.attempt_no
+                    )
+                )
+                .scalars()
+                .all()
+            )
             plan = session.execute(select(ChapterPlan)).scalar_one()
         finally:
             session.close()
@@ -934,7 +853,9 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
     assert plan.repair_attempt_count == 1
 
 
-def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(monkeypatch):
+def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(
+    monkeypatch,
+):
     class WarnThenFailReviewHub:
         def __init__(self) -> None:
             self.calls = 0
@@ -954,14 +875,18 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(mon
     db_path = postgres_test_url("canon-repair-exhaustion-task6")
     orchestrator = _build_orchestrator(db_path, max_rewrites=1)
     try:
-        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: _one_chapter_arc(
-            "canon repair exhaustion"
+        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: (
+            _one_chapter_arc("canon repair exhaustion")
         )
-        orchestrator.writer.write_chapter = lambda context: _writer_output(context.chapter_number)
+        orchestrator.writer.write_chapter = lambda context: _writer_output(
+            context.chapter_number
+        )
         orchestrator.draft_review = WarnThenFailReviewHub()
-        orchestrator._write_chapter_with_attention_fallback = lambda **kwargs: _writer_output(
-            int(kwargs["chapter_number"]),
-            marker=f"repair-{orchestrator.draft_review.calls}",
+        orchestrator._write_chapter_with_attention_fallback = lambda **kwargs: (
+            _writer_output(
+                int(kwargs["chapter_number"]),
+                marker=f"repair-{orchestrator.draft_review.calls}",
+            )
         )
         monkeypatch.setattr(
             repair_service_module,
@@ -999,12 +924,20 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(mon
         engine = get_engine(db_path)
         session = get_session_factory(engine)()
         try:
-            attempts = session.execute(
-                select(ChapterRewriteAttempt).order_by(ChapterRewriteAttempt.attempt_no)
-            ).scalars().all()
+            attempts = (
+                session.execute(
+                    select(ChapterRewriteAttempt).order_by(
+                        ChapterRewriteAttempt.attempt_no
+                    )
+                )
+                .scalars()
+                .all()
+            )
             plan = session.execute(select(ChapterPlan)).scalar_one()
             latest_attempt_review = session.execute(
-                select(ChapterReview).where(ChapterReview.id == attempts[-1].result_review_id)
+                select(ChapterReview).where(
+                    ChapterReview.id == attempts[-1].result_review_id
+                )
             ).scalar_one()
         finally:
             session.close()
@@ -1017,7 +950,9 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(mon
     assert result.status == "needs_review"
     assert len(attempts) >= 2
     assert {attempt.repair_phase for attempt in attempts} == {"canon_repair"}
-    assert [attempt.phase_attempt_no for attempt in attempts] == list(range(1, len(attempts) + 1))
+    assert [attempt.phase_attempt_no for attempt in attempts] == list(
+        range(1, len(attempts) + 1)
+    )
     assert plan.status == "needs_review"
     assert plan.canon_risk_level == "high"
     assert latest_review_meta["repair_exhausted"] is True
@@ -1046,12 +981,16 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
     db_path = postgres_test_url("canon-system-block-task6")
     orchestrator = _build_orchestrator(db_path, max_rewrites=1)
     try:
-        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: _one_chapter_arc(
-            "canon system block"
+        orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: (
+            _one_chapter_arc("canon system block")
         )
-        orchestrator.writer.write_chapter = lambda context: _writer_output(context.chapter_number)
+        orchestrator.writer.write_chapter = lambda context: _writer_output(
+            context.chapter_number
+        )
         orchestrator.draft_review = WarnReviewHub()
-        orchestrator.repair.repair_canon_block = lambda **_kwargs: (_ for _ in ()).throw(
+        orchestrator.repair.repair_canon_block = lambda **_kwargs: (
+            _ for _ in ()
+        ).throw(
             AssertionError("non-repairable canon block should not run canon repair")
         )
         orchestrator.canon_admission.commit = lambda **_kwargs: CanonAdmissionOutcome(
@@ -1098,7 +1037,10 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
     assert system_block_events
     system_block_event = system_block_events[-1]
     system_block_payload = json.loads(system_block_event.payload_json or "{}")
-    assert system_block_payload["reason"] == f"canon quality gate strict: required_repair_scope={raw_scope}"
+    assert (
+        system_block_payload["reason"]
+        == f"canon quality gate strict: required_repair_scope={raw_scope}"
+    )
     assert system_block_payload["required_repair_scope"] == expected_payload_scope
     assert "canon quality gate" in system_block_event.summary
     assert "canon quality gate" in system_block_event.reason
@@ -1173,7 +1115,9 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
         def apply_canon_candidate(**_kwargs):
             apply_calls["count"] += 1
             if apply_calls["count"] > 1:
-                raise AssertionError("canon should not be retried after failed canon repair")
+                raise AssertionError(
+                    "canon should not be retried after failed canon repair"
+                )
             return CanonAdmissionOutcome(
                 blocked_path="frozen/canon-quality.json",
                 block_kind="canon_quality",
@@ -1206,7 +1150,9 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
     assert repair_calls["count"] == 1
 
 
-def _canon_repair_decision_for_scope(raw_scope: object) -> tuple[ReviewVerdict, Decision]:
+def _canon_repair_decision_for_scope(
+    raw_scope: object,
+) -> tuple[ReviewVerdict, Decision]:
     gate = SimpleNamespace(
         required_repair_scope=raw_scope,
         gate_summary=f"canon quality gate strict: required_repair_scope={raw_scope}",
@@ -1233,7 +1179,12 @@ def _canon_repair_decision_for_scope(raw_scope: object) -> tuple[ReviewVerdict, 
 @pytest.mark.parametrize(
     ("raw_scope", "expected_issue_type", "expected_outcome", "expected_scope"),
     [
-        ("chapter_plan", "canon_admission_chapter_plan_block", "chapter_patch", "chapter_plan"),
+        (
+            "chapter_plan",
+            "canon_admission_chapter_plan_block",
+            "chapter_patch",
+            "chapter_plan",
+        ),
         (" BAND ", "canon_admission_band_block", "band_patch", "band_plan"),
         ("arc", "canon_admission_arc_block", "arc_patch", "arc_plan"),
         ("book", "canon_admission_book_block", "book_patch", "book_plan"),

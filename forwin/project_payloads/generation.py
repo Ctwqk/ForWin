@@ -52,7 +52,6 @@ from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.thread import PlotThread
 from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
@@ -68,7 +67,14 @@ from forwin.world_templates import empty_world_root
 
 
 DisplayDatetime = Callable[[datetime | None], str]
-_GENESIS_STAGE_ORDER = ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap")
+_GENESIS_STAGE_ORDER = (
+    "brief",
+    "world",
+    "map",
+    "story_engine",
+    "book_blueprint",
+    "bootstrap",
+)
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 from .arc_snapshot import _band_checkpoint_detail
@@ -82,7 +88,9 @@ def _derive_blocking_reason(
     future_constraints_enabled: bool = True,
 ) -> BlockingReasonInfo:
     ordered_events = list(decision_events or [])
-    fallback_event_id = str(getattr(ordered_events[0], "id", "") or "") if ordered_events else ""
+    fallback_event_id = (
+        str(getattr(ordered_events[0], "id", "") or "") if ordered_events else ""
+    )
 
     def _event_payload(event) -> dict[str, Any]:  # noqa: ANN001
         payload = getattr(event, "payload", None)
@@ -96,17 +104,23 @@ def _derive_blocking_reason(
 
     def _latest_event_id_for_chapter(chapter_number: int) -> str:
         for event in ordered_events:
-            if int(getattr(event, "chapter_number", 0) or 0) == int(chapter_number or 0):
+            if int(getattr(event, "chapter_number", 0) or 0) == int(
+                chapter_number or 0
+            ):
                 return str(getattr(event, "id", "") or "")
         return fallback_event_id
 
-    def _latest_event_id_for_related_object(related_object_type: str, related_object_id: str) -> str:
+    def _latest_event_id_for_related_object(
+        related_object_type: str, related_object_id: str
+    ) -> str:
         if not related_object_type or not related_object_id:
             return fallback_event_id
         for event in ordered_events:
             if (
-                str(getattr(event, "related_object_type", "") or "") == related_object_type
-                and str(getattr(event, "related_object_id", "") or "") == related_object_id
+                str(getattr(event, "related_object_type", "") or "")
+                == related_object_type
+                and str(getattr(event, "related_object_id", "") or "")
+                == related_object_id
             ):
                 return str(getattr(event, "id", "") or "")
         return fallback_event_id
@@ -119,16 +133,26 @@ def _derive_blocking_reason(
                 return str(getattr(event, "id", "") or "")
         return fallback_event_id
 
-    def _latest_future_constraint_event(chapter_number: int) -> DecisionEventInfo | None:
+    def _latest_future_constraint_event(
+        chapter_number: int,
+    ) -> DecisionEventInfo | None:
         for event in ordered_events:
-            if int(getattr(event, "chapter_number", 0) or 0) != int(chapter_number or 0):
+            if int(getattr(event, "chapter_number", 0) or 0) != int(
+                chapter_number or 0
+            ):
                 continue
             payload = _event_payload(event)
-            if str(getattr(event, "event_type", "") or "") == DecisionEventType.HARD_GATE_HIT and str(
-                payload.get("blocking_reason") or ""
-            ) == "future_constraint_block":
+            if (
+                str(getattr(event, "event_type", "") or "")
+                == DecisionEventType.HARD_GATE_HIT
+                and str(payload.get("blocking_reason") or "")
+                == "future_constraint_block"
+            ):
                 return event
-            if str(getattr(event, "event_type", "") or "") != DecisionEventType.REVIEW_VERDICT_RECORDED:
+            if (
+                str(getattr(event, "event_type", "") or "")
+                != DecisionEventType.REVIEW_VERDICT_RECORDED
+            ):
                 continue
             issue_types = payload.get("issue_types") or []
             if not isinstance(issue_types, list):
@@ -169,7 +193,8 @@ def _derive_blocking_reason(
                 if event is not None
                 else _latest_event_id_for_chapter(constraint_block_plan.chapter_number)
             ),
-            detail=detail or f"第 {constraint_block_plan.chapter_number} 章命中了 hard future constraint。",
+            detail=detail
+            or f"第 {constraint_block_plan.chapter_number} 章命中了 hard future constraint。",
         )
 
     blocking_plan = next(
@@ -182,7 +207,11 @@ def _derive_blocking_reason(
     )
     if blocking_plan is not None and blocking_plan.chapter_number > 1:
         previous_plan = next(
-            (plan for plan in plans if plan.chapter_number == blocking_plan.chapter_number - 1),
+            (
+                plan
+                for plan in plans
+                if plan.chapter_number == blocking_plan.chapter_number - 1
+            ),
             None,
         )
         if previous_plan is not None and previous_plan.status != "accepted":
@@ -194,7 +223,9 @@ def _derive_blocking_reason(
                     band_id="",
                 ),
                 chapter_number=previous_plan.chapter_number,
-                decision_event_id=_latest_event_id_for_chapter(previous_plan.chapter_number),
+                decision_event_id=_latest_event_id_for_chapter(
+                    previous_plan.chapter_number
+                ),
                 detail=f"章节 {previous_plan.chapter_number} 当前状态为 {previous_plan.status}。",
             )
     if blocking_plan is None or latest_band_checkpoint is None:
@@ -218,11 +249,15 @@ def _derive_blocking_reason(
         chapter_number=latest_band_checkpoint.boundary_chapter,
         band_id=latest_band_checkpoint.band_id,
         decision_event_id=(
-            _latest_event_id_for_related_object("band_checkpoint", str(latest_band_checkpoint.id or ""))
+            _latest_event_id_for_related_object(
+                "band_checkpoint", str(latest_band_checkpoint.id or "")
+            )
             or _latest_event_id_for_band(str(latest_band_checkpoint.band_id or ""))
             or fallback_event_id
         ),
-        detail=str(latest_band_checkpoint.summary or latest_band_checkpoint.reason or "").strip(),
+        detail=str(
+            latest_band_checkpoint.summary or latest_band_checkpoint.reason or ""
+        ).strip(),
     )
 
 
@@ -272,8 +307,14 @@ def build_generation_control(
     drafted = [plan.chapter_number for plan in plans if plan.status == "drafted"]
     planned = [plan.chapter_number for plan in plans if plan.status == "planned"]
     failed = [plan.chapter_number for plan in plans if plan.status == "failed"]
-    pending_review = [plan.chapter_number for plan in plans if plan.status == "needs_review"]
-    generated = [plan.chapter_number for plan in plans if plan.status in {"drafted", "accepted", "needs_review"}]
+    pending_review = [
+        plan.chapter_number for plan in plans if plan.status == "needs_review"
+    ]
+    generated = [
+        plan.chapter_number
+        for plan in plans
+        if plan.status in {"drafted", "accepted", "needs_review"}
+    ]
     next_candidates = planned + failed
     next_chapter = min(next_candidates) if next_candidates else 0
     if not plans:
@@ -301,12 +342,18 @@ def build_generation_control(
     chapters_until_review = 0
     if review_interval and not pending_review:
         completed_since_review = len(accepted) % review_interval
-        chapters_until_review = review_interval - completed_since_review if completed_since_review else review_interval
+        chapters_until_review = (
+            review_interval - completed_since_review
+            if completed_since_review
+            else review_interval
+        )
     chapters_until_replan = 0
     if latest_replan is not None:
         cooldown_until = int(getattr(latest_replan, "cooldown_until_chapter", 0) or 0)
         if cooldown_until:
-            chapters_until_replan = max(0, cooldown_until - (max(accepted, default=0) + 1))
+            chapters_until_replan = max(
+                0, cooldown_until - (max(accepted, default=0) + 1)
+            )
     blocking_reason = _derive_blocking_reason(
         plans=plans,
         latest_band_checkpoint=latest_band_checkpoint,
@@ -339,8 +386,8 @@ def build_generation_control(
 
 
 __all__ = [
-    '_derive_blocking_reason',
-    '_derive_next_gate',
-    'effective_target_total_chapters',
-    'build_generation_control',
+    "_derive_blocking_reason",
+    "_derive_next_gate",
+    "effective_target_total_chapters",
+    "build_generation_control",
 ]

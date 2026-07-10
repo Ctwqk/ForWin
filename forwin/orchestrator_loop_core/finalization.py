@@ -1,7 +1,17 @@
 from __future__ import annotations
 
 from forwin.book_state.query import BookStateQuery
+from forwin.book_state.repository import BookStateRepository
+from forwin.protocol.book_state import (
+    GraphDelta,
+    GraphDeltaType,
+    NarrativeNode,
+    WORLD_EDGE_TYPES_BY_FAMILY,
+    WorldEdge,
+    WorldNode,
+)
 from forwin.orchestrator_loop_core.common import *
+
 
 def _flush_background_llm_trace(
     self,
@@ -46,6 +56,7 @@ def _flush_background_llm_trace(
         },
     )
 
+
 def _run_provisional_band_preview(
     self,
     *,
@@ -56,9 +67,10 @@ def _run_provisional_band_preview(
     chapter_plans: list[ChapterPlan],
     persist_result: bool = True,
 ) -> ProvisionalBandPreview | None:
-    if not chapter_plans or not str(
-        getattr(self.llm_client, "api_key", "") or ""
-    ).strip():
+    if (
+        not chapter_plans
+        or not str(getattr(self.llm_client, "api_key", "") or "").strip()
+    ):
         return None
     self._emit_progress(
         "stage_changed",
@@ -73,13 +85,13 @@ def _run_provisional_band_preview(
         min_chars=self.provisional_writer.min_chapter_chars,
         max_chars=self.provisional_writer.max_chapter_chars,
     )
-    safe_band = "".join(
-        ch if ch.isalnum() or ch in {"-", "_"} else "_"
-        for ch in band_id
-    ).strip("_") or "band"
-    namespace_root = (
-        f"projects/{project_id}/arcs/{arc_id}/provisional/{safe_band}"
+    safe_band = (
+        "".join(
+            ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in band_id
+        ).strip("_")
+        or "band"
     )
+    namespace_root = f"projects/{project_id}/arcs/{arc_id}/provisional/{safe_band}"
     if persist_result:
         session.query(ProvisionalChapterLedger).filter(
             ProvisionalChapterLedger.project_id == project_id,
@@ -101,18 +113,13 @@ def _run_provisional_band_preview(
             as_of_chapter=max(int(chapter_plan.chapter_number) - 1, 0),
         )
         current_time_label = (
-            timeline_before.current_time_label
-            if timeline_before is not None
-            else ""
+            timeline_before.current_time_label if timeline_before is not None else ""
         )
         context = self.retrieval_broker.build_chapter_context(
             repo, project_id, chapter_plan
         )
         if summaries:
-            previous = (
-                list(context.previous_chapter_summaries)
-                + summaries[-2:]
-            )[-3:]
+            previous = (list(context.previous_chapter_summaries) + summaries[-2:])[-3:]
             context = context.model_copy(
                 update={"previous_chapter_summaries": previous}
             )
@@ -135,7 +142,9 @@ def _run_provisional_band_preview(
                     namespace_root=namespace_root,
                 )
                 artifact_meta_path = str(artifact_paths["meta_path"] or "")
-                draft_blob_path = str(artifact_paths["writer_output"].draft_blob_path or "")
+                draft_blob_path = str(
+                    artifact_paths["writer_output"].draft_blob_path or ""
+                )
             projected_time_label = (
                 writer_output.time_advance.new_time_label
                 if writer_output.time_advance is not None
@@ -191,10 +200,7 @@ def _run_provisional_band_preview(
                             ensure_ascii=False,
                         ),
                         issues_json=json.dumps(
-                            [
-                                issue.model_dump(mode="json")
-                                for issue in verdict.issues
-                            ],
+                            [issue.model_dump(mode="json") for issue in verdict.issues],
                             ensure_ascii=False,
                         ),
                     )
@@ -227,8 +233,7 @@ def _run_provisional_band_preview(
                     ),
                     "artifact_meta_path": artifact_meta_path,
                     "issues": [
-                        issue.model_dump(mode="json")
-                        for issue in verdict.issues
+                        issue.model_dump(mode="json") for issue in verdict.issues
                     ],
                 }
             )
@@ -269,7 +274,9 @@ def _run_provisional_band_preview(
                             events_json="[]",
                             thread_beats_json="[]",
                             time_advance_json="{}",
-                            issues_json=json.dumps(fallback["issues"], ensure_ascii=False),
+                            issues_json=json.dumps(
+                                fallback["issues"], ensure_ascii=False
+                            ),
                             error_text=str(fallback["error"]),
                         )
                     )
@@ -345,6 +352,7 @@ def _run_provisional_band_preview(
         summary_lines=summaries,
     )
 
+
 def _abort_requested(self) -> bool:
     try:
         return bool(self.should_abort and self.should_abort())
@@ -352,12 +360,14 @@ def _abort_requested(self) -> bool:
         logger.debug("Ignoring abort predicate failure.", exc_info=True)
         return False
 
+
 def _pause_requested(self) -> bool:
     try:
         return bool(self.should_pause and self.should_pause())
     except Exception:  # noqa: BLE001
         logger.debug("Ignoring pause predicate failure.", exc_info=True)
         return False
+
 
 def _paused_result(
     self,
@@ -391,6 +401,7 @@ def _paused_result(
         paused=True,
     )
 
+
 def _cancelled_result(
     self,
     project_id: str,
@@ -423,6 +434,7 @@ def _cancelled_result(
         cancelled=True,
     )
 
+
 @staticmethod
 def _normalize_provisional_verdict(
     writer_output: WriterOutput,
@@ -443,8 +455,7 @@ def _normalize_provisional_verdict(
     if not usable_body:
         return ReviewVerdict(verdict=verdict.verdict, issues=filtered_issues)
     softened_issues = [
-        issue.model_copy(update={"severity": "warning"})
-        for issue in filtered_issues
+        issue.model_copy(update={"severity": "warning"}) for issue in filtered_issues
     ]
     softened_issues.append(
         softened_issues[0].model_copy(
@@ -462,6 +473,7 @@ def _normalize_provisional_verdict(
         verdict="warn" if softened_issues else "pass",
         issues=softened_issues,
     )
+
 
 @staticmethod
 def _should_degrade_provisional_preview(exc: Exception) -> bool:
@@ -482,6 +494,7 @@ def _should_degrade_provisional_preview(exc: Exception) -> bool:
         return True
     return WritingOrchestrator._is_transient_llm_like(exc)
 
+
 @staticmethod
 def _build_provisional_fallback(
     *,
@@ -494,7 +507,11 @@ def _build_provisional_fallback(
         goals = json.loads(chapter_plan.goals_json or "[]") or []
     except (json.JSONDecodeError, TypeError):
         goals = []
-    summary = chapter_plan.one_line.strip() or chapter_plan.title.strip() or f"第{chapter_plan.chapter_number}章"
+    summary = (
+        chapter_plan.one_line.strip()
+        or chapter_plan.title.strip()
+        or f"第{chapter_plan.chapter_number}章"
+    )
     estimated_char_count = max(
         360,
         min(1200, 260 + len(summary) * 8 + sum(len(str(goal)) for goal in goals) * 4),
@@ -524,13 +541,19 @@ def _build_provisional_fallback(
         "fallback_mode": "plan_shadow",
     }
 
+
 def _load_writer_output_from_meta(self, meta_path: str) -> WriterOutput:
     payload = self.artifact_store.read_json(meta_path)
     return WriterOutput.model_validate(payload)
 
+
 @staticmethod
 def _load_review_verdict(review: ChapterReview) -> ReviewVerdict:
-    meta = json.loads(review.review_meta_json or "{}") if getattr(review, "review_meta_json", "") else {}
+    meta = (
+        json.loads(review.review_meta_json or "{}")
+        if getattr(review, "review_meta_json", "")
+        else {}
+    )
     if not isinstance(meta, dict):
         meta = {}
     return ReviewVerdict.model_validate(
@@ -540,6 +563,7 @@ def _load_review_verdict(review: ChapterReview) -> ReviewVerdict:
             **meta,
         }
     )
+
 
 def _seed_state(
     self,
@@ -571,7 +595,8 @@ def _seed_state(
                 "chapter_start": chapter_start,
                 "chapter_end": chapter_end,
                 "chapter_count": chapter_count,
-                "arc_synopsis": str(raw.get("arc_synopsis", "")).strip() or str(arc_plan.get("arc_synopsis", "")).strip(),
+                "arc_synopsis": str(raw.get("arc_synopsis", "")).strip()
+                or str(arc_plan.get("arc_synopsis", "")).strip(),
             }
         )
         cursor = chapter_end + 1
@@ -600,7 +625,9 @@ def _seed_state(
     for outline in normalized_outlines:
         chapter_start = int(outline.get("chapter_start", 1) or 1)
         chapter_end = int(outline.get("chapter_end", chapter_start) or chapter_start)
-        chapter_count = max(1, int(outline.get("chapter_count", chapter_end - chapter_start + 1) or 1))
+        chapter_count = max(
+            1, int(outline.get("chapter_count", chapter_end - chapter_start + 1) or 1)
+        )
         arc = updater.create_arc_plan(
             project_id=project_id,
             arc_synopsis=str(outline.get("arc_synopsis", "") or ""),
@@ -616,7 +643,11 @@ def _seed_state(
         if first_arc is None:
             first_arc = arc
         for chapter_number in range(chapter_start, chapter_end + 1):
-            ch = chapters[chapter_number - 1] if chapter_number - 1 < len(chapters) else {}
+            ch = (
+                chapters[chapter_number - 1]
+                if chapter_number - 1 < len(chapters)
+                else {}
+            )
             updater.create_chapter_plan(
                 project_id=project_id,
                 arc_plan_id=arc.id,
@@ -631,6 +662,7 @@ def _seed_state(
     from forwin.characters.models import CharacterCreationRequest
 
     character_helper = CharacterCreationHelper(updater.session)
+    book_state = BookStateRepository(updater.session)
     entity_map: dict[str, str] = {}  # name -> canonical character id
     for char_data in arc_plan.get("characters", []):
         initial_state = char_data.get("initial_state", {})
@@ -646,7 +678,11 @@ def _seed_state(
                 created_at_chapter=0,
                 profile={
                     "role_hint": str(char_data.get("role_hint") or ""),
-                    "role_archetype": str(char_data.get("role_archetype") or char_data.get("role_hint") or ""),
+                    "role_archetype": str(
+                        char_data.get("role_archetype")
+                        or char_data.get("role_hint")
+                        or ""
+                    ),
                     "narrative_role": str(char_data.get("narrative_role") or ""),
                     "public_identity": str(char_data.get("public_identity") or ""),
                 },
@@ -659,35 +695,55 @@ def _seed_state(
 
     # Entities: locations
     for loc_data in arc_plan.get("locations", []):
-        entity = updater.create_entity(
+        initial_state = loc_data.get("initial_state", {})
+        node = WorldNode(
+            id=new_id(),
             project_id=project_id,
-            kind="location",
+            node_type="location",
             name=loc_data.get("name", "未命名"),
             description=loc_data.get("description", ""),
-            aliases=loc_data.get("aliases", []),
+            aliases=list(loc_data.get("aliases", [])),
             importance=loc_data.get("importance", 5),
-            chapter=0,
+            created_at_chapter=0,
+            state=initial_state if isinstance(initial_state, dict) else {},
+            metadata={"source": "arc_plan_seed"},
         )
-        entity_map[entity.name] = entity.id
-        initial_state = loc_data.get("initial_state", {})
-        if initial_state:
-            updater.create_entity_state(entity.id, 0, initial_state)
+        book_state.create_world_node(node)
+        if node.state:
+            book_state.append_world_node_state(
+                project_id=project_id,
+                node_id=node.id,
+                node_type="location",
+                as_of_chapter=0,
+                state=node.state,
+            )
+        entity_map[node.name] = node.id
 
     # Entities: factions
     for fac_data in arc_plan.get("factions", []):
-        entity = updater.create_entity(
+        initial_state = fac_data.get("initial_state", {})
+        node = WorldNode(
+            id=new_id(),
             project_id=project_id,
-            kind="faction",
+            node_type="faction",
             name=fac_data.get("name", "未命名"),
             description=fac_data.get("description", ""),
-            aliases=fac_data.get("aliases", []),
+            aliases=list(fac_data.get("aliases", [])),
             importance=fac_data.get("importance", 5),
-            chapter=0,
+            created_at_chapter=0,
+            state=initial_state if isinstance(initial_state, dict) else {},
+            metadata={"source": "arc_plan_seed"},
         )
-        entity_map[entity.name] = entity.id
-        initial_state = fac_data.get("initial_state", {})
-        if initial_state:
-            updater.create_entity_state(entity.id, 0, initial_state)
+        book_state.create_world_node(node)
+        if node.state:
+            book_state.append_world_node_state(
+                project_id=project_id,
+                node_id=node.id,
+                node_type="faction",
+                as_of_chapter=0,
+                state=node.state,
+            )
+        entity_map[node.name] = node.id
 
     # Relations
     for rel_data in arc_plan.get("relations", []):
@@ -696,13 +752,35 @@ def _seed_state(
         source_id = entity_map.get(source_name)
         target_id = entity_map.get(target_name)
         if source_id and target_id:
-            updater.create_relation(
-                project_id=project_id,
-                source_id=source_id,
-                target_id=target_id,
-                relation_type=rel_data.get("relation_type", "unknown"),
-                description=rel_data.get("description", ""),
-                chapter=0,
+            requested_type = str(rel_data.get("relation_type") or "ally_of")
+            edge_family = next(
+                (
+                    family
+                    for family, edge_types in WORLD_EDGE_TYPES_BY_FAMILY.items()
+                    if requested_type in edge_types
+                ),
+                "social",
+            )
+            edge_type = (
+                requested_type
+                if requested_type in WORLD_EDGE_TYPES_BY_FAMILY[edge_family]
+                else "ally_of"
+            )
+            book_state.create_world_edge(
+                WorldEdge(
+                    id=new_id(),
+                    project_id=project_id,
+                    source_id=source_id,
+                    target_id=target_id,
+                    edge_type=edge_type,
+                    edge_family=edge_family,
+                    established_at_chapter=0,
+                    metadata={
+                        "description": rel_data.get("description", ""),
+                        "source": "arc_plan_seed",
+                        "requested_relation_type": requested_type,
+                    },
+                )
             )
         else:
             logger.warning(
@@ -713,12 +791,20 @@ def _seed_state(
 
     # Plot threads
     for thread_data in arc_plan.get("plot_threads", []):
-        updater.create_thread(
-            project_id=project_id,
-            name=thread_data.get("name", ""),
-            description=thread_data.get("description", ""),
-            priority=thread_data.get("priority", 2),
-            chapter=0,
+        book_state.create_narrative_node(
+            NarrativeNode(
+                id=new_id(),
+                project_id=project_id,
+                node_type="plot_thread",
+                title=thread_data.get("name", ""),
+                status="active",
+                payload={
+                    "description": thread_data.get("description", ""),
+                    "priority": thread_data.get("priority", 2),
+                    "beats": [],
+                },
+                metadata={"created_at_chapter": 0, "source": "arc_plan_seed"},
+            )
         )
 
     self.subworld_manager.apply_initial_arc_plan(
@@ -733,12 +819,36 @@ def _seed_state(
     # Initial timeline
     initial_time = arc_plan.get("initial_time", {})
     if initial_time:
-        updater.create_time_point(
-            project_id=project_id,
-            label=initial_time.get("label", "故事开始"),
-            ordinal=0,
-            description=initial_time.get("description", ""),
-        )
+        delta_id = f"genesis_story_time:{project_id}"
+        if not book_state.graph_delta_ids_exist([delta_id]):
+            book_state.append_graph_delta(
+                GraphDelta(
+                    id=delta_id,
+                    project_id=project_id,
+                    chapter_number=0,
+                    story_time=initial_time.get("label", "故事开始"),
+                    delta_type=GraphDeltaType.WORLD_STATE,
+                    operation="seed_story_time",
+                    target_type="project",
+                    target_id=project_id,
+                    source_type="genesis",
+                    source_id="arc_plan_seed",
+                    summary=initial_time.get("description", ""),
+                )
+            )
 
 
-__all__ = ['_flush_background_llm_trace', '_run_provisional_band_preview', '_abort_requested', '_pause_requested', '_paused_result', '_cancelled_result', '_normalize_provisional_verdict', '_should_degrade_provisional_preview', '_build_provisional_fallback', '_load_writer_output_from_meta', '_load_review_verdict', '_seed_state']
+__all__ = [
+    "_flush_background_llm_trace",
+    "_run_provisional_band_preview",
+    "_abort_requested",
+    "_pause_requested",
+    "_paused_result",
+    "_cancelled_result",
+    "_normalize_provisional_verdict",
+    "_should_degrade_provisional_preview",
+    "_build_provisional_fallback",
+    "_load_writer_output_from_meta",
+    "_load_review_verdict",
+    "_seed_state",
+]

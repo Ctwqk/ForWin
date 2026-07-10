@@ -7,7 +7,7 @@ from typing import Any
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
 from forwin.models.base import new_id
-from forwin.models.world_model import WorldEditProposalRow
+from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.protocol.book_state import (
     CognitionPatch,
     EdgePatch,
@@ -19,7 +19,7 @@ from forwin.protocol.book_state import (
     ReaderPromise,
     WORLD_EDGE_TYPES_BY_FAMILY,
 )
-from forwin.world_model.store import load_json
+from forwin.knowledge_system.store import load_json
 
 
 _PATCH_BLOCK_RE = re.compile(
@@ -28,7 +28,9 @@ _PATCH_BLOCK_RE = re.compile(
 )
 
 
-def proposal_to_graph_delta(session, row: WorldEditProposalRow, *, reason: str = "") -> GraphDelta:
+def proposal_to_graph_delta(
+    session, row: KnowledgeEditProposalRow, *, reason: str = ""
+) -> GraphDelta:
     payload = load_json(row.proposed_patch_json, {})
     operations = _extract_patch_operations(payload)
     if not operations:
@@ -60,16 +62,48 @@ def proposal_to_graph_delta(session, row: WorldEditProposalRow, *, reason: str =
         }:
             node_patches.append(_node_patch(operation, row, runtime, reason=reason))
         elif op in {"create_edge", "set_edge_field", "deactivate_edge"}:
-            edge_patches.append(_edge_patch(operation, row, runtime, reason=reason, source_refs=source_refs))
-        elif op in {"create_map_node", "set_map_node_field", "create_map_edge", "set_map_edge_field", "deactivate_map_edge"}:
-            map_patches.append(_map_patch(operation, row, runtime, reason=reason, source_refs=source_refs))
+            edge_patches.append(
+                _edge_patch(
+                    operation, row, runtime, reason=reason, source_refs=source_refs
+                )
+            )
+        elif op in {
+            "create_map_node",
+            "set_map_node_field",
+            "create_map_edge",
+            "set_map_edge_field",
+            "deactivate_map_edge",
+        }:
+            map_patches.append(
+                _map_patch(
+                    operation, row, runtime, reason=reason, source_refs=source_refs
+                )
+            )
         elif op in {"create_fact", "set_fact_field"}:
-            fact_patches.append(_fact_patch(operation, row, runtime, reason=reason, source_refs=source_refs))
-        elif op in {"set_cognition_field", "append_cognition_ref", "remove_cognition_ref"}:
-            cognition_patches.append(_cognition_patch(operation, row, runtime, reason=reason, source_refs=source_refs))
-        elif op in {"create_reader_promise", "set_reader_promise_field", "resolve_reader_promise"}:
+            fact_patches.append(
+                _fact_patch(
+                    operation, row, runtime, reason=reason, source_refs=source_refs
+                )
+            )
+        elif op in {
+            "set_cognition_field",
+            "append_cognition_ref",
+            "remove_cognition_ref",
+        }:
+            cognition_patches.append(
+                _cognition_patch(
+                    operation, row, runtime, reason=reason, source_refs=source_refs
+                )
+            )
+        elif op in {
+            "create_reader_promise",
+            "set_reader_promise_field",
+            "resolve_reader_promise",
+        }:
             reader_promise_patches.extend(
-                _reader_promise_patches(session, operation, row, reason=reason, source_refs=source_refs)
+                _reader_promise_patches(
+                    session, operation, row, reason=reason, source_refs=source_refs
+                )
             )
         else:
             raise ValueError(f"unsupported forwin-patch op: {op}")
@@ -105,7 +139,9 @@ def proposal_to_graph_delta(session, row: WorldEditProposalRow, *, reason: str =
     )
 
 
-def audit_delta_from_proposal(row: WorldEditProposalRow, *, reason: str = "") -> GraphDelta:
+def audit_delta_from_proposal(
+    row: KnowledgeEditProposalRow, *, reason: str = ""
+) -> GraphDelta:
     payload = load_json(row.proposed_patch_json, {})
     new_value = payload.get("new_value", "")
     target_node_id = getattr(row, "target_node_id", "") or ""
@@ -133,7 +169,11 @@ def audit_delta_from_proposal(row: WorldEditProposalRow, *, reason: str = "") ->
                 op="create",
                 proposition=proposition,
                 truth_value="proposal_approved",
-                related_refs=[ref for ref in [f"node:{target_node_id}" if target_node_id else ""] if ref],
+                related_refs=[
+                    ref
+                    for ref in [f"node:{target_node_id}" if target_node_id else ""]
+                    if ref
+                ],
                 reason=reason or row.reason,
                 new_value={
                     "project_id": row.project_id,
@@ -215,7 +255,9 @@ def _normalize_operations(candidate: Any) -> list[dict[str, Any]]:
     return operations
 
 
-def _node_patch(operation: dict[str, Any], row: WorldEditProposalRow, runtime, *, reason: str) -> NodePatch:
+def _node_patch(
+    operation: dict[str, Any], row: KnowledgeEditProposalRow, runtime, *, reason: str
+) -> NodePatch:
     op = str(operation.get("op") or "")
     node_id = str(operation.get("node_id") or getattr(row, "target_node_id", "") or "")
     if not node_id:
@@ -231,7 +273,9 @@ def _node_patch(operation: dict[str, Any], row: WorldEditProposalRow, runtime, *
         patch_op = "merge"
         new_value = operation.get("metadata", operation.get("new_value", {}))
         if not isinstance(new_value, dict):
-            raise ValueError("merge_node_metadata requires an object metadata/new_value")
+            raise ValueError(
+                "merge_node_metadata requires an object metadata/new_value"
+            )
     elif op == "rename_node":
         field_path = "name"
         new_value = operation.get("name", operation.get("new_value"))
@@ -247,7 +291,9 @@ def _node_patch(operation: dict[str, Any], row: WorldEditProposalRow, runtime, *
         field_path = "profile.personality_loadout"
         new_value = operation.get("loadout", operation.get("new_value"))
         if not isinstance(new_value, dict):
-            raise ValueError("set_personality_loadout requires an object loadout/new_value")
+            raise ValueError(
+                "set_personality_loadout requires an object loadout/new_value"
+            )
     elif op == "append_personality_note":
         field_path = "profile.personality_notes"
         patch_op = "append"
@@ -259,16 +305,22 @@ def _node_patch(operation: dict[str, Any], row: WorldEditProposalRow, runtime, *
         node_type=node.node_type,
         op=patch_op,
         field_path=field_path,
-        old_value=operation.get("old_value", _get_path(node.model_dump(mode="json"), field_path)),
+        old_value=operation.get(
+            "old_value", _get_path(node.model_dump(mode="json"), field_path)
+        ),
         new_value=new_value,
         reason=reason or str(operation.get("reason") or row.reason or ""),
-        visibility_default=str(operation.get("visibility_default") or node.metadata.get("visibility") or "visible"),
+        visibility_default=str(
+            operation.get("visibility_default")
+            or node.metadata.get("visibility")
+            or "visible"
+        ),
     )
 
 
 def _edge_patch(
     operation: dict[str, Any],
-    row: WorldEditProposalRow,
+    row: KnowledgeEditProposalRow,
     runtime,
     *,
     reason: str,
@@ -335,7 +387,9 @@ def _edge_patch(
         edge_type=edge.edge_type,
         edge_family=edge.edge_family,
         field_path=field_path,
-        old_value=operation.get("old_value", _get_path(edge.model_dump(mode="json"), field_path)),
+        old_value=operation.get(
+            "old_value", _get_path(edge.model_dump(mode="json"), field_path)
+        ),
         new_value=operation.get("new_value"),
         reason=reason or str(operation.get("reason") or row.reason or ""),
     )
@@ -343,7 +397,7 @@ def _edge_patch(
 
 def _map_patch(
     operation: dict[str, Any],
-    row: WorldEditProposalRow,
+    row: KnowledgeEditProposalRow,
     runtime,
     *,
     reason: str,
@@ -351,7 +405,11 @@ def _map_patch(
 ) -> MapPatch:
     op = str(operation.get("op") or "")
     if op == "create_map_node":
-        target_id = str(operation.get("node_id") or operation.get("target_id") or f"map_node_{new_id()}")
+        target_id = str(
+            operation.get("node_id")
+            or operation.get("target_id")
+            or f"map_node_{new_id()}"
+        )
         node_type = str(operation.get("node_type") or "site")
         return MapPatch(
             target_type="map_node",
@@ -365,13 +423,20 @@ def _map_patch(
                 "subworld_id": operation.get("subworld_id", ""),
                 "region_id": operation.get("region_id", ""),
                 "status": operation.get("status", "normal"),
-                "metadata": {"source_refs": source_refs, **operation.get("metadata", {})},
+                "metadata": {
+                    "source_refs": source_refs,
+                    **operation.get("metadata", {}),
+                },
             },
             reason=reason or str(operation.get("reason") or row.reason or ""),
             visibility_default=str(operation.get("visibility_default") or "visible"),
         )
     if op == "create_map_edge":
-        target_id = str(operation.get("edge_id") or operation.get("target_id") or f"map_edge_{new_id()}")
+        target_id = str(
+            operation.get("edge_id")
+            or operation.get("target_id")
+            or f"map_edge_{new_id()}"
+        )
         from_node_id = str(operation.get("from_node_id") or "")
         to_node_id = str(operation.get("to_node_id") or "")
         edge_type = str(operation.get("edge_type") or "road")
@@ -393,14 +458,26 @@ def _map_patch(
                 "travel_cost": operation.get("travel_cost", 0.0),
                 "risk_level": operation.get("risk_level", 0.0),
                 "status": operation.get("status", "open"),
-                "discovered_by_default": bool(operation.get("discovered_by_default", True)),
-                "visibility_default": str(operation.get("visibility_default") or "visible"),
-                "metadata": {"source_refs": source_refs, **operation.get("metadata", {})},
+                "discovered_by_default": bool(
+                    operation.get("discovered_by_default", True)
+                ),
+                "visibility_default": str(
+                    operation.get("visibility_default") or "visible"
+                ),
+                "metadata": {
+                    "source_refs": source_refs,
+                    **operation.get("metadata", {}),
+                },
             },
             reason=reason or str(operation.get("reason") or row.reason or ""),
         )
     target_type = "map_node" if op == "set_map_node_field" else "map_edge"
-    target_id = str(operation.get("target_id") or operation.get("node_id") or operation.get("edge_id") or "")
+    target_id = str(
+        operation.get("target_id")
+        or operation.get("node_id")
+        or operation.get("edge_id")
+        or ""
+    )
     current = (
         runtime.map.nodes_by_id.get(target_id)
         if target_type == "map_node"
@@ -424,16 +501,21 @@ def _map_patch(
         target_id=target_id,
         op="set",
         field_path=field_path,
-        old_value=operation.get("old_value", _get_path(current.model_dump(mode="json"), field_path)),
+        old_value=operation.get(
+            "old_value", _get_path(current.model_dump(mode="json"), field_path)
+        ),
         new_value=operation.get("new_value"),
         reason=reason or str(operation.get("reason") or row.reason or ""),
-        visibility_default=str(operation.get("visibility_default") or getattr(current, "visibility_default", "visible")),
+        visibility_default=str(
+            operation.get("visibility_default")
+            or getattr(current, "visibility_default", "visible")
+        ),
     )
 
 
 def _fact_patch(
     operation: dict[str, Any],
-    row: WorldEditProposalRow,
+    row: KnowledgeEditProposalRow,
     runtime,
     *,
     reason: str,
@@ -442,7 +524,9 @@ def _fact_patch(
     op = str(operation.get("op") or "")
     if op == "create_fact":
         fact_id = str(operation.get("fact_id") or f"fact_{new_id()}")
-        proposition = str(operation.get("proposition") or operation.get("new_value") or "")
+        proposition = str(
+            operation.get("proposition") or operation.get("new_value") or ""
+        )
         if not proposition:
             raise ValueError("create_fact requires proposition")
         return FactPatch(
@@ -480,7 +564,9 @@ def _fact_patch(
         fact_id=fact_id,
         op="set",
         field_path=field_path,
-        old_value=operation.get("old_value", _get_path(fact.model_dump(mode="json"), field_path)),
+        old_value=operation.get(
+            "old_value", _get_path(fact.model_dump(mode="json"), field_path)
+        ),
         new_value=operation.get("new_value"),
         reason=reason or str(operation.get("reason") or row.reason or ""),
         proposition=fact.proposition,
@@ -491,7 +577,7 @@ def _fact_patch(
 
 def _cognition_patch(
     operation: dict[str, Any],
-    row: WorldEditProposalRow,
+    row: KnowledgeEditProposalRow,
     runtime,
     *,
     reason: str,
@@ -502,7 +588,12 @@ def _cognition_patch(
     observer_id = str(operation.get("observer_id") or "reader")
     field_path = str(operation.get("field_path") or "")
     if op in {"append_cognition_ref", "remove_cognition_ref"}:
-        if field_path not in {"visible_refs", "hidden_refs", "suspected_refs", "confirmed_refs"}:
+        if field_path not in {
+            "visible_refs",
+            "hidden_refs",
+            "suspected_refs",
+            "confirmed_refs",
+        }:
             raise ValueError(f"{op} requires a cognition *_refs field_path")
         patch_op = "append" if op == "append_cognition_ref" else "remove"
         new_value = operation.get("ref", operation.get("new_value"))
@@ -531,7 +622,7 @@ def _cognition_patch(
 def _reader_promise_patches(
     session,
     operation: dict[str, Any],
-    row: WorldEditProposalRow,
+    row: KnowledgeEditProposalRow,
     *,
     reason: str,
     source_refs: list[str],
@@ -544,7 +635,9 @@ def _reader_promise_patches(
     as_of_chapter = _proposal_chapter(row)
     promises = {
         promise.promise_id: promise
-        for promise in repo.list_reader_promises_native(row.project_id, as_of_chapter=as_of_chapter)
+        for promise in repo.list_reader_promises_native(
+            row.project_id, as_of_chapter=as_of_chapter
+        )
     }
     current = promises.get(promise_id)
     patch_reason = reason or str(operation.get("reason") or row.reason or "")
@@ -613,16 +706,20 @@ def _reader_promise_patches(
     ]
 
 
-def _proposal_chapter(row: WorldEditProposalRow) -> int:
+def _proposal_chapter(row: KnowledgeEditProposalRow) -> int:
     payload = load_json(row.proposed_patch_json, {})
-    frontmatter = payload.get("frontmatter") if isinstance(payload.get("frontmatter"), dict) else {}
+    frontmatter = (
+        payload.get("frontmatter")
+        if isinstance(payload.get("frontmatter"), dict)
+        else {}
+    )
     try:
         return int(frontmatter.get("as_of_chapter") or 0)
     except (TypeError, ValueError):
         return 0
 
 
-def _source_refs(row: WorldEditProposalRow) -> list[str]:
+def _source_refs(row: KnowledgeEditProposalRow) -> list[str]:
     refs = [f"obsidian_proposal:{row.id}", f"obsidian_page:{row.target_page_key}"]
     target_node_id = getattr(row, "target_node_id", "") or ""
     if target_node_id:
@@ -649,10 +746,22 @@ def _get_path(payload: dict[str, Any], field_path: str) -> Any:
     return cursor
 
 
-def _cognition_current(runtime, observer_type: str, observer_id: str, field_path: str) -> Any:
+def _cognition_current(
+    runtime, observer_type: str, observer_id: str, field_path: str
+) -> Any:
     view = runtime.cognition_by_observer.get((observer_type, observer_id))
     if view is None:
-        return [] if field_path in {"visible_refs", "hidden_refs", "suspected_refs", "confirmed_refs"} else None
-    if field_path in {"visible_refs", "hidden_refs", "suspected_refs", "confirmed_refs"}:
+        return (
+            []
+            if field_path
+            in {"visible_refs", "hidden_refs", "suspected_refs", "confirmed_refs"}
+            else None
+        )
+    if field_path in {
+        "visible_refs",
+        "hidden_refs",
+        "suspected_refs",
+        "confirmed_refs",
+    }:
         return sorted(getattr(view, field_path))
     return getattr(view, field_path, None)

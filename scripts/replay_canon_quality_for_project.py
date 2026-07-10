@@ -10,7 +10,7 @@ from sqlalchemy import select
 from forwin.canon_quality.service import analyze_writer_output_quality
 from forwin.config import InfrastructureConfig
 from forwin.models import ChapterDraft, ChapterPlan, Project
-from forwin.models.base import get_engine, get_session_factory, init_db
+from forwin.models.base import get_engine, get_session_factory, require_v5_schema
 from forwin.protocol.writer import WriterOutput
 
 
@@ -109,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
 
     config = InfrastructureConfig.from_env()
     engine = get_engine(config.database_url)
-    init_db(engine)
+    require_v5_schema(engine)
     session_factory = get_session_factory(engine)
     output = Path(args.output) if args.output else REPO_ROOT / "reports" / f"canon-quality-replay-{args.project_id}.md"
     try:

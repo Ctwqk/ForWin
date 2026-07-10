@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from forwin.governance import DecisionEventInfo
 from forwin.state.updater import StateUpdater
-from forwin.world_model.store import WorldModelStore
+from forwin.knowledge_system.store import KnowledgeProjectionStore
 
 
 CodexGovernedActionType = Literal[
@@ -45,9 +45,11 @@ class CodexGovernedActionProcessor:
 
     def __init__(self, session: Session) -> None:
         self.session = session
-        self.store = WorldModelStore(session)
+        self.store = KnowledgeProjectionStore(session)
 
-    def apply(self, *, project_id: str, request: CodexGovernedActionRequest) -> CodexGovernedActionResult:
+    def apply(
+        self, *, project_id: str, request: CodexGovernedActionRequest
+    ) -> CodexGovernedActionResult:
         action_type = str(request.action_type or "").strip()
         if action_type not in self._allowed:
             raise ValueError(f"Codex governed action is not allowed: {action_type}")

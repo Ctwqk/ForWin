@@ -1,4 +1,5 @@
 """ForWin Web API – FastAPI interface for the novel generation system."""
+
 from __future__ import annotations
 
 import logging
@@ -125,7 +126,11 @@ from forwin.api_schemas import (
     LintSignalInfo,
     StartWritingResponse,
 )
-from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
+from forwin.book_genesis import (
+    BookGenesisService,
+    GENESIS_STAGE_ORDER,
+    StaleGenesisRevisionError,
+)
 from forwin.config import InfrastructureConfig
 from forwin.governance import (
     BandCheckpointIssueInfo,
@@ -144,17 +149,20 @@ from forwin.models.base import Base, get_session_factory
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import Project, ChapterPlan, ArcPlanVersion
 from forwin.models.entity import Entity
-from forwin.models.event import CanonEvent, EventEntityLink
 from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
-from forwin.models.publisher import PublisherCommentSyncJob, PublisherConnectionState, PublisherExtensionClient, PublisherRawComment, PublisherUploadJob
-from forwin.models.thread import PlotThread
+from forwin.models.publisher import (
+    PublisherCommentSyncJob,
+    PublisherConnectionState,
+    PublisherExtensionClient,
+    PublisherRawComment,
+    PublisherUploadJob,
+)
 from forwin.models.task import GenerationTask
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.phase import (
     BandExperiencePlan,
     ChapterRewriteAttempt,
 )
-from forwin.models.timeline import ChapterTimeline, StoryTimePoint
 from forwin.models.phase4 import NPCIntentSnapshot
 import forwin.models.phase  # noqa: F401
 from forwin.protocol.experience import BandDelightSchedule
@@ -182,6 +190,7 @@ from forwin.api_core.project_helpers import *
 from forwin.api_core.generation import *
 from forwin.api_core.automation import *
 
+
 def _shutdown_runtime_state() -> None:
 
     _stop_automation_scheduler()
@@ -189,7 +198,9 @@ def _shutdown_runtime_state() -> None:
         try:
             api_state._orchestrator.llm_client.close()
         except Exception:  # noqa: BLE001
-            logger.debug("Ignoring orchestrator LLM client shutdown error.", exc_info=True)
+            logger.debug(
+                "Ignoring orchestrator LLM client shutdown error.", exc_info=True
+            )
         try:
             api_state._orchestrator.engine.dispose()
         except Exception:  # noqa: BLE001
@@ -213,19 +224,27 @@ def _shutdown_runtime_state() -> None:
 # Lifespan
 # ---------------------------------------------------------------------------
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
     if api_state._config is None:
         api_state._config = InfrastructureConfig.from_env()
-    if str(api_state._config.http_bind or "").strip() in {"0.0.0.0", "::"} and not basic_auth_enabled(api_state._config):
+    if str(api_state._config.http_bind or "").strip() in {
+        "0.0.0.0",
+        "::",
+    } and not basic_auth_enabled(api_state._config):
         logger.warning(
             "ForWin is reachable beyond localhost and HTTP Basic Auth is disabled. "
             "This is acceptable only on a trusted LAN."
         )
     if api_state._runtime_container is None:
-        database_url = os.environ.get("FORWIN_DATABASE_URL", api_state._config.database_url)
-        api_state._config = api_state._config.model_copy(update={"database_url": database_url})
+        database_url = os.environ.get(
+            "FORWIN_DATABASE_URL", api_state._config.database_url
+        )
+        api_state._config = api_state._config.model_copy(
+            update={"database_url": database_url}
+        )
         api_state._runtime_container = RuntimeContainer.from_config(
             api_state._config,
             policy=RuntimePolicy.for_profile("standard"),
@@ -266,11 +285,16 @@ async def lifespan(app: FastAPI):
             publisher_session_secret=api_state._config.publisher_session_secret,
             publisher_session_encryption_required=api_state._config.publisher_session_encryption_required,
             publisher_login_discord_webhook_url=api_state._config.publisher_login_discord_webhook_url,
-            codex_intervention_handler=build_codex_intervention_handler(api_state._config),
+            codex_intervention_handler=build_codex_intervention_handler(
+                api_state._config
+            ),
         )
     api_state._publisher_manager.requeue_interrupted_upload_jobs()
     _start_automation_scheduler()
-    logger.info("ForWin API started. DB: %s", api_state._engine.url.render_as_string(hide_password=True))
+    logger.info(
+        "ForWin API started. DB: %s",
+        api_state._engine.url.render_as_string(hide_password=True),
+    )
     try:
         yield
     finally:
@@ -312,19 +336,27 @@ async def optional_basic_auth(request: Request, call_next):
 _observability_handlers = api_observability_routes.build_handlers(
     get_config=lambda: api_state._config,
     get_session=_get_session,
-    list_decision_event_rows=lambda session, **kwargs: _list_decision_event_rows(session, **kwargs),
+    list_decision_event_rows=lambda session, **kwargs: _list_decision_event_rows(
+        session, **kwargs
+    ),
     serialize_decision_event=lambda row: _serialize_decision_event(row),
     display_datetime=_display_datetime,
     json_load_object=lambda raw: _json_load_object(raw),
     json_load_list=lambda raw: _json_load_list(raw),
 )
 get_task_timeline = _observability_handlers["get_task_timeline"]
-get_chapter_observability_ledger = _observability_handlers["get_chapter_observability_ledger"]
+get_chapter_observability_ledger = _observability_handlers[
+    "get_chapter_observability_ledger"
+]
 get_prompt_trace_detail = _observability_handlers["get_prompt_trace_detail"]
 read_artifact_preview = _observability_handlers["read_artifact_preview"]
 get_task_performance_report = _observability_handlers["get_task_performance_report"]
-get_project_performance_report = _observability_handlers["get_project_performance_report"]
-get_chapter_performance_report = _observability_handlers["get_chapter_performance_report"]
+get_project_performance_report = _observability_handlers[
+    "get_project_performance_report"
+]
+get_chapter_performance_report = _observability_handlers[
+    "get_chapter_performance_report"
+]
 get_slow_performance_spans = _observability_handlers["get_slow_performance_spans"]
 get_llm_performance_report = _observability_handlers["get_llm_performance_report"]
 get_db_performance_report = _observability_handlers["get_db_performance_report"]
@@ -335,6 +367,7 @@ def _current_memory_index():
     services = getattr(orchestrator, "services", None)
     broker = getattr(services, "retrieval_broker", None)
     return getattr(broker, "memory_index", None)
+
 
 globals().update(
     api_route_registry.register_api_routes(
@@ -351,50 +384,113 @@ globals().update(
                 get_memory_index=_current_memory_index,
             ),
             task=api_route_registry.TaskDeps(
-                create_generation_task=lambda **kwargs: _create_generation_task(**kwargs),
+                create_generation_task=lambda **kwargs: _create_generation_task(
+                    **kwargs
+                ),
                 serialize_task=lambda task_id, task: _serialize_task(task_id, task),
-                get_generation_task_or_404=lambda task_id: _get_generation_task_or_404(task_id),
-                project_has_active_generation_task=lambda project_id, *, session=None: _project_has_active_generation_task(project_id, session=session),
-                active_generation_task_ids=lambda project_id='': _active_generation_task_ids(project_id),
-                generation_task_conflict_message=lambda project_id: _generation_task_conflict_message(project_id),
+                get_generation_task_or_404=lambda task_id: _get_generation_task_or_404(
+                    task_id
+                ),
+                project_has_active_generation_task=lambda project_id, *, session=None: (
+                    _project_has_active_generation_task(project_id, session=session)
+                ),
+                active_generation_task_ids=lambda project_id="": (
+                    _active_generation_task_ids(project_id)
+                ),
+                generation_task_conflict_message=lambda project_id: (
+                    _generation_task_conflict_message(project_id)
+                ),
                 list_generation_tasks=lambda limit: _list_generation_tasks(limit),
-                serialize_generation_task_center_item=lambda task_id, task: _serialize_generation_task_center_item(task_id, task),
-                serialize_upload_task_center_item=lambda payload: _serialize_upload_task_center_item(payload),
-                list_project_backed_task_items=lambda limit: _list_project_backed_task_items(limit),
+                serialize_generation_task_center_item=lambda task_id, task: (
+                    _serialize_generation_task_center_item(task_id, task)
+                ),
+                serialize_upload_task_center_item=lambda payload: (
+                    _serialize_upload_task_center_item(payload)
+                ),
+                list_project_backed_task_items=lambda limit: (
+                    _list_project_backed_task_items(limit)
+                ),
                 parse_project_task_id=lambda task_id: _parse_project_task_id(task_id),
-                get_project_backed_task_item_or_404=lambda task_id: _get_project_backed_task_item_or_404(task_id),
+                get_project_backed_task_item_or_404=lambda task_id: (
+                    _get_project_backed_task_item_or_404(task_id)
+                ),
                 task_is_terminal=lambda status: _task_is_terminal(status),
                 task_is_terminable=lambda task: _task_is_terminable(task),
                 task_is_pausable=lambda task: _task_is_pausable(task),
                 task_is_deletable=lambda task: _task_is_deletable(task),
                 update_task=lambda task_id, **changes: _update_task(task_id, **changes),
-                create_continue_generation_task=lambda **kwargs: _create_continue_generation_task(**kwargs),
+                create_continue_generation_task=lambda **kwargs: (
+                    _create_continue_generation_task(**kwargs)
+                ),
                 get_task_timeline=get_task_timeline,
             ),
             project=api_route_registry.ProjectDeps(
-                build_genesis_service=lambda *args, **kwargs: _build_genesis_service(*args, **kwargs),
-                close_genesis_service=lambda service=None: _close_genesis_service(service),
-                require_genesis_project=lambda project: _require_genesis_project(project),
-                active_genesis_revision=lambda session, project: _active_genesis_revision(session, project),
+                build_genesis_service=lambda *args, **kwargs: _build_genesis_service(
+                    *args, **kwargs
+                ),
+                close_genesis_service=lambda service=None: _close_genesis_service(
+                    service
+                ),
+                require_genesis_project=lambda project: _require_genesis_project(
+                    project
+                ),
+                active_genesis_revision=lambda session, project: (
+                    _active_genesis_revision(session, project)
+                ),
                 genesis_patch_payload=lambda req: _genesis_patch_payload(req),
-                delete_project_impl=lambda session, project_id: _delete_project(session, project_id),
-                project_delete_blockers=lambda project_id, *, session: _project_delete_blockers(project_id, session=session),
-                project_delete_conflict_message=lambda blockers: _project_delete_conflict_message(blockers),
-                persist_project_automation=lambda session, project, automation: _persist_project_automation(session, project, automation),
-                require_reason=lambda reason, *, action: _require_reason(reason, action=action),
+                delete_project_impl=lambda session, project_id: _delete_project(
+                    session, project_id
+                ),
+                project_delete_blockers=lambda project_id, *, session: (
+                    _project_delete_blockers(project_id, session=session)
+                ),
+                project_delete_conflict_message=lambda blockers: (
+                    _project_delete_conflict_message(blockers)
+                ),
+                persist_project_automation=lambda session, project, automation: (
+                    _persist_project_automation(session, project, automation)
+                ),
+                require_reason=lambda reason, *, action: _require_reason(
+                    reason, action=action
+                ),
             ),
             governance=api_route_registry.GovernanceDeps(
-                latest_related_decision_event=lambda session, **kwargs: _latest_related_decision_event(session, **kwargs),
-                log_decision_event=lambda session, **kwargs: _log_decision_event(session, **kwargs),
-                decision_refs_for_chapter_review=lambda session, *, project_id, chapter_number, review_id: _decision_refs_for_chapter_review(session, project_id=project_id, chapter_number=chapter_number, review_id=review_id),
-                validate_constraint_payload=lambda **kwargs: _validate_constraint_payload(**kwargs),
-                serialize_band_checkpoint=lambda row, *, session=None: _serialize_band_checkpoint(row, session=session),
+                latest_related_decision_event=lambda session, **kwargs: (
+                    _latest_related_decision_event(session, **kwargs)
+                ),
+                log_decision_event=lambda session, **kwargs: _log_decision_event(
+                    session, **kwargs
+                ),
+                decision_refs_for_chapter_review=lambda session, *, project_id, chapter_number, review_id: (
+                    _decision_refs_for_chapter_review(
+                        session,
+                        project_id=project_id,
+                        chapter_number=chapter_number,
+                        review_id=review_id,
+                    )
+                ),
+                validate_constraint_payload=lambda **kwargs: (
+                    _validate_constraint_payload(**kwargs)
+                ),
+                serialize_band_checkpoint=lambda row, *, session=None: (
+                    _serialize_band_checkpoint(row, session=session)
+                ),
                 serialize_constraint=lambda row: _serialize_constraint(row),
-                list_decision_event_rows=lambda session, **kwargs: _list_decision_event_rows(session, **kwargs),
+                list_decision_event_rows=lambda session, **kwargs: (
+                    _list_decision_event_rows(session, **kwargs)
+                ),
                 serialize_decision_event=lambda row: _serialize_decision_event(row),
-                build_causal_replay=lambda session, **kwargs: _build_causal_replay(session, **kwargs),
-                build_governance_insights=lambda session, *, project_id: _build_governance_insights(session, project_id=project_id),
-                latest_band_checkpoint_row=lambda session, *, project_id, band_id='': _latest_band_checkpoint_row(session, project_id=project_id, band_id=band_id),
+                build_causal_replay=lambda session, **kwargs: _build_causal_replay(
+                    session, **kwargs
+                ),
+                build_governance_insights=lambda session, *, project_id: (
+                    _build_governance_insights(session, project_id=project_id)
+                ),
+                latest_band_checkpoint_row=lambda session, *, project_id, band_id="": (
+                    _latest_band_checkpoint_row(
+                        session, project_id=project_id, band_id=band_id
+                    )
+                ),
             ),
             observability=api_route_registry.ObservabilityDeps(
                 get_chapter_observability_ledger=get_chapter_observability_ledger,

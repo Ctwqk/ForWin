@@ -1,4 +1,5 @@
 """ForWin Web API – FastAPI interface for the novel generation system."""
+
 from __future__ import annotations
 
 import logging
@@ -125,7 +126,11 @@ from forwin.api_schemas import (
     LintSignalInfo,
     StartWritingResponse,
 )
-from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
+from forwin.book_genesis import (
+    BookGenesisService,
+    GENESIS_STAGE_ORDER,
+    StaleGenesisRevisionError,
+)
 from forwin.config import InfrastructureConfig
 from forwin.governance import (
     BandCheckpointIssueInfo,
@@ -144,17 +149,20 @@ from forwin.models.base import Base, get_session_factory
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import Project, ChapterPlan, ArcPlanVersion
 from forwin.models.entity import Entity
-from forwin.models.event import CanonEvent, EventEntityLink
 from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
-from forwin.models.publisher import PublisherCommentSyncJob, PublisherConnectionState, PublisherExtensionClient, PublisherRawComment, PublisherUploadJob
-from forwin.models.thread import PlotThread
+from forwin.models.publisher import (
+    PublisherCommentSyncJob,
+    PublisherConnectionState,
+    PublisherExtensionClient,
+    PublisherRawComment,
+    PublisherUploadJob,
+)
 from forwin.models.task import GenerationTask
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.phase import (
     BandExperiencePlan,
     ChapterRewriteAttempt,
 )
-from forwin.models.timeline import ChapterTimeline, StoryTimePoint
 from forwin.models.phase4 import NPCIntentSnapshot
 import forwin.models.phase  # noqa: F401
 from forwin.protocol.experience import BandDelightSchedule
@@ -177,6 +185,7 @@ logger = logging.getLogger(__name__)
 from forwin.api_core import state as api_state
 from forwin.api_core.runtime import *
 
+
 def _generation_task_from_row(row: GenerationTask) -> dict[str, Any]:
     return {
         "task_kind": str(row.task_kind or "generation"),
@@ -191,7 +200,9 @@ def _generation_task_from_row(row: GenerationTask) -> dict[str, Any]:
         "stage_history": _json_load_list(row.stage_history_json),
         "requested_chapters": int(row.requested_chapters or 0),
         "current_chapter": int(row.current_chapter or 0),
-        "completed_chapters": _coerce_int_list(_json_load_list(row.completed_chapters_json)),
+        "completed_chapters": _coerce_int_list(
+            _json_load_list(row.completed_chapters_json)
+        ),
         "failed_chapters": _coerce_int_list(_json_load_list(row.failed_chapters_json)),
         "paused_chapters": _coerce_int_list(_json_load_list(row.paused_chapters_json)),
         "frozen_artifacts": [
@@ -207,7 +218,9 @@ def _generation_task_from_row(row: GenerationTask) -> dict[str, Any]:
         "resume_from_chapter": int(getattr(row, "resume_from_chapter", 0) or 0),
         "run_until_chapter": int(getattr(row, "run_until_chapter", 0) or 0),
         "max_chapters": int(getattr(row, "max_chapters", 0) or 0),
-        "execution_payload": _json_load_object(getattr(row, "execution_payload_json", "{}") or "{}"),
+        "execution_payload": _json_load_object(
+            getattr(row, "execution_payload_json", "{}") or "{}"
+        ),
         "deleted": row.deleted_at is not None,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
@@ -226,7 +239,9 @@ def _apply_generation_task_to_row(
     now: datetime | None = None,
 ) -> None:
     timestamp = now or _utcnow()
-    row.task_kind = str(task.get("task_kind", "generation") or "generation").strip() or "generation"
+    row.task_kind = (
+        str(task.get("task_kind", "generation") or "generation").strip() or "generation"
+    )
     row.status = str(task.get("status", "queued") or "queued").strip() or "queued"
     row.title = str(task.get("title", "") or "").strip()
     row.subtitle = str(task.get("subtitle", "") or "").strip()
@@ -234,15 +249,27 @@ def _apply_generation_task_to_row(
     row.extension_client_id = str(task.get("extension_client_id", "") or "").strip()
     row.error_message = str(task.get("error", "") or "")
     row.message = str(task.get("message", "") or "")
-    row.current_stage = str(task.get("current_stage", "queued") or "queued").strip() or "queued"
+    row.current_stage = (
+        str(task.get("current_stage", "queued") or "queued").strip() or "queued"
+    )
     row.stage_history_json = _json_dump(task.get("stage_history", []), [])
     row.requested_chapters = int(task.get("requested_chapters", 0) or 0)
     row.current_chapter = int(task.get("current_chapter", 0) or 0)
-    row.completed_chapters_json = _json_dump(_coerce_int_list(task.get("completed_chapters", [])), [])
-    row.failed_chapters_json = _json_dump(_coerce_int_list(task.get("failed_chapters", [])), [])
-    row.paused_chapters_json = _json_dump(_coerce_int_list(task.get("paused_chapters", [])), [])
+    row.completed_chapters_json = _json_dump(
+        _coerce_int_list(task.get("completed_chapters", [])), []
+    )
+    row.failed_chapters_json = _json_dump(
+        _coerce_int_list(task.get("failed_chapters", [])), []
+    )
+    row.paused_chapters_json = _json_dump(
+        _coerce_int_list(task.get("paused_chapters", [])), []
+    )
     row.frozen_artifacts_json = _json_dump(
-        [str(item).strip() for item in task.get("frozen_artifacts", []) if str(item).strip()],
+        [
+            str(item).strip()
+            for item in task.get("frozen_artifacts", [])
+            if str(item).strip()
+        ],
         [],
     )
     row.cancel_requested = bool(task.get("cancel_requested"))
@@ -349,7 +376,9 @@ def _prefer_cached_generation_task(
     persisted_updated = _coerce_task_datetime(persisted.get("updated_at"))
     if cached_updated > persisted_updated:
         return cached
-    if cached_updated == persisted_updated and _task_history_len(cached) > _task_history_len(persisted):
+    if cached_updated == persisted_updated and _task_history_len(
+        cached
+    ) > _task_history_len(persisted):
         return cached
     return persisted
 
@@ -373,7 +402,9 @@ def _apply_task_visibility_rules(
     )
 
 
-def _augment_task_with_provisional_history(session, task: dict[str, Any]) -> dict[str, Any]:
+def _augment_task_with_provisional_history(
+    session, task: dict[str, Any]
+) -> dict[str, Any]:
     return augment_task_with_rehearsal_history(
         session,
         task,
@@ -395,11 +426,18 @@ def _is_retryable_generation_task_db_error(exc: Exception) -> bool:
         return True
     orig = getattr(exc, "orig", None)
     sqlstate = str(
-        getattr(orig, "sqlstate", "")
-        or getattr(orig, "pgcode", "")
-        or ""
+        getattr(orig, "sqlstate", "") or getattr(orig, "pgcode", "") or ""
     ).strip()
-    if sqlstate in {"40001", "40P01", "55P03", "57014", "08000", "08003", "08006", "08001"}:
+    if sqlstate in {
+        "40001",
+        "40P01",
+        "55P03",
+        "57014",
+        "08000",
+        "08003",
+        "08006",
+        "08001",
+    }:
         return True
     message = str(exc).lower()
     retryable_fragments = (
@@ -447,7 +485,9 @@ def _run_generation_task_db_write(
     return False
 
 
-def _mark_task_persistence_degraded(task_id: str, task: dict[str, Any], exc: Exception) -> None:
+def _mark_task_persistence_degraded(
+    task_id: str, task: dict[str, Any], exc: Exception
+) -> None:
     task["persistence_degraded"] = True
     task["persistence_error"] = str(exc)
     task["updated_at"] = _utcnow()
@@ -467,7 +507,9 @@ def _prune_generation_tasks_db(now: datetime | None = None) -> None:
 
     current = now or _utcnow()
     if api_state._last_generation_task_db_prune_at is not None:
-        elapsed = (current - api_state._last_generation_task_db_prune_at).total_seconds()
+        elapsed = (
+            current - api_state._last_generation_task_db_prune_at
+        ).total_seconds()
         if elapsed < api_state._TASK_DB_PRUNE_INTERVAL_SECONDS:
             return
 
@@ -481,28 +523,42 @@ def _prune_generation_tasks_db(now: datetime | None = None) -> None:
                     or_(
                         GenerationTask.deleted_at.is_not(None),
                         (
-                            GenerationTask.status.in_(tuple(api_state._GENERATION_TERMINAL_STATUSES))
+                            GenerationTask.status.in_(
+                                tuple(api_state._GENERATION_TERMINAL_STATUSES)
+                            )
                             & (GenerationTask.updated_at < cutoff)
                         ),
                     )
                 )
             )
             total_rows = session.execute(
-                select(func.count(GenerationTask.id)).where(GenerationTask.deleted_at.is_(None))
+                select(func.count(GenerationTask.id)).where(
+                    GenerationTask.deleted_at.is_(None)
+                )
             ).scalar_one()
             overflow = max(0, int(total_rows or 0) - api_state._MAX_TASKS)
             if overflow:
-                overflow_ids = session.execute(
-                    select(GenerationTask.id)
-                    .where(
-                        GenerationTask.deleted_at.is_(None),
-                        GenerationTask.status.in_(tuple(api_state._GENERATION_TERMINAL_STATUSES)),
+                overflow_ids = (
+                    session.execute(
+                        select(GenerationTask.id)
+                        .where(
+                            GenerationTask.deleted_at.is_(None),
+                            GenerationTask.status.in_(
+                                tuple(api_state._GENERATION_TERMINAL_STATUSES)
+                            ),
+                        )
+                        .order_by(GenerationTask.updated_at.asc())
+                        .limit(overflow)
                     )
-                    .order_by(GenerationTask.updated_at.asc())
-                    .limit(overflow)
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 if overflow_ids:
-                    session.execute(delete(GenerationTask).where(GenerationTask.id.in_(overflow_ids)))
+                    session.execute(
+                        delete(GenerationTask).where(
+                            GenerationTask.id.in_(overflow_ids)
+                        )
+                    )
             session.commit()
 
     _run_generation_task_db_write(
@@ -523,7 +579,8 @@ def _prune_tasks(*, include_db: bool = True) -> None:
             if task.get("deleted")
             or (
                 task.get("status") in api_state._GENERATION_TERMINAL_STATUSES
-                and (now - task.get("updated_at", now)).total_seconds() > api_state._TASK_RETENTION_SECONDS
+                and (now - task.get("updated_at", now)).total_seconds()
+                > api_state._TASK_RETENTION_SECONDS
             )
         ]
         for task_id in stale_ids:
@@ -533,7 +590,9 @@ def _prune_tasks(*, include_db: bool = True) -> None:
         _prune_generation_tasks_db(now)
 
 
-def _load_generation_task(task_id: str, *, include_deleted: bool = False) -> dict[str, Any] | None:
+def _load_generation_task(
+    task_id: str, *, include_deleted: bool = False
+) -> dict[str, Any] | None:
     try:
         return _get_task_center_service().load_generation_task(
             task_id,
@@ -542,7 +601,10 @@ def _load_generation_task(task_id: str, *, include_deleted: bool = False) -> dic
     except OperationalError as exc:
         if not _is_retryable_generation_task_db_error(exc):
             raise
-        logger.warning("Generation task read fell back to cache due to DB retryable error for %s", task_id)
+        logger.warning(
+            "Generation task read fell back to cache due to DB retryable error for %s",
+            task_id,
+        )
         return _apply_task_visibility_rules(
             _cached_generation_task(task_id),
             include_deleted=include_deleted,
@@ -564,7 +626,9 @@ def _persist_generation_task(task_id: str, task: dict[str, Any]) -> None:
             session.commit()
 
     try:
-        _run_generation_task_db_write(_operation, context=f"persist_generation_task:{task_id}")
+        _run_generation_task_db_write(
+            _operation, context=f"persist_generation_task:{task_id}"
+        )
     except IntegrityError as exc:
         _sync_task_cache(task_id, None)
         project_id = str(task.get("project_id", "") or "").strip()
@@ -590,12 +654,18 @@ def _recover_interrupted_generation_tasks() -> list[str]:
     now = _utcnow()
     recovered_ids: list[str] = []
     with _get_session() as session:
-        rows = session.execute(
-            select(GenerationTask).where(
-                GenerationTask.deleted_at.is_(None),
-                GenerationTask.status.notin_(tuple(api_state._GENERATION_TERMINAL_STATUSES)),
+        rows = (
+            session.execute(
+                select(GenerationTask).where(
+                    GenerationTask.deleted_at.is_(None),
+                    GenerationTask.status.notin_(
+                        tuple(api_state._GENERATION_TERMINAL_STATUSES)
+                    ),
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for row in rows:
             task = _generation_task_from_row(row)
             if task.get("cancel_requested"):
@@ -618,13 +688,18 @@ def _recover_interrupted_generation_tasks() -> list[str]:
             else:
                 task["status"] = "queued"
                 task["current_stage"] = "queued"
-                task["message"] = "服务重启后生成任务已重新排队，等待 durable worker 接管。"
+                task["message"] = (
+                    "服务重启后生成任务已重新排队，等待 durable worker 接管。"
+                )
                 task["error"] = None
                 task["lease_owner"] = ""
                 task["lease_expires_at"] = now
                 task["finished_at"] = None
             task["updated_at"] = now
-            if str(task.get("current_stage", "")).strip() != str(row.current_stage or "").strip():
+            if (
+                str(task.get("current_stage", "")).strip()
+                != str(row.current_stage or "").strip()
+            ):
                 history = list(task.get("stage_history", []))
                 history.append(
                     _new_stage_history_entry(
@@ -641,6 +716,8 @@ def _recover_interrupted_generation_tasks() -> list[str]:
             recovered_ids.append(row.id)
         session.commit()
     return recovered_ids
+
+
 def _new_stage_history_entry(
     stage: str,
     *,
@@ -662,7 +739,11 @@ def _task_is_terminal(status: str) -> bool:
 
 
 def _task_is_terminable(task: dict[str, Any]) -> bool:
-    return not task.get("deleted") and not task.get("cancel_requested") and not _task_is_terminal(str(task.get("status", "")))
+    return (
+        not task.get("deleted")
+        and not task.get("cancel_requested")
+        and not _task_is_terminal(str(task.get("status", "")))
+    )
 
 
 def _task_is_pausable(task: dict[str, Any]) -> bool:
@@ -812,17 +893,22 @@ def _serialize_task(task_id: str, task: dict[str, Any]) -> TaskSummaryResponse:
     )
 
 
-def _serialize_generation_task_center_item(task_id: str, task: dict[str, Any]) -> TaskCenterItemResponse:
+def _serialize_generation_task_center_item(
+    task_id: str, task: dict[str, Any]
+) -> TaskCenterItemResponse:
     serialized = _serialize_task(task_id, task)
     return TaskCenterItemResponse.model_validate(serialized.model_dump())
 
 
-def _serialize_upload_task_center_item(payload: dict[str, Any]) -> TaskCenterItemResponse:
+def _serialize_upload_task_center_item(
+    payload: dict[str, Any],
+) -> TaskCenterItemResponse:
     return TaskCenterItemResponse(
         task_kind="upload",
         task_id=str(payload.get("job_id", "")).strip(),
         status=str(payload.get("status", "")).strip(),
-        title=str(payload.get("book_name", "")).strip() or str(payload.get("display_name", "")).strip(),
+        title=str(payload.get("book_name", "")).strip()
+        or str(payload.get("display_name", "")).strip(),
         subtitle=str(payload.get("chapter_title", "")).strip(),
         project_id=str(payload.get("project_id", "")).strip() or None,
         extension_client_id=str(payload.get("extension_client_id", "")).strip(),
@@ -853,8 +939,12 @@ def _parse_project_task_id(task_id: str) -> str | None:
     return _get_task_center_service().parse_project_task_id(task_id)
 
 
-def _load_project_task_center_plans(session, project_ids: list[str]) -> dict[str, list[ChapterPlan]]:
-    return _get_task_center_service()._load_project_task_center_plans(session, project_ids)
+def _load_project_task_center_plans(
+    session, project_ids: list[str]
+) -> dict[str, list[ChapterPlan]]:
+    return _get_task_center_service()._load_project_task_center_plans(
+        session, project_ids
+    )
 
 
 def _build_project_task_center_item(

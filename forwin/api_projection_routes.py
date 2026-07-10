@@ -12,9 +12,10 @@ from forwin.knowledge_system.projection_jobs import (
     normalize_projection_kind,
     refresh_projection_now,
 )
+from forwin.knowledge_system.store import load_json
 from forwin.models.project import Project
-from forwin.models.world_model import WorldModelPageRow
-from forwin.world_model import api as world_model_api
+from forwin.models.knowledge import KnowledgeProjectionPageRow
+from forwin.api_schemas import WorldModelPageInfo
 
 
 def build_handlers(
@@ -86,17 +87,26 @@ def build_handlers(
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    def get_projection_status(project_id: str, projection_kind: str = "") -> dict[str, Any]:
+    def get_projection_status(
+        project_id: str, projection_kind: str = ""
+    ) -> dict[str, Any]:
         with get_session() as session:
             _require_project(session, project_id)
             rows = _page_rows(session, project_id, projection_kind=projection_kind)
-            latest = max((row.updated_at for row in rows if row.updated_at is not None), default=None)
+            latest = max(
+                (row.updated_at for row in rows if row.updated_at is not None),
+                default=None,
+            )
             return {
                 "project_id": project_id,
                 "projection_kind": projection_kind or "all",
                 "page_count": len(rows),
-                "latest_updated_at": latest.isoformat(sep=" ", timespec="seconds") if latest else "",
-                "projection_versions": sorted({row.projection_version for row in rows if row.projection_version}),
+                "latest_updated_at": latest.isoformat(sep=" ", timespec="seconds")
+                if latest
+                else "",
+                "projection_versions": sorted(
+                    {row.projection_version for row in rows if row.projection_version}
+                ),
             }
 
     def list_projection_pages(
@@ -114,23 +124,30 @@ def build_handlers(
                 role_scope=role_scope,
                 as_of_chapter=as_of_chapter,
             )
-            return [world_model_api._page_info(row) for row in rows]
+            return [_page_info(row) for row in rows]
 
-    def get_projection_page(project_id: str, page_key: str, projection_kind: str = "") -> Any:
+    def get_projection_page(
+        project_id: str, page_key: str, projection_kind: str = ""
+    ) -> Any:
         with get_session() as session:
             _require_project(session, project_id)
-            query = select(WorldModelPageRow).where(
-                WorldModelPageRow.project_id == project_id,
-                WorldModelPageRow.page_key == page_key,
+            query = select(KnowledgeProjectionPageRow).where(
+                KnowledgeProjectionPageRow.project_id == project_id,
+                KnowledgeProjectionPageRow.page_key == page_key,
             )
             if projection_kind:
-                query = query.where(WorldModelPageRow.projection_kind == projection_kind)
+                query = query.where(
+                    KnowledgeProjectionPageRow.projection_kind == projection_kind
+                )
             row = session.execute(
-                query.order_by(WorldModelPageRow.as_of_chapter.desc(), WorldModelPageRow.updated_at.desc()).limit(1)
+                query.order_by(
+                    KnowledgeProjectionPageRow.as_of_chapter.desc(),
+                    KnowledgeProjectionPageRow.updated_at.desc(),
+                ).limit(1)
             ).scalar_one_or_none()
             if row is None:
                 raise HTTPException(status_code=404, detail="projection page not found")
-            return world_model_api._page_info(row)
+            return _page_info(row)
 
     return {
         "refresh_projection": refresh_projection,
@@ -154,22 +171,60 @@ def _page_rows(
     projection_kind: str = "",
     role_scope: str = "",
     as_of_chapter: int = 0,
-) -> list[WorldModelPageRow]:
-    query = select(WorldModelPageRow).where(WorldModelPageRow.project_id == project_id)
+) -> list[KnowledgeProjectionPageRow]:
+    query = select(KnowledgeProjectionPageRow).where(
+        KnowledgeProjectionPageRow.project_id == project_id
+    )
     if projection_kind:
-        query = query.where(WorldModelPageRow.projection_kind == projection_kind)
+        query = query.where(
+            KnowledgeProjectionPageRow.projection_kind == projection_kind
+        )
     if role_scope:
-        query = query.where(WorldModelPageRow.role_scope == role_scope)
+        query = query.where(KnowledgeProjectionPageRow.role_scope == role_scope)
     if int(as_of_chapter or 0) > 0:
-        query = query.where(WorldModelPageRow.as_of_chapter <= int(as_of_chapter))
+        query = query.where(
+            KnowledgeProjectionPageRow.as_of_chapter <= int(as_of_chapter)
+        )
     return list(
         session.execute(
             query.order_by(
-                WorldModelPageRow.projection_kind.asc(),
-                WorldModelPageRow.page_type.asc(),
-                WorldModelPageRow.title.asc(),
+                KnowledgeProjectionPageRow.projection_kind.asc(),
+                KnowledgeProjectionPageRow.page_type.asc(),
+                KnowledgeProjectionPageRow.title.asc(),
             )
         )
         .scalars()
         .all()
+    )
+
+
+def _page_info(row: KnowledgeProjectionPageRow) -> WorldModelPageInfo:
+    return WorldModelPageInfo(
+        id=row.id,
+        project_id=row.project_id,
+        page_key=row.page_key,
+        page_type=row.page_type,
+        title=row.title,
+        vault_path=row.vault_path,
+        markdown=row.markdown,
+        frontmatter=load_json(row.frontmatter_json, {}),
+        projection_kind=row.projection_kind or "world_studio",
+        projection_version=row.projection_version,
+        source_digest=row.source_digest,
+        section_digest=load_json(row.section_digest_json, {}),
+        observer_type=row.observer_type,
+        observer_id=row.observer_id,
+        role_scope=row.role_scope,
+        visibility_scope=row.visibility_scope,
+        canon_status=row.canon_status or "canon_projection",
+        content_hash=row.content_hash,
+        revision=row.revision,
+        status=row.status,
+        as_of_chapter=row.as_of_chapter,
+        logical_identity_key=row.logical_identity_key,
+        canonical_source_type=row.canonical_source_type,
+        canonical_source_id=row.canonical_source_id,
+        supersedes_page_id=row.supersedes_page_id,
+        canonical_rank=row.canonical_rank,
+        updated_at=row.updated_at.isoformat() if row.updated_at else "",
     )

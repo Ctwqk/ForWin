@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 
 from forwin.book_state.projection import BookStateProjection
 from forwin.book_state.repository import BookStateRepository
+from forwin.knowledge_system.store import KnowledgeProjectionStore
 from forwin.models.project import Project
 from forwin.protocol.book_state import FactNode, MapEdge, MapNode, WorldEdge, WorldNode
-from forwin.world_model.store import WorldModelStore
 
 from .canvas import write_canvas
 from .frontmatter import EDITABLE_FIELDS, LOCKED_FIELDS, parse_sections, render_page
@@ -42,7 +42,7 @@ class ObsidianExporter:
     def __init__(self, session: Session) -> None:
         self.session = session
         self.repo = BookStateRepository(session)
-        self.store = WorldModelStore(session)
+        self.store = KnowledgeProjectionStore(session)
 
     def export_project(
         self,
@@ -55,7 +55,9 @@ class ObsidianExporter:
         root.mkdir(parents=True, exist_ok=True)
         self._ensure_dirs(root)
         as_of = self._resolve_as_of(project_id, as_of_chapter)
-        runtime = BookStateProjection(self.session).load_runtime_as_of(project_id, as_of_chapter=as_of)
+        runtime = BookStateProjection(self.session).load_runtime_as_of(
+            project_id, as_of_chapter=as_of
+        )
 
         page_paths: list[str] = []
         relationship_edges: list[tuple[str, str, str]] = []
@@ -63,23 +65,36 @@ class ObsidianExporter:
 
         self._write_rules(root)
         project = self.session.get(Project, project_id)
-        index_path = self._write_index(root, project_id, project.title if project else project_id, as_of)
+        index_path = self._write_index(
+            root, project_id, project.title if project else project_id, as_of
+        )
         page_paths.append(index_path)
 
         book_pages = self._write_book_pages(root, project_id, as_of, runtime)
         page_paths.extend(book_pages)
 
         node_page_by_id: dict[str, str] = {}
-        for node in sorted(runtime.world.nodes_by_id.values(), key=lambda item: (str(item.node_type), item.id)):
+        for node in sorted(
+            runtime.world.nodes_by_id.values(),
+            key=lambda item: (str(item.node_type), item.id),
+        ):
             rel_path = self._node_relpath(node)
             node_page_by_id[node.id] = rel_path
-            page_paths.append(self._write_node_page(root, project_id, rel_path, node, runtime.world.edges_by_id, as_of))
+            page_paths.append(
+                self._write_node_page(
+                    root, project_id, rel_path, node, runtime.world.edges_by_id, as_of
+                )
+            )
 
         map_page_by_id: dict[str, str] = {}
         for node in sorted(runtime.map.nodes_by_id.values(), key=lambda item: item.id):
             rel_path = self._map_node_relpath(node)
             map_page_by_id[node.id] = rel_path
-            page_paths.append(self._write_map_node_page(root, project_id, rel_path, node, runtime.map.edges_by_id, as_of))
+            page_paths.append(
+                self._write_map_node_page(
+                    root, project_id, rel_path, node, runtime.map.edges_by_id, as_of
+                )
+            )
 
         for edge in runtime.world.edges_by_id.values():
             source = node_page_by_id.get(edge.source_id)
@@ -94,8 +109,16 @@ class ObsidianExporter:
             if source and target:
                 map_edges.append((source, target, str(edge.edge_type)))
 
-        write_canvas(root / "03_Actors" / "Relationship_Canvas.canvas", page_paths=sorted(node_page_by_id.values()), edges=relationship_edges)
-        write_canvas(root / "02_Map" / "Map_Canvas.canvas", page_paths=sorted(map_page_by_id.values()), edges=map_edges)
+        write_canvas(
+            root / "03_Actors" / "Relationship_Canvas.canvas",
+            page_paths=sorted(node_page_by_id.values()),
+            edges=relationship_edges,
+        )
+        write_canvas(
+            root / "02_Map" / "Map_Canvas.canvas",
+            page_paths=sorted(map_page_by_id.values()),
+            edges=map_edges,
+        )
 
         return ObsidianExportResult(
             project_id=project_id,
@@ -111,7 +134,9 @@ class ObsidianExporter:
         snapshot = self.repo.latest_world_snapshot(project_id, 1_000_000_000)
         if snapshot is not None:
             return int(snapshot.as_of_chapter or 0)
-        deltas = self.repo.list_graph_deltas(project_id, after_chapter=-1, through_chapter=1_000_000_000)
+        deltas = self.repo.list_graph_deltas(
+            project_id, after_chapter=-1, through_chapter=1_000_000_000
+        )
         if deltas:
             return max(delta.chapter_number for delta in deltas)
         return 0
@@ -154,7 +179,9 @@ class ObsidianExporter:
             encoding="utf-8",
         )
 
-    def _write_index(self, root: Path, project_id: str, title: str, as_of_chapter: int) -> str:
+    def _write_index(
+        self, root: Path, project_id: str, title: str, as_of_chapter: int
+    ) -> str:
         frontmatter = self._frontmatter(
             project_id=project_id,
             node_id="book:index",
@@ -174,10 +201,19 @@ class ObsidianExporter:
             "Proposed Correction": "",
         }
         rel_path = "00_Index.md"
-        self._write_page(root, rel_path, "ForWin Knowledge Index", frontmatter, sections, page_type="book")
+        self._write_page(
+            root,
+            rel_path,
+            "ForWin Knowledge Index",
+            frontmatter,
+            sections,
+            page_type="book",
+        )
         return rel_path
 
-    def _write_book_pages(self, root: Path, project_id: str, as_of_chapter: int, runtime) -> list[str]:
+    def _write_book_pages(
+        self, root: Path, project_id: str, as_of_chapter: int, runtime
+    ) -> list[str]:
         pages: list[tuple[str, str, dict[str, str]]] = [
             (
                 "01_Book/Current_State.md",
@@ -192,7 +228,10 @@ class ObsidianExporter:
                     ),
                     "Relationships": "_see generated actor pages_",
                     "Reader Visibility": self._reader_visibility(runtime),
-                    "Open Questions": self._open_questions(runtime.world.nodes_by_id.values(), runtime.world.facts_by_id.values()),
+                    "Open Questions": self._open_questions(
+                        runtime.world.nodes_by_id.values(),
+                        runtime.world.facts_by_id.values(),
+                    ),
                     "Evidence": f"- book_state:snapshot:{as_of_chapter}",
                     "Manual Notes": "",
                     "Human Questions": "",
@@ -214,7 +253,9 @@ class ObsidianExporter:
                 as_of_chapter=as_of_chapter,
                 source_refs=[f"book_state:snapshot:{as_of_chapter}"],
             )
-            self._write_page(root, rel_path, title, frontmatter, sections, page_type="book")
+            self._write_page(
+                root, rel_path, title, frontmatter, sections, page_type="book"
+            )
             rel_paths.append(rel_path)
         return rel_paths
 
@@ -228,7 +269,8 @@ class ObsidianExporter:
         as_of_chapter: int,
     ) -> str:
         related_edges = [
-            edge for edge in edges_by_id.values()
+            edge
+            for edge in edges_by_id.values()
             if edge.source_id == node.id or edge.target_id == node.id
         ]
         frontmatter = self._frontmatter(
@@ -236,22 +278,37 @@ class ObsidianExporter:
             node_id=node.id,
             node_type=str(node.node_type),
             as_of_chapter=as_of_chapter,
-            visibility=node.metadata.get("reader_visibility", node.metadata.get("visibility", "reader_known")),
+            visibility=node.metadata.get(
+                "reader_visibility", node.metadata.get("visibility", "reader_known")
+            ),
             truth_relation=node.metadata.get("truth_relation", "true"),
             source_refs=node.source_refs or [f"book_state:node:{node.id}"],
         )
         sections = {
             "Canon Summary": node.summary or node.description or node.name or node.id,
-            "Current State": _format_mapping(node.state or node.profile or node.metadata),
-            "Relationships": "\n".join(_format_edge(edge, node.id) for edge in related_edges) or "_none_",
+            "Current State": _format_mapping(
+                node.state or node.profile or node.metadata
+            ),
+            "Relationships": "\n".join(
+                _format_edge(edge, node.id) for edge in related_edges
+            )
+            or "_none_",
             "Reader Visibility": str(frontmatter["visibility"]),
             "Open Questions": _format_open_questions(node),
-            "Evidence": "\n".join(f"- {ref}" for ref in frontmatter["source_refs"]) or f"- book_state:node:{node.id}",
+            "Evidence": "\n".join(f"- {ref}" for ref in frontmatter["source_refs"])
+            or f"- book_state:node:{node.id}",
             "Manual Notes": "",
             "Human Questions": "",
             "Proposed Correction": "",
         }
-        self._write_page(root, rel_path, node.name or node.id, frontmatter, sections, page_type=str(node.node_type))
+        self._write_page(
+            root,
+            rel_path,
+            node.name or node.id,
+            frontmatter,
+            sections,
+            page_type=str(node.node_type),
+        )
         return rel_path
 
     def _write_map_node_page(
@@ -264,21 +321,28 @@ class ObsidianExporter:
         as_of_chapter: int,
     ) -> str:
         related_edges = [
-            edge for edge_id, edge in edges_by_id.items()
-            if "__reverse" not in edge_id and (edge.from_node_id == node.id or edge.to_node_id == node.id)
+            edge
+            for edge_id, edge in edges_by_id.items()
+            if "__reverse" not in edge_id
+            and (edge.from_node_id == node.id or edge.to_node_id == node.id)
         ]
         frontmatter = self._frontmatter(
             project_id=project_id,
             node_id=node.id,
             node_type=f"map_{node.node_type}",
             as_of_chapter=as_of_chapter,
-            visibility=node.visibility_default if hasattr(node, "visibility_default") else "reader_known",
+            visibility=node.visibility_default
+            if hasattr(node, "visibility_default")
+            else "reader_known",
             source_refs=[f"book_state:map_node:{node.id}"],
         )
         sections = {
             "Canon Summary": node.description or node.name or node.id,
             "Current State": _format_mapping(node.model_dump(mode="json")),
-            "Relationships": "\n".join(_format_map_edge(edge, node.id) for edge in related_edges) or "_none_",
+            "Relationships": "\n".join(
+                _format_map_edge(edge, node.id) for edge in related_edges
+            )
+            or "_none_",
             "Reader Visibility": str(frontmatter["visibility"]),
             "Open Questions": "_none_",
             "Evidence": f"- book_state:map_node:{node.id}",
@@ -286,7 +350,14 @@ class ObsidianExporter:
             "Human Questions": "",
             "Proposed Correction": "",
         }
-        self._write_page(root, rel_path, node.name or node.id, frontmatter, sections, page_type="map_node")
+        self._write_page(
+            root,
+            rel_path,
+            node.name or node.id,
+            frontmatter,
+            sections,
+            page_type="map_node",
+        )
         return rel_path
 
     def _write_page(
@@ -304,7 +375,10 @@ class ObsidianExporter:
         if path.exists():
             current_sections = parse_sections(path.read_text(encoding="utf-8"))
             for field_name in EDITABLE_FIELDS:
-                if current_sections.get(field_name, "").strip() and not sections.get(field_name, "").strip():
+                if (
+                    current_sections.get(field_name, "").strip()
+                    and not sections.get(field_name, "").strip()
+                ):
                     sections[field_name] = current_sections[field_name]
         source_digest = _page_source_digest(frontmatter, sections)
         section_digest = _section_digest(sections)
@@ -408,24 +482,35 @@ class ObsidianExporter:
             f"- Hidden refs: {len(reader.hidden_refs)}"
         )
 
-    def _open_questions(self, nodes: list[WorldNode] | Any, facts: list[FactNode] | Any) -> str:
+    def _open_questions(
+        self, nodes: list[WorldNode] | Any, facts: list[FactNode] | Any
+    ) -> str:
         lines = []
         for node in nodes:
             if node.node_type == "knowledge_gap":
-                lines.append(f"- {node.name or node.id}: {node.summary or node.description}")
+                lines.append(
+                    f"- {node.name or node.id}: {node.summary or node.description}"
+                )
         for fact in facts:
             if fact.truth_value in {"unknown", "disputed"}:
                 lines.append(f"- {fact.proposition}")
         return "\n".join(lines) or "_none_"
 
-    def _ledger_sections(self, project_id: str, as_of_chapter: int, runtime) -> dict[str, str]:
+    def _ledger_sections(
+        self, project_id: str, as_of_chapter: int, runtime
+    ) -> dict[str, str]:
         promises = [
-            node for node in runtime.world.nodes_by_id.values()
+            node
+            for node in runtime.world.nodes_by_id.values()
             if node.node_type == "reader_promise"
         ]
         return {
             "Canon Summary": "Reader promise ledger derived from BookState nodes.",
-            "Current State": "\n".join(f"- {node.name or node.id}: {node.summary or node.description}" for node in promises) or "_none_",
+            "Current State": "\n".join(
+                f"- {node.name or node.id}: {node.summary or node.description}"
+                for node in promises
+            )
+            or "_none_",
             "Relationships": "_promise links are on each node page_",
             "Reader Visibility": "writer-safe unless a promise node is marked hidden in canon metadata.",
             "Open Questions": "_none_",
@@ -437,7 +522,9 @@ class ObsidianExporter:
 
 
 def _slug(value: str) -> str:
-    text = re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", value.strip(), flags=re.UNICODE).strip("_")
+    text = re.sub(r"[^\w\u4e00-\u9fff.-]+", "_", value.strip(), flags=re.UNICODE).strip(
+        "_"
+    )
     return text[:80] or "untitled"
 
 
@@ -461,12 +548,16 @@ def _format_edge(edge: WorldEdge, current_node_id: str) -> str:
 
 def _format_map_edge(edge: MapEdge, current_node_id: str) -> str:
     direction = "->" if edge.from_node_id == current_node_id else "<-"
-    other = edge.to_node_id if edge.from_node_id == current_node_id else edge.from_node_id
+    other = (
+        edge.to_node_id if edge.from_node_id == current_node_id else edge.from_node_id
+    )
     return f"- {direction} {edge.edge_type} {other} ({edge.status}, time={edge.travel_time}, risk={edge.risk_level})"
 
 
 def _format_open_questions(node: WorldNode) -> str:
-    questions = node.metadata.get("open_questions") if isinstance(node.metadata, dict) else None
+    questions = (
+        node.metadata.get("open_questions") if isinstance(node.metadata, dict) else None
+    )
     if isinstance(questions, list) and questions:
         return "\n".join(f"- {item}" for item in questions)
     if node.node_type in {"secret", "knowledge_gap"}:
@@ -476,9 +567,7 @@ def _format_open_questions(node: WorldNode) -> str:
 
 def _page_source_digest(frontmatter: dict[str, Any], sections: dict[str, str]) -> str:
     digest_frontmatter = {
-        key: value
-        for key, value in frontmatter.items()
-        if key != "source_digest"
+        key: value for key, value in frontmatter.items() if key != "source_digest"
     }
     return _sha256_json(
         {

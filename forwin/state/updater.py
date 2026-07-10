@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 from hashlib import md5
 
 from sqlalchemy import select
@@ -30,15 +30,9 @@ from forwin.models import (
     ChapterRewriteAttempt,
     ChapterReview,
     DecisionEvent,
-    Entity,
-    EntityAlias,
-    EntityState,
     NarrativeConstraint,
-    PlotThread,
     Project,
     PromptTrace,
-    RelationEdge,
-    StoryTimePoint,
     SubWorld,
     SubWorldRosterItem,
     new_id,
@@ -58,15 +52,38 @@ if TYPE_CHECKING:
 from forwin.protocol.review import normalize_repair_scope
 
 from .repo import StateRepository
-from .schema import validate_state_payload
 
 logger = logging.getLogger(__name__)
 
 _SUBWORLD_NAME_SURNAMES = (
-    "沈", "顾", "林", "陆", "苏", "许", "周", "谢", "秦", "江", "宋", "裴", "陈", "白",
+    "沈",
+    "顾",
+    "林",
+    "陆",
+    "苏",
+    "许",
+    "周",
+    "谢",
+    "秦",
+    "江",
+    "宋",
+    "裴",
+    "陈",
+    "白",
 )
 _SUBWORLD_NAME_GIVEN = (
-    "临川", "知遥", "明序", "清和", "宴秋", "昭宁", "星野", "景川", "怀瑾", "时雨", "砚书", "听澜",
+    "临川",
+    "知遥",
+    "明序",
+    "清和",
+    "宴秋",
+    "昭宁",
+    "星野",
+    "景川",
+    "怀瑾",
+    "时雨",
+    "砚书",
+    "听澜",
 )
 
 
@@ -187,7 +204,9 @@ class StateUpdater:
     ) -> ChapterPlan:
         """Create a chapter plan."""
         normalized_goals = _normalize_goals_payload(goals)
-        resolved_task_contract = task_contract or derive_chapter_task_contract(normalized_goals)
+        resolved_task_contract = task_contract or derive_chapter_task_contract(
+            normalized_goals
+        )
         plan = ChapterPlan(
             id=new_id(),
             project_id=project_id,
@@ -292,70 +311,6 @@ class StateUpdater:
         self.session.flush()
         return plan
 
-    # ------------------------------------------------------------------
-    # Entities
-    # ------------------------------------------------------------------
-
-    def create_entity(
-        self,
-        project_id: str,
-        kind: str,
-        name: str,
-        description: str,
-        aliases: Optional[list[str]] = None,
-        importance: int = 5,
-        chapter: int = 0,
-    ) -> Entity:
-        """Create a new entity."""
-        entity = Entity(
-            id=new_id(),
-            project_id=project_id,
-            kind=kind,
-            name=name,
-            description=description,
-            aliases_json=json.dumps(aliases or [], ensure_ascii=False),
-            importance=importance,
-            created_at_chapter=chapter,
-            is_active=True,
-        )
-        self.session.add(entity)
-        for alias in aliases or []:
-            alias_text = str(alias).strip()
-            if not alias_text:
-                continue
-            self.session.add(
-                EntityAlias(
-                    id=new_id(),
-                    entity_id=entity.id,
-                    project_id=project_id,
-                    alias=alias_text,
-                )
-            )
-        self.session.flush()
-        return entity
-
-    def create_entity_state(
-        self,
-        entity_id: str,
-        chapter: int,
-        state: dict,
-    ) -> EntityState:
-        """Create a new entity state snapshot."""
-        entity = self.session.get(Entity, entity_id)
-        if entity is None:
-            raise ValueError(f"Entity {entity_id} not found.")
-
-        validated_state = validate_state_payload(entity.kind, state)
-        es = EntityState(
-            id=new_id(),
-            entity_id=entity_id,
-            as_of_chapter=chapter,
-            state_json=json.dumps(validated_state, ensure_ascii=False),
-        )
-        self.session.add(es)
-        self.session.flush()
-        return es
-
     def create_subworld(
         self,
         *,
@@ -450,7 +405,9 @@ class StateUpdater:
             )
             or ""
         ).strip()
-        display_name = str(roster_item.display_name or "").strip() or self._fallback_slot_name(
+        display_name = str(
+            roster_item.display_name or ""
+        ).strip() or self._fallback_slot_name(
             project_id=roster_item.project_id,
             subworld_id=roster_item.subworld_id,
             slot_key=roster_item.slot_key,
@@ -497,7 +454,9 @@ class StateUpdater:
                 or (entity.description if entity is not None else "")
                 or roster_item.role_hint
                 or "",
-                importance=7 if roster_item.is_core else int((entity.importance if entity is not None else 5) or 5),
+                importance=7
+                if roster_item.is_core
+                else int((entity.importance if entity is not None else 5) or 5),
                 created_at_chapter=int(chapter or 0),
                 profile={
                     "role_hint": roster_item.role_hint or "",
@@ -508,7 +467,9 @@ class StateUpdater:
         )
         roster_item.entity_id = None
         roster_item.display_name = result.character_name
-        roster_item.status = "activated_named" if not roster_item.is_core else "seeded_named"
+        roster_item.status = (
+            "activated_named" if not roster_item.is_core else "seeded_named"
+        )
         if not roster_item.activation_chapter:
             roster_item.activation_chapter = int(chapter or 0)
         metadata["character_id"] = result.character_id
@@ -518,92 +479,6 @@ class StateUpdater:
         self.session.add(roster_item)
         self.session.flush()
         return result
-
-    # ------------------------------------------------------------------
-    # Relations
-    # ------------------------------------------------------------------
-
-    def create_relation(
-        self,
-        project_id: str,
-        source_id: str,
-        target_id: str,
-        relation_type: str,
-        description: str = "",
-        chapter: int = 0,
-    ) -> RelationEdge:
-        """Create a relationship edge."""
-        edge = RelationEdge(
-            id=new_id(),
-            project_id=project_id,
-            source_entity_id=source_id,
-            target_entity_id=target_id,
-            relation_type=relation_type,
-            description=description,
-            established_at_chapter=chapter,
-            ended_at_chapter=None,
-            is_active=True,
-        )
-        self.session.add(edge)
-        self.session.flush()
-        try:
-            from forwin.personality.enrichment import RelationshipPersonalityEnricher
-
-            RelationshipPersonalityEnricher(self.session).enrich_relation(edge, reason="relation_created")
-        except Exception as exc:
-            # Relationship personality enrichment is a secondary projection; relation creation remains canonical.
-            logger.warning("relationship personality enrichment failed: %s", exc)
-        return edge
-
-    # ------------------------------------------------------------------
-    # Plot Threads
-    # ------------------------------------------------------------------
-
-    def create_thread(
-        self,
-        project_id: str,
-        name: str,
-        description: str,
-        priority: int = 2,
-        chapter: int = 0,
-    ) -> PlotThread:
-        """Create a plot thread."""
-        thread = PlotThread(
-            id=new_id(),
-            project_id=project_id,
-            name=name,
-            description=description,
-            status="active",
-            priority=priority,
-            opened_at_chapter=chapter,
-            closed_at_chapter=None,
-        )
-        self.session.add(thread)
-        self.session.flush()
-        return thread
-
-    # ------------------------------------------------------------------
-    # Timeline
-    # ------------------------------------------------------------------
-
-    def create_time_point(
-        self,
-        project_id: str,
-        label: str,
-        ordinal: int,
-        description: str = "",
-    ) -> StoryTimePoint:
-        """Create a story time point."""
-        stp = StoryTimePoint(
-            id=new_id(),
-            project_id=project_id,
-            label=label,
-            ordinal=ordinal,
-            description=description,
-        )
-        self.session.add(stp)
-        self.session.flush()
-        return stp
 
     @staticmethod
     def _fallback_slot_name(
@@ -615,7 +490,9 @@ class StateUpdater:
     ) -> str:
         payload = f"{project_id}:{subworld_id}:{slot_key}:{role_hint}".encode("utf-8")
         digest = md5(payload).hexdigest()
-        surname = _SUBWORLD_NAME_SURNAMES[int(digest[:2], 16) % len(_SUBWORLD_NAME_SURNAMES)]
+        surname = _SUBWORLD_NAME_SURNAMES[
+            int(digest[:2], 16) % len(_SUBWORLD_NAME_SURNAMES)
+        ]
         given = _SUBWORLD_NAME_GIVEN[int(digest[2:4], 16) % len(_SUBWORLD_NAME_GIVEN)]
         return f"{surname}{given}"
 
@@ -712,7 +589,9 @@ class StateUpdater:
             chapter_start=schedule.chapter_start,
             chapter_end=schedule.chapter_end,
             stall_guard_max_gap=schedule.stall_guard_max_gap,
-            schedule_json=json.dumps(schedule.model_dump(mode="json"), ensure_ascii=False),
+            schedule_json=json.dumps(
+                schedule.model_dump(mode="json"), ensure_ascii=False
+            ),
             task_contract_json=plan_task_contract_to_json(resolved_task_contract),
         )
         self.session.add(row)
@@ -884,7 +763,9 @@ class StateUpdater:
             chapter_number=chapter_number,
             attempt_no=attempt_no,
             repair_phase=str(repair_phase or "review_repair"),
-            phase_attempt_no=max(0, int(phase_attempt_no if phase_attempt_no is not None else attempt_no)),
+            phase_attempt_no=max(
+                0, int(phase_attempt_no if phase_attempt_no is not None else attempt_no)
+            ),
             trigger_review_id=trigger_review_id,
             repair_scope=normalize_repair_scope(repair_scope),
             design_patch_json=json.dumps(design_patch, ensure_ascii=False),
@@ -894,10 +775,18 @@ class StateUpdater:
             result_review_id=result_review_id,
             failure_reason=str(failure_reason or ""),
             verification_json=json.dumps(verification or {}, ensure_ascii=False),
-            source_chapter_plan_json=json.dumps(source_chapter_plan or {}, ensure_ascii=False),
-            result_chapter_plan_json=json.dumps(result_chapter_plan or {}, ensure_ascii=False),
-            source_band_plan_json=json.dumps(source_band_plan or {}, ensure_ascii=False),
-            result_band_plan_json=json.dumps(result_band_plan or {}, ensure_ascii=False),
+            source_chapter_plan_json=json.dumps(
+                source_chapter_plan or {}, ensure_ascii=False
+            ),
+            result_chapter_plan_json=json.dumps(
+                result_chapter_plan or {}, ensure_ascii=False
+            ),
+            source_band_plan_json=json.dumps(
+                source_band_plan or {}, ensure_ascii=False
+            ),
+            result_band_plan_json=json.dumps(
+                result_band_plan or {}, ensure_ascii=False
+            ),
             forced_accept_applied=forced_accept_applied,
         )
         self.session.add(row)

@@ -52,7 +52,6 @@ from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.thread import PlotThread
 from forwin.protocol.review import normalize_repair_scope
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.query_helpers import (
@@ -69,13 +68,32 @@ from forwin.world_templates import empty_world_root
 
 
 DisplayDatetime = Callable[[datetime | None], str]
-_GENESIS_STAGE_ORDER = ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap")
+_GENESIS_STAGE_ORDER = (
+    "brief",
+    "world",
+    "map",
+    "story_engine",
+    "book_blueprint",
+    "bootstrap",
+)
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
-from .arc_snapshot import _decision_timeline_by_project, _latest_band_checkpoint_by_project, project_arc_snapshot_payload
+from .arc_snapshot import (
+    _decision_timeline_by_project,
+    _latest_band_checkpoint_by_project,
+    project_arc_snapshot_payload,
+)
 from .generation import build_generation_control, effective_target_total_chapters
-from .genesis import _can_start_writing, _load_latest_genesis_revision_by_project, _stage_overview_from_revision
-from .runtime_maps import load_project_runtime_maps, load_project_upload_stats, normalize_project_automation
+from .genesis import (
+    _can_start_writing,
+    _load_latest_genesis_revision_by_project,
+    _stage_overview_from_revision,
+)
+from .runtime_maps import (
+    load_project_runtime_maps,
+    load_project_upload_stats,
+    normalize_project_automation,
+)
 
 
 def build_project_summaries(
@@ -90,36 +108,58 @@ def build_project_summaries(
             select(ChapterPlan)
             .where(ChapterPlan.project_id.in_(project_ids))
             .order_by(ChapterPlan.project_id, ChapterPlan.chapter_number)
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
         if project_ids
         else []
     )
     draft_map = load_latest_drafts_by_plan_id(session, [plan.id for plan in plans])
-    review_draft_ids = {
-        draft_id
-        for draft_id in session.execute(
-            select(ChapterReview.draft_id)
-            .where(ChapterReview.draft_id.in_([draft.id for draft in draft_map.values()]))
-            .distinct()
-        ).scalars().all()
-    } if draft_map else set()
+    review_draft_ids = (
+        {
+            draft_id
+            for draft_id in session.execute(
+                select(ChapterReview.draft_id)
+                .where(
+                    ChapterReview.draft_id.in_(
+                        [draft.id for draft in draft_map.values()]
+                    )
+                )
+                .distinct()
+            )
+            .scalars()
+            .all()
+        }
+        if draft_map
+        else set()
+    )
     runtime_maps = load_project_runtime_maps(session, project_ids)
     upload_stats = load_project_upload_stats(session, project_ids)
-    genesis_revision_map = _load_latest_genesis_revision_by_project(session, project_ids)
-    planned_future_projects = {
-        str(project_id or "").strip()
-        for project_id in session.execute(
-            select(ArcPlanVersion.project_id)
-            .where(
-                ArcPlanVersion.project_id.in_(project_ids),
-                ArcPlanVersion.status == "planned",
+    genesis_revision_map = _load_latest_genesis_revision_by_project(
+        session, project_ids
+    )
+    planned_future_projects = (
+        {
+            str(project_id or "").strip()
+            for project_id in session.execute(
+                select(ArcPlanVersion.project_id)
+                .where(
+                    ArcPlanVersion.project_id.in_(project_ids),
+                    ArcPlanVersion.status == "planned",
+                )
+                .distinct()
             )
-            .distinct()
-        ).scalars().all()
-        if str(project_id or "").strip()
-    } if project_ids else set()
+            .scalars()
+            .all()
+            if str(project_id or "").strip()
+        }
+        if project_ids
+        else set()
+    )
     latest_checkpoint_map = _latest_band_checkpoint_by_project(session, project_ids)
-    decision_timeline_map = _decision_timeline_by_project(session, project_ids, limit=20)
+    decision_timeline_map = _decision_timeline_by_project(
+        session, project_ids, limit=20
+    )
     chapters_by_project: dict[str, list[dict[str, object]]] = {}
     plans_by_project: dict[str, list[ChapterPlan]] = defaultdict(list)
     chapter_stats_by_project: dict[str, dict[str, int]] = {
@@ -170,9 +210,13 @@ def build_project_summaries(
         latest_arc_envelope = runtime_maps["latest_arc_envelope_map"].get(project.id)
         latest_arc_analysis = runtime_maps["latest_arc_analysis_map"].get(project.id)
         latest_provisional = runtime_maps["provisional_map"].get(project.id)
-        latest_scenario_rehearsal = runtime_maps["scenario_rehearsal_map"].get(project.id)
+        latest_scenario_rehearsal = runtime_maps["scenario_rehearsal_map"].get(
+            project.id
+        )
         latest_arc_structure = runtime_maps["latest_arc_structure_map"].get(project.id)
-        latest_band_experience = runtime_maps["latest_band_experience_map"].get(project.id)
+        latest_band_experience = runtime_maps["latest_band_experience_map"].get(
+            project.id
+        )
         latest_checkpoint = latest_checkpoint_map.get(project.id)
         chapter_stats = chapter_stats_by_project.get(project.id, {})
         project_upload_stats = upload_stats.get(project.id, {})
@@ -202,22 +246,38 @@ def build_project_summaries(
                 id=project.id,
                 title=project.title,
                 genre=project.genre,
-                premise=project.premise[:100] + "..." if len(project.premise) > 100 else project.premise,
+                premise=project.premise[:100] + "..."
+                if len(project.premise) > 100
+                else project.premise,
                 created_at=display_datetime(project.created_at),
                 target_total_chapters=effective_target_total_chapters(
                     project,
                     int(chapter_stats.get("chapter_count", 0) or 0),
                 ),
-                creation_status=str(getattr(project, "creation_status", "") or "creating"),
-                active_genesis_revision_id=str(getattr(project, "active_genesis_revision_id", "") or ""),
+                creation_status=str(
+                    getattr(project, "creation_status", "") or "creating"
+                ),
+                active_genesis_revision_id=str(
+                    getattr(project, "active_genesis_revision_id", "") or ""
+                ),
                 genesis_stage_overview=_stage_overview_from_revision(genesis_revision),
                 can_start_writing=_can_start_writing(project, genesis_revision),
                 chapter_count=int(chapter_stats.get("chapter_count", 0) or 0),
-                generated_chapter_count=int(chapter_stats.get("generated_chapter_count", 0) or 0),
-                accepted_chapter_count=int(chapter_stats.get("accepted_chapter_count", 0) or 0),
-                needs_review_chapter_count=int(chapter_stats.get("needs_review_chapter_count", 0) or 0),
-                upload_task_count=int(project_upload_stats.get("upload_task_count", 0) or 0),
-                uploaded_chapter_count=int(project_upload_stats.get("uploaded_chapter_count", 0) or 0),
+                generated_chapter_count=int(
+                    chapter_stats.get("generated_chapter_count", 0) or 0
+                ),
+                accepted_chapter_count=int(
+                    chapter_stats.get("accepted_chapter_count", 0) or 0
+                ),
+                needs_review_chapter_count=int(
+                    chapter_stats.get("needs_review_chapter_count", 0) or 0
+                ),
+                upload_task_count=int(
+                    project_upload_stats.get("upload_task_count", 0) or 0
+                ),
+                uploaded_chapter_count=int(
+                    project_upload_stats.get("uploaded_chapter_count", 0) or 0
+                ),
                 automation=normalize_project_automation(project.automation_json),
                 runtime_policy=policy_record.policy,
                 runtime_policy_version=policy_record.version,
@@ -228,10 +288,16 @@ def build_project_summaries(
                 last_replan_strategy=last_replan.strategy if last_replan else "",
                 last_replan_reason=last_replan.reason if last_replan else "",
                 current_time_label=latest_stage.timeline_label if latest_stage else "",
-                world_pressure_level=latest_world.pressure_level if latest_world else "",
-                world_pressure_summary=latest_world.pressure_summary if latest_world else "",
+                world_pressure_level=latest_world.pressure_level
+                if latest_world
+                else "",
+                world_pressure_summary=latest_world.pressure_summary
+                if latest_world
+                else "",
                 generation_control=generation_control,
-                chapters=chapters_by_project.get(project.id, [])[-_PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT:],
+                chapters=chapters_by_project.get(project.id, [])[
+                    -_PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT:
+                ],
                 latest_band_checkpoint=generation_control.latest_band_checkpoint,
                 blocking_reason=generation_control.blocking_reason,
                 next_gate=generation_control.next_gate,
@@ -249,5 +315,5 @@ def build_project_summaries(
 
 
 __all__ = [
-    'build_project_summaries',
+    "build_project_summaries",
 ]

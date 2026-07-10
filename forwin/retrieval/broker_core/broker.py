@@ -9,9 +9,10 @@ from sqlalchemy import select
 from forwin.book_state.repository import BookStateRepository
 from forwin.config import DEFAULT_QDRANT_URL
 from forwin.context.assembler import assemble_context
+from forwin.knowledge_system.page_repository import KnowledgePageRepository
+from forwin.knowledge_system.store import load_json
 from forwin.llm_kb.retriever import LLMKnowledgeBaseRetriever
 from forwin.llm_kb.store import LLMKnowledgeBaseStore
-from forwin.models.world_model import WorldModelConflictRow, WorldModelPageRow
 from forwin.models.world_v4 import (
     ArcWorldContractRow,
 )
@@ -36,10 +37,11 @@ from forwin.protocol.context import (
     WritingPack,
 )
 from forwin.protocol.world_model import WorldContextPack
-from forwin.world_model.page_repository import WorldModelPageRepository
-from forwin.world_model.store import load_json
 from forwin.obsidian.frontmatter import parse_sections
-from forwin.personality import CharacterPersonalityLibrary, build_active_personality_contexts
+from forwin.personality import (
+    CharacterPersonalityLibrary,
+    build_active_personality_contexts,
+)
 from forwin.retrieval.memory_index import ChapterMemoryIndex, create_memory_index
 from forwin.retrieval.typed_budget import RetrievalBudget, bucket_memory_results
 from .helpers import (
@@ -111,7 +113,9 @@ class RetrievalBroker:
         self.retrieval_budget = retrieval_budget or RetrievalBudget()
         self.last_observability_summary: dict[str, object] = {}
 
-    def build_chapter_context(self, repo, project_id: str, chapter_plan) -> ChapterContextPack:
+    def build_chapter_context(
+        self, repo, project_id: str, chapter_plan
+    ) -> ChapterContextPack:
         self._ensure_memory_index(repo)
         base_pack = _assemble_context(repo, project_id, chapter_plan)
         try:
@@ -143,7 +147,9 @@ class RetrievalBroker:
             }
         )
         pack = self._trim_pack(pack)
-        self._finalize_context_summary(base_pack=base_pack, pack=pack, memories=memories)
+        self._finalize_context_summary(
+            base_pack=base_pack, pack=pack, memories=memories
+        )
 
         return pack
 
@@ -167,7 +173,9 @@ class RetrievalBroker:
             if pack.active_relations:
                 removed = pack.active_relations[-1]
                 estimate -= self._estimate_component_chars(removed)
-                pack = pack.model_copy(update={"active_relations": pack.active_relations[:-1]})
+                pack = pack.model_copy(
+                    update={"active_relations": pack.active_relations[:-1]}
+                )
                 continue
             memories = list(getattr(pack, "retrieved_memories", []) or [])
             if memories:
@@ -178,18 +186,26 @@ class RetrievalBroker:
             if len(pack.active_entities) > 3:
                 removed = pack.active_entities[-1]
                 estimate -= self._estimate_component_chars(removed)
-                pack = pack.model_copy(update={"active_entities": pack.active_entities[:-1]})
+                pack = pack.model_copy(
+                    update={"active_entities": pack.active_entities[:-1]}
+                )
                 continue
             if len(pack.active_threads) > 1:
                 removed = pack.active_threads[-1]
                 estimate -= self._estimate_component_chars(removed)
-                pack = pack.model_copy(update={"active_threads": pack.active_threads[:-1]})
+                pack = pack.model_copy(
+                    update={"active_threads": pack.active_threads[:-1]}
+                )
                 continue
             if len(pack.previous_chapter_summaries) > 1:
                 removed = pack.previous_chapter_summaries[0]
                 estimate -= self._estimate_component_chars(removed)
                 pack = pack.model_copy(
-                    update={"previous_chapter_summaries": pack.previous_chapter_summaries[1:]}
+                    update={
+                        "previous_chapter_summaries": pack.previous_chapter_summaries[
+                            1:
+                        ]
+                    }
                 )
                 continue
             world_context = getattr(pack, "world_context", None)
@@ -215,7 +231,9 @@ class RetrievalBroker:
     ) -> None:
         before_chars = self._estimate_pack_with_components(base_pack)
         after_chars = self._estimate_pack_with_components(pack)
-        memories_before = len(getattr(base_pack, "retrieved_memories", []) or memories or [])
+        memories_before = len(
+            getattr(base_pack, "retrieved_memories", []) or memories or []
+        )
         memories_after = len(getattr(pack, "retrieved_memories", []) or [])
         self.last_observability_summary = {
             "chapter_number": int(getattr(pack, "chapter_number", 0) or 0),
@@ -232,9 +250,15 @@ class RetrievalBroker:
             "memories_count": memories_after,
             "estimated_context_chars_before": before_chars,
             "estimated_context_chars_after": after_chars,
-            "pruned_entities": max(0, len(base_pack.active_entities) - len(pack.active_entities)),
-            "pruned_threads": max(0, len(base_pack.active_threads) - len(pack.active_threads)),
-            "pruned_relations": max(0, len(base_pack.active_relations) - len(pack.active_relations)),
+            "pruned_entities": max(
+                0, len(base_pack.active_entities) - len(pack.active_entities)
+            ),
+            "pruned_threads": max(
+                0, len(base_pack.active_threads) - len(pack.active_threads)
+            ),
+            "pruned_relations": max(
+                0, len(base_pack.active_relations) - len(pack.active_relations)
+            ),
             "pruned_memories": max(0, memories_before - memories_after),
         }
 
@@ -303,15 +327,15 @@ class RetrievalBroker:
         beliefs = []
 
         visible_lines = [
-            line.world_line_id
-            for line in lines
-            if bool(line.is_visible_onstage)
+            line.world_line_id for line in lines if bool(line.is_visible_onstage)
         ]
         hidden_lines = [
             line.world_line_id
             for line in lines
             if line.world_line_id not in visible_lines
-            or any(token in line.line_type for token in ("hidden", "secret", "antagonist"))
+            or any(
+                token in line.line_type for token in ("hidden", "secret", "antagonist")
+            )
         ]
         active_lines = [
             line.world_line_id
@@ -429,10 +453,13 @@ class RetrievalBroker:
         map_nodes = repo.list_map_nodes(project_id)
         map_edges = repo.list_map_edges(project_id)
         if not include_hidden_truth:
-            visible_node_ids = {node.id for node in nodes if not _book_state_node_hidden(node)}
+            visible_node_ids = {
+                node.id for node in nodes if not _book_state_node_hidden(node)
+            }
             nodes = [node for node in nodes if node.id in visible_node_ids]
             edges = [
-                edge for edge in edges
+                edge
+                for edge in edges
                 if edge.source_id in visible_node_ids
                 and edge.target_id in visible_node_ids
                 and not _book_state_edge_hidden(edge)
@@ -441,13 +468,27 @@ class RetrievalBroker:
             map_edges = [edge for edge in map_edges if not _map_edge_hidden(edge)]
             map_nodes = [node for node in map_nodes if not _map_node_hidden(node)]
 
-        book_state_snapshot = snapshot.model_dump(mode="json") if snapshot is not None else {}
-        book_state_nodes = [_node_context(node) for node in nodes[: self.max_world_pages * 4]]
-        book_state_edges = [_edge_context(edge) for edge in edges[: self.max_world_pages * 4]]
-        book_state_facts = [_fact_context(fact) for fact in facts[: self.max_world_pages * 4]]
+        book_state_snapshot = (
+            snapshot.model_dump(mode="json") if snapshot is not None else {}
+        )
+        book_state_nodes = [
+            _node_context(node) for node in nodes[: self.max_world_pages * 4]
+        ]
+        book_state_edges = [
+            _edge_context(edge) for edge in edges[: self.max_world_pages * 4]
+        ]
+        book_state_facts = [
+            _fact_context(fact) for fact in facts[: self.max_world_pages * 4]
+        ]
         book_state_map = {
-            "nodes": [_map_node_context(node) for node in map_nodes[: self.max_world_pages * 4]],
-            "edges": [_map_edge_context(edge) for edge in map_edges[: self.max_world_pages * 4]],
+            "nodes": [
+                _map_node_context(node)
+                for node in map_nodes[: self.max_world_pages * 4]
+            ],
+            "edges": [
+                _map_edge_context(edge)
+                for edge in map_edges[: self.max_world_pages * 4]
+            ],
         }
         active_personality_contexts = _active_personality_contexts(nodes)
         obsidian_pages = self._load_obsidian_page_context(
@@ -455,8 +496,10 @@ class RetrievalBroker:
             project_id,
             include_hidden_truth=include_hidden_truth,
         )
-        llm_kb_context = self._load_llm_kb_context(project_id, pack_kind=pack_kind, query=query)
-        conflicts = self._load_review_conflicts(session, project_id)
+        llm_kb_context = self._load_llm_kb_context(
+            project_id, pack_kind=pack_kind, query=query
+        )
+        conflicts: list[dict[str, object]] = []
         source_refs = [
             *list(pack.source_refs),
             *([f"book_state:snapshot:{snapshot.id}"] if snapshot is not None else []),
@@ -501,10 +544,14 @@ class RetrievalBroker:
         *,
         include_hidden_truth: bool,
     ) -> list[dict[str, object]]:
-        rows = WorldModelPageRepository(session).list_canonical_rows(project_id)
+        rows = KnowledgePageRepository(session).list_canonical_rows(project_id)
         rows = sorted(
             rows,
-            key=lambda row: (int(row.as_of_chapter or 0), str(row.updated_at or ""), str(row.id or "")),
+            key=lambda row: (
+                int(row.as_of_chapter or 0),
+                str(row.updated_at or ""),
+                str(row.id or ""),
+            ),
             reverse=True,
         )[: max(self.max_world_pages * 4, 12)]
         pages: list[dict[str, object]] = []
@@ -524,13 +571,19 @@ class RetrievalBroker:
                     "truth_relation": frontmatter.get("truth_relation", ""),
                     "source_refs": frontmatter.get("source_refs", []),
                     "canon_summary": _truncate(sections.get("Canon Summary", "")),
-                    "manual_notes_present": bool(sections.get("Manual Notes", "").strip()),
-                    "proposed_correction_present": bool(sections.get("Proposed Correction", "").strip()),
+                    "manual_notes_present": bool(
+                        sections.get("Manual Notes", "").strip()
+                    ),
+                    "proposed_correction_present": bool(
+                        sections.get("Proposed Correction", "").strip()
+                    ),
                 }
             )
         return pages
 
-    def _load_llm_kb_context(self, project_id: str, *, pack_kind: str, query: str = "") -> dict[str, object]:
+    def _load_llm_kb_context(
+        self, project_id: str, *, pack_kind: str, query: str = ""
+    ) -> dict[str, object]:
         store = LLMKnowledgeBaseStore(root=self.llm_kb_root)
         files = store.list_files(project_id)
         if not files:
@@ -594,31 +647,9 @@ class RetrievalBroker:
             qdrant_collection=self.qdrant_collection,
         )
 
-    @staticmethod
-    def _load_review_conflicts(session, project_id: str) -> list[dict[str, object]]:
-        rows = list(
-            session.execute(
-                select(WorldModelConflictRow)
-                .where(WorldModelConflictRow.project_id == project_id, WorldModelConflictRow.status == "open")
-                .order_by(WorldModelConflictRow.created_at.desc(), WorldModelConflictRow.id.desc())
-                .limit(12)
-            )
-            .scalars()
-            .all()
-        )
-        return [
-            {
-                "id": row.id,
-                "conflict_type": row.conflict_type,
-                "severity": row.severity,
-                "subject_key": row.subject_key,
-                "description": row.description,
-                "evidence_refs": load_json(row.evidence_refs_json, []),
-            }
-            for row in rows
-        ]
-
-    def _filter_writer_safe_world_context(self, pack: ChapterContextPack) -> ChapterContextPack:
+    def _filter_writer_safe_world_context(
+        self, pack: ChapterContextPack
+    ) -> ChapterContextPack:
         """Keep writer-facing v4 context to IDs, hints, and explicit reveal guards."""
         intent = getattr(pack, "chapter_world_delta_intent", None)
         if intent is None:
@@ -666,25 +697,35 @@ class RetrievalBroker:
         }
         return pack.model_copy(
             update={
-                "active_world_lines": world_pack.active_world_lines or pack.active_world_lines,
-                "visible_world_lines": world_pack.visible_world_lines or pack.visible_world_lines,
-                "hidden_world_lines": world_pack.hidden_world_lines or pack.hidden_world_lines,
-                "recent_world_deltas": world_pack.recent_world_deltas or pack.recent_world_deltas,
+                "active_world_lines": world_pack.active_world_lines
+                or pack.active_world_lines,
+                "visible_world_lines": world_pack.visible_world_lines
+                or pack.visible_world_lines,
+                "hidden_world_lines": world_pack.hidden_world_lines
+                or pack.hidden_world_lines,
+                "recent_world_deltas": world_pack.recent_world_deltas
+                or pack.recent_world_deltas,
                 "recent_offscreen_deltas": world_pack.recent_offscreen_deltas,
-                "active_knowledge_gaps": world_pack.active_knowledge_gaps or pack.active_knowledge_gaps,
-                "planned_reveal_ladder": world_pack.planned_reveal_ladder or pack.planned_reveal_ladder,
+                "active_knowledge_gaps": world_pack.active_knowledge_gaps
+                or pack.active_knowledge_gaps,
+                "planned_reveal_ladder": world_pack.planned_reveal_ladder
+                or pack.planned_reveal_ladder,
                 "promise_debts": world_pack.promise_debts or pack.promise_debts,
-                "recent_reader_experience_deltas": world_pack.recent_reader_experience_deltas or pack.recent_reader_experience_deltas,
+                "recent_reader_experience_deltas": world_pack.recent_reader_experience_deltas
+                or pack.recent_reader_experience_deltas,
                 "must_not_reveal": world_pack.must_not_reveal or pack.must_not_reveal,
-                "fair_misdirection_requirements": world_pack.fair_misdirection_requirements or pack.fair_misdirection_requirements,
-                "active_personality_contexts": world_pack.active_personality_contexts or pack.active_personality_contexts,
+                "fair_misdirection_requirements": world_pack.fair_misdirection_requirements
+                or pack.fair_misdirection_requirements,
+                "active_personality_contexts": world_pack.active_personality_contexts
+                or pack.active_personality_contexts,
                 "map_context": map_context,
                 "knowledge_system_context": knowledge_system_context,
                 "world_context": pack.world_context.model_copy(
                     update={
                         "world_model_refs": {
                             **pack.world_context.world_model_refs,
-                            "knowledge_system_v46": world_pack.source_digest or "book_state",
+                            "knowledge_system_v46": world_pack.source_digest
+                            or "book_state",
                         }
                     }
                 ),
@@ -698,7 +739,9 @@ class RetrievalBroker:
         ranked = sorted(entities, key=lambda item: (-item.importance, item.name))
         return ranked[: self.max_entities]
 
-    def _pick_threads(self, threads: list[PlotThreadSnapshot]) -> list[PlotThreadSnapshot]:
+    def _pick_threads(
+        self, threads: list[PlotThreadSnapshot]
+    ) -> list[PlotThreadSnapshot]:
         # Lower numeric priority means more important, matching the DB/order semantics
         # used by thread sampling and phase analyzers.
         ranked = sorted(threads, key=lambda item: (item.priority, item.name))
@@ -713,7 +756,8 @@ class RetrievalBroker:
         return [
             relation
             for relation in relations
-            if relation.source_name in entity_names or relation.target_name in entity_names
+            if relation.source_name in entity_names
+            or relation.target_name in entity_names
         ]
 
     @staticmethod
@@ -734,11 +778,26 @@ class RetrievalBroker:
             }
         )
         total = cls._estimate_chars(empty_pack)
-        total += sum(cls._estimate_component_chars(item) for item in getattr(pack, "previous_chapter_summaries", []) or [])
-        total += sum(cls._estimate_component_chars(item) for item in getattr(pack, "active_entities", []) or [])
-        total += sum(cls._estimate_component_chars(item) for item in getattr(pack, "active_threads", []) or [])
-        total += sum(cls._estimate_component_chars(item) for item in getattr(pack, "active_relations", []) or [])
-        total += sum(cls._estimate_component_chars(item) for item in getattr(pack, "retrieved_memories", []) or [])
+        total += sum(
+            cls._estimate_component_chars(item)
+            for item in getattr(pack, "previous_chapter_summaries", []) or []
+        )
+        total += sum(
+            cls._estimate_component_chars(item)
+            for item in getattr(pack, "active_entities", []) or []
+        )
+        total += sum(
+            cls._estimate_component_chars(item)
+            for item in getattr(pack, "active_threads", []) or []
+        )
+        total += sum(
+            cls._estimate_component_chars(item)
+            for item in getattr(pack, "active_relations", []) or []
+        )
+        total += sum(
+            cls._estimate_component_chars(item)
+            for item in getattr(pack, "retrieved_memories", []) or []
+        )
         world_context = getattr(pack, "world_context", None)
         if world_context is not None:
             if hasattr(world_context, "model_copy"):
@@ -779,7 +838,9 @@ class RetrievalBroker:
         query = "\n".join(part for part in query_parts if part)
         if not query.strip():
             return []
-        raw_limit = max(self.max_memories, sum(self.retrieval_budget.model_dump().values()))
+        raw_limit = max(
+            self.max_memories, sum(self.retrieval_budget.model_dump().values())
+        )
         memories = self.memory_index.search(
             project_id=base_pack.project_id,
             query=query,
@@ -792,7 +853,14 @@ class RetrievalBroker:
         ]
         buckets = bucket_memory_results(eligible, self.retrieval_budget)
         selected = []
-        for key in ("recent", "promise", "enemy", "wealth_status", "relationship", "world"):
+        for key in (
+            "recent",
+            "promise",
+            "enemy",
+            "wealth_status",
+            "relationship",
+            "world",
+        ):
             selected.extend(buckets[key])
         return selected[:raw_limit]
 
@@ -811,15 +879,27 @@ class RetrievalBroker:
             "node": 3,
             "overview": 2,
         }
-        pages = sorted(pages, key=lambda page: (priority.get(page.page_type, 1), page.title), reverse=True)
+        pages = sorted(
+            pages,
+            key=lambda page: (priority.get(page.page_type, 1), page.title),
+            reverse=True,
+        )
         return world_context.model_copy(
             update={
                 "relevant_world_pages": pages[: self.max_world_pages],
                 "active_world_conflicts": conflicts,
-                "active_secrets": [page for page in pages if page.page_type == "secret"][:3],
-                "active_promises": [page for page in pages if page.page_type == "promise"][:3],
-                "active_resource_constraints": [page for page in pages if page.page_type in {"resource", "currency"}][:3],
-                "active_institution_rules": [page for page in pages if page.page_type == "institution"][:3],
+                "active_secrets": [
+                    page for page in pages if page.page_type == "secret"
+                ][:3],
+                "active_promises": [
+                    page for page in pages if page.page_type == "promise"
+                ][:3],
+                "active_resource_constraints": [
+                    page for page in pages if page.page_type in {"resource", "currency"}
+                ][:3],
+                "active_institution_rules": [
+                    page for page in pages if page.page_type == "institution"
+                ][:3],
             }
         )
 
@@ -852,6 +932,7 @@ class RetrievalBroker:
             steps.extend(contract.reveal_ladder)
         return steps
 
+
 __all__ = [
-    'RetrievalBroker',
+    "RetrievalBroker",
 ]

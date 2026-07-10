@@ -6,18 +6,16 @@ import json
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from forwin.book_state.query import BookStateQuery
 from forwin.director.arc_director import ArcDirector
 from forwin.models import (
     ArcPlanVersion,
     ChapterDraft,
     ChapterPlan,
-    ChapterTimeline,
-    PlotThread,
     Project,
     ProjectReplanEvent,
     ProjectStageAnalysis,
     SignalWindowAggregate,
-    StoryTimePoint,
     new_id,
 )
 from forwin.orchestrator.goals import load_goals_json
@@ -56,7 +54,9 @@ class StageAnalyzer:
         chapter_number: int,
     ) -> StageAssessment:
         total = session.execute(
-            select(func.count(ChapterPlan.id)).where(ChapterPlan.project_id == project_id)
+            select(func.count(ChapterPlan.id)).where(
+                ChapterPlan.project_id == project_id
+            )
         ).scalar_one()
         ratio = 0.0 if total <= 0 else min(1.0, chapter_number / max(total, 1))
         if ratio < 0.2:
@@ -70,28 +70,16 @@ class StageAnalyzer:
         else:
             stage_label = "finale"
 
-        timeline_row = session.execute(
-            select(StoryTimePoint)
-            .join(ChapterTimeline, ChapterTimeline.end_time_id == StoryTimePoint.id)
-            .where(
-                ChapterTimeline.project_id == project_id,
-                ChapterTimeline.chapter_number == chapter_number,
-            )
-            .limit(1)
-        ).scalar_one_or_none()
-        if timeline_row is None:
-            timeline_row = session.execute(
-                select(StoryTimePoint)
-                .where(StoryTimePoint.project_id == project_id)
-                .order_by(StoryTimePoint.ordinal.desc())
-                .limit(1)
-            ).scalar_one_or_none()
+        timeline = BookStateQuery(session).current_timeline(
+            project_id,
+            as_of_chapter=max(int(chapter_number), 0),
+        )
 
         return StageAssessment(
             stage_label=stage_label,
             progress_ratio=ratio,
-            timeline_label=timeline_row.label if timeline_row else "",
-            timeline_ordinal=timeline_row.ordinal if timeline_row else 0,
+            timeline_label=timeline.current_time_label if timeline else "",
+            timeline_ordinal=timeline.ordinal if timeline else 0,
         )
 
 
@@ -149,7 +137,9 @@ class PacingStrategist:
             ):
                 recent_beat_count += 1
             last_active_chapter = (
-                last_beat.chapter_number if last_beat is not None else thread.opened_at_chapter
+                last_beat.chapter_number
+                if last_beat is not None
+                else thread.opened_at_chapter
             )
             if chapter_number - last_active_chapter >= self.stale_thread_window:
                 stale_threads.append(thread.name)
@@ -236,7 +226,10 @@ class ReplanGovernor:
         latest = session.execute(
             select(ProjectReplanEvent)
             .where(ProjectReplanEvent.project_id == project_id)
-            .order_by(ProjectReplanEvent.trigger_chapter.desc(), ProjectReplanEvent.created_at.desc())
+            .order_by(
+                ProjectReplanEvent.trigger_chapter.desc(),
+                ProjectReplanEvent.created_at.desc(),
+            )
             .limit(1)
         ).scalar_one_or_none()
 
@@ -404,16 +397,20 @@ class ReplanGovernor:
         stage: StageAssessment,
         focus_threads: list[str],
     ) -> None:
-        future_plans = session.execute(
-            select(ChapterPlan)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number > chapter_number,
-                ChapterPlan.status.in_(("planned", "failed")),
+        future_plans = (
+            session.execute(
+                select(ChapterPlan)
+                .where(
+                    ChapterPlan.project_id == project_id,
+                    ChapterPlan.chapter_number > chapter_number,
+                    ChapterPlan.status.in_(("planned", "failed")),
+                )
+                .order_by(ChapterPlan.chapter_number.asc())
+                .limit(3)
             )
-            .order_by(ChapterPlan.chapter_number.asc())
-            .limit(3)
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if not future_plans:
             return
         focus_note = "、".join(focus_threads) if focus_threads else "当前主线"
@@ -428,9 +425,7 @@ class ReplanGovernor:
             if goal not in goals:
                 goals.insert(0, goal)
             plan.goals_json = json.dumps(goals[:4], ensure_ascii=False)
-            plan.one_line = (
-                f"[reband/{stage.stage_label}] {templates[min(index, len(templates) - 1)]}"
-            )
+            plan.one_line = f"[reband/{stage.stage_label}] {templates[min(index, len(templates) - 1)]}"
 
     def _apply_rearc(
         self,
@@ -470,15 +465,19 @@ class ReplanGovernor:
         session.add(new_arc)
         session.flush()
 
-        future_plans = session.execute(
-            select(ChapterPlan)
-            .where(
-                ChapterPlan.project_id == project_id,
-                ChapterPlan.chapter_number > chapter_number,
-                ChapterPlan.status.in_(("planned", "failed")),
+        future_plans = (
+            session.execute(
+                select(ChapterPlan)
+                .where(
+                    ChapterPlan.project_id == project_id,
+                    ChapterPlan.chapter_number > chapter_number,
+                    ChapterPlan.status.in_(("planned", "failed")),
+                )
+                .order_by(ChapterPlan.chapter_number.asc())
             )
-            .order_by(ChapterPlan.chapter_number.asc())
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         if self.director is not None and project is not None:
             delta_payload = self.director.plan_subworld_delta(
                 premise=project.premise,
@@ -493,7 +492,9 @@ class ReplanGovernor:
                     }
                     for plan in future_plans[:4]
                 ],
-                existing_subworlds=self.subworld_manager.summarize_registry(session, project_id),
+                existing_subworlds=self.subworld_manager.summarize_registry(
+                    session, project_id
+                ),
                 focus_threads=focus_threads,
             )
             self.subworld_manager.apply_arc_delta(

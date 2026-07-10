@@ -300,14 +300,14 @@ entries:
       - legacy projection views
       - Legacy project scaffold
       - Legacy APIs may keep this package
-    reason: Current World Studio/API pages, Obsidian import/export, retrieval helpers, and Genesis bootstrap still use this package; Phase 3 removes accepted-chapter projection writes but does not rename or delete these helpers.
+    reason: Live page, proposal, Obsidian, retrieval, and Genesis callers moved to BookState-backed knowledge_system owners; the deprecated facade is physically removed.
     removal_phase: complete
     verification:
-      - world_model_current_path_tests
+      - knowledge_system_path_tests
       - inventory_audit
     delete_when:
       - current callers are migrated to BookState or renamed non-legacy modules
-      - old table import/export behavior has an explicit external-compat owner
+      - compatibility HTTP transport is backed by current owners rather than a same-named domain package
     status: deleted
 
   - id: review_engine.legacy_telemetry_names

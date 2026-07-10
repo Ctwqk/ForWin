@@ -52,7 +52,6 @@ from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.thread import PlotThread
 from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
@@ -68,7 +67,14 @@ from forwin.world_templates import empty_world_root
 
 
 DisplayDatetime = Callable[[datetime | None], str]
-_GENESIS_STAGE_ORDER = ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap")
+_GENESIS_STAGE_ORDER = (
+    "brief",
+    "world",
+    "map",
+    "story_engine",
+    "book_blueprint",
+    "bootstrap",
+)
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 from .common import (
@@ -124,16 +130,22 @@ def build_scenario_rehearsal_detail(
         risk_count=int(latest.risk_count or 0),
         blocker_count=int(latest.blocker_count or 0),
         required_patch_count=int(latest.required_patch_count or 0),
-        resolution_status=str(_json_object(latest.report_json).get("resolution_status") or ""),
-        patch_attempt_count=int(_json_object(latest.report_json).get("patch_attempt_count") or 0),
+        resolution_status=str(
+            _json_object(latest.report_json).get("resolution_status") or ""
+        ),
+        patch_attempt_count=int(
+            _json_object(latest.report_json).get("patch_attempt_count") or 0
+        ),
         checkpoint_id=str(_json_object(latest.report_json).get("checkpoint_id") or ""),
-        replan_event_id=str(_json_object(latest.report_json).get("replan_event_id") or ""),
+        replan_event_id=str(
+            _json_object(latest.report_json).get("replan_event_id") or ""
+        ),
         report=_json_object(latest.report_json),
         created_at=display_datetime(latest.created_at),
     )
 
 
 __all__ = [
-    'latest_scenario_rehearsal_run',
-    'build_scenario_rehearsal_detail',
+    "latest_scenario_rehearsal_run",
+    "build_scenario_rehearsal_detail",
 ]

@@ -1,3 +1,3 @@
-from .refresher import KnowledgeProjectionRefreshResult, KnowledgeProjectionRefresher
+"""BookState-backed disposable projections and retrieval queries."""
 
-__all__ = ["KnowledgeProjectionRefreshResult", "KnowledgeProjectionRefresher"]
+__all__: list[str] = []

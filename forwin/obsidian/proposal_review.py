@@ -8,23 +8,29 @@ from fastapi import HTTPException
 
 from forwin.book_state.compiler import BookStateCompiler
 from forwin.book_state.reviewer import BookStateReviewGate
-from forwin.knowledge_system import KnowledgeProjectionRefresher
-from forwin.models.world_model import WorldEditProposalRow
+from forwin.knowledge_system.refresher import KnowledgeProjectionRefresher
+from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.obsidian.structured_patch import proposal_to_graph_delta
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 
 
 @dataclass(frozen=True)
 class ProposalReviewResult:
-    row: WorldEditProposalRow
+    row: KnowledgeEditProposalRow
     projection_refresh: dict[str, Any] = field(default_factory=dict)
 
 
-def proposal_chapter(row: WorldEditProposalRow) -> int:
+def proposal_chapter(row: KnowledgeEditProposalRow) -> int:
     payload = _load_patch_json(row.proposed_patch_json)
-    frontmatter = payload.get("frontmatter") if isinstance(payload.get("frontmatter"), dict) else {}
+    frontmatter = (
+        payload.get("frontmatter")
+        if isinstance(payload.get("frontmatter"), dict)
+        else {}
+    )
     try:
-        return int(frontmatter.get("as_of_chapter") or payload.get("as_of_chapter") or 0)
+        return int(
+            frontmatter.get("as_of_chapter") or payload.get("as_of_chapter") or 0
+        )
     except (TypeError, ValueError):
         return 0
 
@@ -58,12 +64,20 @@ def approve_world_edit_proposal(
     )
     verdict = BookStateReviewGate(session).review(changes)
     if not verdict.accepted or verdict.approved_changes is None:
-        message = "; ".join(f"{issue.code}: {issue.message}" for issue in verdict.issues)
-        raise HTTPException(status_code=409, detail=message or "proposal rejected by BookStateReviewGate")
+        message = "; ".join(
+            f"{issue.code}: {issue.message}" for issue in verdict.issues
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=message or "proposal rejected by BookStateReviewGate",
+        )
 
     result = BookStateCompiler(session).compile(verdict.approved_changes)
     if not result.committed:
-        raise HTTPException(status_code=409, detail="; ".join(result.blocked_reasons) or "BookState compile blocked")
+        raise HTTPException(
+            status_code=409,
+            detail="; ".join(result.blocked_reasons) or "BookState compile blocked",
+        )
 
     row.status = "accepted"
     row.reviewed_at = datetime.now(UTC)
@@ -83,11 +97,15 @@ def approve_world_edit_proposal(
         as_of_chapter=result.chapter_number,
         trigger=trigger,
     )
-    return ProposalReviewResult(row=row, projection_refresh=projection_refresh.as_dict())
+    return ProposalReviewResult(
+        row=row, projection_refresh=projection_refresh.as_dict()
+    )
 
 
-def _load_pending_proposal(session, project_id: str, proposal_id: str) -> WorldEditProposalRow:
-    row = session.get(WorldEditProposalRow, proposal_id)
+def _load_pending_proposal(
+    session, project_id: str, proposal_id: str
+) -> KnowledgeEditProposalRow:
+    row = session.get(KnowledgeEditProposalRow, proposal_id)
     if row is None or row.project_id != project_id:
         raise HTTPException(status_code=404, detail="proposal not found")
     if row.status not in {"pending", "proposed"}:

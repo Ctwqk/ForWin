@@ -53,7 +53,6 @@ from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.publisher import PublisherUploadJob
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
-from forwin.models.thread import PlotThread
 from forwin.protocol.review import normalize_repair_scope
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
@@ -69,7 +68,14 @@ from forwin.world_templates import empty_world_root
 
 
 DisplayDatetime = Callable[[datetime | None], str]
-_GENESIS_STAGE_ORDER = ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap")
+_GENESIS_STAGE_ORDER = (
+    "brief",
+    "world",
+    "map",
+    "story_engine",
+    "book_blueprint",
+    "bootstrap",
+)
 _PROJECT_DETAIL_CHAPTER_PREVIEW_LIMIT = 60
 _PROJECT_SUMMARY_CHAPTER_PREVIEW_LIMIT = 3
 from .common import (
@@ -156,7 +162,9 @@ def _load_latest_band_experience_by_project(
     )
 
 
-def normalize_project_automation(raw: str | dict[str, Any] | None) -> ProjectAutomationSettings:
+def normalize_project_automation(
+    raw: str | dict[str, Any] | None,
+) -> ProjectAutomationSettings:
     payload: dict[str, Any]
     if isinstance(raw, dict):
         payload = dict(raw)
@@ -172,7 +180,9 @@ def normalize_project_automation(raw: str | dict[str, Any] | None) -> ProjectAut
         if not isinstance(book_meta_raw, dict):
             book_meta_raw = {}
         try:
-            cover_candidate_count = int(publish_raw.get("cover_candidate_count", 4) or 4)
+            cover_candidate_count = int(
+                publish_raw.get("cover_candidate_count", 4) or 4
+            )
         except (TypeError, ValueError):
             cover_candidate_count = 4
         cover_candidate_count = max(1, min(cover_candidate_count, 8))
@@ -197,7 +207,9 @@ def normalize_project_automation(raw: str | dict[str, Any] | None) -> ProjectAut
             ),
             "book_meta": {
                 "audience": str(book_meta_raw.get("audience", "")).strip(),
-                "primary_category": str(book_meta_raw.get("primary_category", "")).strip(),
+                "primary_category": str(
+                    book_meta_raw.get("primary_category", "")
+                ).strip(),
                 "theme_tags": [
                     str(entry).strip()
                     for entry in (book_meta_raw.get("theme_tags") or [])
@@ -250,7 +262,9 @@ def normalize_project_automation(raw: str | dict[str, Any] | None) -> ProjectAut
     elif publish_bindings:
         publish_payload = publish_bindings[0]
 
-    time_text = str(payload.get("daily_start_time", "09:00") or "09:00").strip() or "09:00"
+    time_text = (
+        str(payload.get("daily_start_time", "09:00") or "09:00").strip() or "09:00"
+    )
     parts = time_text.split(":", 1)
     if len(parts) != 2 or not all(part.isdigit() for part in parts):
         time_text = "09:00"
@@ -266,14 +280,26 @@ def normalize_project_automation(raw: str | dict[str, Any] | None) -> ProjectAut
             quota_value = default
         return min(20, max(minimum, quota_value))
 
-    quota = _normalize_quota(payload.get("daily_chapter_quota", 1), default=1, minimum=1)
-    daily_plan_quota = _normalize_quota(payload.get("daily_plan_quota", 0), default=0, minimum=0)
-    daily_write_raw = _normalize_quota(payload.get("daily_write_quota", 0), default=0, minimum=0)
+    quota = _normalize_quota(
+        payload.get("daily_chapter_quota", 1), default=1, minimum=1
+    )
+    daily_plan_quota = _normalize_quota(
+        payload.get("daily_plan_quota", 0), default=0, minimum=0
+    )
+    daily_write_raw = _normalize_quota(
+        payload.get("daily_write_quota", 0), default=0, minimum=0
+    )
     daily_write_quota = quota if daily_write_raw <= 0 else daily_write_raw
-    daily_review_quota = _normalize_quota(payload.get("daily_review_quota", 0), default=0, minimum=0)
+    daily_review_quota = _normalize_quota(
+        payload.get("daily_review_quota", 0), default=0, minimum=0
+    )
     auto_publish = bool(payload.get("auto_publish", False))
-    daily_publish_raw = _normalize_quota(payload.get("daily_publish_quota", 0), default=0, minimum=0)
-    daily_publish_quota = 1 if auto_publish and daily_publish_raw <= 0 else daily_publish_raw
+    daily_publish_raw = _normalize_quota(
+        payload.get("daily_publish_quota", 0), default=0, minimum=0
+    )
+    daily_publish_quota = (
+        1 if auto_publish and daily_publish_raw <= 0 else daily_publish_raw
+    )
 
     return ProjectAutomationSettings.model_validate(
         {
@@ -284,7 +310,9 @@ def normalize_project_automation(raw: str | dict[str, Any] | None) -> ProjectAut
             "daily_write_quota": daily_write_quota,
             "daily_review_quota": daily_review_quota,
             "daily_publish_quota": daily_publish_quota,
-            "stop_when_review_pending": bool(payload.get("stop_when_review_pending", True)),
+            "stop_when_review_pending": bool(
+                payload.get("stop_when_review_pending", True)
+            ),
             "auto_publish": auto_publish,
             "publish": publish_payload,
             "publish_bindings": publish_bindings,
@@ -293,9 +321,15 @@ def normalize_project_automation(raw: str | dict[str, Any] | None) -> ProjectAut
             ).model_dump(mode="json"),
             "last_scheduler_date": str(payload.get("last_scheduler_date", "")).strip(),
             "last_scheduler_at": str(payload.get("last_scheduler_at", "")).strip(),
-            "last_scheduler_action": str(payload.get("last_scheduler_action", "")).strip(),
-            "last_scheduler_message": str(payload.get("last_scheduler_message", "")).strip(),
-            "last_scheduler_task_id": str(payload.get("last_scheduler_task_id", "")).strip(),
+            "last_scheduler_action": str(
+                payload.get("last_scheduler_action", "")
+            ).strip(),
+            "last_scheduler_message": str(
+                payload.get("last_scheduler_message", "")
+            ).strip(),
+            "last_scheduler_task_id": str(
+                payload.get("last_scheduler_task_id", "")
+            ).strip(),
         }
     )
 
@@ -317,10 +351,12 @@ def load_project_upload_stats(
                     else_=0,
                 )
             ).label("uploaded_chapter_count"),
-        ).where(
+        )
+        .where(
             PublisherUploadJob.project_id.in_(ids),
             PublisherUploadJob.deleted_at.is_(None),
-        ).group_by(PublisherUploadJob.project_id)
+        )
+        .group_by(PublisherUploadJob.project_id)
     ).all()
     stats = {
         project_id: {
@@ -355,7 +391,9 @@ def load_latest_scenario_rehearsal_by_project(
                 ScenarioRehearsalRunRow.created_at.desc(),
                 ScenarioRehearsalRunRow.id.desc(),
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
     latest: dict[str, ScenarioRehearsalRunRow] = {}
     for row in rows:
@@ -370,13 +408,27 @@ def load_project_runtime_maps(
     latest_stage_map = load_latest_stage_analysis_by_project(session, project_ids)
     last_replan_map = load_latest_replan_event_by_project(session, project_ids)
     latest_world_map = load_latest_world_turn_by_project(session, project_ids)
-    latest_arc_envelope_map = load_latest_active_arc_envelope_by_project(session, project_ids)
-    latest_arc_analysis_map = load_latest_arc_envelope_analysis_by_project(session, project_ids)
-    provisional_map = load_latest_provisional_band_execution_by_project(session, project_ids)
-    scenario_rehearsal_map = load_latest_scenario_rehearsal_by_project(session, project_ids)
-    latest_arc_structure_map = _load_latest_arc_structure_by_project(session, project_ids)
-    latest_band_experience_map = _load_latest_band_experience_by_project(session, project_ids)
-    recent_replans_map = load_recent_replan_events_by_project(session, project_ids, limit=5)
+    latest_arc_envelope_map = load_latest_active_arc_envelope_by_project(
+        session, project_ids
+    )
+    latest_arc_analysis_map = load_latest_arc_envelope_analysis_by_project(
+        session, project_ids
+    )
+    provisional_map = load_latest_provisional_band_execution_by_project(
+        session, project_ids
+    )
+    scenario_rehearsal_map = load_latest_scenario_rehearsal_by_project(
+        session, project_ids
+    )
+    latest_arc_structure_map = _load_latest_arc_structure_by_project(
+        session, project_ids
+    )
+    latest_band_experience_map = _load_latest_band_experience_by_project(
+        session, project_ids
+    )
+    recent_replans_map = load_recent_replan_events_by_project(
+        session, project_ids, limit=5
+    )
     recent_npc_map = load_recent_npc_intents_by_project(session, project_ids, limit=6)
     return {
         "latest_stage_map": latest_stage_map,
@@ -394,12 +446,12 @@ def load_project_runtime_maps(
 
 
 __all__ = [
-    'load_recent_replan_events_by_project',
-    'load_recent_npc_intents_by_project',
-    '_load_latest_arc_structure_by_project',
-    '_load_latest_band_experience_by_project',
-    'normalize_project_automation',
-    'load_project_upload_stats',
-    'load_latest_scenario_rehearsal_by_project',
-    'load_project_runtime_maps',
+    "load_recent_replan_events_by_project",
+    "load_recent_npc_intents_by_project",
+    "_load_latest_arc_structure_by_project",
+    "_load_latest_band_experience_by_project",
+    "normalize_project_automation",
+    "load_project_upload_stats",
+    "load_latest_scenario_rehearsal_by_project",
+    "load_project_runtime_maps",
 ]

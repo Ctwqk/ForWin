@@ -11,6 +11,7 @@ Flow per run:
      d. Save draft + review
      e. Update canon state
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -53,14 +54,28 @@ from forwin.governance_checks import (
     evaluate_resource_closure_risk,
     evaluate_task_contract,
 )
-from forwin.models import BookGenesisRevision, ProvisionalBandExecution, ProvisionalChapterLedger, new_id
+from forwin.models import (
+    BookGenesisRevision,
+    ProvisionalBandExecution,
+    ProvisionalChapterLedger,
+    new_id,
+)
 from forwin.models.governance import BandCheckpoint
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
-from forwin.models.phase import ArcStructureDraft, BandExperiencePlan, ChapterRewriteAttempt
+from forwin.models.phase import (
+    ArcStructureDraft,
+    BandExperiencePlan,
+    ChapterRewriteAttempt,
+)
 from forwin.observability.context import OperationContext
-from forwin.observability.payloads import attempt_group_ids, audit_payload, event_error_payload, safe_error_summary
+from forwin.observability.payloads import (
+    attempt_group_ids,
+    audit_payload,
+    event_error_payload,
+    safe_error_summary,
+)
 from forwin.observability.ports import NullObservability
 from forwin.observability.redaction import redact_payload
 from forwin.observability.spans import SpanRecord, current_span
@@ -68,9 +83,13 @@ from forwin.book_state.extraction_contract import BookStateExtractionRequest
 from forwin.book_state.review_gate_ext import BookStateDirectCommitService
 from forwin.extractor.book_state_graph_delta import BookStateGraphDeltaExtractor
 from forwin.generation.continue_workset import build_continue_generation_workset
-from forwin.knowledge_system import KnowledgeProjectionRefresher
+from forwin.knowledge_system.refresher import KnowledgeProjectionRefresher
 from forwin.planning.world_contracts import WorldContractRepository
-from forwin.protocol.experience import ArcPayoffMap, BandDelightSchedule, ChapterExperiencePlan
+from forwin.protocol.experience import (
+    ArcPayoffMap,
+    BandDelightSchedule,
+    ChapterExperiencePlan,
+)
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.orchestrator.phase3 import save_stage_analysis
 from forwin.orchestrator.feedback_aggregator import run_feedback_aggregation_pass
@@ -78,7 +97,9 @@ from forwin.orchestrator.phase4 import (
     save_npc_intents,
     save_world_turn,
 )
-from forwin.planning.scenario_rehearsal_resolution import latest_blocking_scenario_rehearsal
+from forwin.planning.scenario_rehearsal_resolution import (
+    latest_blocking_scenario_rehearsal,
+)
 from forwin.planning.future_plan_audit import FuturePlanAuditor, FuturePlanAuditRun
 from forwin.planning.band_plan_patcher import BandPlanPatcher
 from forwin.review.decision.rules.obligation_scope import BandScopeCandidate
@@ -101,7 +122,6 @@ from forwin.writer.chapter_writer import ChapterWriter
 from forwin.orchestrator_loop_core.result import ProvisionalGateSnapshot, RunResult
 
 logger = logging.getLogger(__name__)
-
 
 
 def _chapter_plan_prompt_text(plan: ChapterPlan | None) -> str:
@@ -129,7 +149,9 @@ def _loads_json_list(raw: str) -> list[Any]:
     return value if isinstance(value, list) else []
 
 
-def _obligation_prompt_item(obligation: NarrativeObligation, *, current_chapter: int) -> dict[str, Any]:
+def _obligation_prompt_item(
+    obligation: NarrativeObligation, *, current_chapter: int
+) -> dict[str, Any]:
     due_now = bool(obligation.must_resolve_now) or (
         obligation.status == "active"
         and int(obligation.deadline_chapter or 0) <= int(current_chapter or 0)
@@ -146,7 +168,8 @@ def _obligation_prompt_item(obligation: NarrativeObligation, *, current_chapter:
     return {
         "obligation_id": obligation.id,
         "description": obligation.summary,
-        "holder": ",".join(str(item) for item in obligation.subject_refs) or obligation.created_by,
+        "holder": ",".join(str(item) for item in obligation.subject_refs)
+        or obligation.created_by,
         "target": obligation.payoff_test,
         "status": status,
         "must_address_in_current_output": due_now,
@@ -174,23 +197,37 @@ def _band_prompt_result_to_checkpoint_issues(
     for issue in result.get("issues", []) or []:
         if not isinstance(issue, dict):
             continue
-        can_block = (
-            str(issue.get("severity") or "").lower() in {"critical", "blocker", "error"}
-            and float(issue.get("confidence") or 0.0) >= float(min_blocking_confidence or 0.0)
+        can_block = str(issue.get("severity") or "").lower() in {
+            "critical",
+            "blocker",
+            "error",
+        } and float(issue.get("confidence") or 0.0) >= float(
+            min_blocking_confidence or 0.0
         )
-        evidence = issue.get("evidence") if isinstance(issue.get("evidence"), list) else []
+        evidence = (
+            issue.get("evidence") if isinstance(issue.get("evidence"), list) else []
+        )
         detail = "; ".join(
             str(item.get("location") or item.get("quote") or "")
             for item in evidence
-            if isinstance(item, dict) and str(item.get("location") or item.get("quote") or "").strip()
+            if isinstance(item, dict)
+            and str(item.get("location") or item.get("quote") or "").strip()
         )
         output.append(
             BandCheckpointIssueInfo(
                 code=str(issue.get("type") or "band_prompt_issue"),
                 severity="error" if can_block else "warning",
-                issue_group=issue_group_for_issue(code=str(issue.get("type") or "band_prompt_issue")),
-                description=str(issue.get("claim") or issue.get("reasoning_summary") or result.get("summary") or ""),
-                detail=detail or f"{analyzer}:{issue.get('issue_id') or issue.get('type') or 'issue'}",
+                issue_group=issue_group_for_issue(
+                    code=str(issue.get("type") or "band_prompt_issue")
+                ),
+                description=str(
+                    issue.get("claim")
+                    or issue.get("reasoning_summary")
+                    or result.get("summary")
+                    or ""
+                ),
+                detail=detail
+                or f"{analyzer}:{issue.get('issue_id') or issue.get('type') or 'issue'}",
             )
         )
     return output
@@ -212,10 +249,21 @@ def _priority_for_deferred_issue(issue_type: str) -> str:
     return "P1"
 
 
-def _summary_for_deferred_issue(*, verdict: ReviewVerdict, issue_type: str, outcome_reason: str) -> str:
+def _summary_for_deferred_issue(
+    *, verdict: ReviewVerdict, issue_type: str, outcome_reason: str
+) -> str:
     for issue in verdict.issues:
-        if str(getattr(issue, "issue_type", "") or getattr(issue, "rule_name", "") or "") == issue_type:
-            return str(getattr(issue, "description", "") or outcome_reason or issue_type)
+        if (
+            str(
+                getattr(issue, "issue_type", "")
+                or getattr(issue, "rule_name", "")
+                or ""
+            )
+            == issue_type
+        ):
+            return str(
+                getattr(issue, "description", "") or outcome_reason or issue_type
+            )
     return str(outcome_reason or issue_type)
 
 
@@ -227,7 +275,14 @@ def _payoff_test_for_deferred_issue(
     summary: str,
 ) -> str:
     for issue in verdict.issues:
-        if str(getattr(issue, "issue_type", "") or getattr(issue, "rule_name", "") or "") != issue_type:
+        if (
+            str(
+                getattr(issue, "issue_type", "")
+                or getattr(issue, "rule_name", "")
+                or ""
+            )
+            != issue_type
+        ):
             continue
         suggested = str(getattr(issue, "suggested_fix", "") or "").strip()
         if suggested:
@@ -264,8 +319,6 @@ class TransientLLMChapterFailure(RuntimeError):
     def __init__(self, message: str, *, cause: Exception | None = None) -> None:
         super().__init__(message)
         self.cause = cause
-
-
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

@@ -20,6 +20,8 @@ Phase B 已完成：零引用 `forwin/orchestration` ports 和 `_compile_world_m
 
 Phase C 实现已完成：Genesis handoff 后 revision 永久冻结；`EntityRegistrar` 改为 `EntityAdmissionPlan` 规划/验证器，草稿阶段不再写 `Entity`/`EntityAlias`，`EntityAdmissionCommitter` 只在 Canon 成功路径落实无冲突计划；旧 SubWorld admission policy/patch/repair、checker 判决、nonblocking 例外和 summary 名字桥已删除。Planning 服务群由 `PlanningService` / `PlanningQuery` 归口，future audit、patch validation、scenario rehearsal 统一为 `PlanHealth`；`future_plan_auditor.py` 与 `phase24.PlanningServices` 转发门面已删除，orchestrator 拼装降至 87 条。200 章 no-hotfix 运行 gate 尚未执行，因此这里只标记实现完成。
 
+Phase D 与 schema 收口已按批准的 hard-cut 方案完成：`BookStateQuery` / `ReviewQuery` 接管 accepted-state 读侧，WriterOutput 结构化合约与 `EntityAdmissionPlan` 统一转为 GraphDelta；旧 StateUpdater accepted-state 双写、StateRepository 通用读族和八张 legacy accepted-state ORM/表全部删除。`forwin.world_model` facade 被物理删除，live page/proposal/Obsidian/retrieval helper 迁入 `knowledge_system` / `obsidian`；保留的 `/world-model/*` 只是 BookState-backed HTTP adapter。历史 Alembic revision 链和 `models/base.py` 手写 `schema_migrations` / `_upgrade_*` 系统也已删除，生产只接受单一 `0001_v5_baseline`，旧库不迁移。下文关于双写、旧表或 deprecated world-model package 的内容只保留为审计时证据。
+
 ---
 
 ## 0. 对初版报告的核验结论

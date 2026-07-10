@@ -4,10 +4,10 @@ import json
 import logging
 
 from forwin.context.request import ContextDraft, ContextRequest
+from forwin.knowledge_system.context import KnowledgeContextQuery
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.context import ArcEnvelopeView
 from forwin.protocol.world_model import WorldContextPack
-from forwin.world_model.retriever import WorldModelRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -22,27 +22,37 @@ class ExperienceContextProvider:
         arc_envelope_getter = getattr(repo, "get_active_arc_envelope", None)
         reader_promise_getter = getattr(repo, "get_reader_promise", None)
         arc_payoff_map_getter = getattr(repo, "get_arc_payoff_map", None)
-        band_schedule_getter = getattr(repo, "get_band_experience_plan_for_chapter", None)
+        band_schedule_getter = getattr(
+            repo, "get_band_experience_plan_for_chapter", None
+        )
         chapter_experience_getter = getattr(repo, "get_chapter_experience_plan", None)
         chapter_task_contract_getter = getattr(repo, "get_chapter_task_contract", None)
-        band_task_contract_getter = getattr(repo, "get_band_task_contract_for_chapter", None)
+        band_task_contract_getter = getattr(
+            repo, "get_band_task_contract_for_chapter", None
+        )
         constraints_enabled_getter = getattr(repo, "future_constraints_enabled", None)
         constraints_enabled = (
             bool(constraints_enabled_getter(project_id))
             if callable(constraints_enabled_getter)
             else True
         )
-        active_constraints_getter = getattr(repo, "list_active_narrative_constraints", None)
+        active_constraints_getter = getattr(
+            repo, "list_active_narrative_constraints", None
+        )
         next_band_summary_getter = getattr(repo, "get_next_band_summary", None)
 
-        arc_envelope_row = arc_envelope_getter(project_id) if callable(arc_envelope_getter) else None
+        arc_envelope_row = (
+            arc_envelope_getter(project_id) if callable(arc_envelope_getter) else None
+        )
         chapter_experience_plan = (
             chapter_experience_getter(project_id, chapter_plan.chapter_number)
             if callable(chapter_experience_getter)
             else None
         )
         try:
-            goals = json.loads(chapter_plan.goals_json) if chapter_plan.goals_json else []
+            goals = (
+                json.loads(chapter_plan.goals_json) if chapter_plan.goals_json else []
+            )
         except json.JSONDecodeError:
             goals = []
 
@@ -75,7 +85,7 @@ class ExperienceContextProvider:
                     *(entity.name for entity in draft.data.get("entities", [])[:8]),
                     *(thread.name for thread in draft.data.get("threads", [])[:4]),
                 ]
-                world_context = WorldModelRetriever(repo_session).build_context(
+                world_context = KnowledgeContextQuery(repo_session).build(
                     project_id=project_id,
                     chapter_number=chapter_plan.chapter_number,
                     query_terms=query_terms,
@@ -105,8 +115,12 @@ class ExperienceContextProvider:
                     if arc_envelope_row is not None
                     else None
                 ),
-                "reader_promise": reader_promise_getter(project_id) if callable(reader_promise_getter) else None,
-                "arc_payoff_map": arc_payoff_map_getter(project_id) if callable(arc_payoff_map_getter) else None,
+                "reader_promise": reader_promise_getter(project_id)
+                if callable(reader_promise_getter)
+                else None,
+                "arc_payoff_map": arc_payoff_map_getter(project_id)
+                if callable(arc_payoff_map_getter)
+                else None,
                 "band_schedule": (
                     band_schedule_getter(project_id, chapter_plan.chapter_number)
                     if callable(band_schedule_getter)
@@ -114,7 +128,9 @@ class ExperienceContextProvider:
                 ),
                 "chapter_experience_plan": chapter_experience_plan,
                 "chapter_task_contract": (
-                    chapter_task_contract_getter(project_id, chapter_plan.chapter_number)
+                    chapter_task_contract_getter(
+                        project_id, chapter_plan.chapter_number
+                    )
                     if callable(chapter_task_contract_getter)
                     else []
                 ),
@@ -124,7 +140,9 @@ class ExperienceContextProvider:
                     else []
                 ),
                 "active_constraints": (
-                    active_constraints_getter(project_id, chapter_number=chapter_plan.chapter_number)
+                    active_constraints_getter(
+                        project_id, chapter_number=chapter_plan.chapter_number
+                    )
                     if constraints_enabled and callable(active_constraints_getter)
                     else []
                 ),

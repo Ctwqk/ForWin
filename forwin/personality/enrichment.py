@@ -9,11 +9,10 @@ from forwin.book_state import BookStateRepository
 from forwin.governance import DecisionEventType
 from forwin.models import DecisionEvent
 from forwin.models.base import new_id
-from forwin.models.entity import RelationEdge
 from forwin.personality.library import CharacterPersonalityLibrary
 from forwin.personality.models import PersonalityLoadout, PersonalitySkillRef
 from forwin.personality.policy import CharacterPersonalityPolicyResolver
-from forwin.protocol.book_state import WorldNode
+from forwin.protocol.book_state import WorldEdge, WorldNode
 
 
 class RelationshipPersonalityEnricher:
@@ -27,8 +26,12 @@ class RelationshipPersonalityEnricher:
         self.repo = BookStateRepository(session)
         self.library = personality_library or CharacterPersonalityLibrary()
 
-    def enrich_relation(self, relation: RelationEdge, *, reason: str = "relationship changed") -> dict[str, Any]:
-        policy = CharacterPersonalityPolicyResolver(self.session).resolve_for_project(relation.project_id)
+    def enrich_relation(
+        self, relation: WorldEdge, *, reason: str = "relationship changed"
+    ) -> dict[str, Any]:
+        policy = CharacterPersonalityPolicyResolver(self.session).resolve_for_project(
+            relation.project_id
+        )
         if not policy.relationship_enrichment_enabled:
             return {"enriched": 0, "skipped": "policy_disabled", "diffs": []}
         skill_id = self._skill_for_relation(relation)
@@ -38,8 +41,12 @@ class RelationshipPersonalityEnricher:
         if skill is None or skill.incomplete:
             return {"enriched": 0, "skipped": "skill_unavailable", "diffs": []}
 
-        source = self._node_for_character_endpoint(relation.project_id, relation.source_entity_id)
-        target = self._node_for_character_endpoint(relation.project_id, relation.target_entity_id)
+        source = self._node_for_character_endpoint(
+            relation.project_id, relation.source_id
+        )
+        target = self._node_for_character_endpoint(
+            relation.project_id, relation.target_id
+        )
         if source is None or target is None:
             return {"enriched": 0, "skipped": "character_mapping_missing", "diffs": []}
 
@@ -52,13 +59,17 @@ class RelationshipPersonalityEnricher:
             self._save_event(relation, skill_id=skill_id, diffs=diffs, reason=reason)
         return {"enriched": len(diffs), "skill": skill_id, "diffs": diffs}
 
-    def enrich_project(self, project_id: str, *, reason: str = "manual relationship enrichment") -> dict[str, Any]:
-        relations = (
-            self.session.query(RelationEdge)
-            .filter(RelationEdge.project_id == project_id, RelationEdge.is_active.is_(True))
-            .all()
-        )
-        items = [self.enrich_relation(relation, reason=reason) for relation in relations]
+    def enrich_project(
+        self, project_id: str, *, reason: str = "manual relationship enrichment"
+    ) -> dict[str, Any]:
+        relations = [
+            relation
+            for relation in self.repo.list_world_edges(project_id)
+            if relation.is_active
+        ]
+        items = [
+            self.enrich_relation(relation, reason=reason) for relation in relations
+        ]
         return {
             "project_id": project_id,
             "scanned": len(relations),
@@ -66,7 +77,9 @@ class RelationshipPersonalityEnricher:
             "items": items,
         }
 
-    def _node_for_character_endpoint(self, project_id: str, endpoint_id: str) -> WorldNode | None:
+    def _node_for_character_endpoint(
+        self, project_id: str, endpoint_id: str
+    ) -> WorldNode | None:
         normalized = str(endpoint_id or "").strip()
         if not normalized:
             return None
@@ -76,20 +89,30 @@ class RelationshipPersonalityEnricher:
             if node.id == normalized:
                 return node
             metadata = node.metadata if isinstance(node.metadata, dict) else {}
-            identity = metadata.get("character_identity") if isinstance(metadata.get("character_identity"), dict) else {}
+            identity = (
+                metadata.get("character_identity")
+                if isinstance(metadata.get("character_identity"), dict)
+                else {}
+            )
             if str(identity.get("canonical_character_id") or "").strip() == normalized:
                 return node
             if str(identity.get("book_state_node_id") or "").strip() == normalized:
                 return node
         return None
 
-    def _add_pattern(self, node: WorldNode, target_character_id: str, skill_id: str) -> dict[str, Any]:
+    def _add_pattern(
+        self, node: WorldNode, target_character_id: str, skill_id: str
+    ) -> dict[str, Any]:
         metadata = dict(node.metadata) if isinstance(node.metadata, dict) else {}
-        assignment = metadata.get("personality_assignment") if isinstance(metadata, dict) else {}
+        assignment = (
+            metadata.get("personality_assignment") if isinstance(metadata, dict) else {}
+        )
         if isinstance(assignment, dict) and assignment.get("manual_override"):
             return {}
         profile = dict(node.profile) if isinstance(node.profile, dict) else {}
-        loadout = PersonalityLoadout.model_validate(profile.get("personality_loadout") or {})
+        loadout = PersonalityLoadout.model_validate(
+            profile.get("personality_loadout") or {}
+        )
         if loadout.dominant is None:
             return {}
         for ref in loadout.relationship_patterns:
@@ -111,17 +134,21 @@ class RelationshipPersonalityEnricher:
             "new_loadout": new_loadout,
         }
 
-    def _skill_for_relation(self, relation: RelationEdge) -> str:
-        text = f"{relation.relation_type}\n{relation.description}".lower()
+    def _skill_for_relation(self, relation: WorldEdge) -> str:
+        text = (
+            f"{relation.edge_type}\n{relation.metadata.get('description', '')}"
+        ).lower()
         if any(keyword in text for keyword in ("rival", "对手", "竞争")):
             return "rel-rival-respect"
-        if any(keyword in text for keyword in ("mentor", "导师", "师父", "扶持", "保护")):
+        if any(
+            keyword in text for keyword in ("mentor", "导师", "师父", "扶持", "保护")
+        ):
             return "rel-mentor-protector"
         return ""
 
     def _save_event(
         self,
-        relation: RelationEdge,
+        relation: WorldEdge,
         *,
         skill_id: str,
         diffs: list[dict[str, Any]],
@@ -141,7 +168,7 @@ class RelationshipPersonalityEnricher:
                     "stage": "relationship_personality_enrichment",
                     "status": "updated",
                     "relation_edge_id": relation.id,
-                    "relation_type": relation.relation_type,
+                    "relation_type": relation.edge_type,
                     "selected_skill_id": skill_id,
                     "diffs": diffs,
                 },

@@ -1,4 +1,5 @@
 """ForWin Web API – FastAPI interface for the novel generation system."""
+
 from __future__ import annotations
 
 import logging
@@ -125,7 +126,11 @@ from forwin.api_schemas import (
     LintSignalInfo,
     StartWritingResponse,
 )
-from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
+from forwin.book_genesis import (
+    BookGenesisService,
+    GENESIS_STAGE_ORDER,
+    StaleGenesisRevisionError,
+)
 from forwin.application.errors import ActiveGenerationTaskError
 from forwin.config import InfrastructureConfig
 from forwin.governance import (
@@ -145,17 +150,20 @@ from forwin.models.base import Base, get_session_factory
 from forwin.models.genesis import BookGenesisRevision
 from forwin.models.project import Project, ChapterPlan, ArcPlanVersion
 from forwin.models.entity import Entity
-from forwin.models.event import CanonEvent, EventEntityLink
 from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
-from forwin.models.publisher import PublisherCommentSyncJob, PublisherConnectionState, PublisherExtensionClient, PublisherRawComment, PublisherUploadJob
-from forwin.models.thread import PlotThread
+from forwin.models.publisher import (
+    PublisherCommentSyncJob,
+    PublisherConnectionState,
+    PublisherExtensionClient,
+    PublisherRawComment,
+    PublisherUploadJob,
+)
 from forwin.models.task import GenerationTask
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft, ChapterReview
 from forwin.models.phase import (
     BandExperiencePlan,
     ChapterRewriteAttempt,
 )
-from forwin.models.timeline import ChapterTimeline, StoryTimePoint
 from forwin.models.phase4 import NPCIntentSnapshot
 import forwin.models.phase  # noqa: F401
 from forwin.protocol.experience import BandDelightSchedule
@@ -177,6 +185,7 @@ from forwin.state.updater import StateUpdater
 logger = logging.getLogger(__name__)
 
 from forwin.api_core import state as api_state
+
 
 def _get_session():
     return api_state._SessionFactory()
@@ -220,11 +229,17 @@ def _build_genesis_service(
     *,
     model_profile_id: str = "",
 ) -> BookGenesisService:
-    resolved = infrastructure or api_state._config or InfrastructureConfig(minimax_api_key="")
+    resolved = (
+        infrastructure or api_state._config or InfrastructureConfig(minimax_api_key="")
+    )
     resolved_profile = resolved.resolve_model_profile(model_profile_id).model_dump(
         mode="python"
     )
-    shared_container = infrastructure is None and not model_profile_id and api_state._runtime_container is not None
+    shared_container = (
+        infrastructure is None
+        and not model_profile_id
+        and api_state._runtime_container is not None
+    )
     policy = RuntimePolicy.for_profile(
         "standard",
         model_profile_id=str(model_profile_id or "").strip(),
@@ -234,9 +249,15 @@ def _build_genesis_service(
         if shared_container
         else RuntimeContainer.from_config(resolved, policy=policy, role="api")
     )
-    service = container.services().book_genesis if shared_container else container.build_book_genesis_service()
+    service = (
+        container.services().book_genesis
+        if shared_container
+        else container.build_book_genesis_service()
+    )
     setattr(service, "_forwin_runtime_owned", True)
-    setattr(service, "_forwin_runtime_container", container if shared_container else None)
+    setattr(
+        service, "_forwin_runtime_container", container if shared_container else None
+    )
     setattr(service, "_forwin_runtime_shared", bool(shared_container))
     setattr(service.llm_client, "profile_id", resolved_profile.get("id", ""))
     setattr(service.llm_client, "profile_name", resolved_profile.get("name", ""))
@@ -258,10 +279,14 @@ def _close_genesis_service(service: BookGenesisService | None) -> None:
         try:
             container.services().engine.dispose()
         except Exception:  # noqa: BLE001
-            logger.debug("BookGenesisService runtime engine dispose failed", exc_info=True)
+            logger.debug(
+                "BookGenesisService runtime engine dispose failed", exc_info=True
+            )
 
 
-def _active_genesis_revision(session: Session, project: Project) -> BookGenesisRevision | None:
+def _active_genesis_revision(
+    session: Session, project: Project
+) -> BookGenesisRevision | None:
     revision_id = str(getattr(project, "active_genesis_revision_id", "") or "").strip()
     if not revision_id:
         return None
@@ -270,7 +295,11 @@ def _active_genesis_revision(session: Session, project: Project) -> BookGenesisR
 
 def _require_genesis_project(project: Project) -> None:
     creation_status = str(getattr(project, "creation_status", "") or "").strip()
-    if creation_status and creation_status not in {"creating", "genesis_ready", "writing"}:
+    if creation_status and creation_status not in {
+        "creating",
+        "genesis_ready",
+        "writing",
+    }:
         raise HTTPException(400, f"项目生命周期状态无效：{creation_status}")
 
 
@@ -299,8 +328,6 @@ def _coerce_int_list(value: Any) -> list[int]:
         except (TypeError, ValueError):
             continue
     return numbers
-
-
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

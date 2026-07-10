@@ -76,12 +76,12 @@ def _patch_runtime_infrastructure(monkeypatch):
 
     fake_engine = _FakeEngine()
     fake_session_factory = object()
-    init_calls: list[object] = []
+    schema_calls: list[object] = []
     monkeypatch.setattr(container_module, "get_engine", lambda _url: fake_engine)
     monkeypatch.setattr(
         container_module,
-        "init_db",
-        lambda engine: init_calls.append(engine),
+        "require_v5_schema",
+        lambda engine: schema_calls.append(engine),
     )
     monkeypatch.setattr(
         container_module,
@@ -93,13 +93,13 @@ def _patch_runtime_infrastructure(monkeypatch):
         "create_memory_index",
         lambda **_kwargs: SimpleNamespace(),
     )
-    return fake_engine, fake_session_factory, init_calls
+    return fake_engine, fake_session_factory, schema_calls
 
 
 def test_runtime_container_injects_policy_and_selected_model(monkeypatch) -> None:
     from forwin.runtime.container import RuntimeContainer
 
-    fake_engine, fake_session_factory, init_calls = _patch_runtime_infrastructure(
+    fake_engine, fake_session_factory, schema_calls = _patch_runtime_infrastructure(
         monkeypatch
     )
     infrastructure = InfrastructureConfig(
@@ -141,10 +141,12 @@ def test_runtime_container_injects_policy_and_selected_model(monkeypatch) -> Non
     assert services.generation_application is generation_application
     assert generation_application.session_factory is fake_session_factory
     assert generation_application.infrastructure is infrastructure
-    assert init_calls == [fake_engine]
-    assert pipeline.services is services
-    assert pipeline.infrastructure is infrastructure
+    assert schema_calls == [fake_engine]
+    assert not hasattr(pipeline, "services")
+    assert not hasattr(pipeline, "infrastructure")
     assert pipeline.policy is policy
+    assert pipeline.writer is services.writer
+    assert pipeline.canon_admission is services.canon_admission
     assert pipeline._governance_task_id == "task-1"
     assert pipeline._governance_root_event_id == "root-1"
     assert not hasattr(pipeline, "config")
@@ -177,4 +179,7 @@ def test_runtime_container_builds_callback_bound_production_scheduler(
 
     assert scheduler.session_factory is fake_session_factory
     assert scheduler.config is infrastructure
-    assert scheduler.generation_application is container.build_generation_application_service()
+    assert (
+        scheduler.generation_application
+        is container.build_generation_application_service()
+    )

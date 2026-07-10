@@ -10,7 +10,9 @@ from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.generation.pipeline_core.result import RunResult
-from forwin.generation.pipeline_core.quality_gates import evaluate_structural_patch_completion_debt
+from forwin.generation.pipeline_core.structural_patches import (
+    evaluate_structural_patch_completion_debt,
+)
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
@@ -68,7 +70,9 @@ class ArcExecutionScopingTests(unittest.TestCase):
         )
 
         self.assertFalse(result["commit_allowed"])
-        self.assertIn("unresolved_book_patch_debt:patch-book", result["blocking_reasons"])
+        self.assertIn(
+            "unresolved_book_patch_debt:patch-book", result["blocking_reasons"]
+        )
 
     def test_seed_state_distributes_chapters_across_arc_outlines(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -83,6 +87,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
                         premise="前提",
                         genre="玄幻",
                         target_total_chapters=20,
+                        runtime_policy=RuntimePolicy.for_profile("standard"),
                     )
                     pipeline._seed_state(
                         updater,
@@ -117,15 +122,24 @@ class ArcExecutionScopingTests(unittest.TestCase):
                     )
                     session.commit()
 
-                    arcs = session.execute(
-                        select(ArcPlanVersion)
-                        .where(ArcPlanVersion.project_id == project.id)
-                    ).scalars().all()
-                    plans = session.execute(
-                        select(ChapterPlan)
-                        .where(ChapterPlan.project_id == project.id)
-                        .order_by(ChapterPlan.chapter_number.asc())
-                    ).scalars().all()
+                    arcs = (
+                        session.execute(
+                            select(ArcPlanVersion).where(
+                                ArcPlanVersion.project_id == project.id
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    plans = (
+                        session.execute(
+                            select(ChapterPlan)
+                            .where(ChapterPlan.project_id == project.id)
+                            .order_by(ChapterPlan.chapter_number.asc())
+                        )
+                        .scalars()
+                        .all()
+                    )
                 finally:
                     session.close()
             finally:
@@ -135,8 +149,12 @@ class ArcExecutionScopingTests(unittest.TestCase):
         self.assertEqual(len(arcs), 2)
         active_arc = next(arc for arc in arcs if arc.status == "active")
         planned_arc = next(arc for arc in arcs if arc.status == "planned")
-        self.assertEqual(sum(1 for plan in plans if plan.arc_plan_id == active_arc.id), 11)
-        self.assertEqual(sum(1 for plan in plans if plan.arc_plan_id == planned_arc.id), 9)
+        self.assertEqual(
+            sum(1 for plan in plans if plan.arc_plan_id == active_arc.id), 11
+        )
+        self.assertEqual(
+            sum(1 for plan in plans if plan.arc_plan_id == planned_arc.id), 9
+        )
         self.assertEqual([plan.chapter_number for plan in plans], list(range(1, 21)))
 
     def test_new_project_run_executes_only_first_active_arc(self) -> None:
@@ -196,11 +214,15 @@ class ArcExecutionScopingTests(unittest.TestCase):
 
                 session = pipeline._SessionFactory()
                 try:
-                    plans = session.execute(
-                        select(ChapterPlan)
-                        .where(ChapterPlan.project_id == result.project_id)
-                        .order_by(ChapterPlan.chapter_number.asc())
-                    ).scalars().all()
+                    plans = (
+                        session.execute(
+                            select(ChapterPlan)
+                            .where(ChapterPlan.project_id == result.project_id)
+                            .order_by(ChapterPlan.chapter_number.asc())
+                        )
+                        .scalars()
+                        .all()
+                    )
                 finally:
                     session.close()
             finally:
@@ -225,9 +247,12 @@ class ArcExecutionScopingTests(unittest.TestCase):
                     premise="前提",
                     genre="玄幻",
                     target_total_chapters=20,
+                    runtime_policy=RuntimePolicy.for_profile("standard"),
                 )
                 arc_one = updater.create_arc_plan(project.id, "开篇弧", status="active")
-                arc_two = updater.create_arc_plan(project.id, "第二弧", status="planned")
+                arc_two = updater.create_arc_plan(
+                    project.id, "第二弧", status="planned"
+                )
                 for chapter_number in (1, 2):
                     updater.create_chapter_plan(
                         project_id=project.id,
@@ -252,7 +277,9 @@ class ArcExecutionScopingTests(unittest.TestCase):
             progress_events: list[tuple[str, dict[str, object]]] = []
             pipeline = _build_pipeline(
                 db_path,
-                progress_callback=lambda event, payload: progress_events.append((event, dict(payload))),
+                progress_callback=lambda event, payload: progress_events.append(
+                    (event, dict(payload))
+                ),
             )
 
             def fake_run_project_chapters(**kwargs):
@@ -280,7 +307,8 @@ class ArcExecutionScopingTests(unittest.TestCase):
         resolving_payload = next(
             payload
             for event, payload in progress_events
-            if event == "stage_changed" and payload.get("stage") == "resolving_arc_envelope"
+            if event == "stage_changed"
+            and payload.get("stage") == "resolving_arc_envelope"
         )
         self.assertNotIn("requested_chapters", resolving_payload)
         self.assertEqual(resolving_payload["pending_chapter_count"], 2)
@@ -298,9 +326,12 @@ class ArcExecutionScopingTests(unittest.TestCase):
                     premise="前提",
                     genre="玄幻",
                     target_total_chapters=100,
+                    runtime_policy=RuntimePolicy.for_profile("standard"),
                 )
                 arc_one = updater.create_arc_plan(project.id, "开篇弧", status="active")
-                arc_two = updater.create_arc_plan(project.id, "第二弧", status="planned")
+                arc_two = updater.create_arc_plan(
+                    project.id, "第二弧", status="planned"
+                )
                 for chapter_number in range(1, 11):
                     updater.create_chapter_plan(
                         project_id=project.id,

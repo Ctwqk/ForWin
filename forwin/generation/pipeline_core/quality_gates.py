@@ -49,12 +49,13 @@ from forwin.review.decision.rules.review_outcome import (
     review_action_from_decision,
 )
 from forwin.review.decision.rules.obligation_scope import decide_obligation_scope
-from forwin.review.decision.rules.commit_with_obligation import decide_commit_with_obligation
+from forwin.review.decision.rules.commit_with_obligation import (
+    decide_commit_with_obligation,
+)
 from forwin.review.decision.rules.structural_patch import decide_structural_patch
 from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.generation.pipeline_core.structural_patches import (
     _persist_structural_patch_outcome,
-    evaluate_structural_patch_completion_debt,
 )
 from forwin.state.updater import StateUpdater
 
@@ -85,12 +86,14 @@ def _review_action_for_engine_decision(decision: Decision) -> str:
     )
 
 
-@staticmethod
 def _is_timeout_like(exc: Exception) -> bool:
     message = str(exc).lower()
-    return any(token in message for token in ("timed out", "timeout", "read operation timed out"))
+    return any(
+        token in message
+        for token in ("timed out", "timeout", "read operation timed out")
+    )
 
-@staticmethod
+
 def _is_transient_llm_like(exc: Exception) -> bool:
     current: BaseException | None = exc
     while current is not None:
@@ -126,27 +129,11 @@ def _is_transient_llm_like(exc: Exception) -> bool:
         current = current.__cause__ or current.__context__
     return False
 
-@staticmethod
+
 def _transient_retry_delay(attempt: int) -> float:
     return min(20.0, 3.0 * (2 ** max(0, attempt - 1)))
 
-def _current_model_identity(self) -> tuple[str, str]:
-    return (
-        str(getattr(self.llm_client, "profile_id", "") or "").strip(),
-        str(getattr(self.llm_client, "model", "") or "").strip(),
-    )
 
-def _audit_operation_id(self) -> str:
-    return str(self._governance_task_id or self._governance_root_event_id or "").strip()
-
-def _drain_llm_attempt_events(self) -> list[dict[str, object]]:
-    drain = getattr(getattr(self.writer, "llm_client", None), "drain_llm_attempt_events", None)
-    if not callable(drain):
-        return []
-    events = drain()
-    return [dict(item) for item in events if isinstance(item, dict)] if isinstance(events, list) else []
-
-@staticmethod
 def _safe_prompt_trace_attempts(
     attempts: list[dict[str, object]],
     *,
@@ -192,7 +179,9 @@ def _safe_prompt_trace_attempts(
             if key in allowed_keys and value is not None
         }
         if "error_message" in safe:
-            safe["error_message"] = safe_error_summary(str(safe.get("error_message") or ""))
+            safe["error_message"] = safe_error_summary(
+                str(safe.get("error_message") or "")
+            )
         safe_attempts.append(safe)
     if not safe_attempts and exc is not None:
         safe_attempts.append(
@@ -207,8 +196,10 @@ def _safe_prompt_trace_attempts(
         )
     return safe_attempts
 
-@staticmethod
-def _error_category_from_attempts(attempts: list[dict[str, object]], exc: BaseException) -> str:
+
+def _error_category_from_attempts(
+    attempts: list[dict[str, object]], exc: BaseException
+) -> str:
     for attempt in reversed(attempts):
         category = str(attempt.get("error_category") or "").strip()
         if category and category != "unknown":
@@ -218,7 +209,9 @@ def _error_category_from_attempts(attempts: list[dict[str, object]], exc: BaseEx
         return "timeout"
     if "429" in message or "rate limit" in message:
         return "rate_limit"
-    if any(token in message for token in ("529", "500", "502", "503", "504", "overload")):
+    if any(
+        token in message for token in ("529", "500", "502", "503", "504", "overload")
+    ):
         return "provider_overload"
     if "400" in message or "bad request" in message:
         return "bad_request"
@@ -226,7 +219,7 @@ def _error_category_from_attempts(attempts: list[dict[str, object]], exc: BaseEx
         return "parse_or_schema"
     return "unknown"
 
-@staticmethod
+
 def _diagnostic_kind_for_failure(exc: BaseException, error_category: str) -> str:
     message = str(exc).lower()
     if error_category == "bad_request" or "400" in message or "bad request" in message:
@@ -237,166 +230,6 @@ def _diagnostic_kind_for_failure(exc: BaseException, error_category: str) -> str
         return "parse_or_schema_failure"
     return "writer_failure_without_draft"
 
-def _record_failure_prompt_trace(
-    self,
-    *,
-    updater: StateUpdater,
-    project_id: str,
-    chapter_number: int,
-    context,
-    stage_key: str,
-    template_id: str,
-    source_event_id: str,
-    exc: BaseException,
-    duration_ms: int,
-    attempts: list[dict[str, object]],
-    skill_layers: list[object] | None,
-    fallback_stage: str = "",
-) -> str:
-    if not isinstance(updater, StateUpdater):
-        return ""
-    fallback_attempt_no = 0
-    if attempts:
-        try:
-            fallback_attempt_no = int(attempts[-1].get("attempt_no") or 0)
-        except (TypeError, ValueError):
-            fallback_attempt_no = 0
-    safe_attempts = self._safe_prompt_trace_attempts(
-        attempts,
-        fallback_attempt_no=fallback_attempt_no,
-        exc=exc,
-        duration_ms=duration_ms,
-    )
-    error_category = self._error_category_from_attempts(safe_attempts, exc)
-    selected_skills = ChapterWriter._selected_skills_from_layers(skill_layers)
-    operation_id = self._audit_operation_id()
-    model_profile_id, model_name = self._current_model_identity()
-    trace_payload = {
-        "trace_scope": "writer",
-        "stage_key": stage_key,
-        "template_id": template_id,
-        "template_version": "v1",
-        "effective_system_prompt": "",
-        "prompt_layers": [],
-        "input_snapshot": audit_payload(
-            stage=stage_key,
-            status="failed",
-            operation_id=operation_id,
-            chapter_number=chapter_number,
-            writer_mode=str(getattr(self.writer, "writer_mode", "") or ""),
-            selected_skills=selected_skills,
-        ),
-        "model_profile": {
-            "profile_id": model_profile_id,
-            "model": model_name,
-            "base_url": str(getattr(self.llm_client, "base_url", "") or ""),
-        },
-        "attempts": safe_attempts,
-        "output_summary": audit_payload(
-            stage=stage_key,
-            status="failed",
-            operation_id=operation_id,
-            duration_ms=duration_ms,
-            error_category=error_category,
-            chapter_number=chapter_number,
-            context_chapter_number=int(getattr(context, "chapter_number", chapter_number) or chapter_number),
-            error_class=exc.__class__.__name__,
-            error_summary=safe_error_summary(exc),
-            fallback_stage=fallback_stage,
-            attempt_count=len(safe_attempts),
-            attempt_group_ids=attempt_group_ids(safe_attempts),
-        ),
-    }
-    trace_id = self._save_prompt_trace_payload(
-        session=updater.session,
-        updater=updater,
-        project_id=project_id,
-        prompt_trace=trace_payload,
-        decision_event_id=source_event_id,
-    )
-    artifact_manifest: list[dict[str, object]] = []
-    try:
-        manifest = self.artifact_store.save_observability_diagnostic(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            kind=self._diagnostic_kind_for_failure(exc, error_category),
-            source_event_id=source_event_id,
-            trace_id=trace_id,
-            payload={
-                "schema_version": "v4.5.1-audit",
-                "project_id": project_id,
-                "chapter_number": chapter_number,
-                "stage": stage_key,
-                "status": "failed",
-                "operation_id": operation_id,
-                "error_class": exc.__class__.__name__,
-                "error_summary": safe_error_summary(exc),
-                "error_category": error_category,
-                "attempts": safe_attempts,
-                "selected_skills": selected_skills,
-            },
-        )
-        artifact_manifest.append(manifest)
-    except Exception:  # noqa: BLE001
-        logger.warning("Failed to persist observability diagnostic artifact.", exc_info=True)
-    self._record_decision_event(
-        updater=updater,
-        project_id=project_id,
-        chapter_number=chapter_number,
-        event_family="runtime_observation",
-        event_type=DecisionEventType.PROMPT_TRACE_RECORDED,
-        scope="chapter",
-        summary=f"第{chapter_number}章失败 prompt trace 已落盘。",
-        parent_event_id=source_event_id,
-        related_object_type="prompt_trace",
-        related_object_id=trace_id,
-        payload=audit_payload(
-            stage=stage_key,
-            status="failed",
-            operation_id=operation_id,
-            duration_ms=duration_ms,
-            error_category=error_category,
-            trace_id=trace_id,
-            source_event_id=source_event_id,
-            artifact_manifest=artifact_manifest,
-        ),
-    )
-    return trace_id
-
-def _record_model_fallback_payloads(
-    self,
-    *,
-    updater: StateUpdater,
-    project_id: str,
-    chapter_number: int,
-    parent_stage: str,
-    events: list[dict[str, Any]],
-) -> None:
-    for item in events:
-        if not isinstance(item, dict):
-            continue
-        self._record_decision_event(
-            updater=updater,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            event_family="runtime_observation",
-            event_type=DecisionEventType.FALLBACK_PROFILE_SWITCHED,
-            scope="chapter",
-            summary=(
-                f"writer fallback: {str(item.get('from_model') or '-')} -> "
-                f"{str(item.get('to_model') or '-')}"
-            ),
-            payload=audit_payload(
-                stage=parent_stage,
-                status="profile_switched",
-                operation_id=self._audit_operation_id(),
-                model_profile_id=str(item.get("to_profile_id") or ""),
-                model=str(item.get("to_model") or ""),
-                error_summary=safe_error_summary(str(item.get("reason") or "")),
-                from_model_profile_id=str(item.get("from_profile_id") or ""),
-                from_model=str(item.get("from_model") or ""),
-            ),
-        )
 
 def _apply_canon_quality_gate(
     self,
@@ -417,17 +250,11 @@ def _apply_canon_quality_gate(
     draft_id = str(getattr(latest_draft, "id", "") or "")
     review_id = str(getattr(latest_review, "id", "") or "")
     gate_mode = (
-        "fatal_only"
-        if self.policy.canon.quality_gate == "pulp_fatal"
-        else "strict"
+        "fatal_only" if self.policy.canon.quality_gate == "pulp_fatal" else "strict"
     )
     deterministic_gate_mode = gate_mode in {"off", "fatal_only"}
     gate_llm_client = None if deterministic_gate_mode else self.llm_client
-    analysis_mode = (
-        "off"
-        if deterministic_gate_mode
-        else "primary"
-    )
+    analysis_mode = "off" if deterministic_gate_mode else "primary"
     analysis = analyze_writer_output_quality(
         session=session,
         project_id=project_id,
@@ -476,20 +303,32 @@ def _apply_canon_quality_gate(
         return CanonQualityGateOutcome(blocked_path="deferred-acceptance-blocked")
     obligation_repo = NarrativeObligationRepository(session)
     gate_obligations = [
-        *obligation_repo.list_active_for_context(project_id, chapter_number=chapter_number),
-        *obligation_repo.list_planned_for_chapter(project_id, origin_chapter_number=chapter_number),
+        *obligation_repo.list_active_for_context(
+            project_id, chapter_number=chapter_number
+        ),
+        *obligation_repo.list_planned_for_chapter(
+            project_id, origin_chapter_number=chapter_number
+        ),
     ]
     draft_resolved_obligation_ids = verify_due_obligations_for_draft(
         obligations=gate_obligations,
         chapter_number=chapter_number,
         draft_text=str(getattr(writer_output, "body", "") or ""),
-        evidence_ref=f"draft:{draft_id}" if draft_id else f"chapter:{chapter_number}:draft",
+        evidence_ref=f"draft:{draft_id}"
+        if draft_id
+        else f"chapter:{chapter_number}:draft",
     )
-    patch_ids = sorted({
-        patch_id for obligation in gate_obligations
-        for patch_id in obligation.linked_plan_patch_ids if patch_id
-    })
-    gate_analyzer_results = [item for item in analysis.raw_analyzer_results if isinstance(item, dict)]
+    patch_ids = sorted(
+        {
+            patch_id
+            for obligation in gate_obligations
+            for patch_id in obligation.linked_plan_patch_ids
+            if patch_id
+        }
+    )
+    gate_analyzer_results = [
+        item for item in analysis.raw_analyzer_results if isinstance(item, dict)
+    ]
     gate_result = evaluate_canon_admission(
         project_id=project_id,
         chapter_number=chapter_number,
@@ -500,13 +339,17 @@ def _apply_canon_quality_gate(
         obligations=gate_obligations,
         plan_patches=obligation_repo.list_patches_by_ids(patch_ids),
         mode=gate_mode,
-        is_final_chapter=bool(target_total_chapters and chapter_number >= target_total_chapters),
+        is_final_chapter=bool(
+            target_total_chapters and chapter_number >= target_total_chapters
+        ),
         analyzer_results=gate_analyzer_results,
         min_blocking_confidence=0.8,
         require_evidence_for_block=True,
         resolved_obligation_ids=draft_resolved_obligation_ids,
     )
-    CanonQualityRepository(session).save_admission_run(gate_result, signals=gate_signals)
+    CanonQualityRepository(session).save_admission_run(
+        gate_result, signals=gate_signals
+    )
     self._record_decision_event(
         updater=updater,
         project_id=project_id,
@@ -553,6 +396,7 @@ def _apply_canon_quality_gate(
         gate_result=gate_result,
     )
 
+
 def _prepare_deferred_acceptance_if_needed(
     self,
     *,
@@ -577,7 +421,9 @@ def _prepare_deferred_acceptance_if_needed(
         target_total_chapters=target_total_chapters,
         plan_layer_health=PlanLayerHealth(),
     )
-    engine_decision = AutoDecisionEngine(build_review_outcome_rules()).decide(decision_input)
+    engine_decision = AutoDecisionEngine(build_review_outcome_rules()).decide(
+        decision_input
+    )
     selected_review_action = _review_action_for_engine_decision(engine_decision)
     selected_review_reason = str(engine_decision.reason or "")
     selected_primary_issue_class = str(
@@ -642,7 +488,10 @@ def _prepare_deferred_acceptance_if_needed(
         )
     if structural_decision.rule_id in {"arc_patcher_disabled", "book_patcher_disabled"}:
         return [structural_decision.reason]
-    if selected_review_action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
+    if selected_review_action not in {
+        "defer_with_chapter_plan_patch",
+        "defer_with_band_plan_patch",
+    }:
         return []
     issue_type = selected_primary_issue_class
     if not issue_type:
@@ -672,8 +521,14 @@ def _prepare_deferred_acceptance_if_needed(
         target_total_chapters=target_total_chapters,
         bands=bands,
     )
-    if scope_decision.action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
-        return [scope_decision.reason or f"deferred_acceptance_scope_unavailable:{issue_type}"]
+    if scope_decision.action not in {
+        "defer_with_chapter_plan_patch",
+        "defer_with_band_plan_patch",
+    }:
+        return [
+            scope_decision.reason
+            or f"deferred_acceptance_scope_unavailable:{issue_type}"
+        ]
     if self.policy.review.allows_repair_scope("obligation"):
         commit_decision_input = replace(
             decision_input,
@@ -810,6 +665,7 @@ def _prepare_deferred_acceptance_if_needed(
     )
     return [] if result.success else list(result.errors)
 
+
 @staticmethod
 def _band_scope_candidates(
     *,
@@ -817,24 +673,34 @@ def _band_scope_candidates(
     project_id: str,
     current_chapter: int,
 ) -> list[BandScopeCandidate]:
-    rows = session.execute(
-        select(BandExperiencePlan)
-        .where(
-            BandExperiencePlan.project_id == project_id,
-            BandExperiencePlan.chapter_end > int(current_chapter or 0),
+    rows = (
+        session.execute(
+            select(BandExperiencePlan)
+            .where(
+                BandExperiencePlan.project_id == project_id,
+                BandExperiencePlan.chapter_end > int(current_chapter or 0),
+            )
+            .order_by(
+                BandExperiencePlan.chapter_start.asc(),
+                BandExperiencePlan.chapter_end.asc(),
+            )
         )
-        .order_by(BandExperiencePlan.chapter_start.asc(), BandExperiencePlan.chapter_end.asc())
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     if not rows:
         return []
-    plans = session.execute(
-        select(ChapterPlan)
-        .where(
-            ChapterPlan.project_id == project_id,
-            ChapterPlan.chapter_number > int(current_chapter or 0),
-            ChapterPlan.status.in_(("planned", "failed")),
+    plans = (
+        session.execute(
+            select(ChapterPlan).where(
+                ChapterPlan.project_id == project_id,
+                ChapterPlan.chapter_number > int(current_chapter or 0),
+                ChapterPlan.status.in_(("planned", "failed")),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     planned_numbers = [int(plan.chapter_number or 0) for plan in plans]
     result: list[BandScopeCandidate] = []
     for row in rows:
@@ -846,10 +712,13 @@ def _band_scope_candidates(
                 arc_id=str(row.arc_id or ""),
                 chapter_start=start,
                 chapter_end=end,
-                planned_chapters=[number for number in planned_numbers if start <= number <= end],
+                planned_chapters=[
+                    number for number in planned_numbers if start <= number <= end
+                ],
             )
         )
     return result
+
 
 @staticmethod
 def _band_row_by_id(
@@ -867,6 +736,7 @@ def _band_row_by_id(
         .order_by(BandExperiencePlan.created_at.desc(), BandExperiencePlan.id.desc())
         .limit(1)
     ).scalar_one_or_none()
+
 
 def _latest_draft_and_review_for_chapter(
     *,
@@ -898,4 +768,235 @@ def _latest_draft_and_review_for_chapter(
     ).scalar_one_or_none()
     return latest_draft, latest_review
 
-__all__ = ['CanonQualityGateOutcome', '_is_timeout_like', '_is_transient_llm_like', '_transient_retry_delay', '_current_model_identity', '_audit_operation_id', '_drain_llm_attempt_events', '_safe_prompt_trace_attempts', '_error_category_from_attempts', '_diagnostic_kind_for_failure', '_record_failure_prompt_trace', '_record_model_fallback_payloads', '_apply_canon_quality_gate', '_prepare_deferred_acceptance_if_needed', '_band_scope_candidates', '_band_row_by_id', '_latest_draft_and_review_for_chapter', 'evaluate_structural_patch_completion_debt']
+
+class QualityDiagnosticsStage:
+    """Owns the quality gates stage behavior."""
+
+    def _current_model_identity(self) -> tuple[str, str]:
+        return (
+            str(getattr(self.llm_client, "profile_id", "") or "").strip(),
+            str(getattr(self.llm_client, "model", "") or "").strip(),
+        )
+
+    def _audit_operation_id(self) -> str:
+        return str(
+            self._governance_task_id or self._governance_root_event_id or ""
+        ).strip()
+
+    def _drain_llm_attempt_events(self) -> list[dict[str, object]]:
+        drain = getattr(
+            getattr(self.writer, "llm_client", None), "drain_llm_attempt_events", None
+        )
+        if not callable(drain):
+            return []
+        events = drain()
+        return (
+            [dict(item) for item in events if isinstance(item, dict)]
+            if isinstance(events, list)
+            else []
+        )
+
+    def _record_failure_prompt_trace(
+        self,
+        *,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_number: int,
+        context,
+        stage_key: str,
+        template_id: str,
+        source_event_id: str,
+        exc: BaseException,
+        duration_ms: int,
+        attempts: list[dict[str, object]],
+        skill_layers: list[object] | None,
+        fallback_stage: str = "",
+    ) -> str:
+        if not isinstance(updater, StateUpdater):
+            return ""
+        fallback_attempt_no = 0
+        if attempts:
+            try:
+                fallback_attempt_no = int(attempts[-1].get("attempt_no") or 0)
+            except (TypeError, ValueError):
+                fallback_attempt_no = 0
+        safe_attempts = self._safe_prompt_trace_attempts(
+            attempts,
+            fallback_attempt_no=fallback_attempt_no,
+            exc=exc,
+            duration_ms=duration_ms,
+        )
+        error_category = self._error_category_from_attempts(safe_attempts, exc)
+        selected_skills = ChapterWriter._selected_skills_from_layers(skill_layers)
+        operation_id = self._audit_operation_id()
+        model_profile_id, model_name = self._current_model_identity()
+        trace_payload = {
+            "trace_scope": "writer",
+            "stage_key": stage_key,
+            "template_id": template_id,
+            "template_version": "v1",
+            "effective_system_prompt": "",
+            "prompt_layers": [],
+            "input_snapshot": audit_payload(
+                stage=stage_key,
+                status="failed",
+                operation_id=operation_id,
+                chapter_number=chapter_number,
+                writer_mode=str(getattr(self.writer, "writer_mode", "") or ""),
+                selected_skills=selected_skills,
+            ),
+            "model_profile": {
+                "profile_id": model_profile_id,
+                "model": model_name,
+                "base_url": str(getattr(self.llm_client, "base_url", "") or ""),
+            },
+            "attempts": safe_attempts,
+            "output_summary": audit_payload(
+                stage=stage_key,
+                status="failed",
+                operation_id=operation_id,
+                duration_ms=duration_ms,
+                error_category=error_category,
+                chapter_number=chapter_number,
+                context_chapter_number=int(
+                    getattr(context, "chapter_number", chapter_number) or chapter_number
+                ),
+                error_class=exc.__class__.__name__,
+                error_summary=safe_error_summary(exc),
+                fallback_stage=fallback_stage,
+                attempt_count=len(safe_attempts),
+                attempt_group_ids=attempt_group_ids(safe_attempts),
+            ),
+        }
+        trace_id = self._save_prompt_trace_payload(
+            session=updater.session,
+            updater=updater,
+            project_id=project_id,
+            prompt_trace=trace_payload,
+            decision_event_id=source_event_id,
+        )
+        artifact_manifest: list[dict[str, object]] = []
+        try:
+            manifest = self.artifact_store.save_observability_diagnostic(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                kind=self._diagnostic_kind_for_failure(exc, error_category),
+                source_event_id=source_event_id,
+                trace_id=trace_id,
+                payload={
+                    "schema_version": "v4.5.1-audit",
+                    "project_id": project_id,
+                    "chapter_number": chapter_number,
+                    "stage": stage_key,
+                    "status": "failed",
+                    "operation_id": operation_id,
+                    "error_class": exc.__class__.__name__,
+                    "error_summary": safe_error_summary(exc),
+                    "error_category": error_category,
+                    "attempts": safe_attempts,
+                    "selected_skills": selected_skills,
+                },
+            )
+            artifact_manifest.append(manifest)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Failed to persist observability diagnostic artifact.", exc_info=True
+            )
+        self._record_decision_event(
+            updater=updater,
+            project_id=project_id,
+            chapter_number=chapter_number,
+            event_family="runtime_observation",
+            event_type=DecisionEventType.PROMPT_TRACE_RECORDED,
+            scope="chapter",
+            summary=f"第{chapter_number}章失败 prompt trace 已落盘。",
+            parent_event_id=source_event_id,
+            related_object_type="prompt_trace",
+            related_object_id=trace_id,
+            payload=audit_payload(
+                stage=stage_key,
+                status="failed",
+                operation_id=operation_id,
+                duration_ms=duration_ms,
+                error_category=error_category,
+                trace_id=trace_id,
+                source_event_id=source_event_id,
+                artifact_manifest=artifact_manifest,
+            ),
+        )
+        return trace_id
+
+    def _record_model_fallback_payloads(
+        self,
+        *,
+        updater: StateUpdater,
+        project_id: str,
+        chapter_number: int,
+        parent_stage: str,
+        events: list[dict[str, Any]],
+    ) -> None:
+        for item in events:
+            if not isinstance(item, dict):
+                continue
+            self._record_decision_event(
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                event_family="runtime_observation",
+                event_type=DecisionEventType.FALLBACK_PROFILE_SWITCHED,
+                scope="chapter",
+                summary=(
+                    f"writer fallback: {str(item.get('from_model') or '-')} -> "
+                    f"{str(item.get('to_model') or '-')}"
+                ),
+                payload=audit_payload(
+                    stage=parent_stage,
+                    status="profile_switched",
+                    operation_id=self._audit_operation_id(),
+                    model_profile_id=str(item.get("to_profile_id") or ""),
+                    model=str(item.get("to_model") or ""),
+                    error_summary=safe_error_summary(str(item.get("reason") or "")),
+                    from_model_profile_id=str(item.get("from_profile_id") or ""),
+                    from_model=str(item.get("from_model") or ""),
+                ),
+            )
+
+    @staticmethod
+    def _is_timeout_like(exc: Exception) -> bool:
+        return _is_timeout_like(exc)
+
+    @staticmethod
+    def _is_transient_llm_like(exc: Exception) -> bool:
+        return _is_transient_llm_like(exc)
+
+    @staticmethod
+    def _transient_retry_delay(attempt: int) -> float:
+        return _transient_retry_delay(attempt)
+
+    @staticmethod
+    def _safe_prompt_trace_attempts(
+        attempts: list[dict[str, object]],
+        *,
+        fallback_attempt_no: int = 0,
+        exc: BaseException | None = None,
+        duration_ms: int = 0,
+    ) -> list[dict[str, object]]:
+        return _safe_prompt_trace_attempts(
+            attempts,
+            fallback_attempt_no=fallback_attempt_no,
+            exc=exc,
+            duration_ms=duration_ms,
+        )
+
+    @staticmethod
+    def _error_category_from_attempts(
+        attempts: list[dict[str, object]], exc: BaseException
+    ) -> str:
+        return _error_category_from_attempts(attempts, exc)
+
+    @staticmethod
+    def _diagnostic_kind_for_failure(exc: BaseException, error_category: str) -> str:
+        return _diagnostic_kind_for_failure(exc, error_category)
+
+
+__all__ = ["QualityDiagnosticsStage"]

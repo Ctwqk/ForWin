@@ -16,13 +16,13 @@
 
 Slice 1 实施提交依次为 `a7f53bb`、`f7790c5`、`61392af`、`6c2eb0f`、`131e697`、`bc85d91`、`3e0c10f`、`a6a75fb`、`589e58a`、`e87e67b`，并由 completion commit 收口。本轮同时删除失效的旧架构测试大套件和无实现支撑的 review-engine cutover 脚本，常量化 chapter review form 主路径，并增加 production/UI/application/container boundary guard；后续 Phase B-F 不因此标记完成。
 
-Phase B 的行为分层已完成，但结构收口未完成：零引用 ports、空壳和旧 review/reviser 包已删除；`DraftReviewService`、`RepairService`、`FinalResidualPolicy`、`CanonPreparationService` 与 `CanonAdmissionService` 已成为当前行为 owner。`ChapterPipeline` 仍有 90 条跨模块函数赋值，因此 D20 继续列为未完成，不能再以“类属性拼装全部删除”描述现状。
+Phase B 的行为与结构分层均已完成：零引用 ports、空壳和旧 review/reviser 包已删除；`DraftReviewService`、`RepairService`、`FinalResidualPolicy`、`CanonPreparationService` 与 `CanonAdmissionService` 已成为当前行为 owner。`ChapterPipeline` 静态组合 12 个 typed stage owner，90 条跨模块函数赋值已清零；repair 与 Canon preparation 也不再反向接收完整 pipeline。
 
 Phase C 实现已完成：Genesis handoff 后 revision 永久冻结；`EntityRegistrar` 改为 `EntityAdmissionPlan` 规划/验证器，草稿阶段不再写 `Entity`/`EntityAlias`，`EntityAdmissionCommitter` 只在 Canon 成功路径落实无冲突计划；旧 SubWorld admission policy/patch/repair、checker 判决、nonblocking 例外和 summary 名字桥已删除。Planning 服务群由 `PlanningService` / `PlanningQuery` 归口，future audit、patch validation、scenario rehearsal 统一为 `PlanHealth`；`future_plan_auditor.py` 与 `phase24.PlanningServices` 转发门面已删除，orchestrator 拼装降至 87 条。200 章 no-hotfix 运行 gate 尚未执行，因此这里只标记实现完成。
 
 Phase D 的实现已按 hard-cut 方案完成：不可变 Candidate 与冻结 `CanonCommitPlan` 在事务外准备；`CanonAdmissionService.commit_plan` 是 accepted chapter 唯一原子写者，五个故障注入点均证明全回滚，stale 与幂等 replay 有持久化 `CanonCommitRecord`。BookState、实体/别名、义务、章节状态、审计和 outbox 同事务提交；知识、memory、Obsidian 与 publisher 在提交后消费 outbox。运行期 world edit proposal 也归入 Canon 写者。唯一 `0001_v5_baseline` 已从当前 metadata 重生成并通过 upgrade/check/downgrade/upgrade；旧库不迁移。
 
-Phase E/F 尚未完成。已经删除旧 orchestrator/module proxy/re-export 壳并建立部分 application service，但 `ChapterPipeline` 的 90 条方法赋值、HTTP 全局状态与 app factory、未覆盖的 Genesis/Review/Canon application adapters、`governance`/`audit` 命名混用和分层 review UI 仍是实质缺口。完整测试、200 章 no-hotfix、push、150 同步部署和运行角色 smoke 均未执行。
+Phase E/F 尚未完成。已经删除旧 orchestrator/module proxy/re-export 壳、完成 pipeline owner 收口并建立部分 application service；HTTP 全局状态与 app factory、未覆盖的 Genesis/Review/Canon application adapters、`governance`/`audit` 命名混用和分层 review UI 仍是实质缺口。完整测试、200 章 no-hotfix、push、150 同步部署和运行角色 smoke 均未执行。
 
 ---
 
@@ -249,7 +249,7 @@ WritingOrchestrator (变薄的编排壳)
 | D17 ✅ 实现完成 | `FuturePlanAuditor`/patch validator/scenario rehearsal | `PlanningService` / `PlanningQuery` / `PlanHealthService` | 动态 package forwarding、`PlanningServices` bag、future auditor shim | 全部删除；typed health 接入 pre/post audit event | planning facade/health 聚焦测试 | band checkpoint 后续可继续直接消费同一 health DTO |
 | D18 ✅ 已完成 | Genesis 六阶段 + handoff | 冻结语义 | `book_genesis_core/workflow.py` early-return 死块与 handoff 后可继续编辑 | 删除 588 行 workflow；workspace 委托成为 typed service 方法；handoff 设置 revision `locked`，mutation 统一拒绝 | Genesis freeze + handoff 流程 | 不保留直接编辑旁路 |
 | D19 ✎ 已完成 | owner-local typed services | owner-local typed services | `forwin.orchestration.ChapterPipelinePorts` / `OrchestrationEvent` | 未采用 `Any` ports，整包删除；新协议随 owner 定义 | 文件不存在边界测试 | 零引用死代码已清除 |
-| D20 ★ 未完成 | `ChapterPipeline` 公共入口 | typed owner-local collaborators | 类体 90 条跨模块函数赋值 | 按功能族替换并删除 alias 赋值 | 每族替换后回归 + 静态零赋值 | 当前最大结构缺口 |
+| D20 ★ 已完成 | `ChapterPipeline` 公共入口 | 12 个 typed owner-local stage | 类体 90 条跨模块函数赋值与完整 runtime 反向注入 | 静态组合 owner class；repair/Canon 使用窄 execution context | AST 零赋值、构造器零 `Any`、反向依赖守卫 | 公共入口只保留 typed composition 与 task state |
 | D21 ✅ | route registry 域分组 | application services | route ops 内嵌业务逻辑 | 按域抽 service，响应契约不变 | API 回归 + 分组边界测试（已有） | |
 | D22 ✎ 已完成 | durable worker + automation scheduler 入队 | `GenerationApplicationService` | API/CLI/Genesis/auto-continue 的直接任务构造旁路 | 所有生产者统一调用 application service | 任务 lease/resume/cancel/幂等 | worker 只保留 claim/lease/heartbeat/observability |
 | D23 ✅ | publisher worker/browser 隔离 + 强制加密校验 | `PublisherApplicationService` | 生成流程内的 publisher 调用 | 保持后 canon 工作流 | publish=false 冒烟 + 风险门 | 不弱化 browser 风险门 |
@@ -271,9 +271,9 @@ WritingOrchestrator (变薄的编排壳)
 - **入口统一**：`GenerationApplicationService` 已覆盖 API、worker、scheduler、CLI、Genesis、continue 和 auto-continue。
 - **验证**：RuntimePolicy/store/API/snapshot/application/MCP/console 有聚焦测试；completion gate 为 architecture/config 24 passed、策略分支 3 passed、1598 tests collect 无错误；完整长跑与部署 gate 另行执行。
 
-### Phase B — review/repair/final/canon 分层 + orchestrator 立缝（D07-D13,D19,D20 首批）
+### Phase B — review/repair/final/canon 分层 + pipeline ownership（D07-D13,D19,D20）✅ 实现完成
 
-- **当前进度**：行为分层完成，D20 结构切片未完成。旧 `WritingOrchestrator` 已删除，但 `ChapterPipeline` 仍有 90 条跨模块函数赋值；D08 缓存与 review/repair/canon owner 已落地。
+- **当前进度**：行为与结构分层完成。旧 `WritingOrchestrator` 已删除；`ChapterPipeline` 的 90 条函数赋值被 12 个 stage owner 取代，构造器协作者全部具体类型；D08 缓存与 review/repair/canon owner 已落地。
 - **目标**：四层判决语义落地为四个显式 service；`service.py` 猴子补丁开始收敛。
 - **涉及**：`review/{draft_service,decision,repair}`、`orchestrator_loop_core/{review_autofix,repair_loop,quality_gates,world_projection,service}.py`。
 - **不变量**：hard blocker 必拦；force-accept/reckless 不越 canon 门（新增显式不变量测试）；`ChapterReview` 持久化与 UI 队列可读。

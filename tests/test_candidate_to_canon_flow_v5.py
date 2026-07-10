@@ -8,7 +8,7 @@ from forwin.candidate_drafts import (
     CandidateDraftRepository,
     candidate_plan_revision,
 )
-from forwin.canon.preparation import CanonPreparationService
+from forwin.canon.preparation import CanonPreparationContext, CanonPreparationService
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.canon import CanonCommitRecord
@@ -96,7 +96,13 @@ def test_fail_verdict_is_rejected_before_canon_preparation_collaborators() -> No
                 quality_evaluator=unexpected_quality,
                 book_state_preparer=UnexpectedBookState(),
             ).prepare(
-                runtime=object(),
+                context=CanonPreparationContext(
+                    policy=RuntimePolicy.for_profile("standard"),
+                    llm_client=object(),  # type: ignore[arg-type]
+                    artifact_store=object(),  # type: ignore[arg-type]
+                    _record_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
+                    _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
+                ),
                 session=session,
                 repo=StateRepository(session),
                 updater=updater,
@@ -128,15 +134,13 @@ def test_pipeline_only_uses_prepared_atomic_canon_entrypoint() -> None:
     project_source = Path(
         "forwin/generation/pipeline_core/project_chapters.py"
     ).read_text(encoding="utf-8")
-    acceptance_source = Path(
-        "forwin/generation/pipeline_core/acceptance.py"
-    ).read_text(encoding="utf-8")
+    acceptance_source = Path("forwin/generation/pipeline_core/acceptance.py").read_text(
+        encoding="utf-8"
+    )
     projection_source = Path(
         "forwin/generation/pipeline_core/world_projection.py"
     ).read_text(encoding="utf-8")
-    container_source = Path("forwin/runtime/container.py").read_text(
-        encoding="utf-8"
-    )
+    container_source = Path("forwin/runtime/container.py").read_text(encoding="utf-8")
 
     assert ".canon_admission.commit(" not in project_source
     assert ".canon_admission.commit(" not in acceptance_source

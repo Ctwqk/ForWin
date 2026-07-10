@@ -14,13 +14,19 @@ from forwin.book_state.extraction_contract import BookStateExtractionResult
 from forwin.book_state.reviewer import BookStateReviewGate, BookStateReviewVerdict
 from forwin.extractor.book_state_graph_delta import BookStateGraphDeltaExtractor
 from forwin.governance import DecisionEventType
+from forwin.model_adapter import ModelAdapter
 from forwin.models.book_state import GraphDeltaRow
+from forwin.models.governance import DecisionEvent
 from forwin.models.project import ChapterPlan
 from forwin.naming import EntityAdmissionPlan, EntityRegistrar
 from forwin.planning.world_contracts import WorldContractRepository
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.runtime.policy import RuntimePolicy
+from forwin.state.repo import StateRepository
+from forwin.state.updater import StateUpdater
+from forwin.storage import ArtifactStore
 
 from .plan import CanonAuditEvent, CanonCommitPlan, CanonOutboxEvent
 from .types import CanonPreparationOutcome
@@ -38,11 +44,20 @@ class BookStatePreparationOutcome:
         return self.approved_changes is None
 
 
+@dataclass(frozen=True, slots=True)
+class CanonPreparationContext:
+    policy: RuntimePolicy
+    llm_client: ModelAdapter
+    artifact_store: ArtifactStore
+    _record_decision_event: Callable[..., DecisionEvent]
+    _record_rule_decision_event: Callable[..., DecisionEvent]
+
+
 class BookStateCanonPreparer:
     def prepare(
         self,
         *,
-        runtime: Any,
+        context: CanonPreparationContext,
         session: Session,
         project_id: str,
         chapter_number: int,
@@ -55,7 +70,7 @@ class BookStateCanonPreparer:
             chapter_number,
         )
         extraction = BookStateGraphDeltaExtractor(
-            layers=set(runtime.policy.canon.book_state_layers),
+            layers=set(context.policy.canon.book_state_layers),
             session=session,
         ).extract(
             BookStateExtractionRequest(
@@ -94,7 +109,7 @@ class CanonPreparationService:
         self,
         *,
         quality_evaluator: Callable[..., Any] | None = None,
-        book_state_preparer: Any | None = None,
+        book_state_preparer: BookStateCanonPreparer | None = None,
     ) -> None:
         self.quality_evaluator = quality_evaluator or _evaluate_canon_quality
         self.book_state_preparer = book_state_preparer or BookStateCanonPreparer()
@@ -102,10 +117,10 @@ class CanonPreparationService:
     def prepare(
         self,
         *,
-        runtime: Any,
+        context: CanonPreparationContext,
         session: Session,
-        repo: Any,
-        updater: Any,
+        repo: StateRepository,
+        updater: StateUpdater,
         candidate_id: str,
         project_id: str,
         chapter_number: int,
@@ -139,7 +154,7 @@ class CanonPreparationService:
 
         try:
             quality_outcome = self.quality_evaluator(
-                runtime=runtime,
+                context=context,
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -188,7 +203,7 @@ class CanonPreparationService:
             )
         try:
             book_state_outcome = self.book_state_preparer.prepare(
-                runtime=runtime,
+                context=context,
                 session=session,
                 project_id=project_id,
                 chapter_number=chapter_number,
@@ -349,8 +364,8 @@ class CanonPreparationService:
 def _evaluate_canon_quality(**kwargs: Any):
     from forwin.generation.pipeline_core import quality_gates
 
-    runtime = kwargs.pop("runtime")
-    return quality_gates._apply_canon_quality_gate(runtime, **kwargs)
+    context = kwargs.pop("context")
+    return quality_gates._apply_canon_quality_gate(context, **kwargs)
 
 
 def _candidate_ineligibility_reason(verdict: ReviewVerdict) -> str:

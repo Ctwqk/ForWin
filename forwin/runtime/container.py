@@ -16,7 +16,11 @@ from forwin.llm.factory import maybe_wrap_with_codex_router
 from forwin.models.base import get_engine, get_session_factory, require_v5_schema
 from forwin.planning.arc_envelope import ArcEnvelopeManager
 from forwin.planning.service import PlanningService
-from forwin.planning.stage_analysis import PacingStrategist, ReplanGovernor, StageAnalyzer
+from forwin.planning.stage_analysis import (
+    PacingStrategist,
+    ReplanGovernor,
+    StageAnalyzer,
+)
 from forwin.simulation.world import NPCIntentGenerator, WorldSimulator
 from forwin.observability.service import ObservabilityService
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
@@ -123,12 +127,10 @@ class RuntimeContainer:
 
         services = self.services()
         return ChapterPipeline(
-            infrastructure=services.infrastructure,
             policy=services.policy,
             engine=services.engine,
             session_factory=services.session_factory,
             llm_client=services.llm_client,
-            skill_registry=services.skill_runtime.registry,
             skill_router=services.skill_runtime.router,
             skill_prompt_layer_builder=services.skill_runtime.prompt_layer_builder,
             arc_director=services.arc_director,
@@ -369,9 +371,7 @@ class RuntimeContainer:
                 llm_enabled=llm_available,
             ),
             canon_preparation=CanonPreparationService(),
-            canon_admission=CanonAdmissionService(
-                session_factory=session_factory
-            ),
+            canon_admission=CanonAdmissionService(session_factory=session_factory),
             gate_delegation=GateDelegationService(
                 spark_delegate=SparkGateDelegate(llm_client=llm_client)
             ),

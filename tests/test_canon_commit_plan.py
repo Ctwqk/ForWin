@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import func, select
-from types import SimpleNamespace
 
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.canon.plan import (
@@ -13,6 +12,7 @@ from forwin.canon.plan import (
 )
 from forwin.canon.preparation import (
     BookStatePreparationOutcome,
+    CanonPreparationContext,
     CanonPreparationService,
 )
 from forwin.canon.types import CanonQualityGateOutcome
@@ -321,7 +321,13 @@ def test_prepare_uses_pretransaction_collaborators_without_compiling() -> None:
             quality_evaluator=quality_evaluator,
             book_state_preparer=PreparedBookState(),
         ).prepare(
-            runtime=SimpleNamespace(policy=RuntimePolicy.for_profile("standard")),
+            context=CanonPreparationContext(
+                policy=RuntimePolicy.for_profile("standard"),
+                llm_client=object(),  # type: ignore[arg-type]
+                artifact_store=object(),  # type: ignore[arg-type]
+                _record_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
+                _record_rule_decision_event=lambda **_kwargs: None,  # type: ignore[arg-type]
+            ),
             session=session,
             repo=None,
             updater=updater,

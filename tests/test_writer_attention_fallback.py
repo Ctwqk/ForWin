@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -16,6 +15,7 @@ from forwin.generation.pipeline import ChapterPipeline
 from forwin.protocol.writer import WriterOutput
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
+from tests.postgres import postgres_test_url
 
 
 def _build_pipeline(
@@ -44,7 +44,9 @@ def _build_pipeline(
 
 
 class WriterAttentionFallbackTests(unittest.TestCase):
-    def test_transient_classifier_accepts_529_unknown_status_code_wrapped_message(self) -> None:
+    def test_transient_classifier_accepts_529_unknown_status_code_wrapped_message(
+        self,
+    ) -> None:
         exc = ValueError(
             "ChapterWriter preview generation failed after retries: "
             "Server error '529 Unknown Status Code' for url "
@@ -54,7 +56,9 @@ class WriterAttentionFallbackTests(unittest.TestCase):
         self.assertTrue(ChapterPipeline._is_transient_llm_like(exc))
         self.assertTrue(ChapterPipeline._should_degrade_provisional_preview(exc))
 
-    def test_provisional_preview_generation_failure_degrades_to_shadow_plan(self) -> None:
+    def test_provisional_preview_generation_failure_degrades_to_shadow_plan(
+        self,
+    ) -> None:
         exc = ValueError(
             "ChapterWriter preview generation failed after retries: "
             "preview response body is empty"
@@ -62,7 +66,9 @@ class WriterAttentionFallbackTests(unittest.TestCase):
 
         self.assertTrue(ChapterPipeline._should_degrade_provisional_preview(exc))
 
-    def test_blackbox_writer_failure_uses_preview_fallback_before_needs_review(self) -> None:
+    def test_blackbox_writer_failure_uses_preview_fallback_before_needs_review(
+        self,
+    ) -> None:
         with TemporaryDirectory() as tmp:
             db_path = postgres_test_url("writer-fallback")
             engine = get_engine(db_path)
@@ -187,18 +193,32 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                     )
 
                 self.assertIs(result, preview_output)
-                infos = [call.args[0] for call in updater.save_decision_event.call_args_list]
+                infos = [
+                    call.args[0] for call in updater.save_decision_event.call_args_list
+                ]
                 event_types = [info.event_type for info in infos]
-                self.assertIn(DecisionEventType.WRITER_PREVIEW_FALLBACK_STARTED, event_types)
-                self.assertIn(DecisionEventType.WRITER_PREVIEW_FALLBACK_SUCCEEDED, event_types)
-                failed = next(info for info in infos if info.event_type == DecisionEventType.LLM_REQUEST_FAILED)
+                self.assertIn(
+                    DecisionEventType.WRITER_PREVIEW_FALLBACK_STARTED, event_types
+                )
+                self.assertIn(
+                    DecisionEventType.WRITER_PREVIEW_FALLBACK_SUCCEEDED, event_types
+                )
+                failed = next(
+                    info
+                    for info in infos
+                    if info.event_type == DecisionEventType.LLM_REQUEST_FAILED
+                )
                 succeeded = next(
-                    info for info in infos
-                    if info.event_type == DecisionEventType.WRITER_PREVIEW_FALLBACK_SUCCEEDED
+                    info
+                    for info in infos
+                    if info.event_type
+                    == DecisionEventType.WRITER_PREVIEW_FALLBACK_SUCCEEDED
                 )
                 self.assertEqual(succeeded.parent_event_id, f"row-{failed.event_type}")
                 self.assertEqual(succeeded.payload["effective_model"], "backup-model")
-                self.assertEqual(succeeded.payload["effective_profile_id"], "backup-profile")
+                self.assertEqual(
+                    succeeded.payload["effective_profile_id"], "backup-profile"
+                )
                 self.assertEqual(succeeded.payload["successful_attempt_no"], 1)
                 self.assertEqual(succeeded.payload["output_chars"], 4)
             finally:
@@ -239,7 +259,9 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                 parent_event_id=info.parent_event_id,
             )
 
-            with patch.object(pipeline.writer, "write_chapter", side_effect=fake_write_chapter):
+            with patch.object(
+                pipeline.writer, "write_chapter", side_effect=fake_write_chapter
+            ):
                 result = pipeline._write_chapter_with_attention_fallback(
                     context=SimpleNamespace(chapter_number=1),
                     project_id="project-1",
@@ -253,7 +275,9 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                 )
 
             self.assertIsNotNone(result)
-            self.assertEqual(captured, {"provider": "deepseek", "model": "deepseek-reasoner"})
+            self.assertEqual(
+                captured, {"provider": "deepseek", "model": "deepseek-reasoner"}
+            )
             started = next(
                 call.args[0]
                 for call in updater.save_decision_event.call_args_list
@@ -277,9 +301,24 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                     "arc_synopsis": "瞬时故障",
                     "setting_summary": "无",
                     "chapters": [
-                        {"chapter_number": 1, "title": "第一章", "one_line": "开场", "goals": ["推进主线"]},
-                        {"chapter_number": 2, "title": "第二章", "one_line": "展开", "goals": ["继续"]},
-                        {"chapter_number": 3, "title": "第三章", "one_line": "转折", "goals": ["升级"]},
+                        {
+                            "chapter_number": 1,
+                            "title": "第一章",
+                            "one_line": "开场",
+                            "goals": ["推进主线"],
+                        },
+                        {
+                            "chapter_number": 2,
+                            "title": "第二章",
+                            "one_line": "展开",
+                            "goals": ["继续"],
+                        },
+                        {
+                            "chapter_number": 3,
+                            "title": "第三章",
+                            "one_line": "转折",
+                            "goals": ["升级"],
+                        },
                     ],
                     "characters": [],
                     "locations": [],
@@ -296,13 +335,18 @@ class WriterAttentionFallbackTests(unittest.TestCase):
                     raise RuntimeError("HTTP 529 Unknown Status Code")
 
                 with (
-                    patch.object(pipeline.writer, "write_chapter", side_effect=transient_fail),
+                    patch.object(
+                        pipeline.writer, "write_chapter", side_effect=transient_fail
+                    ),
                     patch.object(
                         pipeline.writer,
                         "write_preview_chapter",
                         side_effect=RuntimeError("HTTP 529 Unknown Status Code"),
                     ),
-                    patch("forwin.generation.pipeline.time.sleep", return_value=None),
+                    patch(
+                        "forwin.generation.pipeline_core.writer_attention.time.sleep",
+                        return_value=None,
+                    ),
                 ):
                     result = pipeline.run("p", "玄幻", 3)
 

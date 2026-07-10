@@ -87,11 +87,15 @@ def _setup_project(session):
 
 
 def _persist_candidate(session, project, chapter, output, verdict):
-    planned = EntityRegistrar(session=session).plan_writer_output(
-        project_id=project.id,
-        chapter_number=chapter.chapter_number,
-        writer_output=output,
-    ).writer_output
+    planned = (
+        EntityRegistrar(session=session)
+        .plan_writer_output(
+            project_id=project.id,
+            chapter_number=chapter.chapter_number,
+            writer_output=output,
+        )
+        .writer_output
+    )
     draft = ChapterDraft(
         chapter_plan_id=chapter.id,
         version=1,
@@ -131,7 +135,7 @@ def _prepare_candidate(pipeline, session, project, chapter, output, verdict):
         verdict,
     )
     return pipeline.canon_preparation.prepare(
-        runtime=pipeline,
+        context=pipeline.canon_preparation_context,
         session=session,
         repo=repo,
         updater=updater,

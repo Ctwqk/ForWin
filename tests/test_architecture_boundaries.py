@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib
 import inspect
 from dataclasses import fields
@@ -212,8 +213,7 @@ def test_design_status_contains_deprecation_matrix() -> None:
     assert "兼容 / 弃用矩阵" in status_doc
     assert "`forwin.world_model` | removed | `forwin.knowledge_system`" in status_doc
     assert (
-        "`forwin.reviewer_v4` | removed | `forwin.world_v4_review_gate`"
-        in status_doc
+        "`forwin.reviewer_v4` | removed | `forwin.world_v4_review_gate`" in status_doc
     )
     assert "`forwin.planning.scenario_rehearsal` | removed" in status_doc
 
@@ -333,10 +333,12 @@ def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
         "from types import ModuleType",
     ):
         assert removed not in production_source
-    assert all("import *" not in path.read_text(encoding="utf-8") for path in production_files)
+    assert all(
+        "import *" not in path.read_text(encoding="utf-8") for path in production_files
+    )
 
     pipeline_source = _read("forwin/generation/pipeline.py")
-    assert "class ChapterPipeline:" in pipeline_source
+    assert "class ChapterPipeline(" in pipeline_source
     assert "RuntimeServices" not in pipeline_source
     assert "ChapterPipeline." not in pipeline_source
     assert "ChapterPipeline" not in _read("forwin/generation/pipeline_core/__init__.py")
@@ -383,6 +385,54 @@ def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
     assert "self.repair.review_candidate(" in project_chapters
     assert "self.repair.repair_canon_block(" in project_chapters
     assert "class RepairService" in _read("forwin/review/repair/service.py")
+
+
+def test_chapter_pipeline_uses_real_stage_owners_and_typed_collaborators() -> None:
+    source = _read("forwin/generation/pipeline.py")
+    module = ast.parse(source)
+    pipeline = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "ChapterPipeline"
+    )
+
+    assigned_methods = [
+        node for node in pipeline.body if isinstance(node, (ast.Assign, ast.AnnAssign))
+    ]
+    assert assigned_methods == []
+
+    constructor = next(
+        node
+        for node in pipeline.body
+        if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+    )
+    annotations = [
+        ast.unparse(argument.annotation)
+        for argument in [*constructor.args.args, *constructor.args.kwonlyargs]
+        if argument.annotation is not None
+    ]
+    assert "Any" not in annotations
+    assert all("Any" not in annotation for annotation in annotations)
+
+    bases = {ast.unparse(base) for base in pipeline.bases}
+    assert {
+        "RunControlStage",
+        "GovernanceStage",
+        "ReviewWorkflowStage",
+        "ChapterExecutionStage",
+        "WriterExecutionStage",
+        "FinalizationStage",
+    }.issubset(bases)
+
+
+def test_repair_service_does_not_receive_the_complete_pipeline() -> None:
+    repair_source = _read("forwin/review/repair/service.py")
+    chapter_source = _read("forwin/generation/pipeline_core/project_chapters.py")
+
+    assert "from forwin.generation.pipeline import ChapterPipeline" not in repair_source
+    assert "runtime: ChapterPipeline" not in repair_source
+    assert "runtime=self" not in chapter_source
+    assert "RepairExecution" in repair_source
 
 
 def test_removed_repair_dead_code_stays_removed() -> None:
@@ -584,13 +634,19 @@ def test_generation_task_producers_use_application_service() -> None:
 
 
 def test_runtime_container_is_the_only_pipeline_constructor() -> None:
-    offenders = [
-        path.relative_to(ROOT).as_posix()
-        for root in (ROOT / "forwin", ROOT / "scripts")
-        for path in root.rglob("*.py")
-        if path != ROOT / "forwin/runtime/container.py"
-        and "ChapterPipeline(" in path.read_text(encoding="utf-8")
-    ]
+    offenders: list[str] = []
+    for root in (ROOT / "forwin", ROOT / "scripts"):
+        for path in root.rglob("*.py"):
+            if path == ROOT / "forwin/runtime/container.py":
+                continue
+            module = ast.parse(path.read_text(encoding="utf-8"))
+            if any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "ChapterPipeline"
+                for node in ast.walk(module)
+            ):
+                offenders.append(path.relative_to(ROOT).as_posix())
 
     assert offenders == []
 

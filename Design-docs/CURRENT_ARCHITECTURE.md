@@ -36,8 +36,8 @@ Genesis / Writer / Review 主链
 
 ## 模块与入口边界
 
-- 章节生产入口是 `forwin.generation.pipeline.ChapterPipeline`，构造器显式接收协作者。旧 `WritingOrchestrator`、模块回注与伪造 `__module__` 已删除；当前仍有 90 条跨模块函数赋值留在 `ChapterPipeline` 类体内，这是 v5 后续结构切片的明确未完成项，不得视为最终边界。
-- `forwin.generation.pipeline_core` 只保存 pipeline-owned 函数，不通过 `common.py` 转发外域类型；每个模块直接从真实 owner 导入。
+- 章节生产入口是 `forwin.generation.pipeline.ChapterPipeline`。它静态组合 run control、governance、review、repair planning、chapter execution、writer、finalization 等 stage owner，构造器只接收具体类型协作者；类体不再做跨模块函数赋值。旧 `WritingOrchestrator`、模块回注、伪造 `__module__` 和完整 pipeline 反向注入均已删除。
+- `forwin.generation.pipeline_core` 以 stage owner class 保存 pipeline 行为，以模块私有函数保存纯计算；不通过 `common.py` 转发外域类型。`RepairExecution` 与 `CanonPreparationContext` 是冻结的窄能力集，review/canon 域不依赖 `ChapterPipeline`。
 - Genesis 只有 `forwin.genesis` 一个包，workspace 与 handoff 是其子域；`book_genesis.py`、`book_genesis_core`、`genesis_workspace`、`genesis_handoff` 旧入口均已删除。
 - 项目/Genesis/章节/review 的传输适配统一落到 `ProjectApplicationService`；publisher HTTP/extension 动作统一落到 `PublisherApplicationService`；生成任务统一落到 `GenerationApplicationService`。
 - `forwin.api` 只公开 `app` 与 `lifespan`。旧 `ModuleType` 代理、`api_core.exports`、`globals().update()`、`api_project_ops`、`api_publisher_ops`、`api_project_policy` 和 `project_ops` 根包已删除。

@@ -62,5 +62,6 @@ class RuntimeServices:
     provisional_writer: Any
     repair: RepairService
     repair_verifier: RepairVerifier
+    canon_preparation: Any
     canon_admission: CanonAdmissionService
     gate_delegation: GateDelegationService

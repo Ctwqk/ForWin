@@ -59,6 +59,7 @@ class ChapterPipeline:
         draft_review: Any,
         repair: Any,
         repair_verifier: Any,
+        canon_preparation: Any,
         canon_admission: Any,
         gate_delegation: Any,
         progress_callback: Callable[[str, dict[str, Any]], None] | None = None,
@@ -104,6 +105,7 @@ class ChapterPipeline:
         self.draft_review = draft_review
         self.repair = repair
         self.repair_verifier = repair_verifier
+        self.canon_preparation = canon_preparation
         self.canon_admission = canon_admission
         self.gate_delegation = gate_delegation
         self._bind_pipeline_runtime_hooks()

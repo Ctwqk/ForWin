@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from forwin.book_state.repository import BookStateRepository
 from forwin.config import DEFAULT_QDRANT_URL
+from forwin.context import assemble_context
 from forwin.knowledge_system.page_repository import KnowledgePageRepository
 from forwin.knowledge_system.store import load_json
 from forwin.llm_kb.retriever import LLMKnowledgeBaseRetriever
@@ -61,9 +62,7 @@ from .visibility import (
 
 
 def _assemble_context(repo, project_id: str, chapter_plan) -> ChapterContextPack:
-    from forwin.retrieval import broker as broker_shell
-
-    return broker_shell.assemble_context(repo, project_id, chapter_plan)
+    return assemble_context(repo, project_id, chapter_plan)
 
 
 class RetrievalBroker:

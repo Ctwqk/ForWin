@@ -3,8 +3,9 @@ from __future__ import annotations
 import pytest
 
 from forwin.book_state.extraction_contract import BookStateExtractionRequest
+from forwin.book_state.compiler import BookStateCompiler
 from forwin.book_state.repository import BookStateRepository
-from forwin.book_state.review_gate_ext import BookStateDirectCommitService
+from forwin.book_state.reviewer import BookStateReviewGate
 from forwin.canon_quality.gate import evaluate_canon_admission, normalize_gate_mode
 from forwin.canon_quality.signals import CanonQualitySignal
 from forwin.extractor.book_state_graph_delta import (
@@ -120,7 +121,10 @@ def test_disabled_reviewers_are_not_called() -> None:
         continuity_checker=DummyChecker(),
     )
 
-    assert verdict.verdict == "pass"
+    assert verdict.verdict == "fail"
+    assert [issue.issue_type for issue in verdict.issues] == [
+        "entity_admission_plan_invalid"
+    ]
     assert experience.calls == 0
     assert map_movement.calls == 0
     assert personality.calls == 0
@@ -144,7 +148,10 @@ def test_disabled_personality_reviewer_does_not_collect_or_review() -> None:
         continuity_checker=DummyChecker(),
     )
 
-    assert verdict.verdict == "pass"
+    assert verdict.verdict == "fail"
+    assert [issue.issue_type for issue in verdict.issues] == [
+        "entity_admission_plan_invalid"
+    ]
     assert personality.collect_calls == 0
     assert personality.review_calls == 0
 
@@ -744,7 +751,11 @@ def test_light_state_delta_commits_to_book_state(monkeypatch: pytest.MonkeyPatch
                 )
             ).changes
             assert changes is not None
-            result = BookStateDirectCommitService(session).commit(changes)
+            review = BookStateReviewGate(session).review(changes)
+            assert review.approved_changes is not None
+            result = BookStateCompiler(session).compile(
+                review.approved_changes
+            )
             assert result.committed is True
 
             repo = BookStateRepository(session)

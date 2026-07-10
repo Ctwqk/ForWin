@@ -869,7 +869,6 @@ def _band_row_by_id(
     ).scalar_one_or_none()
 
 def _latest_draft_and_review_for_chapter(
-    self,
     *,
     session: Session,
     project_id: str,

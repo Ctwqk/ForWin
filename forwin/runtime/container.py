@@ -6,7 +6,7 @@ from typing import Callable, Literal
 
 from forwin.application.generation import GenerationApplicationService
 from forwin.genesis import BookGenesisService
-from forwin.canon import CanonAdmissionService
+from forwin.canon import CanonAdmissionService, CanonPreparationService
 from forwin.config import InfrastructureConfig
 from forwin.context.assembler_core import ChapterContextAssembler
 from forwin.context.gates import RecencyTruncateGate
@@ -148,6 +148,7 @@ class RuntimeContainer:
             draft_review=services.draft_review,
             repair=services.repair,
             repair_verifier=services.repair_verifier,
+            canon_preparation=services.canon_preparation,
             canon_admission=services.canon_admission,
             gate_delegation=services.gate_delegation,
             progress_callback=progress_callback,
@@ -367,7 +368,10 @@ class RuntimeContainer:
                 llm_client=llm_client if llm_available else None,
                 llm_enabled=llm_available,
             ),
-            canon_admission=CanonAdmissionService(),
+            canon_preparation=CanonPreparationService(),
+            canon_admission=CanonAdmissionService(
+                session_factory=session_factory
+            ),
             gate_delegation=GateDelegationService(
                 spark_delegate=SparkGateDelegate(llm_client=llm_client)
             ),

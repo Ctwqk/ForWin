@@ -257,10 +257,6 @@ def _audit_future_plans_after_acceptance(
     )
     return result
 
-@staticmethod
-
-@staticmethod
-
 def _record_future_plan_audit_events(
     self,
     *,

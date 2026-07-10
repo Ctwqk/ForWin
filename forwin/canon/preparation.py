@@ -125,18 +125,45 @@ class CanonPreparationService:
             raise ValueError("candidate chapter mismatch")
         if candidate.body_hash != candidate_body_hash(writer_output.body):
             raise ValueError("candidate body changed after review")
+        ineligible_reason = _candidate_ineligibility_reason(verdict)
+        if ineligible_reason:
+            _mark_candidate_needs_review(
+                CandidateDraftRepository(session),
+                candidate.id,
+                reason=ineligible_reason,
+            )
+            return CanonPreparationOutcome(
+                blocked_path=ineligible_reason,
+                block_kind="candidate_ineligible",
+            )
 
-        quality_outcome = self.quality_evaluator(
-            runtime=runtime,
-            session=session,
-            repo=repo,
-            updater=updater,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            writer_output=writer_output,
-            verdict=verdict,
-        )
+        try:
+            quality_outcome = self.quality_evaluator(
+                runtime=runtime,
+                session=session,
+                repo=repo,
+                updater=updater,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                writer_output=writer_output,
+                verdict=verdict,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _mark_candidate_failed(
+                CandidateDraftRepository(session),
+                candidate.id,
+                reason=str(exc),
+            )
+            return CanonPreparationOutcome(
+                blocked_path=str(exc),
+                block_kind="canon_preparation_error",
+            )
         if quality_outcome.blocked:
+            _mark_candidate_needs_review(
+                CandidateDraftRepository(session),
+                candidate.id,
+                reason=quality_outcome.blocked_path or "canon quality blocked",
+            )
             return CanonPreparationOutcome(
                 blocked_path=quality_outcome.blocked_path,
                 block_kind="canon_quality",
@@ -149,20 +176,41 @@ class CanonPreparationService:
                 project_id=project_id,
                 writer_output=writer_output,
             )
-        except ValueError as exc:
+        except Exception as exc:  # noqa: BLE001
+            _mark_candidate_needs_review(
+                CandidateDraftRepository(session),
+                candidate.id,
+                reason=str(exc),
+            )
             return CanonPreparationOutcome(
                 blocked_path=str(exc),
                 block_kind="entity_admission",
             )
-        book_state_outcome = self.book_state_preparer.prepare(
-            runtime=runtime,
-            session=session,
-            project_id=project_id,
-            chapter_number=chapter_number,
-            writer_output=writer_output,
-            verdict=verdict,
-        )
+        try:
+            book_state_outcome = self.book_state_preparer.prepare(
+                runtime=runtime,
+                session=session,
+                project_id=project_id,
+                chapter_number=chapter_number,
+                writer_output=writer_output,
+                verdict=verdict,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _mark_candidate_failed(
+                CandidateDraftRepository(session),
+                candidate.id,
+                reason=str(exc),
+            )
+            return CanonPreparationOutcome(
+                blocked_path=str(exc),
+                block_kind="canon_preparation_error",
+            )
         if book_state_outcome.blocked:
+            _mark_candidate_needs_review(
+                CandidateDraftRepository(session),
+                candidate.id,
+                reason=book_state_outcome.blocked_path or "BookState blocked",
+            )
             return CanonPreparationOutcome(
                 blocked_path=book_state_outcome.blocked_path,
                 block_kind="book_state",
@@ -201,6 +249,11 @@ class CanonPreparationService:
         if int(approved_book_state_changes.chapter_number or 0) != chapter_number:
             raise ValueError("BookState chapter mismatch")
         if entity_admission_plan.blocked:
+            _mark_candidate_needs_review(
+                repository,
+                candidate.id,
+                reason="; ".join(entity_admission_plan.plan_conflicts),
+            )
             return CanonPreparationOutcome(
                 block_kind="entity_admission",
                 blocked_path="; ".join(entity_admission_plan.plan_conflicts),
@@ -298,6 +351,59 @@ def _evaluate_canon_quality(**kwargs: Any):
 
     runtime = kwargs.pop("runtime")
     return quality_gates._apply_canon_quality_gate(runtime, **kwargs)
+
+
+def _candidate_ineligibility_reason(verdict: ReviewVerdict) -> str:
+    if verdict.verdict not in {"pass", "warn"}:
+        return f"review verdict {verdict.verdict} is not Canon-eligible"
+    final_residual = verdict.final_residual_decision
+    if final_residual is not None:
+        if final_residual.decision != "force_accept":
+            return f"final residual decision {final_residual.decision} blocks Canon"
+        if final_residual.canon_risk == "high":
+            return "high-risk final residual blocks Canon"
+    verification = verdict.repair_verification
+    if verification is not None and (
+        not verification.fixed_all_must_fix
+        or not verification.preserved_all_must_preserve
+    ):
+        return "repair verification is incomplete"
+    residuals = verdict.residual_review_issues or []
+    if any(issue.blocking or issue.severity == "error" for issue in residuals):
+        return "hard residual review issues block Canon"
+    return ""
+
+
+def _mark_candidate_needs_review(
+    repository: CandidateDraftRepository,
+    candidate_id: str,
+    *,
+    reason: str,
+) -> None:
+    candidate = repository.get(candidate_id, for_update=True)
+    if candidate is None or candidate.status in {"needs_review", "failed", "accepted"}:
+        return
+    repository.transition(
+        candidate.id,
+        "needs_review",
+        failure_reason=reason,
+    )
+
+
+def _mark_candidate_failed(
+    repository: CandidateDraftRepository,
+    candidate_id: str,
+    *,
+    reason: str,
+) -> None:
+    candidate = repository.get(candidate_id, for_update=True)
+    if candidate is None or candidate.status in {"failed", "accepted"}:
+        return
+    repository.transition(
+        candidate.id,
+        "failed",
+        failure_reason=reason,
+    )
 
 
 __all__ = [

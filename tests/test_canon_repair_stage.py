@@ -9,11 +9,9 @@ from sqlalchemy.orm import sessionmaker
 
 from tests.postgres import postgres_test_url
 from forwin.canon import (
-    CanonAdmissionService,
     CanonAdmissionOutcome,
     CanonQualityGateOutcome,
 )
-from forwin.canon import admission as canon_admission_module
 from forwin.checker.hard_floor import HardFloorResult
 from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.config import InfrastructureConfig
@@ -586,81 +584,6 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
     assert calls == ["draft_verify", "save_admission", "event"]
 
 
-def test_canon_admission_exception_freezes_and_returns_blocked_outcome(
-    monkeypatch,
-):
-    failed_rows: list[dict[str, object]] = []
-    frozen_rows: list[dict[str, object]] = []
-
-    class _CandidateDraftRepo:
-        def __init__(self, _session) -> None:
-            return None
-
-        def mark_canon_failed(self, **kwargs):
-            failed_rows.append(kwargs)
-            return None
-
-    class _Session:
-        def __init__(self) -> None:
-            self.rolled_back = False
-
-        def rollback(self) -> None:
-            self.rolled_back = True
-
-    class _ArtifactStore:
-        def save_frozen_candidate(self, **kwargs):
-            frozen_rows.append(kwargs)
-            return "frozen/canon-update-failed.json"
-
-    class _Pipeline:
-        policy = RuntimePolicy.for_profile("standard")
-        artifact_store = _ArtifactStore()
-
-        def _record_decision_event(self, **_kwargs) -> None:
-            return None
-
-    def _fail_canon_quality_gate(*_args, **_kwargs):
-        raise RuntimeError("canon apply failed")
-
-    monkeypatch.setattr(
-        canon_admission_module,
-        "CandidateDraftRepository",
-        _CandidateDraftRepo,
-    )
-    monkeypatch.setattr(
-        quality_gates_module,
-        "_apply_canon_quality_gate",
-        _fail_canon_quality_gate,
-    )
-    session = _Session()
-
-    outcome = CanonAdmissionService().commit(
-        runtime=_Pipeline(),
-        session=session,
-        repo=object(),
-        updater=object(),
-        project_id="p",
-        chapter_number=2,
-        writer_output=WriterOutput(
-            project_id="p",
-            chapter_number=2,
-            title="第二章",
-            body="正文",
-            char_count=2,
-            end_of_chapter_summary="摘要",
-        ),
-        verdict=ReviewVerdict(verdict="pass", issues=[]),
-    )
-
-    assert isinstance(outcome, CanonAdmissionOutcome)
-    assert outcome.blocked
-    assert outcome.blocked_path == "frozen/canon-update-failed.json"
-    assert outcome.block_kind == "canon_admission_error"
-    assert session.rolled_back is True
-    assert frozen_rows[0]["project_id"] == "p"
-    assert failed_rows[0]["canon_artifact_path"] == "frozen/canon-update-failed.json"
-
-
 def test_canon_admission_exception_pauses_chapter_instead_of_accepting(monkeypatch):
     class PassReviewHub:
         def review(self, **_kwargs) -> ReviewVerdict:
@@ -796,13 +719,12 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
         )
         pipeline.draft_review = WarnThenPassReviewHub()
 
-        def apply_canon_candidate(**_kwargs):
+        def evaluate_canon_candidate(**_kwargs):
             apply_calls["count"] += 1
             if apply_calls["count"] == 1:
-                return CanonAdmissionOutcome(
+                return CanonQualityGateOutcome(
                     blocked_path="frozen/canon-quality.json",
-                    block_kind="canon_quality",
-                    canon_gate_result=CanonAdmissionGateResult(
+                    gate_result=CanonAdmissionGateResult(
                         project_id="p",
                         chapter_number=1,
                         draft_id="d1",
@@ -815,9 +737,9 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
                         deterministic_issue_refs=["signal-1"],
                     ),
                 )
-            return CanonAdmissionOutcome()
+            return CanonQualityGateOutcome()
 
-        pipeline.canon_admission.commit = apply_canon_candidate
+        pipeline.canon_preparation.quality_evaluator = evaluate_canon_candidate
 
         result = pipeline.run("p", "g", 1)
 
@@ -900,10 +822,10 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(
             ),
         )
 
-        def apply_canon_candidate(**_kwargs):
-            return CanonAdmissionOutcome(
-                block_kind="canon_quality",
-                canon_gate_result=CanonAdmissionGateResult(
+        def evaluate_canon_candidate(**_kwargs):
+            return CanonQualityGateOutcome(
+                blocked_path="frozen/canon-quality.json",
+                gate_result=CanonAdmissionGateResult(
                     project_id="p",
                     chapter_number=1,
                     draft_id="d1",
@@ -917,7 +839,7 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(
                 ),
             )
 
-        pipeline.canon_admission.commit = apply_canon_candidate
+        pipeline.canon_preparation.quality_evaluator = evaluate_canon_candidate
 
         result = pipeline.run("p", "g", 1)
 
@@ -993,9 +915,10 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
         ).throw(
             AssertionError("non-repairable canon block should not run canon repair")
         )
-        pipeline.canon_admission.commit = lambda **_kwargs: CanonAdmissionOutcome(
-            block_kind="canon_quality",
-            canon_gate_result=CanonAdmissionGateResult(
+        pipeline.canon_preparation.quality_evaluator = (
+            lambda **_kwargs: CanonQualityGateOutcome(
+                blocked_path="frozen/canon-quality.json",
+                gate_result=CanonAdmissionGateResult(
                 project_id="p",
                 chapter_number=1,
                 draft_id="d1",
@@ -1006,7 +929,8 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
                 required_repair_scope=raw_scope,
                 gate_summary=f"canon quality gate strict: required_repair_scope={raw_scope}",
                 deterministic_issue_refs=["signal-1"],
-            ),
+                ),
+            )
         )
 
         result = pipeline.run("p", "g", 1)
@@ -1093,9 +1017,25 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
         )
 
         def force_accepted_review(**kwargs):
+            planned_output = pipeline._plan_writer_output_entities(
+                session=kwargs["session"],
+                project_id=kwargs["project_id"],
+                chapter_number=kwargs["chapter_plan"].chapter_number,
+                writer_output=kwargs["writer_output"],
+            )
+            verdict = ReviewVerdict(verdict="pass", issues=[])
+            persisted_output, _draft, _review = pipeline._persist_draft_and_review(
+                session=kwargs["session"],
+                updater=kwargs["updater"],
+                chapter_plan=kwargs["chapter_plan"],
+                project_id=kwargs["project_id"],
+                chapter_number=kwargs["chapter_plan"].chapter_number,
+                writer_output=planned_output,
+                review=verdict,
+            )
             return (
-                kwargs["writer_output"],
-                ReviewVerdict(verdict="pass", issues=[]),
+                persisted_output,
+                verdict,
                 initial_force_accept,
             )
 
@@ -1112,16 +1052,15 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
             deterministic_issue_refs=["signal-1"],
         )
 
-        def apply_canon_candidate(**_kwargs):
+        def evaluate_canon_candidate(**_kwargs):
             apply_calls["count"] += 1
             if apply_calls["count"] > 1:
                 raise AssertionError(
                     "canon should not be retried after failed canon repair"
                 )
-            return CanonAdmissionOutcome(
+            return CanonQualityGateOutcome(
                 blocked_path="frozen/canon-quality.json",
-                block_kind="canon_quality",
-                canon_gate_result=gate,
+                gate_result=gate,
             )
 
         def failed_canon_repair(**kwargs):
@@ -1137,7 +1076,7 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
             )
 
         pipeline.repair.review_candidate = force_accepted_review
-        pipeline.canon_admission.commit = apply_canon_candidate
+        pipeline.canon_preparation.quality_evaluator = evaluate_canon_candidate
         pipeline.repair.repair_canon_block = failed_canon_repair
 
         result = pipeline.run("p", "g", 1)

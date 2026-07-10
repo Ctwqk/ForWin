@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 
+from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.canon.types import CanonAdmissionOutcome
 from forwin.checker.hard_floor import run_hard_floor
 from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
 from forwin.experience.trope_cooldown import save_accepted_trope_usage_for_chapter
@@ -480,8 +482,21 @@ def _run_project_chapters(
             )
             if review_gate.pause_required:
                 break
-            should_apply_canon = review_gate.should_apply_canon
             gate_approved = review_gate.gate_approved
+            acceptance_mode = (
+                "gate_approved"
+                if gate_approved
+                else (
+                    "force_accept_after_repair"
+                    if force_accept_applied
+                    else "normal"
+                )
+            )
+            accepted_residual_issues = (
+                residual_review_issues
+                if force_accept_applied or gate_approved
+                else []
+            )
 
             while True:
                 self._emit_progress(
@@ -494,16 +509,48 @@ def _run_project_chapters(
                     failed_chapters=failed_chapters,
                     paused_chapters=paused_chapters,
                 )
-                canon_outcome = self.canon_admission.commit(
-                    runtime=self,
-                    session=session,
-                    repo=repo,
-                    updater=updater,
+                candidate = CandidateDraftRepository(
+                    session
+                ).latest_for_chapter(
                     project_id=project_id,
                     chapter_number=chapter_num,
-                    writer_output=writer_output,
-                    verdict=verdict,
                 )
+                if candidate is None:
+                    canon_outcome = CanonAdmissionOutcome(
+                        blocked_path="v5 candidate record not found",
+                        block_kind="candidate_missing",
+                    )
+                else:
+                    preparation = self.canon_preparation.prepare(
+                        runtime=self,
+                        session=session,
+                        repo=repo,
+                        updater=updater,
+                        candidate_id=candidate.id,
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                        writer_output=writer_output,
+                        verdict=verdict,
+                        acceptance_mode=acceptance_mode,
+                        repair_attempt_count=repair_attempt_count,
+                        residual_review_issues=accepted_residual_issues,
+                        canon_risk_level=canon_risk_level,
+                    )
+                    if preparation.blocked or preparation.plan is None:
+                        canon_outcome = CanonAdmissionOutcome(
+                            blocked_path=preparation.blocked_path,
+                            block_kind=preparation.block_kind,
+                            canon_gate_result=preparation.canon_gate_result,
+                        )
+                    else:
+                        session.commit()
+                        canon_outcome = self.canon_admission.commit_plan(
+                            preparation.plan
+                        )
+                        session.expire_all()
+                        repo, updater, checker = self._make_state_helpers(
+                            session
+                        )
                 if not canon_outcome.blocked:
                     break
                 frozen_path = canon_outcome.blocked_path
@@ -604,24 +651,6 @@ def _run_project_chapters(
                     current_chapter=chapter_num,
                 )
 
-            status = "accepted"
-            updater.mark_chapter_status(
-                project_id,
-                chapter_num,
-                status,
-                acceptance_mode=(
-                    "gate_approved"
-                    if gate_approved
-                    else ("force_accept_after_repair" if force_accept_applied else "normal")
-                ),
-                repair_attempt_count=repair_attempt_count,
-                residual_review_issues=(
-                    residual_review_issues
-                    if force_accept_applied or gate_approved
-                    else []
-                ),
-                    canon_risk_level=canon_risk_level,
-            )
             save_accepted_trope_usage_for_chapter(
                 session,
                 project_id=project_id,
@@ -648,62 +677,6 @@ def _run_project_chapters(
                 failed_chapters=failed_chapters,
                 paused_chapters=paused_chapters,
             )
-            self._record_decision_event(
-                updater=updater,
-                project_id=project_id,
-                chapter_number=chapter_num,
-                event_family="runtime_observation",
-                event_type=DecisionEventType.MEMORY_INDEX_UPSERT_STARTED,
-                scope="chapter",
-                summary=f"第{chapter_num}章 memory index upsert 开始。",
-            )
-            try:
-                self.retrieval_broker.memory_index.upsert_chapter(
-                    project_id=project_id,
-                    chapter_number=chapter_num,
-                    title=writer_output.title,
-                    summary=writer_output.end_of_chapter_summary,
-                    body=writer_output.body,
-                )
-                self._record_decision_event(
-                    updater=updater,
-                    project_id=project_id,
-                    chapter_number=chapter_num,
-                    event_family="runtime_observation",
-                    event_type=DecisionEventType.MEMORY_INDEX_UPSERT_SUCCEEDED,
-                    scope="chapter",
-                    summary=f"第{chapter_num}章 memory index upsert 完成。",
-                )
-            except Exception as exc:
-                self._record_decision_event(
-                    updater=updater,
-                    project_id=project_id,
-                    chapter_number=chapter_num,
-                    event_family="runtime_observation",
-                    event_type=DecisionEventType.MEMORY_INDEX_UPSERT_FAILED,
-                    scope="chapter",
-                    summary=f"第{chapter_num}章 memory index upsert 失败。",
-                    reason=str(exc),
-                    payload={"error_class": exc.__class__.__name__, "error_summary": str(exc)},
-                )
-                should_defer_observation_failure = (
-                    self.policy.quality_profile == "pulp"
-                )
-                if not should_defer_observation_failure:
-                    raise
-                record_deferred_maintenance(
-                    updater,
-                    DeferredMaintenanceRecord(
-                        project_id=project_id,
-                        chapter_number=chapter_num,
-                        task_type="memory_index_upsert",
-                        reason=str(exc),
-                        payload={
-                            "error_class": exc.__class__.__name__,
-                            "error_summary": str(exc),
-                        },
-                    ),
-                )
             self._run_phase3_pass(
                 session=session,
                 project_id=project_id,
@@ -982,6 +955,36 @@ def _run_project_chapters(
             logger.exception("Chapter %d failed.", chapter_num)
             session.rollback()
             repo, updater, checker = self._make_state_helpers(session)
+            current_plan = repo.get_chapter_plan(project_id, chapter_num)
+            if current_plan is not None and current_plan.status == "accepted":
+                record_deferred_maintenance(
+                    updater,
+                    DeferredMaintenanceRecord(
+                        project_id=project_id,
+                        chapter_number=chapter_num,
+                        task_type="post_acceptance_pipeline",
+                        reason=str(exc),
+                        payload={"error_class": exc.__class__.__name__},
+                    ),
+                )
+                session.commit()
+                if chapter_num not in completed_chapters:
+                    completed_chapters.append(chapter_num)
+                self._emit_progress(
+                    "stage_changed",
+                    stage="post_acceptance_deferred",
+                    project_id=project_id,
+                    requested_chapters=requested_chapters,
+                    current_chapter=chapter_num,
+                    completed_chapters=completed_chapters,
+                    failed_chapters=failed_chapters,
+                    paused_chapters=paused_chapters,
+                )
+                logger.warning(
+                    "Chapter %d remains accepted; post-acceptance work was deferred.",
+                    chapter_num,
+                )
+                break
             updater.mark_chapter_status(project_id, chapter_num, "failed")
             session.commit()
             failed_chapters.append(chapter_num)

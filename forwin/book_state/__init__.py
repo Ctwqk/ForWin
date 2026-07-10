@@ -10,7 +10,6 @@ from .narrative import NarrativeControlGraph
 from .projection import BookStateProjection
 from .query import BookStateQuery
 from .repository import BookStateRepository
-from .review_gate_ext import BookStateDirectCommitResult, BookStateDirectCommitService
 from .reviewer import BookStateReviewGate, BookStateReviewIssue, BookStateReviewVerdict
 from .runtime import BookStateRuntime, ObjectiveWorldGraph, distance_between_world_nodes
 from .writer_contract import WriterContractDeltaBuilder
@@ -19,8 +18,6 @@ __all__ = [
     "BookStateRuntime",
     "BookStateCompiler",
     "BookStateDeltaAdapter",
-    "BookStateDirectCommitResult",
-    "BookStateDirectCommitService",
     "BookStateProjection",
     "BookStateQuery",
     "BookStateRepository",

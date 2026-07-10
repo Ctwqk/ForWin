@@ -5,7 +5,11 @@ from tempfile import TemporaryDirectory
 
 from sqlalchemy import func, select
 
-from forwin.canon import CanonAdmissionOutcome
+from forwin.candidate_drafts import (
+    CandidateDraftRepository,
+    candidate_plan_revision,
+)
+from forwin.canon import CanonAdmissionOutcome, CanonPreparationOutcome
 from forwin.config import InfrastructureConfig
 from forwin.models import DecisionEvent
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -19,6 +23,7 @@ from forwin.planning.world_contracts import (
 from forwin.protocol.book_state import BookStateCompileResult
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.naming import EntityRegistrar
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
@@ -81,6 +86,67 @@ def _setup_project(session):
     return project, chapter
 
 
+def _persist_candidate(session, project, chapter, output, verdict):
+    planned = EntityRegistrar(session=session).plan_writer_output(
+        project_id=project.id,
+        chapter_number=chapter.chapter_number,
+        writer_output=output,
+    ).writer_output
+    draft = ChapterDraft(
+        chapter_plan_id=chapter.id,
+        version=1,
+        body_text=planned.body,
+        summary=planned.end_of_chapter_summary,
+        char_count=planned.char_count,
+    )
+    session.add(draft)
+    session.flush()
+    review = ChapterReview(
+        draft_id=draft.id,
+        verdict=verdict.verdict,
+        issues_json="[]",
+        review_meta_json=verdict.model_dump_json(),
+    )
+    session.add(review)
+    session.flush()
+    candidate = CandidateDraftRepository(session).create_reviewed_version(
+        project_id=project.id,
+        chapter_plan=chapter,
+        draft=draft,
+        review=review,
+        writer_output=planned,
+        plan_revision=candidate_plan_revision(chapter),
+        policy_version=1,
+    )
+    return planned, candidate
+
+
+def _prepare_candidate(pipeline, session, project, chapter, output, verdict):
+    repo, updater, _checker = pipeline._make_state_helpers(session)  # noqa: SLF001
+    planned, candidate = _persist_candidate(
+        session,
+        project,
+        chapter,
+        output,
+        verdict,
+    )
+    return pipeline.canon_preparation.prepare(
+        runtime=pipeline,
+        session=session,
+        repo=repo,
+        updater=updater,
+        candidate_id=candidate.id,
+        project_id=project.id,
+        chapter_number=chapter.chapter_number,
+        writer_output=planned,
+        verdict=verdict,
+        acceptance_mode="normal",
+        repair_attempt_count=0,
+        residual_review_issues=[],
+        canon_risk_level="low",
+    )
+
+
 def test_canon_admission_commits_book_state_without_projection_compatibility_event() -> (
     None
 ):
@@ -90,25 +156,25 @@ def test_canon_admission_commits_book_state_without_projection_compatibility_eve
         init_db(engine)
         Session = get_session_factory(engine)
         pipeline = _build_pipeline(db_path, str(Path(tmp) / "artifacts"))
-        with Session.begin() as session:
-            repo, updater, _checker = pipeline._make_state_helpers(session)  # noqa: SLF001
-            project, _chapter = _setup_project(session)
-            result = pipeline.canon_admission.commit(
-                runtime=pipeline,
-                session=session,
-                repo=repo,
-                updater=updater,
-                project_id=project.id,
-                chapter_number=23,
-                writer_output=WriterOutput(
+        with Session() as session:
+            project, chapter = _setup_project(session)
+            preparation = _prepare_candidate(
+                pipeline,
+                session,
+                project,
+                chapter,
+                WriterOutput(
                     project_id=project.id,
                     chapter_number=23,
                     title="乱码呼号",
                     body="防线修复后，通讯台传出乱码和父亲旧部呼号。",
                     end_of_chapter_summary="收到异常通讯。",
                 ),
-                verdict=ReviewVerdict(verdict="pass", issues=[]),
+                ReviewVerdict(verdict="pass", issues=[]),
             )
+            assert preparation.plan is not None
+            session.commit()
+            result = pipeline.canon_admission.commit_plan(preparation.plan)
 
         with Session() as session:
             graph_deltas = session.scalar(
@@ -132,34 +198,31 @@ def test_canon_admission_blocks_review_failure_before_book_state_commit() -> Non
         init_db(engine)
         Session = get_session_factory(engine)
         pipeline = _build_pipeline(db_path, str(Path(tmp) / "artifacts"))
-        with Session.begin() as session:
-            repo, updater, _checker = pipeline._make_state_helpers(session)  # noqa: SLF001
-            project, _chapter = _setup_project(session)
-            outcome = pipeline.canon_admission.commit(
-                runtime=pipeline,
-                session=session,
-                repo=repo,
-                updater=updater,
-                project_id=project.id,
-                chapter_number=23,
-                writer_output=WriterOutput(
+        with Session() as session:
+            project, chapter = _setup_project(session)
+            outcome = _prepare_candidate(
+                pipeline,
+                session,
+                project,
+                chapter,
+                WriterOutput(
                     project_id=project.id,
                     chapter_number=23,
                     title="提前揭示",
                     body="通讯接通后，父亲明确说自己已经在母星被围。",
                     end_of_chapter_summary="提前揭示母星危机。",
                 ),
-                verdict=ReviewVerdict(verdict="pass", issues=[]),
+                ReviewVerdict(verdict="pass", issues=[]),
             )
+            session.commit()
 
         with Session() as session:
             graph_deltas = session.scalar(
                 select(func.count()).select_from(GraphDeltaRow)
             )
 
-        assert isinstance(outcome, CanonAdmissionOutcome)
+        assert isinstance(outcome, CanonPreparationOutcome)
         assert outcome.blocked
-        assert Path(outcome.blocked_path).is_file()
         assert outcome.block_kind == "book_state"
         assert graph_deltas == 0
 
@@ -175,7 +238,7 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
         )
 
     monkeypatch.setattr(
-        "forwin.book_state.review_gate_ext.BookStateCompiler.compile", fail_compile
+        "forwin.canon.admission.BookStateCompiler.compile", fail_compile
     )
     with TemporaryDirectory() as tmp:
         db_path = postgres_test_url("pipeline-bookstate-rollback")
@@ -183,25 +246,25 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
         init_db(engine)
         Session = get_session_factory(engine)
         pipeline = _build_pipeline(db_path, str(Path(tmp) / "artifacts"))
-        with Session.begin() as session:
-            repo, updater, _checker = pipeline._make_state_helpers(session)  # noqa: SLF001
-            project, _chapter = _setup_project(session)
-            result = pipeline.canon_admission.commit(
-                runtime=pipeline,
-                session=session,
-                repo=repo,
-                updater=updater,
-                project_id=project.id,
-                chapter_number=23,
-                writer_output=WriterOutput(
+        with Session() as session:
+            project, chapter = _setup_project(session)
+            preparation = _prepare_candidate(
+                pipeline,
+                session,
+                project,
+                chapter,
+                WriterOutput(
                     project_id=project.id,
                     chapter_number=23,
                     title="乱码呼号",
                     body="防线修复后，通讯台传出乱码和父亲旧部呼号。",
                     end_of_chapter_summary="收到异常通讯。",
                 ),
-                verdict=ReviewVerdict(verdict="pass", issues=[]),
+                ReviewVerdict(verdict="pass", issues=[]),
             )
+            assert preparation.plan is not None
+            session.commit()
+            result = pipeline.canon_admission.commit_plan(preparation.plan)
 
         with Session() as session:
             graph_deltas = session.scalar(
@@ -210,8 +273,7 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
 
         assert isinstance(result, CanonAdmissionOutcome)
         assert result.blocked
-        assert Path(result.blocked_path).is_file()
-        assert result.block_kind == "book_state"
+        assert result.block_kind == "canon_write_failed"
         assert graph_deltas == 0
 
 
@@ -241,16 +303,18 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
                 one_line="一",
                 goals=["一"],
             )
-            draft = ChapterDraft(
-                chapter_plan_id=chapter.id,
-                version=1,
-                body_text="正文",
-                llm_raw_response="{}",
-            )
-            session.add(draft)
-            session.flush()
-            session.add(
-                ChapterReview(draft_id=draft.id, verdict="pass", issues_json="[]")
+            _persist_candidate(
+                session,
+                project,
+                chapter,
+                WriterOutput(
+                    project_id=project.id,
+                    chapter_number=1,
+                    title="一",
+                    body="正文",
+                    end_of_chapter_summary="总结",
+                ),
+                ReviewVerdict(verdict="pass", issues=[]),
             )
 
         monkeypatch.setattr(
@@ -270,9 +334,9 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
             lambda _review: ReviewVerdict(verdict="pass", issues=[]),
         )
         monkeypatch.setattr(
-            pipeline.canon_admission,
-            "commit",
-            lambda **_kwargs: CanonAdmissionOutcome(
+            pipeline.canon_preparation,
+            "prepare",
+            lambda **_kwargs: CanonPreparationOutcome(
                 blocked_path="book-state-review-gate-blocked",
                 block_kind="book_state",
             ),

@@ -270,56 +270,6 @@ class CandidateDraftRepository:
         self.session.flush()
         return row
 
-    # Transitional callers are removed when Canon adopts commit_plan.
-    def mark_canon_committed(
-        self,
-        *,
-        project_id: str,
-        chapter_number: int,
-        canon_artifact_path: str = "",
-    ) -> CandidateDraftRecord | None:
-        row = self.latest_for_chapter(
-            project_id=project_id,
-            chapter_number=chapter_number,
-        )
-        if row is None:
-            return None
-        if row.status == "reviewed":
-            self.transition(row.id, "ready_for_canon")
-        if row.status == "ready_for_canon":
-            self.transition(row.id, "committing")
-        row = self.transition(row.id, "accepted")
-        row.canon_artifact_path = str(canon_artifact_path or "")
-        self.session.add(row)
-        self.session.flush()
-        return row
-
-    def mark_canon_failed(
-        self,
-        *,
-        project_id: str,
-        chapter_number: int,
-        failure_reason: str,
-        canon_artifact_path: str = "",
-    ) -> CandidateDraftRecord | None:
-        row = self.latest_for_chapter(
-            project_id=project_id,
-            chapter_number=chapter_number,
-        )
-        if row is None:
-            return None
-        if row.status not in {"failed", "accepted"}:
-            row = self.transition(
-                row.id,
-                "failed",
-                failure_reason=failure_reason,
-            )
-        row.canon_artifact_path = str(canon_artifact_path or "")
-        self.session.add(row)
-        self.session.flush()
-        return row
-
-
 __all__ = [
     "CandidateDraftRepository",
     "CandidateTransitionError",

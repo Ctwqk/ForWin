@@ -4,9 +4,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from forwin.book_state import (
-    BookStateDirectCommitService,
+    BookStateCompiler,
     BookStateQuery,
     BookStateRepository,
+    BookStateReviewGate,
 )
 from forwin.book_state.writer_contract import WriterContractDeltaBuilder
 from forwin.models import Project
@@ -112,14 +113,17 @@ def test_writer_contract_maps_structured_output_into_book_state_deltas() -> None
         assert any(patch.target_ref.startswith("plot_thread:") for patch in delta.narrative_patches)
         assert delta.fact_patches[0].proposition == "陆明确认旧塔入口"
 
-        commit_result = BookStateDirectCommitService(session).commit(
-            ApprovedGraphDeltaSet(
-                project_id=project.id,
-                chapter_number=2,
-                graph_deltas=result.graph_deltas,
-                approved_by=["test"],
-                review_verdict_id="review-2",
-            )
+        proposed = ApprovedGraphDeltaSet(
+            project_id=project.id,
+            chapter_number=2,
+            graph_deltas=result.graph_deltas,
+            approved_by=["test"],
+            review_verdict_id="review-2",
+        )
+        review_gate = BookStateReviewGate(session).review(proposed)
+        assert review_gate.approved_changes is not None
+        commit_result = BookStateCompiler(session).compile(
+            review_gate.approved_changes
         )
         query = BookStateQuery(session)
         entities = query.active_entities(project.id, as_of_chapter=2)
@@ -127,6 +131,7 @@ def test_writer_contract_maps_structured_output_into_book_state_deltas() -> None
         threads = query.active_threads(project.id, as_of_chapter=2)
         timeline = query.current_timeline(project.id, as_of_chapter=2)
 
+        assert review_gate.accepted is True
         assert commit_result.committed is True
         assert next(item for item in entities if item.name == "陆明").current_state["goal"] == "进入旧塔"
         assert events[0].summary == "陆明确认旧塔入口"

@@ -90,16 +90,17 @@ def test_candidate_draft_record_tracks_review_and_canon_lifecycle() -> None:
         assert record.canon_status == "candidate"
         assert json.loads(record.scene_outputs_json) == []
 
-        committed = repository.mark_canon_committed(
-            project_id=project.id,
-            chapter_number=1,
-            canon_artifact_path="artifacts/canon/1.json",
+        repository.transition(record.id, "ready_for_canon")
+        repository.transition(record.id, "committing")
+        committed = repository.transition(
+            record.id,
+            "accepted",
+            canon_commit_id="canon-commit-1",
         )
 
-        assert committed is not None
         assert committed.status == "accepted"
         assert committed.canon_status == "canon"
-        assert committed.canon_artifact_path == "artifacts/canon/1.json"
+        assert committed.canon_commit_id == "canon-commit-1"
 
 
 def test_candidate_draft_api_requires_v5_candidate_record() -> None:

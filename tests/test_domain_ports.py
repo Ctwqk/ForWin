@@ -1,23 +1,6 @@
 from __future__ import annotations
 
 
-def test_book_state_canon_port_forwards_compile() -> None:
-    from forwin.book_state.ports import BookStateCanonPort
-
-    calls = []
-
-    class CommitService:
-        def compile_approved(self, changes, *, compiler_run_id: str = ""):
-            calls.append((changes, compiler_run_id))
-            return {"committed": True}
-
-    port = BookStateCanonPort(CommitService())
-    result = port.compile("changes", compiler_run_id="run-1")
-
-    assert result == {"committed": True}
-    assert calls == [("changes", "run-1")]
-
-
 def test_review_port_forwards_review_chapter_request() -> None:
     from forwin.review.ports import CallableReviewPort, ReviewChapterRequest, ReviewChapterResult
 

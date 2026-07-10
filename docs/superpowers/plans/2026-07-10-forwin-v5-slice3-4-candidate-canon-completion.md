@@ -236,7 +236,7 @@ Run: `uv run pytest -q tests/test_canon_atomic_transaction.py tests/test_book_st
 
 Expected: all pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add forwin/models forwin/canon forwin/book_state/review_gate_ext.py forwin/outbox/store.py tests/test_canon_atomic_transaction.py
@@ -261,7 +261,7 @@ git commit -m "Make Canon admission atomic and idempotent"
 - Consumes: `CanonPreparationService.prepare(...)`, `CanonAdmissionService.commit_plan(...)`.
 - Produces: accepted pipeline result plus retryable post-commit outbox work.
 
-- [ ] **Step 1: Write failing end-to-end focused tests**
+- [x] **Step 1: Write failing end-to-end focused tests**
 
 ```python
 def test_rejected_candidate_changes_no_authoritative_state(...): ...
@@ -269,19 +269,19 @@ def test_projection_failure_preserves_accepted_chapter_and_retries(...): ...
 def test_pipeline_does_not_call_memory_or_projection_before_commit(...): ...
 ```
 
-- [ ] **Step 2: Run and confirm RED**
+- [x] **Step 2: Run and confirm RED**
 
 Run: `uv run pytest -q tests/test_candidate_to_canon_flow_v5.py tests/test_projection_outbox.py`
 
-- [ ] **Step 3: Replace direct commit calls**
+- [x] **Step 3: Replace direct commit calls**
 
 Both automatic generation and manual acceptance prepare a plan, durably save `ready_for_canon`, then submit the same plan to `commit_plan`. Remove chapter acceptance writes, entity writes, obligation activation, knowledge refresh, and memory-index mutation from `project_chapters.py`.
 
-- [ ] **Step 4: Handle post-commit work through outbox**
+- [x] **Step 4: Handle post-commit work through outbox**
 
 Add a deterministic `canon.post_commit.requested` handler that refreshes knowledge/Qdrant/Obsidian and indexes accepted chapter text. Failure uses existing outbox retry semantics and cannot change accepted state. Publisher notification remains isolated and is represented by a separate deterministic outbox event consumed by the production publisher application boundary.
 
-- [ ] **Step 5: Make post-acceptance planning failure non-destructive**
+- [x] **Step 5: Make post-acceptance planning failure non-destructive**
 
 Phase 3/4 planning and simulation run after the Canon transaction. Their failure records deferred maintenance and stops or degrades the task without changing the accepted chapter to failed.
 

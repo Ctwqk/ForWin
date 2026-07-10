@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from forwin.protocol.review import FinalGateDecision, RepairVerification, ReviewVerdict
+from forwin.protocol.review import (
+    FinalResidualDecision,
+    RepairVerification,
+    ReviewVerdict,
+)
+
+from ..types import Decision, DecisionInput, DecisionRule
+
 
 _HARD_ISSUE_TYPES = {
     "continuity",
@@ -33,23 +40,20 @@ def is_force_acceptable_nonblocking_issue(issue) -> bool:
     )
 
 
-_is_force_acceptable_nonblocking_issue = is_force_acceptable_nonblocking_issue
-
-
-class FinalAcceptanceGate:
+class FinalResidualPolicy:
     def evaluate(
         self,
         *,
         review: ReviewVerdict,
         verification: RepairVerification | None,
-    ) -> FinalGateDecision:
+    ) -> FinalResidualDecision:
         residual_issues = [
             str(issue.description or issue.rule_name or "").strip()
             for issue in review.issues
             if str(issue.severity or "") == "error"
         ]
         if verification is None:
-            return FinalGateDecision(
+            return FinalResidualDecision(
                 decision="manual_review_required",
                 forceable=False,
                 reason="missing-repair-verification",
@@ -58,7 +62,7 @@ class FinalAcceptanceGate:
                 requires_human=True,
             )
         if not verification.fixed_all_must_fix or not verification.preserved_all_must_preserve:
-            return FinalGateDecision(
+            return FinalResidualDecision(
                 decision="manual_review_required",
                 forceable=False,
                 reason="repair-verification-failed",
@@ -78,7 +82,7 @@ class FinalAcceptanceGate:
             None,
         )
         if hard_issue is not None:
-            return FinalGateDecision(
+            return FinalResidualDecision(
                 decision="manual_review_required",
                 forceable=False,
                 reason=f"hard-residual-issue:{hard_issue.issue_type or hard_issue.rule_name}",
@@ -98,7 +102,7 @@ class FinalAcceptanceGate:
             None,
         )
         if unknown_issue is not None:
-            return FinalGateDecision(
+            return FinalResidualDecision(
                 decision="manual_review_required",
                 forceable=False,
                 reason=f"unsupported-residual-issue:{unknown_issue.issue_type or unknown_issue.rule_name}",
@@ -107,7 +111,7 @@ class FinalAcceptanceGate:
                 requires_human=True,
             )
 
-        return FinalGateDecision(
+        return FinalResidualDecision(
             decision="force_accept",
             forceable=True,
             reason="soft-quality-failure-only",
@@ -115,3 +119,45 @@ class FinalAcceptanceGate:
             residual_issues=residual_issues,
             requires_human=False,
         )
+
+
+def build_final_residual_rules(
+    policy: FinalResidualPolicy | None = None,
+) -> list[DecisionRule]:
+    resolved_policy = policy or FinalResidualPolicy()
+    return [
+        DecisionRule(
+            rule_id="final_residual_policy",
+            source_dispatcher="FinalResidualPolicy",
+            priority=300,
+            matches=lambda input: True,
+            decide=lambda input: _decision_from_final_residual(
+                resolved_policy,
+                input,
+            ),
+        )
+    ]
+
+
+def _decision_from_final_residual(
+    policy: FinalResidualPolicy,
+    input: DecisionInput,
+) -> Decision:
+    result = policy.evaluate(
+        review=input.review,
+        verification=input.review.repair_verification,
+    )
+    return Decision(
+        outcome="accept" if result.decision == "force_accept" else "manual_review",
+        reason=result.reason,
+        rule_id="final_residual_policy",
+        missing_evidence=[] if result.forceable else ["force_accept_conditions"],
+        routed_from="FinalResidualPolicy",
+        sub_action={
+            "final_residual_decision": result.decision,
+            "forceable": result.forceable,
+            "canon_risk": result.canon_risk,
+            "residual_issues": list(result.residual_issues),
+            "requires_human": result.requires_human,
+        },
+    )

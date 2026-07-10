@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.reviser.final_acceptance import is_force_acceptable_nonblocking_issue
+from forwin.review_engine.rules.final_residual import is_force_acceptable_nonblocking_issue
 from forwin.subworld_manager import SubWorldManager
 from forwin.orchestrator_loop_core.common import *
 
@@ -61,7 +61,7 @@ def _prompt_trace_success_summary(writer_output: WriterOutput) -> dict[str, obje
         "fallback_chain": generation_meta.get("model_fallbacks", []),
     }
 
-def _apply_world_v4_gate(
+def _commit_book_state_canon(
     self,
     *,
     session: Session,
@@ -126,7 +126,7 @@ def _apply_world_v4_gate(
                     "writer_output": writer_output.model_dump(mode="json"),
                     "review_verdict": verdict.model_dump(mode="json"),
                     "book_state_extraction": extraction.model_dump(mode="json"),
-                    "v4_retrieval_packs": retrieval_pack_payload,
+                    "book_state_retrieval_packs": retrieval_pack_payload,
                 },
             )
         self._record_decision_event(
@@ -774,4 +774,4 @@ def _run_phase3_pass(
 
 
 
-__all__ = ['_prompt_trace_success_summary', '_apply_world_v4_gate', '_filter_resolvable_events', '_ensure_event_mentioned_non_character_entities', '_filter_resolvable_state_changes', '_ensure_genesis_canon_seed_entities', '_collect_subworld_candidate_names', '_nonblocking_review_subworld_names', '_validate_subworld_admission', '_run_phase3_pass']
+__all__ = ['_prompt_trace_success_summary', '_commit_book_state_canon', '_filter_resolvable_events', '_ensure_event_mentioned_non_character_entities', '_filter_resolvable_state_changes', '_ensure_genesis_canon_seed_entities', '_collect_subworld_candidate_names', '_nonblocking_review_subworld_names', '_validate_subworld_admission', '_run_phase3_pass']

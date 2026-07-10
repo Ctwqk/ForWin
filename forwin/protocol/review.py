@@ -34,7 +34,7 @@ RepairFailureType = Literal[
     "cognition_conflict",
     "world_model_conflict",
 ]
-FinalGateDecisionKind = Literal[
+FinalResidualDecisionKind = Literal[
     "force_accept",
     "manual_review_required",
     "repair_exhausted",
@@ -111,8 +111,8 @@ class RepairVerification(BaseModel):
     verifier_mode: str = ""
 
 
-class FinalGateDecision(BaseModel):
-    decision: FinalGateDecisionKind = "repair_exhausted"
+class FinalResidualDecision(BaseModel):
+    decision: FinalResidualDecisionKind = "repair_exhausted"
     forceable: bool = False
     reason: str = ""
     canon_risk: CanonRiskLevel = "high"
@@ -136,7 +136,7 @@ class ReviewVerdict(BaseModel):
     reviewer_mode: str = ""
     repair_instruction: RepairInstruction | None = None
     repair_verification: RepairVerification | None = None
-    final_gate_decision: FinalGateDecision | None = None
+    final_residual_decision: FinalResidualDecision | None = None
     repair_exhausted: bool = False
     residual_review_issues: list[ContinuityIssue] = Field(default_factory=list)
     forced_accept_applied: bool = False

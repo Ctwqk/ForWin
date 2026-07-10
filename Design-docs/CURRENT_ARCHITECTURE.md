@@ -1,6 +1,6 @@
 # ForWin Current Architecture
 
-更新时间：2026-07-06
+更新时间：2026-07-09
 
 状态：active-current。本文档是当前架构入口；旧 V2/V3/V4 side-by-side 计划只作为历史背景或兼容说明读取。
 
@@ -25,16 +25,16 @@ Genesis / Writer / Review 主链
 - 世界状态 canon：`BookState + GraphDelta + Snapshot`。
 - 地图 canon：`BookMap / Scheme C`，语义为 `SubWorld -> Region -> MapNode -> MapEdge`。
 - 上下文来源：`BookState + BookMap + Genesis + approved projections`。
-- review 主链：`reviewer.HistoricalReviewHub` 聚合章节文本、体验、治理、地图、人格和 lint；`BookStateReviewGate` 是 GraphDelta 入 canon 前的 deterministic guardrail。
+- 运行策略：项目只有一份带版本号的 `RuntimePolicy`，durable generation task 保存不可变 policy snapshot；`InfrastructureConfig` 只负责环境凭据、端点、worker/存储和只读模型目录。
+- 任务入口：API、worker、scheduler、CLI、Genesis handoff、continue 和 auto-continue 统一经过 `GenerationApplicationService`；`RuntimeContainer` 是唯一 orchestrator 装配点。
+- review 主链：`reviewer.DraftReviewService` 聚合章节文本、体验、治理、地图、人格和 lint；`FinalResidualPolicy` 只评估 repair 耗尽后的残留，不决定 canon；`BookStateReviewGate` 是 GraphDelta 入 canon 前的 deterministic guardrail。
 - skill runtime：仅作为 prompt / workflow instruction layer，参与 PromptTrace，不写 canon，不绕过 DecisionEvent 或 BookState gate。
 
 ## Quality Profile
 
-ForWin supports `quality_profile=standard|pulp|premium`.
+ForWin 只支持 `RuntimePolicy.quality_profile=standard|pulp`。
 
-`standard` is the default and preserves the existing long-form quality path.
-`pulp` derives a low-cost runtime profile from config: single-call writer mode, deterministic review, fatal-only canon admission, hard floor checks, world-only BookState extraction, context recency truncation, and low-cost trope selection.
-`premium` is reserved for future defaults and currently behaves like standard unless explicit config fields override it.
+`standard` 是默认长篇质量策略；`pulp` 是低成本高节奏策略，使用精简 review signal、`pulp_fatal` canon quality gate、world-only BookState extraction、短上下文窗口和低成本 trope 选择。不存在 `premium`、operation/progression/reckless mode，也不存在请求级策略覆盖。
 
 ## Canon Commit Path
 
@@ -47,6 +47,8 @@ WriterOutput / chapter body
 -> BookStateCompiler
 -> projection refresh
 ```
+
+该代码路径名为 `_commit_book_state_canon`。`_apply_world_v4_gate` 和恒成功的 `_compile_world_model_after_acceptance` 已删除；`FinalResidualPolicy` 的 force-accept 候选仍必须经过上述 canon commit。
 
 旧 `world_model_v4` / world-v4 compatibility projection 写入已经从 accepted chapter runtime 删除。新项目的 canon commit 只以 BookState review/compile 结果为准，后续只保留 Knowledge Projection refresh 等当前检索投影。
 

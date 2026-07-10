@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from forwin.orchestrator_loop_core.common import *
-from forwin.protocol.review import FinalGateDecision
+from forwin.protocol.review import FinalResidualDecision
 from forwin.review_engine.engine import AutoDecisionEngine
-from forwin.review_engine.rules.final_acceptance import build_final_acceptance_rules
+from forwin.review_engine.rules.final_residual import build_final_residual_rules
 from forwin.review_engine.rules.repair_v2 import decide_repair_v2
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.reviser.local_rewrite_executor import LocalRewriteExecutor
@@ -104,9 +104,9 @@ def _review_from_canon_gate_block(gate_result) -> ReviewVerdict:
     )
 
 
-def _final_gate_from_engine_decision(decision: Decision) -> FinalGateDecision:
-    return FinalGateDecision(
-        decision=str(decision.sub_action.get("final_gate_decision") or "manual_review_required"),
+def _final_residual_from_engine_decision(decision: Decision) -> FinalResidualDecision:
+    return FinalResidualDecision(
+        decision=str(decision.sub_action.get("final_residual_decision") or "manual_review_required"),
         forceable=bool(decision.sub_action.get("forceable")),
         reason=str(decision.reason or ""),
         canon_risk=str(decision.sub_action.get("canon_risk") or "high"),
@@ -353,14 +353,14 @@ def _run_repair_loop_for_phase(
             "subworld_admission_patch",
         }
         if not repair_can_run_locally:
-            final_decision = AutoDecisionEngine(build_final_acceptance_rules()).decide(repair_v2_input)
-            final_gate = _final_gate_from_engine_decision(final_decision)
-            force_accept = final_gate.decision == "force_accept"
+            final_decision = AutoDecisionEngine(build_final_residual_rules()).decide(repair_v2_input)
+            final_residual = _final_residual_from_engine_decision(final_decision)
+            force_accept = final_residual.decision == "force_accept"
             current_review = current_review.model_copy(
                 update={
                     "verdict": "warn" if force_accept else current_review.verdict,
                     "repair_exhausted": True,
-                    "final_gate_decision": final_gate,
+                    "final_residual_decision": final_residual,
                     "residual_review_issues": list(current_review.issues),
                     "forced_accept_applied": force_accept,
                 }
@@ -378,11 +378,11 @@ def _run_repair_loop_for_phase(
                     event_family="audit_action",
                     event_type=DecisionEventType.FORCED_ACCEPT_APPLIED,
                     scope="chapter",
-                    summary=f"第{chapter_plan.chapter_number}章通过 final force-accept gate。",
+                    summary=f"第{chapter_plan.chapter_number}章通过 final residual policy。",
                     related_object_type="chapter_review",
                     related_object_id=current_review_row.id,
                     parent_event_id=str(current_review_event.id or ""),
-                    payload={"canon_risk": final_gate.canon_risk, "reason": final_gate.reason},
+                    payload={"canon_risk": final_residual.canon_risk, "reason": final_residual.reason},
                 )
                 return current_output, current_review, True
             return current_output, current_review, False

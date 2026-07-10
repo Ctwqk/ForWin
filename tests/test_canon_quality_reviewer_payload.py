@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.protocol.context import ReviewContextPack
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer.hub import HistoricalReviewHub
+from forwin.reviewer.draft_service import DraftReviewService
 from forwin.reviewer.llm_webnovel import LLMWebNovelReviewer
 import forwin.reviewer.llm_webnovel as llm_webnovel
 
@@ -40,8 +40,8 @@ def test_llm_reviewer_payload_includes_deterministic_quality_report() -> None:
     assert any(item["evidence_id"] == "canon_quality:sig-1" for item in payload["evidence_index"])
 
 
-def test_review_hub_promotes_blocking_canon_quality_signal_to_repair_issue() -> None:
-    issues = HistoricalReviewHub._canon_quality_issues(
+def test_draft_review_promotes_blocking_canon_quality_signal_to_repair_issue() -> None:
+    issues = DraftReviewService._canon_quality_issues(
         {
             "blocking_signals": [
                 {

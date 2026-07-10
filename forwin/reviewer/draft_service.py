@@ -24,7 +24,7 @@ from .personality import PersonalityConsistencyReviewer
 from .publisher_compliance import PublisherComplianceReviewer
 
 
-class HistoricalReviewHub:
+class DraftReviewService:
     def __init__(
         self,
         *,
@@ -310,7 +310,7 @@ class HistoricalReviewHub:
         context: ChapterContextPack,
         writer_output: WriterOutput,
     ) -> ReviewVerdict:
-        selected_skills = HistoricalReviewHub._selected_skills_from_layers(skill_layers)
+        selected_skills = DraftReviewService._selected_skills_from_layers(skill_layers)
         if not selected_skills:
             return verdict
         review_notes = list(verdict.review_notes)
@@ -609,7 +609,7 @@ class HistoricalReviewHub:
             repair_scope="draft",
             failure_type="continuity",
             must_fix=[
-                HistoricalReviewHub._issue_repair_text(issue)
+                DraftReviewService._issue_repair_text(issue)
                 for issue in writer_fixable
                 if issue.severity == "error"
             ],

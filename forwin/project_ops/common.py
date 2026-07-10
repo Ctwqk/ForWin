@@ -29,7 +29,7 @@ from forwin.api_schemas import (
     ChapterRewriteAttemptInfo,
     ChapterReviewIssueInfo,
     ChapterInfo,
-    FinalGateDecisionInfo,
+    FinalResidualDecisionInfo,
     LintSignalInfo,
     ProjectAutomationUpdateRequest,
     ProjectAutomationUpdateResponse,

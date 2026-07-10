@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.naming.entity_registrar import EntityRegistrar, LLMEntityRegistrationClassifier
 from forwin.protocol.writer import WriterOutput
-from forwin.reviser.final_acceptance import is_force_acceptable_nonblocking_issue
+from forwin.review_engine.rules.final_residual import is_force_acceptable_nonblocking_issue
 from forwin.orchestrator_loop_core.common import *
 
 
@@ -145,7 +145,7 @@ def _review_current_output(
         task_family="review_chapter",
     )
     review = self._call_with_compatible_kwargs(
-        self.review_hub.review,
+        self.draft_review.review,
         project_id=project_id,
         repo=repo,
         context=context,
@@ -378,8 +378,8 @@ def _record_map_movement_review_issues(
 
 @staticmethod
 def _review_canon_risk(review: ReviewVerdict) -> str:
-    if review.final_gate_decision is not None:
-        return str(review.final_gate_decision.canon_risk or "")
+    if review.final_residual_decision is not None:
+        return str(review.final_residual_decision.canon_risk or "")
     if review.forced_accept_applied:
         return "low"
     if review.verdict == "fail":

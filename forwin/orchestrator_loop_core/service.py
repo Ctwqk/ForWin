@@ -46,8 +46,8 @@ from forwin.orchestrator_loop_core.gate_delegation import (
 from forwin.orchestrator_loop_core.project_chapters import _run_project_chapters
 from forwin.orchestrator_loop_core.writer_attention import _write_chapter_with_attention_fallback
 from forwin.orchestrator_loop_core.quality_gates import _is_timeout_like, _is_transient_llm_like, _transient_retry_delay, _current_model_identity, _audit_operation_id, _drain_llm_attempt_events, _safe_prompt_trace_attempts, _error_category_from_attempts, _diagnostic_kind_for_failure, _record_failure_prompt_trace, _record_model_fallback_payloads, _apply_canon_quality_gate, _run_obligation_form_gate, _prepare_deferred_acceptance_if_needed, _band_scope_candidates, _band_row_by_id, _latest_draft_and_review_for_chapter, _apply_canon_candidate
-from forwin.orchestrator_loop_core.world_projection import _prompt_trace_success_summary, _apply_world_v4_gate, _filter_resolvable_events, _ensure_event_mentioned_non_character_entities, _filter_resolvable_state_changes, _ensure_genesis_canon_seed_entities, _collect_subworld_candidate_names, _validate_subworld_admission, _run_phase3_pass
-from forwin.orchestrator_loop_core.finalization import _flush_background_llm_trace, _compile_world_model_after_acceptance, _run_provisional_band_preview, _abort_requested, _pause_requested, _paused_result, _cancelled_result, _normalize_provisional_verdict, _should_degrade_provisional_preview, _build_provisional_fallback, _load_writer_output_from_meta, _load_review_verdict, _seed_state
+from forwin.orchestrator_loop_core.world_projection import _prompt_trace_success_summary, _commit_book_state_canon, _filter_resolvable_events, _ensure_event_mentioned_non_character_entities, _filter_resolvable_state_changes, _ensure_genesis_canon_seed_entities, _collect_subworld_candidate_names, _validate_subworld_admission, _run_phase3_pass
+from forwin.orchestrator_loop_core.finalization import _flush_background_llm_trace, _run_provisional_band_preview, _abort_requested, _pause_requested, _paused_result, _cancelled_result, _normalize_provisional_verdict, _should_degrade_provisional_preview, _build_provisional_fallback, _load_writer_output_from_meta, _load_review_verdict, _seed_state
 
 
 class WritingOrchestrator:
@@ -96,7 +96,7 @@ class WritingOrchestrator:
         self.npc_intent_generator = services.npc_intent_generator
         self.world_simulator = services.world_simulator
         self.arc_envelope_manager = services.arc_envelope_manager
-        self.review_hub = services.review_hub
+        self.draft_review = services.draft_review
         self.repair_verifier = services.repair_verifier
         self.gate_delegation = services.gate_delegation
         self._bind_orchestrator_runtime_hooks()
@@ -197,7 +197,7 @@ WritingOrchestrator._band_row_by_id = _band_row_by_id
 WritingOrchestrator._latest_draft_and_review_for_chapter = _latest_draft_and_review_for_chapter
 WritingOrchestrator._apply_canon_candidate = _apply_canon_candidate
 WritingOrchestrator._prompt_trace_success_summary = _prompt_trace_success_summary
-WritingOrchestrator._apply_world_v4_gate = _apply_world_v4_gate
+WritingOrchestrator._commit_book_state_canon = _commit_book_state_canon
 WritingOrchestrator._filter_resolvable_events = _filter_resolvable_events
 WritingOrchestrator._ensure_event_mentioned_non_character_entities = _ensure_event_mentioned_non_character_entities
 WritingOrchestrator._filter_resolvable_state_changes = _filter_resolvable_state_changes
@@ -206,7 +206,6 @@ WritingOrchestrator._collect_subworld_candidate_names = _collect_subworld_candid
 WritingOrchestrator._validate_subworld_admission = _validate_subworld_admission
 WritingOrchestrator._run_phase3_pass = _run_phase3_pass
 WritingOrchestrator._flush_background_llm_trace = _flush_background_llm_trace
-WritingOrchestrator._compile_world_model_after_acceptance = _compile_world_model_after_acceptance
 WritingOrchestrator._run_provisional_band_preview = _run_provisional_band_preview
 WritingOrchestrator._abort_requested = _abort_requested
 WritingOrchestrator._pause_requested = _pause_requested

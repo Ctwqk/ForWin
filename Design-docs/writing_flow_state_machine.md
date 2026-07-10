@@ -192,7 +192,7 @@ worker 已开始推进。API 层会根据 progress stage 更新 `current_stage`�
 2. `assembling_context` 组装章节上下文。
 3. `writing_chapter` 调 writer。writer 内部会按单模型 retry，必要时由 LLMClient 做跨 profile fallback。
 4. writer 失败后尝试 preview fallback；仍失败则章节标为 failed。
-5. `continuity_review` 调 HistoricalReviewHub/ContinuityChecker，保存 draft 和 review；若 reviewer map graph 可用，进入 `MapMovementReview`，检查 objective path、observer-known path、hidden/blocked/false route、access rule 和 speed policy。
+5. `continuity_review` 调 `DraftReviewService`/`ContinuityChecker`，保存 draft 和 review；若 reviewer map graph 可用，进入 `MapMovementReview`，检查 objective path、observer-known path、hidden/blocked/false route、access rule 和 speed policy。
 6. 根据 operation mode 和 verdict 判断：
    - `checkpoint`：总是 `needs_review`。
    - `copilot`：`pass` 才继续，`warn/fail` 进入 `needs_review`。

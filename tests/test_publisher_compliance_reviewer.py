@@ -3,7 +3,7 @@ from __future__ import annotations
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer.hub import HistoricalReviewHub
+from forwin.reviewer.draft_service import DraftReviewService
 from forwin.reviewer.publisher_compliance import PublisherComplianceReviewer
 
 
@@ -77,8 +77,8 @@ def test_publisher_compliance_reviewer_emits_warning_for_soft_promotional_text()
     assert verdict.issues[0].severity == "warning"
 
 
-def test_historical_review_hub_merges_publisher_compliance_when_enabled() -> None:
-    hub = HistoricalReviewHub(
+def test_historical_draft_review_merges_publisher_compliance_when_enabled() -> None:
+    hub = DraftReviewService(
         experience_review_enabled=False,
         lint_review_enabled=False,
         map_movement_review_enabled=False,
@@ -99,8 +99,8 @@ def test_historical_review_hub_merges_publisher_compliance_when_enabled() -> Non
     assert any(issue.reviewer == "publisher_compliance" for issue in verdict.issues)
 
 
-def test_historical_review_hub_unchanged_when_publisher_compliance_disabled() -> None:
-    hub = HistoricalReviewHub(
+def test_historical_draft_review_unchanged_when_publisher_compliance_disabled() -> None:
+    hub = DraftReviewService(
         experience_review_enabled=False,
         lint_review_enabled=False,
         map_movement_review_enabled=False,

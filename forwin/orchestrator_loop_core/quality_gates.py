@@ -916,7 +916,7 @@ def _apply_canon_candidate(
                 block_kind="canon_quality",
                 canon_gate_result=quality_outcome.gate_result,
             )
-        v4_blocked_path = self._apply_world_v4_gate(
+        book_state_blocked_path = self._commit_book_state_canon(
             session=session,
             repo=repo,
             updater=updater,
@@ -925,10 +925,10 @@ def _apply_canon_candidate(
             writer_output=writer_output,
             verdict=verdict,
         )
-        if v4_blocked_path:
+        if book_state_blocked_path:
             return CanonApplyOutcome(
-                blocked_path=v4_blocked_path,
-                block_kind="world_v4",
+                blocked_path=book_state_blocked_path,
+                block_kind="book_state",
             )
         self._validate_subworld_admission(
             repo=repo,

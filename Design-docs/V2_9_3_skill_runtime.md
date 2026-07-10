@@ -245,7 +245,7 @@ Reviewer skills 只提供 rubric / explanation / repair guidance。
 接入规则：
 
 - orchestrator 先选 `reviewer` skills
-- `HistoricalReviewHub / WebNovelExperienceReviewer` 只消费这些 rubric
+- `DraftReviewService / WebNovelExperienceReviewer` 只消费这些 rubric
 - skill 输出只能进入 review notes、repair guidance、trace payload
 - 最终 `pass / warn / fail` 仍由既有 continuity / governance / reviewer 结果决定
 

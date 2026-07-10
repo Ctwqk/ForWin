@@ -39,7 +39,7 @@ def test_core_packages_declare_current_architecture_roles() -> None:
     expectations = {
         "forwin/book_state/README.md": "Status: CANON runtime.",
         "forwin/world_model/README.md": "Status: deprecated projection / wiki / export facade.",
-        "forwin/reviewer/README.md": "Status: MAIN REVIEW facade.",
+        "forwin/reviewer/README.md": "Status: DRAFT REVIEW domain.",
         "forwin/reviewer_v4/README.md": "Status: COMPATIBILITY gate.",
         "forwin/map/README.md": "Status: CANON map runtime.",
     }
@@ -48,7 +48,7 @@ def test_core_packages_declare_current_architecture_roles() -> None:
 
     assert "CANON BookState runtime" in inspect.getdoc(book_state)
     assert "Deprecated world model projection/export facade" in inspect.getdoc(world_model)
-    assert "MAIN chapter review facade" in inspect.getdoc(reviewer)
+    assert "Chapter draft review domain" in inspect.getdoc(reviewer)
     assert "COMPATIBILITY world_v4 extraction review gate" in inspect.getdoc(reviewer_v4)
     assert "CANON Scheme C BookMap runtime" in inspect.getdoc(book_map)
 
@@ -229,6 +229,37 @@ def test_removed_world_v4_projection_modules_stay_removed() -> None:
     assert not (ROOT / "forwin/world_v4_compat").exists()
 
 
+def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
+    assert not (ROOT / "forwin/orchestration/__init__.py").exists()
+    assert not (ROOT / "forwin/orchestration/chapter_pipeline.py").exists()
+    assert not (ROOT / "forwin/orchestration/events.py").exists()
+
+    production_source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin").rglob("*.py"))
+    )
+    for removed in (
+        "ChapterPipelinePorts",
+        "OrchestrationEvent",
+        "_compile_world_model_after_acceptance",
+        "_apply_world_v4_gate",
+        "HistoricalReviewHub",
+        "FinalAcceptanceGate",
+        "final_gate_decision",
+    ):
+        assert removed not in production_source
+
+    assert "_commit_book_state_canon" in _read(
+        "forwin/orchestrator_loop_core/world_projection.py"
+    )
+    assert "class DraftReviewService" in _read(
+        "forwin/reviewer/draft_service.py"
+    )
+    assert "class FinalResidualPolicy" in _read(
+        "forwin/review_engine/rules/final_residual.py"
+    )
+
+
 def test_removed_repair_dead_code_stays_removed() -> None:
     assert not (ROOT / "forwin/orchestrator/repair_coordinator.py").exists()
 
@@ -281,9 +312,9 @@ def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
                 offenders.append((rel_path, token))
 
     assert offenders == []
-    assert "FinalAcceptanceGate" not in _read("forwin/runtime/container.py")
-    assert "FinalAcceptanceGate" not in _read("forwin/orchestrator_loop_core/repair_loop.py")
-    assert "FinalAcceptanceGate" in _read("forwin/review_engine/rules/final_acceptance.py")
+    assert not (ROOT / "forwin/reviser/final_acceptance.py").exists()
+    assert not (ROOT / "forwin/review_engine/rules/final_acceptance.py").exists()
+    assert "FinalResidualPolicy" in _read("forwin/review_engine/rules/final_residual.py")
 
 
 def test_removed_generation_modes_and_review_flags_stay_removed() -> None:

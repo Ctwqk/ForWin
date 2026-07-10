@@ -3,7 +3,7 @@ from __future__ import annotations
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer.hub import HistoricalReviewHub
+from forwin.reviewer.draft_service import DraftReviewService
 from forwin.reviewer.personality import PersonalityConsistencyReviewer
 
 
@@ -70,12 +70,12 @@ def test_personality_reviewer_flags_reference_model_and_untriggered_stress_behav
             assert "personality:char_shen" in signal.evidence_refs
 
 
-def test_historical_review_hub_merges_personality_lint_signals() -> None:
+def test_historical_draft_review_merges_personality_lint_signals() -> None:
     class Continuity:
         def check(self, project_id, writer_output):  # noqa: ANN001
             return ReviewVerdict(verdict="pass", issues=[])
 
-    verdict = HistoricalReviewHub(experience_review_enabled=False, lint_review_enabled=False).review(
+    verdict = DraftReviewService(experience_review_enabled=False, lint_review_enabled=False).review(
         project_id="proj",
         context=_context(),
         writer_output=_writer("沈临川按九型标签直接解释行为。"),

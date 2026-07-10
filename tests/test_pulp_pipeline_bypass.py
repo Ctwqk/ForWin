@@ -25,7 +25,7 @@ from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
 from forwin.protocol.world_v4 import ApprovedWorldChangeSet, ExtractedWorldChangeSet
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer.hub import HistoricalReviewHub
+from forwin.reviewer.draft_service import DraftReviewService
 from forwin.world_v4_review_gate.types import V4ReviewGateVerdict
 from tests.postgres import postgres_test_url
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -102,7 +102,7 @@ def test_disabled_reviewers_are_not_called() -> None:
     experience = RecordingReviewer()
     map_movement = RecordingReviewer()
     personality = RecordingReviewer()
-    hub = HistoricalReviewHub(
+    hub = DraftReviewService(
         experience_reviewer=experience,
         map_movement_reviewer=map_movement,
         personality_reviewer=personality,
@@ -128,7 +128,7 @@ def test_disabled_reviewers_are_not_called() -> None:
 
 def test_disabled_personality_reviewer_does_not_collect_or_review() -> None:
     personality = RecordingPersonalityReviewer()
-    hub = HistoricalReviewHub(
+    hub = DraftReviewService(
         personality_reviewer=personality,
         experience_review_enabled=False,
         map_movement_review_enabled=False,
@@ -151,7 +151,7 @@ def test_disabled_personality_reviewer_does_not_collect_or_review() -> None:
 
 def test_disabled_experience_reviewer_does_not_choose_repair_escalation() -> None:
     experience = RecordingExperienceReviewer()
-    hub = HistoricalReviewHub(
+    hub = DraftReviewService(
         experience_reviewer=experience,
         experience_review_enabled=False,
     )

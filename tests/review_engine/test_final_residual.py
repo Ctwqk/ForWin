@@ -7,7 +7,7 @@ from forwin.orchestrator_loop_core.review_autofix import (
     normalize_nonblocking_review_verdict,
 )
 from forwin.review_engine.engine import AutoDecisionEngine
-from forwin.review_engine.rules.final_acceptance import build_final_acceptance_rules
+from forwin.review_engine.rules.final_residual import build_final_residual_rules
 from forwin.review_engine.types import DecisionInput, PlanLayerHealth
 
 
@@ -45,7 +45,7 @@ def _verified_review(issue_type: str, *, severity: str = "error") -> ReviewVerdi
     )
 
 
-def test_missing_repair_verification_returns_structured_final_gate_decision() -> None:
+def test_missing_repair_verification_returns_structured_final_residual_decision() -> None:
     review = ReviewVerdict(
         verdict="fail",
         issues=[
@@ -58,17 +58,17 @@ def test_missing_repair_verification_returns_structured_final_gate_decision() ->
         ],
     )
 
-    decision = AutoDecisionEngine(build_final_acceptance_rules()).decide(_decision_input(review))
+    decision = AutoDecisionEngine(build_final_residual_rules()).decide(_decision_input(review))
 
-    assert decision.rule_id == "final_acceptance_gate"
+    assert decision.rule_id == "final_residual_policy"
     assert decision.outcome == "manual_review"
     assert decision.reason == "missing-repair-verification"
-    assert decision.sub_action["final_gate_decision"] == "manual_review_required"
+    assert decision.sub_action["final_residual_decision"] == "manual_review_required"
     assert decision.sub_action["forceable"] is False
 
 
 def test_hard_residual_issue_requires_manual_review() -> None:
-    decision = AutoDecisionEngine(build_final_acceptance_rules()).decide(
+    decision = AutoDecisionEngine(build_final_residual_rules()).decide(
         _decision_input(_verified_review("subworld_admission"))
     )
 
@@ -98,13 +98,13 @@ def test_nonblocking_legacy_subworld_residual_can_force_accept() -> None:
         ),
     )
 
-    decision = AutoDecisionEngine(build_final_acceptance_rules()).decide(
+    decision = AutoDecisionEngine(build_final_residual_rules()).decide(
         _decision_input(review)
     )
 
     assert decision.outcome == "accept"
     assert decision.reason == "soft-quality-failure-only"
-    assert decision.sub_action["final_gate_decision"] == "force_accept"
+    assert decision.sub_action["final_residual_decision"] == "force_accept"
     assert decision.sub_action["forceable"] is True
 
 
@@ -154,7 +154,7 @@ def test_review_current_output_normalizes_nonblocking_legacy_subworld_failure() 
     )
 
     class FakeOrchestrator:
-        review_hub = type(
+        draft_review = type(
             "ReviewHub",
             (),
             {"review": staticmethod(lambda **_kwargs: raw_review)},
@@ -185,18 +185,18 @@ def test_review_current_output_normalizes_nonblocking_legacy_subworld_failure() 
 
 
 def test_soft_residual_issue_can_force_accept_after_successful_verification() -> None:
-    decision = AutoDecisionEngine(build_final_acceptance_rules()).decide(
+    decision = AutoDecisionEngine(build_final_residual_rules()).decide(
         _decision_input(_verified_review("director_imbalance"))
     )
 
     assert decision.outcome == "accept"
     assert decision.reason == "soft-quality-failure-only"
-    assert decision.sub_action["final_gate_decision"] == "force_accept"
+    assert decision.sub_action["final_residual_decision"] == "force_accept"
     assert decision.sub_action["forceable"] is True
 
 
 def test_unknown_residual_issue_requires_manual_review() -> None:
-    decision = AutoDecisionEngine(build_final_acceptance_rules()).decide(
+    decision = AutoDecisionEngine(build_final_residual_rules()).decide(
         _decision_input(_verified_review("unexpected_reviewer_issue"))
     )
 

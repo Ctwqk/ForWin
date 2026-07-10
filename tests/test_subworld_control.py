@@ -42,7 +42,7 @@ from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
 from forwin.protocol.review import ContinuityIssue
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
-from forwin.reviewer.hub import HistoricalReviewHub
+from forwin.reviewer.draft_service import DraftReviewService
 from forwin.subworld_manager import SubWorldManager
 from forwin.writer.chapter_writer import ChapterWriter
 from forwin.writer.prompts import build_single_chapter_draft_prompt
@@ -2466,7 +2466,7 @@ class SubWorldControlTests(unittest.TestCase):
         self.assertIn("record_background_generic_decision", decision.manual_actions)
 
     def test_continuity_repair_instruction_preserves_suggested_fix(self) -> None:
-        instruction = HistoricalReviewHub._continuity_repair_instruction(
+        instruction = DraftReviewService._continuity_repair_instruction(
             continuity_issues=[
                 ContinuityIssue(
                     rule_name="sub_world_unknown_named_entity",

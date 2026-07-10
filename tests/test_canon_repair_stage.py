@@ -409,7 +409,7 @@ def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
                 missing_evidence=[],
                 routed_from="test",
                 sub_action={
-                    "final_gate_decision": "force_accept",
+                    "final_residual_decision": "force_accept",
                     "forceable": True,
                     "canon_risk": "low",
                     "residual_issues": [],
@@ -773,7 +773,7 @@ def test_canon_apply_exception_pauses_chapter_instead_of_accepting():
             "canon apply exception"
         )
         orchestrator.writer.write_chapter = lambda context: _writer_output(context.chapter_number)
-        orchestrator.review_hub = PassReviewHub()
+        orchestrator.draft_review = PassReviewHub()
 
         def fail_canon_quality_gate(**_kwargs):
             raise RuntimeError("canon apply failed")
@@ -884,7 +884,7 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
             thread_beats=[],
             time_advance=None,
         )
-        orchestrator.review_hub = WarnThenPassReviewHub()
+        orchestrator.draft_review = WarnThenPassReviewHub()
 
         def apply_canon_candidate(**_kwargs):
             apply_calls["count"] += 1
@@ -961,10 +961,10 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts():
             "canon repair exhaustion"
         )
         orchestrator.writer.write_chapter = lambda context: _writer_output(context.chapter_number)
-        orchestrator.review_hub = WarnThenFailReviewHub()
+        orchestrator.draft_review = WarnThenFailReviewHub()
         orchestrator._write_chapter_with_attention_fallback = lambda **kwargs: _writer_output(
             int(kwargs["chapter_number"]),
-            marker=f"repair-{orchestrator.review_hub.calls}",
+            marker=f"repair-{orchestrator.draft_review.calls}",
         )
         orchestrator._apply_repair_patch = lambda **kwargs: (
             {"repair_scope": kwargs["repair_scope"]},
@@ -1049,7 +1049,7 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
             "canon system block"
         )
         orchestrator.writer.write_chapter = lambda context: _writer_output(context.chapter_number)
-        orchestrator.review_hub = WarnReviewHub()
+        orchestrator.draft_review = WarnReviewHub()
         orchestrator._run_canon_repair_for_block = lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("non-repairable canon block should not run canon repair")
         )

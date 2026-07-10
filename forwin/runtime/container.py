@@ -23,7 +23,7 @@ from forwin.planning.world_contract_service import WorldContractPlanningService
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.retrieval import RetrievalBroker, create_memory_index
-from forwin.reviewer import HistoricalReviewHub
+from forwin.reviewer import DraftReviewService
 from forwin.reviser import RepairVerifier
 from forwin.runtime.factories import ProductionSchedulerFactory, build_provisional_writer, build_writer
 from forwin.runtime.policy import RuntimePolicy
@@ -266,7 +266,7 @@ class RuntimeContainer:
         arc_envelope_manager.services.experience = experience_planning_service
 
         hub_llm_enabled = llm_available
-        review_hub = HistoricalReviewHub(
+        draft_review = DraftReviewService(
             experience_review_enabled=policy.review.allows_signal("experience"),
             lint_review_enabled=policy.review.allows_signal("lint"),
             map_movement_review_enabled=policy.review.allows_signal("map_movement"),
@@ -338,7 +338,7 @@ class RuntimeContainer:
                 ],
                 observability=observability,
             ),
-            review_hub=review_hub,
+            draft_review=draft_review,
             writer=writer,
             provisional_writer=provisional_writer,
             repair_verifier=RepairVerifier(

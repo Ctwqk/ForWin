@@ -30,7 +30,7 @@ from forwin.api_schemas import (
     ChapterRewriteAttemptInfo,
     ChapterReviewIssueInfo,
     ChapterInfo,
-    FinalGateDecisionInfo,
+    FinalResidualDecisionInfo,
     LintSignalInfo,
     ProjectAutomationUpdateRequest,
     ProjectAutomationUpdateResponse,
@@ -240,9 +240,9 @@ def get_chapter_review(
                 if isinstance(review_meta.get("repair_verification"), dict)
                 else None
             ),
-            final_gate_decision=(
-                FinalGateDecisionInfo.model_validate(review_meta.get("final_gate_decision"))
-                if isinstance(review_meta.get("final_gate_decision"), dict)
+            final_residual_decision=(
+                FinalResidualDecisionInfo.model_validate(review_meta.get("final_residual_decision"))
+                if isinstance(review_meta.get("final_residual_decision"), dict)
                 else None
             ),
             repair_exhausted=bool(review_meta.get("repair_exhausted")),

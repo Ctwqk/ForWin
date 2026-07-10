@@ -1,11 +1,11 @@
-"""MAIN chapter review facade; `reviewer_v4` is only a compatibility gate."""
+"""Chapter draft review domain; `reviewer_v4` is only a compatibility gate."""
 
-from .hub import HistoricalReviewHub
+from .draft_service import DraftReviewService
 from .lint import LintReviewer, LintSignalCollector
 from .webnovel import WebNovelExperienceReviewer
 
 __all__ = [
-    "HistoricalReviewHub",
+    "DraftReviewService",
     "LintReviewer",
     "LintSignalCollector",
     "WebNovelExperienceReviewer",

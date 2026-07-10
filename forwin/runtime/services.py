@@ -53,7 +53,7 @@ class RuntimeServices:
     publisher_runtime: Any
 
     context_assembler: Any
-    review_hub: Any
+    draft_review: Any
     writer: Any
     provisional_writer: Any
     repair_verifier: Any

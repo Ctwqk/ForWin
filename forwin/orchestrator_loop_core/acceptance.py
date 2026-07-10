@@ -100,12 +100,6 @@ def accept_review(self, project_id: str, chapter_number: int, *, reason: str = "
             chapter_number=chapter_number,
             trigger_stage="manual_acceptance",
         )
-        self._compile_world_model_after_acceptance(
-            session=session,
-            updater=updater,
-            project_id=project_id,
-            chapter_number=chapter_number,
-        )
         self._record_decision_event(
             updater=updater,
             project_id=project_id,

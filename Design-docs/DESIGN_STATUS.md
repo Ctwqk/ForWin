@@ -17,7 +17,7 @@
 
 | 文档 | 状态 | 说明 |
 |---|---|---|
-| `CURRENT_ARCHITECTURE.md` | active-current | 当前唯一架构入口，固定 BookState / BookMap / review / compatibility 口径。 |
+| `CURRENT_ARCHITECTURE.md` | active-current | 当前唯一架构入口，固定 RuntimePolicy / application boundary / BookState / BookMap / review 口径。 |
 | `DESIGN_STATUS.md` | active-current | 本状态清单。 |
 | `../forwin_architecture_consolidation_audit.md` | active-current | v5 架构收敛决策、删除清单和 Phase A-F 路线。 |
 | `../docs/superpowers/specs/2026-07-09-forwin-v5-architecture-convergence-design.md` | active-current | v5 破坏性收敛规格；旧项目和旧设置不迁移。 |
@@ -27,7 +27,6 @@
 | `map_scheme_c.md` | active-current | Scheme C BookMap 最终语义。 |
 | `writing_flow_state_machine.md` | active-current | 当前写作任务状态机。 |
 | `V4.6_knowledge_system.md` | active-current | BookState DB Canon -> Obsidian -> LLM KB 权威关系。 |
-| `pulp_profile_upgrade_plan.md` | active-current | Pulp quality profile 当前实现计划；implementation tracked by `docs/superpowers/specs/2026-05-18-pulp-profile-upgrade-design.md` and `docs/superpowers/plans/2026-05-19-pulp-profile-upgrade.md`. |
 | `trope_library_pulp_v1.md` | active-current | Pulp 爽点库当前 runtime seed；运行时扩展到 50+ template，并携带 genre/audience/platform/payoff metadata。 |
 
 ## 维护文档
@@ -39,8 +38,6 @@
 | `V4.8_character_creation_personality_assignment.md` | active-maintenance | 人物创建与自动 personality assignment 设计。 |
 | `V4.8_character_creation_personality_maintenance.md` | active-maintenance | 人物创建 helper、assignment、coverage、metrics 和维护流程。 |
 | `maintenance_log.md` | active-maintenance | 项目总维护日志。 |
-| `forwin_design_cleanup_update_plan.md` | active-maintenance | 本轮设计收束与冗余模块更新计划。 |
-| `forwin_decoupling_plan.md` | active-maintenance | 架构解耦建议；部分低风险拆分已落地。 |
 
 ## 历史基线与兼容说明
 
@@ -67,6 +64,11 @@
 | `forwin.planning.scenario_rehearsal_service` | active-current | 无 | 无 | 当前 Scenario Rehearsal service 入口。 |
 | `forwin.runtime_settings` | removed | `forwin.runtime.policy` | 已删除 | 不再有进程内可变生成设置文件。 |
 | `Project.governance_json` settings | removed | `Project.runtime_policy_json` + version | 已删除 | manual checkpoint / decision event 等治理账本仍保留；项目运行设置已迁出 governance 命名。 |
+| `forwin.orchestration` | removed | owner-local typed services | 已删除 | `ChapterPipelinePorts` / `OrchestrationEvent` 为零调用 `Any` ports，未作为 v5 边界采用。 |
+| `forwin.reviewer.hub.HistoricalReviewHub` | removed | `forwin.reviewer.draft_service.DraftReviewService` | 已删除 | 草稿评审只产出 evidence/verdict，不决定 canon。 |
+| `forwin.reviser.final_acceptance.FinalAcceptanceGate` | removed | `forwin.review_engine.rules.final_residual.FinalResidualPolicy` | 已删除 | repair 耗尽后的残留策略；字段为 `final_residual_decision`，仍必须经过 BookState canon commit。 |
+| `_apply_world_v4_gate` | removed | `_commit_book_state_canon` | 已删除 | 当前路径是 BookState extraction/review/compile，不再使用 legacy v4 命名。 |
+| `_compile_world_model_after_acceptance` | removed | 无 | 已删除 | 恒返回 `True` 的空壳及两处调用均删除。 |
 
 ## 2026-07 V5 Slice 1 Status
 
@@ -79,9 +81,19 @@
 - 项目抽屉是唯一 RuntimePolicy UI 写入口；MCP 对应工具为 `project_set_gate_delegate`。
 - 已删除旧 mode/reckless/request override、RuntimeSettingsStore、旧治理设置 DTO，以及绑定这些接口的失效测试套件。
 
-实现提交：`a7f53bb`、`f7790c5`、`61392af`、`6c2eb0f`、`131e697`、`bc85d91`、`3e0c10f`、`a6a75fb`、`589e58a`、`e87e67b`，以及包含本状态记录的 Slice 1 completion commit。
+实现提交：`a7f53bb`、`f7790c5`、`61392af`、`6c2eb0f`、`131e697`、`bc85d91`、`3e0c10f`、`a6a75fb`、`589e58a`、`e87e67b`、`307b0dd`。
 
 验证口径：前序聚焦 policy/store/API/snapshot/application/worker/MCP/browser 测试已通过；completion gate 的 architecture/config 为 24 passed，策略分支补充为 3 passed，`compileall` 成功，全仓 1598 tests collect 成功且无收集错误。全量执行按用户要求由独立测试任务承担，本收敛任务不重复启动；部署和 30 章 no-hotfix gate 仍是后续显式步骤。
+
+## 2026-07 V5 Slice 2 Status
+
+状态：implementation-in-progress，未部署。
+
+- 已删除零调用 `forwin.orchestration` ports 和恒成功 `_compile_world_model_after_acceptance` 空壳。
+- BookState canon 主路径已从 `_apply_world_v4_gate` 改名为 `_commit_book_state_canon`，block kind 改为 `book_state`。
+- `HistoricalReviewHub` 已破坏性改名为 `DraftReviewService`；runtime 字段为 `draft_review`。
+- `FinalAcceptanceGate` 与独立 reviser 实现已删除并合入 `FinalResidualPolicy`；协议/API 字段为 `final_residual_decision`，不存在旧 alias。
+- 下一步是把 canon/repair 函数族从 `WritingOrchestrator` 属性拼装迁入显式协作对象；Phase C-F 尚未开始。
 
 ## 已知限制
 
@@ -109,6 +121,9 @@
 | `docs/superpowers/plans/2026-04-24-forwin-v4-1-runtime-hardening.md` | historical-plan | V4.1 hardening 计划；“V4 source semantics” 口径已被 BookState final 覆盖。 |
 | `docs/superpowers/specs/2026-07-09-forwin-reckless-review-mode-design.md` | historical-plan | 已被 RuntimePolicy `gate_delegate=human|spark` 与 fail-closed gate delegation 覆盖。 |
 | `docs/superpowers/plans/2026-07-09-forwin-reckless-review-mode.md` | historical-plan | 独立 reckless mode 已删除，不再是当前产品或运行时概念。 |
+| `forwin_design_cleanup_update_plan.md` | historical-plan | 旧冗余清单，已被 v5 审计和实施规格覆盖。 |
+| `forwin_decoupling_plan.md` | historical-plan | 旧解耦建议；其中 `forwin.orchestration` 目标已被 v5 owner-local service 设计取代。 |
+| `pulp_profile_upgrade_plan.md` | historical-plan | 旧实现计划；有效运行语义已固化进 `RuntimePolicy.for_profile("pulp")` 与当前架构入口。 |
 
 ## Future Product Backlog
 

@@ -45,16 +45,6 @@ def _flush_background_llm_trace(
         },
     )
 
-def _compile_world_model_after_acceptance(
-    self,
-    *,
-    session: Session,
-    updater: StateUpdater,
-    project_id: str,
-    chapter_number: int,
-) -> bool:
-    return True
-
 def _run_provisional_band_preview(
     self,
     *,
@@ -746,4 +736,4 @@ def _seed_state(
         )
 
 
-__all__ = ['_flush_background_llm_trace', '_compile_world_model_after_acceptance', '_run_provisional_band_preview', '_abort_requested', '_pause_requested', '_paused_result', '_cancelled_result', '_normalize_provisional_verdict', '_should_degrade_provisional_preview', '_build_provisional_fallback', '_load_writer_output_from_meta', '_load_review_verdict', '_seed_state']
+__all__ = ['_flush_background_llm_trace', '_run_provisional_band_preview', '_abort_requested', '_pause_requested', '_paused_result', '_cancelled_result', '_normalize_provisional_verdict', '_should_degrade_provisional_preview', '_build_provisional_fallback', '_load_writer_output_from_meta', '_load_review_verdict', '_seed_state']

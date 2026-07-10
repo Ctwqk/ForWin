@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
-from forwin.reviewer.hub import HistoricalReviewHub
+from forwin.reviewer.draft_service import DraftReviewService
 from forwin.reviewer.infrastructure_errors import (
     filter_writer_fixable_issues,
     infrastructure_issues,
@@ -48,7 +48,7 @@ def test_infrastructure_errors_are_removed_from_writer_must_fix() -> None:
         blocking=True,
     )
 
-    instruction = HistoricalReviewHub._continuity_repair_instruction(
+    instruction = DraftReviewService._continuity_repair_instruction(
         continuity_issues=[schema_issue, prose_issue],
         context=_context(),
     )

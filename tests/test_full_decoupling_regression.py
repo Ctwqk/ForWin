@@ -87,8 +87,8 @@ def test_reviewer_does_not_mutate_chapter_experience_plan() -> None:
     assert plan.model_dump(mode="json") == before
 
 
-def test_review_hub_repair_merge_preserves_existing_scope_order() -> None:
-    from forwin.reviewer.hub import HistoricalReviewHub
+def test_draft_review_repair_merge_preserves_existing_scope_order() -> None:
+    from forwin.reviewer.draft_service import DraftReviewService
 
     base = RepairInstruction(
         repair_scope="draft",
@@ -107,7 +107,7 @@ def test_review_hub_repair_merge_preserves_existing_scope_order() -> None:
         evidence_refs=["experience"],
     )
 
-    merged = HistoricalReviewHub._merge_repair_instructions(
+    merged = DraftReviewService._merge_repair_instructions(
         continuity_instruction=base,
         governance_instruction=None,
         webnovel_instruction=webnovel,

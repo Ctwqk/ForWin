@@ -62,7 +62,7 @@ class RepairVerificationInfo(BaseModel):
     verifier_mode: str = ""
 
 
-class FinalGateDecisionInfo(BaseModel):
+class FinalResidualDecisionInfo(BaseModel):
     decision: str = "repair_exhausted"
     forceable: bool = False
     reason: str = ""
@@ -120,7 +120,7 @@ class ChapterReviewDetail(BaseModel):
     canon_risk_level: str = ""
     residual_review_issues: list[ChapterReviewIssueInfo] = Field(default_factory=list)
     repair_verification: RepairVerificationInfo | None = None
-    final_gate_decision: FinalGateDecisionInfo | None = None
+    final_residual_decision: FinalResidualDecisionInfo | None = None
     repair_exhausted: bool = False
     rewrite_attempts: list[ChapterRewriteAttemptInfo] = Field(default_factory=list)
     decision_refs: list[DecisionEventInfo] = Field(default_factory=list)
@@ -280,7 +280,7 @@ __all__ = [
     'ChapterReviewIssueInfo',
     'LintSignalInfo',
     'RepairVerificationInfo',
-    'FinalGateDecisionInfo',
+    'FinalResidualDecisionInfo',
     'ChapterRewriteAttemptInfo',
     'ChapterReviewDetail',
     'ChapterReviewApproveRequest',

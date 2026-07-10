@@ -91,9 +91,9 @@ def test_webnovel_reviewer_no_longer_carries_legacy_map_movement_helpers() -> No
     assert not hasattr(WebNovelExperienceReviewer, "_map_path_issue")
 
 
-def test_historical_review_hub_accepts_split_reviewer_ports() -> None:
+def test_historical_draft_review_accepts_split_reviewer_ports() -> None:
     from forwin.protocol.review import ReviewVerdict
-    from forwin.reviewer.hub import HistoricalReviewHub
+    from forwin.reviewer.draft_service import DraftReviewService
 
     class Continuity:
         verdict = "pass"
@@ -121,7 +121,7 @@ def test_historical_review_hub_accepts_split_reviewer_ports() -> None:
     map_movement = StubReviewer("pass")
     governance = StubReviewer("pass")
     personality = StubReviewer("pass")
-    hub = HistoricalReviewHub(
+    hub = DraftReviewService(
         experience_reviewer=experience,
         map_movement_reviewer=map_movement,
         governance_reviewer=governance,
@@ -143,9 +143,9 @@ def test_historical_review_hub_accepts_split_reviewer_ports() -> None:
     assert personality.calls == 1
 
 
-def test_historical_review_hub_merge_preserves_arc_repair_scope() -> None:
+def test_historical_draft_review_merge_preserves_arc_repair_scope() -> None:
     from forwin.protocol.review import RepairInstruction
-    from forwin.reviewer.hub import HistoricalReviewHub
+    from forwin.reviewer.draft_service import DraftReviewService
 
     base = RepairInstruction(
         repair_scope="chapter_plan",
@@ -160,7 +160,7 @@ def test_historical_review_hub_merge_preserves_arc_repair_scope() -> None:
         scope_reason="arc-level issue",
     )
 
-    merged = HistoricalReviewHub._merge_repair_instructions(
+    merged = DraftReviewService._merge_repair_instructions(
         continuity_instruction=base,
         governance_instruction=None,
         webnovel_instruction=arc,

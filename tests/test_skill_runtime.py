@@ -8,7 +8,7 @@ from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer import HistoricalReviewHub
+from forwin.reviewer import DraftReviewService
 from forwin.skills import build_skill_runtime_components
 from forwin.writer.chapter_writer import ChapterWriter
 
@@ -183,7 +183,7 @@ class SkillRuntimeTests(unittest.TestCase):
             )
         )
 
-    def test_review_hub_adds_skill_notes_without_overriding_verdict(self) -> None:
+    def test_draft_review_adds_skill_notes_without_overriding_verdict(self) -> None:
         _registry, router, builder = build_skill_runtime_components(
             root=self.skill_root,
             enabled=True,
@@ -196,7 +196,7 @@ class SkillRuntimeTests(unittest.TestCase):
                 task_family="review_chapter",
             )
         )
-        hub = HistoricalReviewHub(
+        hub = DraftReviewService(
             experience_review_enabled=False,
             lint_review_enabled=False,
         )
@@ -236,7 +236,7 @@ class SkillRuntimeTests(unittest.TestCase):
             )
         )
         llm = _ReviewerLLM()
-        hub = HistoricalReviewHub(
+        hub = DraftReviewService(
             experience_review_enabled=True,
             lint_review_enabled=False,
             llm_client=llm,

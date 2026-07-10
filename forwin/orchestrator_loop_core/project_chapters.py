@@ -732,25 +732,6 @@ def _run_project_chapters(
                 future_plan_audit_result is not None
                 and future_plan_audit_result.blocking_reasons
             )
-            world_model_ok = self._compile_world_model_after_acceptance(
-                session=session,
-                updater=updater,
-                project_id=project_id,
-                chapter_number=chapter_num,
-            )
-            if not world_model_ok:
-                session.commit()
-                completed_with_current = [*completed_chapters, chapter_num]
-                paused_chapters.append(chapter_num)
-                return self._paused_result(
-                    project_id,
-                    requested_chapters,
-                    completed_chapters=completed_with_current,
-                    failed_chapters=failed_chapters,
-                    paused_chapters=paused_chapters,
-                    frozen_artifacts=frozen_artifacts,
-                    current_chapter=chapter_num,
-                )
             generation_audit_pause = self._record_generation_audit_checkpoint_if_due(
                 session=session,
                 updater=updater,

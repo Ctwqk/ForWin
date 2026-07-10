@@ -150,7 +150,7 @@ def test_apply_canon_candidate_blocks_review_failure_before_book_state_commit() 
         assert isinstance(outcome, CanonApplyOutcome)
         assert outcome.blocked
         assert outcome.blocked_path == "book-state-direct-extraction-blocked"
-        assert outcome.block_kind == "world_v4"
+        assert outcome.block_kind == "book_state"
         assert graph_deltas == 0
 
 
@@ -320,7 +320,7 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
         assert isinstance(result, CanonApplyOutcome)
         assert result.blocked
         assert result.blocked_path == "book-state-compile-blocked"
-        assert result.block_kind == "world_v4"
+        assert result.block_kind == "book_state"
         assert graph_deltas == 0
 
 
@@ -362,8 +362,6 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
         monkeypatch.setattr(orchestrator, "_load_review_verdict", lambda _review: ReviewVerdict(verdict="pass", issues=[]))
         monkeypatch.setattr(orchestrator, "_apply_canon_candidate", lambda **_kwargs: "book-state-review-gate-blocked")
         monkeypatch.setattr(orchestrator, "_run_phase3_pass", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("phase3 should not run")))
-        monkeypatch.setattr(orchestrator, "_compile_world_model_after_acceptance", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("world compile should not run")))
-
         result = orchestrator.accept_review(project.id, 1)
 
         with Session() as session:

@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from forwin.config import Config, DEFAULT_DATABASE_URL
+from forwin.config import InfrastructureConfig, DEFAULT_DATABASE_URL
 from forwin.models.base import get_engine
 from forwin.secret_store import SecretStoreError, decrypt_json_with_secret
 
@@ -34,7 +34,7 @@ def decode_stored_cookies(raw: str) -> list[dict]:
         return [item for item in payload if isinstance(item, dict)]
     if not isinstance(payload, dict) or payload.get("encoding") != SESSION_COOKIE_ENCODING:
         return []
-    secret = Config.from_env().publisher_session_secret
+    secret = InfrastructureConfig.from_env().publisher_session_secret
     if not secret:
         return []
     try:

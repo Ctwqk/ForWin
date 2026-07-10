@@ -280,7 +280,6 @@ class RuntimeContainer:
             llm_client=llm_client if hub_llm_enabled else None,
             llm_enabled=hub_llm_enabled,
             observability=observability,
-            chapter_review_form_mode="primary",
         )
         publisher_runtime = PublisherRuntimeService(
             session_factory=session_factory,

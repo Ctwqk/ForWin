@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from statistics import quantiles
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory
 from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.project import ArcPlanVersion
@@ -26,7 +26,7 @@ def _p95(values: list[int]) -> int | float:
 
 
 def main() -> int:
-    config = Config.from_env()
+    config = InfrastructureConfig.from_env()
     engine = get_engine(config.database_url)
     session_factory = get_session_factory(engine)
     with session_factory() as session:

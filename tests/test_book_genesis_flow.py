@@ -320,7 +320,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                             },
                         ],
                     },
-                    "execution_bootstrap": {"operation_mode": "blackbox", "root_ready": True},
+                    "execution_bootstrap": {"pipeline": "strict_blackbox", "root_ready": True},
                 }
             ),
         )
@@ -462,7 +462,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                             }
                         ],
                     },
-                    "execution_bootstrap": {"operation_mode": "blackbox", "root_ready": True},
+                    "execution_bootstrap": {"pipeline": "strict_blackbox", "root_ready": True},
                 }
             ),
         )
@@ -565,7 +565,7 @@ class BookGenesisFlowTests(unittest.TestCase):
                             }
                         ],
                     },
-                    "execution_bootstrap": {"operation_mode": "blackbox", "root_ready": True},
+                    "execution_bootstrap": {"pipeline": "strict_blackbox", "root_ready": True},
                 }
             ),
         )

@@ -351,17 +351,15 @@ def test_fatal_only_blocks_fatal_form_analyzer_error_with_evidence() -> None:
 
 
 @pytest.mark.parametrize(
-    ("gate_mode", "passes_none", "expected_analysis_mode"),
+    ("quality_gate", "passes_none", "expected_analysis_mode"),
     [
-        ("off", True, "off"),
-        ("fatal_only", True, "off"),
-        ("shadow", False, "primary"),
+        ("pulp_fatal", True, "off"),
         ("strict", False, "primary"),
     ],
 )
 def test_apply_canon_quality_gate_llm_client_by_gate_mode(
     monkeypatch,
-    gate_mode: str,
+    quality_gate: str,
     passes_none: bool,
     expected_analysis_mode: str,
 ) -> None:
@@ -374,14 +372,19 @@ def test_apply_canon_quality_gate_llm_client_by_gate_mode(
     class Review:
         id = "review-1"
 
-    class Config:
-        canon_quality_gate = gate_mode
-        chapter_review_form_mode = "primary"
+    class CanonPolicy:
+        pass
+
+    canon_policy = CanonPolicy()
+    canon_policy.quality_gate = quality_gate
+
+    class Policy:
+        canon = canon_policy
 
     sentinel_llm_client = object()
 
     class Orchestrator:
-        config = Config()
+        policy = Policy()
         llm_client = sentinel_llm_client
 
         def _latest_draft_and_review_for_chapter(self, **kwargs):  # noqa: ANN003

@@ -18,6 +18,15 @@ def test_infrastructure_config_has_no_generation_policy_fields() -> None:
         "review_interval_chapters",
         "review_engine_repair_v2_enabled",
         "review_engine_arc_patcher_enabled",
+        "canon_quality_gate",
+        "chapter_review_form_mode",
+        "reviewer_quality_mode",
+        "planning_audit_mode",
+        "final_gate_mode",
+        "band_checkpoint_mode",
+        "provisional_preview_enabled",
+        "final_completion_gate",
+        "style_telemetry_mode",
     ):
         assert not hasattr(config, removed)
 

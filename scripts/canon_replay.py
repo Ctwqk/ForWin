@@ -84,7 +84,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", default=True, help="Run LLM and produce candidate rows without DB writes.")
     mode.add_argument("--persist", action="store_true", help="Write replayed form-sourced canon rows.")
-    parser.add_argument("--llm-profile", default="", help="Config LLM profile id or name. Empty means current default routing.")
+    parser.add_argument("--llm-profile", default="", help="InfrastructureConfig LLM profile id or name. Empty means current default routing.")
     parser.add_argument("--estimate-only", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--force-restart", action="store_true")
@@ -146,7 +146,7 @@ def schema_version_warning(*, requested_schema_version: str, current_schema_vers
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    from forwin.config import Config
+    from forwin.config import InfrastructureConfig
     from forwin.canon_quality.chapter_review_form import FORM_SCHEMA_VERSION
     from forwin.canon_quality.chapter_review_form.replay import (
         latest_accepted_chapter,
@@ -157,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     from forwin.canon_quality.chapter_review_form.replay_state import ReplayRangeOptions, state_file_path
     from forwin.models.base import get_engine, get_session_factory, init_db
 
-    config = Config.from_env()
+    config = InfrastructureConfig.from_env()
     engine = get_engine(config.database_url)
     try:
         init_db(engine)

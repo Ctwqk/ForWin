@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI, Header, HTTPException
 
 from forwin.api_auth import basic_auth_enabled, make_basic_auth_middleware
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 
 
 def _authorization(user: str, password: str) -> str:
@@ -15,7 +15,7 @@ def _authorization(user: str, password: str) -> str:
     return f"Basic {token}"
 
 
-def _build_app(config: Config) -> FastAPI:
+def _build_app(config: InfrastructureConfig) -> FastAPI:
     app = FastAPI()
 
     @app.middleware("http")
@@ -57,7 +57,7 @@ async def _request(app: FastAPI, method: str, path: str, **kwargs) -> httpx.Resp
 
 @pytest.mark.asyncio
 async def test_basic_auth_disabled_by_default() -> None:
-    app = _build_app(Config())
+    app = _build_app(InfrastructureConfig())
 
     response = await _request(app, "GET", "/api/projects")
 
@@ -67,7 +67,7 @@ async def test_basic_auth_disabled_by_default() -> None:
 
 @pytest.mark.asyncio
 async def test_basic_auth_rejects_missing_or_wrong_credentials() -> None:
-    app = _build_app(Config(http_basic_user="alice", http_basic_password="secret"))
+    app = _build_app(InfrastructureConfig(http_basic_user="alice", http_basic_password="secret"))
 
     missing = await _request(app, "GET", "/api/projects")
     wrong = await _request(
@@ -85,7 +85,7 @@ async def test_basic_auth_rejects_missing_or_wrong_credentials() -> None:
 
 @pytest.mark.asyncio
 async def test_basic_auth_accepts_correct_credentials() -> None:
-    app = _build_app(Config(http_basic_user="alice", http_basic_password="secret"))
+    app = _build_app(InfrastructureConfig(http_basic_user="alice", http_basic_password="secret"))
 
     response = await _request(
         app,
@@ -100,7 +100,7 @@ async def test_basic_auth_accepts_correct_credentials() -> None:
 
 @pytest.mark.asyncio
 async def test_basic_auth_exempts_health_and_extension_paths() -> None:
-    config = Config(
+    config = InfrastructureConfig(
         http_basic_user="alice",
         http_basic_password="secret",
         publisher_extension_api_key="extension-secret",
@@ -133,7 +133,7 @@ async def test_basic_auth_exempts_health_and_extension_paths() -> None:
 
 @pytest.mark.asyncio
 async def test_extension_key_can_bypass_basic_auth_for_extension_used_job_paths() -> None:
-    config = Config(
+    config = InfrastructureConfig(
         http_basic_user="alice",
         http_basic_password="secret",
         publisher_extension_api_key="extension-secret",
@@ -158,10 +158,10 @@ async def test_extension_key_can_bypass_basic_auth_for_extension_used_job_paths(
 
 def test_config_rejects_partial_basic_auth() -> None:
     with pytest.raises(ValueError, match="must be set together"):
-        Config(http_basic_user="alice")
+        InfrastructureConfig(http_basic_user="alice")
 
     with pytest.raises(ValueError, match="must be set together"):
-        Config(http_basic_password="secret")
+        InfrastructureConfig(http_basic_password="secret")
 
 
 def test_config_from_env_rejects_partial_basic_auth(monkeypatch, tmp_path) -> None:
@@ -171,4 +171,4 @@ def test_config_from_env_rejects_partial_basic_auth(monkeypatch, tmp_path) -> No
     monkeypatch.setenv("FORWIN_HTTP_BASIC_USER", "alice")
 
     with pytest.raises(ValueError, match="must be set together"):
-        Config.from_env()
+        InfrastructureConfig.from_env()

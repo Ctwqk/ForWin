@@ -8,7 +8,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 from forwin.canon_quality.service import analyze_writer_output_quality
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models import ChapterDraft, ChapterPlan, Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.protocol.writer import WriterOutput
@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", default="")
     args = parser.parse_args(argv)
 
-    config = Config.from_env()
+    config = InfrastructureConfig.from_env()
     engine = get_engine(config.database_url)
     init_db(engine)
     session_factory = get_session_factory(engine)

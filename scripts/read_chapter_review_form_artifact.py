@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.canon_quality.chapter_review_form.service import load_form_artifact
 
 
@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--chapter-number", required=True, type=int)
     args = parser.parse_args(argv)
 
-    config = Config.from_env()
+    config = InfrastructureConfig.from_env()
     try:
         artifact = load_form_artifact(config.artifact_root, args.project_id, args.chapter_number)
     except FileNotFoundError:

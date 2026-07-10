@@ -264,7 +264,7 @@ class LLMRouterTests(unittest.TestCase):
 
         result = router.chat_with_result(
             [{"role": "user", "content": "review"}],
-            intent=LLMCallIntent(task_family="review", stage_key="reckless_human_gate"),
+            intent=LLMCallIntent(task_family="review", stage_key="spark_pause_gate"),
         )
 
         self.assertEqual(result.backend, "codex_bridge")
@@ -287,7 +287,7 @@ class LLMRouterTests(unittest.TestCase):
         adapter.chat(
             [{"role": "user", "content": "first"}],
             task_family="review",
-            stage_key="reckless_human_gate",
+            stage_key="spark_pause_gate",
         )
         self.assertEqual(adapter.last_call_result.backend, "codex_bridge")
 
@@ -296,7 +296,7 @@ class LLMRouterTests(unittest.TestCase):
             adapter.chat(
                 [{"role": "user", "content": "second"}],
                 task_family="review",
-                stage_key="reckless_human_gate",
+                stage_key="spark_pause_gate",
             )
 
         self.assertIsNotNone(adapter.last_call_result)

@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Iterable
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.governance import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
@@ -252,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _database_url() -> str:
-    return os.environ.get("DATABASE_URL") or Config.from_env().database_url
+    return os.environ.get("DATABASE_URL") or InfrastructureConfig.from_env().database_url
 
 
 def _latest_drafts_by_chapter(session, project_id: str) -> dict[int, ChapterDraft]:  # noqa: ANN001

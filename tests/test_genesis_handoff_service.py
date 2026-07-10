@@ -97,7 +97,7 @@ class GenesisHandoffServiceTests(unittest.TestCase):
                         },
                     ],
                 },
-                "execution_bootstrap": {"operation_mode": "blackbox", "root_ready": True},
+                "execution_bootstrap": {"pipeline": "strict_blackbox", "root_ready": True},
             },
         )
         for stage_key in ("brief", "world", "map", "story_engine", "book_blueprint", "bootstrap"):

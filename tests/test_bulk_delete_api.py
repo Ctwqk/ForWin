@@ -24,7 +24,7 @@ class BulkDeleteApiTests(unittest.TestCase):
         self.old_session_factory = api_module._SessionFactory
         self.old_config = api_module._config
         api_module._SessionFactory = self.session_factory
-        api_module._config = api_module.Config(
+        api_module._config = api_module.InfrastructureConfig(
             database_url=postgres_test_url("bulk-delete"),
             artifact_root=str(Path(self.tmpdir.name) / "artifacts"),
             minimax_api_key="",

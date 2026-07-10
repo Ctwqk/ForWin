@@ -1054,7 +1054,7 @@ def sample_genesis_detail(project_id: str) -> dict[str, Any]:
                 "arcs": [{"arc_number": 1, "title": "雾港初潮", "chapter_start": 1, "chapter_end": 6, "chapter_count": 6}],
             },
             "execution_bootstrap": {
-                "operation_mode": "blackbox",
+                "pipeline": "strict_blackbox",
                 "start_policy": "explicit_start_writing_only",
                 "root_ready": False,
             },

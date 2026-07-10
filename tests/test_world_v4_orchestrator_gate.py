@@ -6,21 +6,43 @@ from tempfile import TemporaryDirectory
 
 from sqlalchemy import func, select
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models import DecisionEvent, Entity, EntityState
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.project import ChapterPlan
-from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.orchestrator_loop_core.quality_gates import CanonApplyOutcome
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent, WorldContractRepository
 from forwin.protocol.book_state import BookStateCompileResult
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.state_change import StateChangeCandidate
 from forwin.protocol.writer import WriterOutput
+from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
 from tests.postgres import postgres_test_url
+
+
+def _build_orchestrator(database_url: str, artifact_root: str):
+    policy = RuntimePolicy.for_profile("standard")
+    policy = policy.model_copy(
+        update={
+            "canon": policy.canon.model_copy(update={"quality_gate": "pulp_fatal"})
+        }
+    )
+    return RuntimeContainer.from_config(
+        InfrastructureConfig(
+            database_url=database_url,
+            artifact_root=artifact_root,
+            qdrant_url=":memory:",
+            embedding_backend="hash",
+            minimax_api_key="",
+            minimax_model="fake-model",
+        ),
+        policy=policy,
+        role="generation_worker",
+    ).build_writing_orchestrator()
 
 
 def _setup_project(session):
@@ -63,15 +85,7 @@ def test_apply_canon_candidate_commits_book_state_without_projection_compatibili
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
-        orchestrator = WritingOrchestrator(
-            Config(
-                database_url=db_path,
-                artifact_root=str(Path(tmp) / "artifacts"),
-                minimax_api_key="",
-                minimax_model="fake-model",
-                chapter_review_form_mode="off",
-            )
-        )
+        orchestrator = _build_orchestrator(db_path, str(Path(tmp) / "artifacts"))
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
             project, _chapter = _setup_project(session)
@@ -110,16 +124,7 @@ def test_apply_canon_candidate_blocks_review_failure_before_book_state_commit() 
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
-        orchestrator = WritingOrchestrator(
-            Config(
-                database_url=db_path,
-                artifact_root=str(Path(tmp) / "artifacts"),
-                minimax_api_key="",
-                minimax_model="fake-model",
-                chapter_review_form_mode="off",
-                freeze_failed_candidates=False,
-            )
-        )
+        orchestrator = _build_orchestrator(db_path, str(Path(tmp) / "artifacts"))
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
             project, _chapter = _setup_project(session)
@@ -155,15 +160,7 @@ def test_apply_canon_candidate_drops_unregistered_character_state_changes() -> N
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
-        orchestrator = WritingOrchestrator(
-            Config(
-                database_url=db_path,
-                artifact_root=str(Path(tmp) / "artifacts"),
-                minimax_api_key="",
-                minimax_model="fake-model",
-                chapter_review_form_mode="off",
-            )
-        )
+        orchestrator = _build_orchestrator(db_path, str(Path(tmp) / "artifacts"))
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
             project, _chapter = _setup_project(session)
@@ -231,15 +228,7 @@ def test_apply_canon_candidate_drops_fields_unsupported_by_resolved_entity_kind(
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
-        orchestrator = WritingOrchestrator(
-            Config(
-                database_url=db_path,
-                artifact_root=str(Path(tmp) / "artifacts"),
-                minimax_api_key="",
-                minimax_model="fake-model",
-                chapter_review_form_mode="off",
-            )
-        )
+        orchestrator = _build_orchestrator(db_path, str(Path(tmp) / "artifacts"))
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
             project, _chapter = _setup_project(session)
@@ -305,16 +294,7 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
-        orchestrator = WritingOrchestrator(
-            Config(
-                database_url=db_path,
-                artifact_root=str(Path(tmp) / "artifacts"),
-                minimax_api_key="",
-                minimax_model="fake-model",
-                chapter_review_form_mode="off",
-                freeze_failed_candidates=False,
-            )
-        )
+        orchestrator = _build_orchestrator(db_path, str(Path(tmp) / "artifacts"))
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
             project, _chapter = _setup_project(session)
@@ -350,15 +330,7 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
         engine = get_engine(db_path)
         init_db(engine)
         Session = get_session_factory(engine)
-        orchestrator = WritingOrchestrator(
-            Config(
-                database_url=db_path,
-                artifact_root=str(Path(tmp) / "artifacts"),
-                minimax_api_key="",
-                minimax_model="fake-model",
-                chapter_review_form_mode="off",
-            )
-        )
+        orchestrator = _build_orchestrator(db_path, str(Path(tmp) / "artifacts"))
         with Session.begin() as session:
             updater = StateUpdater(session)
             project = updater.create_project(title="Accept", premise="p", genre="g")

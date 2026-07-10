@@ -4,6 +4,18 @@
 **审计方式：** 实地核验代码（forwin/ 606 个 Python 文件、tests/ 289 个测试文件）、配置、设计文档与调用链；初版报告（GPT Pro）作为对照底稿。
 **结论先行：** 应该做架构收敛，且初版报告的大方向正确；但初版基于稍早的 master，遗漏了 2026-07-09 当天落地的 `reckless review` 模式、已经部分落地的 EntityRegistrar，以及最核心的结构性负债——`WritingOrchestrator` 猴子补丁拼装。本修订版据此调整了合并决策和实施顺序。
 
+## 2026-07-09 实施校正
+
+本报告的 Phase A 已按更激进的 v5 方案完成，不再采用报告初稿中的兼容迁移设计：
+
+- `InfrastructureConfig` 只保留进程基础设施和环境模型目录；旧 `Config` 名称、模式字段和 API Key 持久化表面已删除。
+- 每个项目只有一份带版本号的不可变 `RuntimePolicy`；可编辑项仅为 `standard/pulp`、模型 profile、章节长度、暂停策略和 `human/spark` gate 委托。
+- 每个 durable generation task 保存完整且不可变的 policy snapshot；API、worker、scheduler、CLI、Genesis handoff 和自动续跑均经过 `GenerationApplicationService`。
+- `RuntimeSettingsStore`、`governance_json` 运行时设置、request-level model/mode override、checkpoint/copilot/reckless 兼容映射全部删除。旧项目和旧设置文件不迁移。
+- 控制台只读环境模型目录，项目抽屉是唯一 RuntimePolicy 写入口；MCP 用 `project_set_gate_delegate`，不再提供 reckless-mode 开关。
+
+Slice 1 实施提交依次为 `a7f53bb`、`f7790c5`、`61392af`、`6c2eb0f`、`131e697`、`bc85d91`、`3e0c10f`、`a6a75fb`、`589e58a`、`e87e67b`，并由 completion commit 收口。本轮同时删除失效的旧架构测试大套件和无实现支撑的 review-engine cutover 脚本，常量化 chapter review form 主路径，并增加 production/UI/application/container boundary guard；后续 Phase B-F 不因此标记完成。
+
 ---
 
 ## 0. 对初版报告的核验结论
@@ -210,12 +222,12 @@ WritingOrchestrator (变薄的编排壳)
 
 | # | 保留 | 合并进 | 删除/弃用 | 迁移方式 | 需要测试 | 备注 |
 |---|---|---|---|---|---|---|
-| D01 ✅ | blackbox 行为 | `GenerationPolicy` | 用户可见 checkpoint/copilot | 旧值映射为 blackbox+pause policy，发 deprecation 事件 | 配置迁移 + pass/warn/fail 行为回归 | pause 能力不删，只删模式等价物 |
-| D02 ✎ | `review_delegation_mode` | pause policy 的 delegation 维度 | 独立"reckless 模式"叙事 | 语义不变，归位到 HumanGateDelegation；文档改口径 | 7 类 gate 的 human/reckless 分支测试 | ★初版无此项 |
-| D03 ★ | reckless fail-closed + 全痕迹 | 不变 | reckless 批准 `chapter_blackbox_failure` 的**默认**能力 | 加 per-gate allowlist（默认不含 blackbox_failure），governance_json 可显式开 | 不变量测试：reckless 批准后 canon 门仍完整执行 | 防"LLM 放行修复失败章"成为暗门 |
-| D04 ✅ | `quality_profile` | `RuntimePolicyResolver` | `writer_mode`/`reviewer_quality_mode`/`phase4_use_llm`/5 个 `*_mode` 的 UI/env 独立暴露 | env 兼容解析保留；UI 隐藏 | resolver 单测（standard/pulp/test） | |
-| D05 ★ | pulp/standard | — | `premium` 空 profile | 直接删枚举值或补 override 定义 | Config 校验测试 | `PREMIUM_OVERRIDES={}` 是占位符 |
-| D06 ✅ | `RuntimeSettingsStore` | `RuntimePolicyService`（四层归一） | API schema 里的重复模式字段 | 单一 DTO；旧字段作 patch 别名 | settings save/load/backcompat | 四层：env/store/governance_json/payload |
+| D01 ✅ 已完成 | strict pipeline | `RuntimePolicy.pause` | checkpoint/copilot 与用户 mode 轴 | 直接删除，不做旧值映射 | strict pass/warn/fail + pause policy | pause 能力保留，模式等价物删除 |
+| D02 ✎ 已完成 | 可选暂停门委托 | `PausePolicy.gate_delegate` | `review_delegation_mode` 与 reckless 叙事 | 值严格为 `human/spark` | human/spark gate 分支 | Spark 是委托目标，不是运行模式 |
+| D03 ★ 已完成 | Spark fail-closed + 完整痕迹 | `GateDelegationService` | fail/hard residual 的委托能力 | fail 或 hard residual 永不进入委托 | model mismatch/parse/trace/approval 不变量 | 不存在可配置的危险门 allowlist |
+| D04 ✅ 已完成 | `quality_profile` | `RuntimePolicy` | writer/reviewer/planning 等独立模式轴 | 只允许 `standard/pulp`，不解析旧 env mode | profile 与显式注入测试 | 不再需要四层 resolver |
+| D05 ★ 已完成 | pulp/standard | — | `premium` 空 profile | 直接删除 | policy literal 校验 | 无空 override |
+| D06 ✅ 已完成 | 环境基础设施 + 项目策略 + 任务快照 | `InfrastructureConfig` / `RuntimePolicy` / policy snapshot | `RuntimeSettingsStore`、`governance_json` 设置与 request override | 直接删除，无 patch alias、无 backcompat | store/version/snapshot/catalog | 三段职责，不是四层归一 |
 | D07 ✅ | `HistoricalReviewHub` 行为 | `DraftReviewService` | "主 reviewer 决定 canon"的表述 | 重命名/包装，verdict 结构不变 | 现有 review 测试 + verdict parity | |
 | D08 ✅ | `canon_quality` 分析器 | `QualityAnalysisRun` 缓存 | hub/门重复 LLM 分析 | 按 draft body hash+plan version 缓存 | hub/门同 payload parity；改稿失效缓存 | |
 | D09 ✅ | `decide_repair_v2` | `RepairService` | `review_engine_repair_v2_enabled`、`review_engine_auto_approve_enabled` **字段本体** | 直接删字段（config 之外零读取）；shadow/parity 测试转 test-only 或删 | repair 路由测试改为 live 断言 | 两个死旗标，零生产风险 |
@@ -231,7 +243,7 @@ WritingOrchestrator (变薄的编排壳)
 | D19 ★ | `forwin.orchestration.ChapterPipelinePorts` | orchestrator 拆解的目标接口 | （二选一）若不采用则删整包 | 采用：Phase B 起各 service 实现该 ports；不采用：删 3 文件 | import 存在性测试 | 现为零引用死代码 |
 | D20 ★ | `WritingOrchestrator` 公共入口 | 显式协作对象（§4.4） | `service.py` 猴子补丁拼装 + 模块回注 | 每 Phase 收敛一族方法；`__module__` 伪装最后删 | 每族替换后全量回归 | 收敛的结构性主线 |
 | D21 ✅ | route registry 域分组 | application services | route ops 内嵌业务逻辑 | 按域抽 service，响应契约不变 | API 回归 + 分组边界测试（已有） | |
-| D22 ✎ | durable worker + automation scheduler 入队 | `GenerationApplicationService` | API 内直接构建 orchestrator 的旁路 | scheduler/routes/MCP 统一走 service 入队 | 任务 lease/resume/cancel/幂等 | ★补 scheduler 入口 |
+| D22 ✎ 已完成 | durable worker + automation scheduler 入队 | `GenerationApplicationService` | API/CLI/Genesis/auto-continue 的直接任务构造旁路 | 所有生产者统一调用 application service | 任务 lease/resume/cancel/幂等 | worker 只保留 claim/lease/heartbeat/observability |
 | D23 ✅ | publisher worker/browser 隔离 + 强制加密校验 | `PublisherApplicationService` | 生成流程内的 publisher 调用 | 保持后 canon 工作流 | publish=false 冒烟 + 风险门 | 不弱化 browser 风险门 |
 | D24 ✅ | `DecisionEvent`+`PromptTrace` | 统一 payload 契约（operation_id/policy_id/artifact refs） | 平行 ledger 命名 | 契约化，不动存量数据 | 审计查询/dashboard | reckless 的痕迹实现可作模板 |
 | D25 ★ | `governance.py` 事件账本 | 拆分：settings 归 RuntimePolicy、关键词审查归 reviewer | 七处 "governance" 命名混用 | 仅移动+重导出，不改数据 | import 边界测试 | 纯可读性收敛，可最后做 |
@@ -243,15 +255,13 @@ WritingOrchestrator (变薄的编排壳)
 
 > 顺序调整理由：A（模式）几乎零行为风险先行；B 同时启动 orchestrator 立缝（D20）因为它是 C/D/E 的公共前置；C（admission 割接）紧随其后因为它是当前生产 hotfix 压力的来源；D（状态双写）风险最高放中后；E/F 收尾。
 
-### Phase A — 模式与配置收敛（D01-D06,D10）
+### Phase A — 模式与配置收敛（D01-D06,D10）✅ Slice 1 已完成
 
-- **目标**：blackbox 唯一用户模式；四层配置归一为 `RuntimePolicyResolver`；死旗标删除。
-- **涉及**：`config.py`、`runtime_settings.py`、`governance.py`(settings 部分)、`api_schema/llm.py`、`api_runtime.py:build_runtime_config/build_saved_runtime_config`、UI settings。
-- **不变量**：Swarm 角色分工不变；旧 `.env`/runtime JSON/governance_json 可加载且解析结果与现行为等价；默认行为=现 blackbox 严格生成。
-- **删除/迁移**：删 `review_engine_repair_v2_enabled`/`review_engine_auto_approve_enabled` 字段与对应 shadow 测试；`review_engine_live_cutover_*` 转 warning-only 一个版本后删；`premium` 处置；UI 隐藏 `WRITER_MODE` 等。
-- **测试**：resolver 三 profile 单测；旧配置载入等价性；`operation_mode=checkpoint` 旧值 → blackbox+每章 pause 的行为等价测试；API settings PATCH 兼容。
-- **回滚**：resolver 是纯附加层，revert 即回。
-- **验收**：UI 只见 profile+pause policy；`Config` 模式类字段全部标记 deprecated-alias；全量测试绿。
+- **落地形态**：strict pipeline 是唯一生成路径；`RuntimePolicy` 是唯一项目行为 DTO；任务保存精确 policy snapshot。
+- **职责边界**：环境只给 `InfrastructureConfig` 和只读模型目录；项目策略按 version 乐观锁保存；请求只给运行边界，不覆盖策略。
+- **直接删除**：旧 `Config` 名称、`RuntimeSettingsStore`、`governance_json` 设置、mode/reckless/feature-flag DTO、浏览器 API Key 保存表单和兼容测试。
+- **入口统一**：`GenerationApplicationService` 已覆盖 API、worker、scheduler、CLI、Genesis、continue 和 auto-continue。
+- **验证**：RuntimePolicy/store/API/snapshot/application/MCP/console 有聚焦测试；completion gate 为 architecture/config 24 passed、策略分支 3 passed、1598 tests collect 无错误；完整长跑与部署 gate 另行执行。
 
 ### Phase B — review/repair/final/canon 分层 + orchestrator 立缝（D07-D13,D19,D20 首批）
 
@@ -329,20 +339,20 @@ Swarm 角色分工；Postgres/Qdrant/MinIO/artifact store；durable task lease �
 
 | 类别 | 必须证明什么 |
 |---|---|
-| 单元：RuntimePolicyResolver | 四层旧配置输入 → 与现行为等价的 GenerationPolicy；checkpoint/copilot 旧值映射后行为等价（每章 pause / 非 pass pause） |
+| 单元：RuntimePolicy | standard/pulp 完整不可变策略、长度约束、用户可编辑字段与无 secret snapshot |
 | 单元：repair 路由 | repair_v2 live 语义下 scope 选择、预算、耗尽升级正确；不再依赖已删旗标 |
-| 单元：reckless 不变量 | reckless 批准任何门后，canon_quality 门与 BookState 门仍完整执行；model-mismatch/parse 失败 → reject + `RECKLESS_REVIEW_FAILED`；allowlist 外的门不可批 |
+| 单元：gate delegation 不变量 | fail/hard residual 不委托；Spark model-mismatch/parse 失败 → reject + `GATE_DELEGATION_FAILED`；批准后仍执行 canon 门 |
 | 单元：canon_quality 缓存 | hub 与 canon 门共享同一 `QualityAnalysisRun`；body 变更使缓存失效 |
 | 单元：EntityRegistrar | 未知名 → registered/alias/background/plan-conflict 四分类；分类器异常 fail-closed；alias 项目内唯一 |
 | 单元：BookState compiler | 幂等、old-value mismatch 拦截、snapshot 持久化（现有测试保持绿） |
 | 集成：draft→review→repair→canon | fail 草稿进 repair、attempt 记录、验证后才进 CanonAdmission；块住时冻结候选+事件+needs_review 且不动 canon |
 | 集成：读方对拍（Phase D 专用） | 同一项目 30 章，legacy StateRepository 上下文 vs BookState projection 上下文逐章 diff 为空，然后才允许删双写 |
 | 集成：admission 回放 | 100 章冻结 writer 输出回放，registrar 路径零新增 regex、零 needs_review 误报 |
-| API/worker/MCP | 旧 settings payload 兼容；lease/resume/cancel/pause；重试执行不产生重复章节/GraphDelta；MCP 与 API 状态一致（含 `project_set_reckless_mode`） |
-| UI | settings 面板不再出现废弃模式字段；review 面板展示 verdict/repair/residual/canon 四层结论与 reckless 痕迹链接 |
+| API/worker/MCP | RuntimePolicy version conflict；lease/resume/cancel/pause；重试执行不产生重复章节/GraphDelta；MCP 与 API 状态一致（含 `project_set_gate_delegate`） |
+| UI | settings 只读环境模型目录；项目抽屉只显示 v5 policy 字段；生成 modal 只提交 max/run-until/auto-continue |
 | 真实生成 | 30 章（Phase A 后，配置迁移冒烟）→ 60 章（Phase B/C 后，四层判决+registrar）→ 100 章（Phase D 后，单写方）→ **200 章 no-hotfix**（总验收，沿用 post-100 计划标准：全程零代码热修） |
 | Publisher 不回归 | publish=false 不触 browser 状态；canon 接受后可入 publisher 队列；CAPTCHA/MFA 停机；publisher 失败不回滚章节接受态 |
-| 迁移兼容 | 旧 runtime JSON、旧 governance_json、既有 CandidateDraftRecord/ChapterReview、既有 map 行全部可读可用 |
+| 新项目基线 | 不迁移旧 runtime JSON/governance 数据；只验证新项目 Genesis → policy → task snapshot 主链 |
 
 ---
 
@@ -351,7 +361,7 @@ Swarm 角色分工；Postgres/Qdrant/MinIO/artifact store；durable task lease �
 ### 最高风险（按序）
 
 1. **双写删除（Phase D）**：读方迁移不彻底会让 context/review 静默变瞎。对策：读方清单 + 30 章对拍作硬性前置，双写删除独立 commit。
-2. **reckless 放行边界**：LLM 代批 `chapter_blackbox_failure` 意味着修复失败章节可被放行，canon 门成为唯一防线。对策：D03 的 per-gate allowlist + 不变量测试；观察 `RECKLESS_GATE_OVERRIDDEN` 事件的 risk_level 分布再决定是否放宽。
+2. **Spark 委托边界**：只允许可选 pause gate 进入 Spark；fail/hard residual 在调用委托服务前即阻断。持续观察 `GATE_DELEGATION_*` 事件，但不提供扩大危险门范围的配置入口。
 3. **orchestrator 立缝的中间态**：包装层与猴子补丁并存期间，方法解析顺序错误可能引入隐蔽 bug。对策：每族替换独立 commit + 全量回归；`service.py` 赋值行数递减断言防止回潮。
 4. **admission 割接期**：新旧五面并存时删错顺序会复现 100 章 hotfix 循环。对策：先让 canon 门只"验证"不"判决"，回放绿了再删旧面。
 5. **canon admission 抽取**：事件顺序、冻结候选捕获、事务边界易碎。对策：包装先行、事件契约冻结。

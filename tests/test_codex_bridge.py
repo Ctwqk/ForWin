@@ -347,7 +347,7 @@ class CodexBridgeTests(unittest.TestCase):
             with self.assertRaises(httpx.HTTPStatusError):
                 client.chat(
                     [{"role": "user", "content": "review"}],
-                    intent=LLMCallIntent(task_family="review", stage_key="reckless_human_gate"),
+                    intent=LLMCallIntent(task_family="review", stage_key="spark_pause_gate"),
                     model="gpt-5.3-codex-spark",
                 )
 

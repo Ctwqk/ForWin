@@ -1,20 +1,36 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from sqlalchemy import select
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, ChapterPlan
-from forwin.orchestrator.loop import RunResult, WritingOrchestrator
+from forwin.orchestrator.loop import RunResult
 from forwin.orchestrator_loop_core.quality_gates import evaluate_structural_patch_completion_debt
 from forwin.orchestrator.phase24 import ArcEnvelopeManager
+from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
+
+
+def _build_orchestrator(database_url: str, *, progress_callback=None):  # noqa: ANN001
+    return RuntimeContainer.from_config(
+        InfrastructureConfig(
+            database_url=database_url,
+            qdrant_url=":memory:",
+            embedding_backend="hash",
+            minimax_api_key="",
+            minimax_model="fake-model",
+        ),
+        policy=RuntimePolicy.for_profile("standard"),
+        role="generation_worker",
+    ).build_writing_orchestrator(progress_callback=progress_callback)
 
 
 def _chapter_payloads(total: int) -> list[dict]:
@@ -57,9 +73,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
     def test_seed_state_distributes_chapters_across_arc_outlines(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = postgres_test_url("seed-state")
-            orchestrator = WritingOrchestrator(
-                Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
-            )
+            orchestrator = _build_orchestrator(db_path)
             try:
                 session = orchestrator._SessionFactory()
                 try:
@@ -128,9 +142,7 @@ class ArcExecutionScopingTests(unittest.TestCase):
     def test_new_project_run_executes_only_first_active_arc(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = postgres_test_url("run-scope")
-            orchestrator = WritingOrchestrator(
-                Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model")
-            )
+            orchestrator = _build_orchestrator(db_path)
             captured: dict[str, object] = {}
 
             def fake_run_project_chapters(**kwargs):
@@ -238,8 +250,8 @@ class ArcExecutionScopingTests(unittest.TestCase):
 
             captured: dict[str, object] = {}
             progress_events: list[tuple[str, dict[str, object]]] = []
-            orchestrator = WritingOrchestrator(
-                Config(database_url=db_path, minimax_api_key="", minimax_model="fake-model"),
+            orchestrator = _build_orchestrator(
+                db_path,
                 progress_callback=lambda event, payload: progress_events.append((event, dict(payload))),
             )
 

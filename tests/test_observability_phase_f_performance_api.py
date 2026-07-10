@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from tempfile import TemporaryDirectory
 
 import forwin.api as api_module
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.observability import PerformanceSpan
 from forwin.models.project import Project
@@ -16,7 +16,7 @@ def test_performance_api_reports_task_critical_path_and_slow_spans() -> None:
         old_engine = api_module._engine
         old_factory = api_module._SessionFactory
         database_url = postgres_test_url("phase-f-performance-api")
-        api_module._config = Config(
+        api_module._config = InfrastructureConfig(
             database_url=database_url,
             artifact_root=tmp,
             minimax_api_key="",
@@ -86,7 +86,7 @@ def test_slow_spans_orders_by_duration_before_limit() -> None:
         old_engine = api_module._engine
         old_factory = api_module._SessionFactory
         database_url = postgres_test_url("phase-f-slow-span-duration")
-        api_module._config = Config(
+        api_module._config = InfrastructureConfig(
             database_url=database_url,
             artifact_root=tmp,
             minimax_api_key="",

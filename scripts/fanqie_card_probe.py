@@ -16,11 +16,11 @@ def load_cookies() -> list[dict]:
     query = """
 import json
 from sqlalchemy import text
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine
 from forwin.secret_store import SecretStoreError, decrypt_json_with_secret
 
-config = Config.from_env()
+config = InfrastructureConfig.from_env()
 engine = get_engine(config.database_url)
 try:
     with engine.connect() as conn:

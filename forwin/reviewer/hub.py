@@ -45,7 +45,6 @@ class HistoricalReviewHub:
         lint_collector=None,
         llm_webnovel_reviewer=None,
         observability=None,
-        chapter_review_form_mode: str = "primary",
     ) -> None:
         self.experience_review_enabled = bool(experience_review_enabled)
         self.map_movement_review_enabled = bool(map_movement_review_enabled)
@@ -69,7 +68,6 @@ class HistoricalReviewHub:
         self.llm_client = llm_client
         self.llm_enabled = bool(llm_client) if llm_enabled is None else bool(llm_enabled)
         self.observability = observability or NullObservability()
-        self.chapter_review_form_mode = str(chapter_review_form_mode or "primary")
 
     def review(
         self,
@@ -133,7 +131,7 @@ class HistoricalReviewHub:
                     chapter_number=int(getattr(context, "chapter_number", 0) or 0),
                     writer_output=writer_output,
                     persist=False,
-                    mode=self.chapter_review_form_mode,
+                    mode="primary",
                     llm_client=self.llm_client if self.llm_enabled else None,
                     return_raw_analyzer_results=True,
                 )

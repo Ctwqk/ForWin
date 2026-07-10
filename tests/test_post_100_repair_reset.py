@@ -217,7 +217,6 @@ def test_repair_v2_no_longer_has_subworld_repair_scope() -> None:
             ),
             signals=[],
             open_obligations=[],
-            operation_mode="blackbox",
             attempts_completed=0,
             prior_scope_history=[],
             budget=None,

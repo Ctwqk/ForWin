@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import select, text
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.observability import PerformanceSpan
 from forwin.models.project import Project
@@ -41,7 +41,7 @@ def test_observability_service_records_nested_spans_and_errors() -> None:
         obs = ObservabilityService(
             session_factory=Session,
             artifact_store=None,
-            config=Config(database_url=postgres_test_url("phase-f-spans"), minimax_api_key=""),
+            config=InfrastructureConfig(database_url=postgres_test_url("phase-f-spans"), minimax_api_key=""),
         )
         ctx = OperationContext(
             project_id=project_id,
@@ -116,7 +116,7 @@ def test_query_service_builds_task_critical_path_and_breakdowns() -> None:
         obs = ObservabilityService(
             session_factory=Session,
             artifact_store=None,
-            config=Config(database_url=postgres_test_url("phase-f-query"), minimax_api_key=""),
+            config=InfrastructureConfig(database_url=postgres_test_url("phase-f-query"), minimax_api_key=""),
         )
         ctx = OperationContext(project_id=project_id, task_id="task-query", operation_id="task-query")
         with obs.span(ctx, "task.operation", span_kind="task", component="api"):
@@ -155,7 +155,7 @@ def test_prompt_trace_llm_spans_attach_to_active_stage_span() -> None:
         obs = ObservabilityService(
             session_factory=Session,
             artifact_store=None,
-            config=Config(database_url=postgres_test_url("phase-f-prompt-parent"), minimax_api_key=""),
+            config=InfrastructureConfig(database_url=postgres_test_url("phase-f-prompt-parent"), minimax_api_key=""),
         )
         orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
         orchestrator.observability = obs
@@ -214,7 +214,7 @@ def test_stage_transition_span_uses_stage_entry_chapter_when_next_stage_moves_on
         obs = ObservabilityService(
             session_factory=Session,
             artifact_store=None,
-            config=Config(database_url=postgres_test_url("phase-f-stage-chapter"), minimax_api_key=""),
+            config=InfrastructureConfig(database_url=postgres_test_url("phase-f-stage-chapter"), minimax_api_key=""),
         )
         orchestrator = WritingOrchestrator.__new__(WritingOrchestrator)
         orchestrator.observability = obs
@@ -273,7 +273,7 @@ def test_sqlalchemy_probe_records_db_metrics_on_active_span() -> None:
         obs = ObservabilityService(
             session_factory=Session,
             artifact_store=None,
-            config=Config(database_url=postgres_test_url("phase-f-db-probe"), minimax_api_key=""),
+            config=InfrastructureConfig(database_url=postgres_test_url("phase-f-db-probe"), minimax_api_key=""),
         )
         ctx = OperationContext(project_id=project_id, task_id="task-db", operation_id="task-db")
         with obs.span(ctx, "db.probed-work", span_kind="stage", component="test"):
@@ -296,6 +296,6 @@ def test_sqlalchemy_probe_records_db_metrics_on_active_span() -> None:
 
 
 def test_db_probe_is_enabled_by_default_for_runtime_configs() -> None:
-    config = Config(database_url=postgres_test_url("phase-f-db-probe-default"), minimax_api_key="")
+    config = InfrastructureConfig(database_url=postgres_test_url("phase-f-db-probe-default"), minimax_api_key="")
 
     assert config.observability_record_db_spans is True

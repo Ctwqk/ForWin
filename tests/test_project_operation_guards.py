@@ -19,7 +19,6 @@ from forwin.api_schemas import (
     ProjectContinueGenerationRequest,
     ProjectCreateRequest,
     ProjectExtendGenerationRequest,
-    ProjectGovernanceUpdateRequest,
     StartWritingRequest,
 )
 from forwin.config import InfrastructureConfig
@@ -947,7 +946,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
             self.assertIsNotNone(session.get(Project, blocked.id))
             self.assertIsNone(session.get(Project, deletable.id))
 
-    def test_create_project_defaults_to_strict_governance(self) -> None:
+    def test_create_project_defaults_to_standard_runtime_policy(self) -> None:
         created = api_module.create_project(
             ProjectCreateRequest(
                 title="治理测试书",
@@ -956,13 +955,13 @@ class ProjectOperationGuardTests(unittest.TestCase):
             )
         )
 
-        governance = api_module.get_project_governance(created.project_id)
-        self.assertEqual(governance.project_id, created.project_id)
-        self.assertEqual(governance.message, "已读取项目治理设置。")
-        self.assertEqual(governance.governance.progression_mode, "serial_canon_band_guard")
-        self.assertTrue(governance.governance.auto_band_checkpoint)
-        self.assertTrue(governance.governance.manual_checkpoints_enabled)
-        self.assertTrue(governance.governance.future_constraints_enabled)
+        policy = api_module.get_project_policy(created.project_id)
+        self.assertEqual(policy.project_id, created.project_id)
+        self.assertEqual(policy.message, "已读取项目运行策略。")
+        self.assertEqual(policy.version, 1)
+        self.assertEqual(policy.policy.quality_profile, "standard")
+        self.assertEqual(policy.policy.pause.band_checkpoint_action, "pause_on_warn")
+        self.assertTrue(policy.policy.pause.manual_checkpoints)
 
     def test_continue_generation_rejects_failed_band_checkpoint(self) -> None:
         project = self._create_project(project_id="proj-band-checkpoint", creation_status="writing")
@@ -1507,48 +1506,6 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(detail.generation_control.next_gate, "chapter_2_accept")
         self.assertFalse(detail.generation_control.can_resume)
         self.assertFalse(summary.generation_control.can_resume)
-
-    def test_update_governance_writes_decision_event(self) -> None:
-        project = self._create_project(project_id="proj-governance-event")
-
-        response = api_module.update_project_governance(
-            project.id,
-            ProjectGovernanceUpdateRequest(
-                progression_mode="serial_canon",
-                reason="切换到更严格的串行 canon gate",
-            ),
-        )
-
-        self.assertEqual(response.project_id, project.id)
-        self.assertEqual(response.message, "项目治理设置已保存。")
-        self.assertEqual(response.governance.progression_mode, "serial_canon")
-        events = api_module.list_project_decision_events(project.id)
-        self.assertEqual(len(events.items), 1)
-        self.assertEqual(events.items[0].event_type, "governance_updated")
-        self.assertEqual(events.items[0].scope, "project")
-        self.assertEqual(events.items[0].reason, "切换到更严格的串行 canon gate")
-
-    def test_update_governance_round_trips_reckless_review_mode(self) -> None:
-        project = self._create_project(project_id="proj-reckless-governance")
-
-        response = api_module.update_project_governance(
-            project.id,
-            ProjectGovernanceUpdateRequest(
-                review_delegation_mode="reckless",
-                reason="delegate human gates to Spark",
-            ),
-        )
-
-        self.assertEqual(response.governance.review_delegation_mode, "reckless")
-        detail = api_module.get_project(project.id)
-        self.assertEqual(detail.governance.review_delegation_mode, "reckless")
-        events = api_module.list_project_decision_events(project.id)
-        self.assertEqual(events.items[0].event_type, "governance_updated")
-        self.assertEqual(
-            events.items[0].payload["governance"]["review_delegation_mode"],
-            "reckless",
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

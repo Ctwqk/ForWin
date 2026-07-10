@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from forwin.config import InfrastructureConfig
+from forwin.config import FormBlockingPolicy, InfrastructureConfig
 from forwin.models import Entity, Project
 from forwin.canon_quality.placeholder import analyze_placeholder_leakage, extract_expected_protagonist_names
 from forwin.canon_quality.readability import analyze_writer_output_readability
@@ -44,7 +44,7 @@ def analyze_writer_output_quality(
     return_raw_analyzer_results: bool = False,
 ) -> CanonQualityAnalysisResult:
     config = InfrastructureConfig.from_env()
-    resolved_mode = _normalize_form_mode(mode or config.chapter_review_form_mode)
+    resolved_mode = _normalize_form_mode(mode or "primary")
     repo = CanonQualityRepository(session)
     protagonist_names = _load_protagonist_names(session=session, project_id=project_id)
     deterministic_signals = _dedupe_signals(
@@ -88,7 +88,7 @@ def analyze_writer_output_quality(
             blocking=any(signal.status == "open" and signal.severity == "error" for signal in deterministic_signals),
             confidence=1.0 if deterministic_signals else 0.0,
         )
-    min_blocking_confidence = float(config.chapter_review_form_min_blocking_confidence or 0.8)
+    min_blocking_confidence = 0.8
     token_budget_chars = int(config.chapter_review_form_token_budget_chars or 8000)
     max_schema_retries = int(config.chapter_review_form_max_llm_retries or 1)
     form_result = review_chapter_with_form(
@@ -101,7 +101,7 @@ def analyze_writer_output_quality(
         min_blocking_confidence=min_blocking_confidence,
         token_budget_chars=token_budget_chars,
         max_schema_retries=max_schema_retries,
-        blocking_policy=config.form_blocking_policy,
+        blocking_policy=FormBlockingPolicy(),
         mode=resolved_mode,
     )
     if persist:

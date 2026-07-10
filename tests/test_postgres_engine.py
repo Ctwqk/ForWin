@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy import create_mock_engine
 
 from forwin import models  # noqa: F401
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models.base import Base
 from forwin.models.base import get_engine
 
@@ -20,7 +20,7 @@ def test_get_engine_rejects_sqlite_paths(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_removed_db_path_config_alias_is_rejected() -> None:
     with pytest.raises(ValueError):
-        Config(db_path="data/novel.db")
+        InfrastructureConfig(db_path="data/novel.db")
 
 
 def test_get_engine_accepts_postgresql_url() -> None:

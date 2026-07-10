@@ -5,11 +5,11 @@ import json
 from forwin.checker.hard_floor import HardFloorResult
 from forwin.checker.pulp_policy import evaluate_pulp_beat_policy
 from forwin.checker.pulp_beat import verify_pulp_beats
-from forwin.config import Config
 from forwin.governance import DecisionEventType
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.governance import DecisionEvent
 from forwin.models.project import Project
+from forwin.runtime.policy import RuntimePolicy
 from tests.postgres import postgres_test_url
 
 
@@ -97,7 +97,7 @@ def test_pulp_policy_blocks_consecutive_missing_payoff() -> None:
                     warning_reasons=["pulp_visible_payoff"],
                     metadata={"pulp_beat": {"visible_payoff_present": False}},
                 ),
-                config=Config(quality_profile="pulp"),
+                policy=RuntimePolicy.for_profile("pulp"),
             )
 
         assert decision.fatal is True
@@ -117,7 +117,7 @@ def test_pulp_policy_is_warning_only_for_standard_profile() -> None:
             warning_reasons=["pulp_visible_payoff"],
             metadata={"pulp_beat": {"visible_payoff_present": False}},
         ),
-        config=Config(quality_profile="standard"),
+        policy=RuntimePolicy.for_profile("standard"),
     )
 
     assert decision.fatal is False

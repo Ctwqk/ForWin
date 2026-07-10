@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import func, select
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models import ProvisionalBandExecution
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.world_v4 import ScenarioRehearsalRunRow
@@ -20,7 +20,33 @@ from forwin.planning.world_contracts import (
     WorldContractRepository,
 )
 from forwin.protocol.scenario_rehearsal import ScenarioRehearsalRecommendation
+from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
+
+
+def _build_orchestrator(*, provisional_preview: bool = False) -> WritingOrchestrator:
+    policy = RuntimePolicy.for_profile("standard")
+    if provisional_preview:
+        policy = policy.model_copy(
+            update={
+                "planning": policy.planning.model_copy(
+                    update={"provisional_preview": True}
+                )
+            }
+        )
+    return RuntimeContainer.from_config(
+        InfrastructureConfig(
+            database_url=postgres_test_url(),
+            qdrant_url=":memory:",
+            embedding_backend="hash",
+            minimax_api_key="",
+            minimax_model="fake-model",
+        ),
+        policy=policy,
+        role="generation_worker",
+    ).build_writing_orchestrator()
 
 
 def test_project_arc_snapshot_payload_exposes_scenario_rehearsal_fields() -> None:
@@ -217,7 +243,7 @@ def test_legacy_provisional_failure_no_longer_blocks_by_default_but_switch_can_r
         project_id = project.id
 
     with Session() as session:
-        default_orchestrator = WritingOrchestrator(Config(database_url=postgres_test_url()))
+        default_orchestrator = _build_orchestrator()
         try:
             assert default_orchestrator._new_failed_provisional_gate(
                 session,
@@ -228,9 +254,7 @@ def test_legacy_provisional_failure_no_longer_blocks_by_default_but_switch_can_r
             default_orchestrator.llm_client.close()
             default_orchestrator.engine.dispose()
 
-        provisional_orchestrator = WritingOrchestrator(
-            Config(database_url=postgres_test_url(), provisional_preview_enabled=True)
-        )
+        provisional_orchestrator = _build_orchestrator(provisional_preview=True)
         try:
             gate = provisional_orchestrator._new_failed_provisional_gate(
                 session,

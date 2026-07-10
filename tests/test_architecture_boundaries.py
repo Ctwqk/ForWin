@@ -289,15 +289,91 @@ def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
 def test_removed_generation_modes_and_review_flags_stay_removed() -> None:
     forbidden = (
         "operation_mode",
+        "default_operation_mode",
+        "progression_mode",
         "review_delegation_mode",
         "review_engine_",
+        "chapter_review_form_mode",
         "chapter_blackbox_failure",
         "reckless",
+        "RuntimeSettingsStore",
+        "PREMIUM_OVERRIDES",
+        "project_set_reckless_mode",
+        "copilot",
     )
     offenders: list[tuple[str, str]] = []
     for path in sorted((ROOT / "forwin").rglob("*.py")):
+        if "migrations" in path.relative_to(ROOT / "forwin").parts:
+            continue
         source = path.read_text(encoding="utf-8")
         relative = path.relative_to(ROOT).as_posix()
         offenders.extend((relative, token) for token in forbidden if token in source)
 
     assert offenders == []
+
+
+def test_v5_runtime_policy_is_the_only_generation_policy_surface() -> None:
+    config_source = _read("forwin/config.py")
+    task_payload_source = _read("forwin/generation/task_payload.py")
+    policy_source = _read("forwin/runtime/policy.py")
+
+    assert "class InfrastructureConfig" in config_source
+    assert "class Config" not in config_source
+    assert "policy_snapshot: RuntimePolicy" in task_payload_source
+    assert "runtime_overrides" not in task_payload_source
+    assert 'QualityProfile = Literal["standard", "pulp"]' in policy_source
+    assert 'GateDelegate = Literal["human", "spark"]' in policy_source
+
+    forbidden_import = "from forwin.config import Config"
+    offenders = [
+        path.relative_to(ROOT).as_posix()
+        for root in (ROOT / "forwin", ROOT / "scripts")
+        for path in root.rglob("*.py")
+        if forbidden_import in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+
+def test_generation_task_producers_use_application_service() -> None:
+    for rel_path in (
+        "forwin/api_core/generation.py",
+        "forwin/generation/worker.py",
+        "forwin/production/executor.py",
+    ):
+        assert "GenerationApplicationService" in _read(rel_path)
+
+
+def test_runtime_container_is_the_only_orchestrator_constructor() -> None:
+    offenders = [
+        path.relative_to(ROOT).as_posix()
+        for root in (ROOT / "forwin", ROOT / "scripts")
+        for path in root.rglob("*.py")
+        if path != ROOT / "forwin/runtime/container.py"
+        and "WritingOrchestrator(" in path.read_text(encoding="utf-8")
+    ]
+
+    assert offenders == []
+
+
+def test_home_console_has_no_removed_generation_policy_controls() -> None:
+    source = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in sorted((ROOT / "forwin/ui_assets/home").glob("*"))
+        if path.suffix in {".html", ".js"}
+    )
+    for removed in (
+        "config_generation_operation_mode",
+        "task_generation_operation_mode",
+        "task_generation_progression_mode",
+        "config_generation_freeze_failed_candidates",
+        "model_form_api_key",
+        "saveProjectGovernanceFromDrawer",
+    ):
+        assert removed not in source
+    for required in (
+        "runtime_policy_quality_profile",
+        "runtime_policy_model_profile_id",
+        "runtime_policy_min_chapter_chars",
+        "runtime_policy_gate_",
+    ):
+        assert required in source

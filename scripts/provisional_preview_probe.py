@@ -14,9 +14,14 @@ if str(ROOT) not in sys.path:
 
 from sqlalchemy import select
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
+from forwin.generation.task_payload import payload_from_json
 from forwin.models import ChapterPlan, GenerationTask, ProvisionalChapterLedger
+from forwin.models.project import Project
 from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.repo import StateRepository
 from forwin.writer.prompts import build_preview_chapter_prompt
 
@@ -143,6 +148,23 @@ def resolve_target(session, args: argparse.Namespace) -> tuple[str, int, str]:
     return project_id, chapter, error_text
 
 
+def resolve_policy(
+    session,
+    *,
+    task_id: str,
+    project_id: str,
+) -> RuntimePolicy:
+    if task_id:
+        task = session.get(GenerationTask, task_id)
+        if task is None:
+            raise SystemExit(f"Generation task not found: {task_id}")
+        return payload_from_json(task.execution_payload_json).policy_snapshot
+    project = session.get(Project, project_id)
+    if project is None:
+        raise SystemExit(f"Project not found: {project_id}")
+    return ProjectPolicyStore(session).load(project).policy
+
+
 def make_out_dir(raw: str) -> Path:
     if raw:
         path = Path(raw).expanduser().resolve()
@@ -202,12 +224,31 @@ def main() -> int:
     args = parse_args()
     if args.database_url:
         os.environ["FORWIN_DATABASE_URL"] = str(args.database_url)
-    config = Config.from_env()
-    orchestrator = WritingOrchestrator(config)
+    config = InfrastructureConfig.from_env()
+    from forwin.models.base import get_engine, get_session_factory, init_db
+
+    bootstrap_engine = get_engine(config.database_url)
+    init_db(bootstrap_engine)
+    bootstrap_session_factory = get_session_factory(bootstrap_engine)
+    try:
+        with bootstrap_session_factory() as session:
+            project_id, chapter_number, source_error = resolve_target(session, args)
+            policy = resolve_policy(
+                session,
+                task_id=args.task_id,
+                project_id=project_id,
+            )
+    finally:
+        bootstrap_engine.dispose()
+
+    orchestrator = RuntimeContainer.from_config(
+        config,
+        policy=policy,
+        role="generation_worker",
+    ).build_writing_orchestrator()
     try:
         session = orchestrator._SessionFactory()
         try:
-            project_id, chapter_number, source_error = resolve_target(session, args)
             plan = session.execute(
                 select(ChapterPlan).where(
                     ChapterPlan.project_id == project_id,

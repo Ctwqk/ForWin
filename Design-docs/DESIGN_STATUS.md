@@ -1,6 +1,6 @@
 # ForWin Design Status
 
-更新时间：2026-07-06
+更新时间：2026-07-09
 
 状态：active-current。本文档给当前保留的设计文档标注阅读顺序和权威等级。
 
@@ -19,6 +19,8 @@
 |---|---|---|
 | `CURRENT_ARCHITECTURE.md` | active-current | 当前唯一架构入口，固定 BookState / BookMap / review / compatibility 口径。 |
 | `DESIGN_STATUS.md` | active-current | 本状态清单。 |
+| `../forwin_architecture_consolidation_audit.md` | active-current | v5 架构收敛决策、删除清单和 Phase A-F 路线。 |
+| `../docs/superpowers/specs/2026-07-09-forwin-v5-architecture-convergence-design.md` | active-current | v5 破坏性收敛规格；旧项目和旧设置不迁移。 |
 | `V4.5_markstone.md` | active-current | 当前代码与设计差距统一入口，旧 `world_model_v4` 已降级。 |
 | `V4.5.1_markstone.md` | active-current | V4.5 后端闭环后的残余 contract / 文档 / 测试收束。 |
 | `V4_final_book_state_runtime.md` | active-current | BookState 最终 runtime 规格。 |
@@ -63,6 +65,23 @@
 | `forwin.world_v4_review_gate` | legacy-compatibility | `forwin.reviewer` 主 facade | v5.0 复核是否仍需 extraction gate | 兼容 gate，不是主 chapter reviewer。 |
 | `forwin.planning.scenario_rehearsal` | deprecated | `forwin.planning.scenario_rehearsal_service` | v5.0 删除直接业务依赖 | 旧 monolith 仅保留历史 API 兼容；新增 orchestration 必须走 service。 |
 | `forwin.planning.scenario_rehearsal_service` | active-current | 无 | 无 | 当前 Scenario Rehearsal service 入口。 |
+| `forwin.runtime_settings` | removed | `forwin.runtime.policy` | 已删除 | 不再有进程内可变生成设置文件。 |
+| `Project.governance_json` settings | removed | `Project.runtime_policy_json` + version | 已删除 | manual checkpoint / decision event 等治理账本仍保留；项目运行设置已迁出 governance 命名。 |
+
+## 2026-07 V5 Slice 1 Status
+
+状态：implementation-complete，尚未部署，30 章生产 gate 未执行。
+
+- `InfrastructureConfig` 仅负责基础设施、凭据和环境模型目录；不存在 `Config` 兼容名。
+- 项目运行行为只来自版本化 `RuntimePolicy`，质量 profile 仅有 `standard/pulp`，gate delegate 仅有 `human/spark`。
+- generation task 保存不可变 policy snapshot；所有任务生产者和 worker 执行均通过 `GenerationApplicationService`。
+- GET `/api/settings/llm` 是 secret-free 只读目录；控制台不再保存 API Key、模型 profile 或全局生成偏好。
+- 项目抽屉是唯一 RuntimePolicy UI 写入口；MCP 对应工具为 `project_set_gate_delegate`。
+- 已删除旧 mode/reckless/request override、RuntimeSettingsStore、旧治理设置 DTO，以及绑定这些接口的失效测试套件。
+
+实现提交：`a7f53bb`、`f7790c5`、`61392af`、`6c2eb0f`、`131e697`、`bc85d91`、`3e0c10f`、`a6a75fb`、`589e58a`、`e87e67b`，以及包含本状态记录的 Slice 1 completion commit。
+
+验证口径：前序聚焦 policy/store/API/snapshot/application/worker/MCP/browser 测试已通过；completion gate 的 architecture/config 为 24 passed，策略分支补充为 3 passed，`compileall` 成功，全仓 1598 tests collect 成功且无收集错误。全量执行按用户要求由独立测试任务承担，本收敛任务不重复启动；部署和 30 章 no-hotfix gate 仍是后续显式步骤。
 
 ## 已知限制
 
@@ -88,6 +107,8 @@
 |---|---|---|
 | `docs/superpowers/plans/2026-04-24-forwin-v4-world-model.md` | historical-plan | 解释 `world_model_v4` / `reviewer_v4` side-by-side 来源；已被 BookState final 覆盖。 |
 | `docs/superpowers/plans/2026-04-24-forwin-v4-1-runtime-hardening.md` | historical-plan | V4.1 hardening 计划；“V4 source semantics” 口径已被 BookState final 覆盖。 |
+| `docs/superpowers/specs/2026-07-09-forwin-reckless-review-mode-design.md` | historical-plan | 已被 RuntimePolicy `gate_delegate=human|spark` 与 fail-closed gate delegation 覆盖。 |
+| `docs/superpowers/plans/2026-07-09-forwin-reckless-review-mode.md` | historical-plan | 独立 reckless mode 已删除，不再是当前产品或运行时概念。 |
 
 ## Future Product Backlog
 

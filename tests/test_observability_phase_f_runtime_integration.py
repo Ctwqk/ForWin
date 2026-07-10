@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from sqlalchemy import select
 
 from forwin.api_runtime import run_orchestrator_task
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.observability import PerformanceSpan
 from forwin.models.project import Project
@@ -48,7 +48,7 @@ def test_run_orchestrator_task_records_operation_and_cleanup_spans() -> None:
         obs = ObservabilityService(
             session_factory=Session,
             artifact_store=None,
-            config=Config(database_url=postgres_test_url("phase-f-runtime"), minimax_api_key=""),
+            config=InfrastructureConfig(database_url=postgres_test_url("phase-f-runtime"), minimax_api_key=""),
         )
         fake_llm = _FakeCloser()
         fake_engine = _FakeRuntimeEngine()
@@ -115,7 +115,7 @@ def test_run_orchestrator_task_records_worker_component_when_requested() -> None
         obs = ObservabilityService(
             session_factory=Session,
             artifact_store=None,
-            config=Config(database_url=postgres_test_url("phase-f-runtime-worker-component"), minimax_api_key=""),
+            config=InfrastructureConfig(database_url=postgres_test_url("phase-f-runtime-worker-component"), minimax_api_key=""),
         )
         fake_llm = _FakeCloser()
         fake_engine = _FakeRuntimeEngine()

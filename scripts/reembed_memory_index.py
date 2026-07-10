@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import select
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models import ChapterDraft, ChapterPlan
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.retrieval.memory_index import ChapterMemoryIndex, create_memory_index
@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
-    config = Config.from_env()
+    config = InfrastructureConfig.from_env()
     engine = get_engine(config.database_url)
     init_db(engine)
     session_factory = get_session_factory(engine)

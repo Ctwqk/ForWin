@@ -102,11 +102,11 @@ def test_repair_verifier_llm_prompt_is_bounded_to_review_summary() -> None:
         verdict="fail",
         issues=[
             ContinuityIssue(
-                rule_name="sub_world_unknown_named_entity",
+                rule_name="entity_admission_plan_conflict",
                 severity="error",
-                description="周隐（声音）未在当前 chapter 的 subworld 准入名单中。",
+                description="EntityRegistrar 无法为周隐（声音）作出注册决定。",
                 entity_names=["周隐（声音）"],
-                issue_type="subworld_admission",
+                issue_type="entity_admission_plan_conflict",
                 target_scope="chapter",
                 evidence_refs=["chapter=27", huge_payload],
                 suggested_fix=huge_payload,
@@ -157,25 +157,25 @@ def test_repair_verifier_llm_prompt_is_bounded_to_review_summary() -> None:
     assert len(prompt) < 25_000
     assert huge_payload not in prompt
     assert "巨大上下文" not in prompt
-    assert "周隐（声音）未在当前 chapter 的 subworld 准入名单中" in prompt
+    assert "EntityRegistrar 无法为周隐（声音）作出注册决定" in prompt
 
 
 def test_repair_verifier_does_not_treat_different_entities_as_same_unfixed_issue() -> None:
     instruction = RepairInstruction(
         repair_scope="chapter",
         failure_type="continuity",
-        must_fix=["命名角色「陈副总」未在当前 chapter 的 subworld 准入名单中。"],
+        must_fix=["EntityRegistrar 无法为命名角色「陈副总」作出注册决定。"],
         must_preserve=[],
     )
     before_review = ReviewVerdict(
         verdict="fail",
         issues=[
             ContinuityIssue(
-                rule_name="sub_world_unknown_named_entity",
+                rule_name="entity_admission_plan_conflict",
                 severity="error",
-                description="命名角色「陈副总」未在当前 chapter 的 subworld 准入名单中。",
+                description="EntityRegistrar 无法为命名角色「陈副总」作出注册决定。",
                 entity_names=["陈副总"],
-                issue_type="subworld_admission",
+                issue_type="entity_admission_plan_conflict",
                 target_scope="chapter",
             )
         ],
@@ -184,11 +184,11 @@ def test_repair_verifier_does_not_treat_different_entities_as_same_unfixed_issue
         verdict="fail",
         issues=[
             ContinuityIssue(
-                rule_name="sub_world_unknown_named_entity",
+                rule_name="entity_admission_plan_conflict",
                 severity="error",
-                description="命名角色「方敏」未在当前 chapter 的 subworld 准入名单中。",
+                description="EntityRegistrar 无法为命名角色「方敏」作出注册决定。",
                 entity_names=["方敏"],
-                issue_type="subworld_admission",
+                issue_type="entity_admission_plan_conflict",
                 target_scope="chapter",
             )
         ],

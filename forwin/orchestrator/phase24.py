@@ -20,30 +20,16 @@ from forwin.models import (
     SignalWindowAggregate,
     new_id,
 )
-from forwin.experience.arc_experience_planner import ArcExperiencePlanningService
-from forwin.experience.band_scheduler import BandExperienceScheduler
-from forwin.experience.chapter_planner import ChapterExperiencePlanner
-from forwin.experience.persistence import ExperiencePersistence
-from forwin.experience.service import (
-    AudienceCalibrationProfile,
-    ExperiencePlanningService,
-    load_long_window_audience_trends,
-)
+from forwin.experience.service import load_long_window_audience_trends
 from forwin.experience.types import ArcExperienceBundle
-from forwin.planning.arc_activation_service import ArcActivationService
-from forwin.planning.arc_envelope_resolver import (
-    ArcEnvelopeResolver,
-    BaseEnvelopeContext,
-)
+from forwin.planning.arc_envelope_resolver import BaseEnvelopeContext
 from forwin.planning.arc_structure_service import (
     ArcStructureDraftData as CoreArcStructureDraftData,
     ArcStructurePlanningResult,
-    ArcStructurePlanningService,
 )
-from forwin.planning.band_plan_service import BandPlanningRequest, BandPlanService
+from forwin.planning.band_plan_service import BandPlanningRequest
 from forwin.planning.provisional_preview_service import ProvisionalPreviewService
-from forwin.planning.scenario_rehearsal_service import ScenarioRehearsalService
-from forwin.planning.world_contract_service import WorldContractPlanningService
+from forwin.planning.service import PlanningService
 from forwin.protocol.experience import (
     ArcPayoffMap,
     BandDelightSchedule,
@@ -215,66 +201,6 @@ def _compat_structure(
 
 
 @dataclass(slots=True)
-class PlanningServices:
-    arc_activation: ArcActivationService
-    arc_envelope_resolver: ArcEnvelopeResolver
-    arc_structure: ArcStructurePlanningService
-    arc_experience: ArcExperiencePlanningService
-    experience: ExperiencePlanningService
-    experience_persistence: ExperiencePersistence
-    band_scheduler: BandExperienceScheduler
-    chapter_planner: ChapterExperiencePlanner
-    band_plan: BandPlanService
-    world_contracts: WorldContractPlanningService
-    scenario_rehearsal: ScenarioRehearsalService
-    provisional_preview: ProvisionalPreviewService
-
-    @classmethod
-    def build_default(
-        cls,
-        *,
-        director: ArcDirector | None = None,
-        provisional_executor: Any | None = None,
-        subworld_manager: SubWorldManager | None = None,
-        provisional_preview_enabled: bool = False,
-        scenario_progress_callback: Any | None = None,
-    ) -> "PlanningServices":
-        resolved_subworld_manager = subworld_manager or SubWorldManager(director=director)
-        world_contracts = WorldContractPlanningService()
-        experience = ExperiencePlanningService()
-        persistence = ExperiencePersistence()
-        band_scheduler = BandExperienceScheduler()
-        chapter_planner = ChapterExperiencePlanner()
-        return cls(
-            arc_activation=ArcActivationService(),
-            arc_envelope_resolver=ArcEnvelopeResolver(director=director),
-            arc_structure=ArcStructurePlanningService(director=director),
-            arc_experience=ArcExperiencePlanningService(),
-            experience=experience,
-            experience_persistence=persistence,
-            band_scheduler=band_scheduler,
-            chapter_planner=chapter_planner,
-            band_plan=BandPlanService(
-                subworld_manager=resolved_subworld_manager,
-                world_contract_service=world_contracts,
-                experience_service=experience,
-                scheduler=band_scheduler,
-                chapter_planner=chapter_planner,
-                persistence=persistence,
-            ),
-            world_contracts=world_contracts,
-            scenario_rehearsal=ScenarioRehearsalService(
-                director=director,
-                progress_callback=scenario_progress_callback,
-            ),
-            provisional_preview=ProvisionalPreviewService(
-                provisional_executor=provisional_executor,
-                provisional_preview_enabled=provisional_preview_enabled,
-            ),
-        )
-
-
-@dataclass(slots=True)
 class ArcResolutionPlanningState:
     active_arc: ArcPlanVersion
     chapter_plans: list[ChapterPlan]
@@ -293,14 +219,14 @@ class ArcEnvelopeManager:
         subworld_manager: SubWorldManager | None = None,
         provisional_preview_enabled: bool = False,
         scenario_progress_callback: Any | None = None,
-        planning_services: PlanningServices | None = None,
+        planning_service: PlanningService | None = None,
     ) -> None:
         self.director = director
         self.provisional_executor = provisional_executor
         self.subworld_manager = subworld_manager or SubWorldManager(director=director)
         self.provisional_preview_enabled = provisional_preview_enabled
         self.scenario_progress_callback = scenario_progress_callback
-        self.services = planning_services or PlanningServices.build_default(
+        self.planning = planning_service or PlanningService.build_default(
             director=director,
             provisional_executor=provisional_executor,
             subworld_manager=self.subworld_manager,
@@ -325,34 +251,6 @@ class ArcEnvelopeManager:
             message=message,
         )
 
-    def _load_active_arc(
-        self,
-        *,
-        session: Session,
-        project_id: str,
-    ) -> ArcPlanVersion | None:
-        return session.execute(
-            select(ArcPlanVersion)
-            .where(
-                ArcPlanVersion.project_id == project_id,
-                ArcPlanVersion.status == "active",
-            )
-            .order_by(ArcPlanVersion.version.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-
-    def _load_arc_chapter_plans(
-        self,
-        *,
-        session: Session,
-        arc_id: str,
-    ) -> list[ChapterPlan]:
-        return session.execute(
-            select(ChapterPlan)
-            .where(ChapterPlan.arc_plan_id == arc_id)
-            .order_by(ChapterPlan.chapter_number.asc())
-        ).scalars().all()
-
     def _build_arc_resolution_state(
         self,
         *,
@@ -362,7 +260,7 @@ class ArcEnvelopeManager:
         chapter_plans: list[ChapterPlan],
         activation_chapter: int,
     ) -> ArcResolutionPlanningState:
-        base_context = self.services.arc_envelope_resolver.build_base_context(
+        base_context = self.planning.arc_envelope_resolver.build_base_context(
             session=session,
             project=project,
             active_arc=active_arc,
@@ -370,7 +268,7 @@ class ArcEnvelopeManager:
             activation_chapter=activation_chapter,
         )
         audience_trends = load_long_window_audience_trends(session, project.id)
-        structure_result = self.services.arc_structure.ensure_structure(
+        structure_result = self.planning.arc_structure.ensure_structure(
             session=session,
             project=project,
             active_arc=active_arc,
@@ -380,14 +278,14 @@ class ArcEnvelopeManager:
             chapter_plans=chapter_plans,
             audience_trends=audience_trends,
         )
-        arc_experience = self.services.arc_experience.plan_arc_experience(
+        arc_experience = self.planning.arc_experience.plan_arc_experience(
             project=project,
             structure=structure_result.structure,
             chapter_plans=chapter_plans,
             audience_trends=audience_trends,
             drafted_payload=structure_result.experience_payload,
         )
-        self.services.experience_persistence.persist_arc_experience(
+        self.planning.experience_persistence.persist_arc_experience(
             structure_row=structure_result.row,
             arc_experience=arc_experience,
         )
@@ -416,7 +314,7 @@ class ArcEnvelopeManager:
         replanned_arc = session.get(ArcPlanVersion, rehearsal.arc_id)
         if replanned_arc is None:
             return state
-        chapter_plans = self._load_arc_chapter_plans(session=session, arc_id=replanned_arc.id)
+        chapter_plans = self.planning.query.arc_chapters(session, replanned_arc.id)
         return self._build_arc_resolution_state(
             session=session,
             project=project,
@@ -434,7 +332,7 @@ class ArcEnvelopeManager:
         activation_chapter: int,
         detailed_band_size: int,
     ) -> None:
-        self.services.band_plan.ensure_current_band_plan(
+        self.planning.band_plan.ensure_current_band_plan(
             session=session,
             request=BandPlanningRequest(
                 project_id=project_id,
@@ -456,7 +354,7 @@ class ArcEnvelopeManager:
         state: ArcResolutionPlanningState,
         activation_chapter: int,
     ) -> ArcEnvelope:
-        self.services.world_contracts.ensure_for_arc_band(
+        self.planning.world_contracts.ensure_for_arc_band(
             session=session,
             project_id=project_id,
             arc_id=state.active_arc.id,
@@ -464,7 +362,7 @@ class ArcEnvelopeManager:
             activation_chapter=activation_chapter,
             detailed_band_size=state.base_context.provisional_band_size,
         )
-        rehearsal = self.services.scenario_rehearsal.run_for_band(
+        rehearsal = self.planning.scenario_rehearsal.run_for_band(
             session=session,
             project_id=project_id,
             arc_id=state.active_arc.id,
@@ -478,14 +376,14 @@ class ArcEnvelopeManager:
             rehearsal=rehearsal,
             activation_chapter=activation_chapter,
         )
-        preview = self.services.provisional_preview.execute(
+        preview = self.planning.provisional_preview.execute(
             session=session,
             project_id=project_id,
             arc_id=state.active_arc.id,
             band_id=state.base_context.provisional_window.band_id,
             chapter_plans=state.base_context.provisional_window.active_band,
         )
-        envelope = self.services.arc_envelope_resolver.ensure_resolution(
+        envelope = self.planning.arc_envelope_resolver.ensure_resolution(
             session=session,
             project=project,
             active_arc=state.active_arc,
@@ -496,7 +394,7 @@ class ArcEnvelopeManager:
             preview=preview,
             base_context=state.base_context,
         )
-        self.services.provisional_preview.persist_execution(
+        self.planning.provisional_preview.persist_execution(
             session=session,
             project_id=project_id,
             arc_id=state.active_arc.id,
@@ -519,12 +417,12 @@ class ArcEnvelopeManager:
         project_id: str,
         activation_chapter: int = 1,
     ) -> ArcEnvelope | None:
-        self.services.arc_activation.activate_for_chapter(
+        self.planning.arc_activation.activate_for_chapter(
             session=session,
             project_id=project_id,
             chapter_number=activation_chapter,
         )
-        active_arc = self._load_active_arc(session=session, project_id=project_id)
+        active_arc = self.planning.query.active_arc(session, project_id)
         if active_arc is None:
             return None
 
@@ -534,7 +432,7 @@ class ArcEnvelopeManager:
             project_id=project_id,
         )
 
-        chapter_plans = self._load_arc_chapter_plans(session=session, arc_id=active_arc.id)
+        chapter_plans = self.planning.query.arc_chapters(session, active_arc.id)
         project = session.get(Project, project_id)
         if project is None:
             return None
@@ -546,7 +444,7 @@ class ArcEnvelopeManager:
             chapter_plans=chapter_plans,
             activation_chapter=activation_chapter,
         )
-        existing = self.services.arc_envelope_resolver.get_existing_envelope(
+        existing = self.planning.arc_envelope_resolver.get_existing_envelope(
             session=session,
             active_arc=state.active_arc,
             activation_chapter=activation_chapter,
@@ -739,7 +637,7 @@ class ArcEnvelopeManager:
         base_target_size: int,
     ) -> ArcStructureDraftData:
         audience_trends = load_long_window_audience_trends(session, project.id)
-        structure, drafted_payload = self.services.arc_structure.build_structure_draft(
+        structure, drafted_payload = self.planning.arc_structure.build_structure_draft(
             project=project,
             total_chapters=total_chapters,
             chapter_plans=chapter_plans,
@@ -747,7 +645,7 @@ class ArcEnvelopeManager:
             base_target_size=base_target_size,
             audience_trends=audience_trends,
         )
-        arc_experience = self.services.arc_experience.plan_arc_experience(
+        arc_experience = self.planning.arc_experience.plan_arc_experience(
             project=project,
             structure=structure,
             chapter_plans=chapter_plans,
@@ -767,7 +665,7 @@ class ArcEnvelopeManager:
         detailed_band_size: int,
         structure: ArcStructureDraftData,
     ) -> None:
-        self.services.band_plan.ensure_current_band_plan(
+        self.planning.band_plan.ensure_current_band_plan(
             session=session,
             request=BandPlanningRequest(
                 project_id=project_id,
@@ -790,7 +688,7 @@ class ArcEnvelopeManager:
         activation_chapter: int,
         detailed_band_size: int,
     ) -> None:
-        self.services.world_contracts.ensure_for_arc_band(
+        self.planning.world_contracts.ensure_for_arc_band(
             session=session,
             project_id=project_id,
             arc_id=arc_id,
@@ -805,7 +703,7 @@ class ArcEnvelopeManager:
         session: Session,
         project_id: str,
     ) -> AudienceCalibrationProfile:
-        return self.services.experience.build_audience_calibration_profile(
+        return self.planning.experience.build_audience_calibration_profile(
             session=session,
             project_id=project_id,
         )
@@ -821,7 +719,7 @@ class ArcEnvelopeManager:
         calibration: AudienceCalibrationProfile | None = None,
         cost_ceiling: int = 3,
     ) -> BandDelightSchedule:
-        return self.services.band_scheduler.derive_band_delight_schedule(
+        return self.planning.band_scheduler.derive_band_delight_schedule(
             band_id=band_id,
             chapter_start=chapter_start,
             chapter_end=chapter_end,
@@ -841,7 +739,7 @@ class ArcEnvelopeManager:
         chapter_plan: ChapterPlan,
         calibration: AudienceCalibrationProfile | None = None,
     ) -> ChapterExperiencePlan:
-        return self.services.chapter_planner.derive_chapter_experience_plan(
+        return self.planning.chapter_planner.derive_chapter_experience_plan(
             chapter_number=chapter_number,
             structure=_to_core_structure(structure),
             arc_experience=_experience_from_compat_structure(structure),
@@ -865,7 +763,7 @@ class ArcEnvelopeManager:
         preview: ProvisionalBandPreview | None,
         rehearsal: ScenarioRehearsalReport | None = None,
     ) -> ArcEnvelopeResolution:
-        return self.services.arc_envelope_resolver._resolve_envelope(
+        return self.planning.arc_envelope_resolver._resolve_envelope(
             chapter_plans=chapter_plans,
             total_chapters=total_chapters,
             policy=policy,

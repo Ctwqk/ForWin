@@ -20,12 +20,12 @@ def _session():
     return sessionmaker(bind=engine, expire_on_commit=False)()
 
 
-def test_entity_registrar_persists_registration_alias_background_and_conflict_decisions() -> None:
-    from forwin.naming.entity_registrar import EntityRegistrar
+def test_entity_registrar_builds_four_outcome_plan_without_mutating_entities() -> None:
+    from forwin.naming import EntityRegistrar
 
     class FakeClassifier:
         def classify(self, *, names, **_kwargs):
-            assert names == ["猎锚者X（远程声音）", "灰鹞", "网络中介人", "突兀主角"]
+            assert names == ["猎锚者X（远程声音）", "灰鹞", "宁网", "突兀主角"]
             return [
                 {
                     "decision": "register_character",
@@ -33,19 +33,17 @@ def test_entity_registrar_persists_registration_alias_background_and_conflict_de
                     "canonical_name": "猎锚者X",
                     "aliases": ["猎锚者X（远程声音）"],
                     "role_hint": "远程声音",
-                    "gender": "unknown",
                 },
                 {
                     "decision": "register_alias",
                     "name": "灰鹞",
                     "entity_id": "chen-zhaoning",
                     "aliases": ["灰鹞"],
-                    "role_hint": "行动代号",
                 },
                 {
                     "decision": "background_generic",
-                    "name": "网络中介人",
-                    "reason": "背景群体，不是命名角色",
+                    "name": "宁网",
+                    "reason": "背景泛指",
                 },
                 {
                     "decision": "plan_conflict",
@@ -56,7 +54,7 @@ def test_entity_registrar_persists_registration_alias_background_and_conflict_de
 
     session = _session()
     try:
-        project = Project(title="注册流", premise="主角陆明。", genre="pulp", setting_summary="s")
+        project = Project(title="注册流", premise="主角陆明。", genre="pulp")
         session.add(project)
         session.flush()
         session.add(
@@ -72,48 +70,169 @@ def test_entity_registrar_persists_registration_alias_background_and_conflict_de
             )
         )
         session.flush()
-
         output = WriterOutput(
             project_id=project.id,
             chapter_number=6,
             title="第6章",
-            body="猎锚者X（远程声音）提醒陆明，灰鹞截断了网络中介人的链路，突兀主角却突然出现。",
+            body="猎锚者X提醒陆明，灰鹞截断了宁网的链路，突兀主角却突然出现。",
             end_of_chapter_summary="陆明听见猎锚者X的远程声音。",
             entity_mentions=[
-                EntityMention(entity_name="猎锚者X（远程声音）", entity_kind="character", is_named=True),
-                EntityMention(entity_name="灰鹞", entity_kind="character", is_named=True),
-                EntityMention(entity_name="网络中介人", entity_kind="character", is_named=True),
-                EntityMention(entity_name="突兀主角", entity_kind="character", is_named=True),
+                EntityMention(entity_name="猎锚者X（远程声音）", entity_kind="character"),
+                EntityMention(entity_name="灰鹞", entity_kind="character"),
+                EntityMention(entity_name="宁网", entity_kind="character"),
+                EntityMention(entity_name="突兀主角", entity_kind="character"),
             ],
         )
 
-        result = EntityRegistrar(session=session, classifier=FakeClassifier()).register_writer_output(
+        result = EntityRegistrar(
+            session=session,
+            classifier=FakeClassifier(),
+        ).plan_writer_output(
             project_id=project.id,
             chapter_number=6,
             writer_output=output,
         )
-        session.commit()
+
+        assert result.plan_conflicts == ["突兀主角"]
+        assert {decision.action for decision in result.plan.decisions} == {
+            "register_character",
+            "register_alias",
+            "background_generic",
+            "plan_conflict",
+        }
+        assert [entity.name for entity in session.execute(select(Entity)).scalars()] == ["陈昭宁"]
+        assert session.execute(select(EntityAlias)).scalars().all() == []
+        assert session.execute(select(DecisionEvent)).scalars().all() == []
+    finally:
+        session.close()
+
+
+def test_entity_admission_plan_applies_only_at_canon_boundary() -> None:
+    from forwin.canon import EntityAdmissionCommitter
+    from forwin.naming import EntityRegistrar
+
+    class FakeClassifier:
+        def classify(self, *, names, **_kwargs):
+            assert names == ["猎锚者X（远程声音）", "灰鹞"]
+            return [
+                {
+                    "decision": "register_character",
+                    "name": "猎锚者X（远程声音）",
+                    "canonical_name": "猎锚者X",
+                    "aliases": ["猎锚者X（远程声音）"],
+                },
+                {
+                    "decision": "register_alias",
+                    "name": "灰鹞",
+                    "entity_id": "chen-zhaoning",
+                    "aliases": ["灰鹞"],
+                },
+            ]
+
+    session = _session()
+    try:
+        project = Project(title="Canon 注册", premise="主角陆明。", genre="pulp")
+        session.add(project)
+        session.flush()
+        session.add(
+            Entity(
+                id="chen-zhaoning",
+                project_id=project.id,
+                kind="character",
+                name="陈昭宁",
+                aliases_json="[]",
+                description="既有角色",
+                created_at_chapter=1,
+                is_active=True,
+            )
+        )
+        session.flush()
+        registrar = EntityRegistrar(session=session, classifier=FakeClassifier())
+        result = registrar.plan_writer_output(
+            project_id=project.id,
+            chapter_number=6,
+            writer_output=WriterOutput(
+                project_id=project.id,
+                chapter_number=6,
+                title="第6章",
+                body="猎锚者X提醒灰鹞切断链路。",
+                end_of_chapter_summary="远程协作建立。",
+                entity_mentions=[
+                    EntityMention(entity_name="猎锚者X（远程声音）", entity_kind="character"),
+                    EntityMention(entity_name="灰鹞", entity_kind="character"),
+                ],
+            ),
+        )
+
+        assert [entity.name for entity in session.execute(select(Entity)).scalars()] == ["陈昭宁"]
+        verified_plan = registrar.verify_writer_output_admission(
+            project_id=project.id,
+            writer_output=result.writer_output,
+        )
+        EntityAdmissionCommitter(session).apply(
+            project_id=project.id,
+            plan=verified_plan,
+        )
+        session.flush()
 
         repo = StateRepository(session)
-        resolved = repo.get_entities_by_names(project.id, ["猎锚者X（远程声音）", "灰鹞"])
+        resolved = repo.get_entities_by_names(
+            project.id,
+            ["猎锚者X（远程声音）", "灰鹞"],
+        )
         events = session.execute(
             select(DecisionEvent).where(DecisionEvent.project_id == project.id)
         ).scalars().all()
-        aliases = session.execute(
-            select(EntityAlias.alias).where(EntityAlias.project_id == project.id)
-        ).scalars().all()
-
-        assert result.plan_conflicts == ["突兀主角"]
         assert resolved["猎锚者X（远程声音）"].name == "猎锚者X"
         assert resolved["灰鹞"].id == "chen-zhaoning"
-        assert "网络中介人" not in repo.get_entities_by_names(project.id, ["网络中介人"])
-        assert {"猎锚者X（远程声音）", "灰鹞"}.issubset(set(aliases))
-        assert {
+        assert {event.event_type for event in events} >= {
             "entity_registered",
             "entity_alias_registered",
-            "entity_background_generic",
-            "entity_plan_conflict",
-        }.issubset({event.event_type for event in events})
+        }
+    finally:
+        session.close()
+
+
+def test_entity_registrar_classifier_failure_is_recorded_as_plan_conflict() -> None:
+    from forwin.naming.entity_registrar import EntityRegistrar
+
+    class FailingClassifier:
+        def classify(self, **_kwargs):
+            raise RuntimeError("classifier unavailable")
+
+    session = _session()
+    try:
+        project = Project(title="注册失败", premise="主角陆明。", genre="pulp")
+        session.add(project)
+        session.flush()
+        output = WriterOutput(
+            project_id=project.id,
+            chapter_number=2,
+            title="第2章",
+            body="突兀角色进入现场。",
+            end_of_chapter_summary="突兀角色出现。",
+            entity_mentions=[
+                EntityMention(
+                    entity_name="突兀角色",
+                    entity_kind="character",
+                    is_named=True,
+                )
+            ],
+        )
+
+        result = EntityRegistrar(
+            session=session,
+            classifier=FailingClassifier(),
+        ).plan_writer_output(
+            project_id=project.id,
+            chapter_number=2,
+            writer_output=output,
+        )
+
+        assert result.plan_conflicts == ["突兀角色"]
+        assert result.plan.plan_conflicts == ["突兀角色"]
+        assert result.plan.decisions[0].reason == "classifier_error:RuntimeError"
+        assert session.execute(select(Entity)).scalars().all() == []
     finally:
         session.close()
 
@@ -130,14 +249,14 @@ def test_subworld_string_genericization_autofix_is_removed_from_orchestrator_bou
     assert not any(hasattr(WritingOrchestrator, name) for name in forbidden)
 
 
-def test_subworld_string_genericization_is_removed_from_production_paths() -> None:
+def test_legacy_subworld_admission_modules_and_tokens_are_removed() -> None:
     root = Path(__file__).resolve().parents[1]
-    production_files = [
+    deleted_files = [
         root / "forwin" / "subworld" / "admission_policy.py",
         root / "forwin" / "subworld" / "admission_patch.py",
-        root / "forwin" / "orchestrator_loop_core" / "repair_loop.py",
         root / "forwin" / "orchestrator_loop_core" / "subworld_admission_repair.py",
-        root / "forwin" / "ui_assets" / "home" / "app_task_progress.js",
+        root / "forwin" / "planning" / "subworld_admission.py",
+        root / "forwin" / "review" / "repair_handlers" / "subworld.py",
     ]
     forbidden = {
         "_apply_subworld_admission_autofix",
@@ -145,11 +264,29 @@ def test_subworld_string_genericization_is_removed_from_production_paths() -> No
         "genericize_background_reference",
         "subworld_admission_replacements",
         "subworld_admission_autofix",
+        "subworld_admission_patch",
+        "sub_world_unknown_named_entity",
     }
 
+    assert not any(path.exists() for path in deleted_files)
+    production_files = [
+        path
+        for path in (root / "forwin").rglob("*")
+        if path.is_file() and path.suffix in {".py", ".js"}
+    ]
     for path in production_files:
         text = path.read_text(encoding="utf-8")
         assert not any(marker in text for marker in forbidden), path
+
+    registrar_source = (root / "forwin" / "naming" / "entity_registrar.py").read_text()
+    canon_source = (root / "forwin" / "canon" / "admission.py").read_text()
+    checker_source = (root / "forwin" / "checker" / "rules.py").read_text()
+    assert "self.session.add(" not in registrar_source
+    assert "def _check_subworld_admission" not in checker_source
+    verify_index = canon_source.index("verify_writer_output_admission")
+    book_state_index = canon_source.index("_commit_book_state_canon")
+    apply_index = canon_source.index("EntityAdmissionCommitter(session).apply")
+    assert verify_index < book_state_index < apply_index
 
 
 def test_allowed_entity_names_do_not_scrape_recent_accepted_summaries() -> None:
@@ -207,10 +344,10 @@ def test_repair_v2_no_longer_has_subworld_repair_scope() -> None:
                 verdict="fail",
                 issues=[
                     ContinuityIssue(
-                        rule_name="sub_world_unknown_named_entity",
-                        issue_type="subworld_admission",
+                        rule_name="entity_admission_plan_conflict",
+                        issue_type="entity_admission_plan_conflict",
                         severity="error",
-                        description="命名角色未注册。",
+                        description="EntityRegistrar 无法完成命名角色注册。",
                         evidence_refs=["chapter=8", "entity=灰鹞"],
                     )
                 ],

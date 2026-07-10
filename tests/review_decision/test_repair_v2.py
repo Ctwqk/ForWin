@@ -35,37 +35,6 @@ def _input_with_issue(issue_kind: str, *, severity: str = "error") -> DecisionIn
     )
 
 
-def _input_with_rule_and_issue_type(
-    *,
-    rule_name: str,
-    issue_type: str,
-    severity: str = "error",
-) -> DecisionInput:
-    return DecisionInput(
-        project_id="project-1",
-        chapter_number=8,
-        review=ReviewVerdict(
-            verdict="fail",
-            issues=[
-                ContinuityIssue(
-                    rule_name=rule_name,
-                    issue_type=issue_type,
-                    severity=severity,
-                    description=issue_type,
-                    evidence_refs=[f"issue:{issue_type}"],
-                )
-            ],
-        ),
-        signals=[],
-        open_obligations=[],
-        attempts_completed=0,
-        prior_scope_history=[],
-        budget=None,
-        target_total_chapters=20,
-        plan_layer_health=PlanLayerHealth(),
-    )
-
-
 def test_draft_level_issue_routes_to_local_repair() -> None:
     decision = decide_repair_v2(_input_with_issue("placeholder_leakage"))
 
@@ -116,34 +85,15 @@ def test_operator_issue_routes_to_manual_review_without_retry() -> None:
     assert decision.sub_action["max_attempts_for_scope"] == 0
 
 
-def test_missing_canon_entity_routes_to_manual_review_after_registrar_cutover() -> None:
-    decision = decide_repair_v2(_input_with_issue("subworld_admission_missing_canon_entity"))
+def test_entity_admission_conflict_routes_to_manual_review() -> None:
+    decision = decide_repair_v2(_input_with_issue("entity_admission_plan_conflict"))
 
     assert decision.outcome == "manual_review"
     assert decision.sub_action["scope"] == "operator"
 
 
-def test_unauthorized_new_entity_routes_to_manual_review_after_registrar_cutover() -> None:
-    decision = decide_repair_v2(_input_with_issue("subworld_admission_unauthorized_new_entity"))
-
-    assert decision.outcome == "manual_review"
-    assert decision.sub_action["scope"] == "operator"
-
-
-def test_legacy_unknown_named_entity_routes_to_manual_review_after_registrar_cutover() -> None:
-    decision = decide_repair_v2(_input_with_issue("sub_world_unknown_named_entity"))
-
-    assert decision.outcome == "manual_review"
-    assert decision.sub_action["scope"] == "operator"
-
-
-def test_generic_subworld_admission_issue_type_routes_to_manual_review_after_registrar_cutover() -> None:
-    decision = decide_repair_v2(
-        _input_with_rule_and_issue_type(
-            rule_name="sub_world_unknown_named_entity",
-            issue_type="subworld_admission",
-        )
-    )
+def test_invalid_entity_admission_plan_routes_to_manual_review() -> None:
+    decision = decide_repair_v2(_input_with_issue("entity_admission_plan_invalid"))
 
     assert decision.outcome == "manual_review"
     assert decision.sub_action["scope"] == "operator"

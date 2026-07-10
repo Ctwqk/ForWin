@@ -29,10 +29,10 @@ def test_default_repair_instruction_includes_word_budget_guardrails() -> None:
                     description="章节过长。",
                 ),
                 ContinuityIssue(
-                    rule_name="sub_world_unknown_named_entity",
-                    issue_type="subworld_admission",
+                    rule_name="entity_admission_plan_conflict",
+                    issue_type="entity_admission_plan_conflict",
                     severity="error",
-                    description="命名角色未准入。",
+                    description="EntityRegistrar 无法完成命名角色注册。",
                 ),
             ],
         ),

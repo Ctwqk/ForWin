@@ -1,11 +1,6 @@
 from __future__ import annotations
 
 from forwin.protocol.review import ContinuityIssue, RepairVerification, ReviewVerdict
-from forwin.protocol.writer import WriterOutput
-from forwin.orchestrator_loop_core.review_autofix import (
-    _review_current_output,
-    normalize_nonblocking_review_verdict,
-)
 from forwin.review.decision.engine import AutoDecisionEngine
 from forwin.review.decision.rules.final_residual import build_final_residual_rules
 from forwin.review.decision.types import DecisionInput, PlanLayerHealth
@@ -50,10 +45,10 @@ def test_missing_repair_verification_returns_structured_final_residual_decision(
         verdict="fail",
         issues=[
             ContinuityIssue(
-                rule_name="sub_world_unknown_named_entity",
-                issue_type="subworld_admission",
+                rule_name="entity_admission_plan_conflict",
+                issue_type="entity_admission_plan_conflict",
                 severity="error",
-                description="命名角色未准入。",
+                description="EntityRegistrar could not resolve the named reference.",
             )
         ],
     )
@@ -69,119 +64,12 @@ def test_missing_repair_verification_returns_structured_final_residual_decision(
 
 def test_hard_residual_issue_requires_manual_review() -> None:
     decision = AutoDecisionEngine(build_final_residual_rules()).decide(
-        _decision_input(_verified_review("subworld_admission"))
+        _decision_input(_verified_review("entity_admission_plan_conflict"))
     )
 
     assert decision.outcome == "manual_review"
-    assert decision.reason == "hard-residual-issue:subworld_admission"
+    assert decision.reason == "hard-residual-issue:entity_admission_plan_conflict"
     assert decision.sub_action["forceable"] is False
-
-
-def test_nonblocking_legacy_subworld_residual_can_force_accept() -> None:
-    review = ReviewVerdict(
-        verdict="fail",
-        issues=[
-            ContinuityIssue(
-                rule_name="sub_world_unknown_named_entity",
-                issue_type="subworld_admission",
-                severity="error",
-                description="命名角色「周洛」未在当前 chapter 的 subworld 准入名单中。",
-                entity_names=["周洛"],
-                issue_group="director_imbalance",
-                blocking=False,
-            )
-        ],
-        repair_verification=RepairVerification(
-            fixed_all_must_fix=True,
-            preserved_all_must_preserve=True,
-            verifier_mode="rule_only",
-        ),
-    )
-
-    decision = AutoDecisionEngine(build_final_residual_rules()).decide(
-        _decision_input(review)
-    )
-
-    assert decision.outcome == "accept"
-    assert decision.reason == "soft-quality-failure-only"
-    assert decision.sub_action["final_residual_decision"] == "force_accept"
-    assert decision.sub_action["forceable"] is True
-
-
-def test_nonblocking_legacy_subworld_review_downgrades_before_manual_gate() -> None:
-    review = ReviewVerdict(
-        verdict="fail",
-        issues=[
-            ContinuityIssue(
-                rule_name="sub_world_unknown_named_entity",
-                issue_type="subworld_admission",
-                severity="error",
-                description="命名角色「白临川」未在当前 chapter 的 subworld 准入名单中。",
-                entity_names=["白临川"],
-                issue_group="director_imbalance",
-                blocking=False,
-            ),
-            ContinuityIssue(
-                rule_name="reward_delivery_thin",
-                issue_type="payoff_miss",
-                severity="warning",
-                description="本章计划奖励与实际回报对齐不足。",
-            ),
-        ],
-    )
-
-    normalized = normalize_nonblocking_review_verdict(review)
-
-    assert normalized.verdict == "warn"
-    assert [issue.severity for issue in normalized.issues] == ["warning", "warning"]
-    assert normalized.issues[0].original_result["normalized_from_severity"] == "error"
-
-
-def test_review_current_output_normalizes_nonblocking_legacy_subworld_failure() -> None:
-    raw_review = ReviewVerdict(
-        verdict="fail",
-        issues=[
-            ContinuityIssue(
-                rule_name="sub_world_unknown_named_entity",
-                issue_type="subworld_admission",
-                severity="error",
-                description="命名角色「白临川」未在当前 chapter 的 subworld 准入名单中。",
-                entity_names=["白临川"],
-                issue_group="director_imbalance",
-                blocking=False,
-            )
-        ],
-    )
-
-    class FakeOrchestrator:
-        draft_review = type(
-            "ReviewHub",
-            (),
-            {"review": staticmethod(lambda **_kwargs: raw_review)},
-        )()
-
-        def _select_skill_layers(self, **_kwargs):
-            return []
-
-        def _call_with_compatible_kwargs(self, fn, **kwargs):
-            return fn(**kwargs)
-
-    normalized = _review_current_output(
-        FakeOrchestrator(),
-        repo=object(),
-        checker=object(),
-        project_id="project-1",
-        context=object(),
-        writer_output=WriterOutput(
-            chapter_number=1,
-            title="第1章",
-            body="陆明发现白临川留下的线索。",
-            end_of_chapter_summary="陆明得到线索。",
-        ),
-    )
-
-    assert normalized.verdict == "warn"
-    assert normalized.issues[0].severity == "warning"
 
 
 def test_soft_residual_issue_can_force_accept_after_successful_verification() -> None:

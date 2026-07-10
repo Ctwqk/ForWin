@@ -9,7 +9,7 @@ from forwin.models import Base, Project
 from forwin.models import ChapterPlan
 from forwin.models.phase import BandExperiencePlan
 from forwin.narrative_obligations.types import NarrativeObligation
-from forwin.planning.future_plan_auditor import FuturePlanAuditor
+from forwin.planning.future_plan_audit import FuturePlanAuditor
 from forwin.protocol.experience import BandDelightSchedule
 
 

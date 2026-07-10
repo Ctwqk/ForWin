@@ -1,35 +1,39 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from forwin.governance import DecisionEventType
+from forwin.checker.reference_classifier import (
+    looks_like_generic_character_reference,
+    looks_like_non_character_reference,
+)
 from forwin.models.base import new_id
 from forwin.models.entity import Entity, EntityAlias
-from forwin.models.governance import DecisionEvent
-from forwin.protocol.subworld import EntityMention
 from forwin.protocol.writer import WriterOutput
 from forwin.utils import parse_llm_json
+
+from .types import EntityAdmissionDecision, EntityAdmissionPlan
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class EntityRegistrationResult:
+class EntityAdmissionResult:
     writer_output: WriterOutput
+    plan: EntityAdmissionPlan
     registered_names: list[str] = field(default_factory=list)
     alias_names: list[str] = field(default_factory=list)
     background_generic_names: list[str] = field(default_factory=list)
     plan_conflicts: list[str] = field(default_factory=list)
 
 
-class LLMEntityRegistrationClassifier:
+class LLMEntityAdmissionClassifier:
     def __init__(self, llm_client: Any) -> None:
         self.llm_client = llm_client
 
@@ -59,12 +63,13 @@ class LLMEntityRegistrationClassifier:
             {
                 "role": "system",
                 "content": (
-                    "你是 ForWin 命名实体注册器。只输出 JSON。"
+                    "你是 ForWin 命名实体准入规划器。只输出 JSON。"
                     "对每个 unknown_names 项给出 decision: register_character, "
                     "register_alias, background_generic, plan_conflict。"
-                    "register_character 需要 canonical_name, aliases, role_hint, gender。"
+                    "register_character 需要 canonical_name, aliases, role_hint。"
                     "register_alias 需要 entity_id 和 aliases。"
                     "background_generic 不入实体表。plan_conflict 表示与计划或 canon 冲突。"
+                    "不得添加 unknown_names 之外的名字。"
                 ),
             },
             {
@@ -88,7 +93,7 @@ class LLMEntityRegistrationClassifier:
             temperature=0.2,
             max_tokens=600,
             response_format={"type": "json_object"},
-            task_family="entity_registration",
+            task_family="entity_admission",
             stage_key="entity_registrar",
         )
         payload = parse_llm_json(raw, error_prefix="EntityRegistrar JSON parser")
@@ -103,80 +108,408 @@ class EntityRegistrar:
         self.session = session
         self.classifier = classifier
 
-    def register_writer_output(
+    def plan_writer_output(
         self,
         *,
         project_id: str,
         chapter_number: int,
         writer_output: WriterOutput,
-    ) -> EntityRegistrationResult:
-        names = self._unknown_named_references(
+    ) -> EntityAdmissionResult:
+        unknown_names = self._unknown_named_references(
             project_id=project_id,
             writer_output=writer_output,
         )
-        if not names:
-            return EntityRegistrationResult(writer_output=writer_output)
-        decisions = self._classify(
+        raw_decisions = self._classify(
             project_id=project_id,
             chapter_number=chapter_number,
-            names=names,
+            names=unknown_names,
             writer_output=writer_output,
         )
-        registered: list[str] = []
-        aliases: list[str] = []
-        background: list[str] = []
-        conflicts: list[str] = []
-        background_set: set[str] = set()
-        for decision in decisions:
-            action = str(decision.get("decision") or decision.get("action") or "").strip()
-            name = str(decision.get("name") or decision.get("entity_name") or "").strip()
-            if not name:
-                continue
+        reserved_names: dict[str, str] = {}
+        decisions: list[EntityAdmissionDecision] = []
+        for raw_decision in raw_decisions:
+            mention_name = str(
+                raw_decision.get("name") or raw_decision.get("entity_name") or ""
+            ).strip()
+            action = str(
+                raw_decision.get("decision") or raw_decision.get("action") or ""
+            ).strip()
             if action == "register_character":
-                entity = self._register_character(
+                decision = self._plan_character_registration(
                     project_id=project_id,
-                    chapter_number=chapter_number,
-                    decision=decision,
-                    fallback_name=name,
+                    mention_name=mention_name,
+                    raw_decision=raw_decision,
+                    reserved_names=reserved_names,
                 )
-                registered.append(entity.name)
             elif action == "register_alias":
-                alias_name = self._register_alias(
+                decision = self._plan_alias_registration(
                     project_id=project_id,
-                    decision=decision,
-                    fallback_name=name,
+                    mention_name=mention_name,
+                    raw_decision=raw_decision,
+                    reserved_names=reserved_names,
                 )
-                if alias_name:
-                    aliases.append(alias_name)
             elif action == "background_generic":
-                background.append(name)
-                background_set.add(name)
-                self._record_event(
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    event_type=DecisionEventType.ENTITY_BACKGROUND_GENERIC,
-                    summary=f"实体注册器判定「{name}」为背景泛指。",
-                    payload={"name": name, "reason": str(decision.get("reason") or "")},
+                decision = EntityAdmissionDecision(
+                    mention_name=mention_name,
+                    action="background_generic",
+                    reason=str(raw_decision.get("reason") or ""),
                 )
             else:
-                conflicts.append(name)
-                self._record_event(
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    event_type=DecisionEventType.ENTITY_PLAN_CONFLICT,
-                    summary=f"实体注册器判定「{name}」与计划或 canon 冲突。",
-                    payload={"name": name, "reason": str(decision.get("reason") or ""), "decision": action},
+                decision = self._conflict_decision(
+                    mention_name,
+                    str(raw_decision.get("reason") or "plan or canon conflict"),
                 )
-        updated_output = self._drop_background_generic_mentions(writer_output, background_set)
-        return EntityRegistrationResult(
-            writer_output=updated_output,
-            registered_names=registered,
-            alias_names=aliases,
-            background_generic_names=background,
+            decisions.append(decision)
+
+        background_names = [
+            decision.mention_name
+            for decision in decisions
+            if decision.action == "background_generic"
+        ]
+        planned_output = self._drop_background_generic_mentions(
+            writer_output,
+            set(background_names),
+        )
+        conflicts = [
+            decision.mention_name
+            for decision in decisions
+            if decision.action == "plan_conflict"
+        ]
+        plan = EntityAdmissionPlan(
+            project_id=project_id,
+            chapter_number=int(chapter_number),
+            candidate_fingerprint=writer_output_admission_fingerprint(planned_output),
+            decisions=decisions,
+            plan_conflicts=conflicts,
+        )
+        planned_output = self._attach_admission_plan(planned_output, plan)
+        return EntityAdmissionResult(
+            writer_output=planned_output,
+            plan=plan,
+            registered_names=[
+                decision.canonical_name
+                for decision in decisions
+                if decision.action == "register_character"
+            ],
+            alias_names=[
+                decision.mention_name
+                for decision in decisions
+                if decision.action == "register_alias"
+            ],
+            background_generic_names=background_names,
             plan_conflicts=conflicts,
         )
 
-    def _unknown_named_references(self, *, project_id: str, writer_output: WriterOutput) -> list[str]:
+    def verify_writer_output_admission(
+        self,
+        *,
+        project_id: str,
+        writer_output: WriterOutput,
+    ) -> EntityAdmissionPlan:
+        plan = _admission_plan_from_output(writer_output)
+        if plan.project_id != project_id:
+            raise ValueError("Entity admission project mismatch")
+        if plan.chapter_number != int(writer_output.chapter_number):
+            raise ValueError("Entity admission chapter mismatch")
+        actual_fingerprint = writer_output_admission_fingerprint(writer_output)
+        if plan.candidate_fingerprint != actual_fingerprint:
+            raise ValueError("Entity admission plan is stale for this candidate")
+        if plan.plan_conflicts:
+            raise ValueError(
+                "Entity admission rejected: " + ", ".join(plan.plan_conflicts)
+            )
+        decision_names = [decision.mention_name for decision in plan.decisions]
+        if len(decision_names) != len(set(decision_names)):
+            raise ValueError("Entity admission contains duplicate mention decisions")
+        admitted_names = {
+            decision.mention_name
+            for decision in plan.decisions
+            if decision.action != "plan_conflict"
+        }
+        unresolved = [
+            name
+            for name in self._unknown_named_references(
+                project_id=project_id,
+                writer_output=writer_output,
+            )
+            if name not in admitted_names
+        ]
+        if unresolved:
+            raise ValueError(
+                "Entity admission decision missing: " + ", ".join(unresolved)
+            )
+        self._revalidate_plan(project_id=project_id, plan=plan)
+        return plan
+
+    def _plan_character_registration(
+        self,
+        *,
+        project_id: str,
+        mention_name: str,
+        raw_decision: dict[str, Any],
+        reserved_names: dict[str, str],
+    ) -> EntityAdmissionDecision:
+        canonical_name = str(
+            raw_decision.get("canonical_name") or mention_name
+        ).strip()
+        aliases = _dedupe(
+            [
+                *[
+                    str(item or "").strip()
+                    for item in raw_decision.get("aliases", [])
+                    if str(item or "").strip()
+                ],
+                mention_name,
+            ]
+        )
+        names_to_reserve = _dedupe([canonical_name, *aliases])
+        conflict = self._name_conflict(
+            project_id=project_id,
+            names=names_to_reserve,
+            target_entity_id="",
+            reserved_names=reserved_names,
+            mention_name=mention_name,
+        )
+        if not canonical_name:
+            conflict = "missing canonical name"
+        if conflict:
+            return self._conflict_decision(mention_name, conflict)
+        for name in names_to_reserve:
+            reserved_names[name] = mention_name
+        return EntityAdmissionDecision(
+            mention_name=mention_name,
+            action="register_character",
+            entity_id=str(raw_decision.get("entity_id") or new_id()),
+            canonical_name=canonical_name,
+            aliases=[alias for alias in aliases if alias != canonical_name],
+            role_hint=str(raw_decision.get("role_hint") or ""),
+            importance=_importance(raw_decision.get("importance")),
+            reason=str(raw_decision.get("reason") or ""),
+        )
+
+    def _plan_alias_registration(
+        self,
+        *,
+        project_id: str,
+        mention_name: str,
+        raw_decision: dict[str, Any],
+        reserved_names: dict[str, str],
+    ) -> EntityAdmissionDecision:
+        entity, error = self._resolve_character_target(
+            project_id=project_id,
+            entity_id=str(raw_decision.get("entity_id") or "").strip(),
+            canonical_name=str(raw_decision.get("canonical_name") or "").strip(),
+        )
+        if entity is None:
+            return self._conflict_decision(mention_name, error or "alias target not found")
+        aliases = [
+            alias
+            for alias in _dedupe(
+                [
+                    *[
+                        str(item or "").strip()
+                        for item in raw_decision.get("aliases", [])
+                        if str(item or "").strip()
+                    ],
+                    mention_name,
+                ]
+            )
+            if alias != entity.name
+        ]
+        conflict = self._name_conflict(
+            project_id=project_id,
+            names=aliases,
+            target_entity_id=entity.id,
+            reserved_names=reserved_names,
+            mention_name=mention_name,
+        )
+        if conflict:
+            return self._conflict_decision(mention_name, conflict)
+        for name in aliases:
+            reserved_names[name] = mention_name
+        return EntityAdmissionDecision(
+            mention_name=mention_name,
+            action="register_alias",
+            entity_id=entity.id,
+            canonical_name=entity.name,
+            aliases=aliases,
+            role_hint=str(raw_decision.get("role_hint") or ""),
+            reason=str(raw_decision.get("reason") or ""),
+        )
+
+    @staticmethod
+    def _conflict_decision(
+        mention_name: str,
+        reason: str,
+    ) -> EntityAdmissionDecision:
+        return EntityAdmissionDecision(
+            mention_name=mention_name,
+            action="plan_conflict",
+            reason=reason,
+        )
+
+    def _name_conflict(
+        self,
+        *,
+        project_id: str,
+        names: list[str],
+        target_entity_id: str,
+        reserved_names: dict[str, str],
+        mention_name: str,
+    ) -> str:
+        owners = self._name_owners(project_id, names)
+        for name in names:
+            reserved_by = reserved_names.get(name)
+            if reserved_by and reserved_by != mention_name:
+                return f'name "{name}" is already reserved by {reserved_by}'
+            owner_ids = owners.get(name, set())
+            if target_entity_id:
+                if owner_ids and owner_ids != {target_entity_id}:
+                    return f'name "{name}" belongs to another entity'
+            elif owner_ids:
+                return f'name "{name}" already exists'
+        return ""
+
+    def _revalidate_plan(
+        self,
+        *,
+        project_id: str,
+        plan: EntityAdmissionPlan,
+    ) -> None:
+        reserved_names: dict[str, str] = {}
+        for decision in plan.decisions:
+            if decision.action in {"background_generic", "plan_conflict"}:
+                continue
+            target_entity_id = (
+                decision.entity_id if decision.action == "register_alias" else ""
+            )
+            names = (
+                list(decision.aliases)
+                if decision.action == "register_alias"
+                else _dedupe([decision.canonical_name, *decision.aliases])
+            )
+            existing = self.session.get(Entity, decision.entity_id)
+            if decision.action == "register_character" and existing is not None:
+                if (
+                    existing.project_id == project_id
+                    and existing.kind == "character"
+                    and existing.name == decision.canonical_name
+                ):
+                    target_entity_id = existing.id
+                else:
+                    raise ValueError(
+                        f"Entity admission id conflict: {decision.mention_name}"
+                    )
+            conflict = self._name_conflict(
+                project_id=project_id,
+                names=names,
+                target_entity_id=target_entity_id,
+                reserved_names=reserved_names,
+                mention_name=decision.mention_name,
+            )
+            if conflict:
+                raise ValueError(
+                    f"Entity admission uniqueness conflict for {decision.mention_name}: {conflict}"
+                )
+            for name in names:
+                reserved_names[name] = decision.mention_name
+            if decision.action == "register_alias":
+                self._require_character_target(
+                    project_id=project_id,
+                    entity_id=decision.entity_id,
+                )
+
+    def _classify(
+        self,
+        *,
+        project_id: str,
+        chapter_number: int,
+        names: list[str],
+        writer_output: WriterOutput,
+    ) -> list[dict[str, Any]]:
+        deterministic = [
+            {
+                "decision": "background_generic",
+                "name": name,
+                "reason": "deterministic reference classifier",
+            }
+            for name in names
+            if looks_like_generic_character_reference(name)
+            or looks_like_non_character_reference(name)
+        ]
+        deterministic_names = {str(item["name"]) for item in deterministic}
+        unresolved_names = [name for name in names if name not in deterministic_names]
+        if not unresolved_names:
+            return deterministic
+        if self.classifier is None:
+            return [
+                *deterministic,
+                *[
+                    {
+                        "decision": "plan_conflict",
+                        "name": name,
+                        "reason": "entity registrar classifier unavailable",
+                    }
+                    for name in unresolved_names
+                ],
+            ]
+        existing_entities = list(
+            self.session.execute(
+                select(Entity).where(
+                    Entity.project_id == project_id,
+                    Entity.is_active == True,  # noqa: E712
+                )
+            ).scalars().all()
+        )
+        try:
+            raw = self.classifier.classify(
+                project_id=project_id,
+                chapter_number=chapter_number,
+                names=unresolved_names,
+                writer_output=writer_output,
+                existing_entities=existing_entities,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Entity registrar classifier failed; routing names to plan_conflict.",
+                exc_info=True,
+            )
+            return [
+                *deterministic,
+                *[
+                    {
+                        "decision": "plan_conflict",
+                        "name": name,
+                        "reason": f"classifier_error:{type(exc).__name__}",
+                    }
+                    for name in unresolved_names
+                ],
+            ]
+        expected = set(unresolved_names)
+        decision_by_name: dict[str, dict[str, Any]] = {}
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("entity_name") or "").strip()
+            if name in expected and name not in decision_by_name:
+                decision_by_name[name] = item
+        classified = [
+            decision_by_name.get(name)
+            or {
+                "decision": "plan_conflict",
+                "name": name,
+                "reason": "classifier omitted this name",
+            }
+            for name in unresolved_names
+        ]
+        return [*deterministic, *classified]
+
+    def _unknown_named_references(
+        self,
+        *,
+        project_id: str,
+        writer_output: WriterOutput,
+    ) -> list[str]:
         mentioned: list[str] = []
         seen: set[str] = set()
         for mention in getattr(writer_output, "entity_mentions", []) or []:
@@ -196,176 +529,21 @@ class EntityRegistrar:
         known = self._entities_by_names(project_id, mentioned)
         return [name for name in mentioned if name not in known]
 
-    def _classify(
+    def _entities_by_names(
         self,
-        *,
         project_id: str,
-        chapter_number: int,
         names: list[str],
-        writer_output: WriterOutput,
-    ) -> list[dict[str, Any]]:
-        if self.classifier is None:
-            return [
-                {
-                    "decision": "plan_conflict",
-                    "name": name,
-                    "reason": "entity registrar classifier unavailable",
-                }
-                for name in names
-            ]
-        existing_entities = list(
-            self.session.execute(
-                select(Entity).where(Entity.project_id == project_id, Entity.is_active == True)  # noqa: E712
-            ).scalars().all()
-        )
-        try:
-            raw = self.classifier.classify(
-                project_id=project_id,
-                chapter_number=chapter_number,
-                names=names,
-                writer_output=writer_output,
-                existing_entities=existing_entities,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Entity registrar classifier failed; routing names to plan_conflict.", exc_info=True)
-            return [
-                {
-                    "decision": "plan_conflict",
-                    "name": name,
-                    "reason": f"classifier_error:{type(exc).__name__}",
-                }
-                for name in names
-            ]
-        decisions = [item for item in raw if isinstance(item, dict)]
-        decided_names = {str(item.get("name") or item.get("entity_name") or "").strip() for item in decisions}
-        for name in names:
-            if name not in decided_names:
-                decisions.append(
-                    {
-                        "decision": "plan_conflict",
-                        "name": name,
-                        "reason": "classifier omitted this name",
-                    }
-                )
-        return decisions
-
-    def _register_character(
-        self,
-        *,
-        project_id: str,
-        chapter_number: int,
-        decision: dict[str, Any],
-        fallback_name: str,
-    ) -> Entity:
-        canonical = str(decision.get("canonical_name") or fallback_name).strip()
-        entity = self._entities_by_names(project_id, [canonical]).get(canonical)
-        aliases = _dedupe(
-            [
-                *[str(item or "").strip() for item in decision.get("aliases", []) if str(item or "").strip()],
-                fallback_name,
-            ]
-        )
-        if entity is None:
-            entity = Entity(
-                id=new_id(),
-                project_id=project_id,
-                kind="character",
-                name=canonical,
-                aliases_json=json.dumps(
-                    [alias for alias in aliases if alias and alias != canonical],
-                    ensure_ascii=False,
-                ),
-                description=str(decision.get("role_hint") or ""),
-                importance=int(decision.get("importance") or 5),
-                created_at_chapter=int(chapter_number or 0),
-                is_active=True,
-            )
-            self.session.add(entity)
-            self.session.flush()
-            self._record_event(
-                project_id=project_id,
-                chapter_number=chapter_number,
-                event_type=DecisionEventType.ENTITY_REGISTERED,
-                summary=f"实体注册器注册新角色「{canonical}」。",
-                payload={"name": canonical, "aliases": aliases, "decision": decision},
-                related_object_id=entity.id,
-            )
-        for alias in aliases:
-            if alias and alias != canonical:
-                self._add_alias(project_id=project_id, entity=entity, alias=alias, chapter_number=chapter_number)
-        return entity
-
-    def _register_alias(self, *, project_id: str, decision: dict[str, Any], fallback_name: str) -> str:
-        entity_id = str(decision.get("entity_id") or "").strip()
-        entity = self.session.get(Entity, entity_id) if entity_id else None
-        if entity is None or entity.project_id != project_id:
-            canonical = str(decision.get("canonical_name") or "").strip()
-            entity = self._entities_by_names(project_id, [canonical]).get(canonical)
-        if entity is None:
-            self._record_event(
-                project_id=project_id,
-                chapter_number=0,
-                event_type=DecisionEventType.ENTITY_PLAN_CONFLICT,
-                summary=f"实体注册器无法为「{fallback_name}」找到别名目标。",
-                payload={"name": fallback_name, "decision": decision},
-            )
-            return ""
-        aliases = _dedupe(
-            [
-                *[str(item or "").strip() for item in decision.get("aliases", []) if str(item or "").strip()],
-                fallback_name,
-            ]
-        )
-        for alias in aliases:
-            if alias and alias != entity.name:
-                self._add_alias(project_id=project_id, entity=entity, alias=alias, chapter_number=0)
-        return aliases[0] if aliases else fallback_name
-
-    def _add_alias(self, *, project_id: str, entity: Entity, alias: str, chapter_number: int) -> None:
-        existing = self.session.execute(
-            select(EntityAlias).where(EntityAlias.project_id == project_id, EntityAlias.alias == alias)
-        ).scalar_one_or_none()
-        if existing is not None:
-            if existing.entity_id != entity.id:
-                self._record_event(
-                    project_id=project_id,
-                    chapter_number=chapter_number,
-                    event_type=DecisionEventType.ENTITY_ALIAS_CONFLICT,
-                    summary=f"实体别名「{alias}」已绑定到其他实体。",
-                    payload={"alias": alias, "existing_entity_id": existing.entity_id, "target_entity_id": entity.id},
-                )
-            return
-        self.session.add(
-            EntityAlias(
-                id=new_id(),
-                entity_id=entity.id,
-                project_id=project_id,
-                alias=alias,
-            )
-        )
-        entity.aliases_json = json.dumps(_dedupe([*_json_list(entity.aliases_json), alias]), ensure_ascii=False)
-        self.session.add(entity)
-        try:
-            self.session.flush()
-        except IntegrityError:
-            self.session.rollback()
-            raise
-        self._record_event(
-            project_id=project_id,
-            chapter_number=chapter_number,
-            event_type=DecisionEventType.ENTITY_ALIAS_REGISTERED,
-            summary=f"实体注册器注册「{entity.name}」的别名「{alias}」。",
-            payload={"entity_id": entity.id, "entity_name": entity.name, "alias": alias},
-            related_object_id=entity.id,
-        )
-
-    def _entities_by_names(self, project_id: str, names: list[str]) -> dict[str, Entity]:
-        normalized = [str(name or "").strip() for name in names if str(name or "").strip()]
+    ) -> dict[str, Entity]:
+        normalized = _dedupe(names)
         if not normalized:
             return {}
         mapping: dict[str, Entity] = {}
         exact_rows = self.session.execute(
-            select(Entity).where(Entity.project_id == project_id, Entity.name.in_(normalized))
+            select(Entity).where(
+                Entity.project_id == project_id,
+                Entity.is_active == True,  # noqa: E712
+                Entity.name.in_(normalized),
+            )
         ).scalars().all()
         for entity in exact_rows:
             mapping[entity.name] = entity
@@ -377,6 +555,7 @@ class EntityRegistrar:
             .join(Entity, EntityAlias.entity_id == Entity.id)
             .where(
                 Entity.project_id == project_id,
+                Entity.is_active == True,  # noqa: E712
                 EntityAlias.project_id == project_id,
                 EntityAlias.alias.in_(unresolved),
             )
@@ -385,8 +564,97 @@ class EntityRegistrar:
             mapping[str(alias)] = entity
         return mapping
 
-    def _drop_background_generic_mentions(
+    def _name_owners(
         self,
+        project_id: str,
+        names: list[str],
+    ) -> dict[str, set[str]]:
+        normalized = _dedupe(names)
+        owners = {name: set() for name in normalized}
+        if not normalized:
+            return owners
+        exact_rows = self.session.execute(
+            select(Entity.name, Entity.id).where(
+                Entity.project_id == project_id,
+                Entity.name.in_(normalized),
+            )
+        ).all()
+        for name, entity_id in exact_rows:
+            owners[str(name)].add(str(entity_id))
+        alias_rows = self.session.execute(
+            select(EntityAlias.alias, EntityAlias.entity_id).where(
+                EntityAlias.project_id == project_id,
+                EntityAlias.alias.in_(normalized),
+            )
+        ).all()
+        for alias, entity_id in alias_rows:
+            owners[str(alias)].add(str(entity_id))
+        return owners
+
+    def _resolve_character_target(
+        self,
+        *,
+        project_id: str,
+        entity_id: str,
+        canonical_name: str,
+    ) -> tuple[Entity | None, str]:
+        if entity_id:
+            entity = self.session.get(Entity, entity_id)
+            if (
+                entity is None
+                or entity.project_id != project_id
+                or entity.kind != "character"
+                or not entity.is_active
+            ):
+                return None, "alias target not found"
+            return entity, ""
+        if not canonical_name:
+            return None, "alias target is missing entity_id and canonical_name"
+        rows = list(
+            self.session.execute(
+                select(Entity).where(
+                    Entity.project_id == project_id,
+                    Entity.is_active == True,  # noqa: E712
+                    Entity.name == canonical_name,
+                )
+            ).scalars().all()
+        )
+        rows.extend(
+            self.session.execute(
+                select(Entity)
+                .join(EntityAlias, EntityAlias.entity_id == Entity.id)
+                .where(
+                    Entity.project_id == project_id,
+                    Entity.is_active == True,  # noqa: E712
+                    EntityAlias.project_id == project_id,
+                    EntityAlias.alias == canonical_name,
+                )
+            ).scalars().all()
+        )
+        unique = {entity.id: entity for entity in rows if entity.kind == "character"}
+        if len(unique) != 1:
+            reason = "alias target not found" if not unique else "alias target is ambiguous"
+            return None, reason
+        return next(iter(unique.values())), ""
+
+    def _require_character_target(
+        self,
+        *,
+        project_id: str,
+        entity_id: str,
+    ) -> Entity:
+        entity = self.session.get(Entity, entity_id)
+        if (
+            entity is None
+            or entity.project_id != project_id
+            or entity.kind != "character"
+            or not entity.is_active
+        ):
+            raise ValueError(f"Entity admission alias target missing: {entity_id}")
+        return entity
+
+    @staticmethod
+    def _drop_background_generic_mentions(
         writer_output: WriterOutput,
         names: set[str],
     ) -> WriterOutput:
@@ -399,32 +667,51 @@ class EntityRegistrar:
         ]
         return writer_output.model_copy(update={"entity_mentions": mentions})
 
-    def _record_event(
-        self,
-        *,
-        project_id: str,
-        chapter_number: int,
-        event_type: str,
-        summary: str,
-        payload: dict[str, Any],
-        related_object_id: str = "",
-    ) -> None:
-        self.session.add(
-            DecisionEvent(
-                id=new_id(),
-                project_id=project_id,
-                chapter_number=int(chapter_number or 0),
-                scope="chapter" if int(chapter_number or 0) else "project",
-                event_family="runtime_observation",
-                event_type=event_type,
-                actor_type="system",
-                summary=summary,
-                payload_json=json.dumps(payload, ensure_ascii=False),
-                related_object_type="entity" if related_object_id else "",
-                related_object_id=related_object_id,
-            )
-        )
-        self.session.flush()
+    @staticmethod
+    def _attach_admission_plan(
+        writer_output: WriterOutput,
+        plan: EntityAdmissionPlan,
+    ) -> WriterOutput:
+        generation_meta = dict(writer_output.generation_meta or {})
+        generation_meta["entity_admission_plan"] = plan.model_dump(mode="json")
+        return writer_output.model_copy(update={"generation_meta": generation_meta})
+
+
+def writer_output_admission_fingerprint(writer_output: WriterOutput) -> str:
+    payload = writer_output.model_dump(
+        mode="json",
+        exclude={"generation_meta", "draft_blob_path"},
+    )
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _admission_plan_from_output(writer_output: WriterOutput) -> EntityAdmissionPlan:
+    generation_meta = (
+        writer_output.generation_meta
+        if isinstance(writer_output.generation_meta, dict)
+        else {}
+    )
+    payload = generation_meta.get("entity_admission_plan")
+    if not isinstance(payload, dict):
+        raise ValueError("Entity admission plan is missing")
+    try:
+        return EntityAdmissionPlan.model_validate(payload)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("Entity admission plan is invalid") from exc
+
+
+def _importance(raw: object) -> int:
+    try:
+        value = int(raw or 5)
+    except (TypeError, ValueError):
+        value = 5
+    return max(1, min(10, value))
 
 
 def _json_list(raw: str) -> list[str]:
@@ -446,3 +733,11 @@ def _dedupe(items: list[str]) -> list[str]:
             result.append(value)
             seen.add(value)
     return result
+
+
+__all__ = [
+    "EntityAdmissionResult",
+    "EntityRegistrar",
+    "LLMEntityAdmissionClassifier",
+    "writer_output_admission_fingerprint",
+]

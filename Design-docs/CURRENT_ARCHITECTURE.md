@@ -28,6 +28,8 @@ Genesis / Writer / Review 主链
 - 上下文来源：`BookState + BookMap + Genesis + approved projections`。
 - 运行策略：项目只有一份带版本号的 `RuntimePolicy`，durable generation task 保存不可变 policy snapshot；`InfrastructureConfig` 只负责环境凭据、端点、worker/存储和只读模型目录。
 - 任务入口：API、worker、scheduler、CLI、Genesis handoff、continue 和 auto-continue 统一经过 `GenerationApplicationService`；`RuntimeContainer` 是唯一 orchestrator 装配点。
+- 运行时计划：`forwin.planning.PlanningService` 是写侧门面，`PlanningQuery` 读取 active arc/chapter/band 计划，future audit、patch validation 与 scenario rehearsal 统一投影为 `PlanHealth`。
+- 实体准入：`EntityRegistrar` 只构建并验证候选稿上的 `EntityAdmissionPlan`，不会写 `Entity` / `EntityAlias`；分类器异常、遗漏、别名歧义和唯一性冲突均 fail-closed。只有 `CanonAdmissionService` 通过 `EntityAdmissionCommitter` 在 Canon 事务中落实无冲突计划。
 - review 主链：`review.DraftReviewService` 聚合章节文本、体验、治理、地图、人格和 lint；draft review 与 canon gate 通过 `QualityAnalysisRunRow` 共享 primary quality 分析，cache key 包含正文内容、chapter plan、prior-canon 分析上下文、模式/版本与模型指纹；`review.repair.RepairService` 是 draft/canon repair 的两个显式入口；`review.decision.FinalResidualPolicy` 只评估 repair 耗尽后的残留，不决定 canon；`CanonAdmissionService` 直接编排 quality、BookState 与 projection helper，不经 `WritingOrchestrator` canon 方法注入；`BookStateReviewGate` 是 GraphDelta 入 canon 前的 deterministic guardrail。
 - skill runtime：仅作为 prompt / workflow instruction layer，参与 PromptTrace，不写 canon，不绕过 DecisionEvent 或 BookState gate。
 
@@ -43,9 +45,11 @@ ForWin 只支持 `RuntimePolicy.quality_profile=standard|pulp`。
 
 ```text
 WriterOutput / chapter body
+-> EntityAdmissionPlan verification
 -> BookStateGraphDeltaExtractor
 -> BookStateReviewGate
 -> BookStateCompiler
+-> EntityAdmissionPlan commit
 -> projection refresh
 ```
 
@@ -58,7 +62,7 @@ WriterOutput / chapter body
 - `world_model`：legacy wiki/export/projection/read path；不作为新 canon 语义来源。
 - `world_model_v4`：已删除的旧 compatibility projection / debug-export bridge；不得重新作为 runtime 写入路径引入。
 - `reviewer_v4`：world_v4 extraction compatibility gate；不是 `reviewer` 的新版替代品。
-- legacy `entities / entity_states / relation_edges / CanonEvent`：兼容投影、迁移输入或审计摘要。
+- legacy `entity_states / relation_edges / CanonEvent`：兼容投影、迁移输入或审计摘要；`entities / entity_aliases` 只允许由 Canon 实体准入提交器写入。
 - legacy provisional：历史预演、审计和 compatibility preview，不默认阻断正式写作。
 
 ## 投影层
@@ -76,4 +80,4 @@ WriterOutput / chapter body
 - Arc continuation planning builds an `ArcActivationReviewPack` from accepted chapter summaries, current BookState snapshots, open obligations, recent decisions, audience signals, and faction/group state. The handoff records `ARC_ACTIVATION_REVIEW_PACK_BUILT`; degraded fallback chapter plans are marked `needs_review`.
 - The pulp canon profile uses `pulp_fatal`: expanded fatal continuity signals still block admission, while lower-priority obligations remain review warnings unless they are hard blockers. Auto-review retry refuses hard canon, SubWorld, and active-rule blockers instead of looping blindly.
 - The runtime trope registry expands seed and markdown libraries to a minimum usable 50-template pulp set with genre, audience, platform, payoff, and execution metadata. The chapter scheduler enforces a two-use-per-20-chapters template cooldown and prompt injection includes per-trope execution constraints.
-- The operator task drawer surfaces stop-reason distribution, auto-continue chain health, `needs_review` / `repair_exhausted` queues, repair attempts, canon risk, review decision chains, retry actions, soft-accept actions, and proposal-backed repairs for SubWorld entity registration, background-reference genericization, and narrative obligation creation.
+- The operator task drawer surfaces stop-reason distribution, auto-continue chain health, `needs_review` / `repair_exhausted` queues, repair attempts, canon risk, review decision chains, retry actions, soft-accept actions, and proposal-backed narrative-obligation repairs. Entity admission conflicts remain fail-closed review evidence instead of entering a parallel SubWorld repair path.

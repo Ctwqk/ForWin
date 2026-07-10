@@ -18,6 +18,8 @@ Slice 1 实施提交依次为 `a7f53bb`、`f7790c5`、`61392af`、`6c2eb0f`、`1
 
 Phase B 已完成：零引用 `forwin/orchestration` ports 和 `_compile_world_model_after_acceptance` 空壳已删除；BookState canon 主路径已改名 `_commit_book_state_canon`；`HistoricalReviewHub` 已替换为 `DraftReviewService`；`FinalAcceptanceGate` 已合并为 `FinalResidualPolicy`；原 `reviewer`、`review_engine`、`reviser` 三个平级包已物理合并为 `forwin.review/{draft_service,decision,repair}`；唯一 candidate -> canon 决策体已迁入 `forwin.canon.CanonAdmissionService`；1056 行 live repair loop 已迁入 `forwin.review.repair.RepairService`，pipeline 只调用两个显式入口；canon/repair 专属 helper 注入已删除，`WritingOrchestrator._*` 拼装由 102 条降至 89 条；draft review 与 canon gate 通过 `QualityAnalysisRunRow` 共享有效 primary 分析。下文保留旧名称的段落是审计时基线证据，不代表当前代码仍保留旧入口。
 
+Phase C 实现已完成：Genesis handoff 后 revision 永久冻结；`EntityRegistrar` 改为 `EntityAdmissionPlan` 规划/验证器，草稿阶段不再写 `Entity`/`EntityAlias`，`EntityAdmissionCommitter` 只在 Canon 成功路径落实无冲突计划；旧 SubWorld admission policy/patch/repair、checker 判决、nonblocking 例外和 summary 名字桥已删除。Planning 服务群由 `PlanningService` / `PlanningQuery` 归口，future audit、patch validation、scenario rehearsal 统一为 `PlanHealth`；`future_plan_auditor.py` 与 `phase24.PlanningServices` 转发门面已删除，orchestrator 拼装降至 87 条。200 章 no-hotfix 运行 gate 尚未执行，因此这里只标记实现完成。
+
 ---
 
 ## 0. 对初版报告的核验结论
@@ -42,7 +44,7 @@ Phase B 已完成：零引用 `forwin/orchestration` ports 和 `_compile_world_m
 | # | 初版论断 | 修正 |
 |---|---|---|
 | 1 | 模式清单只到 `operation_mode`/`writer_mode`/五个 `*_mode` | **漏了第 9 条模式轴**：`review_delegation_mode: human \| reckless`（2026-07-09 当天 8 个 commit 落地）。reckless 模式用 `gpt-5.3-codex-spark`（经 Codex bridge）代替人工审批 7 类暂停门；见 §3.1 |
-| 2 | D14"新建 EntityAdmissionService/注册器" | **已部分落地**：`EntityAlias` 模型（`forwin/models/entity.py:33`）、`EntityRegistrar` + `LLMEntityRegistrationClassifier` 已接入 repair_loop（`forwin/orchestrator_loop_core/review_autofix.py:158-177`，`repair_loop.py:142,673`）。决策应改为"**完成割接**：拆掉旧 admission 旁路"，而非"新建"。当前新旧五套 admission 面**并存**，重合度反而暂时上升 |
+| 2 | D14"新建 EntityAdmissionService/注册器" | **已完成割接**：`EntityRegistrar` 只构建 `EntityAdmissionPlan`；分类失败/遗漏/歧义/唯一性冲突 fail-closed；Canon `EntityAdmissionCommitter` 是唯一实体写方。旧 admission 五面已物理删除，不保留兼容旁路 |
 | 3 | Phase E"把路由逻辑抽到 service 层"即可统一入口 | **低估了前置条件**：`WritingOrchestrator` 是由 13 个模块、约 115 个函数在 `service.py:111-242` 用属性赋值拼出来的上帝对象，且各模块被回注类引用（`_module.WritingOrchestrator = WritingOrchestrator`）、`__module__` 伪装成 `forwin.orchestrator.loop`。不先给这个类立缝（seam），service 抽取无从谈起 |
 | 4 | "audit old StateUpdater writes：keep as projections or rewrite" | **实测是活的双写**：`_apply_canon_candidate` 在 BookState direct-commit 通过后，仍继续 `updater.apply_state_changes/apply_events/apply_thread_beats/apply_time_advance` 写 legacy 状态（`quality_gates.py:992-1020`）；且 canon 门自身的 `RetrievalBroker.build_world_model_pack` 和 context assembler 还在读 legacy `StateRepository`。删双写前必须先做**读方清单迁移** |
 | 5 | post-100 修复计划 = "backlog，未落地" | 已过时：`a803cf9 Implement post-100 generation repair reset` 及后续 nonblocking-subworld 系列 commit（07-07/07-08）已落地主体；剩余项是 200 章 no-hotfix 验证与旧旁路清理 |
@@ -85,10 +87,10 @@ Phase B 已完成：零引用 `forwin/orchestration` ports 和 `_compile_world_m
 | 项目创建状态 | `projects.creation_status` + `active_genesis_revision_id` | 项目摘要、task-center、UI workspace | 低风险；保持 |
 | Genesis / 书本设置 | 活跃 `BookGenesisRevision.pack_json`（brief→world→map→story_engine→book_blueprint→bootstrap） | stage traces、name suggestions、UI detail | `start-writing` 后必须冻结 revision；handoff 已幂等（tests/test_genesis_handoff_service.py 覆盖） |
 | Book-level plan | handoff 前：Genesis `book_arc_blueprint`；handoff 后：`ArcPlanVersion` 物化行 | Genesis pack 留作蓝图存档 | 明示"handoff 后 Genesis 只是历史文档" |
-| Arc / band / chapter plan | `ArcPlanVersion`、`ChapterPlan` + planning 服务群（band_plan_service、arc_activation_service…） | provisional preview、future plan audit、patch payloads | plan 变更入口分散在 planning/ 20+ 文件；收敛到 PlanningService |
+| Arc / band / chapter plan | `ArcPlanVersion`、`ChapterPlan` + `PlanningService` / `PlanningQuery` | provisional preview、future plan audit、patch payloads | 写侧服务群已有统一 facade；audit/validation/rehearsal 统一投影为 `PlanHealth` |
 | Chapter draft / accepted canon | `ChapterDraft`/`ChapterReview`/`CandidateDraftRecord`；接受 = `_apply_canon_candidate` 成功 | frozen candidates、artifacts、memory index | **注意：接受路径当前是双写**（BookState + legacy StateUpdater 行），见下 |
 | BookState / world state | `GraphDeltaRow` + `BookStateCompiler`（经 `BookStateDirectCommitService.compile_approved`，藏在 `_apply_world_v4_gate` 里） | world/map/cognition/narrative snapshots、knowledge projection、**legacy `world_nodes`/`fact_nodes`/events 行（仍在被写）** | 双写是当前最大的状态源风险；Phase D 处理 |
-| Map / subworld / entity admission | `forwin.map`（Scheme C 行）+ `EntityRegistrar`/`EntityAlias`（新，live） | canon 门内 `_validate_subworld_admission` 名字校验、`subworld/admission_policy.py`、`subworld_admission_repair.py`、`checker/reference_classifier.py` 通用名清单、summary 名字桥 | 新旧并存，判决点重复；Phase C 割接 |
+| Map / subworld / entity admission | `forwin.map`（Scheme C 行）+ `EntityRegistrar` 产生 `EntityAdmissionPlan` + Canon `EntityAdmissionCommitter` | `reference_classifier` 仅作为 registrar 的确定性输入 | 一个未知名只在 registrar 判决；实体/别名只在 Canon 事务写入 |
 | Review verdict | `HistoricalReviewHub` 聚合（continuity/lint/personality/canon_quality/webnovel/governance/map/publisher 信号）→ `ChapterReview` | review form、dashboard、candidate 元数据 | hub 与 canon 门各跑一次 canon_quality 分析（hub 侧受 `canon_quality_review_in_hub_enabled` 控制）；需缓存共享 |
 | Repair decision | `decide_repair_v2`（无条件 live）+ 6 个仍在读取的 `review_engine_*` 布尔门（arc/book patcher、local rewrite、obligation verifier 等，默认全 False） | rewrite attempts、design patch snapshots | 死旗标 2 个删除；活旗标 6 个并入 profile 策略 |
 | Final acceptance | `FinalAcceptanceGate`（blackbox-only、软性残留才 force-accept；由 repair 耗尽路径触发） | verdict.final_gate_decision、forced-accept 事件 | 定位为 `FinalResidualPolicy`；不越过 canon 门 |
@@ -127,15 +129,15 @@ Phase B 已完成：零引用 `forwin/orchestration` ports 和 `_compile_world_m
 |---|---|---|---|---|---|
 | 修复与残留放行 | `repair_loop.py`(1067行)、`review_engine/rules/repair_v2.py`、`rules/final_acceptance.py`、`reviser/final_acceptance.py`、`reckless_review.py` | repair_v2 已 live 但死旗标仍在；final acceptance 在 repair 耗尽时触发；**reckless 又提供了第三条放行路径**（可批 `chapter_blackbox_failure`）——三层"放行"语义无统一表述 | RepairService 拥有 scope 选择→patch→rewrite→verify→耗尽；`FinalResidualPolicy`（软性残留、blackbox、修复已验证）；reckless 只代批"本来会停给人看的门" | 删 `review_engine_repair_v2_enabled`/`auto_approve_enabled` 字段；明确 reckless **不得**放行 hard canon blocker（现状：canon 门在 reckless 之后仍会跑，是安全的，但应写成显式不变量+测试） | reckless 批准 fail verdict 章节后，canon 门成为唯一防线 |
 
-### 3.5 subworld admission vs entity registration（割接中）
+### 3.5 subworld admission vs entity registration（已收口）
 
 | 功能族 | 当前相关文件 | 重合/冲突点 | 保留 | 合并/删除/降级 | 风险 |
 |---|---|---|---|---|---|
-| 实体准入 | `review_autofix.py:158`(EntityRegistrar, live)、`models/entity.py:33`(EntityAlias)、`world_projection.py:_validate_subworld_admission + _collect_subworld_candidate_names`、`subworld/admission_policy.py`、`subworld_admission_repair.py`、`checker/reference_classifier.py`、`subworld_manager.py` | **五套判决面并存**：registrar（写前/修复时）、canon 门名字校验、admission repair scope、通用名硬编码清单、summary 名字桥。100 章日志中的 hotfix 循环由此而来；07-07/08 的 nonblocking-subworld 三连 commit 是并存期的胶水 | `EntityRegistrar` 为唯一判决点：registered / alias / background-generic / plan-conflict；`reference_classifier` 通用名清单降为 registrar 的确定性输入 | canon 门内校验降级为"验证 registrar 结论"（不再独立判决）；`subworld_admission_patch` repair scope 删除；nonblocking 特例胶水随之删除 | LLM 分类失败必须 fail-closed 到 needs_review（现有实现方向正确）；200 章 no-hotfix 验证是收口标准 |
+| 实体准入 | `naming/entity_registrar.py`、`naming/types.py`、`canon/entity_admission.py` | 无平行判决面；`reference_classifier` 只做确定性输入 | `EntityRegistrar` 四分类并附着 fingerprinted `EntityAdmissionPlan`；Canon 提交器落实 entity/alias | 旧 policy/patch/repair/checker/summary bridge 及专用测试删除 | 聚焦测试已覆盖四结果、fail-closed、候选变更失效、Canon 前零实体写；200 章 gate 待跑 |
 
 ### 3.6 future plan audit vs plan patch validator vs band checkpoint
 
-与初版判断一致：产出统一 `PlanHealth`（severity/scope/evidence/可否阻断），`planning_audit_mode`/`plan_patch_validation_mode`/`band_checkpoint_mode` 三个 hybrid 旗标常量化进 profile。补充：`future_plan_auditor.py` 已经只是 re-export shim（6 行），真身在 `planning/future_plan_audit/` 包——shim 可在 Phase F 删除。
+已产出统一 `PlanHealth`（severity/scope/evidence/reasons/blocking），并由 `PlanHealthService` 适配 future audit、patch validation 和 scenario rehearsal；`PlanningService` / `PlanningQuery` 成为运行计划门面。`future_plan_auditor.py` re-export shim 与 `phase24.PlanningServices` service bag 已删除。
 
 ### 3.7 BookState / world_model / map / knowledge projection
 
@@ -239,11 +241,11 @@ WritingOrchestrator (变薄的编排壳)
 | D13 ✎ 已完成 | BookState direct-commit 路径 | `_commit_book_state_canon` | `_apply_world_v4_gate` 误导名 | 函数、变量、artifact key 和 block kind 同步改为 BookState 语义 | BookState canon 测试 | 不留旧名 |
 | D14 ✎ 已完成 | — | — | `_compile_world_model_after_acceptance` 空壳 | 函数、两处调用和恒真 pause 分支已删除 | compile/collect + acceptance 回归 | `return True` 存根已消失 |
 | D15 ✎ | `BookStateCompiler`/GraphDelta 唯一写方 | `BookStateRuntime` | canon 提交内的 legacy `apply_state_changes/apply_events/apply_thread_beats/apply_time_advance` 双写 | **先**迁读方（context providers/RetrievalBroker/ContinuityChecker → BookState projection），读方清零后删写方 | 读方清单测试 + 30 章对拍（legacy vs projection 上下文一致） | 初版低估了读方迁移量 |
-| D16 ✎ | `EntityRegistrar`+`EntityAlias`（已 live） | 唯一实体判决点 | canon 门 `_validate_subworld_admission` 独立判决、`subworld_admission_patch` repair scope、nonblocking subworld 特例胶水、summary 名字桥 | canon 门降级为验证 registrar 结论；07-07/08 胶水随割接删除 | 100 章冻结 fixture 回放，零新增 regex | 初版说"新建"，实为"割接收口" |
-| D17 ✅ | `FuturePlanAuditor`/`BandCheckpoint` | `PlanHealth` 统一模型 | `planning_audit_mode`/`plan_patch_validation_mode`/`band_checkpoint_mode` 用户旗标 | 常量化进 profile | 写前/写后 audit + band 边界测试 | `future_plan_auditor.py` shim 一并删 |
+| D16 ✅ 实现完成 | `EntityRegistrar` + `EntityAdmissionPlan` | 唯一实体判决点；Canon 唯一实体写方 | canon checker、`subworld_admission_patch` scope、nonblocking 胶水、summary 名字桥 | 全部物理删除；候选 fingerprint 防止旧 plan 复用 | 12 个聚焦 entity/architecture tests；200 章 gate 待跑 | 比初版更严格：Canon 前零 entity/alias 写 |
+| D17 ✅ 实现完成 | `FuturePlanAuditor`/patch validator/scenario rehearsal | `PlanningService` / `PlanningQuery` / `PlanHealthService` | 动态 package forwarding、`PlanningServices` bag、future auditor shim | 全部删除；typed health 接入 pre/post audit event | planning facade/health 聚焦测试 | band checkpoint 后续可继续直接消费同一 health DTO |
 | D18 ✅ 已完成 | Genesis 六阶段 + handoff | 冻结语义 | `book_genesis_core/workflow.py` early-return 死块与 handoff 后可继续编辑 | 删除 588 行 workflow；workspace 委托成为 typed service 方法；handoff 设置 revision `locked`，mutation 统一拒绝 | Genesis freeze + handoff 流程 | 不保留直接编辑旁路 |
 | D19 ✎ 已完成 | owner-local typed services | owner-local typed services | `forwin.orchestration.ChapterPipelinePorts` / `OrchestrationEvent` | 未采用 `Any` ports，整包删除；新协议随 owner 定义 | 文件不存在边界测试 | 零引用死代码已清除 |
-| D20 ★ | `WritingOrchestrator` 公共入口 | 显式协作对象（§4.4） | `service.py` 猴子补丁拼装 + 模块回注 | 每 Phase 收敛一族方法；`__module__` 伪装最后删 | 每族替换后全量回归 | 收敛的结构性主线 |
+| D20 ★ | `WritingOrchestrator` 公共入口 | 显式协作对象（§4.4） | `service.py` 猴子补丁拼装 + 模块回注 | 每 Phase 收敛一族方法；当前 87 条 | 每族替换后全量回归 | 收敛的结构性主线 |
 | D21 ✅ | route registry 域分组 | application services | route ops 内嵌业务逻辑 | 按域抽 service，响应契约不变 | API 回归 + 分组边界测试（已有） | |
 | D22 ✎ 已完成 | durable worker + automation scheduler 入队 | `GenerationApplicationService` | API/CLI/Genesis/auto-continue 的直接任务构造旁路 | 所有生产者统一调用 application service | 任务 lease/resume/cancel/幂等 | worker 只保留 claim/lease/heartbeat/observability |
 | D23 ✅ | publisher worker/browser 隔离 + 强制加密校验 | `PublisherApplicationService` | 生成流程内的 publisher 调用 | 保持后 canon 工作流 | publish=false 冒烟 + 风险门 | 不弱化 browser 风险门 |
@@ -276,14 +278,14 @@ WritingOrchestrator (变薄的编排壳)
 - **回滚**：service 为包装层，import 换回即回。
 - **验收**：`service.py` 属性赋值减少 ≥40 行；四个 service 有独立单测；shadow/cutover 术语从生产代码消失。
 
-### Phase C — Genesis/planning/subworld admission 割接收口（D16-D18）
+### Phase C — Genesis/planning/subworld admission 割接收口（D16-D18）✅ 实现完成
 
-- **当前进度**：D18 已完成；`workflow.py` 删除，handoff 后 active revision 冻结。D16 EntityRegistrar 唯一准入与 planning 门面仍在进行。
+- **当前进度**：实现完成。Genesis 冻结、EntityAdmissionPlan 单判决/Canon 单写方、旧 admission 删除、Planning facade/query/health 与 forwarding shim 删除均已落地；200 章 no-hotfix 运行 gate 待独立执行。
 - **目标**：EntityRegistrar 成为唯一实体判决点；Genesis 冻结；planning 服务群归口。
 - **具体**：① canon 门 `_validate_subworld_admission` 改为"验证 registrar 结论"；② 删 `subworld_admission_patch` scope、nonblocking 胶水（93278ab/c12e003/47c193b 引入的特例）、summary 名字桥；③ `reference_classifier` 清单转为 registrar 输入；④ 删 workflow.py 死块；⑤ handoff 后锁 Genesis revision；⑥ `PlanningService` 门面。
 - **不变量**：`start-writing` 仍要求 `manual_ui`+`genesis_ready`；handoff 幂等与回滚（现测试已覆盖）；registrar 失败 fail-closed。
 - **测试**：100 章冻结 fixture 回放零新增 regex；alias 唯一约束；registrar 失败→needs_review；Genesis 冻结后编辑走 proposal。
-- **验收**：一个未知名字只在 registrar 一处被判决；200 章 no-hotfix 验证跑通（Phase C 收口标准）。
+- **验收**：代码边界已保证一个未知名字只在 registrar 一处被判决，且 Canon 前零实体写；200 章 no-hotfix 仍是部署前运行验收，不在本次“尽量跳过测试”的主进程中伪造完成。
 
 ### Phase D — BookState 单一写方（D14,D15）
 

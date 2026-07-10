@@ -11,7 +11,6 @@ from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealt
 from forwin.review.repair.local_rewrite_executor import LocalRewriteExecutor
 from forwin.orchestrator_loop_core.repair_budget import repair_word_budget_patch
 from forwin.orchestrator_loop_core.repair_budget_events import record_repair_body_budget_event
-from forwin.orchestrator_loop_core.subworld_admission_repair import _apply_subworld_admission_repair_patch
 from forwin.orchestrator_loop_core.quality_gates import _latest_draft_and_review_for_chapter
 
 if TYPE_CHECKING:
@@ -145,7 +144,7 @@ def _review_candidate(
             else {}
         ),
     )
-    current_output = self._register_writer_output_entities(
+    current_output = self._plan_writer_output_entities(
         session=session,
         project_id=project_id,
         chapter_number=chapter_plan.chapter_number,
@@ -160,7 +159,12 @@ def _review_candidate(
     )
     autofixed_output = self._apply_canon_name_drift_autofix(current_output, current_review)
     if autofixed_output is not None:
-        current_output = autofixed_output
+        current_output = self._plan_writer_output_entities(
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_plan.chapter_number,
+            writer_output=autofixed_output,
+        )
         current_review = self._review_current_output(
             repo=repo,
             checker=checker,
@@ -170,7 +174,12 @@ def _review_candidate(
         )
     autofixed_output = self._apply_placeholder_leakage_autofix(current_output, current_review)
     if autofixed_output is not None:
-        current_output = autofixed_output
+        current_output = self._plan_writer_output_entities(
+            session=session,
+            project_id=project_id,
+            chapter_number=chapter_plan.chapter_number,
+            writer_output=autofixed_output,
+        )
         current_review = self._review_current_output(
             repo=repo,
             checker=checker,
@@ -358,7 +367,6 @@ def _run_repair_loop_for_phase(
             "local_repair",
             "chapter_patch",
             "band_patch",
-            "subworld_admission_patch",
         }
         if not repair_can_run_locally:
             final_decision = AutoDecisionEngine(build_final_residual_rules()).decide(repair_v2_input)
@@ -533,9 +541,6 @@ def _run_repair_loop_for_phase(
                     local_result.mode,
                 )
 
-        if bool(design_patch.get("subworld_admission_patch_skip_writer")):
-            rewritten_output = current_output
-
         self._emit_progress(
             "stage_changed",
             stage="repairing_chapter",
@@ -668,7 +673,7 @@ def _run_repair_loop_for_phase(
             project_id=project_id,
             current_chapter=chapter_plan.chapter_number,
         )
-        rewritten_output = self._register_writer_output_entities(
+        rewritten_output = self._plan_writer_output_entities(
             session=session,
             project_id=project_id,
             chapter_number=chapter_plan.chapter_number,
@@ -686,7 +691,12 @@ def _run_repair_loop_for_phase(
             rewritten_review,
         )
         if autofixed_rewritten_output is not None:
-            rewritten_output = autofixed_rewritten_output
+            rewritten_output = self._plan_writer_output_entities(
+                session=session,
+                project_id=project_id,
+                chapter_number=chapter_plan.chapter_number,
+                writer_output=autofixed_rewritten_output,
+            )
             rewritten_review = self._review_current_output(
                 repo=repo,
                 checker=checker,
@@ -699,7 +709,12 @@ def _run_repair_loop_for_phase(
             rewritten_review,
         )
         if autofixed_rewritten_output is not None:
-            rewritten_output = autofixed_rewritten_output
+            rewritten_output = self._plan_writer_output_entities(
+                session=session,
+                project_id=project_id,
+                chapter_number=chapter_plan.chapter_number,
+                writer_output=autofixed_rewritten_output,
+            )
             rewritten_review = self._review_current_output(
                 repo=repo,
                 checker=checker,
@@ -864,21 +879,6 @@ def _apply_repair_patch(
     arc_structure = repo.get_latest_arc_structure_draft(project_id)
     patch = dict(repair_instruction.design_patch)
     patch["repair_scope"] = repair_scope
-
-    if repair_scope == "subworld":
-        return _apply_subworld_admission_repair_patch(
-            self,
-            session=session,
-            repo=repo,
-            project_id=project_id,
-            chapter_plan=chapter_plan,
-            context=context,
-            current_output=current_output,
-            current_plan=current_plan,
-            band_schedule=band_schedule,
-            patch=patch,
-            repair_instruction=repair_instruction,
-        )
 
     if repair_scope == "draft":
         updated_plan = current_plan.model_copy(

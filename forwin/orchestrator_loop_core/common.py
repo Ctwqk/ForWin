@@ -79,7 +79,7 @@ from forwin.orchestrator.phase4 import (
     save_world_turn,
 )
 from forwin.planning.scenario_rehearsal_resolution import latest_blocking_scenario_rehearsal
-from forwin.planning.future_plan_auditor import FuturePlanAuditor, FuturePlanAuditRun
+from forwin.planning.future_plan_audit import FuturePlanAuditor, FuturePlanAuditRun
 from forwin.planning.band_plan_patcher import BandPlanPatcher
 from forwin.review.decision.rules.obligation_scope import BandScopeCandidate
 from forwin.orchestrator.phase24 import ProvisionalBandPreview

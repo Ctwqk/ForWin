@@ -49,13 +49,6 @@ class LocalRewriteExecutor:
             return self._drop_duplicate_paragraphs(draft=draft, issue_kind=kind)
         if kind == "internal_state_key_leakage":
             return self._strip_internal_state_keys(draft=draft, issue_kind=kind)
-        if kind == "subworld_admission_unauthorized_new_entity":
-            return RewriteResult(
-                status="unsupported",
-                issue_kind=kind,
-                mode="metadata_required",
-                reason="subworld admission repair requires metadata-aware executor",
-            )
         return RewriteResult(status="unsupported", issue_kind=kind, mode="unsupported_issue")
 
     def _rewrite_placeholder(

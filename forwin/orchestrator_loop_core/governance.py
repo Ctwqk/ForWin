@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from forwin.orchestrator_loop_core.common import *
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.planning.health import PlanHealthService
+from forwin.planning.query import PlanningQuery
 from forwin.review.decision.audit import (
     build_decision_event_payload,
     digest_decision_input,
@@ -141,10 +143,11 @@ def _audit_current_plan_before_write(
         chapter_number=chapter_number,
         result=result,
     )
-    if result.blocking_reasons:
+    plan_health = PlanHealthService.from_future_audit(result, scope="chapter")
+    if plan_health.blocking:
         raise RuntimeError(
             "future_plan_audit_blocked:"
-            + ";".join(str(reason) for reason in result.blocking_reasons)
+            + ";".join(plan_health.reasons)
         )
     if result.applied_plan_patch_ids:
         session.flush()
@@ -162,14 +165,15 @@ def _audit_future_plans_after_acceptance(
 ) -> FuturePlanAuditRun | None:
     project = session.get(Project, project_id)
     target_total_chapters = int(getattr(project, "target_total_chapters", 0) or 0)
-    plans = self._future_plan_audit_plans(
-        session=session,
+    planning_query = PlanningQuery()
+    plans = planning_query.future_chapters(
+        session,
         project_id=project_id,
         current_chapter=chapter_number,
         include_current=False,
     )
-    band_rows = self._future_plan_audit_band_rows(
-        session=session,
+    band_rows = planning_query.future_bands(
+        session,
         project_id=project_id,
         current_chapter=chapter_number,
     )
@@ -212,44 +216,8 @@ def _audit_future_plans_after_acceptance(
     return result
 
 @staticmethod
-def _future_plan_audit_plans(
-    *,
-    session: Session,
-    project_id: str,
-    current_chapter: int,
-    include_current: bool,
-) -> list[ChapterPlan]:
-    lower_bound = int(current_chapter or 0)
-    predicate = ChapterPlan.chapter_number >= lower_bound if include_current else ChapterPlan.chapter_number > lower_bound
-    return list(
-        session.execute(
-            select(ChapterPlan)
-            .where(
-                ChapterPlan.project_id == project_id,
-                predicate,
-                ChapterPlan.status.in_(("planned", "failed")),
-            )
-            .order_by(ChapterPlan.chapter_number.asc())
-        ).scalars().all()
-    )
 
 @staticmethod
-def _future_plan_audit_band_rows(
-    *,
-    session: Session,
-    project_id: str,
-    current_chapter: int,
-) -> list[BandExperiencePlan]:
-    return list(
-        session.execute(
-            select(BandExperiencePlan)
-            .where(
-                BandExperiencePlan.project_id == project_id,
-                BandExperiencePlan.chapter_end > int(current_chapter or 0),
-            )
-            .order_by(BandExperiencePlan.chapter_start.asc(), BandExperiencePlan.chapter_end.asc())
-        ).scalars().all()
-    )
 
 def _record_future_plan_audit_events(
     self,
@@ -271,7 +239,12 @@ def _record_future_plan_audit_events(
         summary=f"future plan audit: {result.status}",
         related_object_type="future_plan_audit_run",
         related_object_id=result.id,
-        payload=result.model_dump(mode="json", exclude={"plan_patches"}),
+        payload={
+            **result.model_dump(mode="json", exclude={"plan_patches"}),
+            "plan_health": PlanHealthService.from_future_audit(result).model_dump(
+                mode="json"
+            ),
+        },
     )
     if result.applied_plan_patch_ids:
         self._record_decision_event(
@@ -933,4 +906,4 @@ def _filter_supported_state_changes(changes):
 
 
 
-__all__ = ['_project_policy', '_record_decision_event', '_record_rule_decision_event', '_audit_current_plan_before_write', '_audit_future_plans_after_acceptance', '_future_plan_audit_plans', '_future_plan_audit_band_rows', '_record_future_plan_audit_events', '_record_generation_audit_checkpoint_if_due', '_generation_audit_checkpoint_payload', '_previous_band_row', '_manual_boundary_checkpoint', '_strict_progression_block', '_create_auto_band_checkpoint', '_filter_supported_state_changes']
+__all__ = ['_project_policy', '_record_decision_event', '_record_rule_decision_event', '_audit_current_plan_before_write', '_audit_future_plans_after_acceptance', '_record_future_plan_audit_events', '_record_generation_audit_checkpoint_if_due', '_generation_audit_checkpoint_payload', '_previous_band_row', '_manual_boundary_checkpoint', '_strict_progression_block', '_create_auto_band_checkpoint', '_filter_supported_state_changes']

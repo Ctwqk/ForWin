@@ -328,8 +328,6 @@ def _review_action_for_outcome(outcome: str, fallback_action: str = "") -> str:
         return "defer_with_arc_plan_patch"
     if outcome == "book_patch":
         return "book_replan_required"
-    if outcome == "subworld_admission_patch":
-        return "subworld_admission_patch"
     if outcome == "commit_with_obligation":
         return "commit_with_obligation"
     if outcome == "manual_review":

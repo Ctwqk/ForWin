@@ -10,16 +10,7 @@ if TYPE_CHECKING:
 from forwin.protocol.writer import WriterOutput
 from forwin.protocol.review import ReviewVerdict, ContinuityIssue
 from forwin.governance import issue_group_for_issue
-from forwin.canon_quality.placeholder import extract_expected_protagonist_names
 from forwin.canon_names import extract_canon_name_anchors, find_canon_name_violations
-from forwin.checker.reference_classifier import (
-    candidate_character_name,
-    has_malformed_parenthetical_annotation,
-    looks_like_generic_character_reference,
-    looks_like_named_character,
-    looks_like_non_character_reference,
-    normalize_character_reference,
-)
 
 logger = logging.getLogger(__name__)
 DEAD_STATUS_KEYWORDS = {
@@ -32,22 +23,6 @@ DEAD_STATUS_KEYWORDS = {
     "阵亡",
     "已阵亡",
 }
-ABSENCE_ONLY_CHANGE_KEYWORDS = (
-    "不存在",
-    "消失",
-    "抹除",
-    "删除",
-    "讣告",
-    "记录",
-    "死亡",
-    "已死",
-    "遇难",
-    "遇难者",
-    "死者",
-    "遗体",
-    "死因",
-    "死亡证明",
-)
 BODY_TERMINAL_PUNCTUATION = set("。！？!?…")
 BODY_TRAILING_CLOSERS = set("”’」』）)]》】")
 
@@ -73,7 +48,6 @@ class ContinuityChecker:
         issues.extend(self._check_thread_status(project_id, writer_output))
         issues.extend(self._check_state_change_validity(writer_output))
         issues.extend(self._check_event_completeness(writer_output))
-        issues.extend(self._check_subworld_admission(project_id, writer_output))
 
         # Determine verdict
         errors = [i for i in issues if i.severity == "error"]
@@ -346,168 +320,3 @@ class ContinuityChecker:
                 ))
 
         return issues
-
-    def _check_subworld_admission(self, project_id: str, output: WriterOutput) -> list[ContinuityIssue]:
-        allowed_names = {
-            self._normalize_character_reference(name)
-            for name in self.repo.get_allowed_entity_names(project_id, output.chapter_number)
-        }
-        allowed_names.update(
-            self._normalize_character_reference(anchor.canonical_name)
-            for anchor in self._canon_name_anchors(project_id)
-        )
-        allowed_names.update(self._known_character_names(project_id))
-        allowed_names.update(self._project_protagonist_names(project_id))
-        if not allowed_names:
-            return []
-        candidate_names: set[str] = set()
-        maybe_event_names: set[str] = set()
-
-        for mention in getattr(output, "entity_mentions", []):
-            if (
-                getattr(mention, "entity_kind", "") == "character"
-                and bool(getattr(mention, "is_named", False))
-                and bool(getattr(mention, "is_on_stage", True))
-            ):
-                name = self._candidate_character_name(getattr(mention, "entity_name", ""))
-                if name:
-                    candidate_names.add(name)
-
-        for change in output.state_changes:
-            if (
-                change.entity_kind == "character"
-                and not self._is_absence_only_state_change(change)
-            ):
-                name = self._candidate_character_name(change.entity_name)
-                if name:
-                    candidate_names.add(name)
-
-        for event in output.new_events:
-            for name in event.involved_entity_names:
-                candidate = self._candidate_character_name(name)
-                if candidate:
-                    maybe_event_names.add(candidate)
-
-        for scene in output.scene_outputs:
-            for name in scene.involved_entities:
-                candidate = self._candidate_character_name(name)
-                if candidate:
-                    candidate_names.add(candidate)
-
-        if maybe_event_names:
-            resolved = self.repo.get_entities_by_names(project_id, sorted(maybe_event_names))
-            for name in maybe_event_names:
-                entity = resolved.get(name)
-                if entity is not None and entity.kind == "character":
-                    candidate_names.add(name)
-
-        issues: list[ContinuityIssue] = []
-        for name in sorted(candidate_names):
-            if name in allowed_names or self._is_allowed_parenthetical_identity_alias(
-                name, allowed_names
-            ):
-                continue
-            issues.append(
-                ContinuityIssue(
-                    rule_name="sub_world_unknown_named_entity",
-                    severity="error",
-                    description=f"命名角色「{name}」未在当前 chapter 的 subworld 准入名单中。",
-                    entity_names=[name],
-                    reviewer="continuity",
-                    issue_type="subworld_admission",
-                    target_scope="chapter",
-                    issue_group=issue_group_for_issue(issue_type="director_imbalance", rule_name="sub_world_unknown_named_entity"),
-                    evidence_refs=[f"chapter={output.chapter_number}", f"entity={name}"],
-                    suggested_fix="改用允许名单中的角色，或改写为无名泛称角色。",
-                )
-            )
-        return issues
-
-    @staticmethod
-    def _is_allowed_parenthetical_identity_alias(name: str, allowed_names: set[str]) -> bool:
-        text = str(name or "").strip()
-        if not text:
-            return False
-        for opener, closer in (("（", "）"), ("(", ")")):
-            if opener not in text or not text.endswith(closer):
-                continue
-            prefix, suffix = text.rsplit(opener, 1)
-            prefix = normalize_character_reference(prefix.strip())
-            suffix = normalize_character_reference(suffix[: -len(closer)].strip())
-            if prefix and suffix and prefix in allowed_names and suffix in allowed_names:
-                return True
-        return False
-
-    def _project_protagonist_names(self, project_id: str) -> set[str]:
-        get_project = getattr(self.repo, "get_project", None)
-        if not callable(get_project):
-            return set()
-        try:
-            project = get_project(project_id)
-        except Exception:  # noqa: BLE001
-            return set()
-        return {
-            self._normalize_character_reference(name)
-            for name in extract_expected_protagonist_names(
-                str(getattr(project, "premise", "") or ""),
-                str(getattr(project, "setting_summary", "") or ""),
-            )
-            if str(name or "").strip()
-        }
-
-    def _known_character_names(self, project_id: str) -> set[str]:
-        get_active_entities = getattr(self.repo, "get_active_entities", None)
-        if not callable(get_active_entities):
-            return set()
-        try:
-            entities = get_active_entities(project_id)
-        except Exception:  # noqa: BLE001
-            return set()
-        names: set[str] = set()
-        for entity in entities or []:
-            if str(getattr(entity, "kind", "") or "") != "character":
-                continue
-            raw_names = [getattr(entity, "name", "") or "", *(getattr(entity, "aliases", []) or [])]
-            for raw_name in raw_names:
-                name = self._normalize_character_reference(str(raw_name or ""))
-                if name:
-                    names.add(name)
-        return names
-
-    @staticmethod
-    def _looks_like_named_character(name: str) -> bool:
-        return looks_like_named_character(name)
-
-    @staticmethod
-    def _candidate_character_name(name: str) -> str:
-        return candidate_character_name(name)
-
-    @staticmethod
-    def _has_malformed_parenthetical_annotation(name: str) -> bool:
-        return has_malformed_parenthetical_annotation(name)
-
-    @staticmethod
-    def _looks_like_generic_character_reference(name: str) -> bool:
-        return looks_like_generic_character_reference(name)
-
-    @staticmethod
-    def _normalize_character_reference(name: str) -> str:
-        return normalize_character_reference(name)
-
-    @staticmethod
-    def _looks_like_non_character_reference(name: str) -> bool:
-        return looks_like_non_character_reference(name)
-
-    @staticmethod
-    def _is_absence_only_state_change(change) -> bool:  # noqa: ANN001
-        if str(getattr(change, "field", "") or "").strip().lower() not in {
-            "existence",
-            "status",
-            "availability",
-        }:
-            return False
-        text = " ".join(
-            str(getattr(change, attr, "") or "")
-            for attr in ("old_value", "new_value", "reason")
-        )
-        return any(keyword in text for keyword in ABSENCE_ONLY_CHANGE_KEYWORDS)

@@ -14,7 +14,7 @@ from forwin.models import (
     Project,
 )
 from forwin.models.base import get_engine, get_session_factory, init_db
-from forwin.planning.future_plan_auditor import (
+from forwin.planning.future_plan_audit import (
     FuturePlanAuditIssue,
     FuturePlanAuditRepository,
     FuturePlanAuditRun,

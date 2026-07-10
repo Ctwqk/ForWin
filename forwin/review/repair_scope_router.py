@@ -12,7 +12,6 @@ class RepairScopeKind(StrEnum):
 
     OPERATOR = "operator"
     ACTIVE_RULES = "active_rules"
-    SUBWORLD = "subworld"
     CHAPTER_PLAN = "chapter_plan"
     DRAFT = "draft"
 
@@ -38,8 +37,6 @@ SIGNAL_KIND_TO_SCOPE: dict[str, RepairScopeKind] = {
     SignalKind.form_invariant_drift.value: RepairScopeKind.CHAPTER_PLAN,
     SignalKind.countdown_non_monotonic.value: RepairScopeKind.ACTIVE_RULES,
     SignalKind.active_rule_missing.value: RepairScopeKind.ACTIVE_RULES,
-    SignalKind.subworld_admission_missing_canon_entity.value: RepairScopeKind.SUBWORLD,
-    SignalKind.subworld_admission_unauthorized_new_entity.value: RepairScopeKind.DRAFT,
     SignalKind.form_open_signal_persisting.value: RepairScopeKind.DRAFT,
     SignalKind.personality_drift.value: RepairScopeKind.DRAFT,
     SignalKind.placeholder_leakage.value: RepairScopeKind.DRAFT,

@@ -1,73 +1,9 @@
 from __future__ import annotations
 
-from forwin.naming.entity_registrar import EntityRegistrar, LLMEntityRegistrationClassifier
+from forwin.naming.entity_registrar import EntityRegistrar, LLMEntityAdmissionClassifier
+from forwin.checker.reference_classifier import normalize_character_reference
 from forwin.protocol.writer import WriterOutput
-from forwin.review.decision.rules.final_residual import is_force_acceptable_nonblocking_issue
 from forwin.orchestrator_loop_core.common import *
-
-
-def _normalize_nonblocking_issue(issue: ContinuityIssue) -> tuple[ContinuityIssue, bool]:
-    if (
-        str(getattr(issue, "severity", "") or "") != "error"
-        or not is_force_acceptable_nonblocking_issue(issue)
-    ):
-        return issue, False
-    original_result = dict(getattr(issue, "original_result", {}) or {})
-    original_result.setdefault("normalized_from_severity", "error")
-    original_result.setdefault(
-        "normalization_reason",
-        "nonblocking_subworld_admission",
-    )
-    return issue.model_copy(
-        update={
-            "severity": "warning",
-            "original_result": original_result,
-        }
-    ), True
-
-
-def _normalize_nonblocking_issues(
-    issues: list[ContinuityIssue],
-) -> tuple[list[ContinuityIssue], bool]:
-    normalized: list[ContinuityIssue] = []
-    changed = False
-    for issue in issues:
-        normalized_issue, issue_changed = _normalize_nonblocking_issue(issue)
-        normalized.append(normalized_issue)
-        changed = changed or issue_changed
-    return normalized, changed
-
-
-def normalize_nonblocking_review_verdict(review: ReviewVerdict) -> ReviewVerdict:
-    issues, issues_changed = _normalize_nonblocking_issues(list(review.issues or []))
-    residual_issues, residual_changed = _normalize_nonblocking_issues(
-        list(review.residual_review_issues or [])
-    )
-    update: dict[str, object] = {}
-    if issues_changed:
-        update["issues"] = issues
-    if residual_changed:
-        update["residual_review_issues"] = residual_issues
-    if issues_changed and review.verdict == "fail" and not any(
-        str(issue.severity or "") == "error" for issue in issues
-    ):
-        update["verdict"] = "warn" if issues else "pass"
-        if str(review.recommended_action or "") in {
-            "",
-            "rewrite",
-            "pause_for_review",
-            "manual_review",
-        }:
-            update["recommended_action"] = "continue"
-        notes = list(review.review_notes or [])
-        note = "nonblocking subworld admission issue normalized to warning"
-        if note not in notes:
-            notes.append(note)
-        update["review_notes"] = notes
-    if not update:
-        return review
-    return review.model_copy(update=update)
-
 
 def _persist_draft_and_review(
     self,
@@ -153,9 +89,9 @@ def _review_current_output(
         continuity_checker=checker,
         reviewer_skill_layers=reviewer_skill_layers,
     )
-    return normalize_nonblocking_review_verdict(review)
+    return review
 
-def _register_writer_output_entities(
+def _plan_writer_output_entities(
     self,
     *,
     session: Session,
@@ -164,17 +100,13 @@ def _register_writer_output_entities(
     writer_output: WriterOutput,
 ) -> WriterOutput:
     llm_client = getattr(self, "llm_client", None)
-    classifier = LLMEntityRegistrationClassifier(llm_client) if llm_client is not None else None
-    result = EntityRegistrar(session=session, classifier=classifier).register_writer_output(
+    classifier = LLMEntityAdmissionClassifier(llm_client) if llm_client is not None else None
+    result = EntityRegistrar(session=session, classifier=classifier).plan_writer_output(
         project_id=project_id,
         chapter_number=chapter_number,
         writer_output=writer_output,
     )
-    if not result.plan_conflicts:
-        return result.writer_output
-    generation_meta = dict(result.writer_output.generation_meta or {})
-    generation_meta["entity_registration_plan_conflicts"] = list(result.plan_conflicts)
-    return result.writer_output.model_copy(update={"generation_meta": generation_meta})
+    return result.writer_output
 
 @staticmethod
 def _apply_canon_name_drift_autofix(
@@ -275,7 +207,7 @@ def _project_character_names(repo: StateRepository, project_id: str) -> set[str]
             continue
         raw_names = [getattr(entity, "name", "") or "", *(getattr(entity, "aliases", []) or [])]
         for raw_name in raw_names:
-            name = ContinuityChecker._normalize_character_reference(str(raw_name or ""))
+            name = normalize_character_reference(str(raw_name or ""))
             if name:
                 names.add(name)
     return names
@@ -553,4 +485,4 @@ def _review_has_structural_repair_issue(review: ReviewVerdict) -> bool:
 
 
 
-__all__ = ['_persist_draft_and_review', '_review_current_output', '_register_writer_output_entities', '_apply_canon_name_drift_autofix', '_apply_placeholder_leakage_autofix', '_project_character_names', '_replace_canon_name_strings', '_review_event_payload', '_review_issue_payloads', '_record_map_movement_review_issues', '_review_canon_risk', '_load_json_list', '_chapter_plan_snapshot', '_band_plan_snapshot', '_repair_verification_issue', '_review_with_repair_verification', '_repair_policy_requested_scope', '_review_has_structural_repair_issue']
+__all__ = ['_persist_draft_and_review', '_review_current_output', '_plan_writer_output_entities', '_apply_canon_name_drift_autofix', '_apply_placeholder_leakage_autofix', '_project_character_names', '_replace_canon_name_strings', '_review_event_payload', '_review_issue_payloads', '_record_map_movement_review_issues', '_review_canon_risk', '_load_json_list', '_chapter_plan_snapshot', '_band_plan_snapshot', '_repair_verification_issue', '_review_with_repair_verification', '_repair_policy_requested_scope', '_review_has_structural_repair_issue']

@@ -9,10 +9,12 @@ from .culture_name_generator import (
     generate,
 )
 from .entity_registrar import (
+    EntityAdmissionResult,
     EntityRegistrar,
-    EntityRegistrationResult,
-    LLMEntityRegistrationClassifier,
+    LLMEntityAdmissionClassifier,
+    writer_output_admission_fingerprint,
 )
+from .types import EntityAdmissionAction, EntityAdmissionDecision, EntityAdmissionPlan
 
 __all__ = [
     "CULTURES",
@@ -21,7 +23,11 @@ __all__ = [
     "CultureLexicon",
     "CultureNameGenerator",
     "generate",
+    "EntityAdmissionAction",
+    "EntityAdmissionDecision",
+    "EntityAdmissionPlan",
+    "EntityAdmissionResult",
     "EntityRegistrar",
-    "EntityRegistrationResult",
-    "LLMEntityRegistrationClassifier",
+    "LLMEntityAdmissionClassifier",
+    "writer_output_admission_fingerprint",
 ]

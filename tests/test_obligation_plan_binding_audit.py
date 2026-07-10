@@ -4,7 +4,7 @@ import json
 
 from forwin.models import ChapterPlan
 from forwin.narrative_obligations.types import NarrativeObligation
-from forwin.planning.future_plan_auditor import FuturePlanAuditor
+from forwin.planning.future_plan_audit import FuturePlanAuditor
 
 
 def test_future_plan_auditor_binds_deadline_plan_to_missing_obligation() -> None:

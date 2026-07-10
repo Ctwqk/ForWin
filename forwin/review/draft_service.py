@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import inspect
+from pydantic import ValidationError
+
+from forwin.naming import EntityAdmissionPlan, writer_output_admission_fingerprint
 from forwin.observability.context import OperationContext
 from forwin.observability.ports import NullObservability
 from forwin.protocol.context import ChapterContextPack
@@ -229,6 +232,8 @@ class DraftReviewService:
                     writer_output,
                 )
                 span.metric("issue_count", len(getattr(publisher_compliance, "issues", []) or []))
+        entity_admission_issues = self._entity_admission_issues(writer_output)
+        entity_admission_verdict = "fail" if entity_admission_issues else "pass"
         issues = [
             *self._normalize_issues(continuity.issues, reviewer="continuity"),
             *self._normalize_issues(governance.issues, reviewer="governance"),
@@ -236,6 +241,7 @@ class DraftReviewService:
             *self._normalize_issues(map_movement.issues, reviewer="map_movement"),
             *self._normalize_issues(personality_review.issues, reviewer="personality"),
             *self._normalize_issues(publisher_compliance.issues, reviewer="publisher_compliance"),
+            *entity_admission_issues,
             *canon_quality_issues,
         ]
         verdict = self._merge_verdicts(
@@ -245,6 +251,7 @@ class DraftReviewService:
             map_movement.verdict,
             personality_review.verdict,
             publisher_compliance.verdict,
+            entity_admission_verdict,
             quality_verdict,
         )
         repair_instruction = None
@@ -580,6 +587,71 @@ class DraftReviewService:
         report["warning_signals"] = warnings
         report["blocking"] = bool(blocking)
         return report
+
+    @staticmethod
+    def _entity_admission_issues(
+        writer_output: WriterOutput,
+    ) -> list[ContinuityIssue]:
+        generation_meta = (
+            writer_output.generation_meta
+            if isinstance(writer_output.generation_meta, dict)
+            else {}
+        )
+        payload = generation_meta.get("entity_admission_plan")
+        if not isinstance(payload, dict):
+            return [DraftReviewService._invalid_entity_admission_issue("missing plan")]
+        try:
+            plan = EntityAdmissionPlan.model_validate(payload)
+        except ValidationError:
+            return [DraftReviewService._invalid_entity_admission_issue("invalid plan")]
+        if plan.candidate_fingerprint != writer_output_admission_fingerprint(writer_output):
+            return [DraftReviewService._invalid_entity_admission_issue("stale plan")]
+        decisions = {decision.mention_name: decision for decision in plan.decisions}
+        return [
+            ContinuityIssue(
+                rule_name="entity_admission_plan_conflict",
+                severity="error",
+                description=(
+                    f"实体准入计划拒绝「{name}」进入本章："
+                    f"{str(getattr(decisions.get(name), 'reason', '') or 'plan conflict')}"
+                ),
+                entity_names=[name],
+                reviewer="entity_registrar",
+                issue_type="entity_admission_plan_conflict",
+                target_scope="operator",
+                evidence_refs=[f"entity_admission:{name}"],
+                suggested_fix="回到章节计划明确该角色，或改写正文移除该命名实体。",
+                source_layer="entity_admission",
+                source_analyzer="EntityRegistrar",
+                source_mode="primary",
+                blocking_origin="entity_admission",
+                blocking=True,
+                original_result=(
+                    decisions[name].model_dump(mode="json")
+                    if name in decisions
+                    else {}
+                ),
+            )
+            for name in plan.plan_conflicts
+        ]
+
+    @staticmethod
+    def _invalid_entity_admission_issue(reason: str) -> ContinuityIssue:
+        return ContinuityIssue(
+            rule_name="entity_admission_plan_invalid",
+            severity="error",
+            description=f"实体准入计划不可用：{reason}。",
+            reviewer="entity_registrar",
+            issue_type="entity_admission_plan_invalid",
+            target_scope="operator",
+            evidence_refs=[f"entity_admission:{reason}"],
+            suggested_fix="重新生成当前候选稿的实体准入计划。",
+            source_layer="entity_admission",
+            source_analyzer="EntityRegistrar",
+            source_mode="primary",
+            blocking_origin="entity_admission",
+            blocking=True,
+        )
 
     @staticmethod
     def _merge_verdicts(*verdicts: str) -> str:

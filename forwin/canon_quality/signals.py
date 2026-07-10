@@ -31,8 +31,6 @@ class SignalKind(StrEnum):
     faction_relation_reversal = "faction_relation_reversal"
     protagonist_resource_debt_mismatch = "protagonist_resource_debt_mismatch"
     location_teleport = "location_teleport"
-    subworld_admission_missing_canon_entity = "subworld_admission_missing_canon_entity"
-    subworld_admission_unauthorized_new_entity = "subworld_admission_unauthorized_new_entity"
     personality_drift = "personality_drift"
     active_rule_missing = "active_rule_missing"
     writer_prompt_assembly_error = "writer_prompt_assembly_error"

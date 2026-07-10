@@ -42,8 +42,8 @@ def _suspected_root_cause(signals: list[RoutedSignal]) -> str:
     kinds = {str(signal.kind or "") for signal in signals}
     if any(kind in kinds for kind in {"form_schema_invalid", "writer_prompt_assembly_error"}):
         return "infrastructure"
-    if any(kind.startswith("subworld_admission_") for kind in kinds):
-        return "subworld_admission"
+    if any(kind.startswith("entity_admission_") for kind in kinds):
+        return "entity_admission"
     if any("countdown" in kind or "active_rule" in kind for kind in kinds):
         return "active_rules"
     if kinds:
@@ -54,8 +54,8 @@ def _suspected_root_cause(signals: list[RoutedSignal]) -> str:
 def _suggested_actions(root_cause: str, signals: list[RoutedSignal]) -> list[str]:
     if root_cause == "infrastructure":
         return ["inspect form schema/coercion error before invoking writer repair"]
-    if root_cause == "subworld_admission":
-        return ["admit known canon entity to chapter subworld roster or register new entity explicitly"]
+    if root_cause == "entity_admission":
+        return ["inspect the EntityRegistrar decision ledger and resolve its plan conflict"]
     if root_cause == "active_rules":
         return ["verify trigger quote and register or revoke the active rule in canon state"]
     return [f"inspect signal {signals[0].kind} and choose the correct repair layer"] if signals else ["inspect repair history"]

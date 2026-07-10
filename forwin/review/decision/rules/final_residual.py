@@ -11,7 +11,8 @@ from ..types import Decision, DecisionInput, DecisionRule
 
 _HARD_ISSUE_TYPES = {
     "continuity",
-    "subworld_admission",
+    "entity_admission_plan_conflict",
+    "entity_admission_plan_invalid",
     "future_constraint",
     "future_resource_preservation",
     "intra_band_consistency",
@@ -25,19 +26,6 @@ _SOFT_ISSUE_TYPES = {
     "director_imbalance",
     "lint",
 }
-
-
-def is_force_acceptable_nonblocking_issue(issue) -> bool:
-    rule_name = str(getattr(issue, "rule_name", "") or "")
-    issue_type = str(getattr(issue, "issue_type", "") or "")
-    issue_group = str(getattr(issue, "issue_group", "") or "")
-    return (
-        rule_name == "sub_world_unknown_named_entity"
-        and issue_type == "subworld_admission"
-        and issue_group == "director_imbalance"
-        and not bool(getattr(issue, "blocking", False))
-        and not str(getattr(issue, "blocking_origin", "") or "").strip()
-    )
 
 
 class FinalResidualPolicy:
@@ -77,7 +65,6 @@ class FinalResidualPolicy:
                 for issue in review.issues
                 if str(issue.severity or "") == "error"
                 and str(issue.issue_type or "") in _HARD_ISSUE_TYPES
-                and not is_force_acceptable_nonblocking_issue(issue)
             ),
             None,
         )
@@ -97,7 +84,6 @@ class FinalResidualPolicy:
                 for issue in review.issues
                 if str(issue.severity or "") == "error"
                 and str(issue.issue_type or "") not in _SOFT_ISSUE_TYPES
-                and not is_force_acceptable_nonblocking_issue(issue)
             ),
             None,
         )

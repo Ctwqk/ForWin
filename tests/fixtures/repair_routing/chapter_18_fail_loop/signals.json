@@ -10,7 +10,7 @@
     "severity": "error"
   },
   {
-    "kind": "subworld_admission_missing_canon_entity",
+    "kind": "entity_admission_plan_conflict",
     "subject_key": "角色A",
     "severity": "error"
   }

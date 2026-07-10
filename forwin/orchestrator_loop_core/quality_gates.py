@@ -33,7 +33,6 @@ _ENGINE_OUTCOME_TO_REVIEW_ACTION = {
     "band_patch": "defer_with_band_plan_patch",
     "arc_patch": "defer_with_arc_plan_patch",
     "book_patch": "book_replan_required",
-    "subworld_admission_patch": "subworld_admission_patch",
     "commit_with_obligation": "commit_with_obligation",
     "manual_review": "manual_review",
     "system_block": "block",

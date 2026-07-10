@@ -60,7 +60,6 @@ CHAPTER_REPAIR_TEST_PATHS = [
     REPO_ROOT / "tests" / "test_form_coercion_dict_bool.py",
     REPO_ROOT / "tests" / "test_repair_loop_detection.py",
     REPO_ROOT / "tests" / "test_repair_scope_router_dispatch.py",
-    REPO_ROOT / "tests" / "test_subworld_admission_auto_population.py",
 ]
 
 LOCAL_REWRITE_STORY_TERMS = (
@@ -77,7 +76,6 @@ ALLOWED_PRODUCTION_MECHANISM_FILES: set[str] = {
     "forwin/orchestrator/loop.py",
     "forwin/orchestrator_loop_core/repair_loop.py",
     "forwin/orchestrator_loop_core/repair_patches.py",
-    "forwin/planning/future_plan_auditor.py",
     "forwin/planning/future_plan_audit/helpers.py",
     "forwin/writer/prompts.py",
 }

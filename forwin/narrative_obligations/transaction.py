@@ -11,7 +11,7 @@ from forwin.models.narrative_obligation import NarrativeObligationRow
 from forwin.models.phase import BandExperiencePlan
 from forwin.models.project import ArcPlanVersion, ChapterPlan
 from forwin.planning.band_plan_patcher import BandPlanPatcher
-from forwin.planning.future_plan_auditor import FuturePlanAuditor
+from forwin.planning.future_plan_audit import FuturePlanAuditor
 from forwin.planning.plan_patch_validator import PlanPatchValidator
 
 from .budget import evaluate_obligation_budget

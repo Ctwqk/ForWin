@@ -19,8 +19,7 @@ _HARD_AUTO_RETRY_REVIEWERS = {
     "canon_quality",
     "active_rule",
     "active_rules",
-    "subworld",
-    "subworld_admission",
+    "entity_registrar",
 }
 _HARD_AUTO_RETRY_ISSUE_TYPES = {
     "dead_character_resurrection",
@@ -33,9 +32,8 @@ _HARD_AUTO_RETRY_ISSUE_TYPES = {
     "protagonist_resource_debt_mismatch",
     "location_teleport",
     "impossible_location_teleport",
-    "subworld_admission_missing_canon_entity",
-    "subworld_admission_unauthorized_new_entity",
-    "sub_world_unknown_named_entity",
+    "entity_admission_plan_conflict",
+    "entity_admission_plan_invalid",
     "active_rule_missing",
     "active_rule_violation",
 }

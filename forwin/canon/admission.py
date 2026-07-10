@@ -9,6 +9,7 @@ from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.config import InfrastructureConfig
 from forwin.governance import DecisionEventType
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
+from forwin.naming import EntityRegistrar
 from forwin.orchestrator_loop_core import governance, quality_gates, world_projection
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
@@ -18,6 +19,7 @@ from forwin.state.updater import StateUpdater
 from forwin.storage.artifacts import ArtifactStore
 
 from .types import CanonAdmissionOutcome
+from .entity_admission import EntityAdmissionCommitter
 
 
 logger = logging.getLogger(__name__)
@@ -91,6 +93,12 @@ class CanonAdmissionService:
                     block_kind="canon_quality",
                     canon_gate_result=quality_outcome.gate_result,
                 )
+            entity_admission_plan = EntityRegistrar(
+                session=session
+            ).verify_writer_output_admission(
+                project_id=project_id,
+                writer_output=writer_output,
+            )
             book_state_blocked_path = world_projection._commit_book_state_canon(
                 runtime,
                 session=session,
@@ -106,12 +114,9 @@ class CanonAdmissionService:
                     blocked_path=book_state_blocked_path,
                     block_kind="book_state",
                 )
-            world_projection._validate_subworld_admission(
-                repo=repo,
+            EntityAdmissionCommitter(session).apply(
                 project_id=project_id,
-                chapter_number=chapter_number,
-                writer_output=writer_output,
-                verdict=verdict,
+                plan=entity_admission_plan,
             )
             world_projection._ensure_genesis_canon_seed_entities(
                 session=session,

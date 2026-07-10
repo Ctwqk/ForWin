@@ -12,7 +12,6 @@ FIRST_BATCH_LIMITS = {
     "forwin/book_genesis.py": 250,
     "forwin/api.py": 700,
     "forwin/api_project_ops.py": 300,
-    "forwin/planning/future_plan_auditor.py": 250,
 }
 SECOND_BATCH_SHELL_LIMITS = {
     "forwin/api_project_payloads.py": 250,
@@ -31,7 +30,7 @@ def test_giant_module_public_imports_remain_available() -> None:
     from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
     from forwin.context.assembler import ChapterContextAssembler, assemble_context
     from forwin.orchestrator.loop import RunResult, WritingOrchestrator
-    from forwin.planning.future_plan_auditor import FuturePlanAuditor, FuturePlanAuditRun
+    from forwin.planning.future_plan_audit import FuturePlanAuditor, FuturePlanAuditRun
     from forwin.retrieval.broker import RetrievalBroker
     from forwin.canon_quality.chapter_review_form.service import review_chapter_with_form
     from forwin.writer.llm_client import LLMClient

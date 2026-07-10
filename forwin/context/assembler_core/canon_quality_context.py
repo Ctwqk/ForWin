@@ -68,7 +68,7 @@ def _build_canon_quality_context(
     try:
         from forwin.canon_quality.repository import CanonQualityRepository
         from forwin.narrative_obligations.repository import NarrativeObligationRepository
-        from forwin.planning.future_plan_auditor import FuturePlanAuditRepository
+        from forwin.planning.future_plan_audit import FuturePlanAuditRepository
 
         repo = CanonQualityRepository(session)
         obligation_repo = NarrativeObligationRepository(session)

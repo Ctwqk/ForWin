@@ -10,7 +10,6 @@ RepairScope = Literal[
     "draft",
     "chapter_plan",
     "band_plan",
-    "subworld",
     "active_rules",
     "operator",
     "scene",
@@ -42,7 +41,7 @@ FinalResidualDecisionKind = Literal[
 CanonRiskLevel = Literal["low", "high"]
 
 _V4_REPAIR_SCOPES = {"scene", "chapter", "band", "arc", "world_model"}
-_METADATA_REPAIR_SCOPES = {"subworld", "active_rules", "operator"}
+_METADATA_REPAIR_SCOPES = {"active_rules", "operator"}
 _KNOWN_REPAIR_SCOPES = {"draft", "chapter_plan", "band_plan", *_METADATA_REPAIR_SCOPES, *_V4_REPAIR_SCOPES}
 
 

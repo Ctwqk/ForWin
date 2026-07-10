@@ -502,7 +502,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
                     title="第三章",
                     status="needs_review",
                     repair_attempt_count=3,
-                    residual_review_issues_json='[{"rule_name":"sub_world_unknown_named_entity"}]',
+                    residual_review_issues_json='[{"rule_name":"entity_admission_plan_conflict"}]',
                     canon_risk_level="high",
                 )
             )

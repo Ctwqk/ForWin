@@ -298,12 +298,15 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
         "WritingOrchestrator._band_scope_candidates",
         "WritingOrchestrator._band_row_by_id",
         "WritingOrchestrator._collect_subworld_candidate_names",
+        "WritingOrchestrator._future_plan_audit_plans",
+        "WritingOrchestrator._future_plan_audit_band_rows",
+        "WritingOrchestrator._register_writer_output_entities",
     ):
         assert removed_assignment not in orchestrator_service
     assert sum(
         line.startswith("WritingOrchestrator._")
         for line in orchestrator_service.splitlines()
-    ) <= 89
+    ) <= 87
     assert "WritingOrchestrator" not in _read("forwin/orchestrator_loop_core/__init__.py")
 
 

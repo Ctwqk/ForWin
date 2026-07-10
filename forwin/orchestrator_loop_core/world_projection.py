@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from forwin.review.decision.rules.final_residual import is_force_acceptable_nonblocking_issue
 from forwin.subworld_manager import SubWorldManager
 from forwin.orchestrator_loop_core.common import *
-from forwin.orchestrator_loop_core.review_autofix import _project_character_names
 
 _EVENT_STUB_ENTITY_KINDS = {"location", "faction", "item", "rule"}
 _EVENT_STUB_KIND_ALIASES = {
@@ -563,128 +561,6 @@ def _ensure_genesis_canon_seed_entities(
     if changed:
         SubWorldManager().ensure_registry(session, project_id)
 
-@staticmethod
-def _collect_subworld_candidate_names(
-    repo: StateRepository,
-    project_id: str,
-    writer_output: WriterOutput,
-) -> set[str]:
-    names: set[str] = set()
-    maybe_event_names: set[str] = set()
-    maybe_state_change_names: set[str] = set()
-    absence_only_names = {
-        name
-        for change in writer_output.state_changes
-        if change.entity_kind == "character"
-        and ContinuityChecker._is_absence_only_state_change(change)
-        for name in [ContinuityChecker._candidate_character_name(change.entity_name)]
-        if name
-    }
-    for mention in getattr(writer_output, "entity_mentions", []):
-        if (
-            getattr(mention, "entity_kind", "") == "character"
-            and bool(getattr(mention, "is_named", False))
-            and bool(getattr(mention, "is_on_stage", True))
-        ):
-            entity_name = ContinuityChecker._candidate_character_name(
-                getattr(mention, "entity_name", "")
-            )
-            if entity_name and entity_name not in absence_only_names:
-                names.add(entity_name)
-    for change in writer_output.state_changes:
-        if (
-            change.entity_kind == "character"
-            and not ContinuityChecker._is_absence_only_state_change(change)
-        ):
-            entity_name = ContinuityChecker._candidate_character_name(change.entity_name)
-            if not entity_name:
-                continue
-            maybe_state_change_names.add(entity_name)
-    for event in writer_output.new_events:
-        for entity_name in event.involved_entity_names:
-            normalized = ContinuityChecker._candidate_character_name(entity_name)
-            if normalized and normalized not in absence_only_names:
-                maybe_event_names.add(normalized)
-    for scene in writer_output.scene_outputs:
-        for entity_name in scene.involved_entities:
-            normalized = ContinuityChecker._candidate_character_name(entity_name)
-            if normalized and normalized not in absence_only_names:
-                names.add(normalized)
-    if maybe_event_names:
-        resolved = repo.get_entities_by_names(project_id, sorted(maybe_event_names))
-        for entity_name in maybe_event_names:
-            entity = resolved.get(entity_name)
-            if entity is not None and entity.kind == "character":
-                names.add(entity_name)
-    if maybe_state_change_names:
-        resolved = repo.get_entities_by_names(project_id, sorted(maybe_state_change_names))
-        for entity_name in maybe_state_change_names:
-            entity = resolved.get(entity_name)
-            if entity is not None and entity.kind == "character":
-                names.add(entity_name)
-    return {name for name in names if len(name) <= 12}
-
-def _nonblocking_review_subworld_names(verdict: ReviewVerdict | None) -> set[str]:
-    if verdict is None:
-        return set()
-    names: set[str] = set()
-    for issue in [*(verdict.issues or []), *(verdict.residual_review_issues or [])]:
-        if not is_force_acceptable_nonblocking_issue(issue):
-            continue
-        for raw_name in getattr(issue, "entity_names", []) or []:
-            raw_text = str(raw_name or "").strip()
-            candidate = ContinuityChecker._candidate_character_name(raw_text)
-            normalized = ContinuityChecker._normalize_character_reference(raw_text)
-            if candidate:
-                names.add(candidate)
-                names.add(ContinuityChecker._normalize_character_reference(candidate))
-            if normalized:
-                names.add(normalized)
-    return names
-
-def _validate_subworld_admission(
-    *,
-    repo: StateRepository,
-    project_id: str,
-    chapter_number: int,
-    writer_output: WriterOutput,
-    verdict: ReviewVerdict | None = None,
-) -> None:
-    allowed_names = {
-        ContinuityChecker._normalize_character_reference(name)
-        for name in repo.get_allowed_entity_names(project_id, chapter_number)
-    }
-    allowed_names.update(
-        ContinuityChecker._normalize_character_reference(anchor.canonical_name)
-        for anchor in ContinuityChecker(repo)._canon_name_anchors(project_id)
-    )
-    allowed_names.update(
-        ContinuityChecker._normalize_character_reference(name)
-        for name in _project_character_names(repo, project_id)
-    )
-    if not allowed_names:
-        return
-    unknown = sorted(
-        name
-        for name in _collect_subworld_candidate_names(repo, project_id, writer_output)
-        if name not in allowed_names
-    )
-    if unknown:
-        accepted_nonblocking_names = _nonblocking_review_subworld_names(verdict)
-        if accepted_nonblocking_names:
-            unknown = [
-                name
-                for name in unknown
-                if name not in accepted_nonblocking_names
-                and ContinuityChecker._normalize_character_reference(name)
-                not in accepted_nonblocking_names
-            ]
-    if unknown:
-        raise ValueError(
-            "Subworld admission rejected chapter "
-            f"{chapter_number}: {', '.join(unknown)}"
-        )
-
 def _run_phase3_pass(
     self,
     *,
@@ -774,4 +650,4 @@ def _run_phase3_pass(
 
 
 
-__all__ = ['_prompt_trace_success_summary', '_commit_book_state_canon', '_filter_resolvable_events', '_ensure_event_mentioned_non_character_entities', '_filter_resolvable_state_changes', '_ensure_genesis_canon_seed_entities', '_collect_subworld_candidate_names', '_nonblocking_review_subworld_names', '_validate_subworld_admission', '_run_phase3_pass']
+__all__ = ['_prompt_trace_success_summary', '_commit_book_state_canon', '_filter_resolvable_events', '_ensure_event_mentioned_non_character_entities', '_filter_resolvable_state_changes', '_ensure_genesis_canon_seed_entities', '_run_phase3_pass']

@@ -24,9 +24,9 @@ class AutoDecisionEngine:
             )
         return Decision(
             outcome="manual_review",
-            reason="no review-engine rule matched",
+            reason="no decision rule matched",
             rule_id="no_rule_matched",
             missing_evidence=["matching_rule"],
-            routed_from="review_engine",
+            routed_from="decision_rules",
             sub_action={},
         )

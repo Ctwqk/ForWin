@@ -5,8 +5,6 @@ import os
 import uuid
 from pathlib import Path
 
-from forwin.config import InfrastructureConfig
-
 from .cases import default_eval_cases
 from .profiles import load_eval_profiles, profile_requires_api_key
 from .runner import EvalRunConfig, LLMReliabilityRunner
@@ -21,11 +19,9 @@ def run_eval_from_args(args) -> int:  # noqa: ANN001
         print("--base-url targets a deployed ForWin instance; pass --allow-production-data explicitly.")
         return 2
 
-    config = InfrastructureConfig.from_env()
     run_id = str(getattr(args, "run_id", "") or "").strip() or f"llm-eval-{uuid.uuid4().hex[:12]}"
     profiles = load_eval_profiles(
         manifest_path=str(getattr(args, "manifest", "") or ""),
-        runtime_settings_path=str(getattr(args, "runtime_settings_path", "") or config.runtime_settings_path),
         selected_ids=str(getattr(args, "profiles", "") or ""),
     )
     if not profiles:

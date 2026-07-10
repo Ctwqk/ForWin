@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from sqlalchemy import select
 
 from forwin.governance import DecisionEventType
@@ -14,6 +14,33 @@ from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ChapterPlan
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.protocol.writer import WriterOutput
+from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
+
+
+def _build_orchestrator(
+    database_url: str,
+    *,
+    writer_attention_retries: int | None = None,
+) -> WritingOrchestrator:
+    policy_payload = RuntimePolicy.for_profile("standard").model_dump(mode="python")
+    if writer_attention_retries is not None:
+        policy_payload["writer_attention_retries"] = writer_attention_retries
+    policy = RuntimePolicy.model_validate(policy_payload)
+    infrastructure = InfrastructureConfig(
+        database_url=database_url,
+        artifact_root="/tmp/forwin-writer-attention-tests",
+        retrieval_backend="qdrant",
+        qdrant_url=":memory:",
+        embedding_backend="hash",
+        minimax_api_key="",
+        minimax_model="fake-model",
+    )
+    return RuntimeContainer.from_config(
+        infrastructure,
+        policy=policy,
+        role="generation_worker",
+    ).build_writing_orchestrator()
 
 
 class WriterAttentionFallbackTests(unittest.TestCase):
@@ -41,14 +68,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
             engine = get_engine(db_path)
             init_db(engine)
 
-            orchestrator = WritingOrchestrator(
-                Config(
-                    database_url=db_path,
-                    minimax_api_key="",
-                    minimax_model="fake-model",
-                    operation_mode="blackbox",
-                )
-            )
+            orchestrator = _build_orchestrator(db_path)
             try:
                 preview_output = WriterOutput(
                     project_id="project-1",
@@ -111,14 +131,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
             engine = get_engine(db_path)
             init_db(engine)
 
-            orchestrator = WritingOrchestrator(
-                Config(
-                    database_url=db_path,
-                    minimax_api_key="",
-                    minimax_model="fake-model",
-                    operation_mode="blackbox",
-                )
-            )
+            orchestrator = _build_orchestrator(db_path)
             try:
                 preview_output = WriterOutput(
                     project_id="project-1",
@@ -195,14 +208,7 @@ class WriterAttentionFallbackTests(unittest.TestCase):
 
     def test_writer_call_receives_repair_model_preference(self) -> None:
         db_path = postgres_test_url("writer-repair-model-preference")
-        orchestrator = WritingOrchestrator(
-            Config(
-                database_url=db_path,
-                minimax_api_key="",
-                minimax_model="fake-model",
-                operation_mode="blackbox",
-            )
-        )
+        orchestrator = _build_orchestrator(db_path)
         try:
             captured: dict[str, str] = {}
 
@@ -262,15 +268,9 @@ class WriterAttentionFallbackTests(unittest.TestCase):
     def test_transient_llm_failure_stops_before_advancing_to_next_chapter(self) -> None:
         with TemporaryDirectory() as tmp:
             db_path = postgres_test_url("transient-llm")
-            orchestrator = WritingOrchestrator(
-                Config(
-                    database_url=db_path,
-                    minimax_api_key="",
-                    minimax_model="fake-model",
-                    operation_mode="blackbox",
-                    blackbox_writer_attention_retries=2,
-                    freeze_failed_candidates=False,
-                )
+            orchestrator = _build_orchestrator(
+                db_path,
+                writer_attention_retries=2,
             )
             try:
                 orchestrator.arc_director.plan_arc = lambda premise, genre, num_chapters: {

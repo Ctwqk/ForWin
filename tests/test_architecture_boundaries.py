@@ -285,3 +285,20 @@ def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
     assert "FinalAcceptanceGate" not in _read("forwin/runtime/container.py")
     assert "FinalAcceptanceGate" not in _read("forwin/orchestrator_loop_core/repair_loop.py")
     assert "FinalAcceptanceGate" in _read("forwin/review_engine/rules/final_acceptance.py")
+
+
+def test_removed_generation_modes_and_review_flags_stay_removed() -> None:
+    forbidden = (
+        "operation_mode",
+        "review_delegation_mode",
+        "review_engine_",
+        "chapter_blackbox_failure",
+        "reckless",
+    )
+    offenders: list[tuple[str, str]] = []
+    for path in sorted((ROOT / "forwin").rglob("*.py")):
+        source = path.read_text(encoding="utf-8")
+        relative = path.relative_to(ROOT).as_posix()
+        offenders.extend((relative, token) for token in forbidden if token in source)
+
+    assert offenders == []

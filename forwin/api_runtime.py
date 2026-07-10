@@ -12,7 +12,6 @@ from forwin.observability.ports import NullObservability
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
-from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.updater import StateUpdater
 
 
@@ -84,16 +83,12 @@ def _paused_chapters_message(result, *, prefix: str = "") -> str:
 def build_home_page_settings(
     *,
     base_config: InfrastructureConfig | None,
-    runtime_settings: RuntimeSettingsStore | None,
 ) -> dict[str, object]:
-    if runtime_settings is not None:
-        return runtime_settings.get()
     policy = RuntimePolicy.for_profile("standard")
     return {
         "api_key": "",
         "base_url": base_config.minimax_base_url if base_config else DEFAULT_MINIMAX_BASE_URL,
         "model": base_config.minimax_model if base_config else DEFAULT_MINIMAX_MODEL,
-        "operation_mode": "blackbox",
         "freeze_failed_candidates": policy.canon.hard_floor,
         "min_chapter_chars": policy.chapter_length.min_chars,
         "review_interval_chapters": policy.pause.review_interval_chapters,

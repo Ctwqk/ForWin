@@ -20,12 +20,11 @@ def build_final_acceptance_rules(gate: FinalAcceptanceGate | None = None) -> lis
 
 def _decision_from_final_gate(gate: FinalAcceptanceGate, input: DecisionInput) -> Decision:
     result = gate.evaluate(
-        operation_mode=input.operation_mode,
         review=input.review,
         verification=input.review.repair_verification,
     )
     return Decision(
-        outcome="auto_approve" if result.decision == "force_accept" else "manual_review",
+        outcome="accept" if result.decision == "force_accept" else "manual_review",
         reason=result.reason,
         rule_id="final_acceptance_gate",
         missing_evidence=[] if result.forceable else ["force_accept_conditions"],

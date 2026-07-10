@@ -376,7 +376,6 @@ def build_parser() -> argparse.ArgumentParser:
     eval_run.add_argument("--suite", default="medium", choices=["smoke", "medium"], help="测试套件")
     eval_run.add_argument("--profiles", default="", help="逗号分隔的 profile id，例如 minimax,kimi,codex-spark")
     eval_run.add_argument("--manifest", default="", help="独立 eval profile manifest JSON")
-    eval_run.add_argument("--runtime-settings-path", default="", help="runtime settings JSON 路径")
     eval_run.add_argument("--artifact-root", default="", help="输出 artifact root")
     eval_run.add_argument("--run-id", default="", help="指定 run id；默认自动生成")
     eval_run.add_argument("--rounds", type=int, default=0, help="每个 profile 的 direct probe 轮数；medium 默认 20，smoke 默认 1")

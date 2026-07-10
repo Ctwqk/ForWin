@@ -11,7 +11,6 @@ def test_decision_input_and_decision_are_serializable() -> None:
         review=ReviewVerdict(verdict="pass"),
         signals=[],
         open_obligations=[],
-        operation_mode="copilot",
         attempts_completed=0,
         prior_scope_history=[],
         budget=None,
@@ -20,7 +19,7 @@ def test_decision_input_and_decision_are_serializable() -> None:
     )
     decision = Decision(
         outcome="manual_review",
-        reason="shadow fixture",
+        reason="rule fixture",
         rule_id="fixture_manual_review",
         missing_evidence=[],
         routed_from="fixture",

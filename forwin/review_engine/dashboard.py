@@ -54,10 +54,6 @@ def _event_payload(event: Any) -> dict[str, Any]:
 
 def _status_chip(payload: dict[str, Any]) -> str:
     outcome = str(payload.get("outcome") or "")
-    rule_id = str(payload.get("rule_id") or "")
-    reason = str(payload.get("reason") or "")
     if outcome == "system_block":
         return "系统阻断"
-    if "policy_disabled" in rule_id or "policy disabled:" in reason:
-        return "可自动处理但策略关闭"
     return "需要人工判断"

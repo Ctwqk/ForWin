@@ -327,7 +327,6 @@ def _run_repair_loop_for_phase(
             review=current_review,
             signals=[],
             open_obligations=[],
-            operation_mode="blackbox",
             attempts_completed=len(phase_attempts),
             prior_scope_history=[
                 str(getattr(attempt, "repair_scope", "") or "")
@@ -339,20 +338,10 @@ def _run_repair_loop_for_phase(
         )
         repair_v2_decision = decide_repair_v2(repair_v2_input)
         repair_scope = str(repair_v2_decision.sub_action.get("scope") or "")
-        self._record_engine_decision_event(
+        self._record_rule_decision_event(
             updater=updater,
             decision=repair_v2_decision,
             decision_input=repair_v2_input,
-            shadow_mismatch=False,
-            live_or_shadow="live",
-            baseline_outcome="",
-            engine_outcome=repair_scope or str(repair_v2_decision.outcome or ""),
-            live_source="engine",
-            shadow_source="",
-            engine_live=True,
-            baseline_shadow_evaluated=False,
-            baseline_safety_net_used=False,
-            severe_mismatch=False,
             related_object_type="chapter_review",
             related_object_id=current_review_row.id,
             parent_event_id=str(current_review_event.id or ""),

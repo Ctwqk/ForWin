@@ -1,17 +1,48 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
+from forwin.generation.gate_delegation import GateResolution
 from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.runtime.policy import RuntimePolicy
 
 
 @dataclass(frozen=True)
 class ChapterReviewGateOutcome:
     should_apply_canon: bool
     gate_kind: str = ""
-    reckless_approved: bool = False
+    gate_approved: bool = False
     pause_required: bool = False
+
+
+def evaluate_candidate_gate(
+    *,
+    policy: RuntimePolicy,
+    verdict,
+    eligible: bool,
+    delegate: Callable[[], GateResolution],
+) -> ChapterReviewGateOutcome:
+    if not eligible or verdict.verdict not in {"pass", "warn"}:
+        return ChapterReviewGateOutcome(
+            should_apply_canon=False,
+            pause_required=True,
+        )
+    if policy.pause.gate_delegate == "human":
+        return ChapterReviewGateOutcome(
+            should_apply_canon=True,
+            pause_required=True,
+        )
+    resolution = delegate()
+    if resolution.approved:
+        return ChapterReviewGateOutcome(
+            should_apply_canon=True,
+            gate_approved=True,
+        )
+    return ChapterReviewGateOutcome(
+        should_apply_canon=True,
+        pause_required=True,
+    )
 
 
 def handle_chapter_review_gate(
@@ -20,7 +51,6 @@ def handle_chapter_review_gate(
     session,
     updater,
     project_id: str,
-    governance,
     chapter_plan,
     writer_output,
     verdict,
@@ -35,33 +65,27 @@ def handle_chapter_review_gate(
     failed_chapters: list[int],
     paused_chapters: list[int],
 ) -> ChapterReviewGateOutcome:
-    operation_mode = "blackbox"
-    should_apply_canon = (
-        verdict.verdict == "pass"
-        or (operation_mode == "blackbox" and verdict.verdict == "warn")
-        or force_accept_applied
-    )
+    eligible = verdict.verdict in {"pass", "warn"}
     review_interval = max(0, int(self.policy.pause.review_interval_chapters))
     gate_kind, gate_reason = _review_gate_details(
-        operation_mode=operation_mode,
         verdict=str(verdict.verdict or ""),
-        force_accept_applied=force_accept_applied,
-        should_apply_canon=should_apply_canon,
+        eligible=eligible,
         review_interval=review_interval,
         chapter_number=chapter_number,
         last_requested_chapter=last_requested_chapter,
     )
     if not gate_kind:
-        return ChapterReviewGateOutcome(should_apply_canon=should_apply_canon)
+        return ChapterReviewGateOutcome(should_apply_canon=eligible)
 
-    reckless_approved = False
-    if _is_reckless(governance):
-        reckless_approved = _delegate_chapter_gate(
+    evaluation = evaluate_candidate_gate(
+        policy=self.policy,
+        verdict=verdict,
+        eligible=eligible,
+        delegate=lambda: _delegate_chapter_gate(
             self,
             session=session,
             updater=updater,
             project_id=project_id,
-            governance=governance,
             gate_kind=gate_kind,
             gate_reason=gate_reason,
             chapter_plan=chapter_plan,
@@ -74,11 +98,12 @@ def handle_chapter_review_gate(
             review_interval=review_interval,
             chapter_number=chapter_number,
         )
-    if reckless_approved:
+    )
+    if evaluation.gate_approved:
         return ChapterReviewGateOutcome(
             should_apply_canon=True,
             gate_kind=gate_kind,
-            reckless_approved=True,
+            gate_approved=True,
         )
 
     updater.mark_chapter_status(
@@ -102,7 +127,7 @@ def handle_chapter_review_gate(
         paused_chapters=paused_chapters,
     )
     return ChapterReviewGateOutcome(
-        should_apply_canon=should_apply_canon,
+        should_apply_canon=evaluation.should_apply_canon,
         gate_kind=gate_kind,
         pause_required=True,
     )
@@ -110,21 +135,13 @@ def handle_chapter_review_gate(
 
 def _review_gate_details(
     *,
-    operation_mode: str,
     verdict: str,
-    force_accept_applied: bool,
-    should_apply_canon: bool,
+    eligible: bool,
     review_interval: int,
     chapter_number: int,
     last_requested_chapter: int,
 ) -> tuple[str, str]:
-    if operation_mode == "checkpoint":
-        return "chapter_operation_checkpoint", "checkpoint operation mode requires approval"
-    if operation_mode == "copilot" and verdict != "pass":
-        return "chapter_copilot_verdict", f"copilot verdict is {verdict}"
-    if operation_mode == "blackbox" and verdict == "fail" and not force_accept_applied:
-        return "chapter_blackbox_failure", "blackbox repair exhausted with fail verdict"
-    if not should_apply_canon:
+    if not eligible:
         return "chapter_acceptance_gate", f"verdict {verdict} is not automatically applicable"
     if (
         review_interval
@@ -141,7 +158,6 @@ def _delegate_chapter_gate(
     session,
     updater,
     project_id: str,
-    governance,
     gate_kind: str,
     gate_reason: str,
     chapter_plan,
@@ -153,7 +169,7 @@ def _delegate_chapter_gate(
     force_accept_applied: bool,
     review_interval: int,
     chapter_number: int,
-) -> bool:
+) -> GateResolution:
     latest_draft = (
         session.query(ChapterDraft)
         .filter(ChapterDraft.chapter_plan_id == chapter_plan.id)
@@ -168,10 +184,9 @@ def _delegate_chapter_gate(
             .order_by(ChapterReview.created_at.desc(), ChapterReview.id.desc())
             .first()
         )
-    outcome = self._delegate_reckless_review(
+    return self._resolve_gate_delegation(
         updater=updater,
         project_id=project_id,
-        governance=governance,
         gate_kind=gate_kind,
         scope="chapter",
         chapter_number=chapter_number,
@@ -197,17 +212,13 @@ def _delegate_chapter_gate(
             "repair_attempt_count": repair_attempt_count,
             "force_accept_applied": force_accept_applied,
             "review_interval_chapters": review_interval,
-            "governance": governance.model_dump(mode="json"),
+            "pause_policy": self.policy.pause.model_dump(mode="json"),
         },
     )
-    return bool(outcome is not None and outcome.approved)
 
 
-def _is_reckless(governance) -> bool:
-    return (
-        str(getattr(governance, "review_delegation_mode", "human") or "human")
-        == "reckless"
-    )
-
-
-__all__ = ["ChapterReviewGateOutcome", "handle_chapter_review_gate"]
+__all__ = [
+    "ChapterReviewGateOutcome",
+    "evaluate_candidate_gate",
+    "handle_chapter_review_gate",
+]

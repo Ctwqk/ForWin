@@ -9,8 +9,9 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from tests.postgres import postgres_test_url
+from forwin.checker.hard_floor import HardFloorResult
 from forwin.canon_quality.signals import CanonAdmissionGateResult
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models import base as base_module
 from forwin.models.base import Base, get_engine, get_session_factory
 from forwin.models.draft import ChapterDraft, ChapterReview
@@ -18,6 +19,7 @@ from forwin.models.governance import DecisionEvent
 from forwin.models.phase import ChapterRewriteAttempt
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.orchestrator.loop import WritingOrchestrator
+from forwin.orchestrator_loop_core import project_chapters as project_chapters_module
 from forwin.orchestrator_loop_core import quality_gates as quality_gates_module
 from forwin.orchestrator_loop_core import repair_loop as repair_loop_module
 from forwin.orchestrator_loop_core.quality_gates import (
@@ -33,6 +35,8 @@ from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
 from forwin.review_engine.rules.repair_v2 import decide_repair_v2
 from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
+from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
 
 
 def _session_factory():
@@ -43,6 +47,42 @@ def _session_factory():
 
 def _noop_decision_refs(*args, **kwargs):
     return []
+
+
+@pytest.fixture(autouse=True)
+def _isolate_canon_repair_from_hard_floor(monkeypatch):
+    monkeypatch.setattr(
+        project_chapters_module,
+        "run_hard_floor",
+        lambda **_kwargs: HardFloorResult(passed=True),
+    )
+
+
+def _build_orchestrator(
+    database_url: str,
+    *,
+    max_rewrites: int = 3,
+) -> WritingOrchestrator:
+    policy_payload = RuntimePolicy.for_profile("standard").model_dump(mode="python")
+    policy_payload["review"]["max_rewrites"] = max_rewrites
+    policy = RuntimePolicy.model_validate(policy_payload).with_user_settings(
+        manual_checkpoints=False,
+        band_checkpoint_action="continue",
+    )
+    infrastructure = InfrastructureConfig(
+        database_url=database_url,
+        artifact_root="/tmp/forwin-canon-repair-tests",
+        retrieval_backend="qdrant",
+        qdrant_url=":memory:",
+        embedding_backend="hash",
+        minimax_api_key="",
+        minimax_model="fake-model",
+    )
+    return RuntimeContainer.from_config(
+        infrastructure,
+        policy=policy,
+        role="generation_worker",
+    ).build_writing_orchestrator()
 
 
 class _RecordingConnection:
@@ -327,12 +367,12 @@ def test_force_accept_flags_latest_attempt_in_active_repair_phase(monkeypatch):
             return None
 
     class _Orchestrator:
-        config = SimpleNamespace(operation_mode="blackbox")
+        policy = RuntimePolicy.for_profile("standard")
 
         def _pause_requested(self) -> bool:
             return False
 
-        def _record_engine_decision_event(self, **_kwargs) -> None:
+        def _record_rule_decision_event(self, **_kwargs) -> None:
             return None
 
         def _record_decision_event(self, **_kwargs):
@@ -485,11 +525,7 @@ def test_canon_quality_gate_deferred_acceptance_short_circuits_before_admission_
             return SimpleNamespace(target_total_chapters=0)
 
     class _Orchestrator:
-        config = SimpleNamespace(
-            canon_quality_gate="strict",
-            chapter_review_form_mode="off",
-            chapter_review_form_min_blocking_confidence=0.8,
-        )
+        policy = RuntimePolicy.for_profile("standard")
         llm_client = None
 
         def _latest_draft_and_review_for_chapter(self, **_kwargs):
@@ -601,11 +637,7 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
             return SimpleNamespace(target_total_chapters=100)
 
     class _Orchestrator:
-        config = SimpleNamespace(
-            canon_quality_gate="strict",
-            chapter_review_form_mode="off",
-            chapter_review_form_min_blocking_confidence=0.8,
-        )
+        policy = RuntimePolicy.for_profile("standard")
         llm_client = None
 
         def _latest_draft_and_review_for_chapter(self, **_kwargs):
@@ -637,10 +669,11 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
     assert calls == ["draft_verify", "save_admission", "event"]
 
 
-def test_apply_canon_candidate_exception_without_freeze_returns_blocked_outcome(
+def test_apply_canon_candidate_exception_freezes_and_returns_blocked_outcome(
     monkeypatch,
 ):
     failed_rows: list[dict[str, object]] = []
+    frozen_rows: list[dict[str, object]] = []
 
     class _CandidateDraftRepo:
         def __init__(self, _session) -> None:
@@ -658,11 +691,12 @@ def test_apply_canon_candidate_exception_without_freeze_returns_blocked_outcome(
             self.rolled_back = True
 
     class _ArtifactStore:
-        def save_frozen_candidate(self, **_kwargs):
-            raise AssertionError("freeze_failed_candidates=False should not freeze")
+        def save_frozen_candidate(self, **kwargs):
+            frozen_rows.append(kwargs)
+            return "frozen/canon-update-failed.json"
 
     class _Orchestrator:
-        config = SimpleNamespace(freeze_failed_candidates=False)
+        policy = RuntimePolicy.for_profile("standard")
         artifact_store = _ArtifactStore()
 
         def _record_decision_event(self, **_kwargs) -> None:
@@ -685,16 +719,24 @@ def test_apply_canon_candidate_exception_without_freeze_returns_blocked_outcome(
         updater=object(),
         project_id="p",
         chapter_number=2,
-        writer_output=object(),
-        verdict=object(),
+        writer_output=WriterOutput(
+            project_id="p",
+            chapter_number=2,
+            title="第二章",
+            body="正文",
+            char_count=2,
+            end_of_chapter_summary="摘要",
+        ),
+        verdict=ReviewVerdict(verdict="pass", issues=[]),
     )
 
     assert isinstance(outcome, CanonApplyOutcome)
     assert outcome.blocked
-    assert outcome.blocked_path == ""
+    assert outcome.blocked_path == "frozen/canon-update-failed.json"
     assert outcome.block_kind == "canon_apply_error"
     assert session.rolled_back is True
-    assert failed_rows[0]["canon_artifact_path"] == ""
+    assert frozen_rows[0]["project_id"] == "p"
+    assert failed_rows[0]["canon_artifact_path"] == "frozen/canon-update-failed.json"
 
 
 def test_coerce_canon_apply_outcome_rejects_truthy_non_string_values():
@@ -715,7 +757,7 @@ def test_coerce_canon_apply_outcome_rejects_truthy_non_string_values():
         _coerce_canon_apply_outcome({"blocked_path": "legacy/path.json"})
 
 
-def test_canon_apply_exception_without_freeze_pauses_chapter_instead_of_accepting():
+def test_canon_apply_exception_pauses_chapter_instead_of_accepting():
     class PassReviewHub:
         def review(self, **_kwargs) -> ReviewVerdict:
             return ReviewVerdict(
@@ -725,18 +767,7 @@ def test_canon_apply_exception_without_freeze_pauses_chapter_instead_of_acceptin
             )
 
     db_path = postgres_test_url("canon-apply-exception-no-freeze")
-    orchestrator = WritingOrchestrator(
-        Config(
-            database_url=db_path,
-            minimax_api_key="",
-            minimax_model="fake-model",
-            chapter_review_form_mode="off",
-            operation_mode="blackbox",
-            freeze_failed_candidates=False,
-            auto_band_checkpoint=False,
-            manual_checkpoints_enabled=False,
-        )
-    )
+    orchestrator = _build_orchestrator(db_path)
     try:
         orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: _one_chapter_arc(
             "canon apply exception"
@@ -790,7 +821,6 @@ def test_canon_gate_block_review_routes_to_required_draft_scope():
             review=review,
             signals=[],
             open_obligations=[],
-            operation_mode="blackbox",
             attempts_completed=0,
             prior_scope_history=[],
             budget=None,
@@ -822,18 +852,7 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
             return ReviewVerdict(verdict="pass", issues=[])
 
     db_path = postgres_test_url("canon-repair-admission")
-    orchestrator = WritingOrchestrator(
-        Config(
-            database_url=db_path,
-            minimax_api_key="",
-            minimax_model="fake-model",
-            chapter_review_form_mode="off",
-            operation_mode="blackbox",
-            review_fail_max_rewrites=1,
-            auto_band_checkpoint=False,
-            manual_checkpoints_enabled=False,
-        )
-    )
+    orchestrator = _build_orchestrator(db_path, max_rewrites=1)
     apply_calls = {"count": 0}
     try:
         orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: {
@@ -936,18 +955,7 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts():
             )
 
     db_path = postgres_test_url("canon-repair-exhaustion-task6")
-    orchestrator = WritingOrchestrator(
-        Config(
-            database_url=db_path,
-            minimax_api_key="",
-            minimax_model="fake-model",
-            chapter_review_form_mode="off",
-            operation_mode="blackbox",
-            review_fail_max_rewrites=1,
-            auto_band_checkpoint=False,
-            manual_checkpoints_enabled=False,
-        )
-    )
+    orchestrator = _build_orchestrator(db_path, max_rewrites=1)
     try:
         orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: _one_chapter_arc(
             "canon repair exhaustion"
@@ -1035,18 +1043,7 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
             )
 
     db_path = postgres_test_url("canon-system-block-task6")
-    orchestrator = WritingOrchestrator(
-        Config(
-            database_url=db_path,
-            minimax_api_key="",
-            minimax_model="fake-model",
-            chapter_review_form_mode="off",
-            operation_mode="blackbox",
-            review_fail_max_rewrites=1,
-            auto_band_checkpoint=False,
-            manual_checkpoints_enabled=False,
-        )
-    )
+    orchestrator = _build_orchestrator(db_path, max_rewrites=1)
     try:
         orchestrator.arc_director.plan_arc = lambda _premise, _genre, _num_chapters: _one_chapter_arc(
             "canon system block"
@@ -1118,18 +1115,7 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
     canon_repair_force_accept,
 ):
     db_path = postgres_test_url("canon-repair-force-accept-fail")
-    orchestrator = WritingOrchestrator(
-        Config(
-            database_url=db_path,
-            minimax_api_key="",
-            minimax_model="fake-model",
-            chapter_review_form_mode="off",
-            operation_mode="blackbox",
-            review_fail_max_rewrites=1,
-            auto_band_checkpoint=False,
-            manual_checkpoints_enabled=False,
-        )
-    )
+    orchestrator = _build_orchestrator(db_path, max_rewrites=1)
     apply_calls = {"count": 0}
     repair_calls = {"count": 0}
     try:
@@ -1233,7 +1219,6 @@ def _canon_repair_decision_for_scope(raw_scope: object) -> tuple[ReviewVerdict, 
             review=review,
             signals=[],
             open_obligations=[],
-            operation_mode="blackbox",
             attempts_completed=0,
             prior_scope_history=[],
             budget=None,

@@ -10,10 +10,6 @@ from sqlalchemy import select
 from forwin.api_schemas import (
     CodexBridgeStatusResponse,
     GenerateRequest,
-    LLMDefaultProfileRequest,
-    LLMPreferencesRequest,
-    LLMProfileUpsertRequest,
-    LLMSettingsRequest,
 )
 from forwin.llm.codex_client import CodexBridgeClient
 from forwin.models.governance import DecisionEvent
@@ -29,7 +25,6 @@ logger = logging.getLogger(__name__)
 def build_handlers(
     *,
     get_config: Callable[[], Any],
-    get_runtime_settings: Callable[[], Any],
     get_publisher_manager: Callable[[], Any],
     get_session: Callable[[], Any],
     render_home_page: Callable[..., str],
@@ -40,7 +35,6 @@ def build_handlers(
     get_generation_task_or_404: Callable[[str], dict[str, Any]],
     project_has_active_generation_task: Callable[..., bool],
     generation_task_conflict_message: Callable[[str], str],
-    serialize_llm_settings: Callable[..., Any],
     active_generation_task_error_cls: type[Exception],
     get_memory_index: Callable[[], Any] | None = None,
 ) -> dict[str, Callable[..., Any]]:
@@ -56,7 +50,6 @@ def build_handlers(
     def home_page():
         settings = build_home_page_settings(
             base_config=get_config(),
-            runtime_settings=get_runtime_settings(),
         )
         publisher_manager = get_publisher_manager()
         backend_ready = (
@@ -69,13 +62,12 @@ def build_handlers(
                 has_api_key=bool(settings["api_key"]),
                 base_url=str(settings["base_url"]),
                 model=str(settings["model"]),
-                operation_mode=str(settings["operation_mode"]),
                 freeze_failed_candidates=bool(settings["freeze_failed_candidates"]),
                 min_chapter_chars=max(500, int(settings.get("min_chapter_chars", 2500))),
                 review_interval_chapters=max(0, int(settings.get("review_interval_chapters", 0))),
                 extension_api_key_configured=bool(backend_ready.get("extension_api_key_configured")),
                 extension_install_path="browser_extension/forwin-publisher",
-                review_engine_breakdown=_load_review_engine_breakdown(get_session),
+                rule_decision_breakdown=_load_rule_decision_breakdown(get_session),
             )
         )
 
@@ -143,84 +135,6 @@ def build_handlers(
             raise HTTPException(409, str(exc)) from exc
         return serialize_task(task_id, get_generation_task_or_404(task_id))
 
-    def get_llm_settings():
-        runtime_settings = get_runtime_settings()
-        if not runtime_settings:
-            raise HTTPException(503, "服务尚未初始化")
-        payload = runtime_settings.get()
-        return serialize_llm_settings(payload, message="已读取当前默认模型配置")
-
-    def save_llm_settings(req: LLMSettingsRequest):
-        runtime_settings = get_runtime_settings()
-        if not runtime_settings:
-            raise HTTPException(503, "服务尚未初始化")
-        payload = runtime_settings.save(
-            api_key=req.api_key,
-            base_url=req.base_url,
-            model=req.model,
-            operation_mode=req.operation_mode,
-            freeze_failed_candidates=req.freeze_failed_candidates,
-            min_chapter_chars=req.min_chapter_chars,
-            review_interval_chapters=req.review_interval_chapters,
-            progression_mode=req.progression_mode,
-            auto_band_checkpoint=req.auto_band_checkpoint,
-            band_warn_action=req.band_warn_action,
-            manual_checkpoints_enabled=req.manual_checkpoints_enabled,
-            future_constraints_enabled=req.future_constraints_enabled,
-        )
-        return serialize_llm_settings(payload, message="默认模型配置已保存")
-
-    def save_llm_preferences(req: LLMPreferencesRequest):
-        runtime_settings = get_runtime_settings()
-        if not runtime_settings:
-            raise HTTPException(503, "服务尚未初始化")
-        payload = runtime_settings.save(
-            operation_mode=req.operation_mode,
-            freeze_failed_candidates=req.freeze_failed_candidates,
-            min_chapter_chars=req.min_chapter_chars,
-            review_interval_chapters=req.review_interval_chapters,
-            progression_mode=req.progression_mode,
-            auto_band_checkpoint=req.auto_band_checkpoint,
-            band_warn_action=req.band_warn_action,
-            manual_checkpoints_enabled=req.manual_checkpoints_enabled,
-            future_constraints_enabled=req.future_constraints_enabled,
-        )
-        return serialize_llm_settings(payload, message="运行偏好已保存")
-
-    def save_llm_profile(req: LLMProfileUpsertRequest):
-        runtime_settings = get_runtime_settings()
-        if not runtime_settings:
-            raise HTTPException(503, "服务尚未初始化")
-        payload = runtime_settings.save_profile(
-            profile_id=req.profile_id,
-            name=req.name,
-            api_key=req.api_key,
-            base_url=req.base_url,
-            model=req.model,
-            set_as_default=req.set_as_default,
-        )
-        return serialize_llm_settings(payload, message="模型配置已保存")
-
-    def set_default_llm_profile(req: LLMDefaultProfileRequest):
-        runtime_settings = get_runtime_settings()
-        if not runtime_settings:
-            raise HTTPException(503, "服务尚未初始化")
-        try:
-            payload = runtime_settings.set_default_profile(req.profile_id)
-        except ValueError as exc:
-            raise HTTPException(404, str(exc)) from exc
-        return serialize_llm_settings(payload, message="默认模型已切换")
-
-    def delete_llm_profile(profile_id: str):
-        runtime_settings = get_runtime_settings()
-        if not runtime_settings:
-            raise HTTPException(503, "服务尚未初始化")
-        try:
-            payload = runtime_settings.delete_profile(profile_id)
-        except ValueError as exc:
-            raise HTTPException(400, str(exc)) from exc
-        return serialize_llm_settings(payload, message="模型配置已删除")
-
     def get_codex_bridge_status() -> CodexBridgeStatusResponse:
         config = get_config()
         enabled = bool(getattr(config, "codex_enabled", False)) if config is not None else False
@@ -283,17 +197,11 @@ def build_handlers(
         "home_page": home_page,
         "publishers_page": publishers_page,
         "generate": generate,
-        "get_llm_settings": get_llm_settings,
-        "save_llm_settings": save_llm_settings,
-        "save_llm_preferences": save_llm_preferences,
-        "save_llm_profile": save_llm_profile,
-        "set_default_llm_profile": set_default_llm_profile,
-        "delete_llm_profile": delete_llm_profile,
         "get_codex_bridge_status": get_codex_bridge_status,
     }
 
 
-def _load_review_engine_breakdown(get_session: Callable[[], Any]) -> list[dict[str, object]]:
+def _load_rule_decision_breakdown(get_session: Callable[[], Any]) -> list[dict[str, object]]:
     session = get_session()
     try:
         rows = session.execute(
@@ -303,7 +211,7 @@ def _load_review_engine_breakdown(get_session: Callable[[], Any]) -> list[dict[s
         ).scalars().all()
         return build_waiting_review_breakdown(rows)
     except Exception as exc:
-        logger.warning("failed to load review engine decision breakdown: %s", exc)
+        logger.warning("failed to load rule decision breakdown: %s", exc)
         return []
     finally:
         close = getattr(session, "close", None)

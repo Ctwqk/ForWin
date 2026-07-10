@@ -65,22 +65,12 @@ def _record_decision_event(
         self._governance_root_event_id = str(row.causal_root_id or row.id or "")
     return row
 
-def _record_engine_decision_event(
+def _record_rule_decision_event(
     self,
     *,
     updater: StateUpdater,
     decision: Decision,
     decision_input: DecisionInput,
-    shadow_mismatch: bool = False,
-    live_or_shadow: str = "shadow",
-    baseline_outcome: str = "",
-    engine_outcome: str = "",
-    live_source: str = "",
-    shadow_source: str = "",
-    engine_live: bool = False,
-    baseline_shadow_evaluated: bool = False,
-    baseline_safety_net_used: bool = False,
-    severe_mismatch: bool = False,
     related_object_type: str = "",
     related_object_id: str = "",
     parent_event_id: str = "",
@@ -89,23 +79,13 @@ def _record_engine_decision_event(
         payload = build_decision_event_payload(
             decision=decision,
             input_digest=digest_decision_input(decision_input),
-            shadow_mismatch=shadow_mismatch,
-            live_or_shadow=live_or_shadow,
-            baseline_outcome=baseline_outcome,
-            engine_outcome=engine_outcome,
-            live_source=live_source,
-            shadow_source=shadow_source,
-            engine_live=engine_live,
-            baseline_shadow_evaluated=baseline_shadow_evaluated,
-            baseline_safety_net_used=baseline_safety_net_used,
-            severe_shadow_mismatch=severe_mismatch,
         )
         self._record_decision_event(
             updater=updater,
             project_id=decision_input.project_id,
             chapter_number=decision_input.chapter_number,
             event_family="evaluation_verdict",
-            event_type=DecisionEventType.REVIEW_ENGINE_DECISION,
+            event_type=DecisionEventType.RULE_DECISION_EVALUATED,
             scope="chapter",
             summary=f"engine decided {decision.outcome} via {decision.rule_id}",
             reason=decision.reason,
@@ -116,7 +96,7 @@ def _record_engine_decision_event(
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "Failed to record review engine decision event project=%s chapter=%s rule=%s: %s",
+            "Failed to record rule decision event project=%s chapter=%s rule=%s: %s",
             decision_input.project_id,
             decision_input.chapter_number,
             decision.rule_id,
@@ -953,4 +933,4 @@ def _filter_supported_state_changes(changes):
 
 
 
-__all__ = ['_project_policy', '_record_decision_event', '_record_engine_decision_event', '_audit_current_plan_before_write', '_audit_future_plans_after_acceptance', '_future_plan_audit_plans', '_future_plan_audit_band_rows', '_record_future_plan_audit_events', '_record_generation_audit_checkpoint_if_due', '_generation_audit_checkpoint_payload', '_previous_band_row', '_manual_boundary_checkpoint', '_strict_progression_block', '_create_auto_band_checkpoint', '_filter_supported_state_changes']
+__all__ = ['_project_policy', '_record_decision_event', '_record_rule_decision_event', '_audit_current_plan_before_write', '_audit_future_plans_after_acceptance', '_future_plan_audit_plans', '_future_plan_audit_band_rows', '_record_future_plan_audit_events', '_record_generation_audit_checkpoint_if_due', '_generation_audit_checkpoint_payload', '_previous_band_row', '_manual_boundary_checkpoint', '_strict_progression_block', '_create_auto_band_checkpoint', '_filter_supported_state_changes']

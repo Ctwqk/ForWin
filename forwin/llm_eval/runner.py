@@ -570,9 +570,6 @@ class LLMReliabilityRunner:
                         "api_key": profile.api_key,
                         "base_url": profile.base_url,
                         "model": profile.model,
-                        "operation_mode": "blackbox",
-                        "min_chapter_chars": 800,
-                        "review_interval_chapters": 0,
                     },
                 )
                 response.raise_for_status()

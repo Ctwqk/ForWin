@@ -179,7 +179,6 @@ from forwin.publisher_runtime.codex_intervention import build_codex_intervention
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
-from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
 
@@ -229,36 +228,9 @@ def _json_dump(value: Any, fallback: Any) -> str:
 
 
 def _resolve_runtime_profile(requested_profile_id: str = "") -> dict[str, str]:
-    stored = api_state._runtime_settings.get() if api_state._runtime_settings else {}
-    profiles = [
-        item for item in stored.get("profiles", [])
-        if isinstance(item, dict)
-    ]
-    target_id = str(requested_profile_id or "").strip() or str(stored.get("default_profile_id", "")).strip()
-    selected = next(
-        (
-            item for item in profiles
-            if str(item.get("id", "")).strip() == target_id
-        ),
-        None,
-    )
-    if selected is None and profiles:
-        selected = profiles[0]
-    if selected is None:
-        selected = {
-            "id": "",
-            "name": "",
-            "api_key": str(stored.get("api_key", "")).strip(),
-            "base_url": str(stored.get("base_url", "")).strip(),
-            "model": str(stored.get("model", "")).strip(),
-        }
-    return {
-        "id": str(selected.get("id", "")).strip(),
-        "name": str(selected.get("name", "")).strip(),
-        "api_key": str(selected.get("api_key", "")).strip(),
-        "base_url": str(selected.get("base_url", "")).strip(),
-        "model": str(selected.get("model", "")).strip(),
-    }
+    infrastructure = api_state._config or InfrastructureConfig()
+    profile = infrastructure.resolve_model_profile(requested_profile_id)
+    return profile.model_dump(mode="python")
 
 
 def _saved_runtime_config_or_default(model_profile_id: str = "") -> InfrastructureConfig:

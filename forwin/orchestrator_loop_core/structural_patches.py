@@ -24,7 +24,7 @@ def _persist_structural_patch_outcome(
     arc_book_budget_enabled: bool = False,
     updater: StateUpdater | None = None,
     decision_input: DecisionInput | None = None,
-    record_engine_decision_event: Any | None = None,
+    record_rule_decision_event: Any | None = None,
 ) -> list[str]:
     issue_type = str(decision.sub_action.get("issue_kind") or "").strip()
     if not issue_type:
@@ -101,7 +101,7 @@ def _persist_structural_patch_outcome(
         deadline_chapter=deadline_chapter,
         payoff_test=payoff_test,
         evidence_refs=[f"review:{review_id}"] if review_id else [],
-        metadata={"minimum_scope": target_scope, "review_engine_rule_id": decision.rule_id},
+        metadata={"minimum_scope": target_scope, "decision_rule_id": decision.rule_id},
     )
     if arc_book_budget_enabled:
         budget = evaluate_obligation_budget(
@@ -126,11 +126,11 @@ def _persist_structural_patch_outcome(
         )
         if budget.over_budget:
             if (
-                callable(record_engine_decision_event)
+                callable(record_rule_decision_event)
                 and updater is not None
                 and decision_input is not None
             ):
-                record_engine_decision_event(
+                record_rule_decision_event(
                     updater=updater,
                     decision=Decision(
                         outcome="system_block",
@@ -146,14 +146,6 @@ def _persist_structural_patch_outcome(
                         },
                     ),
                     decision_input=decision_input,
-                    live_or_shadow="live",
-                    baseline_outcome=decision.outcome,
-                    engine_outcome="system_block",
-                    live_source="engine",
-                    shadow_source="",
-                    engine_live=True,
-                    baseline_shadow_evaluated=False,
-                    baseline_safety_net_used=False,
                     related_object_type="chapter_review",
                     related_object_id=review_id,
                 )

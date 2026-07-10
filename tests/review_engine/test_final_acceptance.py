@@ -18,7 +18,6 @@ def _decision_input(review: ReviewVerdict) -> DecisionInput:
         review=review,
         signals=[],
         open_obligations=[],
-        operation_mode="blackbox",
         attempts_completed=2,
         prior_scope_history=["draft", "draft"],
         budget=None,
@@ -103,7 +102,7 @@ def test_nonblocking_legacy_subworld_residual_can_force_accept() -> None:
         _decision_input(review)
     )
 
-    assert decision.outcome == "auto_approve"
+    assert decision.outcome == "accept"
     assert decision.reason == "soft-quality-failure-only"
     assert decision.sub_action["final_gate_decision"] == "force_accept"
     assert decision.sub_action["forceable"] is True
@@ -190,7 +189,7 @@ def test_soft_residual_issue_can_force_accept_after_successful_verification() ->
         _decision_input(_verified_review("director_imbalance"))
     )
 
-    assert decision.outcome == "auto_approve"
+    assert decision.outcome == "accept"
     assert decision.reason == "soft-quality-failure-only"
     assert decision.sub_action["final_gate_decision"] == "force_accept"
     assert decision.sub_action["forceable"] is True

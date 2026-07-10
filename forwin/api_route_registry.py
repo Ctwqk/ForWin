@@ -56,7 +56,6 @@ from forwin.api_schemas import (
     PublisherCoverSelectRequest,
     PublisherCoverUploadRequest,
     GovernanceInsightsResponse,
-    LLMSettingsResponse,
     MapEnsureResponse,
     MapPathResponse,
     MapRuntimeResponse,
@@ -107,12 +106,10 @@ from forwin.api_schemas import (
 @dataclass(frozen=True)
 class CoreDeps:
     get_config: Callable[[], Any]
-    get_runtime_settings: Callable[[], Any]
     get_orchestrator: Callable[[], Any]
     get_session: Callable[[], Any]
     render_home_page: Callable[..., str]
     build_home_page_settings: Callable[..., dict[str, object]]
-    serialize_llm_settings: Callable[..., Any]
     active_generation_task_error_cls: type[Exception]
     display_datetime: Callable[[Any], str]
     json_load_object: Callable[[str | None], dict[str, Any]]
@@ -214,7 +211,6 @@ def register_api_routes(
     deps: ApiRouteDeps,
 ) -> dict[str, Callable[..., Any]]:
     get_config = deps.get_config
-    get_runtime_settings = deps.get_runtime_settings
     get_publisher_manager = deps.publisher.get_publisher_manager
     get_orchestrator = deps.get_orchestrator
     get_session = deps.get_session
@@ -227,7 +223,6 @@ def register_api_routes(
     project_has_active_generation_task = deps.project_has_active_generation_task
     active_generation_task_ids = deps.active_generation_task_ids
     generation_task_conflict_message = deps.generation_task_conflict_message
-    serialize_llm_settings = deps.serialize_llm_settings
     active_generation_task_error_cls = deps.active_generation_task_error_cls
     list_generation_tasks = deps.list_generation_tasks
     serialize_generation_task_center_item = deps.serialize_generation_task_center_item
@@ -279,7 +274,6 @@ def register_api_routes(
 
     system_handlers = api_system_routes.build_handlers(
         get_config=get_config,
-        get_runtime_settings=get_runtime_settings,
         get_publisher_manager=get_publisher_manager,
         get_session=get_session,
         render_home_page=render_home_page,
@@ -290,7 +284,6 @@ def register_api_routes(
         get_generation_task_or_404=get_generation_task_or_404,
         project_has_active_generation_task=project_has_active_generation_task,
         generation_task_conflict_message=generation_task_conflict_message,
-        serialize_llm_settings=serialize_llm_settings,
         active_generation_task_error_cls=active_generation_task_error_cls,
         get_memory_index=get_memory_index,
     )
@@ -414,12 +407,6 @@ def register_api_routes(
         ("/world-studio/assets/{asset_path:path}", ["GET"], handlers["world_studio_asset"], {}),
         ("/api/projects/{project_id}/world-studio/search", ["GET"], handlers["search_project_world_studio"], {}),
         ("/api/generate", ["POST"], handlers["generate"], {"response_model": TaskResponse}),
-        ("/api/settings/llm", ["GET"], handlers["get_llm_settings"], {"response_model": LLMSettingsResponse}),
-        ("/api/settings/llm", ["POST"], handlers["save_llm_settings"], {"response_model": LLMSettingsResponse}),
-        ("/api/settings/llm/preferences", ["POST"], handlers["save_llm_preferences"], {"response_model": LLMSettingsResponse}),
-        ("/api/settings/llm/profiles", ["POST"], handlers["save_llm_profile"], {"response_model": LLMSettingsResponse}),
-        ("/api/settings/llm/default-profile", ["POST"], handlers["set_default_llm_profile"], {"response_model": LLMSettingsResponse}),
-        ("/api/settings/llm/profiles/{profile_id}", ["DELETE"], handlers["delete_llm_profile"], {"response_model": LLMSettingsResponse}),
         ("/api/settings/codex/health", ["GET"], handlers["get_codex_bridge_status"], {"response_model": CodexBridgeStatusResponse}),
         ("/api/tasks/active-generation-check", ["GET"], handlers["active_generation_task_check"], {"response_model": ActiveGenerationTaskCheckResponse}),
         ("/api/tasks/{task_id}", ["GET"], handlers["get_task"], {"response_model": TaskResponse}),

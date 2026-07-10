@@ -30,7 +30,6 @@ def render_home_page(
     has_api_key: bool,
     base_url: str,
     model: str,
-    operation_mode: str,
     freeze_failed_candidates: bool,
     min_chapter_chars: int = 2500,
     review_interval_chapters: int = 0,
@@ -38,7 +37,7 @@ def render_home_page(
     default_chapters: int = 3,
     extension_api_key_configured: bool = False,
     extension_install_path: str = "browser_extension/forwin-publisher",
-    review_engine_breakdown: list[dict[str, object]] | None = None,
+    rule_decision_breakdown: list[dict[str, object]] | None = None,
 ) -> str:
     normalized_min_chars = max(500, int(min_chapter_chars))
     normalized_review_interval = max(0, int(review_interval_chapters))
@@ -55,7 +54,7 @@ def render_home_page(
             "@@BASE_URL_JSON@@": json.dumps(base_url, ensure_ascii=False),
             "@@MODEL_JSON@@": json.dumps(model, ensure_ascii=False),
             "@@MODEL_PROVIDER_PRESETS_JSON@@": json.dumps(LLM_PROVIDER_PRESETS, ensure_ascii=False),
-            "@@OPERATION_MODE_JSON@@": json.dumps(operation_mode, ensure_ascii=False),
+            "@@OPERATION_MODE_JSON@@": json.dumps("blackbox"),
             "@@FREEZE_FAILED_JSON@@": json.dumps(bool(freeze_failed_candidates)),
             "@@MIN_CHAPTER_CHARS@@": str(normalized_min_chars),
             "@@MIN_CHAPTER_CHARS_JSON@@": json.dumps(normalized_min_chars),
@@ -68,15 +67,15 @@ def render_home_page(
             "@@EXTENSION_READY@@": json.dumps(bool(extension_api_key_configured)),
             "@@EXTENSION_INSTALL_PATH@@": json.dumps(extension_install_path, ensure_ascii=False),
             "@@EXTENSION_INSTALL_PATH_TEXT@@": html.escape(extension_install_path),
-            "@@REVIEW_ENGINE_BREAKDOWN_HTML@@": _render_review_engine_breakdown(
-                review_engine_breakdown or []
+            "@@REVIEW_ENGINE_BREAKDOWN_HTML@@": _render_rule_decision_breakdown(
+                rule_decision_breakdown or []
             ),
             "@@PAGE_DOM_HELPERS_JS@@": PAGE_DOM_HELPERS_JS,
         },
     )
 
 
-def _render_review_engine_breakdown(items: list[dict[str, object]]) -> str:
+def _render_rule_decision_breakdown(items: list[dict[str, object]]) -> str:
     if not items:
         return ""
     rows: list[str] = []

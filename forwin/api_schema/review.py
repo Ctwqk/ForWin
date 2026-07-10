@@ -124,7 +124,7 @@ class ChapterReviewDetail(BaseModel):
     repair_exhausted: bool = False
     rewrite_attempts: list[ChapterRewriteAttemptInfo] = Field(default_factory=list)
     decision_refs: list[DecisionEventInfo] = Field(default_factory=list)
-    review_engine_decision: dict[str, Any] = Field(default_factory=dict)
+    rule_decision: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChapterReviewApproveRequest(BaseModel):

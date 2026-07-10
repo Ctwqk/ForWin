@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 _ENGINE_OUTCOME_TO_REVIEW_ACTION = {
-    "auto_approve": "commit_clean",
+    "accept": "commit_clean",
     "local_repair": "local_rewrite",
     "chapter_patch": "defer_with_chapter_plan_patch",
     "band_patch": "defer_with_band_plan_patch",
@@ -547,10 +547,6 @@ def _prepare_deferred_acceptance_if_needed(
         review=verdict,
         signals=list(signals),
         open_obligations=[],
-        operation_mode=str(
-            getattr(getattr(self, "config", None), "operation_mode", "blackbox")
-            or "blackbox"
-        ),
         attempts_completed=0,
         prior_scope_history=[],
         budget=None,
@@ -563,22 +559,12 @@ def _prepare_deferred_acceptance_if_needed(
     selected_primary_issue_class = str(
         engine_decision.sub_action.get("primary_issue_class") or ""
     ).strip()
-    record_engine_decision = getattr(self, "_record_engine_decision_event", None)
-    if callable(record_engine_decision):
-        record_engine_decision(
+    record_rule_decision = getattr(self, "_record_rule_decision_event", None)
+    if callable(record_rule_decision):
+        record_rule_decision(
             updater=StateUpdater(session),
             decision=engine_decision,
             decision_input=decision_input,
-            shadow_mismatch=False,
-            live_or_shadow="live",
-            baseline_outcome="",
-            engine_outcome=engine_decision.outcome,
-            live_source="engine",
-            shadow_source="",
-            engine_live=True,
-            baseline_shadow_evaluated=False,
-            baseline_safety_net_used=False,
-            severe_mismatch=False,
             related_object_type="chapter_review",
             related_object_id=review_id,
         )
@@ -588,7 +574,6 @@ def _prepare_deferred_acceptance_if_needed(
         review=decision_input.review,
         signals=decision_input.signals,
         open_obligations=decision_input.open_obligations,
-        operation_mode=decision_input.operation_mode,
         attempts_completed=decision_input.attempts_completed,
         prior_scope_history=decision_input.prior_scope_history,
         budget=decision_input.budget,
@@ -604,12 +589,8 @@ def _prepare_deferred_acceptance_if_needed(
     )
     structural_decision = decide_structural_patch(
         input=decision_input,
-        arc_patcher_enabled=bool(
-            getattr(getattr(self, "config", None), "review_engine_arc_patcher_enabled", False)
-        ),
-        book_patcher_enabled=bool(
-            getattr(getattr(self, "config", None), "review_engine_book_patcher_enabled", False)
-        ),
+        arc_patcher_enabled=self.policy.review.allows_repair_scope("arc"),
+        book_patcher_enabled=self.policy.review.allows_repair_scope("book"),
     )
     if structural_decision.outcome in {"arc_patch", "book_patch"}:
         return _persist_structural_patch_outcome(
@@ -623,18 +604,15 @@ def _prepare_deferred_acceptance_if_needed(
             target_total_chapters=target_total_chapters,
             decision=structural_decision,
             outcome_reason=selected_review_reason,
-            arc_book_budget_enabled=bool(
-                getattr(
-                    getattr(self, "config", None),
-                    "review_engine_arc_book_budget_enabled",
-                    False,
-                )
+            arc_book_budget_enabled=(
+                self.policy.review.allows_repair_scope("arc")
+                and self.policy.review.allows_repair_scope("book")
             ),
             updater=StateUpdater(session),
             decision_input=decision_input,
-            record_engine_decision_event=getattr(
+            record_rule_decision_event=getattr(
                 self,
-                "_record_engine_decision_event",
+                "_record_rule_decision_event",
                 None,
             ),
         )
@@ -672,13 +650,7 @@ def _prepare_deferred_acceptance_if_needed(
     )
     if scope_decision.action not in {"defer_with_chapter_plan_patch", "defer_with_band_plan_patch"}:
         return [scope_decision.reason or f"deferred_acceptance_scope_unavailable:{issue_type}"]
-    if bool(
-        getattr(
-            getattr(self, "config", None),
-            "review_engine_commit_with_obligation_enabled",
-            False,
-        )
-    ):
+    if self.policy.review.allows_repair_scope("obligation"):
         commit_decision_input = replace(
             decision_input,
             plan_layer_health=PlanLayerHealth(
@@ -691,32 +663,12 @@ def _prepare_deferred_acceptance_if_needed(
             ),
         )
         commit_decision = decide_commit_with_obligation(commit_decision_input)
-        record_engine = getattr(self, "_record_engine_decision_event", None)
-        if callable(record_engine):
-            record_engine(
+        record_rule = getattr(self, "_record_rule_decision_event", None)
+        if callable(record_rule):
+            record_rule(
                 updater=StateUpdater(session),
                 decision=commit_decision,
                 decision_input=commit_decision_input,
-                live_or_shadow=(
-                    "live"
-                    if commit_decision.outcome == "commit_with_obligation"
-                    else "shadow"
-                ),
-                baseline_outcome="",
-                engine_outcome=commit_decision.outcome,
-                live_source=(
-                    "engine"
-                    if commit_decision.outcome == "commit_with_obligation"
-                    else ""
-                ),
-                shadow_source=(
-                    ""
-                    if commit_decision.outcome == "commit_with_obligation"
-                    else "engine"
-                ),
-                engine_live=commit_decision.outcome == "commit_with_obligation",
-                baseline_shadow_evaluated=False,
-                baseline_safety_net_used=False,
                 related_object_type="chapter_review",
                 related_object_id=review_id,
             )

@@ -239,26 +239,58 @@ class ForWinAPIClient:
             task=await self._safe_task_get(task_id, fallback_payload=payload),
         )
 
-    async def project_set_reckless_mode(
+    async def project_set_gate_delegate(
         self,
         *,
         project_id: str,
-        enabled: bool,
+        delegate: Literal["human", "spark"],
         reason: str,
     ) -> MutationResult:
         normalized_reason = str(reason or "").strip()
         if not normalized_reason:
             raise ValueError("reason is required")
+        if delegate not in {"human", "spark"}:
+            raise ValueError("delegate must be human or spark")
+        current = await self._request_json(
+            "GET",
+            f"/api/projects/{project_id}/policy",
+        )
+        policy = current.get("policy") if isinstance(current, dict) else None
+        if not isinstance(policy, dict):
+            raise RuntimeError("Expected project runtime policy from ForWin API.")
+        chapter_length = policy.get("chapter_length") or {}
+        pause = policy.get("pause") or {}
+        if not isinstance(chapter_length, dict) or not isinstance(pause, dict):
+            raise RuntimeError("Project runtime policy is malformed.")
         payload = await self._request_json(
             "PUT",
-            f"/api/projects/{project_id}/governance",
+            f"/api/projects/{project_id}/policy",
             json={
-                "review_delegation_mode": "reckless" if enabled else "human",
+                "expected_version": int(current.get("version", 0) or 0),
+                "quality_profile": str(policy.get("quality_profile", "standard")),
+                "model_profile_id": str(policy.get("model_profile_id", "")),
+                "min_chapter_chars": int(chapter_length.get("min_chars", 0) or 0),
+                "target_chapter_chars": int(chapter_length.get("target_chars", 0) or 0),
+                "max_chapter_chars": int(chapter_length.get("max_chars", 0) or 0),
+                "review_interval_chapters": int(
+                    pause.get("review_interval_chapters", 0) or 0
+                ),
+                "manual_checkpoints": bool(pause.get("manual_checkpoints", True)),
+                "band_checkpoint_action": str(
+                    pause.get("band_checkpoint_action", "pause_on_warn")
+                ),
+                "generation_audit_interval": int(
+                    pause.get("generation_audit_interval", 0) or 0
+                ),
+                "generation_audit_pauses": bool(
+                    pause.get("generation_audit_pauses", False)
+                ),
+                "gate_delegate": delegate,
                 "reason": normalized_reason,
             },
         )
         if not isinstance(payload, dict):
-            raise RuntimeError("Expected project governance payload from ForWin API.")
+            raise RuntimeError("Expected project runtime policy payload from ForWin API.")
         return MutationResult(
             ok=bool(payload.get("ok", True)),
             message=str(payload.get("message", "")),
@@ -553,9 +585,12 @@ class ForWinAPIClient:
             raise ValueError(f"Unsupported stage_key: {stage_key}")
 
     def _project_view(self, raw: dict[str, Any]) -> ProjectView:
-        governance = raw.get("governance") or {}
-        if not isinstance(governance, dict):
-            governance = {}
+        runtime_policy = raw.get("runtime_policy") or {}
+        if not isinstance(runtime_policy, dict):
+            runtime_policy = {}
+        pause_policy = runtime_policy.get("pause") or {}
+        if not isinstance(pause_policy, dict):
+            pause_policy = {}
         return ProjectView(
             id=str(raw.get("id", "")),
             title=str(raw.get("title", "")),
@@ -573,9 +608,8 @@ class ForWinAPIClient:
             generated_chapter_count=int(raw.get("generated_chapter_count", 0) or 0),
             accepted_chapter_count=int(raw.get("accepted_chapter_count", 0) or 0),
             needs_review_chapter_count=int(raw.get("needs_review_chapter_count", 0) or 0),
-            review_delegation_mode=str(
-                governance.get("review_delegation_mode", "human") or "human"
-            ),
+            gate_delegate=str(pause_policy.get("gate_delegate", "human") or "human"),
+            runtime_policy_version=int(raw.get("runtime_policy_version", 0) or 0),
             latest_stage=str(raw.get("latest_stage", "")),
             next_gate=str(raw.get("next_gate", "")),
             genesis_stage_overview=self._stage_state_list(raw.get("genesis_stage_overview") or []),

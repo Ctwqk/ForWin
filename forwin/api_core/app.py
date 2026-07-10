@@ -213,7 +213,6 @@ def _shutdown_runtime_state() -> None:
     api_state._orchestrator = None
     api_state._runtime_container = None
     api_state._publisher_manager = None
-    api_state._runtime_settings = None
     api_state._task_center_service = None
     api_state._SessionFactory = None
     api_state._engine = None
@@ -352,12 +351,10 @@ globals().update(
         deps=api_route_registry.ApiRouteDeps(
             core=api_route_registry.CoreDeps(
                 get_config=lambda: api_state._config,
-                get_runtime_settings=lambda: api_state._runtime_settings,
                 get_orchestrator=lambda: api_state._orchestrator,
                 get_session=_get_session,
                 render_home_page=render_home_page,
                 build_home_page_settings=build_home_page_settings,
-                serialize_llm_settings=lambda payload, *, message: _serialize_llm_settings(payload, message=message),
                 active_generation_task_error_cls=ActiveGenerationTaskError,
                 display_datetime=_display_datetime,
                 json_load_object=lambda raw: _json_load_object(raw),

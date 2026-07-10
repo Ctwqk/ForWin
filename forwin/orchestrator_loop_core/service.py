@@ -8,7 +8,7 @@ from forwin.orchestrator_loop_core import project_chapters as _project_chapters_
 from forwin.orchestrator_loop_core import quality_gates as _quality_gates_module
 from forwin.orchestrator_loop_core import repair_loop as _repair_loop_module
 from forwin.orchestrator_loop_core import repair_patches as _repair_patches_module
-from forwin.orchestrator_loop_core import reckless_review as _reckless_review_module
+from forwin.orchestrator_loop_core import gate_delegation as _gate_delegation_module
 from forwin.orchestrator_loop_core import review_autofix as _review_autofix_module
 from forwin.orchestrator_loop_core import run_control as _run_control_module
 from forwin.orchestrator_loop_core import runtime_helpers as _runtime_helpers_module
@@ -16,7 +16,7 @@ from forwin.orchestrator_loop_core import world_projection as _world_projection_
 from forwin.orchestrator_loop_core import writer_attention as _writer_attention_module
 from forwin.orchestrator_loop_core.run_control import _bind_orchestrator_runtime_hooks, run, run_existing_project, _emit_progress, _bind_governance_runtime, _clear_governance_runtime, _start_governance_stage_span, _finish_governance_stage_span, _record_stage_transition, _latest_provisional_gate_snapshot, _new_failed_provisional_gate, _block_on_scenario_rehearsal, _block_on_provisional_failure, _pending_chapter_numbers_for_active_arc, _materialize_next_genesis_arc_if_needed, continue_project
 from forwin.orchestrator_loop_core.acceptance import accept_review
-from forwin.orchestrator_loop_core.governance import _project_policy, _record_decision_event, _record_engine_decision_event, _audit_current_plan_before_write, _audit_future_plans_after_acceptance, _future_plan_audit_plans, _future_plan_audit_band_rows, _record_future_plan_audit_events, _record_generation_audit_checkpoint_if_due, _generation_audit_checkpoint_payload, _previous_band_row, _manual_boundary_checkpoint, _strict_progression_block, _create_auto_band_checkpoint, _filter_supported_state_changes
+from forwin.orchestrator_loop_core.governance import _project_policy, _record_decision_event, _record_rule_decision_event, _audit_current_plan_before_write, _audit_future_plans_after_acceptance, _future_plan_audit_plans, _future_plan_audit_band_rows, _record_future_plan_audit_events, _record_generation_audit_checkpoint_if_due, _generation_audit_checkpoint_payload, _previous_band_row, _manual_boundary_checkpoint, _strict_progression_block, _create_auto_band_checkpoint, _filter_supported_state_changes
 from forwin.orchestrator_loop_core.runtime_helpers import _make_state_helpers, _select_skill_layers, _filter_supported_kwargs, _call_with_compatible_kwargs, _save_prompt_trace_payload, _record_prompt_trace_performance_spans
 from forwin.orchestrator_loop_core.review_autofix import _persist_draft_and_review, _review_current_output, _register_writer_output_entities, _apply_canon_name_drift_autofix, _apply_placeholder_leakage_autofix, _project_character_names, _replace_canon_name_strings, _review_event_payload, _review_issue_payloads, _record_map_movement_review_issues, _review_canon_risk, _load_json_list, _chapter_plan_snapshot, _band_plan_snapshot, _repair_verification_issue, _review_with_repair_verification, _repair_policy_requested_scope, _review_has_structural_repair_issue
 from forwin.orchestrator_loop_core.repair_loop import (
@@ -39,9 +39,9 @@ from forwin.orchestrator_loop_core.repair_patches import (
     _replace_band_schedule,
     _structure_data_from_row,
 )
-from forwin.orchestrator_loop_core.reckless_review import (
-    _delegate_checkpoint_if_reckless,
-    _delegate_reckless_review,
+from forwin.orchestrator_loop_core.gate_delegation import (
+    _resolve_checkpoint_gate,
+    _resolve_gate_delegation,
 )
 from forwin.orchestrator_loop_core.project_chapters import _run_project_chapters
 from forwin.orchestrator_loop_core.writer_attention import _write_chapter_with_attention_fallback
@@ -98,6 +98,7 @@ class WritingOrchestrator:
         self.arc_envelope_manager = services.arc_envelope_manager
         self.review_hub = services.review_hub
         self.repair_verifier = services.repair_verifier
+        self.gate_delegation = services.gate_delegation
         self._bind_orchestrator_runtime_hooks()
 
 
@@ -121,9 +122,9 @@ WritingOrchestrator.continue_project = continue_project
 WritingOrchestrator.accept_review = accept_review
 WritingOrchestrator._project_policy = _project_policy
 WritingOrchestrator._record_decision_event = _record_decision_event
-WritingOrchestrator._record_engine_decision_event = _record_engine_decision_event
-WritingOrchestrator._delegate_reckless_review = _delegate_reckless_review
-WritingOrchestrator._delegate_checkpoint_if_reckless = _delegate_checkpoint_if_reckless
+WritingOrchestrator._record_rule_decision_event = _record_rule_decision_event
+WritingOrchestrator._resolve_gate_delegation = _resolve_gate_delegation
+WritingOrchestrator._resolve_checkpoint_gate = _resolve_checkpoint_gate
 WritingOrchestrator._audit_current_plan_before_write = _audit_current_plan_before_write
 WritingOrchestrator._audit_future_plans_after_acceptance = _audit_future_plans_after_acceptance
 WritingOrchestrator._future_plan_audit_plans = _future_plan_audit_plans
@@ -225,7 +226,7 @@ for _module in (
     _quality_gates_module,
     _repair_loop_module,
     _repair_patches_module,
-    _reckless_review_module,
+    _gate_delegation_module,
     _review_autofix_module,
     _run_control_module,
     _runtime_helpers_module,

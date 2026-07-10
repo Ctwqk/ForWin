@@ -105,7 +105,7 @@ class DecisionEventType:
     TERMINATE_REACHED = "terminate_reached"
 
     REVIEW_VERDICT_RECORDED = "review_verdict_recorded"
-    REVIEW_ENGINE_DECISION = "review_engine_decision"
+    RULE_DECISION_EVALUATED = "rule_decision_evaluated"
     REPAIR_STARTED = "repair_started"
     REPAIR_FAILED = "repair_failed"
     REPAIR_SUCCEEDED = "repair_succeeded"
@@ -114,10 +114,10 @@ class DecisionEventType:
     REPAIR_NEEDS_HUMAN_COMPRESSION = "repair_needs_human_compression"
     REVIEW_APPROVED = "review_approved"
     FORCED_ACCEPT_APPLIED = "forced_accept_applied"
-    RECKLESS_REVIEW_REQUESTED = "reckless_review_requested"
-    RECKLESS_REVIEW_DECIDED = "reckless_review_decided"
-    RECKLESS_REVIEW_FAILED = "reckless_review_failed"
-    RECKLESS_GATE_OVERRIDDEN = "reckless_gate_overridden"
+    GATE_DELEGATION_REQUESTED = "gate_delegation_requested"
+    GATE_DELEGATION_DECIDED = "gate_delegation_decided"
+    GATE_DELEGATION_FAILED = "gate_delegation_failed"
+    GATE_DELEGATION_APPROVED = "gate_delegation_approved"
 
     BAND_CHECKPOINT_CREATED = "band_checkpoint_created"
     BAND_CHECKPOINT_HIT = "band_checkpoint_hit"
@@ -259,7 +259,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.TERMINATE_REQUESTED,
     DecisionEventType.TERMINATE_REACHED,
     DecisionEventType.REVIEW_VERDICT_RECORDED,
-    DecisionEventType.REVIEW_ENGINE_DECISION,
+    DecisionEventType.RULE_DECISION_EVALUATED,
     DecisionEventType.REPAIR_STARTED,
     DecisionEventType.REPAIR_FAILED,
     DecisionEventType.REPAIR_SUCCEEDED,
@@ -268,10 +268,10 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.REPAIR_NEEDS_HUMAN_COMPRESSION,
     DecisionEventType.REVIEW_APPROVED,
     DecisionEventType.FORCED_ACCEPT_APPLIED,
-    DecisionEventType.RECKLESS_REVIEW_REQUESTED,
-    DecisionEventType.RECKLESS_REVIEW_DECIDED,
-    DecisionEventType.RECKLESS_REVIEW_FAILED,
-    DecisionEventType.RECKLESS_GATE_OVERRIDDEN,
+    DecisionEventType.GATE_DELEGATION_REQUESTED,
+    DecisionEventType.GATE_DELEGATION_DECIDED,
+    DecisionEventType.GATE_DELEGATION_FAILED,
+    DecisionEventType.GATE_DELEGATION_APPROVED,
     DecisionEventType.BAND_CHECKPOINT_CREATED,
     DecisionEventType.BAND_CHECKPOINT_HIT,
     DecisionEventType.CHECKPOINT_EVALUATOR_ERROR,

@@ -14,7 +14,6 @@ from forwin.config import (
     DEFAULT_DEEPSEEK_BASE_URL,
     DEFAULT_DEEPSEEK_MODEL,
 )
-from forwin.runtime_settings import RuntimeSettingsStore
 
 from .schemas import EvalProfile
 
@@ -87,30 +86,33 @@ def _load_manifest_profiles(path: str) -> list[EvalProfile]:
     return profiles
 
 
-def _load_runtime_profiles(path: str) -> list[EvalProfile]:
+def _load_environment_profiles() -> list[EvalProfile]:
     config = InfrastructureConfig.from_env()
-    if not path:
-        path = config.runtime_settings_path
-    store = RuntimeSettingsStore(path, env_llm_profiles=config.llm_env_profiles)
-    payload = store.get()
     profiles: list[EvalProfile] = []
-    for index, item in enumerate(payload.get("profiles", [])):
+    items = [
+        config.resolve_model_profile("").model_dump(mode="python"),
+        *config.llm_env_profiles,
+    ]
+    for index, item in enumerate(items):
         if not isinstance(item, dict):
             continue
-        profile = _profile_from_raw(item, f"runtime-{index + 1}")
+        profile = _profile_from_raw(item, f"environment-{index + 1}")
         if profile is not None:
             profiles.append(profile)
-    return profiles
+    return list({profile.id: profile for profile in profiles}.values())
 
 
 def load_eval_profiles(
     *,
     manifest_path: str = "",
-    runtime_settings_path: str = "",
     selected_ids: str | list[str] | None = None,
 ) -> list[EvalProfile]:
     selected = _split_ids(selected_ids)
-    profiles = _load_manifest_profiles(manifest_path) if manifest_path else _load_runtime_profiles(runtime_settings_path)
+    profiles = (
+        _load_manifest_profiles(manifest_path)
+        if manifest_path
+        else _load_environment_profiles()
+    )
     if selected:
         wanted = set(selected)
         profiles = [profile for profile in profiles if profile.id in wanted or profile.name in wanted]

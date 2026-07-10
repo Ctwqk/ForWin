@@ -91,8 +91,6 @@ from forwin.api_schemas import (
     LLMPreferencesRequest,
     LLMProfileUpsertRequest,
     LLMSettingsRequest,
-    LLMSettingsResponse,
-    ModelProfile,
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
     NarrativeConstraintsResponse,
@@ -178,7 +176,6 @@ from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
-from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
 
@@ -885,44 +882,6 @@ def _list_project_backed_task_items(limit: int) -> list[TaskCenterItemResponse]:
 
 def _get_project_backed_task_item_or_404(task_id: str) -> TaskCenterItemResponse:
     return _get_task_center_service().get_project_backed_task_item_or_404(task_id)
-
-
-def _serialize_model_profiles(payload: dict[str, object]) -> list[ModelProfile]:
-    profiles = []
-    for item in payload.get("profiles", []):
-        if not isinstance(item, dict):
-            continue
-        profiles.append(
-            ModelProfile(
-                id=str(item.get("id", "")).strip(),
-                name=str(item.get("name", "")).strip() or "未命名模型",
-                has_api_key=bool(str(item.get("api_key", "")).strip()),
-                base_url=str(item.get("base_url", "")).strip(),
-                model=str(item.get("model", "")).strip(),
-            )
-        )
-    return profiles
-
-
-def _serialize_llm_settings(payload: dict[str, object], *, message: str) -> LLMSettingsResponse:
-    return LLMSettingsResponse(
-        has_api_key=bool(payload["api_key"]),
-        base_url=str(payload["base_url"]),
-        model=str(payload["model"]),
-        profiles=_serialize_model_profiles(payload),
-        default_profile_id=str(payload.get("default_profile_id", "")).strip(),
-        operation_mode=str(payload["operation_mode"]),
-        freeze_failed_candidates=bool(payload["freeze_failed_candidates"]),
-        min_chapter_chars=max(500, int(payload.get("min_chapter_chars", 2500))),
-        review_interval_chapters=max(0, int(payload.get("review_interval_chapters", 0))),
-        progression_mode=str(payload.get("progression_mode", "serial_canon_band_guard")),
-        auto_band_checkpoint=bool(payload.get("auto_band_checkpoint", True)),
-        band_warn_action=str(payload.get("band_warn_action", "pause")) or "pause",
-        manual_checkpoints_enabled=bool(payload.get("manual_checkpoints_enabled", True)),
-        future_constraints_enabled=bool(payload.get("future_constraints_enabled", True)),
-        message=message,
-    )
-
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]

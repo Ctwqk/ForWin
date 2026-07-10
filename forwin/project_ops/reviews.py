@@ -270,13 +270,13 @@ def get_chapter_review(
                 for item in reversed(rewrite_attempts)
             ],
             decision_refs=decision_refs,
-            review_engine_decision=_latest_review_engine_decision(decision_refs),
+            rule_decision=_latest_rule_decision(decision_refs),
         )
     finally:
         session.close()
 
 
-def _latest_review_engine_decision(decision_refs: list[Any]) -> dict[str, Any]:
+def _latest_rule_decision(decision_refs: list[Any]) -> dict[str, Any]:
     for event in reversed(decision_refs):
         payload = getattr(event, "payload", {}) or {}
         if not isinstance(payload, dict):

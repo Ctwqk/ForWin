@@ -40,7 +40,6 @@ class FinalAcceptanceGate:
     def evaluate(
         self,
         *,
-        operation_mode: str,
         review: ReviewVerdict,
         verification: RepairVerification | None,
     ) -> FinalGateDecision:
@@ -49,16 +48,6 @@ class FinalAcceptanceGate:
             for issue in review.issues
             if str(issue.severity or "") == "error"
         ]
-        if str(operation_mode or "") != "blackbox":
-            return FinalGateDecision(
-                decision="manual_review_required",
-                forceable=False,
-                reason="non-blackbox-mode",
-                canon_risk="high",
-                residual_issues=residual_issues,
-                requires_human=True,
-            )
-
         if verification is None:
             return FinalGateDecision(
                 decision="manual_review_required",

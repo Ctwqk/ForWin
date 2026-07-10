@@ -23,7 +23,6 @@ def _input_with_issue(issue_kind: str) -> DecisionInput:
         ),
         signals=[],
         open_obligations=[],
-        operation_mode="blackbox",
         attempts_completed=0,
         prior_scope_history=[],
         budget=None,

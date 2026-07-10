@@ -9,9 +9,8 @@ from forwin.narrative_obligations.budget import ObligationBudgetResult
 from forwin.narrative_obligations.types import NarrativeObligation
 from forwin.protocol.review import ReviewVerdict
 
-OperationMode = Literal["blackbox", "copilot", "checkpoint"]
 DecisionOutcome = Literal[
-    "auto_approve",
+    "accept",
     "local_repair",
     "chapter_patch",
     "band_patch",
@@ -41,7 +40,6 @@ class DecisionInput:
     review: ReviewVerdict
     signals: list[CanonQualitySignal]
     open_obligations: list[NarrativeObligation]
-    operation_mode: OperationMode
     attempts_completed: int
     prior_scope_history: list[str]
     budget: ObligationBudgetResult | None

@@ -93,7 +93,7 @@ def _build_stage_generation_messages(
             ("阶段", f"{label} ({stage_key})"),
             (
                 "输出要求",
-                "返回 ExecutionBootstrap JSON，至少包含 operation_mode、governance_defaults、root_ready、start_policy。"
+                "返回 ExecutionBootstrap JSON，至少包含 pipeline、root_ready、start_policy。"
                 "这是执行契约，不是新一轮世界观创作。"
             ),
             ("阶段硬约束", _prompt_bullets(_GENESIS_STAGE_HARD_RULES[stage_key])),

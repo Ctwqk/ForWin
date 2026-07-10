@@ -10,6 +10,7 @@ from forwin.context.assembler import ChapterContextAssembler
 from forwin.context.gates import RecencyTruncateGate
 from forwin.director import ArcDirector
 from forwin.experience.service import ExperiencePlanningService
+from forwin.generation.gate_delegation import GateDelegationService, SparkGateDelegate
 from forwin.llm.factory import maybe_wrap_with_codex_router
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.orchestrator.phase24 import ArcEnvelopeManager
@@ -334,6 +335,9 @@ class RuntimeContainer:
             repair_verifier=RepairVerifier(
                 llm_client=llm_client if llm_available else None,
                 llm_enabled=llm_available,
+            ),
+            gate_delegation=GateDelegationService(
+                spark_delegate=SparkGateDelegate(llm_client=llm_client)
             ),
         )
 

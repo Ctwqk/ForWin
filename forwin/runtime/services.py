@@ -56,3 +56,4 @@ class RuntimeServices:
     writer: Any
     provisional_writer: Any
     repair_verifier: Any
+    gate_delegation: Any

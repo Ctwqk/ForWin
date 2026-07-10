@@ -182,7 +182,6 @@ from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
-from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
 

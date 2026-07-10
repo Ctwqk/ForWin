@@ -14,19 +14,19 @@ def test_waiting_review_breakdown_groups_manual_review_by_rule_id() -> None:
     rows = [
         _event(
             {
-                "rule_id": "auto_approve_policy_disabled",
+                "rule_id": "manual_canon_review",
                 "outcome": "manual_review",
-                "reason": "policy disabled: review_engine.auto_approve_enabled=false",
+                "reason": "canon evidence is incomplete",
             }
         ),
         _event(
             {
-                "rule_id": "auto_approve_policy_disabled",
+                "rule_id": "manual_canon_review",
                 "outcome": "manual_review",
-                "reason": "policy disabled: review_engine.auto_approve_enabled=false",
+                "reason": "canon evidence is incomplete",
             }
         ),
-        _event({"rule_id": "copilot_safe_warn", "outcome": "auto_approve"}),
+        _event({"rule_id": "clean_accept", "outcome": "accept"}),
         _event({"rule_id": "canon_gate_block", "outcome": "system_block"}),
     ]
 
@@ -34,11 +34,11 @@ def test_waiting_review_breakdown_groups_manual_review_by_rule_id() -> None:
 
     assert breakdown == [
         {
-            "rule_id": "auto_approve_policy_disabled",
+            "rule_id": "manual_canon_review",
             "outcome": "manual_review",
-            "reason": "policy disabled: review_engine.auto_approve_enabled=false",
+            "reason": "canon evidence is incomplete",
             "count": 2,
-            "status_chip": "可自动处理但策略关闭",
+            "status_chip": "需要人工判断",
         },
         {
             "rule_id": "canon_gate_block",

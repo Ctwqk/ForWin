@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from forwin.review_engine.issue_taxonomy import IssueScope, classify_primary_issue
 from forwin.review_engine.types import Decision, DecisionInput, DecisionOutcome, DecisionRule
 
@@ -34,33 +32,13 @@ ESCALATION_PATH: tuple[IssueScope, ...] = (
 )
 
 
-@dataclass(frozen=True)
-class RepairV2ShadowResult:
-    live_scope: str
-    shadow_scope: str
-    enabled: bool
-
-
-def compare_repair_v2_shadow(
-    *,
-    old_scope: str,
-    new_scope: str,
-    enabled: bool,
-) -> RepairV2ShadowResult:
-    return RepairV2ShadowResult(
-        live_scope=str(new_scope if enabled else old_scope),
-        shadow_scope=str(new_scope),
-        enabled=bool(enabled),
-    )
-
-
-def build_repair_v2_rules(*, enabled: bool) -> list[DecisionRule]:
+def build_repair_v2_rules() -> list[DecisionRule]:
     return [
         DecisionRule(
             rule_id="repair_v2_scope_driven",
             source_dispatcher="RepairPolicy.v2",
             priority=80,
-            matches=lambda input: bool(enabled) and input.review.verdict == "fail",
+            matches=lambda input: input.review.verdict == "fail",
             decide=decide_repair_v2,
         )
     ]

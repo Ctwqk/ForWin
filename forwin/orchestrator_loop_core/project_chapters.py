@@ -195,9 +195,8 @@ def _run_project_chapters(
         )
         manual_start_approved = bool(
             manual_start_checkpoint is not None
-            and self._delegate_checkpoint_if_reckless(
+            and self._resolve_checkpoint_gate(
                 updater=updater,
-                governance=policy,
                 checkpoint=manual_start_checkpoint,
                 gate_kind="manual_checkpoint_chapter_start",
                 chapter_number=chapter_num,
@@ -470,7 +469,6 @@ def _run_project_chapters(
                 session=session,
                 updater=updater,
                 project_id=project_id,
-                governance=policy,
                 chapter_plan=chapter_plan,
                 writer_output=writer_output,
                 verdict=verdict,
@@ -488,7 +486,7 @@ def _run_project_chapters(
             if review_gate.pause_required:
                 break
             should_apply_canon = review_gate.should_apply_canon
-            reckless_review_approved = review_gate.reckless_approved
+            gate_approved = review_gate.gate_approved
 
             while True:
                 self._emit_progress(
@@ -617,14 +615,14 @@ def _run_project_chapters(
                 chapter_num,
                 status,
                 acceptance_mode=(
-                    "reckless_approved"
-                    if reckless_review_approved
+                    "gate_approved"
+                    if gate_approved
                     else ("force_accept_after_repair" if force_accept_applied else "normal")
                 ),
                 repair_attempt_count=repair_attempt_count,
                 residual_review_issues=(
                     residual_review_issues
-                    if force_accept_applied or reckless_review_approved
+                    if force_accept_applied or gate_approved
                     else []
                 ),
                     canon_risk_level=canon_risk_level,
@@ -784,10 +782,9 @@ def _run_project_chapters(
                     )
                 except (json.JSONDecodeError, TypeError):
                     audit_payload = {}
-                audit_outcome = self._delegate_reckless_review(
+                audit_outcome = self._resolve_gate_delegation(
                     updater=updater,
                     project_id=project_id,
-                    governance=policy,
                     gate_kind="generation_audit_pause",
                     scope="project",
                     chapter_number=chapter_num,
@@ -803,7 +800,7 @@ def _run_project_chapters(
                         "runtime_policy": policy.model_dump(mode="json"),
                     },
                 )
-                if audit_outcome is not None and audit_outcome.approved:
+                if audit_outcome.approved:
                     generation_audit_pause = False
             checkpoint_row = None
             checkpoint_pause = False
@@ -877,9 +874,8 @@ def _run_project_chapters(
             if (
                 (checkpoint_pause or checkpoint_warn_pause)
                 and checkpoint_row is not None
-                and self._delegate_checkpoint_if_reckless(
+                and self._resolve_checkpoint_gate(
                     updater=updater,
-                    governance=policy,
                     checkpoint=checkpoint_row,
                     gate_kind="band_checkpoint_pause",
                     chapter_number=chapter_num,
@@ -900,9 +896,8 @@ def _run_project_chapters(
             )
             if (
                 manual_after_accept is not None
-                and self._delegate_checkpoint_if_reckless(
+                and self._resolve_checkpoint_gate(
                     updater=updater,
-                    governance=policy,
                     checkpoint=manual_after_accept,
                     gate_kind="manual_checkpoint_chapter_accepted",
                     chapter_number=chapter_num,
@@ -911,9 +906,8 @@ def _run_project_chapters(
                 manual_after_accept = None
             if (
                 manual_band_end is not None
-                and self._delegate_checkpoint_if_reckless(
+                and self._resolve_checkpoint_gate(
                     updater=updater,
-                    governance=policy,
                     checkpoint=manual_band_end,
                     gate_kind="manual_checkpoint_band_end",
                     chapter_number=chapter_num,

@@ -74,7 +74,7 @@ def build_review_outcome_rules(_: object | None = None) -> list[DecisionRule]:
     return [
         DecisionRule(
             rule_id="review_outcome_policy",
-            source_dispatcher="review_engine",
+            source_dispatcher="ReviewOutcomeRouter",
             priority=100,
             matches=lambda _input: True,
             decide=decide_review_outcome,
@@ -234,7 +234,7 @@ def _decision(
         reason=reason,
         rule_id="review_outcome_policy",
         missing_evidence=[],
-        routed_from="review_engine",
+        routed_from="ReviewOutcomeRouter",
         sub_action={
             "review_action": action,
             "minimum_scope": minimum_scope,
@@ -293,7 +293,7 @@ def _primary_issue(facts: list[_IssueFact]) -> _IssueFact | None:
 def _decision_outcome_for_review_action(action: str) -> str:
     normalized = str(action or "").strip()
     if normalized == "commit_clean":
-        return "auto_approve"
+        return "accept"
     if normalized == "commit_with_obligation":
         return "commit_with_obligation"
     if normalized == "local_rewrite":
@@ -316,7 +316,7 @@ def _decision_outcome_for_review_action(action: str) -> str:
 
 
 def _review_action_for_outcome(outcome: str, fallback_action: str = "") -> str:
-    if outcome == "auto_approve":
+    if outcome == "accept":
         return "commit_clean"
     if outcome == "local_repair":
         return "local_rewrite"

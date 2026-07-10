@@ -20,7 +20,6 @@ def _input(
         review=review,
         signals=list(signals or []),
         open_obligations=[],
-        operation_mode="blackbox",
         attempts_completed=0,
         prior_scope_history=[],
         budget=None,
@@ -33,13 +32,13 @@ def _decision(input_payload: DecisionInput) -> Decision:
     return AutoDecisionEngine(build_review_outcome_rules()).decide(input_payload)
 
 
-def test_engine_routes_clean_pass_to_auto_approve_commit_clean() -> None:
+def test_engine_routes_clean_pass_to_accept_commit_clean() -> None:
     decision = _decision(_input(review=ReviewVerdict(verdict="pass")))
 
-    assert decision.outcome == "auto_approve"
+    assert decision.outcome == "accept"
     assert decision.sub_action["review_action"] == "commit_clean"
     assert decision.sub_action["minimum_scope"] == "draft"
-    assert decision.routed_from == "review_engine"
+    assert decision.routed_from == "ReviewOutcomeRouter"
 
 
 def test_engine_routes_placeholder_failure_to_local_repair() -> None:

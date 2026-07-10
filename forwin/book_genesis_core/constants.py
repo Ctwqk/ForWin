@@ -187,7 +187,7 @@ _GENESIS_STAGE_HARD_RULES = {
         "target_size、soft_min、soft_max 要贴近建议尺寸，不要极端失衡。",
     ],
     "bootstrap": [
-        "只整理已有 Genesis 结果，不发明新的 operation_mode 或治理字段。",
+        "只整理已有 Genesis 结果，不发明新的运行策略字段。",
         "root_ready 必须反映当前 Genesis 根层是否足以启动写作；start_policy 要简洁、可执行。",
     ],
 }

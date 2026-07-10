@@ -9,7 +9,6 @@ from forwin.config import InfrastructureConfig
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
-from forwin.runtime_settings import RuntimeSettingsStore
 
 _config: InfrastructureConfig | None = None
 _engine = None
@@ -17,7 +16,6 @@ _SessionFactory = None
 _orchestrator: WritingOrchestrator | None = None
 _runtime_container: RuntimeContainer | None = None
 _publisher_manager: PublisherManager | None = None
-_runtime_settings: RuntimeSettingsStore | None = None
 _task_center_service: TaskCenterService | None = None
 _automation_scheduler_thread: threading.Thread | None = None
 _automation_scheduler_stop = threading.Event()

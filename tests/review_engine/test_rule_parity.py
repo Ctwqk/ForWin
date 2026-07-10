@@ -20,7 +20,6 @@ def _input(
         review=review,
         signals=list(signals or []),
         open_obligations=[],
-        operation_mode="blackbox",
         attempts_completed=0,
         prior_scope_history=[],
         budget=None,
@@ -39,8 +38,8 @@ def test_clean_pass_matches_review_outcome_router() -> None:
     decision = _engine_decision(input_payload)
 
     assert decision.sub_action["review_action"] == "commit_clean"
-    assert decision.outcome == "auto_approve"
-    assert decision.routed_from == "review_engine"
+    assert decision.outcome == "accept"
+    assert decision.routed_from == "ReviewOutcomeRouter"
 
 
 def test_placeholder_failure_matches_review_outcome_router() -> None:
@@ -62,7 +61,7 @@ def test_placeholder_failure_matches_review_outcome_router() -> None:
 
     assert decision.sub_action["review_action"] == "local_rewrite"
     assert decision.outcome == "local_repair"
-    assert decision.routed_from == "review_engine"
+    assert decision.routed_from == "ReviewOutcomeRouter"
 
 
 def test_plan_defer_matches_review_outcome_router() -> None:
@@ -81,7 +80,7 @@ def test_plan_defer_matches_review_outcome_router() -> None:
 
     assert decision.sub_action["review_action"] == "defer_with_chapter_plan_patch"
     assert decision.outcome == "chapter_patch"
-    assert decision.routed_from == "review_engine"
+    assert decision.routed_from == "ReviewOutcomeRouter"
 
 
 def test_final_block_matches_review_outcome_router() -> None:
@@ -105,4 +104,4 @@ def test_final_block_matches_review_outcome_router() -> None:
 
     assert decision.sub_action["review_action"] == "block"
     assert decision.outcome == "system_block"
-    assert decision.routed_from == "review_engine"
+    assert decision.routed_from == "ReviewOutcomeRouter"

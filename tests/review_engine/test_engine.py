@@ -12,7 +12,6 @@ def _input() -> DecisionInput:
         review=ReviewVerdict(verdict="warn"),
         signals=[],
         open_obligations=[],
-        operation_mode="copilot",
         attempts_completed=0,
         prior_scope_history=[],
         budget=None,

@@ -30,11 +30,9 @@ from forwin.governance import (
     BlockingReasonInfo,
     DecisionEventInfo,
     NarrativeConstraintInfo,
-    ProjectGovernanceSettings,
     DecisionEventType,
     chapter_blocking_message,
     normalize_checkpoint_status,
-    normalize_project_governance,
 )
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.entity import Entity
@@ -56,6 +54,7 @@ from forwin.models.publisher import PublisherUploadJob
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.models.thread import PlotThread
 from forwin.protocol.review import normalize_repair_scope
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.query_helpers import (
     load_latest_active_arc_envelope_by_project,
     load_latest_arc_envelope_analysis_by_project,
@@ -84,7 +83,6 @@ def build_project_summaries(
     session: Session,
     projects: list[Project],
     display_datetime: DisplayDatetime,
-    review_interval_chapters: int = 0,
 ) -> list[ProjectSummary]:
     project_ids = [project.id for project in projects]
     plans = (
@@ -178,15 +176,15 @@ def build_project_summaries(
         latest_checkpoint = latest_checkpoint_map.get(project.id)
         chapter_stats = chapter_stats_by_project.get(project.id, {})
         project_upload_stats = upload_stats.get(project.id, {})
-        governance = normalize_project_governance(project.governance_json)
+        policy_record = ProjectPolicyStore(session).load(project)
         genesis_revision = genesis_revision_map.get(project.id)
         generation_control = build_generation_control(
             plans=plans_by_project.get(project.id, []),
             latest_replan=last_replan,
-            review_interval_chapters=governance.review_interval_chapters or review_interval_chapters,
+            review_interval_chapters=policy_record.policy.pause.review_interval_chapters,
             latest_band_checkpoint=latest_checkpoint,
             decision_events=decision_timeline_map.get(project.id, []),
-            future_constraints_enabled=governance.future_constraints_enabled,
+            future_constraints_enabled=policy_record.policy.planning.future_constraints,
         )
         if (
             str(getattr(project, "creation_status", "") or "").strip() == "writing"
@@ -221,7 +219,8 @@ def build_project_summaries(
                 upload_task_count=int(project_upload_stats.get("upload_task_count", 0) or 0),
                 uploaded_chapter_count=int(project_upload_stats.get("uploaded_chapter_count", 0) or 0),
                 automation=normalize_project_automation(project.automation_json),
-                governance=governance,
+                runtime_policy=policy_record.policy,
+                runtime_policy_version=policy_record.version,
                 latest_stage=latest_stage.stage_label if latest_stage else "",
                 pacing_verdict=latest_stage.pacing_verdict if latest_stage else "",
                 pacing_summary=latest_stage.pacing_summary if latest_stage else "",

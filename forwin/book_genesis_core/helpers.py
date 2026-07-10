@@ -202,15 +202,13 @@ def _book_brief_from_project(project: Project, brief_seed: dict[str, Any] | None
 
 
 def _initial_pack(project: Project, brief_seed: dict[str, Any] | None = None) -> dict[str, Any]:
-    governance = normalize_project_governance(project.governance_json)
     return {
         "book_brief": _book_brief_from_project(project, brief_seed),
         "world": _empty_stage_world(),
         "book_arc_blueprint": {},
         "subworld_policy": _default_subworld_policy(),
         "execution_bootstrap": {
-            "operation_mode": "blackbox",
-            "governance_defaults": governance.model_dump(mode="json"),
+            "pipeline": "strict_blackbox",
             "status": "draft",
         },
         "stage_states": _empty_stage_states(),

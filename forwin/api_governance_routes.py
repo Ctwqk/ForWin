@@ -9,7 +9,6 @@ from forwin.api_schemas import (
     ManualCheckpointRequest,
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
-    ProjectGovernanceUpdateRequest,
     ScenarioPlanPatchApproveRequest,
     TaskContractUpdateRequest,
     TropeTemplateValidationRequest,
@@ -19,7 +18,6 @@ from forwin.api_schemas import (
 def build_handlers(
     *,
     get_session: Callable[[], Any],
-    get_config: Callable[[], Any],
     get_orchestrator: Callable[[], Any],
     display_datetime: Callable[[Any], str],
     require_reason: Callable[[str], str],
@@ -32,41 +30,15 @@ def build_handlers(
     build_governance_insights: Callable[..., Any],
     latest_band_checkpoint_row: Callable[..., Any],
     latest_related_decision_event: Callable[..., Any],
-    resolve_project_governance: Callable[..., Any],
-    governance_request_payload: Callable[[object], dict[str, object]],
-    persist_project_governance: Callable[..., Any],
     log_decision_event: Callable[..., Any],
     json_load_object: Callable[[str | None], dict[str, Any]],
 ) -> dict[str, Callable[..., Any]]:
-    def get_project_governance(project_id: str):
-        return api_governance_ops.get_project_governance(
-            project_id,
-            get_session=get_session,
-            config=get_config(),
-            resolve_project_governance=resolve_project_governance,
-        )
-
-    def update_project_governance(project_id: str, req: ProjectGovernanceUpdateRequest):
-        return api_governance_ops.update_project_governance(
-            project_id,
-            req,
-            get_session=get_session,
-            config=get_config(),
-            require_reason=require_reason,
-            governance_request_payload=governance_request_payload,
-            resolve_project_governance=resolve_project_governance,
-            persist_project_governance=persist_project_governance,
-            log_decision_event=log_decision_event,
-        )
-
     def create_manual_checkpoint(project_id: str, req: ManualCheckpointRequest):
         return api_governance_ops.create_manual_checkpoint(
             project_id,
             req,
             get_session=get_session,
-            config=get_config(),
             require_reason=require_reason,
-            resolve_project_governance=resolve_project_governance,
             serialize_band_checkpoint=serialize_band_checkpoint,
             log_decision_event=log_decision_event,
         )
@@ -280,8 +252,6 @@ def build_handlers(
         )
 
     return {
-        "get_project_governance": get_project_governance,
-        "update_project_governance": update_project_governance,
         "create_manual_checkpoint": create_manual_checkpoint,
         "get_band_checkpoint": get_band_checkpoint,
         "approve_band_checkpoint": approve_band_checkpoint,

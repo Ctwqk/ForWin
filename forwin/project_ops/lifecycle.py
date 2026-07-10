@@ -59,7 +59,6 @@ from forwin.governance import (
     DecisionEventInfo,
     DecisionEventType,
     derive_chapter_task_contract,
-    new_project_governance,
     plan_task_contract_to_json,
 )
 from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis
@@ -74,6 +73,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import normalize_repair_scope
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id, load_latest_rewrite_attempts_by_chapter
 from forwin.state.updater import StateUpdater
 
@@ -107,7 +107,6 @@ def list_projects(
             session=session,
             projects=projects,
             display_datetime=display_datetime,
-            review_interval_chapters=max(0, int(config.review_interval_chapters if config else 0)),
         )
     finally:
         session.close()
@@ -163,13 +162,7 @@ def create_project(
                 "publish_bindings": publish_bindings,
             }
         )
-        governance = new_project_governance(
-            default_operation_mode="blackbox",
-            review_delegation_mode=(
-                config.review_delegation_mode if config is not None else "human"
-            ),
-            review_interval_chapters=config.review_interval_chapters if config is not None else 0,
-        )
+        policy = RuntimePolicy.for_profile("standard")
         updater = StateUpdater(session)
         project = updater.create_project(
             title=title,
@@ -177,7 +170,7 @@ def create_project(
             genre=str(req.genre or "").strip() or "玄幻",
             setting_summary=str(req.setting_summary or "").strip(),
             target_total_chapters=max(1, int(req.target_total_chapters or 1)),
-            governance=governance,
+            runtime_policy=policy,
             creation_status="creating",
             automation_json=json.dumps(
                 automation.model_dump(mode="json"),
@@ -202,9 +195,10 @@ def create_project(
             project_id=project.id,
             event_family="business_event",
             event_type=DecisionEventType.PROJECT_CREATED,
-            summary="项目已创建并启用默认治理策略。",
+            summary="项目已创建并启用默认运行策略。",
             payload={
-                "governance": governance.model_dump(mode="json"),
+                "runtime_policy_version": 1,
+                "quality_profile": policy.quality_profile,
                 "creation_status": "creating",
             },
         )
@@ -331,7 +325,6 @@ def get_project(
             session=session,
             project=project,
             display_datetime=display_datetime,
-            review_interval_chapters=max(0, int(config.review_interval_chapters if config else 0)),
         )
         return _overlay_active_generation_task(
             detail,

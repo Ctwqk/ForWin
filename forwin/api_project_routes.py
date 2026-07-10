@@ -4,7 +4,7 @@ from typing import Any, Callable
 
 from fastapi import HTTPException
 
-from forwin import api_project_ops
+from forwin import api_project_ops, api_project_policy
 from forwin.api_project_payloads import normalize_project_automation
 from forwin.api_schemas import (
     BookGenesisPatchRequest,
@@ -20,6 +20,7 @@ from forwin.api_schemas import (
     ProjectContinueGenerationRequest,
     ProjectCreateRequest,
     ProjectExtendGenerationRequest,
+    RuntimePolicyUpdateRequest,
     StartWritingRequest,
 )
 from forwin.models.project import Project
@@ -76,7 +77,6 @@ def build_handlers(
     *,
     get_session: Callable[[], Any],
     get_config: Callable[[], Any],
-    get_runtime_settings: Callable[[], Any],
     get_orchestrator: Callable[[], Any],
     get_publisher_manager: Callable[[], Any],
     display_datetime: Callable[[Any], str],
@@ -93,8 +93,6 @@ def build_handlers(
     generation_task_conflict_message: Callable[[str], str],
     create_continue_generation_task: Callable[..., str],
     persist_project_automation: Callable[..., Any],
-    resolve_project_governance: Callable[..., Any],
-    governance_request_payload: Callable[[object], dict[str, object]],
     log_decision_event: Callable[..., Any],
     serialize_task: Callable[[str, dict[str, Any]], Any],
     get_generation_task_or_404: Callable[[str], dict[str, Any]],
@@ -145,6 +143,19 @@ def build_handlers(
             get_session=get_session,
             config=get_config(),
             display_datetime=display_datetime,
+        )
+
+    def get_project_policy(project_id: str):
+        return api_project_policy.get_project_policy(
+            project_id,
+            session_factory=get_session,
+        )
+
+    def update_project_policy(project_id: str, req: RuntimePolicyUpdateRequest):
+        return api_project_policy.update_project_policy(
+            project_id,
+            req,
+            session_factory=get_session,
         )
 
     def get_project_genesis(project_id: str):
@@ -259,11 +270,8 @@ def build_handlers(
             req,
             get_session=get_session,
             config=get_config(),
-            runtime_settings=get_runtime_settings(),
             display_datetime=display_datetime,
             active_generation_task_error_cls=active_generation_task_error_cls,
-            resolve_project_governance=resolve_project_governance,
-            governance_request_payload=governance_request_payload,
             project_has_active_generation_task=project_has_active_generation_task,
             generation_task_conflict_message=generation_task_conflict_message,
             log_decision_event=log_decision_event,
@@ -349,12 +357,10 @@ def build_handlers(
             req,
             config=get_config(),
             orchestrator=get_orchestrator(),
-            runtime_settings=get_runtime_settings(),
             get_session=get_session,
             display_datetime=display_datetime,
             active_generation_task_error_cls=active_generation_task_error_cls,
             require_reason=require_reason,
-            resolve_project_governance=resolve_project_governance,
             project_has_active_generation_task=project_has_active_generation_task,
             generation_task_conflict_message=generation_task_conflict_message,
             log_decision_event=log_decision_event,
@@ -372,11 +378,9 @@ def build_handlers(
             chapter_number,
             req,
             config=get_config(),
-            runtime_settings=get_runtime_settings(),
             get_session=get_session,
             active_generation_task_error_cls=active_generation_task_error_cls,
             require_reason=require_reason,
-            resolve_project_governance=resolve_project_governance,
             project_has_active_generation_task=project_has_active_generation_task,
             generation_task_conflict_message=generation_task_conflict_message,
             log_decision_event=log_decision_event,
@@ -389,6 +393,8 @@ def build_handlers(
         "delete_project": delete_project,
         "bulk_delete_projects": bulk_delete_projects,
         "get_project": get_project,
+        "get_project_policy": get_project_policy,
+        "update_project_policy": update_project_policy,
         "get_project_genesis": get_project_genesis,
         "patch_project_genesis": patch_project_genesis,
         "generate_project_genesis_stage": generate_project_genesis_stage,

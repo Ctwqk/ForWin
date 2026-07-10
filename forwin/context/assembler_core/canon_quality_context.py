@@ -67,23 +67,8 @@ def _build_canon_quality_context(
         return base
     try:
         from forwin.canon_quality.repository import CanonQualityRepository
-        from forwin.governance import normalize_project_governance
         from forwin.narrative_obligations.repository import NarrativeObligationRepository
-        from forwin.models.project import Project
         from forwin.planning.future_plan_auditor import FuturePlanAuditRepository
-
-        project = session.get(Project, project_id)
-        if project is not None:
-            governance = normalize_project_governance(
-                getattr(project, "governance_json", "") or "{}",
-                fallback_operation_mode="blackbox",
-                fallback_review_interval=0,
-            )
-            base["canon_glossary"] = governance.canon_glossary.model_dump(mode="json")
-            base["countdown_rule_profiles"] = {
-                key: profile.model_dump(mode="json")
-                for key, profile in governance.canon_glossary.countdowns.items()
-            }
 
         repo = CanonQualityRepository(session)
         obligation_repo = NarrativeObligationRepository(session)

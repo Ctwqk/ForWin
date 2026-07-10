@@ -11,31 +11,9 @@ from forwin.governance import (
     DecisionEventInfo,
     NarrativeConstraintInfo,
     PlanTaskItem,
-    ProjectGovernanceSettings,
 )
 from forwin.protocol.subworld import SubWorldSummary
 from .project import ProjectAutomationPublishSettings, ProjectAutomationSettings
-
-
-class ProjectGovernanceUpdateRequest(BaseModel):
-    default_operation_mode: str | None = None
-    review_delegation_mode: Literal["human", "reckless"] | None = None
-    review_interval_chapters: int | None = None
-    progression_mode: str | None = None
-    auto_band_checkpoint: bool | None = None
-    band_warn_action: str | None = None
-    manual_checkpoints_enabled: bool | None = None
-    future_constraints_enabled: bool | None = None
-    generation_audit_interval_chapters: int | None = Field(default=None, ge=0)
-    generation_audit_pause_enabled: bool | None = None
-    reason: str = ""
-
-
-class ProjectGovernanceResponse(BaseModel):
-    ok: bool
-    project_id: str
-    governance: ProjectGovernanceSettings
-    message: str = ""
 
 
 class ManualCheckpointRequest(BaseModel):
@@ -118,8 +96,6 @@ class ProjectAutomationUpdateResponse(BaseModel):
 
 
 __all__ = [
-    'ProjectGovernanceUpdateRequest',
-    'ProjectGovernanceResponse',
     'ManualCheckpointRequest',
     'BandCheckpointApproveRequest',
     'NarrativeConstraintCreateRequest',

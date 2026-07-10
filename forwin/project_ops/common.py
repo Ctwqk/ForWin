@@ -60,7 +60,6 @@ from forwin.governance import (
     DecisionEventInfo,
     DecisionEventType,
     derive_chapter_task_contract,
-    new_project_governance,
     plan_task_contract_to_json,
 )
 from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis

@@ -11,7 +11,6 @@ from forwin.governance import (
     DecisionEventInfo,
     NarrativeConstraintInfo,
     PlanTaskItem,
-    ProjectGovernanceSettings,
 )
 from forwin.protocol.subworld import SubWorldSummary
 

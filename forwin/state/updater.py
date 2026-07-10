@@ -15,7 +15,6 @@ from forwin.governance import (
     NarrativeConstraintInfo,
     derive_band_task_contract,
     derive_chapter_task_contract,
-    governance_to_json,
     issue_group_for_issue,
     plan_task_contract_to_json,
 )
@@ -147,19 +146,6 @@ class StateUpdater:
             runtime_policy_json=runtime_policy.model_dump_json(),
             runtime_policy_version=1,
         )
-        self.session.add(project)
-        self.session.flush()
-        return project
-
-    def update_project_governance(
-        self,
-        project_id: str,
-        governance,
-    ) -> Project | None:
-        project = self._repo.get_project(project_id)
-        if project is None:
-            return None
-        project.governance_json = governance_to_json(governance)
         self.session.add(project)
         self.session.flush()
         return project

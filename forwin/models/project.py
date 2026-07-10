@@ -21,7 +21,6 @@ class Project(Base):
     creation_status: Mapped[str] = mapped_column(String, default="creating")
     active_genesis_revision_id: Mapped[str] = mapped_column(String, default="")
     automation_json: Mapped[str] = mapped_column(Text, default="{}")
-    governance_json: Mapped[str] = mapped_column(Text, default="{}")
     runtime_policy_json: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )

@@ -43,8 +43,6 @@ from forwin.governance import (
     chapter_blocking_message,
     ensure_decision_event_type,
     issue_group_for_issue,
-    new_project_governance,
-    normalize_project_governance,
 )
 from forwin.governance_checks import (
     band_combined_text,

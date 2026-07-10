@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -11,10 +11,10 @@ from forwin.governance import (
     DecisionEventInfo,
     NarrativeConstraintInfo,
     PlanTaskItem,
-    ProjectGovernanceSettings,
 )
 from forwin.long_run_policy import LongRunPolicy
 from forwin.protocol.subworld import SubWorldSummary
+from forwin.runtime.policy import RuntimePolicy
 from .genesis import BookGenesisStageState
 from .publisher import PublisherBookMetaRequest
 from .tasks import GenerationControlInfo
@@ -111,7 +111,8 @@ class ProjectSummary(ProjectArcSnapshotFields):
     genesis_stage_overview: list[BookGenesisStageState] = Field(default_factory=list)
     can_start_writing: bool = False
     automation: ProjectAutomationSettings = Field(default_factory=ProjectAutomationSettings)
-    governance: ProjectGovernanceSettings = Field(default_factory=ProjectGovernanceSettings)
+    runtime_policy: RuntimePolicy
+    runtime_policy_version: int
     latest_stage: str = ""
     pacing_verdict: str = ""
     pacing_summary: str = ""
@@ -185,7 +186,8 @@ class ProjectDetail(ProjectArcSnapshotFields):
     upload_task_count: int = 0
     uploaded_chapter_count: int = 0
     automation: ProjectAutomationSettings = Field(default_factory=ProjectAutomationSettings)
-    governance: ProjectGovernanceSettings = Field(default_factory=ProjectGovernanceSettings)
+    runtime_policy: RuntimePolicy
+    runtime_policy_version: int
     characters: list[EntityInfo] = []
     locations: list[EntityInfo] = []
     factions: list[EntityInfo] = []
@@ -247,19 +249,11 @@ class ProjectCreateResponse(BaseModel):
 
 
 class ProjectContinueGenerationRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     max_chapters: int | None = Field(default=None, ge=1)
     auto_continue: bool | None = None
     run_until_chapter: int | None = Field(default=None, ge=1)
-    operation_mode: str | None = None
-    review_delegation_mode: Literal["human", "reckless"] | None = None
-    review_interval_chapters: int | None = None
-    progression_mode: str | None = None
-    auto_band_checkpoint: bool | None = None
-    band_warn_action: str | None = None
-    manual_checkpoints_enabled: bool | None = None
-    future_constraints_enabled: bool | None = None
-    generation_audit_interval_chapters: int | None = Field(default=None, ge=0)
-    generation_audit_pause_enabled: bool | None = None
 
 
 class ProjectExtendGenerationRequest(BaseModel):

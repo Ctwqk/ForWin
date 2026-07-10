@@ -11,7 +11,6 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 
 from forwin.api_project_payloads import build_project_detail, build_project_summaries, normalize_project_automation
-from forwin.api_runtime import build_saved_runtime_config, copy_config
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.api_schemas import (
     BookGenesisDetail,
@@ -64,7 +63,6 @@ from forwin.governance import (
     DecisionEventInfo,
     DecisionEventType,
     derive_chapter_task_contract,
-    new_project_governance,
     plan_task_contract_to_json,
 )
 from forwin.map.genesis_adapter import build_subworld_map_specs_from_genesis
@@ -79,6 +77,7 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import normalize_repair_scope
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id, load_latest_rewrite_attempts_by_chapter
 from forwin.state.updater import StateUpdater
 
@@ -364,12 +363,10 @@ def approve_chapter_review(
     *,
     config,
     orchestrator,
-    runtime_settings,
     get_session,
     display_datetime,
     active_generation_task_error_cls,
     require_reason,
-    resolve_project_governance,
     project_has_active_generation_task,
     generation_task_conflict_message,
     log_decision_event,
@@ -379,10 +376,7 @@ def approve_chapter_review(
     if config is None or orchestrator is None:
         raise HTTPException(500, "服务尚未完成初始化")
 
-    runtime_config = build_saved_runtime_config(
-        base_config=config,
-        runtime_settings=runtime_settings,
-    )
+    runtime_config = config
     reason = require_reason(req.reason, action="接受 review")
     task_id = ""
     if req.continue_generation:
@@ -391,27 +385,13 @@ def approve_chapter_review(
             project = session.get(Project, project_id)
             if project is None:
                 raise HTTPException(404, "项目不存在")
-            governance = resolve_project_governance(project, base_config=config)
-            runtime_config = copy_config(
-                runtime_config,
-                operation_mode=governance.default_operation_mode,
-                review_delegation_mode=governance.review_delegation_mode,
-                review_interval_chapters=governance.review_interval_chapters,
-                progression_mode=governance.progression_mode,
-                auto_band_checkpoint=governance.auto_band_checkpoint,
-                band_warn_action=governance.band_warn_action,
-                manual_checkpoints_enabled=governance.manual_checkpoints_enabled,
-                future_constraints_enabled=governance.future_constraints_enabled,
-                generation_audit_interval_chapters=governance.generation_audit_interval_chapters,
-                generation_audit_pause_enabled=governance.generation_audit_pause_enabled,
-            )
+            ProjectPolicyStore(session).load(project)
             if project_has_active_generation_task(project_id, session=session):
                 raise HTTPException(409, generation_task_conflict_message(project_id))
             project_detail = build_project_detail(
                 session=session,
                 project=project,
                 display_datetime=display_datetime,
-                review_interval_chapters=governance.review_interval_chapters,
             )
             if project_detail.blocking_reason.code:
                 log_decision_event(
@@ -597,11 +577,9 @@ def retry_chapter_review(
     req: ChapterReviewRetryRequest,
     *,
     config,
-    runtime_settings,
     get_session,
     active_generation_task_error_cls,
     require_reason,
-    resolve_project_governance,
     project_has_active_generation_task,
     generation_task_conflict_message,
     log_decision_event,
@@ -611,10 +589,7 @@ def retry_chapter_review(
         raise HTTPException(500, "服务尚未完成初始化")
 
     reason = require_reason(req.reason, action="重试 review 章节")
-    runtime_config = build_saved_runtime_config(
-        base_config=config,
-        runtime_settings=runtime_settings,
-    )
+    runtime_config = config
     task_id = ""
     continue_requested_chapters = 0
     session = get_session()
@@ -624,20 +599,7 @@ def retry_chapter_review(
             raise HTTPException(404, "项目不存在")
         if project_has_active_generation_task(project_id, session=session):
             raise HTTPException(409, generation_task_conflict_message(project_id))
-        governance = resolve_project_governance(project, base_config=config)
-        runtime_config = copy_config(
-            runtime_config,
-            operation_mode=governance.default_operation_mode,
-            review_delegation_mode=governance.review_delegation_mode,
-            review_interval_chapters=governance.review_interval_chapters,
-            progression_mode=governance.progression_mode,
-            auto_band_checkpoint=governance.auto_band_checkpoint,
-            band_warn_action=governance.band_warn_action,
-            manual_checkpoints_enabled=governance.manual_checkpoints_enabled,
-            future_constraints_enabled=governance.future_constraints_enabled,
-            generation_audit_interval_chapters=governance.generation_audit_interval_chapters,
-            generation_audit_pause_enabled=governance.generation_audit_pause_enabled,
-        )
+        ProjectPolicyStore(session).load(project)
         plan = session.execute(
             select(ChapterPlan).where(
                 ChapterPlan.project_id == project_id,

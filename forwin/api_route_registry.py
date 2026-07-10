@@ -68,7 +68,7 @@ from forwin.api_schemas import (
     ProjectCreateResponse,
     ProjectDeleteResponse,
     ProjectDetail,
-    ProjectGovernanceResponse,
+    RuntimePolicyResponse,
     ProjectSummary,
     PromptTraceDetailResponse,
     ProvisionalBandDetail,
@@ -161,8 +161,6 @@ class ProjectDeps:
 
 @dataclass(frozen=True)
 class GovernanceDeps:
-    resolve_project_governance: Callable[..., Any]
-    governance_request_payload: Callable[[object], dict[str, object]]
     latest_related_decision_event: Callable[..., Any]
     log_decision_event: Callable[..., Any]
     decision_refs_for_chapter_review: Callable[..., list[Any]]
@@ -174,7 +172,6 @@ class GovernanceDeps:
     build_causal_replay: Callable[..., Any]
     build_governance_insights: Callable[..., Any]
     latest_band_checkpoint_row: Callable[..., Any]
-    persist_project_governance: Callable[..., Any]
 
 
 @dataclass(frozen=True)
@@ -234,8 +231,6 @@ def register_api_routes(
     project_has_active_generation_task = deps.project_has_active_generation_task
     active_generation_task_ids = deps.active_generation_task_ids
     generation_task_conflict_message = deps.generation_task_conflict_message
-    resolve_project_governance = deps.resolve_project_governance
-    governance_request_payload = deps.governance_request_payload
     serialize_llm_settings = deps.serialize_llm_settings
     active_generation_task_error_cls = deps.active_generation_task_error_cls
     list_generation_tasks = deps.list_generation_tasks
@@ -273,7 +268,6 @@ def register_api_routes(
     build_causal_replay = deps.build_causal_replay
     build_governance_insights = deps.build_governance_insights
     latest_band_checkpoint_row = deps.latest_band_checkpoint_row
-    persist_project_governance = deps.persist_project_governance
     json_load_object = deps.json_load_object
     get_task_timeline = deps.get_task_timeline
     get_chapter_observability_ledger = deps.get_chapter_observability_ledger
@@ -296,14 +290,11 @@ def register_api_routes(
         render_publishers_page=render_publishers_page,
         build_home_page_settings=build_home_page_settings,
         build_runtime_config=build_runtime_config,
-        copy_config=copy_config,
         create_generation_task=create_generation_task,
         serialize_task=serialize_task,
         get_generation_task_or_404=get_generation_task_or_404,
         project_has_active_generation_task=project_has_active_generation_task,
         generation_task_conflict_message=generation_task_conflict_message,
-        resolve_project_governance=resolve_project_governance,
-        governance_request_payload=governance_request_payload,
         serialize_llm_settings=serialize_llm_settings,
         active_generation_task_error_cls=active_generation_task_error_cls,
         get_memory_index=get_memory_index,
@@ -337,7 +328,6 @@ def register_api_routes(
     project_handlers = api_project_routes.build_handlers(
         get_session=get_session,
         get_config=get_config,
-        get_runtime_settings=get_runtime_settings,
         get_orchestrator=get_orchestrator,
         get_publisher_manager=get_publisher_manager,
         display_datetime=display_datetime,
@@ -354,8 +344,6 @@ def register_api_routes(
         generation_task_conflict_message=generation_task_conflict_message,
         create_continue_generation_task=create_continue_generation_task,
         persist_project_automation=persist_project_automation,
-        resolve_project_governance=resolve_project_governance,
-        governance_request_payload=governance_request_payload,
         log_decision_event=log_decision_event,
         serialize_task=serialize_task,
         get_generation_task_or_404=get_generation_task_or_404,
@@ -366,7 +354,6 @@ def register_api_routes(
     )
     governance_handlers = api_governance_routes.build_handlers(
         get_session=get_session,
-        get_config=get_config,
         get_orchestrator=get_orchestrator,
         display_datetime=display_datetime,
         require_reason=require_reason,
@@ -379,9 +366,6 @@ def register_api_routes(
         build_governance_insights=build_governance_insights,
         latest_band_checkpoint_row=latest_band_checkpoint_row,
         latest_related_decision_event=latest_related_decision_event,
-        resolve_project_governance=resolve_project_governance,
-        governance_request_payload=governance_request_payload,
-        persist_project_governance=persist_project_governance,
         log_decision_event=log_decision_event,
         json_load_object=json_load_object,
     )
@@ -488,6 +472,8 @@ def register_api_routes(
         ("/api/projects/{project_id}", ["DELETE"], handlers["delete_project"], {"response_model": ProjectDeleteResponse}),
         ("/api/projects/bulk-delete", ["POST"], handlers["bulk_delete_projects"], {"response_model": BulkDeleteResponse}),
         ("/api/projects/{project_id}", ["GET"], handlers["get_project"], {"response_model": ProjectDetail}),
+        ("/api/projects/{project_id}/policy", ["GET"], handlers["get_project_policy"], {"response_model": RuntimePolicyResponse}),
+        ("/api/projects/{project_id}/policy", ["PUT"], handlers["update_project_policy"], {"response_model": RuntimePolicyResponse}),
         ("/api/projects/{project_id}/genesis", ["GET"], handlers["get_project_genesis"], {"response_model": BookGenesisDetail}),
         ("/api/projects/{project_id}/genesis", ["PATCH"], handlers["patch_project_genesis"], {"response_model": BookGenesisDetail}),
         ("/api/projects/{project_id}/genesis/stages/{stage_key}/generate", ["POST"], handlers["generate_project_genesis_stage"], {"response_model": BookGenesisDetail}),
@@ -513,8 +499,6 @@ def register_api_routes(
         ("/api/projects/{project_id}/continue-generation", ["POST"], handlers["continue_project_generation"], {"response_model": TaskResponse}),
         ("/api/projects/{project_id}/extend-generation", ["POST"], handlers["extend_project_generation"], {"response_model": ProjectDetail}),
         ("/api/projects/{project_id}/automation", ["PUT"], handlers["update_project_automation"], {"response_model": ProjectAutomationUpdateResponse}),
-        ("/api/projects/{project_id}/governance", ["GET"], handlers["get_project_governance"], {"response_model": ProjectGovernanceResponse}),
-        ("/api/projects/{project_id}/governance", ["PUT"], handlers["update_project_governance"], {"response_model": ProjectGovernanceResponse}),
         ("/api/projects/{project_id}/manual-checkpoints", ["POST"], handlers["create_manual_checkpoint"], {"response_model": BandCheckpointDetail}),
         ("/api/projects/{project_id}/bands/{band_id}/checkpoint", ["GET"], handlers["get_band_checkpoint"], {"response_model": BandCheckpointDetail}),
         ("/api/projects/{project_id}/bands/{band_id}/checkpoint/approve", ["POST"], handlers["approve_band_checkpoint"], {"response_model": BandCheckpointDetail}),

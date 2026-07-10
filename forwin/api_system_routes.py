@@ -18,6 +18,7 @@ from forwin.api_schemas import (
 from forwin.llm.codex_client import CodexBridgeClient
 from forwin.models.governance import DecisionEvent
 from forwin.models.project import Project
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.review_engine.dashboard import build_waiting_review_breakdown
 
 
@@ -34,14 +35,11 @@ def build_handlers(
     render_publishers_page: Callable[..., str],
     build_home_page_settings: Callable[..., dict[str, object]],
     build_runtime_config: Callable[..., Any],
-    copy_config: Callable[..., Any],
     create_generation_task: Callable[..., str],
     serialize_task: Callable[..., Any],
     get_generation_task_or_404: Callable[[str], dict[str, Any]],
     project_has_active_generation_task: Callable[..., bool],
     generation_task_conflict_message: Callable[[str], str],
-    resolve_project_governance: Callable[..., Any],
-    governance_request_payload: Callable[[object], dict[str, object]],
     serialize_llm_settings: Callable[..., Any],
     active_generation_task_error_cls: type[Exception],
     get_memory_index: Callable[[], Any] | None = None,
@@ -121,22 +119,7 @@ def build_handlers(
                     raise HTTPException(409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。")
                 if project_has_active_generation_task(normalized_project_id, session=session):
                     raise HTTPException(409, generation_task_conflict_message(normalized_project_id))
-                governance = resolve_project_governance(
-                    project,
-                    overrides=governance_request_payload(req),
-                    base_config=config,
-                )
-                runtime_config = copy_config(
-                    runtime_config,
-                    operation_mode=governance.default_operation_mode,
-                    review_delegation_mode=governance.review_delegation_mode,
-                    review_interval_chapters=governance.review_interval_chapters,
-                    progression_mode=governance.progression_mode,
-                    auto_band_checkpoint=governance.auto_band_checkpoint,
-                    band_warn_action=governance.band_warn_action,
-                    manual_checkpoints_enabled=governance.manual_checkpoints_enabled,
-                    future_constraints_enabled=governance.future_constraints_enabled,
-                )
+                ProjectPolicyStore(session).load(project)
                 task_title = project.title or task_title
                 task_subtitle = f"书本生成 · {project.genre} · {req.num_chapters} 章"
             finally:

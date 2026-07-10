@@ -18,7 +18,6 @@ from forwin.api_schemas import (
     NarrativeConstraintInfo,
     ProjectAutomationSettings,
 )
-from forwin.config import InfrastructureConfig
 from forwin.governance import (
     BandCheckpointIssueInfo,
     CONSTRAINT_LEVELS,
@@ -28,7 +27,6 @@ from forwin.governance import (
     ensure_decision_event_type,
     issue_group_for_issue,
     normalize_checkpoint_status,
-    normalize_project_governance,
 )
 from forwin.models.governance import BandCheckpoint, DecisionEvent, NarrativeConstraint
 from forwin.models.phase import BandExperiencePlan
@@ -82,85 +80,6 @@ def persist_project_automation(
 ) -> ProjectAutomationSettings:
     normalized = normalize_project_automation(automation.model_dump(mode="json"))
     project.automation_json = json.dumps(
-        normalized.model_dump(mode="json"),
-        ensure_ascii=False,
-    )
-    session.add(project)
-    session.flush()
-    return normalized
-
-
-def governance_request_payload(req: object) -> dict[str, object]:
-    if req is None:
-        return {}
-    payload: dict[str, object] = {}
-    for field in (
-        "default_operation_mode",
-        "operation_mode",
-        "review_delegation_mode",
-        "review_interval_chapters",
-        "progression_mode",
-        "auto_band_checkpoint",
-        "band_warn_action",
-        "manual_checkpoints_enabled",
-        "future_constraints_enabled",
-        "generation_audit_interval_chapters",
-        "generation_audit_pause_enabled",
-    ):
-        if not hasattr(req, field):
-            continue
-        value = getattr(req, field)
-        if value is None:
-            continue
-        target_field = "default_operation_mode" if field == "operation_mode" else field
-        payload[target_field] = value
-    return payload
-
-
-def resolve_project_governance(
-    project: Project | None,
-    *,
-    overrides: dict[str, object] | None = None,
-    base_config: InfrastructureConfig | None = None,
-) -> object:
-    fallback_operation_mode = (
-        base_config.operation_mode if base_config is not None else "blackbox"
-    )
-    fallback_review_delegation_mode = (
-        base_config.review_delegation_mode if base_config is not None else "human"
-    )
-    fallback_review_interval = (
-        max(0, int(base_config.review_interval_chapters or 0))
-        if base_config is not None
-        else 0
-    )
-    raw = project.governance_json if project is not None else "{}"
-    governance = normalize_project_governance(
-        raw,
-        fallback_operation_mode=fallback_operation_mode,
-        fallback_review_delegation_mode=fallback_review_delegation_mode,
-        fallback_review_interval=fallback_review_interval,
-    )
-    merged = governance.model_dump(mode="json")
-    for key, value in (overrides or {}).items():
-        merged[key] = value
-    return normalize_project_governance(
-        merged,
-        fallback_operation_mode=fallback_operation_mode,
-        fallback_review_delegation_mode=fallback_review_delegation_mode,
-        fallback_review_interval=fallback_review_interval,
-    )
-
-
-def persist_project_governance(
-    session,
-    project: Project,
-    governance,
-    *,
-    base_config: InfrastructureConfig | None = None,
-) -> object:
-    normalized = resolve_project_governance(project, overrides=governance.model_dump(mode="json"), base_config=base_config)
-    project.governance_json = json.dumps(
         normalized.model_dump(mode="json"),
         ensure_ascii=False,
     )

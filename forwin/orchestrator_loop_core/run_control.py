@@ -73,19 +73,7 @@ def run(
             genre=genre,
             setting_summary=setting_summary,
             target_total_chapters=num_chapters,
-            governance=new_project_governance(
-                default_operation_mode=self.config.operation_mode,
-                review_delegation_mode=self.config.review_delegation_mode,
-                review_interval_chapters=self.config.review_interval_chapters,
-            ).model_copy(
-                update={
-                    "progression_mode": self.config.progression_mode,
-                    "auto_band_checkpoint": self.config.auto_band_checkpoint,
-                    "band_warn_action": self.config.band_warn_action,
-                    "manual_checkpoints_enabled": self.config.manual_checkpoints_enabled,
-                    "future_constraints_enabled": self.config.future_constraints_enabled,
-                }
-            ),
+            runtime_policy=self.policy,
         )
         project_id = project.id
         self._bind_governance_runtime(project_id=project_id, updater=updater)

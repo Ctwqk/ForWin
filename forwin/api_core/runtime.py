@@ -114,8 +114,6 @@ from forwin.api_schemas import (
     ProjectBulkDeleteRequest,
     ProjectDeleteResponse,
     ProjectDetail,
-    ProjectGovernanceResponse,
-    ProjectGovernanceUpdateRequest,
     ProjectSummary,
     ProvisionalBandDetail,
     ProvisionalChapterLedgerInfo,
@@ -154,8 +152,6 @@ from forwin.governance import (
     ensure_decision_event_type,
     issue_group_for_issue,
     load_plan_task_contract,
-    new_project_governance,
-    normalize_project_governance,
     plan_task_contract_to_json,
 )
 from forwin.models.base import Base, get_session_factory

@@ -114,8 +114,6 @@ from forwin.api_schemas import (
     ProjectBulkDeleteRequest,
     ProjectDeleteResponse,
     ProjectDetail,
-    ProjectGovernanceResponse,
-    ProjectGovernanceUpdateRequest,
     ProjectSummary,
     ProvisionalBandDetail,
     ProvisionalChapterLedgerInfo,
@@ -154,8 +152,6 @@ from forwin.governance import (
     ensure_decision_event_type,
     issue_group_for_issue,
     load_plan_task_contract,
-    new_project_governance,
-    normalize_project_governance,
     plan_task_contract_to_json,
 )
 from forwin.models.base import Base, get_session_factory
@@ -423,8 +419,6 @@ globals().update(
                 require_reason=lambda reason, *, action: _require_reason(reason, action=action),
             ),
             governance=api_route_registry.GovernanceDeps(
-                resolve_project_governance=lambda project, *, overrides=None, base_config=None: _resolve_project_governance(project, overrides=overrides, base_config=base_config),
-                governance_request_payload=lambda req: _governance_request_payload(req),
                 latest_related_decision_event=lambda session, **kwargs: _latest_related_decision_event(session, **kwargs),
                 log_decision_event=lambda session, **kwargs: _log_decision_event(session, **kwargs),
                 decision_refs_for_chapter_review=lambda session, *, project_id, chapter_number, review_id: _decision_refs_for_chapter_review(session, project_id=project_id, chapter_number=chapter_number, review_id=review_id),
@@ -436,7 +430,6 @@ globals().update(
                 build_causal_replay=lambda session, **kwargs: _build_causal_replay(session, **kwargs),
                 build_governance_insights=lambda session, *, project_id: _build_governance_insights(session, project_id=project_id),
                 latest_band_checkpoint_row=lambda session, *, project_id, band_id='': _latest_band_checkpoint_row(session, project_id=project_id, band_id=band_id),
-                persist_project_governance=lambda session, project, governance: _persist_project_governance(session, project, governance),
             ),
             observability=api_route_registry.ObservabilityDeps(
                 get_chapter_observability_ledger=get_chapter_observability_ledger,

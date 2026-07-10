@@ -11,12 +11,13 @@ from forwin.governance import (
     DecisionEventInfo,
     NarrativeConstraintInfo,
     PlanTaskItem,
-    ProjectGovernanceSettings,
 )
 from forwin.protocol.subworld import SubWorldSummary
 
 
 class GenerateRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     premise: str
     genre: str = "玄幻"
     num_chapters: int = 3
@@ -25,34 +26,12 @@ class GenerateRequest(BaseModel):
     api_key: str | None = None
     base_url: str | None = None
     model: str | None = None
-    operation_mode: str | None = None
-    freeze_failed_candidates: bool | None = None
-    min_chapter_chars: int | None = None
-    review_interval_chapters: int | None = None
-    progression_mode: str | None = None
-    auto_band_checkpoint: bool | None = None
-    band_warn_action: str | None = None
-    manual_checkpoints_enabled: bool | None = None
-    future_constraints_enabled: bool | None = None
-    generation_audit_interval_chapters: int | None = Field(default=None, ge=0)
-    generation_audit_pause_enabled: bool | None = None
 
 
 class LLMSettingsRequest(BaseModel):
     api_key: str = ""
     base_url: str = DEFAULT_MINIMAX_BASE_URL
     model: str = DEFAULT_MINIMAX_MODEL
-    operation_mode: str = "blackbox"
-    freeze_failed_candidates: bool = True
-    min_chapter_chars: int = 2500
-    review_interval_chapters: int = 0
-    progression_mode: str = "serial_canon_band_guard"
-    auto_band_checkpoint: bool = True
-    band_warn_action: str = "pause"
-    manual_checkpoints_enabled: bool = True
-    future_constraints_enabled: bool = True
-    generation_audit_interval_chapters: int = 0
-    generation_audit_pause_enabled: bool = False
 
 
 class ModelProfile(BaseModel):
@@ -77,17 +56,7 @@ class LLMDefaultProfileRequest(BaseModel):
 
 
 class LLMPreferencesRequest(BaseModel):
-    operation_mode: str = "blackbox"
-    freeze_failed_candidates: bool = True
-    min_chapter_chars: int = 2500
-    review_interval_chapters: int = 0
-    progression_mode: str = "serial_canon_band_guard"
-    auto_band_checkpoint: bool = True
-    band_warn_action: str = "pause"
-    manual_checkpoints_enabled: bool = True
-    future_constraints_enabled: bool = True
-    generation_audit_interval_chapters: int = 0
-    generation_audit_pause_enabled: bool = False
+    pass
 
 
 class LLMSettingsResponse(BaseModel):
@@ -96,17 +65,6 @@ class LLMSettingsResponse(BaseModel):
     model: str
     profiles: list[ModelProfile] = Field(default_factory=list)
     default_profile_id: str = ""
-    operation_mode: str = "blackbox"
-    freeze_failed_candidates: bool = True
-    min_chapter_chars: int = 2500
-    review_interval_chapters: int = 0
-    progression_mode: str = "serial_canon_band_guard"
-    auto_band_checkpoint: bool = True
-    band_warn_action: str = "pause"
-    manual_checkpoints_enabled: bool = True
-    future_constraints_enabled: bool = True
-    generation_audit_interval_chapters: int = 0
-    generation_audit_pause_enabled: bool = False
     message: str = ""
 
 

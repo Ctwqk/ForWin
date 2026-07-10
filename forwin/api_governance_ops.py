@@ -26,8 +26,6 @@ from forwin.api_schemas import (
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
     NarrativeConstraintsResponse,
-    ProjectGovernanceResponse,
-    ProjectGovernanceUpdateRequest,
     ProvisionalBandDetail,
     ScenarioPlanPatchApproveRequest,
     ScenarioRehearsalDetail,
@@ -57,74 +55,7 @@ from forwin.protocol.trope_library import (
     validate_trope_template_payload,
 )
 from forwin.state.repo import StateRepository
-
-
-def get_project_governance(
-    project_id: str,
-    *,
-    get_session,
-    config,
-    resolve_project_governance,
-) -> ProjectGovernanceResponse:
-    session = get_session()
-    try:
-        project = session.get(Project, project_id)
-        if project is None:
-            raise HTTPException(404, "项目不存在")
-        governance = resolve_project_governance(project, base_config=config)
-        return ProjectGovernanceResponse(
-            ok=True,
-            project_id=project_id,
-            governance=governance,
-            message="已读取项目治理设置。",
-        )
-    finally:
-        session.close()
-
-
-def update_project_governance(
-    project_id: str,
-    req: ProjectGovernanceUpdateRequest,
-    *,
-    get_session,
-    config,
-    require_reason,
-    governance_request_payload,
-    resolve_project_governance,
-    persist_project_governance,
-    log_decision_event,
-) -> ProjectGovernanceResponse:
-    session = get_session()
-    try:
-        project = session.get(Project, project_id)
-        if project is None:
-            raise HTTPException(404, "项目不存在")
-        reason = require_reason(req.reason, action="修改项目治理设置")
-        governance = resolve_project_governance(
-            project,
-            overrides=governance_request_payload(req),
-            base_config=config,
-        )
-        stored = persist_project_governance(session, project, governance)
-        log_decision_event(
-            session,
-            project_id=project_id,
-            event_family="audit_action",
-            event_type=DecisionEventType.GOVERNANCE_UPDATED,
-            actor_type="manual_ui",
-            summary="项目治理设置已更新。",
-            reason=reason,
-            payload={"governance": stored.model_dump(mode="json")},
-        )
-        session.commit()
-        return ProjectGovernanceResponse(
-            ok=True,
-            project_id=project_id,
-            governance=stored,
-            message="项目治理设置已保存。",
-        )
-    finally:
-        session.close()
+from forwin.runtime.policy_store import ProjectPolicyMissing, ProjectPolicyStore
 
 
 def create_manual_checkpoint(
@@ -132,9 +63,7 @@ def create_manual_checkpoint(
     req: ManualCheckpointRequest,
     *,
     get_session,
-    config,
     require_reason,
-    resolve_project_governance,
     serialize_band_checkpoint,
     log_decision_event,
 ) -> BandCheckpointDetail:
@@ -144,8 +73,11 @@ def create_manual_checkpoint(
         if project is None:
             raise HTTPException(404, "项目不存在")
         reason = require_reason(req.reason, action="创建 manual checkpoint")
-        governance = resolve_project_governance(project, base_config=config)
-        if not governance.manual_checkpoints_enabled:
+        try:
+            policy = ProjectPolicyStore(session).load(project).policy
+        except ProjectPolicyMissing as exc:
+            raise HTTPException(500, "project runtime policy is missing") from exc
+        if not policy.pause.manual_checkpoints:
             raise HTTPException(409, "当前项目未启用 manual checkpoint。")
         boundary_kind = str(req.boundary_kind or "").strip()
         if boundary_kind not in {"chapter_start", "chapter_accepted", "band_end"}:

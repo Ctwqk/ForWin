@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from forwin.arc_sizing import allocate_arc_chapter_sizes
-from forwin.governance import DecisionEventInfo, DecisionEventType, normalize_project_governance
+from forwin.governance import DecisionEventInfo, DecisionEventType
 from forwin.genesis_handoff import GenesisHandoffService
 from forwin.genesis_workspace import GenesisWorkspaceService
 from forwin.genesis_workspace.trace_service import GenesisTraceService

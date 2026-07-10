@@ -627,10 +627,8 @@ def _fallback_blueprint(project: Project, pack: dict[str, Any]) -> dict[str, Any
 
 
 def _fallback_bootstrap(project: Project, pack: dict[str, Any]) -> dict[str, Any]:
-    governance = normalize_project_governance(project.governance_json)
     return {
-        "operation_mode": "blackbox",
-        "governance_defaults": governance.model_dump(mode="json"),
+        "pipeline": "strict_blackbox",
         "root_ready": bool(pack.get("book_arc_blueprint")),
         "start_policy": "explicit_start_writing_only",
     }

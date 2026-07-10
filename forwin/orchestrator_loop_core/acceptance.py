@@ -62,11 +62,7 @@ def accept_review(self, project_id: str, chapter_number: int, *, reason: str = "
                 "message": f"第{chapter_number}章 canon gate 阻止接受，已转为 needs_review。",
                 "frozen_artifact": frozen_path,
             }
-        acceptance_mode = (
-            "checkpoint_approved"
-            if project is not None and self._project_governance(project).default_operation_mode == "checkpoint"
-            else "human_approved"
-        )
+        acceptance_mode = "human_approved"
         updater.mark_chapter_status(
             project_id,
             chapter_number,

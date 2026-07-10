@@ -8,6 +8,7 @@ from forwin.review_engine.audit import (
 )
 from forwin.review_engine.types import Decision, DecisionInput
 from forwin.state.repo import StateRepository
+from forwin.runtime.policy_store import ProjectPolicyStore
 
 
 def _positive_int(value: object) -> int:
@@ -16,14 +17,8 @@ def _positive_int(value: object) -> int:
     except (TypeError, ValueError):
         return 0
 
-def _project_governance(self, project: Project):
-    governance = normalize_project_governance(
-        getattr(project, "governance_json", "{}"),
-        fallback_operation_mode=self.config.operation_mode,
-        fallback_review_delegation_mode=self.config.review_delegation_mode,
-        fallback_review_interval=self.config.review_interval_chapters,
-    )
-    return governance
+def _project_policy(self, session: Session, project: Project):
+    return ProjectPolicyStore(session).load(project).policy
 
 def _record_decision_event(
     self,
@@ -329,19 +324,15 @@ def _record_generation_audit_checkpoint_if_due(
     failed_chapters: list[int],
     paused_chapters: list[int],
     future_plan_audit_result: FuturePlanAuditRun | None,
-    governance,
+    policy,
 ) -> bool:
-    interval = _positive_int(
-        getattr(governance, "generation_audit_interval_chapters", 0)
-    )
+    interval = _positive_int(policy.pause.generation_audit_interval)
     if interval <= 0:
         return False
     chapter_number = int(chapter_number or 0)
     if chapter_number <= 0 or chapter_number % interval != 0:
         return False
-    project_pause_enabled = bool(getattr(governance, "generation_audit_pause_enabled", False))
-    runtime_pause_enabled = bool(getattr(self.config, "generation_audit_pause_enabled", False))
-    pause_enabled = bool(project_pause_enabled and runtime_pause_enabled)
+    pause_enabled = policy.pause.generation_audit_pauses
     has_next_requested = chapter_number != int(last_requested_chapter or 0)
     will_pause = bool(pause_enabled and has_next_requested)
     payload = self._generation_audit_checkpoint_payload(
@@ -535,8 +526,7 @@ def _strict_progression_block(
     project: Project,
     chapter_number: int,
 ) -> tuple[str, str, str]:
-    governance = self._project_governance(project)
-    mode = str(governance.progression_mode or "serial_canon_band_guard")
+    policy = self._project_policy(session, project)
     if chapter_number > 1:
         previous_plan = repo.get_chapter_plan(project.id, chapter_number - 1)
         if previous_plan is not None and previous_plan.status != "accepted":
@@ -545,8 +535,6 @@ def _strict_progression_block(
                 "",
                 chapter_blocking_message("chapter_not_canon", chapter_number=chapter_number - 1),
             )
-    if mode != "serial_canon_band_guard":
-        return "", "", ""
     band_row = repo.get_band_row_for_chapter(project.id, chapter_number)
     if band_row is None or not band_is_first_chapter(band_row.chapter_start, chapter_number):
         return "", "", ""
@@ -558,7 +546,11 @@ def _strict_progression_block(
     if previous_band is None:
         return "", "", ""
     latest_checkpoint = repo.get_latest_band_checkpoint(project.id, band_id=previous_band.band_id)
-    if latest_checkpoint is None and bool(governance.auto_band_checkpoint) and updater is not None:
+    if (
+        latest_checkpoint is None
+        and policy.pause.band_checkpoint_action != "continue"
+        and updater is not None
+    ):
         latest_checkpoint = self._create_auto_band_checkpoint(
             session=session,
             repo=repo,
@@ -575,7 +567,7 @@ def _strict_progression_block(
     checkpoint_status = str(latest_checkpoint.status or "")
     if checkpoint_status in {"pass", "overridden"}:
         return "", "", ""
-    if checkpoint_status == "warn" and str(governance.band_warn_action or "") == "continue":
+    if checkpoint_status == "warn" and policy.pause.band_checkpoint_action == "continue":
         return "", "", ""
     code = {
         "pending": "band_checkpoint_pending",
@@ -961,4 +953,4 @@ def _filter_supported_state_changes(changes):
 
 
 
-__all__ = ['_project_governance', '_record_decision_event', '_record_engine_decision_event', '_audit_current_plan_before_write', '_audit_future_plans_after_acceptance', '_future_plan_audit_plans', '_future_plan_audit_band_rows', '_record_future_plan_audit_events', '_record_generation_audit_checkpoint_if_due', '_generation_audit_checkpoint_payload', '_previous_band_row', '_manual_boundary_checkpoint', '_strict_progression_block', '_create_auto_band_checkpoint', '_filter_supported_state_changes']
+__all__ = ['_project_policy', '_record_decision_event', '_record_engine_decision_event', '_audit_current_plan_before_write', '_audit_future_plans_after_acceptance', '_future_plan_audit_plans', '_future_plan_audit_band_rows', '_record_future_plan_audit_events', '_record_generation_audit_checkpoint_if_due', '_generation_audit_checkpoint_payload', '_previous_band_row', '_manual_boundary_checkpoint', '_strict_progression_block', '_create_auto_band_checkpoint', '_filter_supported_state_changes']

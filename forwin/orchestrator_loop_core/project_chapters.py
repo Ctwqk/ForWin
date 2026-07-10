@@ -129,7 +129,7 @@ def _run_project_chapters(
     project = repo.get_project(project_id)
     if project is None:
         raise ValueError(f"项目不存在: {project_id}")
-    governance = self._project_governance(project)
+    policy = self._project_policy(session, project)
 
     for chapter_num in chapter_numbers:
         if self._abort_requested():
@@ -203,7 +203,7 @@ def _run_project_chapters(
             manual_start_checkpoint is not None
             and self._delegate_checkpoint_if_reckless(
                 updater=updater,
-                governance=governance,
+                governance=policy,
                 checkpoint=manual_start_checkpoint,
                 gate_kind="manual_checkpoint_chapter_start",
                 chapter_number=chapter_num,
@@ -476,7 +476,7 @@ def _run_project_chapters(
                 session=session,
                 updater=updater,
                 project_id=project_id,
-                governance=governance,
+                governance=policy,
                 chapter_plan=chapter_plan,
                 writer_output=writer_output,
                 verdict=verdict,
@@ -772,7 +772,7 @@ def _run_project_chapters(
                 failed_chapters=failed_chapters,
                 paused_chapters=paused_chapters,
                 future_plan_audit_result=future_plan_audit_result,
-                governance=governance,
+                policy=policy,
             )
             if generation_audit_pause:
                 audit_event = (
@@ -795,7 +795,7 @@ def _run_project_chapters(
                 audit_outcome = self._delegate_reckless_review(
                     updater=updater,
                     project_id=project_id,
-                    governance=governance,
+                    governance=policy,
                     gate_kind="generation_audit_pause",
                     scope="project",
                     chapter_number=chapter_num,
@@ -808,7 +808,7 @@ def _run_project_chapters(
                         "completed_chapters": [*completed_chapters, chapter_num],
                         "failed_chapters": failed_chapters,
                         "paused_chapters": paused_chapters,
-                        "governance": governance.model_dump(mode="json"),
+                        "runtime_policy": policy.model_dump(mode="json"),
                     },
                 )
                 if audit_outcome is not None and audit_outcome.approved:
@@ -816,7 +816,7 @@ def _run_project_chapters(
             checkpoint_row = None
             checkpoint_pause = False
             checkpoint_warn_pause = False
-            if bool(governance.auto_band_checkpoint):
+            if policy.pause.band_checkpoint_action != "continue":
                 try:
                     checkpoint_row = self._create_auto_band_checkpoint(
                         session=session,
@@ -875,7 +875,8 @@ def _run_project_chapters(
                 if (
                     checkpoint_row is not None
                     and checkpoint_row.status == "warn"
-                    and str(governance.band_warn_action or "") == "pause"
+                    and policy.pause.band_checkpoint_action
+                    in {"pause_on_warn", "pause_always"}
                 ):
                     checkpoint_warn_pause = True
             should_pause_for_checkpoint = checkpoint_pause or (
@@ -886,7 +887,7 @@ def _run_project_chapters(
                 and checkpoint_row is not None
                 and self._delegate_checkpoint_if_reckless(
                     updater=updater,
-                    governance=governance,
+                    governance=policy,
                     checkpoint=checkpoint_row,
                     gate_kind="band_checkpoint_pause",
                     chapter_number=chapter_num,
@@ -909,7 +910,7 @@ def _run_project_chapters(
                 manual_after_accept is not None
                 and self._delegate_checkpoint_if_reckless(
                     updater=updater,
-                    governance=governance,
+                    governance=policy,
                     checkpoint=manual_after_accept,
                     gate_kind="manual_checkpoint_chapter_accepted",
                     chapter_number=chapter_num,
@@ -920,7 +921,7 @@ def _run_project_chapters(
                 manual_band_end is not None
                 and self._delegate_checkpoint_if_reckless(
                     updater=updater,
-                    governance=governance,
+                    governance=policy,
                     checkpoint=manual_band_end,
                     gate_kind="manual_checkpoint_band_end",
                     chapter_number=chapter_num,

@@ -5,16 +5,12 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field
 
-from forwin.canon_quality.rule_profile import CanonGlossary
 from forwin.governance_keywords import constraint_keywords, keyword_is_prefix_negated
 
 if TYPE_CHECKING:
     from forwin.protocol.experience import BandDelightSchedule
 
 
-ProgressionMode = Literal["serial_canon", "serial_canon_band_guard"]
-ReviewDelegationMode = Literal["human", "reckless"]
-BandWarnAction = Literal["pause", "continue"]
 PlanTaskType = Literal[
     "plot_advance",
     "relationship_shift",
@@ -92,7 +88,7 @@ class DecisionEventType:
     START_WRITING_REQUESTED = "start_writing_requested"
     PROMPT_TRACE_RECORDED = "prompt_trace_recorded"
 
-    GOVERNANCE_UPDATED = "governance_updated"
+    RUNTIME_POLICY_UPDATED = "runtime_policy_updated"
     MANUAL_CHECKPOINT_CREATED = "manual_checkpoint_created"
     MANUAL_CHECKPOINT_HIT = "manual_checkpoint_hit"
     CONSTRAINT_CREATED = "constraint_created"
@@ -248,7 +244,7 @@ KNOWN_DECISION_EVENT_TYPES = {
     DecisionEventType.GENESIS_STAGE_REFINED,
     DecisionEventType.START_WRITING_REQUESTED,
     DecisionEventType.PROMPT_TRACE_RECORDED,
-    DecisionEventType.GOVERNANCE_UPDATED,
+    DecisionEventType.RUNTIME_POLICY_UPDATED,
     DecisionEventType.MANUAL_CHECKPOINT_CREATED,
     DecisionEventType.MANUAL_CHECKPOINT_HIT,
     DecisionEventType.CONSTRAINT_CREATED,
@@ -402,20 +398,6 @@ class PlanTaskItem(BaseModel):
     source: str = "derived"
 
 
-class ProjectGovernanceSettings(BaseModel):
-    default_operation_mode: str = "blackbox"
-    review_delegation_mode: ReviewDelegationMode = "human"
-    review_interval_chapters: int = 0
-    progression_mode: ProgressionMode = "serial_canon_band_guard"
-    auto_band_checkpoint: bool = True
-    band_warn_action: BandWarnAction = "pause"
-    manual_checkpoints_enabled: bool = True
-    future_constraints_enabled: bool = True
-    generation_audit_interval_chapters: int = 6
-    generation_audit_pause_enabled: bool = False
-    canon_glossary: CanonGlossary = Field(default_factory=CanonGlossary)
-
-
 class BlockingReasonInfo(BaseModel):
     code: BlockingReasonCode = ""
     message: str = ""
@@ -498,83 +480,6 @@ class NextBandSummary(BaseModel):
     chapter_end: int = 0
     chapter_titles: list[str] = Field(default_factory=list)
     band_task_contract: list[PlanTaskItem] = Field(default_factory=list)
-
-
-def new_project_governance(
-    *,
-    default_operation_mode: str = "blackbox",
-    review_delegation_mode: ReviewDelegationMode = "human",
-    review_interval_chapters: int = 0,
-) -> ProjectGovernanceSettings:
-    return ProjectGovernanceSettings(
-        default_operation_mode=str(default_operation_mode or "blackbox").strip() or "blackbox",
-        review_delegation_mode=(
-            review_delegation_mode if review_delegation_mode in {"human", "reckless"} else "human"
-        ),
-        review_interval_chapters=max(0, int(review_interval_chapters or 0)),
-        progression_mode="serial_canon_band_guard",
-        auto_band_checkpoint=True,
-        band_warn_action="pause",
-        manual_checkpoints_enabled=True,
-        future_constraints_enabled=True,
-        generation_audit_interval_chapters=6,
-        generation_audit_pause_enabled=False,
-    )
-
-
-def normalize_project_governance(
-    raw: str | dict[str, Any] | None,
-    *,
-    fallback_operation_mode: str = "blackbox",
-    fallback_review_delegation_mode: ReviewDelegationMode = "human",
-    fallback_review_interval: int = 0,
-) -> ProjectGovernanceSettings:
-    payload: dict[str, Any]
-    if isinstance(raw, dict):
-        payload = dict(raw)
-    else:
-        try:
-            payload = json.loads(raw or "{}") or {}
-        except (json.JSONDecodeError, TypeError):
-            payload = {}
-    if not payload:
-        return new_project_governance(
-            default_operation_mode=fallback_operation_mode,
-            review_delegation_mode=fallback_review_delegation_mode,
-            review_interval_chapters=fallback_review_interval,
-        )
-    merged = {
-        "default_operation_mode": fallback_operation_mode,
-        "review_delegation_mode": fallback_review_delegation_mode,
-        "review_interval_chapters": fallback_review_interval,
-        **payload,
-    }
-    merged["default_operation_mode"] = (
-        str(merged.get("default_operation_mode", fallback_operation_mode) or "blackbox").strip()
-        or "blackbox"
-    )
-    if str(merged.get("review_delegation_mode") or "").strip() not in {
-        "human",
-        "reckless",
-    }:
-        merged["review_delegation_mode"] = "human"
-    try:
-        merged["review_interval_chapters"] = max(0, int(merged.get("review_interval_chapters", fallback_review_interval) or 0))
-    except (TypeError, ValueError):
-        merged["review_interval_chapters"] = max(0, int(fallback_review_interval or 0))
-    try:
-        merged["generation_audit_interval_chapters"] = max(
-            0,
-            int(merged.get("generation_audit_interval_chapters", 0) or 0),
-        )
-    except (TypeError, ValueError):
-        merged["generation_audit_interval_chapters"] = 0
-    if str(merged.get("progression_mode") or "").strip() not in {
-        "serial_canon",
-        "serial_canon_band_guard",
-    }:
-        merged["progression_mode"] = "serial_canon_band_guard"
-    return ProjectGovernanceSettings.model_validate(merged)
 
 
 def load_plan_task_contract(raw: str | list[dict[str, Any]] | None) -> list[PlanTaskItem]:
@@ -673,10 +578,6 @@ def derive_band_task_contract(schedule: "BandDelightSchedule") -> list[PlanTaskI
                 )
             )
     return tasks
-
-
-def governance_to_json(settings: ProjectGovernanceSettings) -> str:
-    return json.dumps(settings.model_dump(mode="json"), ensure_ascii=False)
 
 
 def ensure_decision_event_type(value: str) -> str:

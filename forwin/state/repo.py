@@ -14,7 +14,6 @@ from forwin.governance import (
     NextBandSummary,
     PlanTaskItem,
     load_plan_task_contract,
-    normalize_project_governance,
 )
 from forwin.models import (
     ArcEnvelope,
@@ -48,6 +47,7 @@ from forwin.models import (
     SubWorldRosterItem,
     WorldSimulationTurn,
 )
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.protocol import (
     ArcPayoffMap,
     AudienceTrendView,
@@ -1016,7 +1016,9 @@ class StateRepository:
         project = self.session.get(Project, project_id)
         if project is None:
             return False
-        return bool(normalize_project_governance(getattr(project, "governance_json", "") or "").future_constraints_enabled)
+        return ProjectPolicyStore(self.session).load(
+            project
+        ).policy.planning.future_constraints
 
     def list_narrative_constraints(
         self,

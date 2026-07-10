@@ -114,8 +114,6 @@ from forwin.api_schemas import (
     ProjectBulkDeleteRequest,
     ProjectDeleteResponse,
     ProjectDetail,
-    ProjectGovernanceResponse,
-    ProjectGovernanceUpdateRequest,
     ProjectSummary,
     ProvisionalBandDetail,
     ProvisionalChapterLedgerInfo,
@@ -154,8 +152,6 @@ from forwin.governance import (
     ensure_decision_event_type,
     issue_group_for_issue,
     load_plan_task_contract,
-    new_project_governance,
-    normalize_project_governance,
     plan_task_contract_to_json,
 )
 from forwin.models.base import Base, get_session_factory
@@ -405,36 +401,6 @@ def _persist_project_automation(
     automation: ProjectAutomationSettings,
 ) -> ProjectAutomationSettings:
     return api_governance_support.persist_project_automation(session, project, automation)
-
-
-def _governance_request_payload(req: object) -> dict[str, object]:
-    return api_governance_support.governance_request_payload(req)
-
-
-def _resolve_project_governance(
-    project: Project | None,
-    *,
-    overrides: dict[str, object] | None = None,
-    base_config: InfrastructureConfig | None = None,
-) -> object:
-    return api_governance_support.resolve_project_governance(
-        project,
-        overrides=overrides,
-        base_config=base_config,
-    )
-
-
-def _persist_project_governance(
-    session,
-    project: Project,
-    governance,
-) -> object:
-    return api_governance_support.persist_project_governance(
-        session,
-        project,
-        governance,
-        base_config=api_state._config,
-    )
 
 
 def _log_decision_event(session, **kwargs):

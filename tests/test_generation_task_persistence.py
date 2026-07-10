@@ -7,12 +7,13 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import forwin.api as api_module
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft
 from forwin.models.phase import ProvisionalBandExecution
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
+from forwin.runtime.policy import RuntimePolicy
 from tests.postgres import postgres_test_url
 
 
@@ -70,7 +71,10 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
             "mode": "continue",
             "root_event_id": "event-1",
             "auto_continue": True,
-            "runtime_overrides": {"quality_profile": "pulp"},
+            "policy_version": 4,
+            "policy_snapshot": RuntimePolicy.for_profile("pulp").model_dump(
+                mode="json"
+            ),
         }
 
         api_module._persist_generation_task("task-payload-1", task)
@@ -78,22 +82,24 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
 
         self.assertEqual(loaded["execution_payload"]["mode"], "continue")
         self.assertEqual(loaded["execution_payload"]["root_event_id"], "event-1")
+        self.assertEqual(loaded["execution_payload"]["policy_version"], 4)
         self.assertEqual(
-            loaded["execution_payload"]["runtime_overrides"]["quality_profile"],
+            loaded["execution_payload"]["policy_snapshot"]["quality_profile"],
             "pulp",
         )
 
     def test_create_generation_task_enqueues_without_starting_thread(self) -> None:
-        config = Config(database_url=postgres_test_url("generation-tasks"), minimax_api_key="sk-test")
+        policy = RuntimePolicy.for_profile("standard")
 
         with patch("forwin.api_core.generation.threading.Thread") as thread_cls:
             task_id = api_module._create_generation_task(
                 premise="主角从县城崛起",
                 genre="都市",
                 num_chapters=2,
-                runtime_config=config,
                 title="线程切换测试",
                 subtitle="都市 · 2 章",
+                runtime_policy=policy,
+                runtime_policy_version=1,
             )
 
         thread_cls.assert_not_called()
@@ -106,7 +112,7 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         self.assertEqual(task["execution_payload"]["num_chapters"], 2)
 
     def test_create_continue_generation_task_enqueues_without_starting_thread(self) -> None:
-        config = Config(database_url=postgres_test_url("generation-tasks"), minimax_api_key="sk-test")
+        policy = RuntimePolicy.for_profile("standard")
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             session.add(
@@ -125,13 +131,14 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         with patch("forwin.api_core.generation.threading.Thread") as thread_cls:
             task_id = api_module._create_continue_generation_task(
                 project_id="project-enqueue-only",
-                runtime_config=config,
                 requested_chapters=3,
                 max_chapters=3,
                 auto_continue=False,
                 run_until_chapter=8,
                 title="继续入队测试",
                 subtitle="继续生成",
+                runtime_policy=policy,
+                runtime_policy_version=1,
             )
 
         thread_cls.assert_not_called()
@@ -317,7 +324,7 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
 
     def test_continue_generation_api_rejects_pending_review_chapters(self) -> None:
         old_config = api_module._config
-        api_module._config = Config(
+        api_module._config = InfrastructureConfig(
             database_url=postgres_test_url("generation-tasks"),
             minimax_api_key="sk-test",
         )

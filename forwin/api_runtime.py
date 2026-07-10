@@ -11,6 +11,7 @@ from forwin.observability import LogRecorder, OperationContext
 from forwin.observability.ports import NullObservability
 from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.updater import StateUpdater
 
@@ -447,6 +448,7 @@ def _task_observability(orchestrator: WritingOrchestrator):
 def _build_writing_orchestrator_for_task(
     config: InfrastructureConfig,
     *,
+    policy: RuntimePolicy,
     progress_callback=None,
     should_abort=None,
     should_pause=None,
@@ -458,7 +460,11 @@ def _build_writing_orchestrator_for_task(
             should_abort=should_abort,
             should_pause=should_pause,
         )
-    return RuntimeContainer.from_config(config).build_writing_orchestrator(
+    return RuntimeContainer.from_config(
+        config,
+        policy=policy,
+        role="generation_worker",
+    ).build_writing_orchestrator(
         progress_callback=progress_callback,
         should_abort=should_abort,
         should_pause=should_pause,
@@ -610,6 +616,8 @@ def run_generation_with_config(
     config: InfrastructureConfig,
     update_task: TaskUpdater,
     logger: logging.Logger,
+    *,
+    policy: RuntimePolicy,
     project_id: str | None = None,
     should_abort: Callable[[], bool] | None = None,
     should_pause: Callable[[], bool] | None = None,
@@ -629,6 +637,7 @@ def run_generation_with_config(
 
     orchestrator = _build_writing_orchestrator_for_task(
         config,
+        policy=policy,
         progress_callback=_handle_progress,
         should_abort=should_abort,
         should_pause=should_pause,
@@ -705,6 +714,8 @@ def run_continue_project_with_config(
     config: InfrastructureConfig,
     update_task: TaskUpdater,
     logger: logging.Logger,
+    *,
+    policy: RuntimePolicy,
     should_abort: Callable[[], bool] | None = None,
     should_pause: Callable[[], bool] | None = None,
     max_chapters: int | None = None,
@@ -719,6 +730,7 @@ def run_continue_project_with_config(
 
     orchestrator = _build_writing_orchestrator_for_task(
         config,
+        policy=policy,
         progress_callback=_handle_progress,
         should_abort=should_abort,
         should_pause=should_pause,

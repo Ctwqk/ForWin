@@ -66,7 +66,6 @@ class ProductionExecutor:
                     premise=project.premise,
                     genre=project.genre,
                     num_chapters=max(1, int(plan.requested_chapters or len(plan.write_chapters))),
-                    runtime_config=runtime_config,
                     project_id=project.id,
                     title=project.title,
                     subtitle=f"自动调度 · 首批 {len(plan.write_chapters)} 章",
@@ -75,7 +74,6 @@ class ProductionExecutor:
             elif plan.generation_mode == "continue" and plan.write_chapters:
                 task_id = self.create_continue_generation_task(
                     project_id=project.id,
-                    runtime_config=runtime_config,
                     requested_chapters=max(1, int(plan.requested_chapters or len(plan.write_chapters))),
                     max_chapters=max(1, int(policy.quota.write or len(plan.write_chapters))),
                     title=project.title,

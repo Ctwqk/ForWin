@@ -49,7 +49,6 @@ from forwin.api_runtime import (
     build_home_page_settings,
     build_runtime_config,
     build_saved_runtime_config,
-    copy_config,
     run_continue_project_with_config,
     run_generation_with_config,
 )
@@ -139,9 +138,10 @@ from forwin.api_schemas import (
     StartWritingResponse,
 )
 from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
+from forwin.application.errors import PermanentConfigurationError
 from forwin.config import InfrastructureConfig
 from forwin.generation.auto_continue import GenerationAutoContinueController
-from forwin.generation.task_payload import execution_payload_from_config
+from forwin.generation.task_payload import execution_payload
 from forwin.governance import (
     BandCheckpointIssueInfo,
     CONSTRAINT_LEVELS,
@@ -184,6 +184,8 @@ from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
@@ -446,17 +448,22 @@ def _create_generation_task(
     premise: str,
     genre: str,
     num_chapters: int,
-    runtime_config: InfrastructureConfig,
     project_id: str = "",
     title: str = "",
     subtitle: str = "",
-    model_profile_id: str = "",
+    runtime_policy: RuntimePolicy | None = None,
+    runtime_policy_version: int | None = None,
 ) -> str:
     normalized_project_id = str(project_id or "").strip()
     if normalized_project_id and _project_has_active_generation_task(normalized_project_id):
         raise ActiveGenerationTaskError(
             _generation_task_conflict_message(normalized_project_id)
         )
+    policy, policy_version = _resolve_generation_task_policy(
+        project_id=normalized_project_id,
+        policy=runtime_policy,
+        policy_version=runtime_policy_version,
+    )
     task_id = uuid.uuid4().hex[:12]
     task_record = _create_task_record(
         message=f"开始生成 {num_chapters} 章。",
@@ -476,20 +483,15 @@ def _create_generation_task(
             event_type=DecisionEventType.GENERATION_REQUESTED,
             summary="项目生成任务已创建。",
         )
-    runtime_config = copy_config(
-        runtime_config,
-        governance_task_id=task_id,
-        governance_causal_root_id=root_event_id,
-    )
-    payload = execution_payload_from_config(
+    payload = execution_payload(
         mode="initial",
-        runtime_config=runtime_config,
+        policy=policy,
+        policy_version=policy_version,
         root_event_id=root_event_id,
         premise=premise,
         genre=genre,
         num_chapters=num_chapters,
         auto_continue=False,
-        model_profile_id=model_profile_id,
     )
     task_record["execution_payload"] = payload.model_dump(mode="json")
     _persist_generation_task(task_id, task_record)
@@ -499,7 +501,6 @@ def _create_generation_task(
 def _create_continue_generation_task(
     *,
     project_id: str,
-    runtime_config: InfrastructureConfig,
     requested_chapters: int,
     max_chapters: int | None = None,
     auto_continue: bool = True,
@@ -507,12 +508,19 @@ def _create_continue_generation_task(
     title: str = "",
     subtitle: str = "",
     message: str = "",
+    runtime_policy: RuntimePolicy | None = None,
+    runtime_policy_version: int | None = None,
 ) -> str:
     normalized_project_id = str(project_id or "").strip()
     if normalized_project_id and _project_has_active_generation_task(normalized_project_id):
         raise ActiveGenerationTaskError(
             _generation_task_conflict_message(normalized_project_id)
         )
+    policy, policy_version = _resolve_generation_task_policy(
+        project_id=normalized_project_id,
+        policy=runtime_policy,
+        policy_version=runtime_policy_version,
+    )
     task_id = uuid.uuid4().hex[:12]
     task_record = _create_task_record(
         message=message or "准备继续后续章节。",
@@ -529,14 +537,10 @@ def _create_continue_generation_task(
         event_type=DecisionEventType.CONTINUE_REQUESTED,
         summary="继续生成任务已创建。",
     )
-    runtime_config = copy_config(
-        runtime_config,
-        governance_task_id=task_id,
-        governance_causal_root_id=root_event_id,
-    )
-    payload = execution_payload_from_config(
+    payload = execution_payload(
         mode="continue",
-        runtime_config=runtime_config,
+        policy=policy,
+        policy_version=policy_version,
         root_event_id=root_event_id,
         auto_continue=auto_continue,
         run_until_chapter=run_until_chapter,
@@ -545,6 +549,35 @@ def _create_continue_generation_task(
     task_record["execution_payload"] = payload.model_dump(mode="json")
     _persist_generation_task(task_id, task_record)
     return task_id
+
+
+def _resolve_generation_task_policy(
+    *,
+    project_id: str,
+    policy: RuntimePolicy | None,
+    policy_version: int | None,
+) -> tuple[RuntimePolicy, int]:
+    if policy is not None:
+        normalized_version = int(policy_version or 0)
+        if normalized_version < 1:
+            raise PermanentConfigurationError(
+                "generation task policy version must be positive"
+            )
+        return policy, normalized_version
+
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_project_id:
+        raise PermanentConfigurationError(
+            "generation task requires an explicit v5 policy snapshot"
+        )
+    with _get_session() as session:
+        project = session.get(Project, normalized_project_id)
+        if project is None:
+            raise PermanentConfigurationError(
+                f"generation task project not found: {normalized_project_id}"
+            )
+        record = ProjectPolicyStore(session).load(project)
+        return record.policy, record.version
 
 
 def _maybe_enqueue_auto_publish_jobs(result) -> None:

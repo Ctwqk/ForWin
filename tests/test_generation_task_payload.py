@@ -2,76 +2,70 @@ from __future__ import annotations
 
 import json
 
-from forwin.config import Config
+import pytest
+
+from forwin.application.errors import PermanentConfigurationError
+from forwin.config import InfrastructureConfig
 from forwin.generation.task_payload import (
     GenerationTaskExecutionPayload,
-    build_worker_config_from_payload,
-    execution_payload_from_config,
+    build_execution_context,
+    execution_payload,
+    payload_from_json,
 )
+from forwin.runtime.policy import RuntimePolicy
 
 
-def test_execution_payload_serializes_non_secret_runtime_overrides() -> None:
-    config = Config(
-        minimax_api_key="sk-secret",
-        minimax_base_url="https://llm.example.test/v1",
-        minimax_model="model-a",
-        quality_profile="pulp",
-        operation_mode="blackbox",
-        review_delegation_mode="reckless",
-        publisher_session_secret="publisher-secret",
-        codex_bridge_token="codex-secret",
-    )
+ENV_PROFILE = {
+    "id": "env-kimi",
+    "name": "Kimi (.env)",
+    "api_key": "secret",
+    "base_url": "https://api.moonshot.cn/v1",
+    "model": "kimi-k2.5",
+}
 
-    payload = execution_payload_from_config(
+
+def test_execution_payload_serializes_exact_non_secret_policy() -> None:
+    policy = RuntimePolicy.for_profile(
+        "standard", model_profile_id="env-kimi"
+    ).with_user_settings(gate_delegate="spark")
+
+    payload = execution_payload(
         mode="continue",
-        runtime_config=config,
-        root_event_id="event-root",
-        auto_continue=True,
-        run_until_chapter=50,
+        policy=policy,
+        policy_version=3,
+        root_event_id="root-1",
         max_chapters=5,
     )
     raw = payload.model_dump(mode="json")
 
-    assert raw["mode"] == "continue"
-    assert raw["root_event_id"] == "event-root"
-    assert raw["auto_continue"] is True
-    assert raw["run_until_chapter"] == 50
-    assert raw["max_chapters"] == 5
-    assert raw["runtime_overrides"]["minimax_base_url"] == "https://llm.example.test/v1"
-    assert raw["runtime_overrides"]["minimax_model"] == "model-a"
-    assert raw["runtime_overrides"]["quality_profile"] == "pulp"
-    assert raw["runtime_overrides"]["review_delegation_mode"] == "reckless"
-    assert "minimax_api_key" not in json.dumps(raw)
-    assert "publisher-secret" not in json.dumps(raw)
-    assert "codex-secret" not in json.dumps(raw)
+    assert raw["policy_version"] == 3
+    assert raw["policy_snapshot"]["pause"]["gate_delegate"] == "spark"
+    assert "runtime_overrides" not in raw
+    assert "api_key" not in json.dumps(raw)
 
 
-def test_worker_config_uses_worker_secret_and_payload_generation_settings() -> None:
-    base = Config(
-        minimax_api_key="sk-worker",
-        minimax_model="worker-default",
-        operation_mode="blackbox",
-    )
+def test_worker_context_resolves_credentials_without_mutating_policy() -> None:
+    infrastructure = InfrastructureConfig(llm_env_profiles=[ENV_PROFILE])
     payload = GenerationTaskExecutionPayload(
         mode="continue",
-        runtime_overrides={
-            "minimax_model": "queued-model",
-            "quality_profile": "pulp",
-            "operation_mode": "blackbox",
-            "review_delegation_mode": "reckless",
-        },
+        policy_version=2,
+        policy_snapshot=RuntimePolicy.for_profile(
+            "pulp", model_profile_id="env-kimi"
+        ),
         root_event_id="root-1",
     )
 
-    config = build_worker_config_from_payload(
-        base,
-        payload,
-        task_id="task-1",
-    )
+    context = build_execution_context(infrastructure, payload, task_id="task-1")
 
-    assert config.minimax_api_key == "sk-worker"
-    assert config.minimax_model == "queued-model"
-    assert config.quality_profile == "pulp"
-    assert config.review_delegation_mode == "reckless"
-    assert config.governance_task_id == "task-1"
-    assert config.governance_causal_root_id == "root-1"
+    assert context.model_profile.api_key == "secret"
+    assert context.policy == payload.policy_snapshot
+    assert context.task_id == "task-1"
+
+
+@pytest.mark.parametrize("raw", [None, "", "{}", '{"mode":"continue"}'])
+def test_payload_without_v5_policy_snapshot_fails_closed(raw: str | None) -> None:
+    with pytest.raises(
+        PermanentConfigurationError,
+        match="generation task has no valid v5 policy snapshot",
+    ):
+        payload_from_json(raw)

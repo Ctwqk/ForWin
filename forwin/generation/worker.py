@@ -16,7 +16,8 @@ from forwin.generation.task_lease import (
 )
 from forwin.generation.ports import CreateContinueGenerationTask
 from forwin.generation.task_payload import (
-    build_worker_config_from_payload,
+    GenerationExecutionContext,
+    build_execution_context,
     payload_from_json,
 )
 from forwin.generation.worker_observability import (
@@ -188,8 +189,8 @@ def _default_continue_executor(
     from forwin.api_runtime import run_continue_project_with_config
 
     def _execute(task: GenerationTask, resume_from_chapter: int) -> None:
-        payload = payload_from_json(getattr(task, "execution_payload_json", "{}"))
-        worker_config = build_worker_config_from_payload(
+        payload = payload_from_json(getattr(task, "execution_payload_json", ""))
+        context = build_execution_context(
             config,
             payload,
             task_id=task.id,
@@ -198,7 +199,7 @@ def _default_continue_executor(
             session_factory=session_factory,
             task_id=task.id,
             payload=payload,
-            worker_config=worker_config,
+            execution_context=context,
             create_continue_generation_task=create_continue_generation_task,
         )
         update_task = _db_task_updater(
@@ -209,9 +210,10 @@ def _default_continue_executor(
         run_continue_project_with_config(
             task.id,
             str(task.project_id or ""),
-            worker_config,
+            context.infrastructure,
             update_task,
             logger,
+            policy=context.policy,
             should_abort=_db_task_flag(session_factory, task.id, "cancel_requested"),
             should_pause=_db_task_flag(session_factory, task.id, "pause_requested"),
             max_chapters=int(task.max_chapters or 0) or None,
@@ -242,8 +244,8 @@ def _default_new_executor(
 
     def _execute(task: GenerationTask, resume_from_chapter: int) -> None:
         _ = resume_from_chapter
-        payload = payload_from_json(getattr(task, "execution_payload_json", "{}"))
-        worker_config = build_worker_config_from_payload(
+        payload = payload_from_json(getattr(task, "execution_payload_json", ""))
+        context = build_execution_context(
             config,
             payload,
             task_id=task.id,
@@ -252,7 +254,7 @@ def _default_new_executor(
             session_factory=session_factory,
             task_id=task.id,
             payload=payload,
-            worker_config=worker_config,
+            execution_context=context,
             create_continue_generation_task=create_continue_generation_task,
         )
         update_task = _db_task_updater(
@@ -265,9 +267,10 @@ def _default_new_executor(
             payload.premise,
             payload.genre,
             int(payload.num_chapters or task.requested_chapters or 0),
-            worker_config,
+            context.infrastructure,
             update_task,
             logger,
+            policy=context.policy,
             should_abort=_db_task_flag(session_factory, task.id, "cancel_requested"),
             should_pause=_db_task_flag(session_factory, task.id, "pause_requested"),
             completion_handler=completion_handler,
@@ -381,7 +384,7 @@ def _worker_completion_handler(
     session_factory: Callable[[], Any],
     task_id: str,
     payload,
-    worker_config: InfrastructureConfig,
+    execution_context: GenerationExecutionContext,
     create_continue_generation_task: CreateContinueGenerationTask | None,
 ) -> Callable[[object], None]:
     from forwin.generation.auto_continue import GenerationAutoContinueController
@@ -401,7 +404,7 @@ def _worker_completion_handler(
             run_until_chapter=int(getattr(payload, "run_until_chapter", 0) or 0) or None,
             max_chapters=int(getattr(payload, "max_chapters", 0) or 0) or None,
             auto_continue=bool(getattr(payload, "auto_continue", True)),
-            runtime_config=worker_config,
+            runtime_config=execution_context.infrastructure,
         )
 
     return _handle

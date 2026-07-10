@@ -54,7 +54,7 @@ class GenerationTask(Base):
     resume_from_chapter: Mapped[int] = mapped_column(Integer, default=0)
     run_until_chapter: Mapped[int] = mapped_column(Integer, default=0)
     max_chapters: Mapped[int] = mapped_column(Integer, default=0)
-    execution_payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    execution_payload_json: Mapped[str] = mapped_column(Text, default="")
     paused_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -376,7 +376,6 @@ def approve_chapter_review(
     if config is None or orchestrator is None:
         raise HTTPException(500, "服务尚未完成初始化")
 
-    runtime_config = config
     reason = require_reason(req.reason, action="接受 review")
     task_id = ""
     if req.continue_generation:
@@ -450,7 +449,6 @@ def approve_chapter_review(
         try:
             task_id = create_continue_generation_task(
                 project_id=project_id,
-                runtime_config=runtime_config,
                 requested_chapters=workset.requested_chapters,
                 message=f"已接受第{chapter_number}章，准备继续后续章节。",
             )
@@ -468,7 +466,6 @@ def approve_chapter_review(
             result=result,
             message=message,
             reason=reason,
-            runtime_config=runtime_config,
             get_session=get_session,
             active_generation_task_error_cls=active_generation_task_error_cls,
             create_continue_generation_task=create_continue_generation_task,
@@ -498,7 +495,6 @@ def _auto_retry_review_approve_blocker(
     result: dict[str, Any],
     message: str,
     reason: str,
-    runtime_config: Any,
     get_session,
     active_generation_task_error_cls,
     create_continue_generation_task,
@@ -547,7 +543,6 @@ def _auto_retry_review_approve_blocker(
         try:
             task_id = create_continue_generation_task(
                 project_id=project_id,
-                runtime_config=runtime_config,
                 requested_chapters=requested_chapters,
                 message=f"第{chapter_number}章 canon gate 阻断后已自动重置，准备重新生成。",
             )
@@ -589,7 +584,6 @@ def retry_chapter_review(
         raise HTTPException(500, "服务尚未完成初始化")
 
     reason = require_reason(req.reason, action="重试 review 章节")
-    runtime_config = config
     task_id = ""
     continue_requested_chapters = 0
     session = get_session()
@@ -665,7 +659,6 @@ def retry_chapter_review(
         try:
             task_id = create_continue_generation_task(
                 project_id=project_id,
-                runtime_config=runtime_config,
                 requested_chapters=continue_requested_chapters,
                 message=f"已重置第{chapter_number}章，准备重新生成。",
             )

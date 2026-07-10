@@ -283,11 +283,11 @@ def get_candidate_draft(
             project_id=project_id,
             chapter_number=chapter_number,
         )
-        record_status = str(getattr(record, "status", "") or review.status or "")
-        canon_status = str(getattr(record, "canon_status", "") or "")
-        if not canon_status:
-            canon_status = "canon" if str(review.status or "") == "accepted" else "candidate"
-        canon_ready = canon_status == "canon" or str(review.status or "") == "accepted"
+        if record is None:
+            raise HTTPException(404, f"第{chapter_number}章缺少 v5 candidate record")
+        record_status = str(record.status or "")
+        canon_status = str(record.canon_status or "candidate")
+        canon_ready = canon_status == "canon"
         return CandidateDraftDetail(
             project_id=review.project_id,
             chapter_number=review.chapter_number,
@@ -298,22 +298,18 @@ def get_candidate_draft(
             body=review.body,
             summary=review.summary,
             char_count=len(review.body or ""),
-            scene_outputs=_load_json_object(getattr(record, "scene_outputs_json", "[]"), []) if record else [],
-            state_change_candidates=_load_json_object(getattr(record, "state_change_candidates_json", "[]"), []) if record else [],
-            event_candidates=_load_json_object(getattr(record, "event_candidates_json", "[]"), []) if record else [],
-            thread_beat_candidates=_load_json_object(getattr(record, "thread_beat_candidates_json", "[]"), []) if record else [],
+            scene_outputs=_load_json_object(record.scene_outputs_json, []),
+            state_change_candidates=_load_json_object(record.state_change_candidates_json, []),
+            event_candidates=_load_json_object(record.event_candidates_json, []),
+            thread_beat_candidates=_load_json_object(record.thread_beat_candidates_json, []),
             review_verdict=review.verdict,
             review_summary=review.review_summary,
             repair_attempts=review.rewrite_attempts,
-            repair_attempt_count=(
-                int(getattr(record, "repair_attempt_count", 0) or 0)
-                if record is not None
-                else int(getattr(review, "repair_attempt_count", 0) or len(review.rewrite_attempts))
-            ),
+            repair_attempt_count=int(record.repair_attempt_count or 0),
             canon_ready=canon_ready,
             canon_status=canon_status,
-            canon_artifact_path=str(getattr(record, "canon_artifact_path", "") or ""),
-            failure_reason=str(getattr(record, "failure_reason", "") or ""),
+            canon_artifact_path=str(record.canon_artifact_path or ""),
+            failure_reason=str(record.failure_reason or ""),
         )
     finally:
         session.close()

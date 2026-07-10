@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
+from fastapi import HTTPException
+
 from forwin.application.projects.reviews import get_candidate_draft
 from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.models.base import get_engine, get_session_factory, init_db
@@ -9,12 +12,19 @@ from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.draft import CandidateDraftRecord
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 def _setup_reviewed_draft(session):
     updater = StateUpdater(session)
-    project = updater.create_project(title="候选正文", premise="前提", genre="玄幻")
+    project = updater.create_project(
+        title="候选正文",
+        premise="前提",
+        genre="玄幻",
+        runtime_policy=RuntimePolicy.for_profile("standard"),
+    )
     arc = updater.create_arc_plan(project.id, "主线弧")
     chapter = updater.create_chapter_plan(
         project_id=project.id,
@@ -61,12 +71,14 @@ def test_candidate_draft_record_tracks_review_and_canon_lifecycle() -> None:
         project, chapter, draft, review, writer_output = _setup_reviewed_draft(session)
         repository = CandidateDraftRepository(session)
 
-        record = repository.upsert_from_review(
+        record = repository.create_reviewed_version(
             project_id=project.id,
             chapter_plan=chapter,
             draft=draft,
             review=review,
             writer_output=writer_output,
+            plan_revision="arc-v1:chapter-1",
+            policy_version=1,
             repair_attempt_count=0,
         )
 
@@ -85,24 +97,26 @@ def test_candidate_draft_record_tracks_review_and_canon_lifecycle() -> None:
         )
 
         assert committed is not None
-        assert committed.status == "canon_committed"
+        assert committed.status == "accepted"
         assert committed.canon_status == "canon"
         assert committed.canon_artifact_path == "artifacts/canon/1.json"
 
 
-def test_candidate_draft_api_reads_record_and_preserves_legacy_fallback() -> None:
+def test_candidate_draft_api_requires_v5_candidate_record() -> None:
     engine = get_engine(postgres_test_url())
     init_db(engine)
     Session = get_session_factory(engine)
 
     with Session.begin() as session:
         project, chapter, draft, review, writer_output = _setup_reviewed_draft(session)
-        CandidateDraftRepository(session).upsert_from_review(
+        CandidateDraftRepository(session).create_reviewed_version(
             project_id=project.id,
             chapter_plan=chapter,
             draft=draft,
             review=review,
             writer_output=writer_output,
+            plan_revision="arc-v1:chapter-1",
+            policy_version=1,
             repair_attempt_count=2,
         )
         project_id = project.id
@@ -124,12 +138,11 @@ def test_candidate_draft_api_reads_record_and_preserves_legacy_fallback() -> Non
     with Session.begin() as session:
         session.query(CandidateDraftRecord).delete()
 
-    fallback = get_candidate_draft(
-        project_id,
-        1,
-        get_session=Session,
-        decision_refs_for_chapter_review=lambda *_args, **_kwargs: [],
-    )
-
-    assert fallback.candidate_draft_id == draft_id
-    assert fallback.canon_status == "candidate"
+    with pytest.raises(HTTPException, match="v5 candidate record") as exc:
+        get_candidate_draft(
+            project_id,
+            1,
+            get_session=Session,
+            decision_refs_for_chapter_review=lambda *_args, **_kwargs: [],
+        )
+    assert exc.value.status_code == 404

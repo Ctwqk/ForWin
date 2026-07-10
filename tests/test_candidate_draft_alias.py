@@ -5,9 +5,13 @@ import json
 from fastapi import HTTPException
 
 from forwin.application.projects.reviews import get_candidate_draft
+from forwin.candidate_drafts import CandidateDraftRepository
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft, ChapterReview
+from forwin.protocol.writer import WriterOutput
+from forwin.runtime.policy import RuntimePolicy
 from forwin.state.updater import StateUpdater
+from tests.postgres import postgres_test_url
 
 
 def test_candidate_draft_alias_returns_latest_draft_review_and_canon_status() -> None:
@@ -17,7 +21,12 @@ def test_candidate_draft_alias_returns_latest_draft_review_and_canon_status() ->
 
     with Session.begin() as session:
         updater = StateUpdater(session)
-        project = updater.create_project(title="候选正文", premise="前提", genre="玄幻")
+        project = updater.create_project(
+            title="候选正文",
+            premise="前提",
+            genre="玄幻",
+            runtime_policy=RuntimePolicy.for_profile("standard"),
+        )
         arc = updater.create_arc_plan(project.id, "主线弧")
         chapter = updater.create_chapter_plan(
             project_id=project.id,
@@ -44,6 +53,23 @@ def test_candidate_draft_alias_returns_latest_draft_review_and_canon_status() ->
             review_meta_json=json.dumps({"recommended_action": "repair"}, ensure_ascii=False),
         )
         session.add(review)
+        session.flush()
+        CandidateDraftRepository(session).create_reviewed_version(
+            project_id=project.id,
+            chapter_plan=chapter,
+            draft=draft,
+            review=review,
+            writer_output=WriterOutput(
+                project_id=project.id,
+                chapter_number=1,
+                title="第一章",
+                body="正文",
+                char_count=2,
+                end_of_chapter_summary="摘要",
+            ),
+            plan_revision="arc-v1:chapter-1",
+            policy_version=1,
+        )
         project_id = project.id
         draft_id = draft.id
 
@@ -70,7 +96,12 @@ def test_candidate_draft_alias_404s_when_no_candidate_exists() -> None:
 
     with Session.begin() as session:
         updater = StateUpdater(session)
-        project = updater.create_project(title="候选正文", premise="前提", genre="玄幻")
+        project = updater.create_project(
+            title="候选正文",
+            premise="前提",
+            genre="玄幻",
+            runtime_policy=RuntimePolicy.for_profile("standard"),
+        )
         arc = updater.create_arc_plan(project.id, "主线弧")
         updater.create_chapter_plan(
             project_id=project.id,

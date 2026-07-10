@@ -5,7 +5,7 @@ from forwin.naming.entity_registrar import EntityRegistrar, LLMEntityAdmissionCl
 from forwin.checker.reference_classifier import normalize_character_reference
 from forwin.protocol.writer import WriterOutput
 from typing import Any
-from forwin.models.project import ChapterPlan
+from forwin.models.project import ChapterPlan, Project
 from forwin.governance import issue_group_for_issue
 import json
 from forwin.protocol.review import ReviewVerdict
@@ -14,7 +14,10 @@ from forwin.protocol.experience import (
     BandDelightSchedule,
     ChapterExperiencePlan,
 )
-from forwin.candidate_drafts import CandidateDraftRepository
+from forwin.candidate_drafts import (
+    CandidateDraftRepository,
+    candidate_plan_revision,
+)
 from forwin.models.draft import (
     ChapterDraft,
     ChapterReview,
@@ -77,17 +80,50 @@ def _persist_draft_and_review(
         model_name=str(getattr(self.llm_client, "model", "") or ""),
     )
     review_row = updater.save_review(draft.id, review)
-    repair_attempt_count = session.query(ChapterRewriteAttempt).filter(
-        ChapterRewriteAttempt.project_id == project_id,
-        ChapterRewriteAttempt.chapter_number == chapter_number,
-    ).count()
-    CandidateDraftRepository(session).upsert_from_review(
+    repair_attempts = (
+        session.query(ChapterRewriteAttempt)
+        .filter(
+            ChapterRewriteAttempt.project_id == project_id,
+            ChapterRewriteAttempt.chapter_number == chapter_number,
+        )
+        .order_by(
+            ChapterRewriteAttempt.attempt_no.asc(),
+            ChapterRewriteAttempt.id.asc(),
+        )
+        .all()
+    )
+    candidate_repository = CandidateDraftRepository(session)
+    previous_candidate = candidate_repository.latest_for_chapter(
+        project_id=project_id,
+        chapter_number=chapter_number,
+    )
+    project = session.get(Project, project_id)
+    candidate_repository.create_reviewed_version(
         project_id=project_id,
         chapter_plan=chapter_plan,
         draft=draft,
         review=review_row,
         writer_output=persisted_output,
-        repair_attempt_count=repair_attempt_count,
+        plan_revision=candidate_plan_revision(chapter_plan),
+        policy_version=max(1, int(getattr(project, "runtime_policy_version", 1) or 1)),
+        parent_candidate_id=(
+            str(previous_candidate.id)
+            if previous_candidate is not None
+            and previous_candidate.candidate_draft_id != draft.id
+            else ""
+        ),
+        repair_attempt_count=len(repair_attempts),
+        repair_history=[
+            {
+                "id": str(attempt.id),
+                "attempt_no": int(attempt.attempt_no or 0),
+                "repair_phase": str(attempt.repair_phase or ""),
+                "repair_scope": str(attempt.repair_scope or ""),
+                "result_verdict": str(attempt.result_verdict or ""),
+                "failure_reason": str(attempt.failure_reason or ""),
+            }
+            for attempt in repair_attempts
+        ],
     )
     updater.mark_chapter_status(project_id, chapter_number, "drafted")
     session.flush()

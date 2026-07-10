@@ -46,7 +46,14 @@ class CandidateDraftRecord(Base):
     __table_args__ = (
         Index("ix_candidate_drafts_project_chapter", "project_id", "chapter_number"),
         Index("ix_candidate_drafts_plan_created", "chapter_plan_id", "created_at"),
-        Index("ix_candidate_drafts_draft", "candidate_draft_id"),
+        Index(
+            "ux_candidate_drafts_project_chapter_version",
+            "project_id",
+            "chapter_number",
+            "version",
+            unique=True,
+        ),
+        Index("ux_candidate_drafts_draft", "candidate_draft_id", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=new_id)
@@ -62,6 +69,18 @@ class CandidateDraftRecord(Base):
     )
     review_id: Mapped[str] = mapped_column(String, ForeignKey("chapter_reviews.id"), default="")
     version: Mapped[int] = mapped_column(Integer, default=1)
+    parent_candidate_id: Mapped[str] = mapped_column(String, default="")
+    body_hash: Mapped[str] = mapped_column(String(64), default="")
+    plan_revision: Mapped[str] = mapped_column(String, default="")
+    writer_artifact_ref: Mapped[str] = mapped_column(Text, default="")
+    review_result_json: Mapped[str] = mapped_column(Text, default="{}")
+    repair_history_json: Mapped[str] = mapped_column(Text, default="[]")
+    entity_admission_plan_json: Mapped[str] = mapped_column(Text, default="{}")
+    eligibility_decision_json: Mapped[str] = mapped_column(Text, default="{}")
+    policy_version: Mapped[int] = mapped_column(Integer, default=1)
+    canon_commit_plan_json: Mapped[str] = mapped_column(Text, default="{}")
+    canon_commit_id: Mapped[str] = mapped_column(String, default="")
+    idempotency_key: Mapped[str] = mapped_column(String, default="")
     status: Mapped[str] = mapped_column(String, default="drafted")
     canon_status: Mapped[str] = mapped_column(String, default="candidate")
     scene_outputs_json: Mapped[str] = mapped_column(Text, default="[]")

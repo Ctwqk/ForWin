@@ -12,7 +12,7 @@ from forwin.models.project import Project
 from forwin.models.publisher import PublisherConnectionState, PublisherUploadJob
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer.publisher_compliance import PublisherComplianceReviewer
+from forwin.review.publisher_compliance import PublisherComplianceReviewer
 from .audit import PublisherAuditService, terminal_upload_event_type
 from .browser_sessions import isoformat, utc_now
 from .connection_state import ExtensionConnectionService

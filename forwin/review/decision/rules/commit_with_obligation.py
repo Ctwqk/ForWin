@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from forwin.review_engine.issue_taxonomy import classify_primary_issue
-from forwin.review_engine.types import Decision, DecisionInput
+from forwin.review.decision.issue_taxonomy import classify_primary_issue
+from forwin.review.decision.types import Decision, DecisionInput
 
 
 def decide_commit_with_obligation(input: DecisionInput) -> Decision:

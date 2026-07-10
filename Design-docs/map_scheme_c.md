@@ -353,7 +353,7 @@ python3 -m pytest tests/test_book_state_protocol.py tests/test_book_state_runtim
 编译检查：
 
 ```bash
-python3 -m py_compile forwin/map/protocol.py forwin/map/service.py forwin/map/generator.py forwin/map/__init__.py forwin/context/assembler.py forwin/protocol/context.py forwin/reviewer/context_builder.py forwin/reviewer/webnovel.py tests/test_map_generation.py tests/test_map_world_integration.py
+python3 -m py_compile forwin/map/protocol.py forwin/map/service.py forwin/map/generator.py forwin/map/__init__.py forwin/context/assembler.py forwin/protocol/context.py forwin/review/context_builder.py forwin/review/webnovel.py tests/test_map_generation.py tests/test_map_world_integration.py
 ```
 
 ## 11. 当前实现边界

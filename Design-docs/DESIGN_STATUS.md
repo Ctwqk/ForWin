@@ -59,14 +59,17 @@
 | `forwin.world_model_v4` | removed | `forwin.book_state` | 已删除 | 旧 compatibility projection/debug bridge 已从生产模块删除。 |
 | `forwin.world_v4_compat` | removed | `forwin.book_state` | 已删除 | 旧 compatibility projection writer 已从生产模块删除。 |
 | `forwin.reviewer_v4` | deprecated | `forwin.world_v4_review_gate` | v5.0 删除 alias 包 | 仅作为旧导入路径 alias；新代码必须导入 `world_v4_review_gate`。 |
-| `forwin.world_v4_review_gate` | legacy-compatibility | `forwin.reviewer` 主 facade | v5.0 复核是否仍需 extraction gate | 兼容 gate，不是主 chapter reviewer。 |
+| `forwin.world_v4_review_gate` | legacy-compatibility | `forwin.review` 主域 | v5.0 复核是否仍需 extraction gate | 兼容 gate，不是主 chapter reviewer。 |
 | `forwin.planning.scenario_rehearsal` | deprecated | `forwin.planning.scenario_rehearsal_service` | v5.0 删除直接业务依赖 | 旧 monolith 仅保留历史 API 兼容；新增 orchestration 必须走 service。 |
 | `forwin.planning.scenario_rehearsal_service` | active-current | 无 | 无 | 当前 Scenario Rehearsal service 入口。 |
 | `forwin.runtime_settings` | removed | `forwin.runtime.policy` | 已删除 | 不再有进程内可变生成设置文件。 |
 | `Project.governance_json` settings | removed | `Project.runtime_policy_json` + version | 已删除 | manual checkpoint / decision event 等治理账本仍保留；项目运行设置已迁出 governance 命名。 |
 | `forwin.orchestration` | removed | owner-local typed services | 已删除 | `ChapterPipelinePorts` / `OrchestrationEvent` 为零调用 `Any` ports，未作为 v5 边界采用。 |
-| `forwin.reviewer.hub.HistoricalReviewHub` | removed | `forwin.reviewer.draft_service.DraftReviewService` | 已删除 | 草稿评审只产出 evidence/verdict，不决定 canon。 |
-| `forwin.reviser.final_acceptance.FinalAcceptanceGate` | removed | `forwin.review_engine.rules.final_residual.FinalResidualPolicy` | 已删除 | repair 耗尽后的残留策略；字段为 `final_residual_decision`，仍必须经过 BookState canon commit。 |
+| `forwin.reviewer` | removed | `forwin.review` | 已删除 | 草稿评审、decision rules 与 repair 归入一个 bounded package，不留旧导入 alias。 |
+| `forwin.review_engine` | removed | `forwin.review.decision` | 已删除 | 决策规则不再作为与 review 平级的第二套域。 |
+| `forwin.reviser` | removed | `forwin.review.repair` | 已删除 | rewrite executor 与 verifier 归 repair owner。 |
+| `HistoricalReviewHub` | removed | `forwin.review.draft_service.DraftReviewService` | 已删除 | 草稿评审只产出 evidence/verdict，不决定 canon。 |
+| `FinalAcceptanceGate` | removed | `forwin.review.decision.rules.final_residual.FinalResidualPolicy` | 已删除 | repair 耗尽后的残留策略；字段为 `final_residual_decision`，仍必须经过 BookState canon commit。 |
 | `_apply_world_v4_gate` | removed | `_commit_book_state_canon` | 已删除 | 当前路径是 BookState extraction/review/compile，不再使用 legacy v4 命名。 |
 | `_compile_world_model_after_acceptance` | removed | 无 | 已删除 | 恒返回 `True` 的空壳及两处调用均删除。 |
 
@@ -91,8 +94,9 @@
 
 - 已删除零调用 `forwin.orchestration` ports 和恒成功 `_compile_world_model_after_acceptance` 空壳。
 - BookState canon 主路径已从 `_apply_world_v4_gate` 改名为 `_commit_book_state_canon`，block kind 改为 `book_state`。
+- `reviewer`、`review_engine`、`reviser` 已物理合并为 `forwin.review/{draft_service,decision,repair}`；不存在旧 package alias。
 - `HistoricalReviewHub` 已破坏性改名为 `DraftReviewService`；runtime 字段为 `draft_review`。
-- `FinalAcceptanceGate` 与独立 reviser 实现已删除并合入 `FinalResidualPolicy`；协议/API 字段为 `final_residual_decision`，不存在旧 alias。
+- `FinalAcceptanceGate` 已合入 `FinalResidualPolicy`；协议/API 字段为 `final_residual_decision`，不存在旧 alias。
 - 下一步是把 canon/repair 函数族从 `WritingOrchestrator` 属性拼装迁入显式协作对象；Phase C-F 尚未开始。
 
 ## 已知限制

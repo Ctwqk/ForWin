@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from forwin.canon_quality.signals import SignalKind
-from forwin.reviewer.repair_scope_router import SIGNAL_KIND_TO_SCOPE, RepairScopeKind, route_signal_kind
+from forwin.review.repair_scope_router import SIGNAL_KIND_TO_SCOPE, RepairScopeKind, route_signal_kind
 
 
 def test_signal_kind_routing_table_is_exhaustive() -> None:

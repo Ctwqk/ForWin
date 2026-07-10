@@ -16,7 +16,7 @@ from forwin.protocol.context import ChapterContextPack, ReviewContextPack
 from forwin.personality.models import PersonalityLoadout
 from forwin.protocol.scene import ScenePlan
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer.webnovel import WebNovelExperienceReviewer
+from forwin.review.webnovel import WebNovelExperienceReviewer
 from forwin.writer.prompts import build_scene_generation_prompt
 from tests.postgres import postgres_test_url
 

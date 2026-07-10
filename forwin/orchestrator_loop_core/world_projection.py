@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.review_engine.rules.final_residual import is_force_acceptable_nonblocking_issue
+from forwin.review.decision.rules.final_residual import is_force_acceptable_nonblocking_issue
 from forwin.subworld_manager import SubWorldManager
 from forwin.orchestrator_loop_core.common import *
 

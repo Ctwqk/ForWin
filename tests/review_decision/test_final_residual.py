@@ -6,9 +6,9 @@ from forwin.orchestrator_loop_core.review_autofix import (
     _review_current_output,
     normalize_nonblocking_review_verdict,
 )
-from forwin.review_engine.engine import AutoDecisionEngine
-from forwin.review_engine.rules.final_residual import build_final_residual_rules
-from forwin.review_engine.types import DecisionInput, PlanLayerHealth
+from forwin.review.decision.engine import AutoDecisionEngine
+from forwin.review.decision.rules.final_residual import build_final_residual_rules
+from forwin.review.decision.types import DecisionInput, PlanLayerHealth
 
 
 def _decision_input(review: ReviewVerdict) -> DecisionInput:

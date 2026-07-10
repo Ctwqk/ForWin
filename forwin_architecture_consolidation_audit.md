@@ -16,7 +16,7 @@
 
 Slice 1 实施提交依次为 `a7f53bb`、`f7790c5`、`61392af`、`6c2eb0f`、`131e697`、`bc85d91`、`3e0c10f`、`a6a75fb`、`589e58a`、`e87e67b`，并由 completion commit 收口。本轮同时删除失效的旧架构测试大套件和无实现支撑的 review-engine cutover 脚本，常量化 chapter review form 主路径，并增加 production/UI/application/container boundary guard；后续 Phase B-F 不因此标记完成。
 
-Phase B 已开始按“直接删除或改为真实 owner”执行：零引用 `forwin/orchestration` ports 和 `_compile_world_model_after_acceptance` 空壳已删除；BookState canon 主路径已改名 `_commit_book_state_canon`；`HistoricalReviewHub` 已替换为 `DraftReviewService`；`FinalAcceptanceGate` 及其跨 `reviser`/`review_engine` 双层实现已合并为 `FinalResidualPolicy`，协议/API 字段改为 `final_residual_decision`。这些是已实现事实；下文保留旧名称的段落是审计时基线证据，不代表当前代码仍保留旧入口。
+Phase B 已开始按“直接删除或改为真实 owner”执行：零引用 `forwin/orchestration` ports 和 `_compile_world_model_after_acceptance` 空壳已删除；BookState canon 主路径已改名 `_commit_book_state_canon`；`HistoricalReviewHub` 已替换为 `DraftReviewService`；`FinalAcceptanceGate` 已合并为 `FinalResidualPolicy`，协议/API 字段改为 `final_residual_decision`；原 `reviewer`、`review_engine`、`reviser` 三个平级包已物理合并为 `forwin.review/{draft_service,decision,repair}`，不留兼容导入。下文保留旧名称的段落是审计时基线证据，不代表当前代码仍保留旧入口。
 
 ---
 
@@ -230,11 +230,11 @@ WritingOrchestrator (变薄的编排壳)
 | D04 ✅ 已完成 | `quality_profile` | `RuntimePolicy` | writer/reviewer/planning 等独立模式轴 | 只允许 `standard/pulp`，不解析旧 env mode | profile 与显式注入测试 | 不再需要四层 resolver |
 | D05 ★ 已完成 | pulp/standard | — | `premium` 空 profile | 直接删除 | policy literal 校验 | 无空 override |
 | D06 ✅ 已完成 | 环境基础设施 + 项目策略 + 任务快照 | `InfrastructureConfig` / `RuntimePolicy` / policy snapshot | `RuntimeSettingsStore`、`governance_json` 设置与 request override | 直接删除，无 patch alias、无 backcompat | store/version/snapshot/catalog | 三段职责，不是四层归一 |
-| D07 ✎ 已完成 | `HistoricalReviewHub` 行为 | `DraftReviewService` | 旧类名、`review_hub` runtime 字段、`reviewer/hub.py` | 破坏性改名为 `draft_review` / `draft_service.py`，不留 alias | review 聚焦测试 + 架构扫描 | 草稿评审只产 evidence/verdict |
+| D07 ✎ 已完成 | `HistoricalReviewHub` 行为 | `forwin.review.DraftReviewService` | 旧类名、`review_hub` runtime 字段、`reviewer` 旧包 | 破坏性改名并合入单一 review bounded package，不留 alias | review 聚焦测试 + 架构扫描 | 草稿评审只产 evidence/verdict |
 | D08 ✅ | `canon_quality` 分析器 | `QualityAnalysisRun` 缓存 | hub/门重复 LLM 分析 | 按 draft body hash+plan version 缓存 | hub/门同 payload parity；改稿失效缓存 | |
 | D09 ✅ | `decide_repair_v2` | `RepairService` | `review_engine_repair_v2_enabled`、`review_engine_auto_approve_enabled` **字段本体** | 直接删字段（config 之外零读取）；shadow/parity 测试转 test-only 或删 | repair 路由测试改为 live 断言 | 两个死旗标，零生产风险 |
 | D10 ✎ | arc/book patcher、obligation verifier、local rewrite、commit_with_obligation 等 6 个活旗标 | profile 内部策略位 | 独立 env 暴露 | 默认值随 profile；env 覆盖仅 test | 各 gate 开/关行为测试 | 初版笼统归为"hide"；实测它们是活的门 |
-| D11 ✎ 已完成 | `FinalAcceptanceGate` | `FinalResidualPolicy` | `reviser/final_acceptance.py`、旧 rule/class/字段 | 实现并入 final residual rule；协议/API 使用 `final_residual_decision`，不留 alias | 软过硬拦 7 tests | 仍不越过 canon commit |
+| D11 ✎ 已完成 | `FinalAcceptanceGate` | `forwin.review.decision.FinalResidualPolicy` | `reviser/final_acceptance.py`、旧 rule/class/字段 | 实现并入 final residual rule；协议/API 使用 `final_residual_decision`，不留 alias | 软过硬拦 7 tests | 仍不越过 canon commit |
 | D12 ✅ | `_apply_canon_candidate` 行为 | `CanonAdmissionService` | 无 | 包装抽取，事件契约不变 | canon block/commit/幂等 | |
 | D13 ✎ 已完成 | BookState direct-commit 路径 | `_commit_book_state_canon` | `_apply_world_v4_gate` 误导名 | 函数、变量、artifact key 和 block kind 同步改为 BookState 语义 | BookState canon 测试 | 不留旧名 |
 | D14 ✎ 已完成 | — | — | `_compile_world_model_after_acceptance` 空壳 | 函数、两处调用和恒真 pause 分支已删除 | compile/collect + acceptance 回归 | `return True` 存根已消失 |
@@ -269,7 +269,7 @@ WritingOrchestrator (变薄的编排壳)
 
 - **当前进度**：D07、D11、D13、D14、D19 已完成；FinalResidual 聚焦 7 tests 通过。尚未完成 D08 缓存、RepairService / CanonAdmissionService 和 monkey-patch 函数族迁移。
 - **目标**：四层判决语义落地为四个显式 service；`service.py` 猴子补丁开始收敛。
-- **涉及**：`reviewer/draft_service.py`、`review_engine/*`、`orchestrator_loop_core/{review_autofix,repair_loop,quality_gates,world_projection,service}.py`。
+- **涉及**：`review/{draft_service,decision,repair}`、`orchestrator_loop_core/{review_autofix,repair_loop,quality_gates,world_projection,service}.py`。
 - **不变量**：hard blocker 必拦；force-accept/reckless 不越 canon 门（新增显式不变量测试）；`ChapterReview` 持久化与 UI 队列可读。
 - **具体**：① 建 `DraftReviewService`/`RepairService`/`FinalResidualPolicy`/`CanonAdmissionService` 包装现函数；② `QualityAnalysisRun` 缓存；③ `_apply_world_v4_gate` 重命名；④ 删空壳 `_compile_world_model_after_acceptance`；⑤ reckless per-gate allowlist（D03）。
 - **测试**：verdict parity（包装前后）；repair 路由 live 断言；软/硬残留；reckless 批准后 canon 门执行不变量；同一 accept 尝试内 canon_quality LLM 只调一次。

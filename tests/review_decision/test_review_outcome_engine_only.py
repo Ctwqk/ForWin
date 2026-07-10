@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from forwin.canon_quality.signals import CanonQualitySignal
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
-from forwin.review_engine.engine import AutoDecisionEngine
-from forwin.review_engine.rules.review_outcome import build_review_outcome_rules
-from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
+from forwin.review.decision.engine import AutoDecisionEngine
+from forwin.review.decision.rules.review_outcome import build_review_outcome_rules
+from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 
 
 def _input(

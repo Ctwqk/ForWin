@@ -62,7 +62,7 @@ def test_api_automation_can_use_runtime_production_scheduler_factory() -> None:
 def test_reviewer_does_not_mutate_chapter_experience_plan() -> None:
     from forwin.protocol.context import ReviewContextPack
     from forwin.protocol.writer import WriterOutput
-    from forwin.reviewer.experience import ExperienceReviewer
+    from forwin.review.experience import ExperienceReviewer
 
     plan = ChapterExperiencePlan(planned_reward_tags=["mystery"], progress_markers=["找到线索"])
     before = plan.model_dump(mode="json")
@@ -88,7 +88,7 @@ def test_reviewer_does_not_mutate_chapter_experience_plan() -> None:
 
 
 def test_draft_review_repair_merge_preserves_existing_scope_order() -> None:
-    from forwin.reviewer.draft_service import DraftReviewService
+    from forwin.review.draft_service import DraftReviewService
 
     base = RepairInstruction(
         repair_scope="draft",

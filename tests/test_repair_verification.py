@@ -4,7 +4,7 @@ import json
 
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.reviser.verification import RepairVerifier
+from forwin.review.repair.verification import RepairVerifier
 
 
 class ContradictingLLMClient:

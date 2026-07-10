@@ -52,7 +52,7 @@ def _movement_output() -> WriterOutput:
 
 
 def test_map_movement_reviewer_owns_deterministic_movement_issue() -> None:
-    from forwin.reviewer.map_movement import MapMovementReviewer
+    from forwin.review.map_movement import MapMovementReviewer
 
     verdict = MapMovementReviewer().review(_movement_context(), _movement_output())
 
@@ -62,7 +62,7 @@ def test_map_movement_reviewer_owns_deterministic_movement_issue() -> None:
 
 
 def test_webnovel_reviewer_facade_keeps_legacy_movement_behavior_without_owning_method() -> None:
-    from forwin.reviewer.webnovel import WebNovelExperienceReviewer
+    from forwin.review.webnovel import WebNovelExperienceReviewer
 
     reviewer = WebNovelExperienceReviewer(llm_enabled=False)
     verdict = reviewer.review(_movement_context(), _movement_output())
@@ -72,8 +72,8 @@ def test_webnovel_reviewer_facade_keeps_legacy_movement_behavior_without_owning_
 
 
 def test_llm_webnovel_reviewer_owns_llm_prompt_and_json_repair() -> None:
-    from forwin.reviewer.llm_webnovel import LLMWebNovelReviewer
-    from forwin.reviewer.webnovel import WebNovelExperienceReviewer
+    from forwin.review.llm_webnovel import LLMWebNovelReviewer
+    from forwin.review.webnovel import WebNovelExperienceReviewer
 
     assert hasattr(LLMWebNovelReviewer, "_llm_review_messages")
     assert hasattr(LLMWebNovelReviewer, "_repair_llm_json")
@@ -84,7 +84,7 @@ def test_llm_webnovel_reviewer_owns_llm_prompt_and_json_repair() -> None:
 
 
 def test_webnovel_reviewer_no_longer_carries_legacy_map_movement_helpers() -> None:
-    from forwin.reviewer.webnovel import WebNovelExperienceReviewer
+    from forwin.review.webnovel import WebNovelExperienceReviewer
 
     assert not hasattr(WebNovelExperienceReviewer, "_legacy_map_movement_issue")
     assert not hasattr(WebNovelExperienceReviewer, "_observer_cognition_views")
@@ -93,7 +93,7 @@ def test_webnovel_reviewer_no_longer_carries_legacy_map_movement_helpers() -> No
 
 def test_historical_draft_review_accepts_split_reviewer_ports() -> None:
     from forwin.protocol.review import ReviewVerdict
-    from forwin.reviewer.draft_service import DraftReviewService
+    from forwin.review.draft_service import DraftReviewService
 
     class Continuity:
         verdict = "pass"
@@ -145,7 +145,7 @@ def test_historical_draft_review_accepts_split_reviewer_ports() -> None:
 
 def test_historical_draft_review_merge_preserves_arc_repair_scope() -> None:
     from forwin.protocol.review import RepairInstruction
-    from forwin.reviewer.draft_service import DraftReviewService
+    from forwin.review.draft_service import DraftReviewService
 
     base = RepairInstruction(
         repair_scope="chapter_plan",

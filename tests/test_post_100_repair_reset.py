@@ -192,12 +192,12 @@ def test_allowed_entity_names_do_not_scrape_recent_accepted_summaries() -> None:
 
 def test_repair_v2_no_longer_has_subworld_repair_scope() -> None:
     from forwin.protocol.review import ContinuityIssue, ReviewVerdict
-    from forwin.review_engine.rules.repair_v2 import (
+    from forwin.review.decision.rules.repair_v2 import (
         MAX_ATTEMPTS_PER_SCOPE,
         _SCOPE_TO_OUTCOME,
         decide_repair_v2,
     )
-    from forwin.review_engine.types import DecisionInput, PlanLayerHealth
+    from forwin.review.decision.types import DecisionInput, PlanLayerHealth
 
     decision = decide_repair_v2(
         DecisionInput(

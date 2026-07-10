@@ -85,7 +85,7 @@ def _fatal_only_residual_refs(
 def _required_repair_scope_for_signals(
     signals: list[CanonQualitySignal],
 ) -> Literal["draft", "chapter_plan", "band", "arc", "book"] | None:
-    from forwin.reviewer.repair_scope_router import RepairScopeKind, route_signal_kind
+    from forwin.review.repair_scope_router import RepairScopeKind, route_signal_kind
 
     routed_scopes: list[Literal["draft", "chapter_plan"]] = []
     for signal in signals:

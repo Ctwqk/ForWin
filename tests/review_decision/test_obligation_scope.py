@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from forwin.review_engine.rules.obligation_scope import (
+from forwin.review.decision.rules.obligation_scope import (
     BandScopeCandidate,
     decide_obligation_scope,
     decision_from_obligation_scope,

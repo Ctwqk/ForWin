@@ -25,7 +25,7 @@ from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import RepairInstruction, ReviewVerdict
 from forwin.protocol.world_v4 import ApprovedWorldChangeSet, ExtractedWorldChangeSet
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer.draft_service import DraftReviewService
+from forwin.review.draft_service import DraftReviewService
 from forwin.world_v4_review_gate.types import V4ReviewGateVerdict
 from tests.postgres import postgres_test_url
 from forwin.models.base import get_engine, get_session_factory, init_db

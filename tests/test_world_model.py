@@ -41,7 +41,7 @@ from forwin.config import InfrastructureConfig
 from forwin.context.assembler import assemble_context
 from forwin.retrieval.broker import RetrievalBroker
 from forwin.state.repo import StateRepository
-from forwin.reviewer.context_builder import build_review_context_pack
+from forwin.review.context_builder import build_review_context_pack
 
 
 class WorldModelTests(unittest.TestCase):

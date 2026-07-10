@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from forwin.canon_quality.chapter_review_form.operator_report import build_report
-from forwin.reviewer.repair_loop_detector import RepairAttemptRecord
-from forwin.reviewer.repair_scope_router import RepairScopeKind, RoutedSignal
+from forwin.review.repair_loop_detector import RepairAttemptRecord
+from forwin.review.repair_scope_router import RepairScopeKind, RoutedSignal
 
 
 def _signal(kind: str, subject: str) -> RoutedSignal:

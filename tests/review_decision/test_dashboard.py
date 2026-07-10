@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from forwin.review_engine.dashboard import build_waiting_review_breakdown
+from forwin.review.decision.dashboard import build_waiting_review_breakdown
 
 
 def _event(payload: dict[str, object], *, reason: str = "") -> SimpleNamespace:

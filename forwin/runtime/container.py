@@ -23,8 +23,8 @@ from forwin.planning.world_contract_service import WorldContractPlanningService
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publisher_runtime.service import PublisherRuntimeService
 from forwin.retrieval import RetrievalBroker, create_memory_index
-from forwin.reviewer import DraftReviewService
-from forwin.reviser import RepairVerifier
+from forwin.review import DraftReviewService
+from forwin.review.repair import RepairVerifier
 from forwin.runtime.factories import ProductionSchedulerFactory, build_provisional_writer, build_writer
 from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.services import RuntimeServices, SkillRuntimeBundle

@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import replace
 
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
-from forwin.review_engine.engine import AutoDecisionEngine
-from forwin.review_engine.rules.repair import build_scope_driven_repair_rules
-from forwin.review_engine.rules.repair_v2 import decide_repair_v2
-from forwin.review_engine.types import DecisionInput, PlanLayerHealth
+from forwin.review.decision.engine import AutoDecisionEngine
+from forwin.review.decision.rules.repair import build_scope_driven_repair_rules
+from forwin.review.decision.rules.repair_v2 import decide_repair_v2
+from forwin.review.decision.types import DecisionInput, PlanLayerHealth
 
 
 def _input_with_issue(issue_kind: str, *, severity: str = "error") -> DecisionInput:

@@ -56,7 +56,7 @@ FORBIDDEN_FIXTURE_TERMS = [
 REPAIR_TIME_CANON_STATE_FILES = [
     "forwin/planning/countdown_drift_pre_audit.py",
     "forwin/canon_quality/active_rules_handler.py",
-    "forwin/reviewer/repair_handlers/active_rules.py",
+    "forwin/review/repair_handlers/active_rules.py",
 ]
 
 

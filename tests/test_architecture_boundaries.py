@@ -10,7 +10,7 @@ import pytest
 
 import forwin.book_state as book_state
 import forwin.map as book_map
-import forwin.reviewer as reviewer
+import forwin.review as review
 import forwin.reviewer_v4 as reviewer_v4
 import forwin.world_model as world_model
 from forwin.api_route_registry import (
@@ -39,7 +39,7 @@ def test_core_packages_declare_current_architecture_roles() -> None:
     expectations = {
         "forwin/book_state/README.md": "Status: CANON runtime.",
         "forwin/world_model/README.md": "Status: deprecated projection / wiki / export facade.",
-        "forwin/reviewer/README.md": "Status: DRAFT REVIEW domain.",
+        "forwin/review/README.md": "Status: DRAFT REVIEW domain.",
         "forwin/reviewer_v4/README.md": "Status: COMPATIBILITY gate.",
         "forwin/map/README.md": "Status: CANON map runtime.",
     }
@@ -48,7 +48,7 @@ def test_core_packages_declare_current_architecture_roles() -> None:
 
     assert "CANON BookState runtime" in inspect.getdoc(book_state)
     assert "Deprecated world model projection/export facade" in inspect.getdoc(world_model)
-    assert "Chapter draft review domain" in inspect.getdoc(reviewer)
+    assert "Chapter draft review domain" in inspect.getdoc(review)
     assert "COMPATIBILITY world_v4 extraction review gate" in inspect.getdoc(reviewer_v4)
     assert "CANON Scheme C BookMap runtime" in inspect.getdoc(book_map)
 
@@ -253,23 +253,23 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
         "forwin/orchestrator_loop_core/world_projection.py"
     )
     assert "class DraftReviewService" in _read(
-        "forwin/reviewer/draft_service.py"
+        "forwin/review/draft_service.py"
     )
     assert "class FinalResidualPolicy" in _read(
-        "forwin/review_engine/rules/final_residual.py"
+        "forwin/review/decision/rules/final_residual.py"
     )
 
 
 def test_removed_repair_dead_code_stays_removed() -> None:
     assert not (ROOT / "forwin/orchestrator/repair_coordinator.py").exists()
 
-    loop_detector = importlib.import_module("forwin.reviewer.repair_loop_detector")
+    loop_detector = importlib.import_module("forwin.review.repair_loop_detector")
     assert hasattr(loop_detector, "RepairAttemptRecord")
     assert not hasattr(loop_detector, "RepairLoopDetector")
     assert not hasattr(loop_detector, "RepairLoopResult")
     assert not hasattr(loop_detector, "attempt_record_from_history_item")
 
-    scope_router = importlib.import_module("forwin.reviewer.repair_scope_router")
+    scope_router = importlib.import_module("forwin.review.repair_scope_router")
     assert hasattr(scope_router, "RepairScopeKind")
     assert hasattr(scope_router, "route_signal_kind")
     assert not hasattr(scope_router, "RepairScopeDispatch")
@@ -292,11 +292,11 @@ def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
             "forwin/runtime/services.py",
             "forwin/orchestrator_loop_core/service.py",
             "forwin/orchestrator_loop_core/repair_loop.py",
-            "forwin/review_engine/rules/repair.py",
+            "forwin/review/decision/rules/repair.py",
         ],
         "Obligation" "ScopeRouter": [
             "forwin/orchestrator_loop_core/quality_gates.py",
-            "forwin/review_engine/rules/obligation_scope.py",
+            "forwin/review/decision/rules/obligation_scope.py",
         ],
         "select_" "cutover_pair": [
             "forwin/orchestrator_loop_core/quality_gates.py",
@@ -312,9 +312,9 @@ def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
                 offenders.append((rel_path, token))
 
     assert offenders == []
-    assert not (ROOT / "forwin/reviser/final_acceptance.py").exists()
-    assert not (ROOT / "forwin/review_engine/rules/final_acceptance.py").exists()
-    assert "FinalResidualPolicy" in _read("forwin/review_engine/rules/final_residual.py")
+    for removed_package in ("reviser", "review_engine", "reviewer"):
+        assert list((ROOT / f"forwin/{removed_package}").rglob("*.py")) == []
+    assert "FinalResidualPolicy" in _read("forwin/review/decision/rules/final_residual.py")
 
 
 def test_removed_generation_modes_and_review_flags_stay_removed() -> None:

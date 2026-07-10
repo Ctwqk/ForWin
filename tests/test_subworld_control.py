@@ -42,7 +42,7 @@ from forwin.protocol.state_change import EventCandidate, StateChangeCandidate
 from forwin.protocol.review import ContinuityIssue
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
-from forwin.reviewer.draft_service import DraftReviewService
+from forwin.review.draft_service import DraftReviewService
 from forwin.subworld_manager import SubWorldManager
 from forwin.writer.chapter_writer import ChapterWriter
 from forwin.writer.prompts import build_single_chapter_draft_prompt

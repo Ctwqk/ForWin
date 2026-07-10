@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from forwin.protocol.review import ReviewVerdict
-from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
+from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 
 
 def test_decision_input_and_decision_are_serializable() -> None:

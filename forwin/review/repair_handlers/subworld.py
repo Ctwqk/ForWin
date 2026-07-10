@@ -11,7 +11,7 @@ from forwin.models.base import new_id
 from forwin.models.entity import Entity
 from forwin.models.subworld import SubWorld, SubWorldRosterItem
 from forwin.planning.subworld_admission import normalize_entity_kind
-from forwin.reviewer.repair_scope_router import RoutedSignal
+from forwin.review.repair_scope_router import RoutedSignal
 
 
 @dataclass(slots=True)

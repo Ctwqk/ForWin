@@ -3,8 +3,8 @@ from __future__ import annotations
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer.draft_service import DraftReviewService
-from forwin.reviewer.personality import PersonalityConsistencyReviewer
+from forwin.review.draft_service import DraftReviewService
+from forwin.review.personality import PersonalityConsistencyReviewer
 
 
 def _context() -> ChapterContextPack:

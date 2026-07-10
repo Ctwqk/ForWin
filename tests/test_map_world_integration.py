@@ -35,7 +35,7 @@ from forwin.protocol.scene import SceneOutput
 from forwin.protocol.state_change import TimeAdvance
 from forwin.protocol.book_state import MapEdge, MapNode, WorldNode
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer.webnovel import WebNovelExperienceReviewer
+from forwin.review.webnovel import WebNovelExperienceReviewer
 from forwin.state.repo import StateRepository
 from forwin.writer.prompts import build_single_chapter_draft_prompt
 

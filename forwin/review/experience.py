@@ -15,7 +15,7 @@ class ExperienceReviewer:
         llm_client=None,
         llm_enabled: bool | None = None,
     ) -> None:
-        from forwin.reviewer.webnovel import WebNovelExperienceReviewer
+        from forwin.review.webnovel import WebNovelExperienceReviewer
 
         self._delegate = WebNovelExperienceReviewer(
             enabled=enabled,

@@ -17,7 +17,7 @@ from forwin.llm.codex_client import CodexBridgeClient
 from forwin.models.governance import DecisionEvent
 from forwin.models.project import Project
 from forwin.runtime.policy_store import ProjectPolicyStore
-from forwin.review_engine.dashboard import build_waiting_review_breakdown
+from forwin.review.decision.dashboard import build_waiting_review_breakdown
 
 
 logger = logging.getLogger(__name__)

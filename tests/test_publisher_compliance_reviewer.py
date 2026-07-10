@@ -3,8 +3,8 @@ from __future__ import annotations
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer.draft_service import DraftReviewService
-from forwin.reviewer.publisher_compliance import PublisherComplianceReviewer
+from forwin.review.draft_service import DraftReviewService
+from forwin.review.publisher_compliance import PublisherComplianceReviewer
 
 
 def _writer(body: str, title: str = "第一章") -> WriterOutput:

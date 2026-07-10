@@ -27,7 +27,7 @@ Genesis / Writer / Review 主链
 - 上下文来源：`BookState + BookMap + Genesis + approved projections`。
 - 运行策略：项目只有一份带版本号的 `RuntimePolicy`，durable generation task 保存不可变 policy snapshot；`InfrastructureConfig` 只负责环境凭据、端点、worker/存储和只读模型目录。
 - 任务入口：API、worker、scheduler、CLI、Genesis handoff、continue 和 auto-continue 统一经过 `GenerationApplicationService`；`RuntimeContainer` 是唯一 orchestrator 装配点。
-- review 主链：`reviewer.DraftReviewService` 聚合章节文本、体验、治理、地图、人格和 lint；`FinalResidualPolicy` 只评估 repair 耗尽后的残留，不决定 canon；`BookStateReviewGate` 是 GraphDelta 入 canon 前的 deterministic guardrail。
+- review 主链：`review.DraftReviewService` 聚合章节文本、体验、治理、地图、人格和 lint；`review.decision.FinalResidualPolicy` 只评估 repair 耗尽后的残留，不决定 canon；`BookStateReviewGate` 是 GraphDelta 入 canon 前的 deterministic guardrail。
 - skill runtime：仅作为 prompt / workflow instruction layer，参与 PromptTrace，不写 canon，不绕过 DecisionEvent 或 BookState gate。
 
 ## Quality Profile

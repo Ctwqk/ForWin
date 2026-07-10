@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from forwin.review_engine.issue_taxonomy import IssueScope, classify_primary_issue
-from forwin.review_engine.types import Decision, DecisionInput, DecisionOutcome, DecisionRule
+from forwin.review.decision.issue_taxonomy import IssueScope, classify_primary_issue
+from forwin.review.decision.types import Decision, DecisionInput, DecisionOutcome, DecisionRule
 
 _SCOPE_TO_OUTCOME: dict[IssueScope, DecisionOutcome] = {
     "draft": "local_repair",

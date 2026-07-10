@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
-from forwin.review_engine.rules.structural_patch import decide_structural_patch
-from forwin.review_engine.types import DecisionInput, PlanLayerHealth
+from forwin.review.decision.rules.structural_patch import decide_structural_patch
+from forwin.review.decision.types import DecisionInput, PlanLayerHealth
 
 
 def _input_with_issue(issue_kind: str) -> DecisionInput:

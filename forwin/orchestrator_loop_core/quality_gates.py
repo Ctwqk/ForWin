@@ -8,15 +8,15 @@ from forwin.canon_quality.obligation_verifier import verify_due_obligations_for_
 from forwin.orchestrator_loop_core.quality_gate_types import CanonApplyOutcome, CanonQualityGateOutcome
 from forwin.orchestrator_loop_core.quality_signal_utils import dedupe_quality_signals
 from forwin.orchestrator_loop_core.common import *
-from forwin.review_engine.engine import AutoDecisionEngine
-from forwin.review_engine.rules.review_outcome import (
+from forwin.review.decision.engine import AutoDecisionEngine
+from forwin.review.decision.rules.review_outcome import (
     build_review_outcome_rules,
     review_action_from_decision,
 )
-from forwin.review_engine.rules.obligation_scope import decide_obligation_scope
-from forwin.review_engine.rules.commit_with_obligation import decide_commit_with_obligation
-from forwin.review_engine.rules.structural_patch import decide_structural_patch
-from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
+from forwin.review.decision.rules.obligation_scope import decide_obligation_scope
+from forwin.review.decision.rules.commit_with_obligation import decide_commit_with_obligation
+from forwin.review.decision.rules.structural_patch import decide_structural_patch
+from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.orchestrator_loop_core.structural_patches import (
     _persist_structural_patch_outcome,
     evaluate_structural_patch_completion_debt,

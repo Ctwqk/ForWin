@@ -2,7 +2,7 @@
 
 Status: COMPATIBILITY gate.
 
-`reviewer_v4` reviews extracted world_v4 changes before the old V4 compatibility compiler/projection path. It is not the main chapter reviewer and must not grow into a replacement for `forwin.reviewer`.
+`reviewer_v4` reviews extracted world_v4 changes before the old V4 compatibility compiler/projection path. It is not the main chapter reviewer and must not grow into a replacement for `forwin.review`.
 
 Rules:
 

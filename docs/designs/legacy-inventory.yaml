@@ -313,15 +313,15 @@ entries:
 
   - id: review_engine.legacy_telemetry_names
     category: deleted
-    owner_area: review_engine
+    owner_area: review
     paths:
       - forwin/orchestrator_loop_core/governance.py
       - forwin/orchestrator_loop_core/common.py
       - forwin/orchestrator_loop_core/quality_gates.py
       - forwin/orchestrator_loop_core/repair_loop.py
-      - forwin/review_engine/audit.py
-      - forwin/review_engine/rules/final_acceptance.py
-      - forwin/review_engine/rules/review_outcome.py
+      - forwin/review/decision/audit.py
+      - forwin/review/decision/rules/final_residual.py
+      - forwin/review/decision/rules/review_outcome.py
     allow_patterns:
       - legacy_outcome
       - legacy_shadow_evaluated
@@ -345,10 +345,9 @@ entries:
 
   - id: legacy_compatibility_audit_runtime
     category: runtime_delete
-    owner_area: review_engine
+    owner_area: review
     paths:
-      - scripts/audit_review_engine_cutover.py
-      - forwin/review_engine/audit.py
+      - forwin/review/decision/audit.py
       - forwin/governance.py
       - forwin/orchestrator_loop_core/governance.py
       - forwin/orchestrator_loop_core/service.py
@@ -593,7 +592,7 @@ entries:
     paths:
       - forwin/personality/models.py
       - forwin/protocol/review.py
-      - forwin/reviewer/repair_scope_router.py
+      - forwin/review/repair_scope_router.py
       - forwin/writer/chapter_writer.py
     allow_patterns:
       - _accept_legacy_keys
@@ -699,11 +698,11 @@ entries:
 
   - id: dead_code.removed_repair_paths
     category: deleted
-    owner_area: reviewer
+    owner_area: review
     paths:
       - forwin/orchestrator/repair_coordinator.py
-      - forwin/reviewer/repair_loop_detector.py
-      - forwin/reviewer/repair_scope_router.py
+      - forwin/review/repair_loop_detector.py
+      - forwin/review/repair_scope_router.py
       - forwin/canon_quality/rule_profile.py
     allow_patterns:
       - class ChapterRepairCoordinator

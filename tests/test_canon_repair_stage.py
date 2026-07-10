@@ -33,8 +33,8 @@ from forwin.orchestrator_loop_core.repair_loop import (
 from forwin.project_ops.reviews import get_chapter_review
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.review_engine.rules.repair_v2 import decide_repair_v2
-from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
+from forwin.review.decision.rules.repair_v2 import decide_repair_v2
+from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 from forwin.runtime.container import RuntimeContainer
 from forwin.runtime.policy import RuntimePolicy
 

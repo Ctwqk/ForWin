@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from forwin.canon_quality.signals import CanonQualitySignal
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
-from forwin.review_engine.issue_taxonomy import classify_primary_issue, scope_for_issue_kind
+from forwin.review.decision.issue_taxonomy import classify_primary_issue, scope_for_issue_kind
 
 
 def test_structural_identity_issue_routes_to_arc_plan() -> None:

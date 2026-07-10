@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from forwin.protocol.context import ReviewContextPack
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer.draft_service import DraftReviewService
-from forwin.reviewer.llm_webnovel import LLMWebNovelReviewer
-import forwin.reviewer.llm_webnovel as llm_webnovel
+from forwin.review.draft_service import DraftReviewService
+from forwin.review.llm_webnovel import LLMWebNovelReviewer
+import forwin.review.llm_webnovel as llm_webnovel
 
 
 def test_llm_reviewer_payload_includes_deterministic_quality_report() -> None:

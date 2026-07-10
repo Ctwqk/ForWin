@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from forwin.protocol.writer import WriterOutput
-from forwin.reviser.local_rewrite_executor import LocalRewriteExecutor
+from forwin.review.repair.local_rewrite_executor import LocalRewriteExecutor
 
 
 def _output(body: str) -> WriterOutput:

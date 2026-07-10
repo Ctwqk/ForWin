@@ -6,11 +6,11 @@ from forwin.governance import (
     ensure_decision_event_type,
 )
 from forwin.protocol.review import ReviewVerdict
-from forwin.review_engine.audit import (
+from forwin.review.decision.audit import (
     build_decision_event_payload,
     digest_decision_input,
 )
-from forwin.review_engine.types import Decision, DecisionInput, PlanLayerHealth
+from forwin.review.decision.types import Decision, DecisionInput, PlanLayerHealth
 
 
 def _input(*, chapter_number: int = 1) -> DecisionInput:

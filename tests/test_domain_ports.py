@@ -19,7 +19,7 @@ def test_book_state_canon_port_forwards_compile() -> None:
 
 
 def test_review_port_forwards_review_chapter_request() -> None:
-    from forwin.reviewer.ports import CallableReviewPort, ReviewChapterRequest, ReviewChapterResult
+    from forwin.review.ports import CallableReviewPort, ReviewChapterRequest, ReviewChapterResult
 
     calls = []
 

@@ -4,8 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from forwin.reviewer.repair_loop_detector import RepairAttemptRecord
-from forwin.reviewer.repair_scope_router import RoutedSignal
+from forwin.review.repair_loop_detector import RepairAttemptRecord
+from forwin.review.repair_scope_router import RoutedSignal
 
 
 class OperatorReport(BaseModel):

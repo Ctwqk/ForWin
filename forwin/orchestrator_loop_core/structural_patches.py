@@ -6,7 +6,7 @@ from forwin.planning.arc_plan_patcher import ArcPlanPatcher
 from forwin.planning.book_patch_validator import BookPatchValidator
 from forwin.planning.book_plan_patcher import BookPlanPatcher
 from forwin.narrative_obligations.budget import evaluate_obligation_budget
-from forwin.review_engine.types import Decision, DecisionInput
+from forwin.review.decision.types import Decision, DecisionInput
 
 
 def _persist_structural_patch_outcome(

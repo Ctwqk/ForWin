@@ -1,8 +1,8 @@
-# forwin.reviewer
+# forwin.review
 
 Status: DRAFT REVIEW domain.
 
-`reviewer` owns chapter-draft signal collection. `DraftReviewService` aggregates continuity, governance, experience, map movement, personality, lint, and webnovel-facing review signals.
+`review` owns chapter-draft signal collection, decision rules, repair execution, verification, and final residual policy. `DraftReviewService` aggregates continuity, governance, experience, map movement, personality, lint, and webnovel-facing review signals.
 
 Rules:
 

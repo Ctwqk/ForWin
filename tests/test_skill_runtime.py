@@ -8,7 +8,7 @@ from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import ReviewVerdict
 from forwin.protocol.writer import WriterOutput
-from forwin.reviewer import DraftReviewService
+from forwin.review import DraftReviewService
 from forwin.skills import build_skill_runtime_components
 from forwin.writer.chapter_writer import ChapterWriter
 

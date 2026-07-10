@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from forwin.protocol.context import ChapterContextPack
 from forwin.protocol.review import ContinuityIssue, ReviewVerdict
-from forwin.reviewer.draft_service import DraftReviewService
-from forwin.reviewer.infrastructure_errors import (
+from forwin.review.draft_service import DraftReviewService
+from forwin.review.infrastructure_errors import (
     filter_writer_fixable_issues,
     infrastructure_issues,
 )

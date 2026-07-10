@@ -78,6 +78,7 @@
 | `orchestrator_loop_core.__init__` re-export | removed | explicit submodule imports | 已删除 | 包初始化不再反向加载 `common.*` 和完整 `WritingOrchestrator`。 |
 | canon runtime helper injection | removed | `CanonAdmissionService` direct collaborators | 已删除 | 删除 13 条 quality/BookState/projection helper 赋值；orchestrator 拼装降至 89 条并由架构测试锁定。 |
 | duplicate canon quality analysis | removed | `QualityAnalysisRunRow` | 已删除 | draft review/canon gate 共享有效 primary 结果；content/plan/analyzer 指纹变化自动失效，replay/dry-run/失败结果不复用。 |
+| `book_genesis_core.workflow` unreachable implementation | removed | typed `BookGenesisService` -> `GenesisWorkspaceService` methods | 已删除 | 588 行文件整段删除；handoff 锁 active revision，四个 workspace mutation 入口 fail-closed。 |
 
 ## 2026-07 V5 Slice 1 Status
 
@@ -106,6 +107,7 @@
 - `CanonAdmissionService` 已拥有唯一 candidate -> canon 决策体；`WritingOrchestrator._apply_canon_candidate` 和 outcome coercer 已删除。
 - live repair loop 已迁入 `forwin.review.repair.service`；`WritingOrchestrator` 不再暴露 `_review_and_maybe_rewrite` / `_run_canon_repair_for_block`。
 - canon/repair 函数族已退出 `WritingOrchestrator` 属性拼装，D08 quality analysis 共享缓存已落地；Phase B 完成，下一步进入 Phase C。
+- Phase C Genesis 切片已完成：workflow dead block 删除，handoff 后 revision 永久冻结；EntityRegistrar / planning 收口仍在进行。
 
 ## 已知限制
 

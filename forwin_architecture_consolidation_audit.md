@@ -32,7 +32,7 @@ Phase B 已完成：零引用 `forwin/orchestration` ports 和 `_compile_world_m
 | 4 | `review_engine_auto_approve_enabled` 同样是死旗标（无生产调用方） | 全仓 grep 仅 config.py 命中 |
 | 5 | `FinalAcceptanceGate` 仅在 blackbox 下评估 force-accept，且只处理软性残留 issue | `forwin/reviser/final_acceptance.py:40-56` |
 | 6 | BookState = CANON、world_model = deprecated projection（import 即 warning）、map = CANON Scheme C runtime | 三个包的 `__init__.py` 包级 docstring 与 DeprecationWarning |
-| 7 | `book_genesis_core/workflow.py` 存在 early-return 后的大段不可达死代码（`generate_stage`/`refine_stage` 等，包体约 3900 行） | `forwin/book_genesis_core/workflow.py:166-247,261-...` |
+| 7 | `book_genesis_core/workflow.py` 的 early-return 后不可达实现 | **已删除**：588 行文件整体移除，9 个 workspace 委托改为 `BookGenesisService` 真方法；名称 profile resolver 归 `GenesisNameSuggestionService` |
 | 8 | 架构边界测试已在守护删除项（world_v4 模块、review-engine safety-net、repair 死代码） | `tests/test_architecture_boundaries.py:227,233,254` |
 | 9 | 生成任务已是 durable worker 模式：API 入队，worker `claim + lease + resume` | `forwin/generation/worker.py:46-167`、`forwin/generation/task_lease.py` |
 | 10 | `Design-docs/DESIGN_STATUS.md` 是真实维护中的弃用矩阵（含 v5.0 删除目标），不是摆设 | `Design-docs/DESIGN_STATUS.md` 兼容/弃用矩阵段 |
@@ -241,7 +241,7 @@ WritingOrchestrator (变薄的编排壳)
 | D15 ✎ | `BookStateCompiler`/GraphDelta 唯一写方 | `BookStateRuntime` | canon 提交内的 legacy `apply_state_changes/apply_events/apply_thread_beats/apply_time_advance` 双写 | **先**迁读方（context providers/RetrievalBroker/ContinuityChecker → BookState projection），读方清零后删写方 | 读方清单测试 + 30 章对拍（legacy vs projection 上下文一致） | 初版低估了读方迁移量 |
 | D16 ✎ | `EntityRegistrar`+`EntityAlias`（已 live） | 唯一实体判决点 | canon 门 `_validate_subworld_admission` 独立判决、`subworld_admission_patch` repair scope、nonblocking subworld 特例胶水、summary 名字桥 | canon 门降级为验证 registrar 结论；07-07/08 胶水随割接删除 | 100 章冻结 fixture 回放，零新增 regex | 初版说"新建"，实为"割接收口" |
 | D17 ✅ | `FuturePlanAuditor`/`BandCheckpoint` | `PlanHealth` 统一模型 | `planning_audit_mode`/`plan_patch_validation_mode`/`band_checkpoint_mode` 用户旗标 | 常量化进 profile | 写前/写后 audit + band 边界测试 | `future_plan_auditor.py` shim 一并删 |
-| D18 ✅ | Genesis 六阶段 + handoff | 冻结语义 | `book_genesis_core/workflow.py` early-return 死块 | 直接删不可达代码 | Genesis 流程 + handoff 幂等测试 | 行为已由 workspace 委托承担 |
+| D18 ✅ 已完成 | Genesis 六阶段 + handoff | 冻结语义 | `book_genesis_core/workflow.py` early-return 死块与 handoff 后可继续编辑 | 删除 588 行 workflow；workspace 委托成为 typed service 方法；handoff 设置 revision `locked`，mutation 统一拒绝 | Genesis freeze + handoff 流程 | 不保留直接编辑旁路 |
 | D19 ✎ 已完成 | owner-local typed services | owner-local typed services | `forwin.orchestration.ChapterPipelinePorts` / `OrchestrationEvent` | 未采用 `Any` ports，整包删除；新协议随 owner 定义 | 文件不存在边界测试 | 零引用死代码已清除 |
 | D20 ★ | `WritingOrchestrator` 公共入口 | 显式协作对象（§4.4） | `service.py` 猴子补丁拼装 + 模块回注 | 每 Phase 收敛一族方法；`__module__` 伪装最后删 | 每族替换后全量回归 | 收敛的结构性主线 |
 | D21 ✅ | route registry 域分组 | application services | route ops 内嵌业务逻辑 | 按域抽 service，响应契约不变 | API 回归 + 分组边界测试（已有） | |
@@ -278,6 +278,7 @@ WritingOrchestrator (变薄的编排壳)
 
 ### Phase C — Genesis/planning/subworld admission 割接收口（D16-D18）
 
+- **当前进度**：D18 已完成；`workflow.py` 删除，handoff 后 active revision 冻结。D16 EntityRegistrar 唯一准入与 planning 门面仍在进行。
 - **目标**：EntityRegistrar 成为唯一实体判决点；Genesis 冻结；planning 服务群归口。
 - **具体**：① canon 门 `_validate_subworld_admission` 改为"验证 registrar 结论"；② 删 `subworld_admission_patch` scope、nonblocking 胶水（93278ab/c12e003/47c193b 引入的特例）、summary 名字桥；③ `reference_classifier` 清单转为 registrar 输入；④ 删 workflow.py 死块；⑤ handoff 后锁 Genesis revision；⑥ `PlanningService` 门面。
 - **不变量**：`start-writing` 仍要求 `manual_ui`+`genesis_ready`；handoff 幂等与回滚（现测试已覆盖）；registrar 失败 fail-closed。

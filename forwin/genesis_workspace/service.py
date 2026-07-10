@@ -22,6 +22,17 @@ def _book_genesis():
     return book_genesis
 
 
+def _ensure_genesis_mutable(
+    project: Project,
+    revision: BookGenesisRevision,
+) -> None:
+    if (
+        str(getattr(project, "creation_status", "") or "") == "writing"
+        or str(getattr(revision, "status", "") or "") == "locked"
+    ):
+        raise ValueError("Genesis 已冻结；写作启动后不能直接修改 Genesis revision。")
+
+
 class GenesisWorkspaceService:
     """Human-facing Genesis workspace operations.
 
@@ -88,6 +99,7 @@ class GenesisWorkspaceService:
         patch: dict[str, Any],
         reason: str = "",
     ) -> BookGenesisRevision:
+        _ensure_genesis_mutable(project, revision)
         book_genesis = _book_genesis()
         book_genesis._ensure_revision_is_current(session, project, revision)
         current = self.load_pack(revision)
@@ -181,6 +193,7 @@ class GenesisWorkspaceService:
         stage_key: str,
         event_type: str = DecisionEventType.GENESIS_STAGE_GENERATED,
     ) -> tuple[BookGenesisRevision, PromptTrace]:
+        _ensure_genesis_mutable(project, revision)
         book_genesis = _book_genesis()
         if stage_key not in book_genesis.GENESIS_STAGE_ORDER:
             raise ValueError(f"未知 Genesis stage: {stage_key}")
@@ -287,6 +300,7 @@ class GenesisWorkspaceService:
         target_path: str = "",
         reason: str = "",
     ) -> tuple[BookGenesisRevision, PromptTrace]:
+        _ensure_genesis_mutable(project, revision)
         book_genesis = _book_genesis()
         normalized_instruction = str(instruction or "").strip()
         normalized_path = str(target_path or "").strip()
@@ -383,6 +397,7 @@ class GenesisWorkspaceService:
         revision: BookGenesisRevision,
         stage_key: str,
     ) -> BookGenesisRevision:
+        _ensure_genesis_mutable(project, revision)
         book_genesis = _book_genesis()
         if stage_key not in book_genesis.GENESIS_STAGE_ORDER:
             raise ValueError(f"未知 Genesis stage: {stage_key}")

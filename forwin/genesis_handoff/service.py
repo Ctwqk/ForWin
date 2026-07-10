@@ -107,6 +107,8 @@ class GenesisHandoffService:
             )
             in_map_bootstrap = False
             WorldModelCompiler(session).bootstrap_from_genesis(project.id)
+            revision.status = "locked"
+            session.add(revision)
             project.creation_status = "writing"
             session.add(project)
             active_chapter_count = int(

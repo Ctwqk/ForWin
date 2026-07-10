@@ -239,7 +239,6 @@ entries:
     paths:
       - forwin/api_core/runtime.py
       - forwin/api_schema/project.py
-      - forwin/book_genesis_core/workflow.py
       - forwin/context/assembler_core/personality_integrity.py
       - forwin/genesis_workspace/service.py
       - forwin/mcp/client.py

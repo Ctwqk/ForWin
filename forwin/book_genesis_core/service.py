@@ -6,7 +6,6 @@ from forwin.book_genesis_core.fallbacks import *
 from forwin.book_genesis_core.names_paths import *
 
 from forwin.book_genesis_core.messages import _build_stage_generation_messages, _build_stage_refine_messages
-from forwin.book_genesis_core.workflow import create_initial_revision, active_revision, load_pack, patch_pack, generate_stage, refine_stage, lock_stage, build_detail, generate_name_suggestions, _resolve_name_generation_profile
 from forwin.book_genesis_core.materialize import materialize_book_arcs, materialize_arc_chapter_plans, _ensure_arc_map_expansion, promote_next_arc_if_needed
 from forwin.book_genesis_core.llm import _generate_stage_payload, _refine_stage_payload, _call_json_with_trace, _call_json_with_trace_impl, _call_llm_chat, _resolve_skill_layers, _trace_payload, _prepare_trace_payload_for_save, _record_llm_events_for_trace, _record_trace_performance_spans
 from forwin.book_genesis_core.normalize import _normalize_world_payload, _normalize_world_root_payload, _normalize_scope_profile, _normalize_blueprint_payload, _normalize_map_payload, _normalize_story_engine_payload
@@ -33,20 +32,146 @@ class BookGenesisService:
         self.workspace = GenesisWorkspaceService(self)
         self.handoff = GenesisHandoffService(self)
 
+    def create_initial_revision(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project: Project,
+        brief_seed: dict[str, Any] | None = None,
+    ) -> BookGenesisRevision:
+        return self.workspace.create_initial_revision(
+            session=session,
+            updater=updater,
+            project=project,
+            brief_seed=brief_seed,
+        )
+
+    def active_revision(
+        self,
+        session: Session,
+        project: Project,
+    ) -> BookGenesisRevision | None:
+        return self.workspace.active_revision(session, project)
+
+    def load_pack(self, revision: BookGenesisRevision | None) -> dict[str, Any]:
+        return self.workspace.load_pack(revision)
+
+    def patch_pack(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project: Project,
+        revision: BookGenesisRevision,
+        patch: dict[str, Any],
+        reason: str = "",
+    ) -> BookGenesisRevision:
+        return self.workspace.patch_pack(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+            patch=patch,
+            reason=reason,
+        )
+
+    def generate_stage(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project: Project,
+        revision: BookGenesisRevision,
+        stage_key: str,
+        event_type: str = DecisionEventType.GENESIS_STAGE_GENERATED,
+    ) -> tuple[BookGenesisRevision, PromptTrace]:
+        return self.workspace.generate_stage(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+            stage_key=stage_key,
+            event_type=event_type,
+        )
+
+    def refine_stage(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project: Project,
+        revision: BookGenesisRevision,
+        stage_key: str,
+        instruction: str,
+        target_path: str = "",
+        reason: str = "",
+    ) -> tuple[BookGenesisRevision, PromptTrace]:
+        return self.workspace.refine_stage(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+            stage_key=stage_key,
+            instruction=instruction,
+            target_path=target_path,
+            reason=reason,
+        )
+
+    def lock_stage(
+        self,
+        *,
+        session: Session,
+        updater: StateUpdater,
+        project: Project,
+        revision: BookGenesisRevision,
+        stage_key: str,
+    ) -> BookGenesisRevision:
+        return self.workspace.lock_stage(
+            session=session,
+            updater=updater,
+            project=project,
+            revision=revision,
+            stage_key=stage_key,
+        )
+
+    def build_detail(
+        self,
+        *,
+        session: Session,
+        project: Project,
+    ) -> dict[str, Any]:
+        return self.workspace.build_detail(session=session, project=project)
+
+    def generate_name_suggestions(
+        self,
+        *,
+        project: Project,
+        revision: BookGenesisRevision,
+        stage_key: str,
+        target_path: str,
+        field_path: str,
+        kind: str = "",
+        count: int = 1,
+        nonce: str = "",
+        stage_payload_override: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.workspace.generate_name_suggestions(
+            project=project,
+            revision=revision,
+            stage_key=stage_key,
+            target_path=target_path,
+            field_path=field_path,
+            kind=kind,
+            count=count,
+            nonce=nonce,
+            stage_payload_override=stage_payload_override,
+        )
+
 
 
 BookGenesisService._build_stage_generation_messages = _build_stage_generation_messages
 BookGenesisService._build_stage_refine_messages = _build_stage_refine_messages
-BookGenesisService.create_initial_revision = create_initial_revision
-BookGenesisService.active_revision = active_revision
-BookGenesisService.load_pack = load_pack
-BookGenesisService.patch_pack = patch_pack
-BookGenesisService.generate_stage = generate_stage
-BookGenesisService.refine_stage = refine_stage
-BookGenesisService.lock_stage = lock_stage
-BookGenesisService.build_detail = build_detail
-BookGenesisService.generate_name_suggestions = generate_name_suggestions
-BookGenesisService._resolve_name_generation_profile = _resolve_name_generation_profile
 BookGenesisService.materialize_book_arcs = materialize_book_arcs
 BookGenesisService.materialize_arc_chapter_plans = materialize_arc_chapter_plans
 BookGenesisService._ensure_arc_map_expansion = _ensure_arc_map_expansion

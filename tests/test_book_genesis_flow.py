@@ -376,6 +376,10 @@ class BookGenesisFlowTests(unittest.TestCase):
 
         with self.session_factory() as session:
             project = session.get(Project, created.project_id)
+            revision = session.get(
+                BookGenesisRevision,
+                str(project.active_genesis_revision_id or ""),
+            )
             arcs = session.execute(
                 select(ArcPlanVersion)
                 .where(ArcPlanVersion.project_id == created.project_id)
@@ -408,8 +412,10 @@ class BookGenesisFlowTests(unittest.TestCase):
             ).scalars().all()
 
         assert project is not None
+        assert revision is not None
         self.assertEqual(response.task_id, "task-genesis-001")
         self.assertEqual(project.creation_status, "writing")
+        self.assertEqual(revision.status, "locked")
         self.assertEqual(len(arcs), 2)
         self.assertEqual(arcs[0].status, "active")
         self.assertEqual(arcs[0].planned_target_size, 3)

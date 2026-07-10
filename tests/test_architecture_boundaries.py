@@ -355,6 +355,18 @@ def test_quality_analysis_cache_is_shared_and_versioned() -> None:
     ]
 
 
+def test_genesis_workflow_contains_delegation_only() -> None:
+    assert not (ROOT / "forwin/book_genesis_core/workflow.py").exists()
+    service = _read("forwin/book_genesis_core/service.py")
+    assert "from forwin.book_genesis_core.workflow" not in service
+    assert "def patch_pack(" in service
+    assert "return self.workspace.patch_pack(" in service
+    workspace = _read("forwin/genesis_workspace/service.py")
+    for method in ("patch_pack", "generate_stage", "refine_stage", "lock_stage"):
+        method_source = workspace.split(f"    def {method}(", 1)[1]
+        assert "_ensure_genesis_mutable(" in method_source.split("    def ", 1)[0]
+
+
 def test_review_engine_safety_net_runtime_paths_are_removed() -> None:
     forbidden_runtime_tokens = {
         "Review" "OutcomeRouter": [

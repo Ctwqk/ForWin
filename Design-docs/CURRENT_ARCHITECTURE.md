@@ -22,6 +22,7 @@ Genesis / Writer / Review 主链
 ## Runtime 边界
 
 - 书本根真值：`Genesis`。
+- Genesis 只在写前可变；`start-writing` 成功后 active revision 标记为 `locked`，workspace mutation 全部拒绝，运行时计划只认物化后的 `ArcPlanVersion` / `ChapterPlan`。
 - 世界状态 canon：`BookState + GraphDelta + Snapshot`。
 - 地图 canon：`BookMap / Scheme C`，语义为 `SubWorld -> Region -> MapNode -> MapEdge`。
 - 上下文来源：`BookState + BookMap + Genesis + approved projections`。

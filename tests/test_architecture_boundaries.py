@@ -279,6 +279,9 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
     assert "self.repair.repair_canon_block(" in _read(
         "forwin/orchestrator_loop_core/project_chapters.py"
     )
+    assert "WritingOrchestrator._apply_repair_patch" not in _read(
+        "forwin/orchestrator_loop_core/service.py"
+    )
     assert "WritingOrchestrator" not in _read("forwin/orchestrator_loop_core/__init__.py")
 
 

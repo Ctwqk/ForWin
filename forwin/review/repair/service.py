@@ -439,7 +439,8 @@ def _run_repair_loop_for_phase(
             result_chapter_plan,
             result_band_plan,
             failure_reason,
-        ) = self._apply_repair_patch(
+        ) = _apply_repair_patch(
+            self,
             session=session,
             repo=repo,
             project_id=project_id,

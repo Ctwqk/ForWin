@@ -917,7 +917,7 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
     assert plan.repair_attempt_count == 1
 
 
-def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts():
+def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts(monkeypatch):
     class WarnThenFailReviewHub:
         def __init__(self) -> None:
             self.calls = 0
@@ -946,12 +946,16 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts():
             int(kwargs["chapter_number"]),
             marker=f"repair-{orchestrator.draft_review.calls}",
         )
-        orchestrator._apply_repair_patch = lambda **kwargs: (
-            {"repair_scope": kwargs["repair_scope"]},
-            kwargs["context"],
-            {},
-            {},
-            "",
+        monkeypatch.setattr(
+            repair_service_module,
+            "_apply_repair_patch",
+            lambda _runtime, **kwargs: (
+                {"repair_scope": kwargs["repair_scope"]},
+                kwargs["context"],
+                {},
+                {},
+                "",
+            ),
         )
 
         def apply_canon_candidate(**_kwargs):

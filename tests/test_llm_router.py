@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import forwin.api as api_module
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.book_genesis import BookGenesisService
 from forwin.llm.router import LLMCallIntent, LLMCallRouter, RoutedModelAdapter
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.orchestrator.loop import WritingOrchestrator
-from forwin.runtime_settings import RuntimeSettingsStore
+from forwin.runtime.container import RuntimeContainer
+from forwin.runtime.policy import RuntimePolicy
 
 
 class OrdinaryAdapter:
@@ -331,7 +330,7 @@ class LLMRouterTests(unittest.TestCase):
         self.assertEqual(codex.calls[0]["kwargs"]["model"], "gpt-5.3-codex-spark")
 
     def test_config_exposes_codex_bridge_defaults(self) -> None:
-        config = Config(database_url=postgres_test_url())
+        config = InfrastructureConfig(database_url=postgres_test_url())
 
         self.assertFalse(config.codex_enabled)
         self.assertEqual(config.codex_bridge_url, "http://host.docker.internal:8897")
@@ -341,34 +340,8 @@ class LLMRouterTests(unittest.TestCase):
 
     def test_api_genesis_service_uses_routed_adapter_when_codex_enabled(self) -> None:
         old_config = api_module._config
-        old_runtime_settings = api_module._runtime_settings
         try:
-            with TemporaryDirectory() as tmpdir:
-                api_module._config = Config(
-                    database_url=postgres_test_url("forwin"),
-                    minimax_api_key="ordinary-key",
-                    minimax_base_url="http://ordinary.invalid/v1",
-                    minimax_model="ordinary-model",
-                    codex_enabled=True,
-                    codex_bridge_url="http://codex.invalid",
-                )
-                api_module._runtime_settings = RuntimeSettingsStore(
-                    str(Path(tmpdir) / "runtime.json"),
-                    default_api_key="ordinary-key",
-                    default_base_url="http://ordinary.invalid/v1",
-                    default_model="ordinary-model",
-                )
-
-                service = api_module._build_genesis_service()
-
-                self.assertIsInstance(service.llm_client, RoutedModelAdapter)
-        finally:
-            api_module._config = old_config
-            api_module._runtime_settings = old_runtime_settings
-
-    def test_orchestrator_uses_routed_adapter_when_codex_enabled(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            config = Config(
+            api_module._config = InfrastructureConfig(
                 database_url=postgres_test_url("forwin"),
                 minimax_api_key="ordinary-key",
                 minimax_base_url="http://ordinary.invalid/v1",
@@ -376,11 +349,33 @@ class LLMRouterTests(unittest.TestCase):
                 codex_enabled=True,
                 codex_bridge_url="http://codex.invalid",
             )
-            orchestrator = WritingOrchestrator(config)
-            try:
-                self.assertIsInstance(orchestrator.llm_client, RoutedModelAdapter)
-            finally:
-                orchestrator.llm_client.close()
+            service = api_module._build_genesis_service()
+
+            self.assertIsInstance(service.llm_client, RoutedModelAdapter)
+        finally:
+            api_module._config = old_config
+
+    def test_orchestrator_uses_routed_adapter_when_codex_enabled(self) -> None:
+        config = InfrastructureConfig(
+            database_url=postgres_test_url("forwin"),
+            minimax_api_key="ordinary-key",
+            minimax_base_url="http://ordinary.invalid/v1",
+            minimax_model="ordinary-model",
+            codex_enabled=True,
+            codex_bridge_url="http://codex.invalid",
+        )
+        container = RuntimeContainer.from_config(
+            config,
+            policy=RuntimePolicy.for_profile("standard"),
+            role="api",
+        )
+        services = container.services()
+        orchestrator = container.build_writing_orchestrator()
+        try:
+            self.assertIsInstance(orchestrator.llm_client, RoutedModelAdapter)
+        finally:
+            services.llm_client.close()
+            services.engine.dispose()
 
     def test_book_genesis_marks_stage_calls_for_codex_and_excludes_launch_arc(self) -> None:
         client = CapturingLLM()

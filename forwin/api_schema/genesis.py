@@ -74,14 +74,15 @@ class BookGenesisPatchRequest(BaseModel):
 
 
 class BookGenesisStageRunRequest(BaseModel):
-    model_profile_id: str = ""
+    model_config = {"extra": "forbid"}
 
 
 class BookGenesisRefineRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
     instruction: str = ""
     target_path: str = ""
     reason: str = ""
-    model_profile_id: str = ""
 
 
 class BookGenesisNameGenerateRequest(BaseModel):

@@ -10,6 +10,8 @@ from sqlalchemy import select
 from forwin.api_schemas import (
     CodexBridgeStatusResponse,
     GenerateRequest,
+    RuntimeCatalogResponse,
+    runtime_catalog,
 )
 from forwin.llm.codex_client import CodexBridgeClient
 from forwin.models.governance import DecisionEvent
@@ -83,6 +85,12 @@ def build_handlers(
                 extension_install_path="browser_extension/forwin-publisher",
             )
         )
+
+    def get_runtime_catalog() -> RuntimeCatalogResponse:
+        config = get_config()
+        if config is None:
+            raise HTTPException(503, "服务尚未初始化")
+        return runtime_catalog(config)
 
     def generate(req: GenerateRequest):
         config = get_config()
@@ -188,6 +196,7 @@ def build_handlers(
         "health": health,
         "home_page": home_page,
         "publishers_page": publishers_page,
+        "get_runtime_catalog": get_runtime_catalog,
         "generate": generate,
         "get_codex_bridge_status": get_codex_bridge_status,
     }

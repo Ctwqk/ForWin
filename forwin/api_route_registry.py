@@ -67,6 +67,7 @@ from forwin.api_schemas import (
     ProjectCreateResponse,
     ProjectDeleteResponse,
     ProjectDetail,
+    RuntimeCatalogResponse,
     RuntimePolicyResponse,
     ProjectSummary,
     PromptTraceDetailResponse,
@@ -149,7 +150,6 @@ class ProjectDeps:
     delete_project_impl: Callable[..., None]
     project_delete_blockers: Callable[..., list[str]]
     project_delete_conflict_message: Callable[[list[str]], str]
-    saved_runtime_config_or_default: Callable[..., Any]
     persist_project_automation: Callable[..., Any]
     require_reason: Callable[[str], str]
 
@@ -246,7 +246,6 @@ def register_api_routes(
     delete_project_impl = deps.delete_project_impl
     project_delete_blockers = deps.project_delete_blockers
     project_delete_conflict_message = deps.project_delete_conflict_message
-    saved_runtime_config_or_default = deps.saved_runtime_config_or_default
     create_continue_generation_task = deps.create_continue_generation_task
     persist_project_automation = deps.persist_project_automation
     require_reason = deps.require_reason
@@ -327,7 +326,6 @@ def register_api_routes(
         delete_project_impl=delete_project_impl,
         project_delete_blockers=project_delete_blockers,
         project_delete_conflict_message=project_delete_conflict_message,
-        saved_runtime_config_or_default=saved_runtime_config_or_default,
         project_has_active_generation_task=project_has_active_generation_task,
         generation_task_conflict_message=generation_task_conflict_message,
         create_continue_generation_task=create_continue_generation_task,
@@ -405,6 +403,7 @@ def register_api_routes(
         ("/publishers", ["GET"], handlers["publishers_page"], {"response_class": HTMLResponse}),
         ("/world-studio", ["GET"], handlers["world_studio_page"], {"response_class": HTMLResponse}),
         ("/world-studio/assets/{asset_path:path}", ["GET"], handlers["world_studio_asset"], {}),
+        ("/api/settings/llm", ["GET"], handlers["get_runtime_catalog"], {"response_model": RuntimeCatalogResponse}),
         ("/api/projects/{project_id}/world-studio/search", ["GET"], handlers["search_project_world_studio"], {}),
         ("/api/generate", ["POST"], handlers["generate"], {"response_model": TaskResponse}),
         ("/api/settings/codex/health", ["GET"], handlers["get_codex_bridge_status"], {"response_model": CodexBridgeStatusResponse}),

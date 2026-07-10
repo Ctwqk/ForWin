@@ -22,7 +22,7 @@ from forwin.api_schemas import (
     ProjectGovernanceUpdateRequest,
     StartWritingRequest,
 )
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.governance import BandCheckpoint
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
@@ -39,23 +39,20 @@ class ProjectOperationGuardTests(unittest.TestCase):
 
         self.old_session_factory = api_module._SessionFactory
         self.old_config = api_module._config
-        self.old_runtime_settings = api_module._runtime_settings
         self.old_orchestrator = api_module._orchestrator
 
         api_module._SessionFactory = self.session_factory
-        api_module._config = Config(
+        api_module._config = InfrastructureConfig(
             database_url=postgres_test_url("operation-guards"),
             minimax_api_key="saved-key",
             minimax_base_url="https://api.minimaxi.com/v1",
             minimax_model="MiniMax-M2.7",
         )
-        api_module._runtime_settings = None
         api_module._orchestrator = None
 
     def tearDown(self) -> None:
         api_module._SessionFactory = self.old_session_factory
         api_module._config = self.old_config
-        api_module._runtime_settings = self.old_runtime_settings
         api_module._orchestrator = self.old_orchestrator
         self.engine.dispose()
         self.tmpdir.cleanup()
@@ -711,10 +708,6 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 project.id,
                 get_session=self.session_factory,
                 config=api_module._config,
-                saved_runtime_config_or_default=lambda: Config(
-                    database_url=api_module._config.database_url,
-                    minimax_api_key="saved-key",
-                ),
                 build_genesis_service=lambda _runtime_config: FakeGenesisService(),
                 close_genesis_service=lambda _service: None,
                 require_genesis_project=lambda _project: None,
@@ -783,10 +776,6 @@ class ProjectOperationGuardTests(unittest.TestCase):
             StartWritingRequest(auto_continue=False, max_chapters=2, run_until_chapter=2),
             get_session=self.session_factory,
             config=api_module._config,
-            saved_runtime_config_or_default=lambda: Config(
-                database_url=api_module._config.database_url,
-                minimax_api_key="saved-key",
-            ),
             build_genesis_service=lambda _runtime_config: FakeGenesisService(),
             close_genesis_service=lambda _service: None,
             require_genesis_project=lambda _project: None,
@@ -869,10 +858,6 @@ class ProjectOperationGuardTests(unittest.TestCase):
             project.id,
             get_session=self.session_factory,
             config=api_module._config,
-            saved_runtime_config_or_default=lambda: Config(
-                database_url=api_module._config.database_url,
-                minimax_api_key="saved-key",
-            ),
             build_genesis_service=lambda _runtime_config: FakeGenesisService(),
             close_genesis_service=lambda _service: None,
             require_genesis_project=lambda _project: None,

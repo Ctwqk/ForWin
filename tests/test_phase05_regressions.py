@@ -88,7 +88,6 @@ from forwin.protocol.writer import WriterOutput
 from forwin.publishers import PublisherManager
 from forwin.retrieval import RetrievalBroker
 from forwin.retrieval.memory_index import QdrantChapterMemoryIndex, RemoteTextEmbedder, create_memory_index
-from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.repo import StateRepository
 from forwin.state.updater import StateUpdater
 from forwin.storage import ArtifactStore
@@ -1934,7 +1933,6 @@ class Phase05RegressionTests(unittest.TestCase):
             try:
                 api_module._config = Config(
                     database_url=postgres_test_url("books"),
-                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
                     minimax_model="MiniMax-M2.7",
@@ -1988,7 +1986,6 @@ class Phase05RegressionTests(unittest.TestCase):
             try:
                 api_module._config = Config(
                     database_url=postgres_test_url("book-publish-defaults"),
-                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
                     minimax_model="MiniMax-M2.7",
@@ -2034,7 +2031,6 @@ class Phase05RegressionTests(unittest.TestCase):
             try:
                 api_module._config = Config(
                     database_url=postgres_test_url("book-total-consistency"),
-                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
                     minimax_model="MiniMax-M2.7",
@@ -2102,7 +2098,6 @@ class Phase05RegressionTests(unittest.TestCase):
             try:
                 api_module._config = Config(
                     database_url=postgres_test_url("book-automation"),
-                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="saved-key",
                     minimax_base_url="https://api.minimaxi.com/v1",
                     minimax_model="MiniMax-M2.7",
@@ -2462,42 +2457,6 @@ class Phase05RegressionTests(unittest.TestCase):
         self.assertEqual([hit.chapter_number for hit in hits], [1, 2])
         self.assertEqual(hits[0].chapter_number, 1)
         self.assertIn("末班车", hits[0].summary)
-
-    def test_runtime_settings_store_caches_get_results_until_save(self) -> None:
-        with TemporaryDirectory() as tmp:
-            path = Path(tmp) / "runtime-settings.json"
-            store = RuntimeSettingsStore(
-                str(path),
-                default_api_key="sk-default",
-                default_base_url="https://example.default/v1",
-                default_model="default-model",
-            )
-
-            first = store.get()
-            path.write_text(
-                json.dumps(
-                    {
-                        "api_key": "sk-external",
-                        "base_url": "https://example.external/v1",
-                        "model": "external-model",
-                        "operation_mode": "checkpoint",
-                        "freeze_failed_candidates": False,
-                        "min_chapter_chars": 2800,
-                    },
-                    ensure_ascii=False,
-                ),
-                encoding="utf-8",
-            )
-            second = store.get()
-            saved = store.save(model="saved-model")
-            third = store.get()
-
-        self.assertEqual(first["api_key"], "sk-default")
-        self.assertEqual(first["min_chapter_chars"], 2500)
-        self.assertEqual(second["api_key"], "sk-default")
-        self.assertEqual(saved["model"], "saved-model")
-        self.assertEqual(saved["min_chapter_chars"], 2500)
-        self.assertEqual(third["model"], "saved-model")
 
     def test_thread_sampling_balances_stale_and_hot_threads(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -6178,20 +6137,12 @@ class Phase05RegressionTests(unittest.TestCase):
     def test_home_page_renders_minimax_defaults_and_apikey_field(self) -> None:
         with TemporaryDirectory() as tmp:
             old_config = api_module._config
-            old_store = api_module._runtime_settings
             try:
                 api_module._config = Config(
                     database_url=postgres_test_url(),
-                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
                     minimax_model="MiniMax-M2.7",
-                )
-                api_module._runtime_settings = RuntimeSettingsStore(
-                    api_module._config.runtime_settings_path,
-                    default_api_key="",
-                    default_base_url=api_module._config.minimax_base_url,
-                    default_model=api_module._config.minimax_model,
                 )
                 with TestClient(api_module.app) as client:
                     page = client.get("/")
@@ -6210,7 +6161,6 @@ class Phase05RegressionTests(unittest.TestCase):
                     self.assertIn("模型设置", page.text)
             finally:
                 api_module._config = old_config
-                api_module._runtime_settings = old_store
 
     def test_publishers_page_uses_extension_bridge_flow(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -6218,7 +6168,6 @@ class Phase05RegressionTests(unittest.TestCase):
             try:
                 api_module._config = Config(
                     database_url=postgres_test_url("publishers-extension-flow"),
-                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_model="fake-model",
                     chapter_review_form_mode="off",
@@ -6304,7 +6253,6 @@ class Phase05RegressionTests(unittest.TestCase):
             self.assertEqual(run_result.status, "needs_review")
 
             old_config = api_module._config
-            old_store = api_module._runtime_settings
             old_engine = api_module._engine
             old_factory = api_module._SessionFactory
             old_orchestrator = api_module._orchestrator
@@ -6313,7 +6261,6 @@ class Phase05RegressionTests(unittest.TestCase):
             try:
                 api_module._config = Config(
                     database_url=db_path,
-                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
                     minimax_api_key="",
                     minimax_base_url="https://api.minimaxi.com/v1",
                     minimax_model="MiniMax-M2.7",
@@ -6323,14 +6270,6 @@ class Phase05RegressionTests(unittest.TestCase):
                 api_module._engine = temp_engine
                 api_module._SessionFactory = get_session_factory(api_module._engine)
                 api_module._orchestrator = orchestrator
-                api_module._runtime_settings = RuntimeSettingsStore(
-                    api_module._config.runtime_settings_path,
-                    default_api_key="",
-                    default_base_url=api_module._config.minimax_base_url,
-                    default_model=api_module._config.minimax_model,
-                    default_operation_mode="blackbox",
-                    default_freeze_failed_candidates=True,
-                )
                 api_module._tasks = {}
                 with patch.object(api_module.threading, "Thread", FakeThread):
                     review_payload = api_module.get_chapter_review(
@@ -6358,70 +6297,10 @@ class Phase05RegressionTests(unittest.TestCase):
                 if temp_engine is not None:
                     temp_engine.dispose()
                 api_module._config = old_config
-                api_module._runtime_settings = old_store
                 api_module._engine = old_engine
                 api_module._SessionFactory = old_factory
                 api_module._orchestrator = old_orchestrator
                 api_module._tasks = old_tasks
-
-    def test_generate_accepts_request_level_minimax_overrides(self) -> None:
-        class FakeThread:
-            created: list["FakeThread"] = []
-
-            def __init__(self, target=None, args=None, daemon=None):
-                self.target = target
-                self.args = args or ()
-                self.daemon = daemon
-                self.started = False
-                FakeThread.created.append(self)
-
-            def start(self):
-                self.started = True
-
-        old_config = api_module._config
-        old_engine = api_module._engine
-        old_factory = api_module._SessionFactory
-        old_tasks = api_module._tasks
-        temp_engine = None
-        try:
-            api_module._config = Config(
-                database_url=postgres_test_url(),
-                minimax_api_key="",
-                minimax_base_url="https://api.minimaxi.com/v1",
-                minimax_model="MiniMax-M2.7",
-            )
-            temp_engine = get_engine(api_module._config.database_url)
-            api_module._engine = temp_engine
-            api_module._SessionFactory = get_session_factory(temp_engine)
-            api_module._tasks = {}
-            with TestClient(api_module.app) as client:
-                with patch.object(api_module.threading, "Thread", FakeThread):
-                    response = client.post(
-                        "/api/generate",
-                        json={
-                            "premise": "一段前提",
-                            "genre": "玄幻",
-                            "num_chapters": 2,
-                            "api_key": "sk-inline",
-                            "base_url": "https://example.test/v1",
-                            "model": "custom-model",
-                        },
-                        )
-
-            self.assertEqual(response.status_code, 200)
-            self.assertEqual(len(FakeThread.created), 0)
-            task = api_module._get_generation_task_or_404(response.json()["task_id"])
-            overrides = task["execution_payload"]["runtime_overrides"]
-            self.assertNotIn("minimax_api_key", overrides)
-            self.assertEqual(overrides["minimax_base_url"], "https://example.test/v1")
-            self.assertEqual(overrides["minimax_model"], "custom-model")
-        finally:
-            if temp_engine is not None:
-                temp_engine.dispose()
-            api_module._config = old_config
-            api_module._engine = old_engine
-            api_module._SessionFactory = old_factory
-            api_module._tasks = old_tasks
 
     def test_generate_for_existing_project_keeps_book_context(self) -> None:
         class FakeThread:
@@ -6618,22 +6497,12 @@ class Phase05RegressionTests(unittest.TestCase):
         old_config = api_module._config
         old_orchestrator = api_module._orchestrator
         old_tasks = api_module._tasks
-        old_store = api_module._runtime_settings
         try:
             api_module._config = Config(
                 database_url=postgres_test_url(),
-                runtime_settings_path="data/runtime_settings.json",
                 minimax_api_key="",
                 minimax_base_url="https://api.minimaxi.com/v1",
                 minimax_model="MiniMax-M2.7",
-            )
-            api_module._runtime_settings = RuntimeSettingsStore(
-                "data/runtime_settings.json",
-                default_api_key="",
-                default_base_url=api_module._config.minimax_base_url,
-                default_model=api_module._config.minimax_model,
-                default_operation_mode="blackbox",
-                default_freeze_failed_candidates=True,
             )
             api_module._tasks = {}
             fake = FakeOrchestrator()
@@ -6657,143 +6526,10 @@ class Phase05RegressionTests(unittest.TestCase):
             api_module._config = old_config
             api_module._orchestrator = old_orchestrator
             api_module._tasks = old_tasks
-            api_module._runtime_settings = old_store
 
     def test_get_engine_rejects_sqlite_database_urls(self) -> None:
         with self.assertRaises(ValueError):
             get_engine(("sqlite" + ":///tmp/forwin.db"))
-
-    def test_llm_settings_api_persists_runtime_defaults(self) -> None:
-        with TemporaryDirectory() as tmp:
-            old_config = api_module._config
-            old_store = api_module._runtime_settings
-            try:
-                api_module._config = Config(
-                    database_url=postgres_test_url(),
-                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
-                    minimax_api_key="",
-                    minimax_base_url="https://api.minimaxi.com/v1",
-                    minimax_model="MiniMax-M2.7",
-                )
-                api_module._runtime_settings = RuntimeSettingsStore(
-                    api_module._config.runtime_settings_path,
-                    default_api_key="",
-                    default_base_url=api_module._config.minimax_base_url,
-                    default_model=api_module._config.minimax_model,
-                )
-                with TestClient(api_module.app) as client:
-                    saved = client.post(
-                        "/api/settings/llm",
-                        json={
-                            "api_key": "sk-saved",
-                            "base_url": "https://example.saved/v1",
-                            "model": "saved-model",
-                        },
-                    )
-                    current = client.get("/api/settings/llm")
-
-                self.assertEqual(saved.status_code, 200)
-                self.assertEqual(current.status_code, 200)
-                self.assertEqual(current.json()["has_api_key"], True)
-                self.assertEqual(current.json()["base_url"], "https://example.saved/v1")
-                self.assertEqual(current.json()["model"], "saved-model")
-                self.assertEqual(current.json()["operation_mode"], "blackbox")
-                self.assertEqual(current.json()["freeze_failed_candidates"], True)
-                self.assertEqual(current.json()["min_chapter_chars"], 2500)
-            finally:
-                api_module._config = old_config
-                api_module._runtime_settings = old_store
-
-    def test_llm_settings_api_persists_runtime_modes(self) -> None:
-        with TemporaryDirectory() as tmp:
-            old_config = api_module._config
-            old_store = api_module._runtime_settings
-            try:
-                api_module._config = Config(
-                    database_url=postgres_test_url(),
-                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
-                    minimax_api_key="",
-                    minimax_base_url="https://api.minimaxi.com/v1",
-                    minimax_model="MiniMax-M2.7",
-                )
-                api_module._runtime_settings = RuntimeSettingsStore(
-                    api_module._config.runtime_settings_path,
-                    default_api_key="",
-                    default_base_url=api_module._config.minimax_base_url,
-                    default_model=api_module._config.minimax_model,
-                )
-                with TestClient(api_module.app) as client:
-                    saved = client.post(
-                        "/api/settings/llm",
-                        json={
-                            "api_key": "",
-                            "base_url": "https://api.minimaxi.com/v1",
-                            "model": "MiniMax-M2.7",
-                            "operation_mode": "checkpoint",
-                            "freeze_failed_candidates": False,
-                            "min_chapter_chars": 2800,
-                        },
-                    )
-                    current = client.get("/api/settings/llm")
-
-                self.assertEqual(saved.status_code, 200)
-                self.assertEqual(current.status_code, 200)
-                self.assertEqual(current.json()["operation_mode"], "checkpoint")
-                self.assertEqual(current.json()["freeze_failed_candidates"], False)
-                self.assertEqual(current.json()["min_chapter_chars"], 2800)
-            finally:
-                api_module._config = old_config
-                api_module._runtime_settings = old_store
-
-    def test_llm_profile_endpoints_and_preferences(self) -> None:
-        with TemporaryDirectory() as tmp:
-            old_config = api_module._config
-            old_store = api_module._runtime_settings
-            try:
-                api_module._config = Config(
-                    database_url=postgres_test_url(),
-                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
-                    minimax_api_key="",
-                    minimax_base_url="https://api.minimaxi.com/v1",
-                    minimax_model="MiniMax-M2.7",
-                )
-                api_module._runtime_settings = RuntimeSettingsStore(
-                    api_module._config.runtime_settings_path,
-                    default_api_key="default-key",
-                    default_base_url=api_module._config.minimax_base_url,
-                    default_model=api_module._config.minimax_model,
-                )
-                saved_profile = api_module.save_llm_profile(
-                    api_module.LLMProfileUpsertRequest(
-                        name="OpenRouter 备用",
-                        api_key="sk-alt",
-                        base_url="https://openrouter.ai/api/v1",
-                        model="openrouter/test",
-                        set_as_default=True,
-                    )
-                )
-                profile_id = saved_profile.default_profile_id
-
-                prefs = api_module.save_llm_preferences(
-                    api_module.LLMPreferencesRequest(
-                        operation_mode="checkpoint",
-                        freeze_failed_candidates=False,
-                        min_chapter_chars=3100,
-                    )
-                )
-                current = api_module.get_llm_settings()
-                deleted = api_module.delete_llm_profile(profile_id)
-
-                self.assertEqual(prefs.operation_mode, "checkpoint")
-                self.assertEqual(current.default_profile_id, profile_id)
-                self.assertEqual(current.operation_mode, "checkpoint")
-                self.assertEqual(current.freeze_failed_candidates, False)
-                self.assertEqual(current.min_chapter_chars, 3100)
-                self.assertGreaterEqual(len(current.profiles), 2)
-                self.assertNotEqual(deleted.default_profile_id, profile_id)
-            finally:
-                api_module._config = old_config
-                api_module._runtime_settings = old_store
 
     def test_tasks_list_endpoint_returns_recent_items(self) -> None:
         old_tasks = api_module._tasks
@@ -6956,80 +6692,6 @@ class Phase05RegressionTests(unittest.TestCase):
             api_module._publisher_manager = old_manager
             engine.dispose()
             tmp.cleanup()
-
-    def test_generate_uses_saved_runtime_settings_when_request_omits_key(self) -> None:
-        class FakeThread:
-            created: list["FakeThread"] = []
-
-            def __init__(self, target=None, args=None, daemon=None):
-                self.target = target
-                self.args = args or ()
-                self.daemon = daemon
-                self.started = False
-                FakeThread.created.append(self)
-
-            def start(self):
-                self.started = True
-
-        with TemporaryDirectory() as tmp:
-            old_config = api_module._config
-            old_store = api_module._runtime_settings
-            old_engine = api_module._engine
-            old_factory = api_module._SessionFactory
-            old_tasks = api_module._tasks
-            temp_engine = None
-            try:
-                api_module._config = Config(
-                    database_url=postgres_test_url(),
-                    runtime_settings_path=str(Path(tmp) / "runtime_settings.json"),
-                    minimax_api_key="",
-                    minimax_base_url="https://api.minimaxi.com/v1",
-                    minimax_model="MiniMax-M2.7",
-                )
-                temp_engine = get_engine(api_module._config.database_url)
-                api_module._engine = temp_engine
-                api_module._SessionFactory = get_session_factory(temp_engine)
-                api_module._runtime_settings = RuntimeSettingsStore(
-                    api_module._config.runtime_settings_path,
-                    default_api_key="",
-                    default_base_url=api_module._config.minimax_base_url,
-                    default_model=api_module._config.minimax_model,
-                )
-                api_module._runtime_settings.save(
-                    api_key="sk-from-store",
-                    base_url="https://stored.example/v1",
-                    model="stored-model",
-                )
-                api_module._tasks = {}
-                with TestClient(api_module.app) as client:
-                    with patch.object(api_module.threading, "Thread", FakeThread):
-                        response = client.post(
-                            "/api/generate",
-                            json={
-                                "premise": "一段前提",
-                                "genre": "玄幻",
-                                "num_chapters": 1,
-                                "api_key": "",
-                                "base_url": "",
-                                "model": "",
-                            },
-                        )
-
-                self.assertEqual(response.status_code, 200)
-                self.assertEqual(len(FakeThread.created), 0)
-                task = api_module._get_generation_task_or_404(response.json()["task_id"])
-                overrides = task["execution_payload"]["runtime_overrides"]
-                self.assertNotIn("minimax_api_key", overrides)
-                self.assertEqual(overrides["minimax_base_url"], "https://stored.example/v1")
-                self.assertEqual(overrides["minimax_model"], "stored-model")
-            finally:
-                if temp_engine is not None:
-                    temp_engine.dispose()
-                api_module._config = old_config
-                api_module._runtime_settings = old_store
-                api_module._engine = old_engine
-                api_module._SessionFactory = old_factory
-                api_module._tasks = old_tasks
 
     def test_phase24_persists_experience_overlay_artifacts(self) -> None:
         with TemporaryDirectory() as tmp:

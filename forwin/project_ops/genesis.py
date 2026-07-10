@@ -90,6 +90,13 @@ from .common import *
 from forwin.generation.run_target import resolve_generation_run_target
 
 
+def _build_project_genesis_service(session, project: Project, build_genesis_service):
+    policy_record = ProjectPolicyStore(session).load(project)
+    return build_genesis_service(
+        model_profile_id=policy_record.policy.model_profile_id,
+    )
+
+
 def get_project_genesis(
     project_id: str,
     *,
@@ -105,7 +112,11 @@ def get_project_genesis(
         if project is None:
             raise HTTPException(404, "项目不存在")
         require_genesis_project(project)
-        genesis_service = build_genesis_service()
+        genesis_service = _build_project_genesis_service(
+            session,
+            project,
+            build_genesis_service,
+        )
         return BookGenesisDetail.model_validate(
             genesis_service.build_detail(session=session, project=project)
         )
@@ -137,7 +148,11 @@ def patch_project_genesis(
         patch_payload = genesis_patch_payload(req)
         if not patch_payload:
             raise HTTPException(400, "没有可更新的 Genesis 字段")
-        genesis_service = build_genesis_service()
+        genesis_service = _build_project_genesis_service(
+            session,
+            project,
+            build_genesis_service,
+        )
         updater = StateUpdater(session)
         try:
             genesis_service.patch_pack(
@@ -170,6 +185,7 @@ def generate_project_genesis_stage(
     require_genesis_project,
     active_genesis_revision,
 ) -> BookGenesisDetail:
+    _ = req
     session = get_session()
     genesis_service = None
     try:
@@ -183,8 +199,10 @@ def generate_project_genesis_stage(
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "项目 Genesis revision 不存在")
-        genesis_service = build_genesis_service(
-            model_profile_id=str((req.model_profile_id if req else "") or "").strip()
+        genesis_service = _build_project_genesis_service(
+            session,
+            project,
+            build_genesis_service,
         )
         updater = StateUpdater(session)
         try:
@@ -229,7 +247,11 @@ def lock_project_genesis_stage(
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "项目 Genesis revision 不存在")
-        genesis_service = build_genesis_service()
+        genesis_service = _build_project_genesis_service(
+            session,
+            project,
+            build_genesis_service,
+        )
         updater = StateUpdater(session)
         try:
             genesis_service.lock_stage(
@@ -261,6 +283,7 @@ def rerun_project_genesis_stage(
     require_genesis_project,
     active_genesis_revision,
 ) -> BookGenesisDetail:
+    _ = req
     session = get_session()
     genesis_service = None
     try:
@@ -274,8 +297,10 @@ def rerun_project_genesis_stage(
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "项目 Genesis revision 不存在")
-        genesis_service = build_genesis_service(
-            model_profile_id=str((req.model_profile_id if req else "") or "").strip()
+        genesis_service = _build_project_genesis_service(
+            session,
+            project,
+            build_genesis_service,
         )
         updater = StateUpdater(session)
         try:
@@ -322,8 +347,10 @@ def refine_project_genesis_stage(
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "项目 Genesis revision 不存在")
-        genesis_service = build_genesis_service(
-            model_profile_id=str(req.model_profile_id or "").strip()
+        genesis_service = _build_project_genesis_service(
+            session,
+            project,
+            build_genesis_service,
         )
         updater = StateUpdater(session)
         try:
@@ -373,7 +400,11 @@ def generate_project_genesis_name(
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "项目 Genesis revision 不存在")
-        genesis_service = build_genesis_service()
+        genesis_service = _build_project_genesis_service(
+            session,
+            project,
+            build_genesis_service,
+        )
         try:
             payload = genesis_service.generate_name_suggestions(
                 project=project,
@@ -399,7 +430,6 @@ def start_project_writing(
     *,
     get_session,
     config,
-    saved_runtime_config_or_default,
     build_genesis_service,
     close_genesis_service,
     require_genesis_project,
@@ -413,7 +443,7 @@ def start_project_writing(
     auto_continue = True if req is None or req.auto_continue is None else bool(req.auto_continue)
     run_until_chapter = req.run_until_chapter if req is not None else None
     max_chapters = req.max_chapters if req is not None else None
-    runtime_config = saved_runtime_config_or_default()
+    infrastructure = config
     session = get_session()
     genesis_service = None
     try:
@@ -426,16 +456,16 @@ def start_project_writing(
         if project_has_active_generation_task(project_id, session=session):
             raise HTTPException(409, generation_task_conflict_message(project_id))
         policy_record = ProjectPolicyStore(session).load(project)
-        model_profile = runtime_config.resolve_model_profile(
+        model_profile = infrastructure.resolve_model_profile(
             policy_record.policy.model_profile_id
         )
-        if not model_profile.api_key and not runtime_config.codex_enabled:
+        if not model_profile.api_key and not infrastructure.codex_enabled:
             raise HTTPException(400, "所选模型 profile 未配置 API Key。")
         revision = active_genesis_revision(session, project)
         if revision is None:
             raise HTTPException(409, "Genesis revision 不存在。")
         genesis_service = build_genesis_service(
-            runtime_config,
+            infrastructure,
             model_profile_id=policy_record.policy.model_profile_id,
         )
         updater = StateUpdater(session)
@@ -446,7 +476,7 @@ def start_project_writing(
                 command=StartWritingCommand(
                     project_id=project.id,
                     actor_type="manual_ui",
-                    runtime_config=runtime_config,
+                    runtime_config=infrastructure,
                 ),
             )
         except ValueError as exc:

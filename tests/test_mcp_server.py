@@ -13,7 +13,7 @@ from fastmcp.exceptions import ToolError
 
 import forwin.api as api_module
 from forwin.api_schemas import BookGenesisPatchRequest, ProjectCreateRequest
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.governance import BandCheckpointDetail, BandCheckpointIssueInfo
 from forwin.mcp.client import ForWinAPIClient
 from forwin.mcp.http import build_asgi_app, build_mcp_server
@@ -36,7 +36,6 @@ from forwin.mcp.models import (
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.project import ArcPlanVersion, ChapterPlan
-from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.updater import StateUpdater
 
 
@@ -121,23 +120,16 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
 
         self.old_session_factory = api_module._SessionFactory
         self.old_config = api_module._config
-        self.old_runtime_settings = api_module._runtime_settings
         with api_module._tasks_lock:
             self.old_tasks = dict(api_module._tasks)
             api_module._tasks.clear()
 
         api_module._SessionFactory = self.session_factory
-        api_module._config = Config(
+        api_module._config = InfrastructureConfig(
             database_url=self.database_url,
             minimax_api_key="test-key",
             minimax_base_url="http://example.invalid",
             minimax_model="fake-model",
-        )
-        api_module._runtime_settings = RuntimeSettingsStore(
-            str(Path(self.tmpdir.name) / "runtime_settings.json"),
-            default_api_key="default-key",
-            default_base_url="http://default.invalid",
-            default_model="default-model",
         )
 
         self.api_transport = httpx.ASGITransport(app=api_module.app)
@@ -148,7 +140,6 @@ class ForWinMCPIntegrationTests(unittest.TestCase):
     def tearDown(self) -> None:
         api_module._SessionFactory = self.old_session_factory
         api_module._config = self.old_config
-        api_module._runtime_settings = self.old_runtime_settings
         with api_module._tasks_lock:
             api_module._tasks.clear()
             api_module._tasks.update(self.old_tasks)

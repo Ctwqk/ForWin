@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
-from forwin.config import Config
-from forwin.runtime_settings import RuntimeSettingsStore
+import forwin.api as api_module
+from forwin.config import InfrastructureConfig
 
 
 def test_config_builds_kimi_and_deepseek_profiles_from_env(monkeypatch) -> None:
@@ -13,7 +12,7 @@ def test_config_builds_kimi_and_deepseek_profiles_from_env(monkeypatch) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "secret-deepseek")
     monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat")
 
-    config = Config.from_env()
+    config = InfrastructureConfig.from_env()
     profiles = {item["id"]: item for item in config.llm_env_profiles}
 
     assert profiles["env-kimi"]["api_key"] == "secret-kimi"
@@ -41,104 +40,64 @@ def test_config_builds_provider_profiles_from_env_file(monkeypatch, tmp_path: Pa
     monkeypatch.delenv("KIMI_API_KEY", raising=False)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
 
-    config = Config.from_env()
+    config = InfrastructureConfig.from_env()
     profiles = {item["id"]: item for item in config.llm_env_profiles}
 
     assert profiles["env-kimi"]["api_key"] == "file-kimi"
     assert profiles["env-deepseek"]["api_key"] == "file-deepseek"
 
 
-def test_runtime_settings_uses_env_profiles_without_persisting_env_keys(tmp_path: Path) -> None:
-    settings_path = tmp_path / "runtime_settings.json"
-    settings_path.write_text(
-        json.dumps(
-            {
-                "profiles": [
-                    {
-                        "id": "default",
-                        "name": "MiniMax 默认",
-                        "api_key": "secret-minimax",
-                        "base_url": "https://api.minimaxi.com/v1",
-                        "model": "MiniMax-M2.7",
-                    },
-                    {
-                        "id": "old-kimi",
-                        "name": "Old Kimi",
-                        "api_key": "stale-kimi",
-                        "base_url": "https://api.moonshot.cn/v1",
-                        "model": "kimi-k2.5",
-                    },
-                ],
-                "default_profile_id": "old-kimi",
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    store = RuntimeSettingsStore(
-        str(settings_path),
-        env_llm_profiles=[
+def test_runtime_catalog_is_read_only_and_secret_free() -> None:
+    previous = api_module._config
+    api_module._config = InfrastructureConfig(
+        minimax_api_key="secret-minimax-env",
+        llm_env_profiles=[
             {
                 "id": "env-kimi",
                 "name": "Kimi (.env)",
                 "api_key": "secret-kimi-env",
                 "base_url": "https://api.moonshot.cn/v1",
                 "model": "kimi-k2.5",
-            },
-            {
-                "id": "env-deepseek",
-                "name": "DeepSeek (.env)",
-                "api_key": "secret-deepseek-env",
-                "base_url": "https://api.deepseek.com/v1",
-                "model": "deepseek-chat",
-            },
-        ],
+            }
+        ]
+    )
+    try:
+        response = api_module.get_runtime_catalog()
+    finally:
+        api_module._config = previous
+
+    assert response.bootstrap_policy.quality_profile == "standard"
+    profiles = {profile.id: profile for profile in response.model_profiles}
+    assert response.default_model_profile_id == "env-minimax"
+    assert set(profiles) == {"env-minimax", "env-kimi"}
+    assert profiles["env-minimax"].has_api_key is True
+    assert profiles["env-kimi"].has_api_key is True
+    assert not hasattr(profiles["env-minimax"], "api_key")
+    assert "secret-kimi-env" not in response.model_dump_json()
+    assert "secret-minimax-env" not in response.model_dump_json()
+
+
+def test_explicit_env_minimax_profile_resolves_to_environment_default() -> None:
+    config = InfrastructureConfig(
+        minimax_api_key="secret-minimax-env",
+        minimax_model="MiniMax-M2.7",
     )
 
-    loaded = store.get()
-    profile_ids = [item["id"] for item in loaded["profiles"]]
+    profile = config.resolve_model_profile("env-minimax")
 
-    assert "old-kimi" not in profile_ids
-    assert "env-kimi" in profile_ids
-    assert "env-deepseek" in profile_ids
-    assert loaded["default_profile_id"] == "env-kimi"
-    assert loaded["api_key"] == "secret-kimi-env"
-
-    saved = store.save(operation_mode="blackbox")
-    persisted_text = settings_path.read_text(encoding="utf-8")
-
-    assert "env-kimi" in [item["id"] for item in saved["profiles"]]
-    assert "env-deepseek" in [item["id"] for item in saved["profiles"]]
-    assert "secret-kimi-env" not in persisted_text
-    assert "secret-deepseek-env" not in persisted_text
-    assert "old-kimi" not in persisted_text
+    assert profile.id == "env-minimax"
+    assert profile.api_key == "secret-minimax-env"
 
 
-def test_runtime_settings_preserves_env_default_profile_across_reload(tmp_path: Path) -> None:
-    settings_path = tmp_path / "runtime_settings.json"
-    env_profiles = [
-        {
-            "id": "env-kimi",
-            "name": "Kimi (.env)",
-            "api_key": "secret-kimi-env",
-            "base_url": "https://api.moonshot.cn/v1",
-            "model": "kimi-k2.5",
-        },
-        {
-            "id": "env-deepseek",
-            "name": "DeepSeek (.env)",
-            "api_key": "secret-deepseek-env",
-            "base_url": "https://api.deepseek.com/v1",
-            "model": "deepseek-chat",
-        },
-    ]
-    store = RuntimeSettingsStore(str(settings_path), env_llm_profiles=env_profiles)
+def test_runtime_catalog_routes_are_read_only() -> None:
+    routes = {
+        (route.path, method)
+        for route in api_module.app.routes
+        for method in (route.methods or set())
+    }
 
-    saved = store.set_default_profile("env-deepseek")
-    reloaded = RuntimeSettingsStore(str(settings_path), env_llm_profiles=env_profiles).get()
-    persisted_text = settings_path.read_text(encoding="utf-8")
-
-    assert saved["default_profile_id"] == "env-deepseek"
-    assert reloaded["default_profile_id"] == "env-deepseek"
-    assert reloaded["api_key"] == "secret-deepseek-env"
-    assert "secret-deepseek-env" not in persisted_text
+    assert ("/api/settings/llm", "GET") in routes
+    assert ("/api/settings/llm", "POST") not in routes
+    assert ("/api/settings/llm/preferences", "POST") not in routes
+    assert all("/api/settings/llm/profiles" not in path for path, _method in routes)
+    assert all("/api/settings/llm/default-profile" not in path for path, _method in routes)

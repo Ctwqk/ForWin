@@ -44,7 +44,6 @@ class ApiPagesRenderingTests(unittest.TestCase):
             has_api_key=False,
             base_url="https://api.minimaxi.com/v1",
             model="MiniMax-M2.7",
-            operation_mode="blackbox",
             freeze_failed_candidates=True,
         )
 
@@ -235,7 +234,6 @@ class ApiPagesRenderingTests(unittest.TestCase):
             has_api_key=True,
             base_url="https://api.minimaxi.com/v1",
             model="MiniMax-M2.7",
-            operation_mode="blackbox",
             freeze_failed_candidates=True,
         )
 
@@ -246,21 +244,20 @@ class ApiPagesRenderingTests(unittest.TestCase):
             has_api_key=False,
             base_url="https://api.minimaxi.com/v1",
             model="MiniMax-M2.7",
-            operation_mode="blackbox",
             freeze_failed_candidates=True,
-            review_engine_breakdown=[
+            rule_decision_breakdown=[
                 {
-                    "rule_id": "auto_approve_policy_disabled",
-                    "outcome": "manual_review",
-                    "reason": "policy disabled: review_engine.auto_approve_enabled=false",
+                    "rule_id": "gate_delegation_failed",
+                    "outcome": "system_block",
+                    "reason": "delegated gate did not return valid proof",
                     "count": 2,
                 }
             ],
         )
 
         self.assertIn("Review Engine Decisions", html)
-        self.assertIn("auto_approve_policy_disabled", html)
-        self.assertIn("manual_review", html)
+        self.assertIn("gate_delegation_failed", html)
+        self.assertIn("system_block", html)
 
     def test_publishers_page_renders_javascript_that_passes_node_syntax_check(self) -> None:
         html = render_publishers_page(

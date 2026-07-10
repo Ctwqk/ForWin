@@ -30,7 +30,6 @@ from forwin.models.world_model import (
 )
 from forwin.protocol.context import WorldContextPack
 from forwin.protocol.book_state import WorldNode
-from forwin.runtime_settings import RuntimeSettingsStore
 from forwin.state.updater import StateUpdater
 from forwin.world_model.compiler import WorldModelCompiler
 from forwin.world_model.exporter_obsidian import ObsidianWorldExporter
@@ -38,7 +37,7 @@ from forwin.world_model.importer_obsidian import ObsidianWorldImporter
 from forwin.world_model.page_repository import WorldModelPageRepository
 from forwin.world_model.retriever import WorldModelRetriever
 from forwin.obsidian.importer import ObsidianImporter
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.context.assembler import assemble_context
 from forwin.retrieval.broker import RetrievalBroker
 from forwin.state.repo import StateRepository
@@ -54,19 +53,12 @@ class WorldModelTests(unittest.TestCase):
         self.session_factory = get_session_factory(self.engine)
         self.old_session_factory = api_module._SessionFactory
         self.old_config = api_module._config
-        self.old_runtime_settings = api_module._runtime_settings
         api_module._SessionFactory = self.session_factory
-        api_module._config = Config(
+        api_module._config = InfrastructureConfig(
             database_url=self.database_url,
             minimax_api_key="test-key",
             minimax_base_url="http://example.invalid",
             minimax_model="fake-model",
-        )
-        api_module._runtime_settings = RuntimeSettingsStore(
-            str(Path(self.tmpdir.name) / "runtime_settings.json"),
-            default_api_key="default-key",
-            default_base_url="http://default.invalid",
-            default_model="default-model",
         )
 
     def test_page_identity_ignores_removed_legacy_entity_frontmatter(self) -> None:
@@ -84,7 +76,6 @@ class WorldModelTests(unittest.TestCase):
     def tearDown(self) -> None:
         api_module._SessionFactory = self.old_session_factory
         api_module._config = self.old_config
-        api_module._runtime_settings = self.old_runtime_settings
         self.engine.dispose()
         self.tmpdir.cleanup()
 

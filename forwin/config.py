@@ -508,17 +508,18 @@ class InfrastructureConfig(_InfrastructureFields, _ConfigBaseModel):  # type: ig
 
     def resolve_model_profile(self, profile_id: str) -> ModelProfileConfig:
         requested = str(profile_id or "").strip()
+        default_profile = ModelProfileConfig(
+            id="env-minimax",
+            name="MiniMax (.env)",
+            api_key=self.minimax_api_key,
+            base_url=self.minimax_base_url,
+            model=self.minimax_model,
+        )
         profiles = [
             ModelProfileConfig.model_validate(item) for item in self.llm_env_profiles
         ]
-        if not requested:
-            return ModelProfileConfig(
-                id="env-minimax",
-                name="MiniMax (.env)",
-                api_key=self.minimax_api_key,
-                base_url=self.minimax_base_url,
-                model=self.minimax_model,
-            )
+        if not requested or requested == default_profile.id:
+            return default_profile
         for profile in profiles:
             if profile.id == requested:
                 return profile

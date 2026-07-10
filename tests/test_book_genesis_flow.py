@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -23,7 +22,7 @@ from forwin.book_genesis import _fallback_brief
 from forwin.book_genesis import _fallback_blueprint
 from forwin.book_genesis import _fallback_map
 from forwin.book_genesis import _fallback_named_entity_seed
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.governance import DecisionEventType
 from forwin.map.models import MapEdgeRow, MapGenerationRunRow, MapNodeRow, MapRegionRow
 from forwin.map.protocol import BookMapGenerationResult, MapValidationReport
@@ -32,14 +31,13 @@ from forwin.models.genesis import BookGenesisRevision, PromptTrace
 from forwin.models.governance import DecisionEvent
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.orchestrator.phase24 import ArcEnvelopeManager
-from forwin.runtime_settings import RuntimeSettingsStore
+from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.skills import build_skill_runtime_components
 from forwin.state.updater import StateUpdater
 
 
 class BookGenesisFlowTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmpdir = TemporaryDirectory()
         self.database_url = postgres_test_url("genesis")
         engine = get_engine(self.database_url)
         init_db(engine)
@@ -47,35 +45,27 @@ class BookGenesisFlowTests(unittest.TestCase):
         self.engine = engine
         self.old_session_factory = api_module._SessionFactory
         self.old_config = api_module._config
-        self.old_runtime_settings = api_module._runtime_settings
         api_module._SessionFactory = self.session_factory
-        api_module._config = Config(
+        api_module._config = InfrastructureConfig(
             database_url=self.database_url,
             minimax_api_key="test-key",
             minimax_base_url="http://example.invalid",
             minimax_model="fake-model",
-        )
-        api_module._runtime_settings = RuntimeSettingsStore(
-            str(Path(self.tmpdir.name) / "runtime_settings.json"),
-            default_api_key="default-key",
-            default_base_url="http://default.invalid",
-            default_model="default-model",
-        )
-        api_module._runtime_settings.save_profile(
-            profile_id="genesis-alt",
-            name="Genesis Alt",
-            api_key="alt-key",
-            base_url="http://alt.invalid",
-            model="alt-model",
-            set_as_default=False,
+            llm_env_profiles=[
+                {
+                    "id": "genesis-alt",
+                    "name": "Genesis Alt",
+                    "api_key": "alt-key",
+                    "base_url": "http://alt.invalid",
+                    "model": "alt-model",
+                }
+            ],
         )
 
     def tearDown(self) -> None:
         api_module._SessionFactory = self.old_session_factory
         api_module._config = self.old_config
-        api_module._runtime_settings = self.old_runtime_settings
         self.engine.dispose()
-        self.tmpdir.cleanup()
 
     def test_create_project_enters_creating_and_creates_initial_genesis_revision(self) -> None:
         response = api_module.create_project(
@@ -745,6 +735,17 @@ class BookGenesisFlowTests(unittest.TestCase):
             )
         )
 
+        with self.session_factory.begin() as session:
+            project = session.get(Project, created.project_id)
+            assert project is not None
+            store = ProjectPolicyStore(session)
+            current = store.load(project)
+            store.save(
+                project,
+                current.policy.with_user_settings(model_profile_id="genesis-alt"),
+                expected_version=current.version,
+            )
+
         test_case = self
 
         def fake_generate_call(_service, *, messages, fallback, stage_key, temperature=0.45, max_tokens=None):
@@ -786,7 +787,7 @@ class BookGenesisFlowTests(unittest.TestCase):
             detail = api_module.generate_project_genesis_stage(
                 created.project_id,
                 "world",
-                BookGenesisStageRunRequest.model_validate({"model_profile_id": "genesis-alt"}),
+                BookGenesisStageRunRequest(),
             )
 
         self.assertEqual(detail.pack.world["world_bible"]["overview"], "被选中模型生成的世界观。")

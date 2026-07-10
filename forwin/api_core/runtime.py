@@ -87,12 +87,6 @@ from forwin.api_schemas import (
     ExtensionSessionSyncResponse,
     GenerateRequest,
     GenerationControlInfo,
-    LLMDefaultProfileRequest,
-    LLMPreferencesRequest,
-    LLMProfileUpsertRequest,
-    LLMSettingsRequest,
-    LLMSettingsResponse,
-    ModelProfile,
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
     NarrativeConstraintsResponse,
@@ -224,27 +218,16 @@ def _json_dump(value: Any, fallback: Any) -> str:
     return json.dumps(normalized, ensure_ascii=False)
 
 
-def _resolve_runtime_profile(requested_profile_id: str = "") -> dict[str, str]:
-    infrastructure = api_state._config or InfrastructureConfig()
-    profile = infrastructure.resolve_model_profile(requested_profile_id)
-    return profile.model_dump(mode="python")
-
-
-def _saved_runtime_config_or_default(model_profile_id: str = "") -> InfrastructureConfig:
-    _ = model_profile_id
-    if not api_state._config:
-        return InfrastructureConfig(minimax_api_key="")
-    return api_state._config
-
-
 def _build_genesis_service(
-    runtime_config: InfrastructureConfig | None = None,
+    infrastructure: InfrastructureConfig | None = None,
     *,
     model_profile_id: str = "",
 ) -> BookGenesisService:
-    resolved_profile = _resolve_runtime_profile(model_profile_id)
-    resolved = runtime_config or _saved_runtime_config_or_default(model_profile_id)
-    shared_container = runtime_config is None and not model_profile_id and api_state._runtime_container is not None
+    resolved = infrastructure or api_state._config or InfrastructureConfig(minimax_api_key="")
+    resolved_profile = resolved.resolve_model_profile(model_profile_id).model_dump(
+        mode="python"
+    )
+    shared_container = infrastructure is None and not model_profile_id and api_state._runtime_container is not None
     policy = RuntimePolicy.for_profile(
         "standard",
         model_profile_id=str(model_profile_id or "").strip(),

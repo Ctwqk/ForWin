@@ -87,12 +87,6 @@ from forwin.api_schemas import (
     ExtensionSessionSyncResponse,
     GenerateRequest,
     GenerationControlInfo,
-    LLMDefaultProfileRequest,
-    LLMPreferencesRequest,
-    LLMProfileUpsertRequest,
-    LLMSettingsRequest,
-    LLMSettingsResponse,
-    ModelProfile,
     NarrativeConstraintCreateRequest,
     NarrativeConstraintUpdateRequest,
     NarrativeConstraintsResponse,
@@ -135,7 +129,6 @@ from forwin.api_schemas import (
     StartWritingResponse,
 )
 from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
-from forwin.config import InfrastructureConfig
 from forwin.governance import (
     BandCheckpointIssueInfo,
     CONSTRAINT_LEVELS,
@@ -363,12 +356,6 @@ def _get_generation_task_or_404(task_id: str) -> dict[str, Any]:
     if task is None or task.get("deleted"):
         raise HTTPException(404, "任务不存在")
     return task
-
-
-def _saved_runtime_config_or_503() -> InfrastructureConfig:
-    if not api_state._config:
-        raise HTTPException(503, "服务尚未初始化")
-    return api_state._config
 
 
 def _require_reason(reason: str, *, action: str) -> str:

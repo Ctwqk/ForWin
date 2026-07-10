@@ -10,7 +10,6 @@ from forwin.llm_eval.reporting import summarize_attempts
 from forwin.llm_eval.schemas import EvalAttemptResult
 from forwin.llm_eval.validators import validate_output
 from forwin.llm_eval.variants import apply_cache_buster, variant_seed
-from forwin.runtime_settings import RuntimeSettingsStore
 
 
 def test_manifest_profiles_resolve_api_key_from_env_and_redact_secret() -> None:
@@ -53,38 +52,10 @@ def test_manifest_profiles_resolve_api_key_from_env_and_redact_secret() -> None:
     assert "secret-kimi-key" not in json.dumps(redacted, ensure_ascii=False)
 
 
-def test_runtime_settings_profiles_are_loaded_without_changing_default_file() -> None:
-    with TemporaryDirectory() as tmp:
-        settings_path = Path(tmp) / "runtime_settings.json"
-        store = RuntimeSettingsStore(str(settings_path), default_api_key="")
-        store.save_profile(
-            profile_id="minimax",
-            name="MiniMax",
-            api_key="secret-minimax",
-            base_url="https://api.minimaxi.com/v1",
-            model="MiniMax-M2.7",
-            set_as_default=True,
-        )
-        before = settings_path.read_text(encoding="utf-8")
-
-        profiles = load_eval_profiles(
-            runtime_settings_path=str(settings_path),
-            selected_ids=["minimax"],
-        )
-        after = settings_path.read_text(encoding="utf-8")
-
-    assert [profile.id for profile in profiles] == ["minimax"]
-    assert profiles[0].api_key == "secret-minimax"
-    assert before == after
-
-
 def test_selected_provider_aliases_fallback_to_default_profiles() -> None:
-    with TemporaryDirectory() as tmp:
-        settings_path = Path(tmp) / "missing_runtime_settings.json"
-        profiles = load_eval_profiles(
-            runtime_settings_path=str(settings_path),
-            selected_ids=["minimax", "kimi", "deepseek"],
-        )
+    profiles = load_eval_profiles(
+        selected_ids=["minimax", "kimi", "deepseek"],
+    )
 
     assert [profile.id for profile in profiles] == ["minimax", "kimi", "deepseek"]
     assert profiles[0].provider == "minimax"
@@ -96,12 +67,9 @@ def test_selected_provider_aliases_fallback_to_default_profiles() -> None:
 
 
 def test_selected_codex_spark_alias_uses_cli_subscription_not_api_key() -> None:
-    with TemporaryDirectory() as tmp:
-        settings_path = Path(tmp) / "missing_runtime_settings.json"
-        profiles = load_eval_profiles(
-            runtime_settings_path=str(settings_path),
-            selected_ids=["codex-spark"],
-        )
+    profiles = load_eval_profiles(
+        selected_ids=["codex-spark"],
+    )
 
     assert [profile.id for profile in profiles] == ["codex-spark"]
     assert profiles[0].provider == "codex_cli"

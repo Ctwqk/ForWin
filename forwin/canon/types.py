@@ -19,7 +19,7 @@ class CanonQualityGateOutcome:
 
 
 @dataclass(frozen=True)
-class CanonApplyOutcome:
+class CanonAdmissionOutcome:
     blocked_path: str = ""
     block_kind: str = ""
     canon_gate_result: CanonAdmissionGateResult | None = None
@@ -36,6 +36,3 @@ class CanonApplyOutcome:
         if self.block_kind != "canon_quality" or self.canon_gate_result is None:
             return ""
         return str(self.canon_gate_result.required_repair_scope or "")
-
-
-__all__ = ["CanonApplyOutcome", "CanonQualityGateOutcome"]

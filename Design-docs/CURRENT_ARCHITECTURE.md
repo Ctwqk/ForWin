@@ -48,7 +48,7 @@ WriterOutput / chapter body
 -> projection refresh
 ```
 
-该代码路径名为 `_commit_book_state_canon`。`_apply_world_v4_gate` 和恒成功的 `_compile_world_model_after_acceptance` 已删除；`FinalResidualPolicy` 的 force-accept 候选仍必须经过上述 canon commit。
+`forwin.canon.CanonAdmissionService` 是唯一把 candidate 转为 accepted/canon 状态的入口；generation pipeline 与人工接受都调用其强类型 `commit()`。内部 BookState 写路径名为 `_commit_book_state_canon`。`_apply_canon_candidate`、兼容 outcome coercer、`_apply_world_v4_gate` 和恒成功的 `_compile_world_model_after_acceptance` 已删除；`FinalResidualPolicy` 的 force-accept 候选仍必须经过上述 canon admission。
 
 旧 `world_model_v4` / world-v4 compatibility projection 写入已经从 accepted chapter runtime 删除。新项目的 canon commit 只以 BookState review/compile 结果为准，后续只保留 Knowledge Projection refresh 等当前检索投影。
 

@@ -16,7 +16,7 @@
 
 Slice 1 实施提交依次为 `a7f53bb`、`f7790c5`、`61392af`、`6c2eb0f`、`131e697`、`bc85d91`、`3e0c10f`、`a6a75fb`、`589e58a`、`e87e67b`，并由 completion commit 收口。本轮同时删除失效的旧架构测试大套件和无实现支撑的 review-engine cutover 脚本，常量化 chapter review form 主路径，并增加 production/UI/application/container boundary guard；后续 Phase B-F 不因此标记完成。
 
-Phase B 已开始按“直接删除或改为真实 owner”执行：零引用 `forwin/orchestration` ports 和 `_compile_world_model_after_acceptance` 空壳已删除；BookState canon 主路径已改名 `_commit_book_state_canon`；`HistoricalReviewHub` 已替换为 `DraftReviewService`；`FinalAcceptanceGate` 已合并为 `FinalResidualPolicy`，协议/API 字段改为 `final_residual_decision`；原 `reviewer`、`review_engine`、`reviser` 三个平级包已物理合并为 `forwin.review/{draft_service,decision,repair}`，不留兼容导入。下文保留旧名称的段落是审计时基线证据，不代表当前代码仍保留旧入口。
+Phase B 已开始按“直接删除或改为真实 owner”执行：零引用 `forwin/orchestration` ports 和 `_compile_world_model_after_acceptance` 空壳已删除；BookState canon 主路径已改名 `_commit_book_state_canon`；`HistoricalReviewHub` 已替换为 `DraftReviewService`；`FinalAcceptanceGate` 已合并为 `FinalResidualPolicy`；原 `reviewer`、`review_engine`、`reviser` 三个平级包已物理合并为 `forwin.review/{draft_service,decision,repair}`；唯一 candidate -> canon 决策体已迁入 `forwin.canon.CanonAdmissionService`，旧 orchestrator 方法、字符串/None outcome coercer 和 `CanonApplyOutcome` 名称均删除。下文保留旧名称的段落是审计时基线证据，不代表当前代码仍保留旧入口。
 
 ---
 
@@ -235,7 +235,7 @@ WritingOrchestrator (变薄的编排壳)
 | D09 ✅ | `decide_repair_v2` | `RepairService` | `review_engine_repair_v2_enabled`、`review_engine_auto_approve_enabled` **字段本体** | 直接删字段（config 之外零读取）；shadow/parity 测试转 test-only 或删 | repair 路由测试改为 live 断言 | 两个死旗标，零生产风险 |
 | D10 ✎ | arc/book patcher、obligation verifier、local rewrite、commit_with_obligation 等 6 个活旗标 | profile 内部策略位 | 独立 env 暴露 | 默认值随 profile；env 覆盖仅 test | 各 gate 开/关行为测试 | 初版笼统归为"hide"；实测它们是活的门 |
 | D11 ✎ 已完成 | `FinalAcceptanceGate` | `forwin.review.decision.FinalResidualPolicy` | `reviser/final_acceptance.py`、旧 rule/class/字段 | 实现并入 final residual rule；协议/API 使用 `final_residual_decision`，不留 alias | 软过硬拦 7 tests | 仍不越过 canon commit |
-| D12 ✅ | `_apply_canon_candidate` 行为 | `CanonAdmissionService` | 无 | 包装抽取，事件契约不变 | canon block/commit/幂等 | |
+| D12 ✎ 已完成（入口） | `_apply_canon_candidate` 行为 | `forwin.canon.CanonAdmissionService` | orchestrator 方法与 compatibility outcome coercer | 唯一决策体迁入 canon owner；generation/人工接受直接调用强类型 `commit` | canon block/commit/失败冻结 | 内部 quality/BookState helper 仍待继续迁移 |
 | D13 ✎ 已完成 | BookState direct-commit 路径 | `_commit_book_state_canon` | `_apply_world_v4_gate` 误导名 | 函数、变量、artifact key 和 block kind 同步改为 BookState 语义 | BookState canon 测试 | 不留旧名 |
 | D14 ✎ 已完成 | — | — | `_compile_world_model_after_acceptance` 空壳 | 函数、两处调用和恒真 pause 分支已删除 | compile/collect + acceptance 回归 | `return True` 存根已消失 |
 | D15 ✎ | `BookStateCompiler`/GraphDelta 唯一写方 | `BookStateRuntime` | canon 提交内的 legacy `apply_state_changes/apply_events/apply_thread_beats/apply_time_advance` 双写 | **先**迁读方（context providers/RetrievalBroker/ContinuityChecker → BookState projection），读方清零后删写方 | 读方清单测试 + 30 章对拍（legacy vs projection 上下文一致） | 初版低估了读方迁移量 |
@@ -267,7 +267,7 @@ WritingOrchestrator (变薄的编排壳)
 
 ### Phase B — review/repair/final/canon 分层 + orchestrator 立缝（D07-D13,D19,D20 首批）
 
-- **当前进度**：D07、D11、D13、D14、D19 已完成；FinalResidual 聚焦 7 tests 通过。尚未完成 D08 缓存、RepairService / CanonAdmissionService 和 monkey-patch 函数族迁移。
+- **当前进度**：D07、D11、D13、D14、D19 与 D12 入口迁移已完成；FinalResidual 聚焦 7 tests 通过，CanonAdmission 异常路径与 BookState block 聚焦通过。尚未完成 D08 缓存、RepairService，以及 CanonAdmission 内部 quality/BookState helper 的 monkey-patch 迁移。
 - **目标**：四层判决语义落地为四个显式 service；`service.py` 猴子补丁开始收敛。
 - **涉及**：`review/{draft_service,decision,repair}`、`orchestrator_loop_core/{review_autofix,repair_loop,quality_gates,world_projection,service}.py`。
 - **不变量**：hard blocker 必拦；force-accept/reckless 不越 canon 门（新增显式不变量测试）；`ChapterReview` 持久化与 UI 队列可读。

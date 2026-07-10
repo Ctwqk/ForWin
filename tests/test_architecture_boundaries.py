@@ -243,6 +243,9 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
         "OrchestrationEvent",
         "_compile_world_model_after_acceptance",
         "_apply_world_v4_gate",
+        "_apply_canon_candidate",
+        "_coerce_canon_apply_outcome",
+        "CanonApplyOutcome",
         "HistoricalReviewHub",
         "FinalAcceptanceGate",
         "final_gate_decision",
@@ -258,6 +261,14 @@ def test_phase_b_dead_ports_and_legacy_canon_names_stay_removed() -> None:
     assert "class FinalResidualPolicy" in _read(
         "forwin/review/decision/rules/final_residual.py"
     )
+    assert "class CanonAdmissionService" in _read("forwin/canon/admission.py")
+    assert "self.canon_admission.commit(" in _read(
+        "forwin/orchestrator_loop_core/acceptance.py"
+    )
+    assert "self.canon_admission.commit(" in _read(
+        "forwin/orchestrator_loop_core/project_chapters.py"
+    )
+    assert not (ROOT / "forwin/orchestrator_loop_core/quality_gate_types.py").exists()
 
 
 def test_removed_repair_dead_code_stays_removed() -> None:

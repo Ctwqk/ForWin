@@ -386,7 +386,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 plan.status = "needs_review"
                 plan.canon_risk_level = "high"
                 plan.repair_attempt_count = 0
-                plan.residual_review_issues_json = '[{"rule_name":"canon_apply_error"}]'
+                plan.residual_review_issues_json = '[{"rule_name":"canon_admission_error"}]'
                 session.add(plan)
                 session.commit()
             return {

@@ -6,6 +6,7 @@ from typing import Callable, Literal
 
 from forwin.application.generation import GenerationApplicationService
 from forwin.book_genesis import BookGenesisService
+from forwin.canon import CanonAdmissionService
 from forwin.config import InfrastructureConfig
 from forwin.context.assembler import ChapterContextAssembler
 from forwin.context.gates import RecencyTruncateGate
@@ -345,6 +346,7 @@ class RuntimeContainer:
                 llm_client=llm_client if llm_available else None,
                 llm_enabled=llm_available,
             ),
+            canon_admission=CanonAdmissionService(),
             gate_delegation=GateDelegationService(
                 spark_delegate=SparkGateDelegate(llm_client=llm_client)
             ),

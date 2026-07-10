@@ -9,6 +9,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from tests.postgres import postgres_test_url
+from forwin.canon import CanonAdmissionService, CanonAdmissionOutcome, CanonQualityGateOutcome
+from forwin.canon import admission as canon_admission_module
 from forwin.checker.hard_floor import HardFloorResult
 from forwin.canon_quality.signals import CanonAdmissionGateResult
 from forwin.config import InfrastructureConfig
@@ -22,10 +24,6 @@ from forwin.orchestrator.loop import WritingOrchestrator
 from forwin.orchestrator_loop_core import project_chapters as project_chapters_module
 from forwin.orchestrator_loop_core import quality_gates as quality_gates_module
 from forwin.orchestrator_loop_core import repair_loop as repair_loop_module
-from forwin.orchestrator_loop_core.quality_gates import (
-    CanonApplyOutcome,
-    CanonQualityGateOutcome,
-)
 from forwin.orchestrator_loop_core.repair_loop import (
     _attempts_for_repair_phase,
     _review_from_canon_gate_block,
@@ -457,7 +455,7 @@ def test_canon_apply_outcome_preserves_gate_result_and_block_path():
         gate_summary="canon quality gate strict: commit_allowed=False",
     )
 
-    outcome = CanonApplyOutcome(
+    outcome = CanonAdmissionOutcome(
         blocked_path="frozen/path.json",
         block_kind="canon_quality",
         canon_gate_result=gate,
@@ -669,7 +667,7 @@ def test_canon_quality_gate_passes_draft_resolved_obligation_ids(monkeypatch):
     assert calls == ["draft_verify", "save_admission", "event"]
 
 
-def test_apply_canon_candidate_exception_freezes_and_returns_blocked_outcome(
+def test_canon_admission_exception_freezes_and_returns_blocked_outcome(
     monkeypatch,
 ):
     failed_rows: list[dict[str, object]] = []
@@ -706,14 +704,14 @@ def test_apply_canon_candidate_exception_freezes_and_returns_blocked_outcome(
             raise RuntimeError("canon apply failed")
 
     monkeypatch.setattr(
-        quality_gates_module,
+        canon_admission_module,
         "CandidateDraftRepository",
         _CandidateDraftRepo,
     )
     session = _Session()
 
-    outcome = quality_gates_module._apply_canon_candidate(
-        _Orchestrator(),
+    outcome = CanonAdmissionService().commit(
+        runtime=_Orchestrator(),
         session=session,
         repo=object(),
         updater=object(),
@@ -730,34 +728,16 @@ def test_apply_canon_candidate_exception_freezes_and_returns_blocked_outcome(
         verdict=ReviewVerdict(verdict="pass", issues=[]),
     )
 
-    assert isinstance(outcome, CanonApplyOutcome)
+    assert isinstance(outcome, CanonAdmissionOutcome)
     assert outcome.blocked
     assert outcome.blocked_path == "frozen/canon-update-failed.json"
-    assert outcome.block_kind == "canon_apply_error"
+    assert outcome.block_kind == "canon_admission_error"
     assert session.rolled_back is True
     assert frozen_rows[0]["project_id"] == "p"
     assert failed_rows[0]["canon_artifact_path"] == "frozen/canon-update-failed.json"
 
 
-def test_coerce_canon_apply_outcome_rejects_truthy_non_string_values():
-    from forwin.orchestrator_loop_core.project_chapters import (
-        _coerce_canon_apply_outcome,
-    )
-
-    existing = CanonApplyOutcome(blocked_path="path", block_kind="string_block")
-
-    assert _coerce_canon_apply_outcome(existing) is existing
-    assert not _coerce_canon_apply_outcome(None).blocked
-    assert not _coerce_canon_apply_outcome("").blocked
-    legacy = _coerce_canon_apply_outcome("legacy/path.json")
-    assert legacy.blocked
-    assert legacy.blocked_path == "legacy/path.json"
-    assert legacy.block_kind == "string_block"
-    with pytest.raises(TypeError):
-        _coerce_canon_apply_outcome({"blocked_path": "legacy/path.json"})
-
-
-def test_canon_apply_exception_pauses_chapter_instead_of_accepting():
+def test_canon_admission_exception_pauses_chapter_instead_of_accepting():
     class PassReviewHub:
         def review(self, **_kwargs) -> ReviewVerdict:
             return ReviewVerdict(
@@ -889,7 +869,7 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
         def apply_canon_candidate(**_kwargs):
             apply_calls["count"] += 1
             if apply_calls["count"] == 1:
-                return CanonApplyOutcome(
+                return CanonAdmissionOutcome(
                     blocked_path="frozen/canon-quality.json",
                     block_kind="canon_quality",
                     canon_gate_result=CanonAdmissionGateResult(
@@ -905,9 +885,9 @@ def test_warn_review_canon_block_runs_canon_repair_before_accepting():
                         deterministic_issue_refs=["signal-1"],
                     ),
                 )
-            return CanonApplyOutcome()
+            return CanonAdmissionOutcome()
 
-        orchestrator._apply_canon_candidate = apply_canon_candidate
+        orchestrator.canon_admission.commit = apply_canon_candidate
 
         result = orchestrator.run("p", "g", 1)
 
@@ -975,7 +955,7 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts():
         )
 
         def apply_canon_candidate(**_kwargs):
-            return CanonApplyOutcome(
+            return CanonAdmissionOutcome(
                 block_kind="canon_quality",
                 canon_gate_result=CanonAdmissionGateResult(
                     project_id="p",
@@ -991,7 +971,7 @@ def test_repairable_canon_block_exhaustion_pauses_with_canon_repair_attempts():
                 ),
             )
 
-        orchestrator._apply_canon_candidate = apply_canon_candidate
+        orchestrator.canon_admission.commit = apply_canon_candidate
 
         result = orchestrator.run("p", "g", 1)
 
@@ -1053,7 +1033,7 @@ def test_non_repairable_canon_quality_block_records_system_block_without_repair(
         orchestrator._run_canon_repair_for_block = lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("non-repairable canon block should not run canon repair")
         )
-        orchestrator._apply_canon_candidate = lambda **_kwargs: CanonApplyOutcome(
+        orchestrator.canon_admission.commit = lambda **_kwargs: CanonAdmissionOutcome(
             block_kind="canon_quality",
             canon_gate_result=CanonAdmissionGateResult(
                 project_id="p",
@@ -1173,7 +1153,7 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
             apply_calls["count"] += 1
             if apply_calls["count"] > 1:
                 raise AssertionError("canon should not be retried after failed canon repair")
-            return CanonApplyOutcome(
+            return CanonAdmissionOutcome(
                 blocked_path="frozen/canon-quality.json",
                 block_kind="canon_quality",
                 canon_gate_result=gate,
@@ -1192,7 +1172,7 @@ def test_failed_canon_repair_after_force_accept_pauses_without_reapplying_canon(
             )
 
         orchestrator._review_and_maybe_rewrite = force_accepted_review
-        orchestrator._apply_canon_candidate = apply_canon_candidate
+        orchestrator.canon_admission.commit = apply_canon_candidate
         orchestrator._run_canon_repair_for_block = failed_canon_repair
 
         result = orchestrator.run("p", "g", 1)

@@ -45,7 +45,7 @@ from forwin.orchestrator_loop_core.gate_delegation import (
 )
 from forwin.orchestrator_loop_core.project_chapters import _run_project_chapters
 from forwin.orchestrator_loop_core.writer_attention import _write_chapter_with_attention_fallback
-from forwin.orchestrator_loop_core.quality_gates import _is_timeout_like, _is_transient_llm_like, _transient_retry_delay, _current_model_identity, _audit_operation_id, _drain_llm_attempt_events, _safe_prompt_trace_attempts, _error_category_from_attempts, _diagnostic_kind_for_failure, _record_failure_prompt_trace, _record_model_fallback_payloads, _apply_canon_quality_gate, _run_obligation_form_gate, _prepare_deferred_acceptance_if_needed, _band_scope_candidates, _band_row_by_id, _latest_draft_and_review_for_chapter, _apply_canon_candidate
+from forwin.orchestrator_loop_core.quality_gates import _is_timeout_like, _is_transient_llm_like, _transient_retry_delay, _current_model_identity, _audit_operation_id, _drain_llm_attempt_events, _safe_prompt_trace_attempts, _error_category_from_attempts, _diagnostic_kind_for_failure, _record_failure_prompt_trace, _record_model_fallback_payloads, _apply_canon_quality_gate, _run_obligation_form_gate, _prepare_deferred_acceptance_if_needed, _band_scope_candidates, _band_row_by_id, _latest_draft_and_review_for_chapter
 from forwin.orchestrator_loop_core.world_projection import _prompt_trace_success_summary, _commit_book_state_canon, _filter_resolvable_events, _ensure_event_mentioned_non_character_entities, _filter_resolvable_state_changes, _ensure_genesis_canon_seed_entities, _collect_subworld_candidate_names, _validate_subworld_admission, _run_phase3_pass
 from forwin.orchestrator_loop_core.finalization import _flush_background_llm_trace, _run_provisional_band_preview, _abort_requested, _pause_requested, _paused_result, _cancelled_result, _normalize_provisional_verdict, _should_degrade_provisional_preview, _build_provisional_fallback, _load_writer_output_from_meta, _load_review_verdict, _seed_state
 
@@ -98,6 +98,7 @@ class WritingOrchestrator:
         self.arc_envelope_manager = services.arc_envelope_manager
         self.draft_review = services.draft_review
         self.repair_verifier = services.repair_verifier
+        self.canon_admission = services.canon_admission
         self.gate_delegation = services.gate_delegation
         self._bind_orchestrator_runtime_hooks()
 
@@ -195,7 +196,6 @@ WritingOrchestrator._prepare_deferred_acceptance_if_needed = _prepare_deferred_a
 WritingOrchestrator._band_scope_candidates = _band_scope_candidates
 WritingOrchestrator._band_row_by_id = _band_row_by_id
 WritingOrchestrator._latest_draft_and_review_for_chapter = _latest_draft_and_review_for_chapter
-WritingOrchestrator._apply_canon_candidate = _apply_canon_candidate
 WritingOrchestrator._prompt_trace_success_summary = _prompt_trace_success_summary
 WritingOrchestrator._commit_book_state_canon = _commit_book_state_canon
 WritingOrchestrator._filter_resolvable_events = _filter_resolvable_events

@@ -6,13 +6,13 @@ from tempfile import TemporaryDirectory
 
 from sqlalchemy import func, select
 
+from forwin.canon import CanonAdmissionOutcome
 from forwin.config import InfrastructureConfig
 from forwin.models import DecisionEvent, Entity, EntityState
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.draft import ChapterDraft, ChapterReview
 from forwin.models.project import ChapterPlan
-from forwin.orchestrator_loop_core.quality_gates import CanonApplyOutcome
 from forwin.planning.world_contracts import ChapterWorldDeltaIntent, WorldContractRepository
 from forwin.protocol.book_state import BookStateCompileResult
 from forwin.protocol.review import ReviewVerdict
@@ -51,6 +51,7 @@ def _setup_project(session):
         title="BookState gate",
         premise="殖民地防线与异常通讯",
         genre="科幻",
+        runtime_policy=RuntimePolicy.for_profile("standard"),
     )
     arc = updater.create_arc_plan(project.id, "母星通讯危机", chapter_start=21, chapter_end=28)
     chapter = updater.create_chapter_plan(
@@ -79,7 +80,7 @@ def _setup_project(session):
     return project, chapter
 
 
-def test_apply_canon_candidate_commits_book_state_without_projection_compatibility_event() -> None:
+def test_canon_admission_commits_book_state_without_projection_compatibility_event() -> None:
     with TemporaryDirectory() as tmp:
         db_path = postgres_test_url("orchestrator-bookstate-no-projection-compat")
         engine = get_engine(db_path)
@@ -89,7 +90,8 @@ def test_apply_canon_candidate_commits_book_state_without_projection_compatibili
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
             project, _chapter = _setup_project(session)
-            result = orchestrator._apply_canon_candidate(  # noqa: SLF001
+            result = orchestrator.canon_admission.commit(
+                runtime=orchestrator,
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -111,14 +113,14 @@ def test_apply_canon_candidate_commits_book_state_without_projection_compatibili
 
         event_types = {event.event_type for event in events}
         payloads = "\n".join(event.payload_json or "" for event in events)
-        assert isinstance(result, CanonApplyOutcome)
+        assert isinstance(result, CanonAdmissionOutcome)
         assert not result.blocked
         assert graph_deltas > 0
         assert "legacy_projection_failed" not in event_types
         assert "projection.legacy_world_model_projection" not in payloads
 
 
-def test_apply_canon_candidate_blocks_review_failure_before_book_state_commit() -> None:
+def test_canon_admission_blocks_review_failure_before_book_state_commit() -> None:
     with TemporaryDirectory() as tmp:
         db_path = postgres_test_url("orchestrator-bookstate-review-block")
         engine = get_engine(db_path)
@@ -128,7 +130,8 @@ def test_apply_canon_candidate_blocks_review_failure_before_book_state_commit() 
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
             project, _chapter = _setup_project(session)
-            outcome = orchestrator._apply_canon_candidate(  # noqa: SLF001
+            outcome = orchestrator.canon_admission.commit(
+                runtime=orchestrator,
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -147,14 +150,14 @@ def test_apply_canon_candidate_blocks_review_failure_before_book_state_commit() 
         with Session() as session:
             graph_deltas = session.scalar(select(func.count()).select_from(GraphDeltaRow))
 
-        assert isinstance(outcome, CanonApplyOutcome)
+        assert isinstance(outcome, CanonAdmissionOutcome)
         assert outcome.blocked
-        assert outcome.blocked_path == "book-state-direct-extraction-blocked"
+        assert Path(outcome.blocked_path).is_file()
         assert outcome.block_kind == "book_state"
         assert graph_deltas == 0
 
 
-def test_apply_canon_candidate_drops_unregistered_character_state_changes() -> None:
+def test_canon_admission_drops_unregistered_character_state_changes() -> None:
     with TemporaryDirectory() as tmp:
         db_path = postgres_test_url("orchestrator-state-filter")
         engine = get_engine(db_path)
@@ -171,7 +174,8 @@ def test_apply_canon_candidate_drops_unregistered_character_state_changes() -> N
                 description="主角",
                 chapter=0,
             )
-            result = orchestrator._apply_canon_candidate(  # noqa: SLF001
+            result = orchestrator.canon_admission.commit(
+                runtime=orchestrator,
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -216,13 +220,13 @@ def test_apply_canon_candidate_drops_unregistered_character_state_changes() -> N
                 .where(Entity.project_id == project.id, Entity.name == "未入册角色")
             )
 
-        assert isinstance(result, CanonApplyOutcome)
+        assert isinstance(result, CanonAdmissionOutcome)
         assert not result.blocked
         assert json.loads(known_state.state_json)["location"] == "旧港火灾纪念碑广场"
         assert unknown_count == 0
 
 
-def test_apply_canon_candidate_drops_fields_unsupported_by_resolved_entity_kind() -> None:
+def test_canon_admission_drops_fields_unsupported_by_resolved_entity_kind() -> None:
     with TemporaryDirectory() as tmp:
         db_path = postgres_test_url("orchestrator-state-filter-resolved-kind")
         engine = get_engine(db_path)
@@ -239,7 +243,8 @@ def test_apply_canon_candidate_drops_fields_unsupported_by_resolved_entity_kind(
                 description="记忆资产二级市场中介网络",
                 chapter=0,
             )
-            result = orchestrator._apply_canon_candidate(  # noqa: SLF001
+            result = orchestrator.canon_admission.commit(
+                runtime=orchestrator,
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -273,7 +278,7 @@ def test_apply_canon_candidate_drops_fields_unsupported_by_resolved_entity_kind(
                 .where(EntityState.entity_id == faction_id)
             )
 
-        assert isinstance(result, CanonApplyOutcome)
+        assert isinstance(result, CanonAdmissionOutcome)
         assert not result.blocked
         assert state_count == 0
 
@@ -298,7 +303,8 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
         with Session.begin() as session:
             repo, updater, _checker = orchestrator._make_state_helpers(session)  # noqa: SLF001
             project, _chapter = _setup_project(session)
-            result = orchestrator._apply_canon_candidate(  # noqa: SLF001
+            result = orchestrator.canon_admission.commit(
+                runtime=orchestrator,
                 session=session,
                 repo=repo,
                 updater=updater,
@@ -317,9 +323,9 @@ def test_book_state_compile_failure_rolls_back_graph_deltas(monkeypatch) -> None
         with Session() as session:
             graph_deltas = session.scalar(select(func.count()).select_from(GraphDeltaRow))
 
-        assert isinstance(result, CanonApplyOutcome)
+        assert isinstance(result, CanonAdmissionOutcome)
         assert result.blocked
-        assert result.blocked_path == "book-state-compile-blocked"
+        assert Path(result.blocked_path).is_file()
         assert result.block_kind == "book_state"
         assert graph_deltas == 0
 
@@ -360,7 +366,14 @@ def test_accept_review_respects_canon_gate_block(monkeypatch) -> None:
             ),
         )
         monkeypatch.setattr(orchestrator, "_load_review_verdict", lambda _review: ReviewVerdict(verdict="pass", issues=[]))
-        monkeypatch.setattr(orchestrator, "_apply_canon_candidate", lambda **_kwargs: "book-state-review-gate-blocked")
+        monkeypatch.setattr(
+            orchestrator.canon_admission,
+            "commit",
+            lambda **_kwargs: CanonAdmissionOutcome(
+                blocked_path="book-state-review-gate-blocked",
+                block_kind="book_state",
+            ),
+        )
         monkeypatch.setattr(orchestrator, "_run_phase3_pass", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("phase3 should not run")))
         result = orchestrator.accept_review(project.id, 1)
 

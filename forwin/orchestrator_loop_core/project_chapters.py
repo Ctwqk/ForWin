@@ -25,25 +25,6 @@ _STRUCTURED_EXTRACTION_PARTS = (
 )
 
 
-def _coerce_canon_apply_outcome(value: object):
-    from forwin.orchestrator_loop_core.quality_gates import CanonApplyOutcome
-
-    if isinstance(value, CanonApplyOutcome):
-        return value
-    if value is None:
-        return CanonApplyOutcome()
-    if isinstance(value, str):
-        if not value:
-            return CanonApplyOutcome()
-        return CanonApplyOutcome(blocked_path=value, block_kind="string_block")
-    if value:
-        raise TypeError(
-            "_apply_canon_candidate returned unsupported canon outcome type: "
-            f"{type(value).__name__}"
-        )
-    return CanonApplyOutcome()
-
-
 def _record_pulp_beat_evaluation(
     self,
     *,
@@ -499,16 +480,15 @@ def _run_project_chapters(
                     failed_chapters=failed_chapters,
                     paused_chapters=paused_chapters,
                 )
-                canon_outcome = _coerce_canon_apply_outcome(
-                    self._apply_canon_candidate(
-                        session=session,
-                        repo=repo,
-                        updater=updater,
-                        project_id=project_id,
-                        chapter_number=chapter_num,
-                        writer_output=writer_output,
-                        verdict=verdict,
-                    )
+                canon_outcome = self.canon_admission.commit(
+                    runtime=self,
+                    session=session,
+                    repo=repo,
+                    updater=updater,
+                    project_id=project_id,
+                    chapter_number=chapter_num,
+                    writer_output=writer_output,
+                    verdict=verdict,
                 )
                 if not canon_outcome.blocked:
                     break

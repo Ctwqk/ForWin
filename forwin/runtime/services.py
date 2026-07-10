@@ -6,9 +6,14 @@ from typing import Any
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
+from forwin.application.generation import GenerationApplicationService
+from forwin.canon import CanonAdmissionService
 from forwin.config import InfrastructureConfig
+from forwin.generation.gate_delegation import GateDelegationService
 from forwin.model_adapter import ModelAdapter
 from forwin.observability.ports import ObservabilityPort
+from forwin.review import DraftReviewService
+from forwin.review.repair import RepairVerifier
 from forwin.runtime.policy import RuntimePolicy
 from forwin.skills import SkillPromptLayerBuilder, SkillRegistry, SkillRouter
 
@@ -28,7 +33,7 @@ class RuntimeServices:
     session_factory: sessionmaker
     llm_client: ModelAdapter
     skill_runtime: SkillRuntimeBundle
-    generation_application: Any
+    generation_application: GenerationApplicationService
 
     arc_director: Any
     book_genesis: Any
@@ -53,8 +58,9 @@ class RuntimeServices:
     publisher_runtime: Any
 
     context_assembler: Any
-    draft_review: Any
+    draft_review: DraftReviewService
     writer: Any
     provisional_writer: Any
-    repair_verifier: Any
-    gate_delegation: Any
+    repair_verifier: RepairVerifier
+    canon_admission: CanonAdmissionService
+    gate_delegation: GateDelegationService

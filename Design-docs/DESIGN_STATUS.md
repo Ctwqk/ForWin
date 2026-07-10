@@ -72,6 +72,8 @@
 | `FinalAcceptanceGate` | removed | `forwin.review.decision.rules.final_residual.FinalResidualPolicy` | 已删除 | repair 耗尽后的残留策略；字段为 `final_residual_decision`，仍必须经过 BookState canon commit。 |
 | `_apply_world_v4_gate` | removed | `_commit_book_state_canon` | 已删除 | 当前路径是 BookState extraction/review/compile，不再使用 legacy v4 命名。 |
 | `_compile_world_model_after_acceptance` | removed | 无 | 已删除 | 恒返回 `True` 的空壳及两处调用均删除。 |
+| `WritingOrchestrator._apply_canon_candidate` | removed | `forwin.canon.CanonAdmissionService.commit` | 已删除 | generation 与人工接受共享同一强类型 canon admission；不接受字符串/None compatibility outcome。 |
+| `orchestrator_loop_core.quality_gate_types` | removed | `forwin.canon.types` | 已删除 | canon outcome 类型归 canon owner；`CanonApplyOutcome` 改名 `CanonAdmissionOutcome`。 |
 
 ## 2026-07 V5 Slice 1 Status
 
@@ -97,6 +99,7 @@
 - `reviewer`、`review_engine`、`reviser` 已物理合并为 `forwin.review/{draft_service,decision,repair}`；不存在旧 package alias。
 - `HistoricalReviewHub` 已破坏性改名为 `DraftReviewService`；runtime 字段为 `draft_review`。
 - `FinalAcceptanceGate` 已合入 `FinalResidualPolicy`；协议/API 字段为 `final_residual_decision`，不存在旧 alias。
+- `CanonAdmissionService` 已拥有唯一 candidate -> canon 决策体；`WritingOrchestrator._apply_canon_candidate` 和 outcome coercer 已删除。
 - 下一步是把 canon/repair 函数族从 `WritingOrchestrator` 属性拼装迁入显式协作对象；Phase C-F 尚未开始。
 
 ## 已知限制

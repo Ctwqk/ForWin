@@ -374,7 +374,6 @@ def register_api_routes(
     )
     proposal_handlers = api_proposal_routes.build_handlers(
         get_session=get_session,
-        get_config=get_config,
     )
     map_handlers = api_map_routes.build_handlers(
         get_session=get_session,

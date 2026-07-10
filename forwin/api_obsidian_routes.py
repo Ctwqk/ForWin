@@ -63,7 +63,6 @@ def build_handlers(
     get_session: Callable[[], Any],
     get_config: Callable[[], Any] | None = None,
     qdrant_url: str | None = None,
-    llm_kb_qdrant_collection: str | None = None,
     qdrant_client: Any | None = None,
     qdrant_models: Any | None = None,
 ) -> dict[str, Callable[..., Any]]:
@@ -72,12 +71,6 @@ def build_handlers(
             return qdrant_url
         config = get_config() if get_config is not None else None
         return getattr(config, "qdrant_url", None)
-
-    def _llm_kb_qdrant_collection() -> str | None:
-        if llm_kb_qdrant_collection is not None:
-            return llm_kb_qdrant_collection
-        config = get_config() if get_config is not None else None
-        return getattr(config, "llm_kb_qdrant_collection", None)
 
     def export_obsidian(
         project_id: str, req: WorldModelExportRequest
@@ -157,10 +150,6 @@ def build_handlers(
                     reason=request.reason,
                     forced_accept_reason=request.forced_accept_reason,
                     trigger="obsidian_proposal_approve",
-                    qdrant_url=_qdrant_url(),
-                    qdrant_collection=_llm_kb_qdrant_collection(),
-                    qdrant_client=qdrant_client,
-                    qdrant_models=qdrant_models,
                 )
                 session.commit()
                 return _proposal_info(

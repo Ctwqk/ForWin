@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -19,14 +20,15 @@ from forwin.models.book_state import GraphDeltaRow
 from forwin.models.canon import CanonCommitRecord
 from forwin.models.draft import CandidateDraftRecord, ChapterDraft
 from forwin.models.governance import DecisionEvent
+from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.models.project import ChapterPlan, Project
 from forwin.narrative_obligations.repository import NarrativeObligationRepository
 from forwin.outbox.store import enqueue_outbox_event
-from forwin.protocol.book_state import BookStateCompileResult
+from forwin.protocol.book_state import ApprovedGraphDeltaSet, BookStateCompileResult
 
 from .entity_admission import EntityAdmissionCommitter
 from .plan import CanonCommitPlan
-from .types import CanonAdmissionOutcome
+from .types import CanonAdmissionOutcome, CanonWorldEditOutcome
 
 
 logger = logging.getLogger(__name__)
@@ -338,6 +340,84 @@ class CanonAdmissionService:
         )
         if current_chapter_delta_count:
             raise CanonStaleVersion("BookState already contains this chapter")
+
+    def commit_world_edit(
+        self,
+        *,
+        session: Session,
+        project_id: str,
+        proposal_id: str,
+        approved_changes: ApprovedGraphDeltaSet,
+        reason: str,
+        trigger: str,
+    ) -> CanonWorldEditOutcome:
+        project = session.execute(
+            select(Project)
+            .where(Project.id == project_id)
+            .with_for_update()
+        ).scalar_one_or_none()
+        if project is None:
+            raise CanonStaleVersion("project no longer exists")
+        proposal = session.execute(
+            select(KnowledgeEditProposalRow)
+            .where(KnowledgeEditProposalRow.id == proposal_id)
+            .with_for_update()
+        ).scalar_one_or_none()
+        if proposal is None or proposal.project_id != project_id:
+            raise CanonStaleVersion("world edit proposal no longer exists")
+        if proposal.status not in {"pending", "proposed"}:
+            raise CanonStaleVersion(
+                f"world edit proposal is already {proposal.status}"
+            )
+        if approved_changes.project_id != project_id:
+            raise CanonStaleVersion("world edit project changed")
+
+        compile_result = BookStateCompiler(session).compile(
+            approved_changes,
+            compiler_run_id=f"canon-world-edit-{proposal.id}",
+        )
+        if not compile_result.committed:
+            raise CanonWriteFailure(
+                "; ".join(compile_result.blocked_reasons)
+                or "BookState compiler rejected the world edit"
+            )
+        if compile_result.metadata.get("idempotent"):
+            raise CanonStaleVersion(
+                "world edit delta already exists without an accepted proposal"
+            )
+
+        proposal.status = "accepted"
+        proposal.reviewed_at = datetime.now(UTC)
+        proposal.review_reason = reason
+        proposal.graph_delta_id = (
+            compile_result.graph_delta_ids[0]
+            if compile_result.graph_delta_ids
+            else ""
+        )
+        session.add(proposal)
+        event_id = (
+            f"canon-world-edit:{proposal.id}:"
+            f"{proposal.graph_delta_id}:projection"
+        )
+        enqueue_outbox_event(
+            session,
+            aggregate_type="project",
+            aggregate_id=project_id,
+            event_type="knowledge.projection.refresh_requested",
+            event_id=event_id,
+            payload={
+                "project_id": project_id,
+                "projection_kind": "all",
+                "as_of_chapter": compile_result.chapter_number,
+                "trigger": trigger,
+                "proposal_id": proposal.id,
+            },
+        )
+        session.flush()
+        return CanonWorldEditOutcome(
+            compile_result=compile_result,
+            outbox_event_id=event_id,
+        )
 
     def _return_candidate_to_ready(self, candidate_id: str) -> None:
         if self.session_factory is None:

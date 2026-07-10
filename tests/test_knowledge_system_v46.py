@@ -18,6 +18,7 @@ from forwin.models import Project
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.book_state import GraphDeltaRow
 from forwin.models.knowledge import KnowledgeEditProposalRow, KnowledgeProjectionPageRow
+from forwin.models.outbox import OutboxEvent
 from forwin.obsidian import ObsidianExporter
 from forwin.protocol.book_state import (
     ApprovedGraphDeltaSet,
@@ -34,6 +35,7 @@ from forwin.protocol.book_state import (
 from forwin.protocol.world_v4 import ApprovedWorldChangeSet, ReaderExperienceDelta
 from forwin.retrieval.broker_core import RetrievalBroker
 from forwin.state.repo import StateRepository
+from tests.postgres import postgres_test_url
 from tests.qdrant import FakeQdrantClient, FakeQdrantModels
 
 
@@ -308,10 +310,20 @@ def test_obsidian_export_import_and_proposal_review(tmp_path: Path) -> None:
 
         assert approved.status == "accepted"
         assert approved.graph_delta_id
-        assert approved.projection_refresh["ok"] is True
+        assert approved.projection_refresh["deferred"] is True
+        assert approved.projection_refresh["outbox_event_id"]
         assert rejected.status == "rejected"
         with Session() as session:
             assert session.query(GraphDeltaRow).filter_by(project_id=project_id).count() == 1
+            event = (
+                session.query(OutboxEvent)
+                .filter_by(
+                    event_id=approved.projection_refresh["outbox_event_id"],
+                    status="pending",
+                )
+                .one()
+            )
+            assert event.event_type == "knowledge.projection.refresh_requested"
 
         structured_patch = """```forwin-patch
 [
@@ -941,8 +953,6 @@ def test_unified_proposal_api_creates_reviews_and_updates_loadout(tmp_path: Path
         ) + "\n```"
         handlers = build_proposal_handlers(
             get_session=Session,
-            qdrant_client=FakeQdrantClient(),
-            qdrant_models=FakeQdrantModels,
         )
         created = handlers["create_project_proposal"](
             project_id,

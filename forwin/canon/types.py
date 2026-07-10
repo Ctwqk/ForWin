@@ -61,3 +61,9 @@ class CanonAdmissionOutcome:
         if self.block_kind != "canon_quality" or self.canon_gate_result is None:
             return ""
         return str(self.canon_gate_result.required_repair_scope or "")
+
+
+@dataclass(frozen=True)
+class CanonWorldEditOutcome:
+    compile_result: BookStateCompileResult
+    outbox_event_id: str

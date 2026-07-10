@@ -285,13 +285,13 @@ Add a deterministic `canon.post_commit.requested` handler that refreshes knowled
 
 Phase 3/4 planning and simulation run after the Canon transaction. Their failure records deferred maintenance and stops or degrades the task without changing the accepted chapter to failed.
 
-- [ ] **Step 6: Run focused flow, outbox, publisher, and pipeline tests**
+- [x] **Step 6: Run focused flow, outbox, publisher, and pipeline tests**
 
 Run: `uv run pytest -q tests/test_candidate_to_canon_flow_v5.py tests/test_projection_outbox.py tests/test_project_publish_bindings.py tests/test_world_v4_orchestrator_gate.py tests/test_gate_delegation_chapter.py`
 
 Expected: all pass.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add forwin/generation forwin/runtime/container.py forwin/knowledge_system/canon_outbox.py forwin/outbox/handlers.py tests/test_candidate_to_canon_flow_v5.py tests/test_projection_outbox.py
@@ -314,23 +314,23 @@ git commit -m "Route chapter acceptance through prepared Canon commits"
 - Consumes: completed candidate and Canon implementation.
 - Produces: one clean v5 baseline and static guards against regression.
 
-- [ ] **Step 1: Add failing architecture guards**
+- [x] **Step 1: Add failing architecture guards**
 
 Guards reject Canon-path `KnowledgeProjectionRefresher`, memory-index writes, publisher calls, chapter acceptance outside `forwin/canon`, mutable candidate upsert, missing unique Canon idempotency key, and authoritative writes outside `CanonAdmissionService`.
 
-- [ ] **Step 2: Run and confirm RED before final deletion**
+- [x] **Step 2: Run and confirm RED before final deletion**
 
 Run: `uv run pytest -q tests/test_v5_canon_architecture.py`
 
-- [ ] **Step 3: Regenerate the only Alembic baseline**
+- [x] **Step 3: Regenerate the only Alembic baseline**
 
 Run the repository baseline generator against current metadata, then verify upgrade, schema check, downgrade, and upgrade on a disposable PostgreSQL database.
 
-- [ ] **Step 4: Correct documentation status**
+- [x] **Step 4: Correct documentation status**
 
 Record Slice 3/4 as implementation-complete only after focused evidence exists. Keep release verification, 200 chapters, push, and deployment explicitly incomplete.
 
-- [ ] **Step 5: Run slice verification**
+- [x] **Step 5: Run slice verification**
 
 Run:
 
@@ -342,7 +342,7 @@ uv run pytest --collect-only -q
 git diff --check
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add forwin/migrations tests Design-docs forwin_architecture_consolidation_audit.md

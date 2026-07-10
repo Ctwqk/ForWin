@@ -63,8 +63,8 @@ def test_pipeline_book_state_runtime_has_no_legacy_projection_markers() -> None:
     ]
     assert all(token not in source for token in forbidden)
     assert all(token not in projection_source for token in forbidden)
-    assert "BookStateDirectCommitService" in projection_source
-    assert "KnowledgeProjectionRefresher" in projection_source
+    assert "BookStateDirectCommitService" not in projection_source
+    assert "KnowledgeProjectionRefresher" not in projection_source
 
 
 def test_design_docs_do_not_name_legacy_tables_as_current_source_of_truth() -> None:
@@ -342,7 +342,7 @@ def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
     assert "ChapterPipeline" not in _read("forwin/generation/pipeline_core/__init__.py")
 
     projection_source = _read("forwin/generation/pipeline_core/world_projection.py")
-    assert "_commit_book_state_canon" in projection_source
+    assert "_commit_book_state_canon" not in projection_source
     assert "_ensure_genesis_canon_seed_entities" not in projection_source
     assert "class DraftReviewService" in _read("forwin/review/draft_service.py")
     assert "class FinalResidualPolicy" in _read(
@@ -375,10 +375,11 @@ def test_pipeline_and_runtime_assembly_have_single_explicit_owners() -> None:
         assert f"def {removed_reader}(" not in state_repository
 
     project_chapters = _read("forwin/generation/pipeline_core/project_chapters.py")
-    assert "self.canon_admission.commit(" in _read(
-        "forwin/generation/pipeline_core/acceptance.py"
-    )
-    assert "self.canon_admission.commit(" in project_chapters
+    acceptance = _read("forwin/generation/pipeline_core/acceptance.py")
+    assert "self.canon_admission.commit(" not in acceptance
+    assert "self.canon_admission.commit(" not in project_chapters
+    assert "self.canon_admission.commit_plan(" in acceptance
+    assert "self.canon_admission.commit_plan(" in project_chapters
     assert "self.repair.review_candidate(" in project_chapters
     assert "self.repair.repair_canon_block(" in project_chapters
     assert "class RepairService" in _read("forwin/review/repair/service.py")

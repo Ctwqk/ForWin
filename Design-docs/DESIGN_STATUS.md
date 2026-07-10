@@ -1,6 +1,6 @@
 # ForWin Design Status
 
-更新时间：2026-07-09
+更新时间：2026-07-10
 
 状态：active-current。本文档给当前保留的设计文档标注阅读顺序和权威等级。
 
@@ -66,7 +66,7 @@
 | `forwin.runtime_settings` | removed | `forwin.runtime.policy` | 已删除 | 不再有进程内可变生成设置文件。 |
 | `Project.governance_json` settings | removed | `Project.runtime_policy_json` + version | 已删除 | manual checkpoint / decision event 等治理账本仍保留；项目运行设置已迁出 governance 命名。 |
 | `forwin.orchestration` | removed | owner-local typed services | 已删除 | `ChapterPipelinePorts` / `OrchestrationEvent` 为零调用 `Any` ports，未作为 v5 边界采用。 |
-| `WritingOrchestrator` + `forwin.orchestrator*` | removed | `forwin.generation.pipeline.ChapterPipeline` | 已删除 | pipeline 使用显式构造依赖和类内方法绑定；类属性后注入、模块回注与 `__module__` 伪装均已删除。 |
+| `WritingOrchestrator` + `forwin.orchestrator*` | removed | `forwin.generation.pipeline.ChapterPipeline` | 旧入口已删除 | 模块回注与身份伪装已删除；`ChapterPipeline` 仍有 90 条跨模块函数赋值，结构切片尚未完成。 |
 | `book_genesis.py` / `book_genesis_core` / `genesis_workspace` / `genesis_handoff` | removed | `forwin.genesis` | 已删除 | Genesis service、workspace 与 handoff 归入一个包；不再经延迟 facade 查询 helper。 |
 | `api.py` 动态代理 + `api_core.exports` | removed | explicit ASGI `app` / `lifespan` | 已删除 | `forwin.api` 只公开 ASGI 契约，不再传播私有 patch point。 |
 | `api_project_ops` / `api_project_policy` / root `project_ops` | removed | `forwin.application.projects.ProjectApplicationService` | 已删除 | 项目、Genesis、章节和 review 路由只绑定 application service。 |
@@ -76,13 +76,13 @@
 | `forwin.reviser` | removed | `forwin.review.repair` | 已删除 | rewrite executor 与 verifier 归 repair owner。 |
 | `HistoricalReviewHub` | removed | `forwin.review.draft_service.DraftReviewService` | 已删除 | 草稿评审只产出 evidence/verdict，不决定 canon。 |
 | `FinalAcceptanceGate` | removed | `forwin.review.decision.rules.final_residual.FinalResidualPolicy` | 已删除 | repair 耗尽后的残留策略；字段为 `final_residual_decision`，仍必须经过 BookState canon commit。 |
-| `_apply_world_v4_gate` | removed | `_commit_book_state_canon` | 已删除 | 当前路径是 BookState extraction/review/compile，不再使用 legacy v4 命名。 |
+| `_apply_world_v4_gate` | removed | `CanonPreparationService` + `CanonAdmissionService.commit_plan` | 已删除 | extraction/review 在事务外准备，compile 只在原子 Canon 事务内执行。 |
 | `_compile_world_model_after_acceptance` | removed | 无 | 已删除 | 恒返回 `True` 的空壳及两处调用均删除。 |
-| `WritingOrchestrator._apply_canon_candidate` | removed | `forwin.canon.CanonAdmissionService.commit` | 已删除 | generation 与人工接受共享同一强类型 canon admission；不接受字符串/None compatibility outcome。 |
+| `WritingOrchestrator._apply_canon_candidate` | removed | `forwin.canon.CanonAdmissionService.commit_plan` | 已删除 | generation 与人工接受共享持久化 `CanonCommitPlan`；旧 `commit()` 不存在。 |
 | `orchestrator_loop_core.quality_gate_types` | removed | `forwin.canon.types` | 已删除 | canon outcome 类型归 canon owner；`CanonApplyOutcome` 改名 `CanonAdmissionOutcome`。 |
 | `orchestrator_loop_core.repair_loop` | removed | `forwin.review.repair.RepairService` | 已删除 | live repair 算法迁入 owner；`ChapterPipeline` 只调用 `review_candidate` / `repair_canon_block`。 |
 | `orchestrator_loop_core.__init__` re-export | removed | explicit owner imports | 已删除 | `pipeline_core` 初始化为空边界；子模块不再借 `common.py` 转发外域类型。 |
-| pipeline runtime helper injection | removed | explicit `ChapterPipeline` methods and collaborators | 已删除 | 87 条残余类属性拼装、模块回注和 fake module identity 已全部删除。 |
+| pipeline runtime helper injection | implementation-in-progress | owner-local typed collaborators | 待完成 | 模块回注和 fake identity 已删除；类体仍有 90 条 `method = module_function` 赋值。 |
 | duplicate canon quality analysis | removed | `QualityAnalysisRunRow` | 已删除 | draft review/canon gate 共享有效 primary 结果；content/plan/analyzer 指纹变化自动失效，replay/dry-run/失败结果不复用。 |
 | `book_genesis_core.workflow` unreachable implementation | removed | typed `BookGenesisService` -> `GenesisWorkspaceService` methods | 已删除 | 588 行文件整段删除；handoff 锁 active revision，四个 workspace mutation 入口 fail-closed。 |
 | SubWorld entity admission policy/patch/repair | removed | `EntityRegistrar` -> `EntityAdmissionPlan` -> Canon `EntityAdmissionCommitter` | 已删除 | 草稿期不写 Entity/EntityAlias；旧 canon checker、repair scope、nonblocking 例外和 summary 名字桥全部删除。 |
@@ -108,13 +108,13 @@
 状态：implementation-complete，未部署，长跑 gate 未执行。
 
 - 已删除零调用 `forwin.orchestration` ports 和恒成功 `_compile_world_model_after_acceptance` 空壳。
-- BookState canon 主路径已从 `_apply_world_v4_gate` 改名为 `_commit_book_state_canon`，block kind 改为 `book_state`。
+- BookState canon 旧路径已被 `CanonPreparationService` + `CanonAdmissionService.commit_plan` 取代，旧 direct commit 服务与端口均删除。
 - `reviewer`、`review_engine`、`reviser` 已物理合并为 `forwin.review/{draft_service,decision,repair}`；不存在旧 package alias。
 - `HistoricalReviewHub` 已破坏性改名为 `DraftReviewService`；runtime 字段为 `draft_review`。
 - `FinalAcceptanceGate` 已合入 `FinalResidualPolicy`；协议/API 字段为 `final_residual_decision`，不存在旧 alias。
-- `CanonAdmissionService` 已拥有唯一 candidate -> canon 决策体；旧 `_apply_canon_candidate` 和 outcome coercer 已删除。
+- `CanonAdmissionService` 已拥有唯一 candidate -> canon 原子写事务；旧 `_apply_canon_candidate`、`commit()` 和 outcome coercer 已删除。
 - live repair loop 已迁入 `forwin.review.repair.service`；`ChapterPipeline` 只调用明确的 repair/canon service。
-- D08 quality analysis 共享缓存已落地；旧 `WritingOrchestrator` 与全部类属性拼装在后续结构收口中物理删除；Phase B 完成。
+- D08 quality analysis 共享缓存已落地；旧 `WritingOrchestrator` 已删除，但 `ChapterPipeline` 的 90 条跨模块方法赋值仍待收口，Phase B 的行为切片完成、结构切片未完成。
 - Phase C 实现完成：Genesis handoff 永久冻结；EntityRegistrar 只产出候选 `EntityAdmissionPlan`，Canon 是唯一实体写方；旧 SubWorld admission 全链删除；planning 服务群归口到 `PlanningService` / `PlanningQuery` / `PlanHealthService`。200 章 no-hotfix 运行 gate 尚未执行。
 
 ## 已知限制
@@ -135,21 +135,24 @@
 - live page/proposal/Obsidian/retrieval helper 已迁入 `knowledge_system` / `obsidian`，`forwin.world_model` facade 与旧 world-model ORM 已物理删除。
 - 项目详情、CLI、phase3/phase4、thread sampling、personality relation enrichment 与兼容 HTTP adapter 均读取 BookState/Knowledge Projection，不再回退旧 accepted-state 表。
 - GraphDelta patch 持久化现在记录并按 sequence 重放，避免 create/append 顺序在数据库 round-trip 后漂移。
+- Candidate 版本现在 append-only，持久化 body/plan/policy 指纹、review/repair/entity/eligibility/Canon plan 与父版本链。
+- `CanonCommitPlan` 在事务外冻结；Canon 事务锁项目/章节/候选并原子提交 BookState、实体、义务、accepted 状态、审计、outbox 与 `CanonCommitRecord`。
+- 五阶段故障注入、stale revalidation、幂等 replay 和 projection retry 已有聚焦测试；world edit proposal 也已归入 Canon 单写者。
 
 Schema 同期完成破坏性收口：历史 Alembic 链与 `models/base.py` 手写升级器已删除，唯一 revision 为 `0001_v5_baseline`；生产启动拒绝非 v5 schema，不迁移旧库。验证口径将在本 Slice completion commit 重新记录；30/60/100/200 章 gate 均未宣称完成。
 
 ## 2026-07 V5 Slice 5 Status
 
-状态：implementation-complete，未部署，长跑 gate 与全量测试未在本任务执行。
+状态：implementation-partial，未部署，长跑 gate 与全量测试未执行。
 
-- `WritingOrchestrator`、`forwin.orchestrator` 与 `orchestrator_loop_core` 已删除；`ChapterPipeline` 显式接收协作者，所有方法在类定义内绑定。
+- `WritingOrchestrator`、`forwin.orchestrator` 与 `orchestrator_loop_core` 已删除；`ChapterPipeline` 显式接收协作者，但仍有 90 条跨模块函数赋值，尚未完成 typed owner 收敛。
 - Genesis 已收口为 `forwin.genesis/{workspace,handoff}`；旧四个包/门面和 workspace 对 `book_genesis` 的延迟查询全部删除。
 - `forwin.api` 只公开 `app/lifespan`；动态 module proxy、`api_core.exports` 和 route handler `globals()` 注入已删除。
 - `ProjectApplicationService` 接管项目、Genesis、章节和 review 入口；`PublisherApplicationService` 接管 publisher/extension 入口；`GenerationApplicationService` 仍是唯一生成任务入口。
 - 根层 `api_project_ops`、`api_project_policy`、`api_publisher_ops`、`project_ops`、`api_schemas`、`api_project_payloads` 及 context/retrieval/writer 转发壳已物理删除。
 - 全仓生产代码不再使用星号导入、类/模块身份篡改或 `common/constants` 借道 re-export；机械删除 2,336 个未使用 import，并修复因此暴露的 8 个隐性依赖和 `llm_eval` 未定义配置。
 
-验证：`compileall` 成功；Ruff `F401/F403/F405/F821` 全绿；ASGI 导入保持 163 routes；全仓 1533 tests collect 成功；聚焦架构/API split/large-module 守卫 32 passed，alias/rehearsal/extraction-gate 相关组 54 passed。按用户要求不重复运行全量测试。
+此前记录的编译、Ruff、路由导入和 collect 证据只适用于当时提交。当前 v5 总验收仍需在 pipeline ownership、HTTP app factory、application adapters 与 audit/governance 命名完成后重跑；不得据此前证据宣称 Phase E/F 完成。
 
 ## 2026-07 Integrated Roadmap Status
 

@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
 
-from forwin.book_state.compiler import BookStateCompiler
 from forwin.book_state.reviewer import BookStateReviewGate
-from forwin.knowledge_system.refresher import KnowledgeProjectionRefresher
+from forwin.canon import (
+    CanonAdmissionService,
+    CanonStaleVersion,
+    CanonWriteFailure,
+)
 from forwin.models.knowledge import KnowledgeEditProposalRow
 from forwin.obsidian.structured_patch import proposal_to_graph_delta
 from forwin.protocol.book_state import ApprovedGraphDeltaSet
@@ -43,10 +45,6 @@ def approve_world_edit_proposal(
     reason: str = "",
     forced_accept_reason: str = "",
     trigger: str = "obsidian_proposal_approve",
-    qdrant_url: str | None = None,
-    qdrant_collection: str | None = None,
-    qdrant_client: Any | None = None,
-    qdrant_models: Any | None = None,
 ) -> ProposalReviewResult:
     row = _load_pending_proposal(session, project_id, proposal_id)
     try:
@@ -72,33 +70,24 @@ def approve_world_edit_proposal(
             detail=message or "proposal rejected by BookStateReviewGate",
         )
 
-    result = BookStateCompiler(session).compile(verdict.approved_changes)
-    if not result.committed:
-        raise HTTPException(
-            status_code=409,
-            detail="; ".join(result.blocked_reasons) or "BookState compile blocked",
+    try:
+        outcome = CanonAdmissionService().commit_world_edit(
+            session=session,
+            project_id=project_id,
+            proposal_id=proposal_id,
+            approved_changes=verdict.approved_changes,
+            reason=reason,
+            trigger=trigger,
         )
-
-    row.status = "accepted"
-    row.reviewed_at = datetime.now(UTC)
-    row.review_reason = reason
-    row.graph_delta_id = delta.id
-    session.add(row)
-    session.flush()
-
-    projection_refresh = KnowledgeProjectionRefresher(
-        session,
-        qdrant_url=qdrant_url,
-        qdrant_collection=qdrant_collection,
-        qdrant_client=qdrant_client,
-        qdrant_models=qdrant_models,
-    ).refresh(
-        project_id,
-        as_of_chapter=result.chapter_number,
-        trigger=trigger,
-    )
+    except (CanonStaleVersion, CanonWriteFailure) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return ProposalReviewResult(
-        row=row, projection_refresh=projection_refresh.as_dict()
+        row=row,
+        projection_refresh={
+            "deferred": True,
+            "outbox_event_id": outcome.outbox_event_id,
+            "as_of_chapter": outcome.compile_result.chapter_number,
+        },
     )
 
 

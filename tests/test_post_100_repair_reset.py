@@ -9,15 +9,29 @@ from forwin.models import DecisionEvent, Entity, EntityAlias, Project
 from forwin.models.base import Base
 from forwin.models.draft import ChapterDraft
 from forwin.models.project import ArcPlanVersion, ChapterPlan
+from forwin.book_state import BookStateQuery, BookStateRepository
 from forwin.generation.pipeline import ChapterPipeline
 from forwin.protocol import EntityMention, WriterOutput
-from forwin.state.repo import StateRepository
+from forwin.protocol.book_state import WorldNode
 
 
 def _session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine, expire_on_commit=False)()
+
+
+def _seed_book_state_character(session, project_id: str) -> None:
+    BookStateRepository(session).create_world_node(
+        WorldNode(
+            id="chen-zhaoning",
+            project_id=project_id,
+            node_type="character",
+            name="陈昭宁",
+            description="既有角色",
+            created_at_chapter=1,
+        )
+    )
 
 
 def test_entity_registrar_builds_four_outcome_plan_without_mutating_entities() -> None:
@@ -70,6 +84,7 @@ def test_entity_registrar_builds_four_outcome_plan_without_mutating_entities() -
             )
         )
         session.flush()
+        _seed_book_state_character(session, project.id)
         output = WriterOutput(
             project_id=project.id,
             chapter_number=6,
@@ -147,6 +162,7 @@ def test_entity_admission_plan_applies_only_at_canon_boundary() -> None:
             )
         )
         session.flush()
+        _seed_book_state_character(session, project.id)
         registrar = EntityRegistrar(session=session, classifier=FakeClassifier())
         result = registrar.plan_writer_output(
             project_id=project.id,
@@ -169,22 +185,41 @@ def test_entity_admission_plan_applies_only_at_canon_boundary() -> None:
             project_id=project.id,
             writer_output=result.writer_output,
         )
+        registered = next(
+            decision
+            for decision in verified_plan.decisions
+            if decision.action == "register_character"
+        )
+        BookStateRepository(session).create_world_node(
+            WorldNode(
+                id=registered.entity_id,
+                project_id=project.id,
+                node_type="character",
+                name=registered.canonical_name,
+                aliases=registered.aliases,
+                created_at_chapter=6,
+            )
+        )
         EntityAdmissionCommitter(session).apply(
             project_id=project.id,
             plan=verified_plan,
         )
         session.flush()
 
-        repo = StateRepository(session)
-        resolved = repo.get_entities_by_names(
-            project.id,
-            ["猎锚者X（远程声音）", "灰鹞"],
-        )
+        entities = {
+            entity.name: entity
+            for entity in session.execute(select(Entity)).scalars().all()
+        }
+        aliases = {
+            alias.alias: alias.entity_id
+            for alias in session.execute(select(EntityAlias)).scalars().all()
+        }
         events = session.execute(
             select(DecisionEvent).where(DecisionEvent.project_id == project.id)
         ).scalars().all()
-        assert resolved["猎锚者X（远程声音）"].name == "猎锚者X"
-        assert resolved["灰鹞"].id == "chen-zhaoning"
+        assert entities["猎锚者X"].id == registered.entity_id
+        assert aliases["猎锚者X（远程声音）"] == registered.entity_id
+        assert aliases["灰鹞"] == "chen-zhaoning"
         assert {event.event_type for event in events} >= {
             "entity_registered",
             "entity_alias_registered",
@@ -279,14 +314,17 @@ def test_legacy_subworld_admission_modules_and_tokens_are_removed() -> None:
         assert not any(marker in text for marker in forbidden), path
 
     registrar_source = (root / "forwin" / "naming" / "entity_registrar.py").read_text()
+    preparation_source = (root / "forwin" / "canon" / "preparation.py").read_text()
     canon_source = (root / "forwin" / "canon" / "admission.py").read_text()
     checker_source = (root / "forwin" / "checker" / "rules.py").read_text()
     assert "self.session.add(" not in registrar_source
     assert "def _check_subworld_admission" not in checker_source
-    verify_index = canon_source.index("verify_writer_output_admission")
-    book_state_index = canon_source.index("_commit_book_state_canon")
+    verify_index = preparation_source.index("verify_writer_output_admission")
+    book_state_index = preparation_source.index("book_state_preparer.prepare")
+    compile_index = canon_source.index("BookStateCompiler(session).compile")
     apply_index = canon_source.index("EntityAdmissionCommitter(session).apply")
-    assert verify_index < book_state_index < apply_index
+    assert verify_index < book_state_index
+    assert compile_index < apply_index
 
 
 def test_allowed_entity_names_do_not_scrape_recent_accepted_summaries() -> None:
@@ -321,8 +359,14 @@ def test_allowed_entity_names_do_not_scrape_recent_accepted_summaries() -> None:
 
         # If this test ever starts depending on ChapterPlan/ChapterDraft summary text,
         # the old alias-hotfix path has crept back in.
-        repo = StateRepository(session)
-        assert "猎锚者X" not in repo.get_allowed_entity_names(project.id, 6)
+        names = {
+            entity.name
+            for entity in BookStateQuery(session).active_entities(
+                project.id,
+                as_of_chapter=6,
+            )
+        }
+        assert "猎锚者X" not in names
     finally:
         session.close()
 

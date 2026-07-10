@@ -71,7 +71,6 @@ from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import normalize_repair_scope
-from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id, load_latest_rewrite_attempts_by_chapter
 from forwin.state.updater import StateUpdater
 
@@ -145,7 +144,6 @@ def continue_project_generation(
             raise HTTPException(404, "项目不存在")
         if str(project.creation_status or "") in {"creating", "genesis_ready"}:
             raise HTTPException(409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。")
-        policy_record = ProjectPolicyStore(session).load(project)
         if project_has_active_generation_task(project_id, session=session):
             raise HTTPException(409, generation_task_conflict_message(project_id))
         plans = session.execute(
@@ -229,20 +227,15 @@ def continue_project_generation(
             if target_total >= first_chapter:
                 batch_end_chapter = min(batch_end_chapter, target_total)
             task_run_until_chapter = batch_end_chapter
-        task_id = call_task_factory_with_supported_kwargs(
-            create_continue_generation_task,
-            {
-                "project_id": project_id,
-                "runtime_policy": policy_record.policy,
-                "runtime_policy_version": policy_record.version,
-                "requested_chapters": workset.requested_chapters,
-                "max_chapters": task_max_chapters,
-                "auto_continue": auto_continue,
-                "run_until_chapter": task_run_until_chapter,
-                "title": project.title,
-                "subtitle": f"继续生成 · {project.genre}",
-                "message": "准备继续生成剩余章节。",
-            },
+        task_id = create_continue_generation_task(
+            project_id=project_id,
+            requested_chapters=workset.requested_chapters,
+            max_chapters=task_max_chapters,
+            auto_continue=auto_continue,
+            run_until_chapter=task_run_until_chapter,
+            title=project.title,
+            subtitle=f"继续生成 · {project.genre}",
+            message="准备继续生成剩余章节。",
         )
     except active_generation_task_error_cls as exc:
         raise HTTPException(409, str(exc)) from exc

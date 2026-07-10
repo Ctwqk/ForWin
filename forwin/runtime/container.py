@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import logging
 from typing import Callable, Literal
 
+from forwin.application.generation import GenerationApplicationService
 from forwin.book_genesis import BookGenesisService
 from forwin.config import InfrastructureConfig
 from forwin.context.assembler import ChapterContextAssembler
@@ -126,6 +127,9 @@ class RuntimeContainer:
             root_event_id=root_event_id,
         )
 
+    def build_generation_application_service(self) -> GenerationApplicationService:
+        return self.services().generation_application
+
     def build_genesis_workspace_service(self):
         return self.services().genesis_workspace_service
 
@@ -157,6 +161,10 @@ class RuntimeContainer:
         init_db(engine)
         session_factory = get_session_factory(engine)
         self._run_retention_cleanup(session_factory, infrastructure)
+        generation_application = GenerationApplicationService(
+            session_factory=session_factory,
+            infrastructure=infrastructure,
+        )
 
         model_profile = infrastructure.resolve_model_profile(policy.model_profile_id)
         llm_client = self._build_llm_client(infrastructure, policy)
@@ -296,6 +304,7 @@ class RuntimeContainer:
             session_factory=session_factory,
             llm_client=llm_client,
             skill_runtime=skill_runtime,
+            generation_application=generation_application,
             arc_director=arc_director,
             book_genesis=book_genesis,
             subworld_manager=subworld_manager,
@@ -316,6 +325,7 @@ class RuntimeContainer:
             production_scheduler=ProductionSchedulerFactory(
                 session_factory=session_factory,
                 infrastructure=infrastructure,
+                generation_application=generation_application,
                 observability=observability,
             ),
             publisher_runtime=publisher_runtime,

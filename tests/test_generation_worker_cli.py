@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from forwin.config import Config
 from forwin.cli import _get_config
 from forwin.generation.worker import GenerationWorkerResult
 from forwin.generation.worker_cli import run_generation_worker_loop
@@ -36,6 +36,7 @@ def test_generation_worker_cli_config_loads_container_environment(monkeypatch) -
 
 def test_generation_worker_loop_once_exits_when_no_task(caplog) -> None:
     calls = []
+    application_service = SimpleNamespace()
 
     def fake_run_once(**kwargs):
         calls.append(kwargs)
@@ -43,8 +44,7 @@ def test_generation_worker_loop_once_exits_when_no_task(caplog) -> None:
 
     _enable_worker_cli_logging(caplog, logging.DEBUG)
     exit_code = run_generation_worker_loop(
-        session_factory=lambda: None,
-        config=Config(minimax_api_key="sk-test"),
+        application_service=application_service,
         worker_id="worker-test",
         lease_seconds=300,
         poll_interval=0,
@@ -55,35 +55,32 @@ def test_generation_worker_loop_once_exits_when_no_task(caplog) -> None:
     assert exit_code == 0
     assert len(calls) == 1
     assert calls[0]["worker_id"] == "worker-test"
+    assert calls[0]["application_service"] is application_service
     messages = [record.getMessage() for record in caplog.records]
     assert any("Generation worker starting" in message for message in messages)
     assert any("No claimable generation task" in message for message in messages)
     assert any("Generation worker stopping" in message for message in messages)
 
 
-def test_generation_worker_loop_forwards_continue_task_factory() -> None:
+def test_generation_worker_loop_forwards_application_service() -> None:
     calls = []
-
-    def create_continue_generation_task(**kwargs):
-        return f"task-for-{kwargs['project_id']}"
+    application_service = SimpleNamespace()
 
     def fake_run_once(**kwargs):
         calls.append(kwargs)
         return GenerationWorkerResult(claimed=False, message="no_claimable_generation_task")
 
     exit_code = run_generation_worker_loop(
-        session_factory=lambda: None,
-        config=Config(minimax_api_key="sk-test"),
+        application_service=application_service,
         worker_id="worker-test",
         lease_seconds=300,
         poll_interval=0,
         once=True,
         run_once=fake_run_once,
-        create_continue_generation_task=create_continue_generation_task,
     )
 
     assert exit_code == 0
-    assert calls[0]["create_continue_generation_task"] is create_continue_generation_task
+    assert calls[0]["application_service"] is application_service
 
 
 def test_generation_worker_loop_no_claim_does_not_write_decision_events(caplog) -> None:
@@ -98,8 +95,7 @@ def test_generation_worker_loop_no_claim_does_not_write_decision_events(caplog) 
     try:
         _enable_worker_cli_logging(caplog, logging.DEBUG)
         exit_code = run_generation_worker_loop(
-            session_factory=Session,
-            config=Config(database_url=database_url, minimax_api_key="sk-test"),
+            application_service=SimpleNamespace(),
             worker_id="worker-test",
             lease_seconds=300,
             poll_interval=0,
@@ -132,8 +128,7 @@ def test_generation_worker_loop_polls_until_stop_after_claim(caplog) -> None:
 
     _enable_worker_cli_logging(caplog, logging.DEBUG)
     exit_code = run_generation_worker_loop(
-        session_factory=lambda: None,
-        config=Config(minimax_api_key="sk-test"),
+        application_service=SimpleNamespace(),
         worker_id="worker-test",
         lease_seconds=300,
         poll_interval=0,
@@ -157,8 +152,7 @@ def test_generation_worker_loop_logs_exception_before_raising(caplog) -> None:
     _enable_worker_cli_logging(caplog, logging.ERROR)
     try:
         run_generation_worker_loop(
-            session_factory=lambda: None,
-            config=Config(minimax_api_key="sk-test"),
+            application_service=SimpleNamespace(),
             worker_id="worker-test",
             lease_seconds=300,
             poll_interval=0,

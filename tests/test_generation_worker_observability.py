@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from forwin.config import Config
+from forwin.config import InfrastructureConfig
 from forwin.generation.task_lease import GenerationTaskClaimResult
 from forwin.generation.worker_observability import (
     generation_worker_span,
@@ -19,6 +20,21 @@ from forwin.models.observability import PerformanceSpan
 from forwin.models.project import Project
 from forwin.models.task import GenerationTask
 from tests.postgres import postgres_test_url
+
+
+def _application_service(Session, database_url: str, execute):
+    def execute_claimed(task, *, resume_from_chapter: int, worker_id: str) -> None:
+        _ = worker_id
+        execute(task, resume_from_chapter)
+
+    return SimpleNamespace(
+        session_factory=Session,
+        infrastructure=InfrastructureConfig(
+            database_url=database_url,
+            minimax_api_key="",
+        ),
+        execute_claimed=execute_claimed,
+    )
 
 
 def test_generation_worker_decision_event_types_are_registered() -> None:
@@ -81,7 +97,7 @@ def test_record_worker_claim_writes_project_scoped_decision_event() -> None:
             claim = GenerationTaskClaimResult(task=task, claim_kind="queued")
             record_worker_claim(
                 session_factory=Session,
-                config=Config(database_url=database_url, minimax_api_key=""),
+                config=InfrastructureConfig(database_url=database_url, minimax_api_key=""),
                 worker_id="worker-1",
                 claim=claim,
                 resume_from_chapter=4,
@@ -123,7 +139,7 @@ def test_record_worker_reclaim_includes_previous_lease_metadata() -> None:
             )
             record_worker_claim(
                 session_factory=Session,
-                config=Config(database_url=database_url, minimax_api_key=""),
+                config=InfrastructureConfig(database_url=database_url, minimax_api_key=""),
                 worker_id="worker-2",
                 claim=claim,
                 resume_from_chapter=9,
@@ -149,7 +165,7 @@ def test_generation_worker_span_records_performance_span() -> None:
         _seed_project_task(Session, task_id="task-worker-span")
         with generation_worker_span(
             session_factory=Session,
-            config=Config(database_url=database_url, minimax_api_key=""),
+            config=InfrastructureConfig(database_url=database_url, minimax_api_key=""),
             span_name="generation_worker.claim",
             task_id="task-worker-span",
             project_id="project-worker-obs",
@@ -191,7 +207,7 @@ def test_worker_observability_event_failure_is_non_fatal() -> None:
 
         record_worker_claim(
             session_factory=Session,
-            config=Config(database_url=database_url, minimax_api_key=""),
+            config=InfrastructureConfig(database_url=database_url, minimax_api_key=""),
             worker_id="worker-1",
             claim=claim,
             resume_from_chapter=1,
@@ -219,10 +235,12 @@ def test_run_one_generation_task_records_claim_event_and_execute_span() -> None:
             session.add(task)
 
         result = run_one_generation_task(
-            session_factory=Session,
+            application_service=_application_service(
+                Session,
+                database_url,
+                lambda _task, _resume: None,
+            ),
             worker_id="worker-integrated",
-            config=Config(database_url=database_url, minimax_api_key=""),
-            execute_continue=lambda _task, _resume: None,
         )
 
         assert result.claimed is True
@@ -259,10 +277,12 @@ def test_run_one_generation_task_records_reclaim_event() -> None:
             session.add(task)
 
         run_one_generation_task(
-            session_factory=Session,
+            application_service=_application_service(
+                Session,
+                database_url,
+                lambda _task, _resume: None,
+            ),
             worker_id="worker-reclaim",
-            config=Config(database_url=database_url, minimax_api_key=""),
-            execute_continue=lambda _task, _resume: None,
         )
 
         event = _task_events(Session, "task-worker-integrated-reclaim")[0]
@@ -295,10 +315,12 @@ def test_run_one_generation_task_records_heartbeat_failure_event() -> None:
                 session.add(row)
 
         run_one_generation_task(
-            session_factory=Session,
+            application_service=_application_service(
+                Session,
+                database_url,
+                steal_lease,
+            ),
             worker_id="worker-heartbeat",
-            config=Config(database_url=database_url, minimax_api_key=""),
-            execute_continue=steal_lease,
         )
 
         assert "generation_worker_heartbeat_failed" in [
@@ -326,10 +348,12 @@ def test_run_one_generation_task_records_execution_failed_event() -> None:
 
         try:
             run_one_generation_task(
-                session_factory=Session,
+                application_service=_application_service(
+                    Session,
+                    database_url,
+                    fail_execution,
+                ),
                 worker_id="worker-failed",
-                config=Config(database_url=database_url, minimax_api_key=""),
-                execute_continue=fail_execution,
             )
         except RuntimeError:
             pass

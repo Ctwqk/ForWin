@@ -14,12 +14,14 @@ from forwin.writer.profile import WriterProfile
 class ProductionSchedulerFactory:
     session_factory: Any
     infrastructure: InfrastructureConfig
+    generation_application: Any
     observability: Any = None
 
     def build(self, **callbacks) -> ProductionScheduler:
         return ProductionScheduler(
             session_factory=self.session_factory,
             config=self.infrastructure,
+            generation_application=self.generation_application,
             observability=self.observability,
             **callbacks,
         )

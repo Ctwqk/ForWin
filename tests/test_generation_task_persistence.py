@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 import forwin.api as api_module
+from forwin.application.errors import ProjectNotFound
 from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.draft import ChapterDraft
@@ -14,6 +15,7 @@ from forwin.models.phase import ProvisionalBandExecution
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.runtime.policy import RuntimePolicy
+from forwin.runtime.policy_store import ProjectPolicyStore
 from tests.postgres import postgres_test_url
 
 
@@ -24,7 +26,13 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
         init_db(self.engine)
         self.session_factory = get_session_factory(self.engine)
         self.old_session_factory = api_module._SessionFactory
+        self.old_config = api_module._config
+        self.old_runtime_container = api_module._runtime_container
         api_module._SessionFactory = self.session_factory
+        api_module._config = InfrastructureConfig(
+            database_url=postgres_test_url("generation-tasks-config")
+        )
+        api_module._runtime_container = None
         with api_module._tasks_lock:
             self.old_tasks = dict(api_module._tasks)
             api_module._tasks.clear()
@@ -34,6 +42,8 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
             api_module._tasks.clear()
             api_module._tasks.update(self.old_tasks)
         api_module._SessionFactory = self.old_session_factory
+        api_module._config = self.old_config
+        api_module._runtime_container = self.old_runtime_container
         self.engine.dispose()
         self.tmpdir.cleanup()
 
@@ -88,45 +98,34 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
             "pulp",
         )
 
-    def test_create_generation_task_enqueues_without_starting_thread(self) -> None:
-        policy = RuntimePolicy.for_profile("standard")
-
-        with patch("forwin.api_core.generation.threading.Thread") as thread_cls:
-            task_id = api_module._create_generation_task(
+    def test_create_generation_task_rejects_projectless_initial_path(self) -> None:
+        with self.assertRaises(ProjectNotFound):
+            api_module._create_generation_task(
                 premise="主角从县城崛起",
                 genre="都市",
                 num_chapters=2,
                 title="线程切换测试",
                 subtitle="都市 · 2 章",
-                runtime_policy=policy,
-                runtime_policy_version=1,
             )
-
-        thread_cls.assert_not_called()
-        task = api_module._get_generation_task_or_404(task_id)
-        self.assertEqual(task["status"], "queued")
-        self.assertEqual(task["current_stage"], "queued")
-        self.assertEqual(task["execution_payload"]["mode"], "initial")
-        self.assertEqual(task["execution_payload"]["premise"], "主角从县城崛起")
-        self.assertEqual(task["execution_payload"]["genre"], "都市")
-        self.assertEqual(task["execution_payload"]["num_chapters"], 2)
 
     def test_create_continue_generation_task_enqueues_without_starting_thread(self) -> None:
-        policy = RuntimePolicy.for_profile("standard")
         now = datetime.now(timezone.utc)
-        with self.session_factory() as session:
-            session.add(
-                Project(
-                    id="project-enqueue-only",
-                    title="继续入队测试",
-                    premise="测试",
-                    genre="玄幻",
-                    creation_status="writing",
-                    created_at=now,
-                    updated_at=now,
-                )
+        with self.session_factory.begin() as session:
+            project = Project(
+                id="project-enqueue-only",
+                title="继续入队测试",
+                premise="测试",
+                genre="玄幻",
+                creation_status="writing",
+                created_at=now,
+                updated_at=now,
             )
-            session.commit()
+            session.add(project)
+            session.flush()
+            ProjectPolicyStore(session).initialize(
+                project,
+                RuntimePolicy.for_profile("standard"),
+            )
 
         with patch("forwin.api_core.generation.threading.Thread") as thread_cls:
             task_id = api_module._create_continue_generation_task(
@@ -137,8 +136,6 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
                 run_until_chapter=8,
                 title="继续入队测试",
                 subtitle="继续生成",
-                runtime_policy=policy,
-                runtime_policy_version=1,
             )
 
         thread_cls.assert_not_called()
@@ -349,6 +346,11 @@ class GenerationTaskPersistenceTests(unittest.TestCase):
                     created_at=now,
                 )
                 session.add(project)
+                session.flush()
+                ProjectPolicyStore(session).initialize(
+                    project,
+                    RuntimePolicy.for_profile("standard"),
+                )
                 session.commit()
                 session.add(arc)
                 session.add_all(

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import os
-import uuid
 import json
 import io
 import inspect
@@ -134,19 +133,19 @@ from forwin.api_schemas import (
     StartWritingResponse,
 )
 from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
-from forwin.application.errors import PermanentConfigurationError
+from forwin.application.errors import ProjectNotFound
+from forwin.application.generation import (
+    EnqueueGenerationCommand,
+    GenerationApplicationService,
+)
 from forwin.config import InfrastructureConfig
-from forwin.generation.auto_continue import GenerationAutoContinueController
-from forwin.generation.task_payload import execution_payload
 from forwin.governance import (
     BandCheckpointIssueInfo,
     CONSTRAINT_LEVELS,
     CONSTRAINT_STATUSES,
     CONSTRAINT_TYPES,
     DecisionEventType,
-    DecisionEventInfo,
     NarrativeConstraintInfo,
-    ensure_decision_event_type,
     issue_group_for_issue,
     load_plan_task_contract,
     plan_task_contract_to_json,
@@ -180,8 +179,6 @@ from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
-from forwin.runtime.policy import RuntimePolicy
-from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
 
@@ -341,101 +338,6 @@ def _project_delete_blockers(project_id: str, *, session) -> list[str]:
     return blockers
 
 
-def _create_task_root_event(
-    *,
-    project_id: str,
-    task_id: str,
-    event_type: str,
-    summary: str,
-    reason: str = "",
-    actor_type: str = "api",
-) -> str:
-    if not str(project_id or "").strip():
-        return ""
-    with _get_session() as session:
-        row = _log_decision_event(
-            session,
-            project_id=project_id,
-            task_id=task_id,
-            scope="task",
-            event_family="audit_action",
-            event_type=event_type,
-            actor_type=actor_type,
-            summary=summary,
-            reason=reason,
-            related_object_type="generation_task",
-            related_object_id=task_id,
-        )
-        session.commit()
-        return row.id
-
-
-def _make_generation_completion_handler(
-    *,
-    task_id: str,
-    root_event_id: str = "",
-    prior_handler=None,
-    auto_continue: bool = False,
-    run_until_chapter: int | None = None,
-    max_chapters: int | None = None,
-    create_continue_generation_task=None,
-):
-    def _handler(result) -> None:
-        if prior_handler is not None:
-            prior_handler(result)
-        project_id = str(getattr(result, "project_id", "") or "").strip()
-        if not project_id:
-            return
-        event_type = ""
-        summary = ""
-        if getattr(result, "paused", False):
-            event_type = DecisionEventType.PAUSE_REACHED
-            summary = "生成任务已在安全检查点暂停。"
-        elif getattr(result, "cancelled", False):
-            event_type = DecisionEventType.TERMINATE_REACHED
-            summary = "生成任务已在安全检查点终止。"
-        elif getattr(result, "failed_chapters", None):
-            event_type = DecisionEventType.RUN_COMPLETED_WITH_FAILURES
-            summary = "生成任务已结束，存在失败章节。"
-        else:
-            event_type = DecisionEventType.RUN_COMPLETED
-            summary = "生成任务已完成。"
-        with _get_session() as session:
-            _log_decision_event(
-                session,
-                project_id=project_id,
-                task_id=task_id,
-                scope="task",
-                event_family="business_event",
-                event_type=event_type,
-                actor_type="system",
-                summary=summary,
-                payload={
-                    "completed_chapters": list(getattr(result, "completed_chapters", []) or []),
-                    "failed_chapters": list(getattr(result, "failed_chapters", []) or []),
-                    "paused_chapters": list(getattr(result, "paused_chapters", []) or []),
-                },
-                related_object_type="generation_task",
-                related_object_id=task_id,
-                causal_root_id=root_event_id,
-            )
-            session.commit()
-        if auto_continue and create_continue_generation_task is not None:
-            controller = GenerationAutoContinueController(
-                session_factory=_get_session,
-                create_continue_generation_task=create_continue_generation_task,
-            )
-            controller.after_task_completion(
-                result,
-                parent_task_id=task_id,
-                run_until_chapter=run_until_chapter,
-                max_chapters=max_chapters,
-                auto_continue=auto_continue,
-            )
-
-    return _handler
-
-
 def _create_generation_task(
     *,
     premise: str,
@@ -444,51 +346,23 @@ def _create_generation_task(
     project_id: str = "",
     title: str = "",
     subtitle: str = "",
-    runtime_policy: RuntimePolicy | None = None,
-    runtime_policy_version: int | None = None,
 ) -> str:
     normalized_project_id = str(project_id or "").strip()
-    if normalized_project_id and _project_has_active_generation_task(normalized_project_id):
-        raise ActiveGenerationTaskError(
-            _generation_task_conflict_message(normalized_project_id)
-        )
-    policy, policy_version = _resolve_generation_task_policy(
-        project_id=normalized_project_id,
-        policy=runtime_policy,
-        policy_version=runtime_policy_version,
-    )
-    task_id = uuid.uuid4().hex[:12]
-    task_record = _create_task_record(
-        message=f"开始生成 {num_chapters} 章。",
-        title=title or (premise.strip()[:36] if premise.strip() else "未命名生成任务"),
-        subtitle=subtitle or f"{genre} · {num_chapters} 章",
-        requested_chapters=num_chapters,
-    )
-    if normalized_project_id:
-        task_record["project_id"] = normalized_project_id
-    task_record["max_chapters"] = int(num_chapters or 0)
-    task_record["run_until_chapter"] = int(num_chapters or 0)
-    root_event_id = ""
-    if normalized_project_id:
-        root_event_id = _create_task_root_event(
+    if not normalized_project_id:
+        raise ProjectNotFound(normalized_project_id)
+    return _generation_application_service().enqueue(
+        EnqueueGenerationCommand(
             project_id=normalized_project_id,
-            task_id=task_id,
-            event_type=DecisionEventType.GENERATION_REQUESTED,
-            summary="项目生成任务已创建。",
+            requested_chapters=int(num_chapters or 0),
+            max_chapters=int(num_chapters or 0),
+            run_until_chapter=int(num_chapters or 0),
+            auto_continue=False,
+            title=title or (premise.strip()[:36] if premise.strip() else "未命名生成任务"),
+            subtitle=subtitle or f"{genre} · {num_chapters} 章",
+            message=f"开始生成 {num_chapters} 章。",
+            root_event_type=DecisionEventType.GENERATION_REQUESTED,
         )
-    payload = execution_payload(
-        mode="initial",
-        policy=policy,
-        policy_version=policy_version,
-        root_event_id=root_event_id,
-        premise=premise,
-        genre=genre,
-        num_chapters=num_chapters,
-        auto_continue=False,
-    )
-    task_record["execution_payload"] = payload.model_dump(mode="json")
-    _persist_generation_task(task_id, task_record)
-    return task_id
+    ).task_id
 
 
 def _create_continue_generation_task(
@@ -501,76 +375,32 @@ def _create_continue_generation_task(
     title: str = "",
     subtitle: str = "",
     message: str = "",
-    runtime_policy: RuntimePolicy | None = None,
-    runtime_policy_version: int | None = None,
 ) -> str:
     normalized_project_id = str(project_id or "").strip()
-    if normalized_project_id and _project_has_active_generation_task(normalized_project_id):
-        raise ActiveGenerationTaskError(
-            _generation_task_conflict_message(normalized_project_id)
+    return _generation_application_service().enqueue(
+        EnqueueGenerationCommand(
+            project_id=normalized_project_id,
+            requested_chapters=int(requested_chapters or 0),
+            max_chapters=int(max_chapters or 0),
+            run_until_chapter=int(run_until_chapter or 0),
+            auto_continue=bool(auto_continue),
+            title=title or f"继续生成 {normalized_project_id}",
+            subtitle=subtitle or f"项目 {normalized_project_id}",
+            message=message or "准备继续后续章节。",
+            root_event_type=DecisionEventType.CONTINUE_REQUESTED,
         )
-    policy, policy_version = _resolve_generation_task_policy(
-        project_id=normalized_project_id,
-        policy=runtime_policy,
-        policy_version=runtime_policy_version,
-    )
-    task_id = uuid.uuid4().hex[:12]
-    task_record = _create_task_record(
-        message=message or "准备继续后续章节。",
-        title=title or f"继续生成 {normalized_project_id}",
-        subtitle=subtitle or f"项目 {normalized_project_id}",
-        requested_chapters=requested_chapters,
-    )
-    task_record["project_id"] = normalized_project_id
-    task_record["max_chapters"] = int(max_chapters or 0)
-    task_record["run_until_chapter"] = int(run_until_chapter or 0)
-    root_event_id = _create_task_root_event(
-        project_id=normalized_project_id,
-        task_id=task_id,
-        event_type=DecisionEventType.CONTINUE_REQUESTED,
-        summary="继续生成任务已创建。",
-    )
-    payload = execution_payload(
-        mode="continue",
-        policy=policy,
-        policy_version=policy_version,
-        root_event_id=root_event_id,
-        auto_continue=auto_continue,
-        run_until_chapter=run_until_chapter,
-        max_chapters=max_chapters,
-    )
-    task_record["execution_payload"] = payload.model_dump(mode="json")
-    _persist_generation_task(task_id, task_record)
-    return task_id
+    ).task_id
 
 
-def _resolve_generation_task_policy(
-    *,
-    project_id: str,
-    policy: RuntimePolicy | None,
-    policy_version: int | None,
-) -> tuple[RuntimePolicy, int]:
-    if policy is not None:
-        normalized_version = int(policy_version or 0)
-        if normalized_version < 1:
-            raise PermanentConfigurationError(
-                "generation task policy version must be positive"
-            )
-        return policy, normalized_version
-
-    normalized_project_id = str(project_id or "").strip()
-    if not normalized_project_id:
-        raise PermanentConfigurationError(
-            "generation task requires an explicit v5 policy snapshot"
-        )
-    with _get_session() as session:
-        project = session.get(Project, normalized_project_id)
-        if project is None:
-            raise PermanentConfigurationError(
-                f"generation task project not found: {normalized_project_id}"
-            )
-        record = ProjectPolicyStore(session).load(project)
-        return record.policy, record.version
+def _generation_application_service() -> GenerationApplicationService:
+    if api_state._runtime_container is not None:
+        return api_state._runtime_container.build_generation_application_service()
+    if api_state._SessionFactory is None or api_state._config is None:
+        raise RuntimeError("generation application service is unavailable")
+    return GenerationApplicationService(
+        session_factory=api_state._SessionFactory,
+        infrastructure=api_state._config,
+    )
 
 
 def _maybe_enqueue_auto_publish_jobs(result) -> None:

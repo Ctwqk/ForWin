@@ -473,20 +473,15 @@ def start_project_writing(
                 requested_chapters = min(requested_chapters, target.effective_max_chapters)
                 task_max_chapters = target.effective_max_chapters
                 task_run_until_chapter = target.run_until_chapter
-            task_id = call_task_factory_with_supported_kwargs(
-                create_continue_generation_task,
-                {
-                    "project_id": project.id,
-                    "runtime_policy": policy_record.policy,
-                    "runtime_policy_version": policy_record.version,
-                    "requested_chapters": requested_chapters,
-                    "max_chapters": task_max_chapters,
-                    "auto_continue": auto_continue,
-                    "run_until_chapter": task_run_until_chapter,
-                    "title": project.title,
-                    "subtitle": f"启动写作 · {project.genre}",
-                    "message": "Genesis 完成，准备进入写作主链。",
-                },
+            task_id = create_continue_generation_task(
+                project_id=project.id,
+                requested_chapters=requested_chapters,
+                max_chapters=task_max_chapters,
+                auto_continue=auto_continue,
+                run_until_chapter=task_run_until_chapter,
+                title=project.title,
+                subtitle=f"启动写作 · {project.genre}",
+                message="Genesis 完成，准备进入写作主链。",
             )
         except Exception:
             session.rollback()

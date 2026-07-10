@@ -5,6 +5,12 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from forwin.application.errors import ActiveGenerationTaskError
+from forwin.application.generation import (
+    EnqueueGenerationCommand,
+    GenerationApplicationService,
+)
+from forwin.governance import DecisionEventType
 from forwin.models.project import Project
 
 from .events import (
@@ -32,18 +38,14 @@ class ProductionExecutor:
     def __init__(
         self,
         *,
-        create_generation_task: Callable[..., str],
-        create_continue_generation_task: Callable[..., str],
-        active_generation_task_error_cls: type[Exception],
+        generation_application: GenerationApplicationService,
         publisher_manager_factory: Callable[[], Any] | None = None,
         session_factory: Callable[[], Any] | None = None,
         config: Any = None,
         review_chapter: Callable[[str, int], Any] | None = None,
         approve_chapter_review: Callable[[str, int], Any] | None = None,
     ) -> None:
-        self.create_generation_task = create_generation_task
-        self.create_continue_generation_task = create_continue_generation_task
-        self.active_generation_task_error_cls = active_generation_task_error_cls
+        self.generation_application = generation_application
         self.publisher_manager_factory = publisher_manager_factory
         self.session_factory = session_factory
         self.config = config
@@ -56,32 +58,50 @@ class ProductionExecutor:
         plan: ProductionPlan,
         project: Project,
         policy: ProductionPolicy,
-        runtime_config: Any,
     ) -> ProductionExecutionResult:
         action = ACTION_IDLE
         task_id = ""
         try:
             if plan.generation_mode == "initial" and plan.write_chapters:
-                task_id = self.create_generation_task(
-                    premise=project.premise,
-                    genre=project.genre,
-                    num_chapters=max(1, int(plan.requested_chapters or len(plan.write_chapters))),
-                    project_id=project.id,
-                    title=project.title,
-                    subtitle=f"自动调度 · 首批 {len(plan.write_chapters)} 章",
+                requested = max(
+                    1,
+                    int(plan.requested_chapters or len(plan.write_chapters)),
                 )
+                task_id = self.generation_application.enqueue(
+                    EnqueueGenerationCommand(
+                        project_id=project.id,
+                        requested_chapters=requested,
+                        max_chapters=requested,
+                        run_until_chapter=max(plan.write_chapters),
+                        auto_continue=False,
+                        title=project.title,
+                        subtitle=f"自动调度 · 首批 {len(plan.write_chapters)} 章",
+                        message=f"按计划开始首批 {requested} 章。",
+                        root_event_type=DecisionEventType.GENERATION_REQUESTED,
+                    )
+                ).task_id
                 action = ACTION_STARTED_INITIAL_GENERATION
             elif plan.generation_mode == "continue" and plan.write_chapters:
-                task_id = self.create_continue_generation_task(
-                    project_id=project.id,
-                    requested_chapters=max(1, int(plan.requested_chapters or len(plan.write_chapters))),
-                    max_chapters=max(1, int(policy.quota.write or len(plan.write_chapters))),
-                    title=project.title,
-                    subtitle=f"自动调度 · 今日上限 {max(1, int(policy.quota.write or len(plan.write_chapters)))} 章",
-                    message=f"按计划继续生成，今日最多处理 {max(1, int(policy.quota.write or len(plan.write_chapters)))} 章。",
+                requested = max(
+                    1,
+                    int(plan.requested_chapters or len(plan.write_chapters)),
                 )
+                maximum = max(1, int(policy.quota.write or len(plan.write_chapters)))
+                task_id = self.generation_application.enqueue(
+                    EnqueueGenerationCommand(
+                        project_id=project.id,
+                        requested_chapters=requested,
+                        max_chapters=maximum,
+                        run_until_chapter=max(plan.write_chapters),
+                        auto_continue=True,
+                        title=project.title,
+                        subtitle=f"自动调度 · 今日上限 {maximum} 章",
+                        message=f"按计划继续生成，今日最多处理 {maximum} 章。",
+                        root_event_type=DecisionEventType.CONTINUE_REQUESTED,
+                    )
+                ).task_id
                 action = ACTION_STARTED_CONTINUE_GENERATION
-        except self.active_generation_task_error_cls:
+        except ActiveGenerationTaskError:
             return ProductionExecutionResult(
                 action=ACTION_ACTIVE_TASK,
                 message=message_for_action(ACTION_ACTIVE_TASK),

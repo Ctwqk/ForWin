@@ -124,6 +124,7 @@ def test_runtime_container_injects_policy_and_selected_model(monkeypatch) -> Non
     )
 
     services = container.services()
+    generation_application = container.build_generation_application_service()
     orchestrator = container.build_writing_orchestrator(
         progress_callback=lambda *_args: None,
         task_id="task-1",
@@ -137,6 +138,9 @@ def test_runtime_container_injects_policy_and_selected_model(monkeypatch) -> Non
     assert services.llm_client.model == "kimi-k2.5"
     assert services.engine is fake_engine
     assert services.session_factory is fake_session_factory
+    assert services.generation_application is generation_application
+    assert generation_application.session_factory is fake_session_factory
+    assert generation_application.infrastructure is infrastructure
     assert init_calls == [fake_engine]
     assert orchestrator.services is services
     assert orchestrator.infrastructure is infrastructure
@@ -165,15 +169,12 @@ def test_runtime_container_builds_callback_bound_production_scheduler(
     )
 
     scheduler = container.build_production_scheduler(
-        runtime_config_provider=lambda: infrastructure,
         display_datetime=lambda _value: "",
         persist_project_automation=lambda *_args, **_kwargs: None,
-        create_generation_task=lambda **_kwargs: "task-1",
-        create_continue_generation_task=lambda **_kwargs: "task-2",
-        active_generation_task_error_cls=RuntimeError,
         generation_terminal_statuses={"completed"},
         upload_terminal_statuses={"succeeded"},
     )
 
     assert scheduler.session_factory is fake_session_factory
     assert scheduler.config is infrastructure
+    assert scheduler.generation_application is container.build_generation_application_service()

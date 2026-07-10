@@ -14,7 +14,6 @@ from forwin.api_schemas import (
 from forwin.llm.codex_client import CodexBridgeClient
 from forwin.models.governance import DecisionEvent
 from forwin.models.project import Project
-from forwin.runtime.policy import RuntimePolicy
 from forwin.runtime.policy_store import ProjectPolicyStore
 from forwin.review_engine.dashboard import build_waiting_review_breakdown
 
@@ -91,30 +90,25 @@ def build_handlers(
             raise HTTPException(503, "服务尚未初始化")
 
         normalized_project_id = str(req.project_id or "").strip()
+        if not normalized_project_id:
+            raise HTTPException(400, "v5 generation requires an existing project_id")
         task_title = (req.premise or "").strip()[:36] or "未命名生成任务"
         task_subtitle = f"{req.genre} · {req.num_chapters} 章"
-        task_policy = RuntimePolicy.for_profile(
-            "standard",
-            model_profile_id=str(req.model_profile_id or "").strip(),
-        )
-        task_policy_version = 1
-        if normalized_project_id:
-            session = get_session()
-            try:
-                project = session.get(Project, normalized_project_id)
-                if project is None:
-                    raise HTTPException(404, "项目不存在")
-                if str(project.creation_status or "") in {"creating", "genesis_ready"}:
-                    raise HTTPException(409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。")
-                if project_has_active_generation_task(normalized_project_id, session=session):
-                    raise HTTPException(409, generation_task_conflict_message(normalized_project_id))
-                policy_record = ProjectPolicyStore(session).load(project)
-                task_policy = policy_record.policy
-                task_policy_version = policy_record.version
-                task_title = project.title or task_title
-                task_subtitle = f"书本生成 · {project.genre} · {req.num_chapters} 章"
-            finally:
-                session.close()
+        session = get_session()
+        try:
+            project = session.get(Project, normalized_project_id)
+            if project is None:
+                raise HTTPException(404, "项目不存在")
+            if str(project.creation_status or "") in {"creating", "genesis_ready"}:
+                raise HTTPException(409, "该项目仍在 Genesis 阶段，请先完成创世并点击“启动写作”。")
+            if project_has_active_generation_task(normalized_project_id, session=session):
+                raise HTTPException(409, generation_task_conflict_message(normalized_project_id))
+            policy_record = ProjectPolicyStore(session).load(project)
+            task_policy = policy_record.policy
+            task_title = project.title or task_title
+            task_subtitle = f"书本生成 · {project.genre} · {req.num_chapters} 章"
+        finally:
+            session.close()
 
         model_profile = config.resolve_model_profile(task_policy.model_profile_id)
         if not model_profile.api_key and not config.codex_enabled:
@@ -128,8 +122,6 @@ def build_handlers(
                 project_id=normalized_project_id,
                 title=task_title,
                 subtitle=task_subtitle,
-                runtime_policy=task_policy,
-                runtime_policy_version=task_policy_version,
             )
         except active_generation_task_error_cls as exc:
             raise HTTPException(409, str(exc)) from exc

@@ -3,23 +3,28 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from forwin.config import Config
+from forwin.application.generation import GenerationTaskHandle
+from forwin.config import InfrastructureConfig
 from forwin.models.base import get_engine, get_session_factory, init_db, new_id
 from forwin.models.project import ArcPlanVersion, ChapterPlan, Project
 from forwin.models.task import GenerationTask
 from forwin.production.scheduler import ProductionScheduler
 
 
-class ActiveGenerationTaskError(RuntimeError):
-    pass
-
-
 def test_scheduler_runs_due_projects_and_preserves_actions() -> None:
     engine = get_engine(postgres_test_url("production-scheduler"))
     init_db(engine)
     Session = get_session_factory(engine)
-    initial_calls: list[dict] = []
-    continue_calls: list[dict] = []
+    commands = []
+
+    class RecordingApplicationService:
+        def enqueue(self, command):
+            commands.append(command)
+            suffix = "initial" if command.root_event_type == "generation_requested" else "continue"
+            return GenerationTaskHandle(
+                task_id=f"task-{suffix}",
+                project_id=command.project_id,
+            )
     try:
         with Session.begin() as session:
             ready_payload = json.dumps(
@@ -142,8 +147,8 @@ def test_scheduler_runs_due_projects_and_preserves_actions() -> None:
 
         scheduler = ProductionScheduler(
             session_factory=Session,
-            config=Config(database_url=postgres_test_url("unused-config")),
-            runtime_config_provider=lambda: Config(database_url=postgres_test_url("unused-runtime")),
+            config=InfrastructureConfig(database_url=postgres_test_url("unused-config")),
+            generation_application=RecordingApplicationService(),
             display_datetime=lambda value: value.strftime("%Y-%m-%d %H:%M:%S UTC") if value else "",
             persist_project_automation=lambda session, project, automation: setattr(
                 project,
@@ -151,9 +156,6 @@ def test_scheduler_runs_due_projects_and_preserves_actions() -> None:
                 automation.model_dump_json(),
             )
             or automation,
-            create_generation_task=lambda **kwargs: initial_calls.append(kwargs) or "task-initial",
-            create_continue_generation_task=lambda **kwargs: continue_calls.append(kwargs) or "task-continue",
-            active_generation_task_error_cls=ActiveGenerationTaskError,
             generation_terminal_statuses={"completed", "partial_failed", "failed", "needs_review", "cancelled", "paused"},
             upload_terminal_statuses={"succeeded", "failed", "cancelled"},
         )
@@ -167,8 +169,14 @@ def test_scheduler_runs_due_projects_and_preserves_actions() -> None:
             }
 
         assert [result.project_id for result in results]
-        assert initial_calls[0]["num_chapters"] == 2
-        assert continue_calls[0]["requested_chapters"] == 1
+        initial_command = next(
+            command for command in commands if command.root_event_type == "generation_requested"
+        )
+        continue_command = next(
+            command for command in commands if command.root_event_type == "continue_requested"
+        )
+        assert initial_command.requested_chapters == 2
+        assert continue_command.requested_chapters == 1
         assert projects["自动调度-首批"]["last_scheduler_action"] == "started_initial_generation"
         assert projects["自动调度-续跑"]["last_scheduler_action"] == "started_continue_generation"
         assert projects["自动调度-待审"]["last_scheduler_action"] == "waiting_review"

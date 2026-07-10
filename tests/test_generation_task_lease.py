@@ -3,17 +3,30 @@ from __future__ import annotations
 import time
 from datetime import datetime, timedelta, timezone
 from threading import Event
+from types import SimpleNamespace
 
+from forwin.config import InfrastructureConfig
 from forwin.generation.task_lease import (
     claim_generation_task,
     generation_task_resume_from_chapter,
     heartbeat_generation_task,
 )
-from forwin.generation.worker import _db_task_updater, run_one_generation_task
-from forwin.config import Config
+from forwin.generation.worker import run_one_generation_task
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.task import GenerationTask
 from tests.postgres import postgres_test_url
+
+
+def _application_service(Session, database_url: str, execute):
+    return SimpleNamespace(
+        session_factory=Session,
+        infrastructure=InfrastructureConfig(database_url=database_url),
+        execute_claimed=lambda task, *, resume_from_chapter, worker_id: execute(
+            task,
+            resume_from_chapter,
+            worker_id,
+        ),
+    )
 
 
 def test_claim_generation_task_sets_lease_fields() -> None:
@@ -227,58 +240,6 @@ def test_heartbeat_extends_matching_running_lease() -> None:
         engine.dispose()
 
 
-def test_db_task_updater_refreshes_owned_running_lease_and_prevents_reclaim() -> None:
-    engine = get_engine(postgres_test_url("generation-task-runtime-heartbeat"))
-    init_db(engine)
-    Session = get_session_factory(engine)
-    expired = (datetime.now(timezone.utc) - timedelta(minutes=10)).replace(tzinfo=None)
-    try:
-        with Session.begin() as session:
-            session.add(
-                GenerationTask(
-                    id="task-runtime-heartbeat",
-                    task_kind="generation",
-                    status="running",
-                    project_id="project-1",
-                    lease_owner="worker-1",
-                    lease_expires_at=expired,
-                    heartbeat_at=expired,
-                )
-            )
-
-        update_task = _db_task_updater(
-            Session,
-            worker_id="worker-1",
-            lease_seconds=300,
-        )
-        update_task(
-            "task-runtime-heartbeat",
-            current_stage="writing_chapter",
-            current_chapter=2,
-        )
-
-        with Session.begin() as session:
-            task = session.get(GenerationTask, "task-runtime-heartbeat")
-            assert task is not None
-            assert task.current_stage == "writing_chapter"
-            assert task.current_chapter == 2
-            assert task.heartbeat_at is not None
-            assert task.lease_expires_at is not None
-            assert task.heartbeat_at != expired
-            assert task.lease_expires_at != expired
-
-        with Session.begin() as session:
-            claim = claim_generation_task(
-                session,
-                worker_id="worker-2",
-                lease_seconds=300,
-            )
-
-        assert claim is None
-    finally:
-        engine.dispose()
-
-
 def test_generation_task_resume_from_completed_chapters() -> None:
     task = GenerationTask(
         id="task-resume",
@@ -301,7 +262,8 @@ def test_generation_task_resume_prefers_explicit_resume_point() -> None:
 
 
 def test_worker_claims_and_executes_queued_project_task() -> None:
-    engine = get_engine(postgres_test_url("generation-task-worker"))
+    database_url = postgres_test_url("generation-task-worker")
+    engine = get_engine(database_url)
     init_db(engine)
     Session = get_session_factory(engine)
     calls: list[tuple[str, int]] = []
@@ -319,10 +281,12 @@ def test_worker_claims_and_executes_queued_project_task() -> None:
             )
 
         result = run_one_generation_task(
-            session_factory=Session,
+            application_service=_application_service(
+                Session,
+                database_url,
+                lambda task, resume, _worker_id: calls.append((task.id, resume)),
+            ),
             worker_id="worker-1",
-            config=Config(),
-            execute_continue=lambda task, resume: calls.append((task.id, resume)),
         )
 
         assert result.claimed is True
@@ -339,7 +303,8 @@ def test_worker_claims_and_executes_queued_project_task() -> None:
 
 
 def test_worker_refreshes_lease_during_long_executor_call() -> None:
-    engine = get_engine(postgres_test_url("generation-worker-periodic-heartbeat"))
+    database_url = postgres_test_url("generation-worker-periodic-heartbeat")
+    engine = get_engine(database_url)
     init_db(engine)
     Session = get_session_factory(engine)
     heartbeat_seen = Event()
@@ -354,8 +319,9 @@ def test_worker_refreshes_lease_during_long_executor_call() -> None:
                 )
             )
 
-        def execute(task: GenerationTask, resume: int) -> None:
+        def execute(task: GenerationTask, resume: int, worker_id: str) -> None:
             _ = resume
+            assert worker_id == "worker-periodic"
             with Session() as session:
                 row = session.get(GenerationTask, task.id)
                 baseline = row.heartbeat_at if row is not None else None
@@ -371,142 +337,12 @@ def test_worker_refreshes_lease_during_long_executor_call() -> None:
             raise AssertionError("periodic heartbeat did not refresh during executor call")
 
         result = run_one_generation_task(
-            session_factory=Session,
+            application_service=_application_service(Session, database_url, execute),
             worker_id="worker-periodic",
-            config=Config(),
             lease_seconds=3,
-            execute_continue=execute,
         )
 
         assert result.executed is True
         assert heartbeat_seen.is_set()
-    finally:
-        engine.dispose()
-
-
-def test_default_continue_executor_passes_resume_to_runtime(monkeypatch) -> None:
-    engine = get_engine(postgres_test_url("generation-worker-resume-runtime"))
-    init_db(engine)
-    Session = get_session_factory(engine)
-    calls: list[dict[str, object]] = []
-    try:
-        with Session.begin() as session:
-            session.add(
-                GenerationTask(
-                    id="task-worker-resume-runtime",
-                    task_kind="generation",
-                    status="queued",
-                    project_id="project-1",
-                    completed_chapters_json="[1, 2]",
-                    max_chapters=3,
-                    execution_payload_json='{"mode":"continue","runtime_overrides":{}}',
-                )
-            )
-
-        def fake_run_continue_project_with_config(*args, **kwargs):
-            calls.append(kwargs)
-
-        monkeypatch.setattr(
-            "forwin.api_runtime.run_continue_project_with_config",
-            fake_run_continue_project_with_config,
-        )
-
-        result = run_one_generation_task(
-            session_factory=Session,
-            worker_id="worker-resume",
-            config=Config(minimax_api_key="sk-test"),
-        )
-
-        assert result.resume_from_chapter == 3
-        assert calls[0]["resume_from_chapter"] == 3
-        assert calls[0]["component"] == "worker"
-    finally:
-        engine.dispose()
-
-
-def test_worker_uses_initial_payload_for_new_generation(monkeypatch) -> None:
-    engine = get_engine(postgres_test_url("generation-worker-initial-payload"))
-    init_db(engine)
-    Session = get_session_factory(engine)
-    calls: list[dict[str, object]] = []
-    try:
-        with Session.begin() as session:
-            session.add(
-                GenerationTask(
-                    id="task-initial-payload",
-                    task_kind="generation",
-                    status="queued",
-                    project_id="",
-                    requested_chapters=2,
-                    execution_payload_json=(
-                        '{"mode":"initial","premise":"县城开局","genre":"都市",'
-                        '"num_chapters":2,"runtime_overrides":{"quality_profile":"pulp"}}'
-                    ),
-                )
-            )
-
-        def fake_run_generation_with_config(*args, **kwargs):
-            calls.append({"args": args, "kwargs": kwargs})
-
-        monkeypatch.setattr(
-            "forwin.api_runtime.run_generation_with_config",
-            fake_run_generation_with_config,
-        )
-
-        result = run_one_generation_task(
-            session_factory=Session,
-            worker_id="worker-initial",
-            config=Config(minimax_api_key="sk-test"),
-        )
-
-        assert result.claimed is True
-        assert calls
-        assert calls[0]["args"][1] == "县城开局"
-        assert calls[0]["args"][2] == "都市"
-        assert calls[0]["args"][3] == 2
-        assert calls[0]["kwargs"]["component"] == "worker"
-    finally:
-        engine.dispose()
-
-
-def test_worker_continue_executor_passes_completion_handler(monkeypatch) -> None:
-    engine = get_engine(postgres_test_url("generation-worker-completion-handler"))
-    init_db(engine)
-    Session = get_session_factory(engine)
-    seen_completion_handlers: list[object] = []
-    try:
-        with Session.begin() as session:
-            session.add(
-                GenerationTask(
-                    id="task-worker-completion",
-                    task_kind="generation",
-                    status="queued",
-                    project_id="project-1",
-                    max_chapters=2,
-                    run_until_chapter=10,
-                    execution_payload_json=(
-                        '{"mode":"continue","auto_continue":true,'
-                        '"run_until_chapter":10,"max_chapters":2,'
-                        '"runtime_overrides":{}}'
-                    ),
-                )
-            )
-
-        def fake_run_continue_project_with_config(*args, **kwargs):
-            seen_completion_handlers.append(kwargs.get("completion_handler"))
-
-        monkeypatch.setattr(
-            "forwin.api_runtime.run_continue_project_with_config",
-            fake_run_continue_project_with_config,
-        )
-
-        run_one_generation_task(
-            session_factory=Session,
-            worker_id="worker-completion",
-            config=Config(minimax_api_key="sk-test"),
-        )
-
-        assert callable(seen_completion_handlers[0])
-        assert seen_completion_handlers[0] is not None
     finally:
         engine.dispose()

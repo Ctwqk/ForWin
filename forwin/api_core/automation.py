@@ -178,6 +178,7 @@ from forwin.orchestrator.feedback_aggregator import derive_action_effectiveness
 from forwin.publisher_runtime.codex_intervention import build_codex_intervention_handler
 from forwin.publishers import PublisherManager
 from forwin.runtime.container import RuntimeContainer
+from forwin.application.generation import GenerationApplicationService
 from forwin.state.query_helpers import load_latest_drafts_by_plan_id
 from forwin.state.updater import StateUpdater
 
@@ -220,18 +221,21 @@ def _run_automation_scheduler_pass() -> None:
     if api_state._runtime_container is not None:
         runtime_services = api_state._runtime_container.services()
         production_scheduler_factory = runtime_services.production_scheduler
+        generation_application = runtime_services.generation_application
+    else:
+        generation_application = GenerationApplicationService(
+            session_factory=api_state._SessionFactory,
+            infrastructure=api_state._config,
+        )
     result = api_automation.run_automation_scheduler_pass(
         session_factory=api_state._SessionFactory,
         config=api_state._config,
-        saved_runtime_config_or_503=_saved_runtime_config_or_503,
+        generation_application=generation_application,
         utcnow=_utcnow,
         display_tz=api_state._DISPLAY_TZ,
         display_datetime=_display_datetime,
         get_session=_get_session,
         persist_project_automation=_persist_project_automation,
-        create_generation_task=_create_generation_task,
-        create_continue_generation_task=_create_continue_generation_task,
-        active_generation_task_error_cls=ActiveGenerationTaskError,
         terminal_statuses=api_state._GENERATION_TERMINAL_STATUSES,
         review_chapter=_run_scheduled_review_action,
         approve_chapter_review=_run_scheduled_review_action,

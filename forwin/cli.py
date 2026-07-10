@@ -224,37 +224,33 @@ def cmd_llm_eval(args: argparse.Namespace) -> None:
 def cmd_generation_worker(args: argparse.Namespace) -> None:
     """Run the durable generation worker."""
     from forwin.api_core import state as api_state
-    from forwin.api_core.generation import _create_continue_generation_task
     from forwin.generation.worker_cli import default_worker_id, run_generation_worker_loop
-    from forwin.models.base import get_engine, get_session_factory, init_db
     from forwin.runtime.container import RuntimeContainer
     from forwin.runtime.policy import RuntimePolicy
 
     config = _get_config(args)
-    engine = get_engine(config.database_url)
+    container = RuntimeContainer.from_config(
+        config,
+        policy=RuntimePolicy.for_profile("standard"),
+        role="generation_worker",
+    )
+    services = container.services()
     try:
-        init_db(engine)
-        Session = get_session_factory(engine)
         api_state._config = config
-        api_state._engine = engine
-        api_state._SessionFactory = Session
-        api_state._runtime_container = RuntimeContainer.from_config(
-            config,
-            policy=RuntimePolicy.for_profile("standard"),
-            role="generation_worker",
-        )
+        api_state._engine = services.engine
+        api_state._SessionFactory = services.session_factory
+        api_state._runtime_container = container
 
         exit_code = run_generation_worker_loop(
-            session_factory=Session,
-            config=config,
+            application_service=services.generation_application,
             worker_id=args.worker_id or default_worker_id(),
             lease_seconds=args.lease_seconds,
             poll_interval=args.poll_interval,
             once=args.once,
-            create_continue_generation_task=_create_continue_generation_task,
         )
     finally:
-        engine.dispose()
+        services.llm_client.close()
+        services.engine.dispose()
     if exit_code:
         sys.exit(exit_code)
 

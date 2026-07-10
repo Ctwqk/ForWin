@@ -1318,7 +1318,7 @@ class ProjectOperationGuardTests(unittest.TestCase):
         self.assertEqual(captured["max_chapters"], 3)
         self.assertEqual(captured["requested_chapters"], 3)
 
-    def test_continue_generation_filters_auto_continue_target_for_strict_task_factory(self) -> None:
+    def test_continue_generation_uses_exact_task_factory_signature(self) -> None:
         project = self._create_project(project_id="proj-continue-strict-factory")
         with self.session_factory() as session:
             project_row = session.get(Project, project.id)
@@ -1348,7 +1348,19 @@ class ProjectOperationGuardTests(unittest.TestCase):
                 )
             session.commit()
 
-        def strict_task_creation(project_id, runtime_config, requested_chapters, max_chapters, title, subtitle, message):
+        def strict_task_creation(
+            *,
+            project_id,
+            requested_chapters,
+            max_chapters,
+            auto_continue,
+            run_until_chapter,
+            title,
+            subtitle,
+            message,
+        ):
+            self.assertIs(auto_continue, True)
+            self.assertEqual(run_until_chapter, 4)
             task_id = "task-continue-strict-factory"
             task = api_module._create_task_record(
                 title=title,

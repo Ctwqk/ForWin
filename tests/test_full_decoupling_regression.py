@@ -2,59 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from forwin.config import Config
-from forwin.orchestrator.loop import RunResult
 from forwin.protocol.experience import ChapterExperiencePlan
 from forwin.protocol.review import ContinuityIssue, RepairInstruction, ReviewVerdict
-
-
-def test_api_runtime_uses_runtime_container_for_generation_tasks(monkeypatch) -> None:
-    from forwin import api_runtime
-
-    calls: list[str] = []
-    updates: list[dict] = []
-
-    class FakeOrchestrator:
-        llm_client = SimpleNamespace(close=lambda: calls.append("llm_closed"))
-        engine = SimpleNamespace(dispose=lambda: calls.append("engine_disposed"))
-        _SessionFactory = None
-
-        def run(self, *, premise: str, genre: str, num_chapters: int):
-            calls.append(f"run:{premise}:{genre}:{num_chapters}")
-            return RunResult(project_id="project-1", requested_chapters=num_chapters, completed_chapters=[1])
-
-    class FakeContainer:
-        @classmethod
-        def from_config(cls, config):
-            calls.append("from_config")
-            return cls()
-
-        def build_writing_orchestrator(self, **kwargs):
-            assert callable(kwargs["progress_callback"])
-            calls.append("build_orchestrator")
-            return FakeOrchestrator()
-
-    monkeypatch.setattr(api_runtime, "RuntimeContainer", FakeContainer, raising=False)
-
-    api_runtime.run_generation_with_config(
-        task_id="task-1",
-        premise="premise",
-        genre="玄幻",
-        num_chapters=1,
-        config=Config(database_url="postgresql+psycopg://fake/forwin", minimax_api_key=""),
-        update_task=lambda task_id, **changes: updates.append({"task_id": task_id, **changes}),
-        logger=SimpleNamespace(
-            exception=lambda *args, **kwargs: None,
-            debug=lambda *args, **kwargs: None,
-        ),
-    )
-
-    assert calls[:3] == ["from_config", "build_orchestrator", "from_config"] or calls[:2] == [
-        "from_config",
-        "build_orchestrator",
-    ]
-    assert "run:premise:玄幻:1" in calls
-    assert any(update.get("status") == "completed" for update in updates)
 
 
 def test_api_genesis_service_uses_runtime_container_when_available(monkeypatch) -> None:
@@ -89,22 +38,20 @@ def test_api_automation_can_use_runtime_production_scheduler_factory() -> None:
     class FakeFactory:
         def build(self, **kwargs):
             calls.append("build")
-            assert kwargs["runtime_config_provider"]() == "runtime-config"
             assert kwargs["generation_terminal_statuses"] == {"completed"}
+            assert "create_generation_task" not in kwargs
+            assert "create_continue_generation_task" not in kwargs
             return SimpleNamespace(run_due_projects=lambda *, now: calls.append(now.isoformat()))
 
     api_automation.run_automation_scheduler_pass(
         session_factory=object(),
         config=object(),
-        saved_runtime_config_or_503=lambda: "runtime-config",
+        generation_application=SimpleNamespace(),
         utcnow=lambda: datetime(2026, 5, 6, tzinfo=timezone.utc),
         display_tz=timezone.utc,
         display_datetime=lambda value: "",
         get_session=lambda: None,
         persist_project_automation=lambda *args, **kwargs: None,
-        create_generation_task=lambda **kwargs: "task-1",
-        create_continue_generation_task=lambda **kwargs: "task-2",
-        active_generation_task_error_cls=RuntimeError,
         terminal_statuses={"completed"},
         production_scheduler_factory=FakeFactory(),
     )

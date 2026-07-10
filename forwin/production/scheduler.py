@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from forwin.application.generation import GenerationApplicationService
 from forwin.api_project_payloads import normalize_project_automation
 from forwin.api_schemas import ProjectAutomationSettings
 from forwin.models.project import Project
@@ -43,12 +44,9 @@ class ProductionScheduler:
         *,
         session_factory: Callable[[], Any] | None,
         config: Any,
-        runtime_config_provider: Callable[[], Any],
+        generation_application: GenerationApplicationService,
         display_datetime: Callable[[datetime | None], str],
         persist_project_automation: Callable[..., ProjectAutomationSettings],
-        create_generation_task: Callable[..., str],
-        create_continue_generation_task: Callable[..., str],
-        active_generation_task_error_cls: type[Exception],
         generation_terminal_statuses: set[str],
         upload_terminal_statuses: set[str],
         display_tz: Any = None,
@@ -60,12 +58,9 @@ class ProductionScheduler:
     ) -> None:
         self.session_factory = session_factory
         self.config = config
-        self.runtime_config_provider = runtime_config_provider
+        self.generation_application = generation_application
         self.display_datetime = display_datetime
         self.persist_project_automation = persist_project_automation
-        self.create_generation_task = create_generation_task
-        self.create_continue_generation_task = create_continue_generation_task
-        self.active_generation_task_error_cls = active_generation_task_error_cls
         self.generation_terminal_statuses = generation_terminal_statuses
         self.upload_terminal_statuses = upload_terminal_statuses
         self.display_tz = display_tz
@@ -79,7 +74,6 @@ class ProductionScheduler:
     def run_due_projects(self, *, now: datetime) -> list[ProductionRunResult]:
         if self.session_factory is None or self.config is None:
             return []
-        runtime_config = self.runtime_config_provider()
         now_local = now.astimezone(self.display_tz) if self.display_tz is not None else now
         today = now_local.strftime("%Y-%m-%d")
         current_minutes = now_local.hour * 60 + now_local.minute
@@ -103,9 +97,7 @@ class ProductionScheduler:
                 upload_terminal_statuses=self.upload_terminal_statuses,
             )
             executor = ProductionExecutor(
-                create_generation_task=self.create_generation_task,
-                create_continue_generation_task=self.create_continue_generation_task,
-                active_generation_task_error_cls=self.active_generation_task_error_cls,
+                generation_application=self.generation_application,
                 publisher_manager_factory=self.publisher_manager_factory,
                 session_factory=self.session_factory,
                 config=self.config,
@@ -162,7 +154,6 @@ class ProductionScheduler:
                         plan=plan,
                         project=project,
                         policy=policy,
-                        runtime_config=runtime_config,
                     )
                     span.tag("action", execution.action)
                     updated = updated.model_copy(

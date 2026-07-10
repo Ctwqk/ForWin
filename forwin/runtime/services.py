@@ -28,6 +28,7 @@ class RuntimeServices:
     session_factory: sessionmaker
     llm_client: ModelAdapter
     skill_runtime: SkillRuntimeBundle
+    generation_application: Any
 
     arc_director: Any
     book_genesis: Any

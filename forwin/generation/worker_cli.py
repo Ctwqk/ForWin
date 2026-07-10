@@ -5,11 +5,12 @@ import os
 import socket
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING
 
-from forwin.config import InfrastructureConfig
-from forwin.generation.ports import CreateContinueGenerationTask
 from forwin.generation.worker import GenerationWorkerResult, run_one_generation_task
+
+if TYPE_CHECKING:
+    from forwin.application.generation import GenerationApplicationService
 
 
 logger = logging.getLogger(__name__)
@@ -21,15 +22,13 @@ def default_worker_id() -> str:
 
 def run_generation_worker_loop(
     *,
-    session_factory: Callable[[], Any],
-    config: InfrastructureConfig,
+    application_service: GenerationApplicationService,
     worker_id: str = "",
     lease_seconds: int = 300,
     poll_interval: float = 2.0,
     once: bool = False,
     max_loops: int = 0,
     run_once: Callable[..., GenerationWorkerResult] = run_one_generation_task,
-    create_continue_generation_task: CreateContinueGenerationTask | None = None,
 ) -> int:
     normalized_worker_id = str(worker_id or "").strip() or default_worker_id()
     loops = 0
@@ -44,11 +43,9 @@ def run_generation_worker_loop(
         while True:
             loops += 1
             result = run_once(
-                session_factory=session_factory,
+                application_service=application_service,
                 worker_id=normalized_worker_id,
-                config=config,
                 lease_seconds=lease_seconds,
-                create_continue_generation_task=create_continue_generation_task,
             )
             if result.claimed:
                 logger.info(

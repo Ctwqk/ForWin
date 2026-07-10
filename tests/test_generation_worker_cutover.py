@@ -4,11 +4,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import forwin.api as api_module
-from forwin.config import Config
+from forwin.application.generation import GenerationApplicationService
+from forwin.config import InfrastructureConfig
 from forwin.generation.worker import run_one_generation_task
 from forwin.models.base import get_engine, get_session_factory, init_db
 from forwin.models.project import ArcPlanVersion, Project
 from forwin.models.task import GenerationTask
+from forwin.runtime.policy import RuntimePolicy
+from forwin.runtime.policy_store import ProjectPolicyStore
 from tests.postgres import postgres_test_url
 
 
@@ -18,23 +21,31 @@ def test_api_enqueued_continue_task_is_claimed_by_worker(monkeypatch) -> None:
     init_db(engine)
     Session = get_session_factory(engine)
     old_session_factory = api_module._SessionFactory
+    old_config = api_module._config
+    old_runtime_container = api_module._runtime_container
     api_module._SessionFactory = Session
+    infrastructure = InfrastructureConfig(database_url=database_url, minimax_api_key="sk-test")
+    api_module._config = infrastructure
+    api_module._runtime_container = None
     calls: list[dict[str, object]] = []
     now = datetime.now(timezone.utc)
     try:
         with Session.begin() as session:
-            session.add(
-                Project(
-                    id="project-worker-cutover",
-                    title="Worker Cutover",
-                    premise="测试",
-                    genre="玄幻",
-                    creation_status="writing",
-                    created_at=now,
-                    updated_at=now,
-                )
+            project = Project(
+                id="project-worker-cutover",
+                title="Worker Cutover",
+                premise="测试",
+                genre="玄幻",
+                creation_status="writing",
+                created_at=now,
+                updated_at=now,
             )
+            session.add(project)
             session.flush()
+            ProjectPolicyStore(session).initialize(
+                project,
+                RuntimePolicy.for_profile("standard"),
+            )
             session.add(
                 ArcPlanVersion(
                     id="arc-worker-cutover",
@@ -49,7 +60,6 @@ def test_api_enqueued_continue_task_is_claimed_by_worker(monkeypatch) -> None:
 
         task_id = api_module._create_continue_generation_task(
             project_id="project-worker-cutover",
-            runtime_config=Config(database_url=database_url, minimax_api_key="sk-test"),
             requested_chapters=1,
             max_chapters=1,
             auto_continue=False,
@@ -59,18 +69,20 @@ def test_api_enqueued_continue_task_is_claimed_by_worker(monkeypatch) -> None:
         queued = api_module._get_generation_task_or_404(task_id)
         assert queued["status"] == "queued"
 
-        def fake_run_continue_project_with_config(*args, **kwargs):
+        def fake_run_continue_project_with_context(*args, **kwargs):
             calls.append({"args": args, "kwargs": kwargs})
 
         monkeypatch.setattr(
-            "forwin.api_runtime.run_continue_project_with_config",
-            fake_run_continue_project_with_config,
+            "forwin.api_runtime.run_continue_project_with_context",
+            fake_run_continue_project_with_context,
         )
 
         result = run_one_generation_task(
-            session_factory=Session,
+            application_service=GenerationApplicationService(
+                session_factory=Session,
+                infrastructure=infrastructure,
+            ),
             worker_id="worker-cutover",
-            config=Config(database_url=database_url, minimax_api_key="sk-test"),
         )
 
         assert result.claimed is True
@@ -83,6 +95,8 @@ def test_api_enqueued_continue_task_is_claimed_by_worker(monkeypatch) -> None:
             assert row.lease_owner == "worker-cutover"
     finally:
         api_module._SessionFactory = old_session_factory
+        api_module._config = old_config
+        api_module._runtime_container = old_runtime_container
         engine.dispose()
 
 

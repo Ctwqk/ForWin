@@ -135,6 +135,7 @@ from forwin.api_schemas import (
     StartWritingResponse,
 )
 from forwin.book_genesis import BookGenesisService, GENESIS_STAGE_ORDER, StaleGenesisRevisionError
+from forwin.application.errors import ActiveGenerationTaskError
 from forwin.config import InfrastructureConfig
 from forwin.governance import (
     BandCheckpointIssueInfo,
@@ -185,10 +186,6 @@ from forwin.state.updater import StateUpdater
 logger = logging.getLogger(__name__)
 
 from forwin.api_core import state as api_state
-
-class ActiveGenerationTaskError(RuntimeError):
-    pass
-
 
 def _get_session():
     return api_state._SessionFactory()

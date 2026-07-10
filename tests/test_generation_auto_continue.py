@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 
-import forwin.api_core.generation as generation_api
-from forwin.config import Config as RuntimeConfig
 from forwin.generation.auto_continue import (
     AutoContinueDecision,
     GenerationAutoContinueController,
@@ -25,74 +23,6 @@ class ResultStub:
     system_block_chapters: list[int] | None = None
     paused: bool = False
     cancelled: bool = False
-
-
-def test_completion_handler_schedules_next_task_after_success(monkeypatch) -> None:
-    observed: list[dict[str, object]] = []
-    runtime_config = RuntimeConfig()
-
-    class DummySession:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-        def commit(self) -> None:
-            observed.append({"commit": True})
-
-    class ControllerStub:
-        def __init__(self, *, session_factory, create_continue_generation_task):
-            observed.append(
-                {
-                    "session_factory": session_factory,
-                    "create_continue_generation_task": create_continue_generation_task,
-                }
-            )
-            self.create_continue_generation_task = create_continue_generation_task
-
-        def after_task_completion(self, result, **kwargs):
-            observed.append({"result": result, **kwargs})
-            self.create_continue_generation_task(
-                project_id=result.project_id,
-                run_until_chapter=kwargs["run_until_chapter"],
-                runtime_config=kwargs["runtime_config"],
-            )
-
-    class Result:
-        project_id = "project-auto"
-        status = "completed"
-        completed_chapters = [1]
-        failed_chapters: list[int] = []
-        paused_chapters: list[int] = []
-
-    def fake_create_continue_generation_task(**kwargs):
-        observed.append({"scheduled": kwargs})
-        return "task-next"
-
-    monkeypatch.setattr(generation_api, "_get_session", lambda: DummySession())
-    monkeypatch.setattr(generation_api, "_log_decision_event", lambda *args, **kwargs: None)
-    monkeypatch.setattr(generation_api, "GenerationAutoContinueController", ControllerStub)
-
-    handler = generation_api._make_generation_completion_handler(
-        task_id="task-prev",
-        root_event_id="root-event",
-        runtime_config=runtime_config,
-        auto_continue=True,
-        run_until_chapter=2,
-        max_chapters=None,
-        create_continue_generation_task=fake_create_continue_generation_task,
-    )
-
-    handler(Result())
-
-    scheduled = next(item["scheduled"] for item in observed if "scheduled" in item)
-    call = next(item for item in observed if item.get("parent_task_id") == "task-prev")
-    assert scheduled["project_id"] == "project-auto"
-    assert scheduled["run_until_chapter"] == 2
-    assert scheduled["runtime_config"] is runtime_config
-    assert call["run_until_chapter"] == 2
-    assert call["runtime_config"] is runtime_config
 
 
 def _session_factory(name: str):
@@ -146,7 +76,6 @@ def _chapter(session, *, project_id: str, arc_id: str, number: int, status: str)
 def test_controller_continues_to_future_arc_when_no_blocker() -> None:
     engine, Session = _session_factory("auto-continue-future-arc")
     calls: list[dict[str, object]] = []
-    runtime_config = object()
     try:
         with Session.begin() as session:
             project = _project(session)
@@ -165,7 +94,6 @@ def test_controller_continues_to_future_arc_when_no_blocker() -> None:
             run_until_chapter=6,
             max_chapters=None,
             auto_continue=True,
-            runtime_config=runtime_config,
         )
 
         assert decision == AutoContinueDecision(
@@ -183,7 +111,6 @@ def test_controller_continues_to_future_arc_when_no_blocker() -> None:
         assert calls[0]["max_chapters"] == 3
         assert calls[0]["run_until_chapter"] == 6
         assert calls[0]["auto_continue"] is True
-        assert calls[0]["runtime_config"] is runtime_config
         assert calls[0]["title"] == "Auto Book"
         assert calls[0]["subtitle"] == "自动续跑 · 玄幻"
         assert calls[0]["message"] == "前一批完成，无阻断，自动继续生成。"
@@ -194,7 +121,6 @@ def test_controller_continues_to_future_arc_when_no_blocker() -> None:
 def test_controller_ignores_paused_marker_for_already_accepted_chapter() -> None:
     engine, Session = _session_factory("auto-continue-accepted-paused-marker")
     calls: list[dict[str, object]] = []
-    runtime_config = object()
     try:
         with Session.begin() as session:
             project = _project(session)
@@ -221,7 +147,6 @@ def test_controller_ignores_paused_marker_for_already_accepted_chapter() -> None
             run_until_chapter=3,
             max_chapters=None,
             auto_continue=True,
-            runtime_config=runtime_config,
         )
 
         assert decision == AutoContinueDecision(
@@ -238,7 +163,6 @@ def test_controller_ignores_paused_marker_for_already_accepted_chapter() -> None
         assert calls[0]["requested_chapters"] == 2
         assert calls[0]["run_until_chapter"] == 3
         assert calls[0]["auto_continue"] is True
-        assert calls[0]["runtime_config"] is runtime_config
     finally:
         engine.dispose()
 
@@ -246,7 +170,6 @@ def test_controller_ignores_paused_marker_for_already_accepted_chapter() -> None
 def test_controller_ignores_safe_paused_status_for_already_accepted_chapter() -> None:
     engine, Session = _session_factory("auto-continue-safe-paused-status")
     calls: list[dict[str, object]] = []
-    runtime_config = object()
     try:
         with Session.begin() as session:
             project = _project(session)
@@ -278,7 +201,6 @@ def test_controller_ignores_safe_paused_status_for_already_accepted_chapter() ->
             run_until_chapter=3,
             max_chapters=None,
             auto_continue=True,
-            runtime_config=runtime_config,
         )
 
         assert decision == AutoContinueDecision(
@@ -295,22 +217,21 @@ def test_controller_ignores_safe_paused_status_for_already_accepted_chapter() ->
         assert calls[0]["requested_chapters"] == 2
         assert calls[0]["run_until_chapter"] == 3
         assert calls[0]["auto_continue"] is True
-        assert calls[0]["runtime_config"] is runtime_config
     finally:
         engine.dispose()
 
 
-def test_controller_filters_task_kwargs_for_current_strict_factory_signature() -> None:
+def test_controller_uses_exact_generation_task_factory_signature() -> None:
     engine, Session = _session_factory("auto-continue-strict-factory")
     calls: list[dict[str, object]] = []
-    runtime_config = object()
 
     def create_task(
         *,
         project_id,
-        runtime_config,
         requested_chapters,
         max_chapters,
+        auto_continue,
+        run_until_chapter,
         title,
         subtitle,
         message,
@@ -318,9 +239,10 @@ def test_controller_filters_task_kwargs_for_current_strict_factory_signature() -
         calls.append(
             {
                 "project_id": project_id,
-                "runtime_config": runtime_config,
                 "requested_chapters": requested_chapters,
                 "max_chapters": max_chapters,
+                "auto_continue": auto_continue,
+                "run_until_chapter": run_until_chapter,
                 "title": title,
                 "subtitle": subtitle,
                 "message": message,
@@ -346,16 +268,16 @@ def test_controller_filters_task_kwargs_for_current_strict_factory_signature() -
             run_until_chapter=6,
             max_chapters=None,
             auto_continue=True,
-            runtime_config=runtime_config,
         )
 
         assert decision.next_task_id == "task-strict"
         assert calls == [
             {
                 "project_id": "project-auto",
-                "runtime_config": runtime_config,
                 "requested_chapters": 3,
                 "max_chapters": 3,
+                "auto_continue": True,
+                "run_until_chapter": 6,
                 "title": "Auto Book",
                 "subtitle": "自动续跑 · 玄幻",
                 "message": "前一批完成，无阻断，自动继续生成。",
@@ -460,7 +382,6 @@ def test_controller_stops_on_pending_review_and_records_audit_event() -> None:
 def test_controller_auto_retries_system_block_review_once() -> None:
     engine, Session = _session_factory("auto-continue-review-auto-retry")
     calls: list[dict[str, object]] = []
-    runtime_config = object()
     try:
         with Session.begin() as session:
             project = _project(session)
@@ -490,7 +411,6 @@ def test_controller_auto_retries_system_block_review_once() -> None:
             run_until_chapter=6,
             max_chapters=None,
             auto_continue=True,
-            runtime_config=runtime_config,
         )
 
         with Session() as session:
@@ -520,7 +440,6 @@ def test_controller_auto_retries_system_block_review_once() -> None:
         assert calls[0]["max_chapters"] == 5
         assert calls[0]["auto_continue"] is True
         assert calls[0]["run_until_chapter"] == 6
-        assert calls[0]["runtime_config"] is runtime_config
         assert calls[0]["message"] == "第2章 needs_review 已自动重置并重试。"
         assert plan.status == "planned"
         assert plan.canon_risk_level == ""

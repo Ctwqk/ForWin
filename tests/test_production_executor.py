@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from forwin.application.errors import ActiveGenerationTaskError
+from forwin.application.generation import GenerationTaskHandle
 from forwin.api_project_payloads import normalize_project_automation
 from forwin.models.project import Project
 from forwin.production.executor import ProductionExecutor
@@ -9,12 +11,21 @@ from forwin.production.planner import ProductionPlan
 from forwin.production.policy import policy_from_automation
 
 
-class ActiveGenerationTaskError(RuntimeError):
-    pass
+class RecordingApplicationService:
+    def __init__(self, *, task_id: str = "task-1", error: Exception | None = None) -> None:
+        self.task_id = task_id
+        self.error = error
+        self.commands = []
+
+    def enqueue(self, command):
+        self.commands.append(command)
+        if self.error is not None:
+            raise self.error
+        return GenerationTaskHandle(task_id=self.task_id, project_id=command.project_id)
 
 
 def test_executor_starts_initial_generation_task() -> None:
-    calls: list[dict] = []
+    application = RecordingApplicationService(task_id="task-initial")
     project = Project(id="project-1", title="测试书", premise="前提", genre="玄幻")
     plan = ProductionPlan(
         project_id=project.id,
@@ -25,24 +36,22 @@ def test_executor_starts_initial_generation_task() -> None:
     )
 
     result = ProductionExecutor(
-        create_generation_task=lambda **kwargs: calls.append(kwargs) or "task-initial",
-        create_continue_generation_task=lambda **_kwargs: "unexpected",
-        active_generation_task_error_cls=ActiveGenerationTaskError,
+        generation_application=application,
     ).execute(
         plan=plan,
         project=project,
         policy=policy_from_automation(normalize_project_automation({"daily_chapter_quota": 2})),
-        runtime_config=SimpleNamespace(),
     )
 
     assert result.action == "started_initial_generation"
     assert result.task_id == "task-initial"
-    assert calls[0]["num_chapters"] == 2
-    assert calls[0]["project_id"] == project.id
+    assert application.commands[0].requested_chapters == 2
+    assert application.commands[0].project_id == project.id
+    assert application.commands[0].root_event_type == "generation_requested"
 
 
 def test_executor_starts_continue_generation_task() -> None:
-    calls: list[dict] = []
+    application = RecordingApplicationService(task_id="task-continue")
     project = Project(id="project-1", title="测试书", premise="前提", genre="玄幻")
     plan = ProductionPlan(
         project_id=project.id,
@@ -53,20 +62,18 @@ def test_executor_starts_continue_generation_task() -> None:
     )
 
     result = ProductionExecutor(
-        create_generation_task=lambda **_kwargs: "unexpected",
-        create_continue_generation_task=lambda **kwargs: calls.append(kwargs) or "task-continue",
-        active_generation_task_error_cls=ActiveGenerationTaskError,
+        generation_application=application,
     ).execute(
         plan=plan,
         project=project,
         policy=policy_from_automation(normalize_project_automation({"daily_chapter_quota": 3})),
-        runtime_config=SimpleNamespace(),
     )
 
     assert result.action == "started_continue_generation"
     assert result.task_id == "task-continue"
-    assert calls[0]["requested_chapters"] == 3
-    assert calls[0]["max_chapters"] == 3
+    assert application.commands[0].requested_chapters == 3
+    assert application.commands[0].max_chapters == 3
+    assert application.commands[0].root_event_type == "continue_requested"
 
 
 def test_executor_maps_active_generation_conflict_to_action() -> None:
@@ -79,18 +86,14 @@ def test_executor_maps_active_generation_conflict_to_action() -> None:
         requested_chapters=1,
     )
 
-    def raise_active(**_kwargs):
-        raise ActiveGenerationTaskError("already active")
-
     result = ProductionExecutor(
-        create_generation_task=lambda **_kwargs: "unexpected",
-        create_continue_generation_task=raise_active,
-        active_generation_task_error_cls=ActiveGenerationTaskError,
+        generation_application=RecordingApplicationService(
+            error=ActiveGenerationTaskError("already active")
+        ),
     ).execute(
         plan=plan,
         project=project,
         policy=policy_from_automation(normalize_project_automation({})),
-        runtime_config=SimpleNamespace(),
     )
 
     assert result.action == "active_task"
@@ -126,9 +129,7 @@ def test_executor_enqueues_publish_jobs_without_running_browser_worker() -> None
     )
 
     result = ProductionExecutor(
-        create_generation_task=lambda **_kwargs: "unexpected",
-        create_continue_generation_task=lambda **_kwargs: "unexpected",
-        active_generation_task_error_cls=ActiveGenerationTaskError,
+        generation_application=RecordingApplicationService(),
         publisher_manager_factory=lambda: SimpleNamespace(
             create_upload_jobs_batch=lambda **kwargs: publish_calls.append(kwargs) or 1
         ),
@@ -136,7 +137,6 @@ def test_executor_enqueues_publish_jobs_without_running_browser_worker() -> None
         plan=plan,
         project=project,
         policy=policy,
-        runtime_config=SimpleNamespace(),
     )
 
     assert result.action == "started_publish_jobs"
@@ -157,9 +157,7 @@ def test_executor_consumes_review_quota_jobs_before_reporting_idle() -> None:
     )
 
     result = ProductionExecutor(
-        create_generation_task=lambda **_kwargs: "unexpected",
-        create_continue_generation_task=lambda **_kwargs: "unexpected",
-        active_generation_task_error_cls=ActiveGenerationTaskError,
+        generation_application=RecordingApplicationService(),
         review_chapter=lambda project_id, chapter_number: review_calls.append((project_id, chapter_number)),
         approve_chapter_review=lambda project_id, chapter_number: approve_calls.append((project_id, chapter_number)),
     ).execute(
@@ -168,7 +166,6 @@ def test_executor_consumes_review_quota_jobs_before_reporting_idle() -> None:
         policy=policy_from_automation(
             normalize_project_automation({"daily_chapter_quota": 1, "daily_review_quota": 2})
         ),
-        runtime_config=SimpleNamespace(),
     )
 
     assert result.action == "ran_review_jobs"

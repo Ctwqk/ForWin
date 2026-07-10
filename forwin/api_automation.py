@@ -99,15 +99,12 @@ def run_automation_scheduler_pass(
     *,
     session_factory,
     config,
-    saved_runtime_config_or_503: Callable[[], Any],
+    generation_application,
     utcnow: Callable[[], datetime],
     display_tz,
     display_datetime: Callable[[datetime | None], str],
     get_session: Callable[[], Any],
     persist_project_automation: Callable[..., ProjectAutomationSettings],
-    create_generation_task: Callable[..., str],
-    create_continue_generation_task: Callable[..., str],
-    active_generation_task_error_cls: type[Exception],
     terminal_statuses: set[str],
     review_chapter: Callable[[str, int], Any] | None = None,
     approve_chapter_review: Callable[[str, int], Any] | None = None,
@@ -117,12 +114,8 @@ def run_automation_scheduler_pass(
         return
     try:
         scheduler_kwargs = dict(
-            runtime_config_provider=saved_runtime_config_or_503,
             display_datetime=display_datetime,
             persist_project_automation=persist_project_automation,
-            create_generation_task=create_generation_task,
-            create_continue_generation_task=create_continue_generation_task,
-            active_generation_task_error_cls=active_generation_task_error_cls,
             generation_terminal_statuses=terminal_statuses,
             upload_terminal_statuses={"succeeded", "failed", "cancelled"},
             display_tz=display_tz,
@@ -136,6 +129,7 @@ def run_automation_scheduler_pass(
             else ProductionScheduler(
                 session_factory=session_factory,
                 config=config,
+                generation_application=generation_application,
                 **scheduler_kwargs,
             )
         )
